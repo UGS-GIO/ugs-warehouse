@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+build/
+dist/
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Local artifacts produced by manual ingest runs
+out/
+tmp/
+*.pmtiles
+*.parquet

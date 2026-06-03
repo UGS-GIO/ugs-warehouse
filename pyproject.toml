@@ -1,0 +1,28 @@
+[project]
+name = "ugs-warehouse"
+version = "0.0.1"
+description = "Iceberg lakehouse for UGS — forks at _current and emits Iceberg + GeoParquet + PMTiles + STAC"
+requires-python = ">=3.11"
+dependencies = [
+  "duckdb>=1.1",
+  "pyiceberg[sql-postgres,pyarrow]>=0.7",
+  "pyarrow>=17",
+  "psycopg[binary]>=3.2",
+  "cloud-sql-python-connector>=1.11",
+  "google-cloud-storage>=2.18",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.6"]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 100

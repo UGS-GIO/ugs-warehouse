@@ -5,9 +5,9 @@ For each topic:
   2. Transform in DuckDB: hydrate WKB, confirm/reproject -> 4326, add h3_r9,
      hilbert-sort (`transform`)
   3. Write Iceberg table — WKB geom (`sink_iceberg`)
-  4. Emit GeoParquet archive — native geom, citable (`sink_archive`)  [TODO]
-  5. Build PMTiles via tippecanoe (`sink_pmtiles`)                      [TODO]
-  6. Write STAC item (`sink_stac`)                                      [TODO]
+  4. Emit GeoParquet archive — native geom, citable (`sink_archive`)
+  5. Build PMTiles via tippecanoe (`sink_pmtiles`)
+  6. Write STAC item (`sink_stac`)
 
 Each sink is independent: failure in one does not corrupt the others.
 """
@@ -17,7 +17,7 @@ import argparse
 import sys
 import traceback
 
-from . import sink_archive, sink_iceberg, source, transform
+from . import sink_archive, sink_iceberg, sink_pmtiles, sink_stac, source, transform
 from .topics import REGISTRY, Topic, all_topics
 
 
@@ -32,8 +32,8 @@ def _ingest(topic: Topic) -> int:
     for name, fn in [
         ("iceberg", lambda: sink_iceberg.write(topic, con, view)),
         ("archive", lambda: sink_archive.write(topic, con, view)),
-        # ("pmtiles",  lambda: sink_pmtiles.build(topic, ...)),
-        # ("stac",     lambda: sink_stac.write(topic, ...)),
+        ("pmtiles", lambda: sink_pmtiles.build(topic, con, view)),
+        ("stac",    lambda: sink_stac.write(topic, con, view)),
     ]:
         try:
             fn()

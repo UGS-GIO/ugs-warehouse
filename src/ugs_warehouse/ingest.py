@@ -17,7 +17,7 @@ import argparse
 import sys
 import traceback
 
-from . import sink_iceberg, source, transform
+from . import sink_archive, sink_iceberg, source, transform
 from .topics import REGISTRY, Topic, all_topics
 
 
@@ -31,7 +31,7 @@ def _ingest(topic: Topic) -> int:
     rc = 0
     for name, fn in [
         ("iceberg", lambda: sink_iceberg.write(topic, con, view)),
-        # ("archive",  lambda: sink_archive.write(topic, con, view)),
+        ("archive", lambda: sink_archive.write(topic, con, view)),
         # ("pmtiles",  lambda: sink_pmtiles.build(topic, ...)),
         # ("stac",     lambda: sink_stac.write(topic, ...)),
     ]:

@@ -2,12 +2,12 @@
 
 For each topic:
   1. Read `{schema}.{topic}_current` from Postgres (`source`)
-  2. Transform in DuckDB: confirm/reproject -> 4326, add h3_r9, hilbert-sort,
-     ST_AsWKB for the Iceberg copy (`transform`)
+  2. Transform in DuckDB: hydrate WKB, confirm/reproject -> 4326, add h3_r9,
+     hilbert-sort (`transform`)
   3. Write Iceberg table — WKB geom (`sink_iceberg`)
-  4. Emit GeoParquet archive — native geom, citable (`sink_archive`)
-  5. Build PMTiles via tippecanoe (`sink_pmtiles`)
-  6. Write STAC item (`sink_stac`)
+  4. Emit GeoParquet archive — native geom, citable (`sink_archive`)  [TODO]
+  5. Build PMTiles via tippecanoe (`sink_pmtiles`)                      [TODO]
+  6. Write STAC item (`sink_stac`)                                      [TODO]
 
 Each sink is independent: failure in one does not corrupt the others.
 """
@@ -15,8 +15,34 @@ from __future__ import annotations
 
 import argparse
 import sys
+import traceback
 
-from .topics import REGISTRY, all_topics
+from . import sink_iceberg, source, transform
+from .topics import REGISTRY, Topic, all_topics
+
+
+def _ingest(topic: Topic) -> int:
+    print(f"[{topic.fqn}] reading from Postgres")
+    arrow_in = source.read(topic)
+    print(f"[{topic.fqn}] {arrow_in.num_rows} rows in")
+
+    con, view = transform.run(arrow_in)
+
+    rc = 0
+    for name, fn in [
+        ("iceberg", lambda: sink_iceberg.write(topic, con, view)),
+        # ("archive",  lambda: sink_archive.write(topic, con, view)),
+        # ("pmtiles",  lambda: sink_pmtiles.build(topic, ...)),
+        # ("stac",     lambda: sink_stac.write(topic, ...)),
+    ]:
+        try:
+            fn()
+        except Exception as e:
+            # Per-sink isolation: log + continue, never silent fail.
+            print(f"[{topic.fqn}] sink {name} FAILED: {e}", file=sys.stderr)
+            traceback.print_exc()
+            rc = 1
+    return rc
 
 
 def ingest_topic(layer: str) -> int:
@@ -24,17 +50,12 @@ def ingest_topic(layer: str) -> int:
     if topic is None:
         print(f"ERROR: unknown topic '{layer}'", file=sys.stderr)
         return 1
-    print(f"[{topic.fqn}] starting ingest")
-
-    # TODO: source.read(topic) -> pyarrow.Table (native geom, source CRS)
-    # TODO: transform.run(arrow) -> (arrow_native_geom_4326, arrow_iceberg_wkb)
-    # TODO: sink_iceberg.write(topic, arrow_iceberg_wkb)
-    # TODO: archive_path = sink_archive.write(topic, arrow_native_geom_4326)
-    # TODO: sink_pmtiles.build(topic, archive_path)
-    # TODO: sink_stac.write(topic)
-
-    print(f"[{topic.fqn}] OK (stub — sinks not yet wired)")
-    return 0
+    try:
+        return _ingest(topic)
+    except Exception as e:
+        print(f"[{topic.fqn}] FATAL: {e}", file=sys.stderr)
+        traceback.print_exc()
+        return 1
 
 
 def main() -> int:

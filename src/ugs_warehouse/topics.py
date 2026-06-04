@@ -1,104 +1,75 @@
-"""Topic registry — one entry per `{schema}.{topic}_current` Postgres table the warehouse owns.
+"""Topic primitives.
 
-Topics drive both ingest (one Iceberg + GeoParquet + PMTiles + STAC set per topic)
-and per-app PMTiles bundle composition (a topic may appear in multiple apps).
+A `Topic` = a `{schema}.{layer}_current` Postgres serving table the warehouse
+ingests. There is no hard-coded registry: topics are discovered from Postgres
+at runtime (or carried in the Pub/Sub trigger payload), so adding a new
+`_current` upstream is zero-config here.
+
+`MART_SCHEMAS` is the small list of dbt mart schemas the warehouse considers —
+discovery only scans these.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+import duckdb
+
+MART_SCHEMAS: tuple[str, ...] = ("hazards", "emp", "gen_gis")
+
 
 @dataclass(frozen=True)
 class Topic:
-    layer: str   # full `_current` table name; also the MapLibre source-layer name
+    layer: str   # `_current` table name (= MapLibre source-layer)
     schema: str  # Postgres / dbt mart schema (= warehouse partition root)
 
     @property
     def stem(self) -> str:
-        """Bare topic name, suffix stripped."""
+        """Bare topic name, `_current` suffix stripped."""
         return self.layer.removesuffix("_current")
 
     @property
     def fqn(self) -> str:
         return f"{self.schema}.{self.layer}"
 
+    @classmethod
+    def parse(cls, dotted: str) -> "Topic":
+        """Parse a `schema.layer_current` string into a Topic."""
+        if "." not in dotted:
+            raise ValueError(
+                f"topic must be 'schema.layer_current' (got {dotted!r})"
+            )
+        schema, layer = dotted.split(".", 1)
+        return cls(layer=layer, schema=schema)
 
-def _t(layer: str, schema: str) -> Topic:
+
+def from_pubsub(payload: dict) -> Topic:
+    """Build a Topic from a publish-event payload `{schema, topic}`."""
+    schema = payload.get("schema")
+    layer = payload.get("topic") or payload.get("layer")
+    if not schema or not layer:
+        raise ValueError(f"payload missing schema/topic: {payload}")
     return Topic(layer=layer, schema=schema)
 
 
-REGISTRY: dict[str, Topic] = {t.layer: t for t in [
-    # --- hazards ---
-    _t("hazards_qfaults_current",              "hazards"),
-    _t("hazards_surfacefaultrupture_current",  "hazards"),
-    _t("liquefaction_current",                 "hazards"),
-    _t("landslidesusceptibility_current",      "hazards"),
-    _t("landslideinventory_current",           "hazards"),
-    _t("landslidelegacy_current",              "hazards"),
-    _t("rockfall_current",                     "hazards"),
-    _t("floodanddebrisflow_current",           "hazards"),
-    _t("groundshaking_current",                "hazards"),
-    _t("alluvialfan_current",                  "hazards"),
-    _t("collapsiblesoil_current",              "hazards"),
-    _t("corrosivesoilrock_current",            "hazards"),
-    _t("earthfissure_current",                 "hazards"),
-    _t("erosionhazardzone_current",            "hazards"),
-    _t("expansivesoilrock_current",            "hazards"),
-    _t("karstfeatures_current",                "hazards"),
-    _t("pipinganderosion_current",             "hazards"),
-    _t("radonsusceptibility_current",          "hazards"),
-    _t("salttectonicsdeformation_current",     "hazards"),
-    _t("shallowbedrock_current",               "hazards"),
-    _t("shallowgroundwater_current",           "hazards"),
-    _t("solublesoilandrock_current",           "hazards"),
-    _t("windblownsand_current",                "hazards"),
-    # --- emp (energy + minerals) ---
-    _t("enmin_geophysics_mtstations_current",                "emp"),
-    _t("enmin_geophysics_pacesgravity_current",              "emp"),
-    _t("enmin_geophysics_tem_current",                       "emp"),
-    _t("enmin_geophysics_ugsgravity_current",                "emp"),
-    _t("enmin_geothermal_ingenious_springfeatures_current",  "emp"),
-    _t("enmin_geothermal_ingenious_wellfeatures_current",    "emp"),
-    _t("geothermal_deepsedbasin_current",                    "emp"),
-    _t("geothermal_kgra_current",                            "emp"),
-    _t("geothermal_potentialresourcearea_current",           "emp"),
-    _t("geothermal_utgeothermaluses_current",                "emp"),
-    _t("mart_geophysics_heatflowedwards_source_current",     "emp"),
-    _t("mart_geothermal_wellsandsprings_current",            "emp"),
-    # --- gen_gis (shared reference) ---
-    _t("studyareas_current", "gen_gis"),
-]}
+def discover(
+    con: duckdb.DuckDBPyConnection,
+    pg_alias: str = "pg",
+    schemas: tuple[str, ...] = MART_SCHEMAS,
+) -> list[Topic]:
+    """Every `_current` table in the configured mart schemas.
 
-
-# Per-app PMTiles bundle composition. A topic may appear in multiple apps.
-APPS: dict[str, list[str]] = {
-    "hazards": [layer for layer, t in REGISTRY.items() if t.schema == "hazards"],
-    "geophysics": [
-        "enmin_geophysics_mtstations_current",
-        "enmin_geophysics_pacesgravity_current",
-        "enmin_geophysics_tem_current",
-        "enmin_geophysics_ugsgravity_current",
-        "enmin_geothermal_ingenious_springfeatures_current",
-        "enmin_geothermal_ingenious_wellfeatures_current",
-        "geothermal_deepsedbasin_current",
-        "geothermal_kgra_current",
-        "geothermal_potentialresourcearea_current",
-        "geothermal_utgeothermaluses_current",
-        "mart_geophysics_heatflowedwards_source_current",
-        "mart_geothermal_wellsandsprings_current",
-        "hazards_qfaults_current",
-    ],
-    "carbonstorage":  ["hazards_qfaults_current"],
-    "subsurface":     ["hazards_qfaults_current"],
-    "wetlandplants":  ["studyareas_current"],
-    "minerals":       [],
-    "wetlands":       [],
-}
-
-
-def all_topics() -> list[Topic]:
-    return list(REGISTRY.values())
-
-
-def topics_for_app(app: str) -> list[Topic]:
-    return [REGISTRY[name] for name in APPS.get(app, []) if name in REGISTRY]
+    Queries Postgres `information_schema.tables` through DuckDB's postgres
+    extension (the connection must already have Postgres ATTACHed as
+    `pg_alias` — see `source._connect`).
+    """
+    schema_list = ",".join(f"'{s}'" for s in schemas)
+    pg_sql = (
+        "SELECT table_schema, table_name FROM information_schema.tables "
+        r"WHERE table_name LIKE '%\_current' ESCAPE '\' "
+        f"AND table_schema IN ({schema_list}) "
+        "ORDER BY table_schema, table_name"
+    )
+    rows = con.execute(
+        "SELECT * FROM postgres_query(?, ?)", [pg_alias, pg_sql]
+    ).fetchall()
+    return [Topic(schema=s, layer=t) for s, t in rows]

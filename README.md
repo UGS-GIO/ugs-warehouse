@@ -36,7 +36,7 @@ No Spark, no Dataproc. SedonaDB single-node only re-enters if native geometry in
 
 ```
 src/ugs_warehouse/
-├── topics.py        topic registry (the {schema}.{topic}_current set)
+├── topics.py        Topic primitives + runtime discover() (no hard-coded list)
 ├── catalog.py       PyIceberg SQL catalog (mapping-db)
 ├── source.py        Postgres _current reader (Cloud SQL Connector)
 ├── transform.py     DuckDB reproject + h3 + hilbert + WKB
@@ -62,7 +62,11 @@ pip install -e ".[dev]"
 export ICEBERG_CATALOG_URI=postgresql+psycopg://$USER:$PASS@127.0.0.1:5432/seamlessgeolmap
 export ICEBERG_WAREHOUSE_PATH=gs://ut-dnr-ugs-maps-prod-public/warehouse/iceberg/
 
-python -m ugs_warehouse.ingest --topic hazards_qfaults_current
+# dotted form: schema.layer_current
+python -m ugs_warehouse.ingest --topic hazards.hazards_qfaults_current
+python -m ugs_warehouse.ingest --topic hazards.hazards_qfaults_current --dry-run
+
+# --all discovers every _current in the mart schemas at runtime
 python -m ugs_warehouse.ingest --all
 ```
 

@@ -3,7 +3,7 @@
 Pub/Sub push delivers an HTTP POST with envelope:
     { "message": { "data": "<base64-encoded-JSON>", ... }, "subscription": "..." }
 
-The encoded JSON payload (emitted by dataELT `publish.sh`) is at minimum:
+The encoded JSON payload (emitted by dataELT `publish.sh`) carries:
     { "schema": "hazards", "topic": "hazards_qfaults_current" }
 
 A 2xx response acks the message; non-2xx triggers Pub/Sub retry (and DLQ if
@@ -19,6 +19,7 @@ import logging
 from fastapi import FastAPI, HTTPException, Request
 
 from ugs_warehouse.ingest import ingest_topic
+from ugs_warehouse.topics import from_pubsub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ugs-warehouse.service")
@@ -43,15 +44,15 @@ async def pubsub_push(req: Request) -> dict[str, str]:
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"invalid payload: {e}") from e
 
-    topic = payload.get("topic") or payload.get("layer")
-    schema = payload.get("schema")
-    if not topic:
-        raise HTTPException(status_code=400, detail="payload missing 'topic'")
+    try:
+        topic = from_pubsub(payload)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
-    log.info("ingest start: schema=%s topic=%s", schema, topic)
+    log.info("ingest start: %s", topic.fqn)
     rc = ingest_topic(topic)
-    log.info("ingest done : topic=%s rc=%s", topic, rc)
+    log.info("ingest done : %s rc=%s", topic.fqn, rc)
 
-    # rc != 0 = at least one sink failed — already logged. We still ack so
+    # rc != 0 = at least one sink failed — already logged. Ack anyway so
     # Pub/Sub does not retry-storm; recovery happens on the next publish.
-    return {"status": "ok", "topic": topic, "rc": str(rc)}
+    return {"status": "ok", "topic": topic.fqn, "rc": str(rc)}

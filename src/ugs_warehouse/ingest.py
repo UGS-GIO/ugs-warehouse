@@ -10,6 +10,9 @@ For each topic:
   6. Write STAC item (`sink_stac`)
 
 Each sink is independent: failure in one does not corrupt the others.
+
+Topics are not hard-coded — `--all` discovers `_current` tables from Postgres,
+and `--topic schema.layer_current` ingests one explicitly.
 """
 from __future__ import annotations
 
@@ -17,8 +20,8 @@ import argparse
 import sys
 import traceback
 
-from . import sink_archive, sink_iceberg, sink_pmtiles, sink_stac, source, transform
-from .topics import REGISTRY, Topic, all_topics
+from . import sink_archive, sink_iceberg, sink_pmtiles, sink_stac, source, topics, transform
+from .topics import Topic
 
 
 def _ingest(topic: Topic, dry_run: bool = False) -> int:
@@ -64,11 +67,8 @@ def _ingest(topic: Topic, dry_run: bool = False) -> int:
     return rc
 
 
-def ingest_topic(layer: str, dry_run: bool = False) -> int:
-    topic = REGISTRY.get(layer)
-    if topic is None:
-        print(f"ERROR: unknown topic '{layer}'", file=sys.stderr)
-        return 1
+def ingest_topic(topic: Topic, dry_run: bool = False) -> int:
+    """Ingest a single Topic. Top-level entry point for callers (CLI + service)."""
     try:
         return _ingest(topic, dry_run=dry_run)
     except Exception as e:
@@ -82,12 +82,13 @@ def main() -> int:
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument(
         "--topic",
-        help="single topic _current name (e.g. hazards_qfaults_current)",
+        help="dotted form: schema.layer_current "
+             "(e.g. hazards.hazards_qfaults_current)",
     )
     g.add_argument(
         "--all",
         action="store_true",
-        help="ingest every topic in the registry",
+        help="discover every _current table in the mart schemas and ingest each",
     )
     ap.add_argument(
         "--dry-run",
@@ -98,11 +99,15 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.all:
+        con = source._connect()
+        discovered = topics.discover(con)
+        print(f"discovered {len(discovered)} topics in {topics.MART_SCHEMAS}")
         rc = 0
-        for t in all_topics():
-            rc |= ingest_topic(t.layer, dry_run=args.dry_run)
+        for t in discovered:
+            rc |= ingest_topic(t, dry_run=args.dry_run)
         return rc
-    return ingest_topic(args.topic, dry_run=args.dry_run)
+
+    return ingest_topic(Topic.parse(args.topic), dry_run=args.dry_run)
 
 
 if __name__ == "__main__":

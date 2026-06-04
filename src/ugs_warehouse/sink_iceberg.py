@@ -31,7 +31,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
     """Overwrite the topic's Iceberg table with the transformed view."""
     arrow_iceberg: pa.Table = con.execute(
         f"SELECT * REPLACE (ST_AsWKB(geom) AS geom) FROM {view}"
-    ).arrow()
+    ).fetch_arrow_table()
 
     cat = catalog()
     ns = iceberg_namespace(topic.schema)

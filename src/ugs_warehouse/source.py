@@ -71,4 +71,4 @@ def read(topic: Topic) -> pa.Table:
     return con.execute(
         "SELECT * FROM postgres_query(?, ?)",
         [PG_ALIAS, pg_sql],
-    ).arrow()
+    ).fetch_arrow_table()

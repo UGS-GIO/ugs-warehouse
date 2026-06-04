@@ -36,20 +36,18 @@ def run(arrow_in: pa.Table) -> tuple[duckdb.DuckDBPyConnection, str]:
     # If not (transitional pre-cutover), reproject from target_epsg -> 4326.
     # Reproject source is target_epsg (the storage CRS the WKB is in), NOT
     # source_epsg (the upstream's original CRS, kept only for provenance).
-    # Wrap in ST_SetSRID(.., 4326) so the resulting GEOMETRY carries the
-    # correct SRID for downstream sinks (esp. GeoParquet metadata).
+    # DuckDB GEOMETRY does not carry SRID metadata the way PostGIS does;
+    # CRS is attached at GeoParquet write time in `sink_archive`. The Iceberg
+    # sink uses ST_AsWKB and stores the raw bytes.
     geom_hydrate = (
-        f"ST_SetSRID("
-        f"  CASE WHEN target_epsg = {TARGET_SRS} "
+        f"CASE WHEN target_epsg = {TARGET_SRS} "
         f"  THEN ST_GeomFromWKB(geom_wkb) "
         f"  ELSE ST_Transform("
         f"    ST_GeomFromWKB(geom_wkb), "
         f"    'EPSG:' || target_epsg, "
         f"    'EPSG:{TARGET_SRS}', "
         f"    always_xy := true) "
-        f"  END,"
-        f"  {TARGET_SRS}"
-        f")"
+        f"END"
     )
 
     con.execute(f"""

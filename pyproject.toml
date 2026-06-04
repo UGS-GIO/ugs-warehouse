@@ -12,6 +12,7 @@ dependencies = [
   "google-cloud-storage>=2.18",
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
+  "pytz>=2024.1",  # DuckDB timestamptz -> Python conversion
 ]
 
 [project.optional-dependencies]

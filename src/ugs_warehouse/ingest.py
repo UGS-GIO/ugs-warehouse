@@ -37,12 +37,13 @@ def _ingest(topic: Topic, dry_run: bool = False) -> int:
               MAX(ST_XMax(geom)), MAX(ST_YMax(geom))
             FROM {view}
         """).fetchone()
+        cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
         sample = con.execute(f"SELECT * EXCLUDE (geom) FROM {view} LIMIT 1").fetchone()
         print(f"[{topic.fqn}] DRY-RUN OK")
         print(f"  rows after transform : {count}")
         print(f"  bbox (4326)          : minx={bbox[0]:.6f} miny={bbox[1]:.6f} "
               f"maxx={bbox[2]:.6f} maxy={bbox[3]:.6f}")
-        print(f"  columns              : {con.execute(f'DESCRIBE {view}').df()['column_name'].tolist()}")
+        print(f"  columns              : {cols}")
         print(f"  sample row (no geom) : {sample}")
         return 0
 

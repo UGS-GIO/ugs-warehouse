@@ -17,16 +17,38 @@ and `--topic schema.layer_current` ingests one explicitly.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import traceback
+from types import ModuleType
 
-from . import sink_archive, sink_ducklake, sink_pmtiles, sink_stac, source, topics, transform
+from . import (
+    sink_archive,
+    sink_ducklake,
+    sink_pmtiles,
+    sink_stac,
+    source,
+    source_postgrest,
+    topics,
+    transform,
+)
 from .topics import Topic
 
 
+def _backend() -> ModuleType:
+    """Pick the source backend (env-driven).
+
+    SOURCE_BACKEND=postgrest  -> source_postgrest (HTTP, no DB login needed)
+    SOURCE_BACKEND=postgres   -> source (direct Postgres, default)
+    """
+    return source_postgrest if os.environ.get("SOURCE_BACKEND") == "postgrest" else source
+
+
 def _ingest(topic: Topic, dry_run: bool = False) -> int:
-    print(f"[{topic.fqn}] reading from Postgres")
-    arrow_in = source.read(topic)
+    backend = _backend()
+    label = "PostgREST" if backend is source_postgrest else "Postgres"
+    print(f"[{topic.fqn}] reading from {label}")
+    arrow_in = backend.read(topic)
     print(f"[{topic.fqn}] {arrow_in.num_rows} rows in, {len(arrow_in.column_names)} columns")
 
     con, view = transform.run(arrow_in)
@@ -99,8 +121,8 @@ def main() -> int:
     args = ap.parse_args()
 
     if args.all:
-        con = source._connect()
-        discovered = topics.discover(con)
+        backend = _backend()
+        discovered = backend.discover()
         print(f"discovered {len(discovered)} topics in {topics.MART_SCHEMAS}")
         rc = 0
         for t in discovered:

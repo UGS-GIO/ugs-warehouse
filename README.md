@@ -50,6 +50,17 @@ service/              Cloud Run service: Pub/Sub push → ingest
 scripts/              CLI: bootstrap catalog, manual ingest
 ```
 
+## Source backend (`SOURCE_BACKEND` env)
+
+The source layer is swappable:
+
+| Value | Reads from | When |
+|---|---|---|
+| `postgres` (default) | direct libpq via DuckDB postgres extension | prod; whenever you have a Postgres login on mapping-db |
+| `postgrest` | HTTP via `postgrest-seamlessgeolmap` Cloud Run | **bandaid** — lets the warehouse run without a Postgres login. `web_anon` has `SELECT` on emp / wetlands / mapping schemas (hazards + gen_gis return 401). Slower (HTTP + GeoJSON). See `src/ugs_warehouse/source_postgrest.py` for caveats |
+
+Switch back to `postgres` once direct DB creds land — only `source.py` changes; transform + sinks unaffected.
+
 ## Local dev
 
 Personal `gcloud` auth + the existing `cloud_sql_proxy` to reach `mapping-db`:

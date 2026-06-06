@@ -17,7 +17,7 @@ import os
 import duckdb
 import pyarrow as pa
 
-from .topics import Topic
+from .topics import MART_SCHEMAS, Topic
 
 POSTGRES_DSN = os.environ.get(
     "POSTGRES_DSN",
@@ -72,3 +72,19 @@ def read(topic: Topic) -> pa.Table:
         "SELECT * FROM postgres_query(?, ?)",
         [PG_ALIAS, pg_sql],
     ).fetch_arrow_table()
+
+
+def discover() -> list[Topic]:
+    """Enumerate `_current` tables in MART_SCHEMAS via direct Postgres."""
+    con = _connect()
+    schema_list = ",".join(f"'{s}'" for s in MART_SCHEMAS)
+    pg_sql = (
+        "SELECT table_schema, table_name FROM information_schema.tables "
+        r"WHERE table_name LIKE '%\_current' ESCAPE '\' "
+        f"AND table_schema IN ({schema_list}) "
+        "ORDER BY table_schema, table_name"
+    )
+    rows = con.execute(
+        "SELECT * FROM postgres_query(?, ?)", [PG_ALIAS, pg_sql]
+    ).fetchall()
+    return [Topic(schema=s, layer=t) for s, t in rows]

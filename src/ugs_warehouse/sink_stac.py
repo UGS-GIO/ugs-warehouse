@@ -4,8 +4,8 @@ Output:
   gs://{STAC_BUCKET}/{STAC_PREFIX}/{topic_stem}/{topic_stem}.json
 
 Each item links the GeoParquet archive (`data`), the PMTiles (`pmtiles`), and
-the Iceberg table location (`iceberg`). bbox + row_count are computed from the
-DuckDB transformed view.
+the DuckLake table location (`ducklake`). bbox + row_count are computed from
+the DuckDB transformed view.
 
 Env:
   WAREHOUSE_STAC_BUCKET  default ut-dnr-ugs-maps-prod-public
@@ -22,7 +22,7 @@ import duckdb
 from google.cloud import storage
 
 from . import sink_archive, sink_pmtiles
-from .catalog import WAREHOUSE_PATH
+from .catalog import DATA_PATH
 from .topics import Topic
 
 STAC_BUCKET = os.environ.get("WAREHOUSE_STAC_BUCKET", "ut-dnr-ugs-maps-prod-public")
@@ -66,7 +66,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
         f"gs://{sink_pmtiles.PMTILES_BUCKET}/"
         f"{sink_pmtiles.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     )
-    iceberg_uri = f"{WAREHOUSE_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
+    ducklake_uri = f"{DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
 
     item = {
         "type": "Feature",
@@ -93,11 +93,11 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
                 "roles": ["visual"],
                 "title": "PMTiles vector tiles",
             },
-            "iceberg": {
-                "href": iceberg_uri,
-                "type": "application/x-iceberg-table",
+            "ducklake": {
+                "href": ducklake_uri,
+                "type": "application/x-ducklake-table",
                 "roles": ["data"],
-                "title": "Iceberg table (WKB geometry)",
+                "title": "DuckLake table (native geometry)",
             },
         },
         "links": [],

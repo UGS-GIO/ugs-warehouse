@@ -1,7 +1,7 @@
 # ugs-warehouse
 
-Iceberg lakehouse for UGS. Forks at the published gold contract — the Postgres
-`{schema}.{topic}_current` serving tables — and produces Iceberg tables,
+DuckLake lakehouse for UGS. Forks at the published gold contract — the Postgres
+`{schema}.{topic}_current` serving tables — and produces DuckLake tables,
 GeoParquet archives, PMTiles, and STAC items on GCS.
 
 ## Architecture
@@ -12,8 +12,8 @@ publish.sh (dataELT) → Pub/Sub {schema, topic}
 Cloud Run service (this repo)
    ↓
 DuckDB reads {schema}.{topic}_current from Cloud SQL (mapping-db)
-   ↓ reproject→4326 · h3_r9 · hilbert-sort · ST_AsWKB
-   ├─→ Iceberg table (WKB geom)      catalog: iceberg_catalog schema on mapping-db
+   ↓ confirm/reproject → 4326 · h3_r9 · hilbert-sort
+   ├─→ DuckLake table (native geom)  catalog: Postgres on mapping-db
    ├─→ GeoParquet archive (native)   gs://.../warehouse/geoparquet/{topic}/
    ├─→ PMTiles (vector, tippecanoe)  gs://.../warehouse/pmtiles/{topic}/
    └─→ STAC item                     gs://.../warehouse/stac/{topic}/
@@ -24,30 +24,30 @@ DuckDB reads {schema}.{topic}_current from Cloud SQL (mapping-db)
 | Concern | Choice |
 |---|---|
 | Compute engine | DuckDB embedded (single node — UGS fits) |
-| Lakehouse format | Iceberg (open multi-engine read; standard) |
-| Geometry in Iceberg | **WKB BLOB** — native geo lives in the GeoParquet archive |
-| Catalog | PyIceberg SQL catalog in a schema on the existing `mapping-db` Cloud SQL (no new database) |
+| Lakehouse format | DuckLake (native DuckDB geom + tz, simpler than Iceberg at this scale) |
+| Catalog | DuckLake-on-Postgres in the existing `mapping-db` Cloud SQL (no new database) |
+| Data files | parquet chunks on GCS |
 | Runtime | Cloud Run service, scale-to-zero |
 | Trigger | Pub/Sub from `publish.sh` (push subscription) |
 
-No Spark, no Dataproc. SedonaDB single-node only re-enters if native geometry inside Iceberg becomes a hard requirement.
+No Spark, no Dataproc, no PyIceberg. Iceberg's multi-engine federation buys nothing at UGS scale; DuckLake handles native geometry + timestamps directly.
 
 ## Layout
 
 ```
 src/ugs_warehouse/
-├── topics.py        Topic primitives + runtime discover() (no hard-coded list)
-├── catalog.py       PyIceberg SQL catalog (mapping-db)
-├── source.py        Postgres _current reader (Cloud SQL Connector)
-├── transform.py     DuckDB reproject + h3 + hilbert + WKB
-├── sink_iceberg.py  Iceberg table write (WKB geom)
-├── sink_archive.py  GeoParquet archive write (native geom)
-├── sink_pmtiles.py  tippecanoe wrapper
-├── sink_stac.py     STAC item write
-└── ingest.py        per-topic orchestration
+├── topics.py         Topic primitives + runtime discover() (no hard-coded list)
+├── catalog.py        DuckLake ATTACH on mapping-db Postgres
+├── source.py         Postgres _current reader (Cloud SQL Connector)
+├── transform.py      DuckDB reproject + h3 + hilbert
+├── sink_ducklake.py  DuckLake table write (native geom)
+├── sink_archive.py   GeoParquet archive write (native geom)
+├── sink_pmtiles.py   tippecanoe wrapper
+├── sink_stac.py      STAC item write
+└── ingest.py         per-topic orchestration
 
-service/             Cloud Run service: Pub/Sub push → ingest
-scripts/             CLI: bootstrap catalog, manual ingest
+service/              Cloud Run service: Pub/Sub push → ingest
+scripts/              CLI: bootstrap catalog, manual ingest
 ```
 
 ## Local dev
@@ -59,8 +59,9 @@ cloud_sql_proxy -instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:543
 
 pip install -e ".[dev]"
 
-export ICEBERG_CATALOG_URI=postgresql+psycopg://$USER:$PASS@127.0.0.1:5432/seamlessgeolmap
-export ICEBERG_WAREHOUSE_PATH=gs://ut-dnr-ugs-maps-prod-public/warehouse/iceberg/
+export POSTGRES_DSN="host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=$USER password=$PASS"
+export DUCKLAKE_CATALOG_DSN="$POSTGRES_DSN"
+export DUCKLAKE_DATA_PATH=gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/
 
 # dotted form: schema.layer_current
 python -m ugs_warehouse.ingest --topic hazards.hazards_qfaults_current

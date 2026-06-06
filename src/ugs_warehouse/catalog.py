@@ -1,49 +1,55 @@
-"""PyIceberg SQL catalog wired to the existing `mapping-db` Postgres.
+"""DuckLake catalog on Postgres (mapping-db).
 
-Catalog metadata lives in a dedicated schema (`iceberg_catalog`) on the same
-Cloud SQL instance that hosts the dbt marts. No new database. Data files
-(parquet manifests + data) live on GCS under WAREHOUSE_PATH.
+Catalog metadata lives in a DuckLake-managed Postgres database; data parquet
+chunks land in GCS under DATA_PATH. The catalog tables are auto-created by
+the DuckLake extension on first ATTACH.
 
 Env:
-  ICEBERG_CATALOG_URI    SQLAlchemy URI for the catalog Postgres
-                         e.g. postgresql+psycopg://user:pass@127.0.0.1:5432/seamlessgeolmap
-  ICEBERG_WAREHOUSE_PATH gs://ut-dnr-ugs-maps-prod-public/warehouse/iceberg/
+  DUCKLAKE_CATALOG_DSN  libpq DSN for the catalog Postgres
+                        e.g. host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=... password=...
+  DUCKLAKE_DATA_PATH    where parquet chunks live; default GCS prod path
 """
 from __future__ import annotations
 
 import os
 
-from pyiceberg.catalog import load_catalog
-from pyiceberg.catalog.sql import SqlCatalog
+import duckdb
 
-CATALOG_NAME = "ugs"
-CATALOG_SCHEMA = "iceberg_catalog"  # Postgres schema that holds catalog tables
-CATALOG_URI = os.environ.get("ICEBERG_CATALOG_URI", "")
-WAREHOUSE_PATH = os.environ.get(
-    "ICEBERG_WAREHOUSE_PATH",
-    "gs://ut-dnr-ugs-maps-prod-public/warehouse/iceberg/",
+CATALOG_ALIAS = "warehouse"
+CATALOG_DSN = os.environ.get("DUCKLAKE_CATALOG_DSN", "")
+DATA_PATH = os.environ.get(
+    "DUCKLAKE_DATA_PATH",
+    "gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/",
 )
 
 
-def catalog() -> SqlCatalog:
-    """Open the warehouse Iceberg SQL catalog."""
-    if not CATALOG_URI:
-        raise SystemExit(
-            "ICEBERG_CATALOG_URI not set — point it at the mapping-db Postgres "
-            "(see README)."
-        )
-    return load_catalog(
-        CATALOG_NAME,
-        type="sql",
-        uri=CATALOG_URI,
-        warehouse=WAREHOUSE_PATH,
-    )
+def attach(con: duckdb.DuckDBPyConnection) -> str:
+    """Attach the warehouse DuckLake to a DuckDB connection (idempotent).
 
-
-def iceberg_namespace(topic_schema: str) -> str:
-    """Iceberg namespace for a dbt mart schema.
-
-    One Iceberg namespace per dbt mart schema (`hazards`, `emp`, `gen_gis`),
-    keeping Iceberg table FQNs aligned with the source `{schema}.{topic}_current`.
+    Returns the alias to use in fully-qualified references, e.g.
+    f'{alias}.{schema}.{table}'.
     """
-    return topic_schema
+    if not CATALOG_DSN:
+        raise SystemExit(
+            "DUCKLAKE_CATALOG_DSN not set — point at the mapping-db Postgres"
+        )
+    # Idempotent: if already attached on this con, just return the alias.
+    row = con.execute(
+        "SELECT 1 FROM duckdb_databases() WHERE database_name = ?",
+        [CATALOG_ALIAS],
+    ).fetchone()
+    if row:
+        return CATALOG_ALIAS
+    for ext in ("httpfs", "spatial", "postgres", "ducklake"):
+        con.execute(f"INSTALL {ext};")
+        con.execute(f"LOAD {ext};")
+    con.execute(
+        f"ATTACH 'ducklake:postgres:{CATALOG_DSN}' AS {CATALOG_ALIAS} "
+        f"(DATA_PATH '{DATA_PATH}')"
+    )
+    return CATALOG_ALIAS
+
+
+def schemas_to_ensure() -> tuple[str, ...]:
+    """DuckLake schemas the bootstrap creates (matches mart schemas)."""
+    return ("hazards", "emp", "gen_gis")

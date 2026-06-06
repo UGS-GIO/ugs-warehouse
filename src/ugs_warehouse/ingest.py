@@ -4,7 +4,7 @@ For each topic:
   1. Read `{schema}.{topic}_current` from Postgres (`source`)
   2. Transform in DuckDB: hydrate WKB, confirm/reproject -> 4326, add h3_r9,
      hilbert-sort (`transform`)
-  3. Write Iceberg table — WKB geom (`sink_iceberg`)
+  3. Write DuckLake table — native geom (`sink_ducklake`)
   4. Emit GeoParquet archive — native geom, citable (`sink_archive`)
   5. Build PMTiles via tippecanoe (`sink_pmtiles`)
   6. Write STAC item (`sink_stac`)
@@ -20,7 +20,7 @@ import argparse
 import sys
 import traceback
 
-from . import sink_archive, sink_iceberg, sink_pmtiles, sink_stac, source, topics, transform
+from . import sink_archive, sink_ducklake, sink_pmtiles, sink_stac, source, topics, transform
 from .topics import Topic
 
 
@@ -52,10 +52,10 @@ def _ingest(topic: Topic, dry_run: bool = False) -> int:
 
     rc = 0
     for name, fn in [
-        ("iceberg", lambda: sink_iceberg.write(topic, con, view)),
-        ("archive", lambda: sink_archive.write(topic, con, view)),
-        ("pmtiles", lambda: sink_pmtiles.build(topic, con, view)),
-        ("stac",    lambda: sink_stac.write(topic, con, view)),
+        ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
+        ("archive",  lambda: sink_archive.write(topic, con, view)),
+        ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
+        ("stac",     lambda: sink_stac.write(topic, con, view)),
     ]:
         try:
             fn()

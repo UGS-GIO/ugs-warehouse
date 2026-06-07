@@ -132,20 +132,84 @@ So PostgREST is fine for iterating on emp/wetlands/mapping spatial topics today,
   sinks, both modes); DuckLake `METADATA_SCHEMA` pin into `ducklake_catalog`; single
   `AGENTS.md` replacing `CLAUDE.md`/`GEMINI.md`.
 
-### Next (immediate)
-- **First real ingest** — code + catalog + bucket ready. Do `gcloud auth
-  application-default login` on the work box, confirm write IAM on the bucket, then:
-  ```bash
-  export SOURCE_BACKEND=postgrest
-  export DUCKLAKE_CATALOG_DSN="host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=schema_owner password=..."
-  export DUCKLAKE_DATA_PATH="gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/ducklake/"
-  export WAREHOUSE_ARCHIVE_PREFIX="warehouse-sandbox/geoparquet"
-  export WAREHOUSE_PMTILES_PREFIX="warehouse-sandbox/pmtiles"
-  export WAREHOUSE_STAC_PREFIX="warehouse-sandbox/stac"
-  python -m scripts.bootstrap_catalog
+### Next (immediate) — first real ingest, work-box runbook
+
+Decisions: reuse bucket `ut-dnr-ugs-maps-prod-public` under a `warehouse-sandbox/`
+prefix (promote to `warehouse/` once it looks right); run manually on the work box
+to validate the full pipeline before any Cloud Run deploy. The four sinks write:
+DuckLake table (parquet chunks on GCS + metadata rows in Postgres), GeoParquet
+archive (parquet), PMTiles, STAC json — so two of four emit parquet, not just STAC.
+
+Run top to bottom; check output after each **CHECKPOINT** before continuing.
+
+```bash
+# 1. Code
+cd <ugs-warehouse>
+git pull
+python3 -m venv .venv && source .venv/bin/activate
+pip install -e ".[dev]"
+
+# 2. GCS auth
+gcloud auth application-default login
+gcloud auth application-default set-quota-project ut-dnr-ugs-maps-prod
+
+# 3. CHECKPOINT — confirm bucket write (403 => need roles/storage.objectAdmin)
+echo ok | gcloud storage cp - gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/_perm_check.txt
+gcloud storage rm gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/_perm_check.txt
+
+# 4. Proxy to mapping-db for the catalog — SECOND terminal, it blocks.
+#    Confirm region (us-west3 per README). v2 binary: cloud-sql-proxy <conn> --port 5432
+cloud_sql_proxy -instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5432
+
+# 5. Env (bucket is the code default; only prefixes + data path need overrides)
+export SOURCE_BACKEND=postgrest
+export DUCKLAKE_CATALOG_DSN="host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=schema_owner password=<PW>"
+export DUCKLAKE_DATA_PATH="gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/ducklake/"
+export WAREHOUSE_ARCHIVE_PREFIX="warehouse-sandbox/geoparquet"
+export WAREHOUSE_PMTILES_PREFIX="warehouse-sandbox/pmtiles"
+export WAREHOUSE_STAC_PREFIX="warehouse-sandbox/stac"
+
+# 6. CHECKPOINT — bootstrap (also proves schema_owner can CREATE in ducklake_catalog)
+python -m scripts.bootstrap_catalog        # expect: attached + 3 schema-ready lines
+
+# 7. CHECKPOINT — the real ingest
+python -m ugs_warehouse.ingest --topic emp.geothermal_kgra_current   # expect 4 sink lines
+
+# 8. Verify artifacts
+gcloud storage ls -r gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/
+```
+
+Likely snags (both OK): **tippecanoe** isn't pip-installed (it's baked into the Docker
+image only) — if absent the `pmtiles` sink fails but ducklake/archive/stac still write
+(per-sink isolation, rc=1); we get PMTiles in the container later. And confirm the
+`ducklake_catalog` schema actually lives in the `seamlessgeolmap` DB — fix `dbname=` if not.
+
+**Docker dress-rehearsal (do once before Cloud Run).** Sequence is venv (above) →
+docker → Cloud Run. The image is the real deploy artifact and includes tippecanoe, so
+this is the run where all 4 sinks (incl. pmtiles) should go green:
+
+```bash
+docker build -t ugs-warehouse .
+docker run --rm --network host \
+  -e SOURCE_BACKEND=postgrest \
+  -e DUCKLAKE_CATALOG_DSN="host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=schema_owner password=<PW>" \
+  -e DUCKLAKE_DATA_PATH="gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/ducklake/" \
+  -e WAREHOUSE_ARCHIVE_PREFIX="warehouse-sandbox/geoparquet" \
+  -e WAREHOUSE_PMTILES_PREFIX="warehouse-sandbox/pmtiles" \
+  -e WAREHOUSE_STAC_PREFIX="warehouse-sandbox/stac" \
+  -e GOOGLE_APPLICATION_CREDENTIALS=/adc.json \
+  -v "$HOME/.config/gcloud/application_default_credentials.json:/adc.json:ro" \
+  ugs-warehouse \
   python -m ugs_warehouse.ingest --topic emp.geothermal_kgra_current
-  ```
-  Expect 4 sink lines + artifacts under `warehouse-sandbox/` + a DuckLake table.
+```
+
+`--network host` lets the container reach the host's `cloud_sql_proxy` on
+127.0.0.1:5432 (Linux; on macOS use `host.docker.internal` in the DSN instead). The
+image CMD is uvicorn (the service) — we override it with the CLI for this one-shot.
+
+**Actual Cloud Run note (deploy-time, not now):** no `cloud_sql_proxy` process there —
+reach mapping-db via a Cloud SQL unix-socket mount or the `cloud-sql-python-connector`
+(already a dep, currently unused; code uses plain libpq DSN). Wire that at deploy.
 
 ### Parked
 - **Publish-allowlist on discover()** — guard SKIPs non-spatial/hidden topics gracefully,

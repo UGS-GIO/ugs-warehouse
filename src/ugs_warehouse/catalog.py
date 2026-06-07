@@ -21,6 +21,11 @@ DATA_PATH = os.environ.get(
     "DUCKLAKE_DATA_PATH",
     "gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/",
 )
+# Postgres schema DuckLake stores its metadata tables in. Must be a schema the
+# catalog DSN user can write to (mapping-db prod: `schema_owner` on
+# `ducklake_catalog`). DuckLake default is `main`; we pin it so the warehouse
+# never tries to create catalog tables in `public`.
+METADATA_SCHEMA = os.environ.get("DUCKLAKE_METADATA_SCHEMA", "ducklake_catalog")
 
 
 def attach(con: duckdb.DuckDBPyConnection) -> str:
@@ -45,7 +50,7 @@ def attach(con: duckdb.DuckDBPyConnection) -> str:
         con.execute(f"LOAD {ext};")
     con.execute(
         f"ATTACH 'ducklake:postgres:{CATALOG_DSN}' AS {CATALOG_ALIAS} "
-        f"(DATA_PATH '{DATA_PATH}')"
+        f"(DATA_PATH '{DATA_PATH}', METADATA_SCHEMA '{METADATA_SCHEMA}')"
     )
     return CATALOG_ALIAS
 

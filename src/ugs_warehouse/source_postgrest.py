@@ -42,6 +42,8 @@ POSTGREST_URL = os.environ.get(
 ).rstrip("/")
 PAGE = int(os.environ.get("POSTGREST_PAGE", "1000"))
 GEOM_COLUMN = "geom"  # UGS dbt convention
+# GeoJSON (RFC 7946): absence of a `crs` member means WGS84 / EPSG:4326.
+DEFAULT_EPSG = 4326
 _EPSG_RE = re.compile(r"EPSG:(\d+)", re.IGNORECASE)
 
 
@@ -118,9 +120,11 @@ def read(topic: Topic) -> pa.Table:
     for r in rows:
         g = r.pop(GEOM_COLUMN, None)
         r["geom_wkb"] = _to_wkb(g)
+        # Pre-cutover rows carry an explicit CRS extension (e.g. 3857); already-
+        # 4326 rows have no crs member. Default to 4326 rather than dropping the
+        # column, which would break transform's reproject CASE on target_epsg.
         epsg = _extract_epsg(g)
-        if epsg is not None:
-            r["target_epsg"] = epsg
+        r["target_epsg"] = epsg if epsg is not None else DEFAULT_EPSG
 
     return pa.Table.from_pylist(rows)
 

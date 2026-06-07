@@ -53,19 +53,35 @@ def _ingest(topic: Topic, dry_run: bool = False) -> int:
 
     con, view = transform.run(arrow_in)
 
+    count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
+    non_null = con.execute(
+        f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL"
+    ).fetchone()[0]
+
+    if non_null == 0:
+        # No usable geometry — non-spatial table, or the source backend could
+        # not read geom (e.g. PostgREST column-level grant hides it). Writing
+        # sinks here would emit empty/broken artifacts, so bail before them in
+        # both dry-run and real mode.
+        cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
+        print(f"[{topic.fqn}] SKIP: 0/{count} rows have geometry "
+              f"(non-spatial table, or geom not readable by this backend)",
+              file=sys.stderr)
+        print(f"  columns : {cols}", file=sys.stderr)
+        return 1
+
     if dry_run:
         # Validate source + transform without touching any sink.
-        count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
+        cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
+        sample = con.execute(f"SELECT * EXCLUDE (geom) FROM {view} LIMIT 1").fetchone()
         bbox = con.execute(f"""
             SELECT
               MIN(ST_XMin(geom)), MIN(ST_YMin(geom)),
               MAX(ST_XMax(geom)), MAX(ST_YMax(geom))
             FROM {view}
         """).fetchone()
-        cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
-        sample = con.execute(f"SELECT * EXCLUDE (geom) FROM {view} LIMIT 1").fetchone()
         print(f"[{topic.fqn}] DRY-RUN OK")
-        print(f"  rows after transform : {count}")
+        print(f"  rows after transform : {count} ({non_null} with geometry)")
         print(f"  bbox (4326)          : minx={bbox[0]:.6f} miny={bbox[1]:.6f} "
               f"maxx={bbox[2]:.6f} maxy={bbox[3]:.6f}")
         print(f"  columns              : {cols}")

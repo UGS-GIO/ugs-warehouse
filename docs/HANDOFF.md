@@ -158,12 +158,12 @@ echo ok | gcloud storage cp - gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox
 gcloud storage rm gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/_perm_check.txt
 
 # 4. Proxy to mapping-db for the catalog — SECOND terminal, it blocks.
-#    Confirm region (us-west3 per README). v2 binary: cloud-sql-proxy <conn> --port 5432
-cloud_sql_proxy -instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5432
+#    Confirm region (us-west3 per README). v2 binary: cloud-sql-proxy <conn> --port 5433
+cloud_sql_proxy -instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5433
 
 # 5. Env (bucket is the code default; only prefixes + data path need overrides)
 export SOURCE_BACKEND=postgrest
-export DUCKLAKE_CATALOG_DSN="host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=schema_owner password=<PW>"
+export DUCKLAKE_CATALOG_DSN="host=127.0.0.1 port=5433 dbname=seamlessgeolmap user=schema_owner password=<PW>"
 export DUCKLAKE_DATA_PATH="gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/ducklake/"
 export WAREHOUSE_ARCHIVE_PREFIX="warehouse-sandbox/geoparquet"
 export WAREHOUSE_PMTILES_PREFIX="warehouse-sandbox/pmtiles"
@@ -192,7 +192,7 @@ this is the run where all 4 sinks (incl. pmtiles) should go green:
 docker build -t ugs-warehouse .
 docker run --rm --network host \
   -e SOURCE_BACKEND=postgrest \
-  -e DUCKLAKE_CATALOG_DSN="host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=schema_owner password=<PW>" \
+  -e DUCKLAKE_CATALOG_DSN="host=127.0.0.1 port=5433 dbname=seamlessgeolmap user=schema_owner password=<PW>" \
   -e DUCKLAKE_DATA_PATH="gs://ut-dnr-ugs-maps-prod-public/warehouse-sandbox/ducklake/" \
   -e WAREHOUSE_ARCHIVE_PREFIX="warehouse-sandbox/geoparquet" \
   -e WAREHOUSE_PMTILES_PREFIX="warehouse-sandbox/pmtiles" \
@@ -204,7 +204,7 @@ docker run --rm --network host \
 ```
 
 `--network host` lets the container reach the host's `cloud_sql_proxy` on
-127.0.0.1:5432 (Linux; on macOS use `host.docker.internal` in the DSN instead). The
+127.0.0.1:5433 (Linux; on macOS use `host.docker.internal` in the DSN instead). The
 image CMD is uvicorn (the service) — we override it with the CLI for this one-shot.
 
 **Actual Cloud Run note (deploy-time, not now):** no `cloud_sql_proxy` process there —
@@ -233,6 +233,7 @@ reach mapping-db via a Cloud SQL unix-socket mount or the `cloud-sql-python-conn
 |---|---|---|
 | **`schema_reader` login on mapping-db** | marshallrobinson | `CREATE ROLE schema_reader LOGIN PASSWORD '…'; GRANT USAGE + SELECT ON ALL TABLES IN SCHEMA hazards, emp, gen_gis, wetlands, mapping; ALTER DEFAULT PRIVILEGES … GRANT SELECT ON TABLES`. Table SELECT includes `geom` (unlike `web_anon`) — unblocks hazards/gen_gis + full coverage + speed. Asked |
 | **Work-box GCS write auth/IAM** | Clinton | `gcloud auth application-default login`; confirm identity has `storage.objects.create` on `ut-dnr-ugs-maps-prod-public`. Last gate to first real ingest |
+| **Missing `target_epsg` column** | marshallrobinson | `emp.geothermal_kgra_current` table missing `target_epsg` expected by `transform.py`. Ingest dry-run: `FATAL: Binder Error: Referenced column "target_epsg" not found in FROM clause!` |
 
 Resolved this session: catalog write home (`schema_owner` + `METADATA_SCHEMA`); bucket
 name (`ut-dnr-ugs-maps-prod-public`).

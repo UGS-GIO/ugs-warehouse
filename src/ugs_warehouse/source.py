@@ -62,10 +62,15 @@ def read(topic: Topic) -> pa.Table:
     con = _connect()
     cols = _describe(con, topic)
     geom_col = _geom_column(cols)
-    other = [c for c, _ in cols if c != geom_col]
+    # Derive target_epsg from the geometry's own SRID — the WKB emitted by
+    # ST_AsBinary is in that CRS, so ST_SRID is authoritative. Don't depend on a
+    # literal target_epsg column (not all _current tables carry one yet). Drop
+    # any existing target_epsg to avoid a duplicate. SRID 0 (unset) -> 4326.
+    other = [c for c, _ in cols if c not in (geom_col, "target_epsg")]
     select_list = (
         ", ".join(f'"{c}"' for c in other)
         + f', ST_AsBinary("{geom_col}") AS geom_wkb'
+        + f', COALESCE(NULLIF(ST_SRID("{geom_col}"), 0), 4326) AS target_epsg'
     )
     pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}"'
     return con.execute(

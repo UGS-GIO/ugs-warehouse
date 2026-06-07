@@ -66,11 +66,11 @@ Switch back to `postgres` once direct DB creds land — only `source.py` changes
 Personal `gcloud` auth + the existing `cloud_sql_proxy` to reach `mapping-db`:
 
 ```bash
-cloud_sql_proxy -instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5432
+cloud_sql_proxy -instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5433
 
 pip install -e ".[dev]"
 
-export POSTGRES_DSN="host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=$USER password=$PASS"
+export POSTGRES_DSN="host=127.0.0.1 port=5433 dbname=seamlessgeolmap user=$USER password=$PASS"
 export DUCKLAKE_CATALOG_DSN="$POSTGRES_DSN"
 export DUCKLAKE_DATA_PATH=gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/
 

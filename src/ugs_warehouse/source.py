@@ -21,7 +21,7 @@ from .topics import MART_SCHEMAS, Topic
 
 POSTGRES_DSN = os.environ.get(
     "POSTGRES_DSN",
-    "host=127.0.0.1 port=5432 dbname=seamlessgeolmap",
+    "host=127.0.0.1 port=5433 dbname=seamlessgeolmap",
 )
 PG_ALIAS = "pg"
 

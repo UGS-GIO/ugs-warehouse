@@ -6,7 +6,7 @@ the DuckLake extension on first ATTACH.
 
 Env:
   DUCKLAKE_CATALOG_DSN  libpq DSN for the catalog Postgres
-                        e.g. host=127.0.0.1 port=5432 dbname=seamlessgeolmap user=... password=...
+                        e.g. host=127.0.0.1 port=5433 dbname=seamlessgeolmap user=... password=...
   DUCKLAKE_DATA_PATH    where parquet chunks live; default GCS prod path
 """
 from __future__ import annotations

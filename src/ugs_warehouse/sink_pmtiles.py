@@ -19,9 +19,11 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+from pathlib import Path
 
 import duckdb
-from google.cloud import storage
+import obstore as obs
+from obstore.store import GCSStore
 
 from .topics import Topic
 
@@ -33,8 +35,8 @@ PMTILES_MIME = "application/vnd.pmtiles"
 
 
 def _upload(local: str, gcs_object: str) -> None:
-    bucket = storage.Client().bucket(PMTILES_BUCKET)
-    bucket.blob(gcs_object).upload_from_filename(local, content_type=PMTILES_MIME)
+    store = GCSStore(bucket=PMTILES_BUCKET)
+    obs.put(store, gcs_object, Path(local), attributes={"Content-Type": PMTILES_MIME})
 
 
 def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:

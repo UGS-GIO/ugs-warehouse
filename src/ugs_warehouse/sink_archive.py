@@ -16,9 +16,11 @@ from __future__ import annotations
 import datetime
 import os
 import tempfile
+from pathlib import Path
 
 import duckdb
-from google.cloud import storage
+import obstore as obs
+from obstore.store import GCSStore
 
 from .topics import Topic
 
@@ -28,8 +30,8 @@ PARQUET_MIME = "application/vnd.apache.parquet"
 
 
 def _upload(local_path: str, gcs_object: str) -> None:
-    bucket = storage.Client().bucket(ARCHIVE_BUCKET)
-    bucket.blob(gcs_object).upload_from_filename(local_path, content_type=PARQUET_MIME)
+    store = GCSStore(bucket=ARCHIVE_BUCKET)
+    obs.put(store, gcs_object, Path(local_path), attributes={"Content-Type": PARQUET_MIME})
 
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:

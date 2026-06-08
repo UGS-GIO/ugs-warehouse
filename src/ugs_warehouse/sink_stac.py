@@ -17,9 +17,11 @@ import datetime
 import json
 import os
 import tempfile
+from pathlib import Path
 
 import duckdb
-from google.cloud import storage
+import obstore as obs
+from obstore.store import GCSStore
 
 from . import sink_archive, sink_pmtiles
 from .catalog import DATA_PATH
@@ -107,8 +109,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
         local = os.path.join(tmp, f"{topic.stem}.json")
         with open(local, "w") as f:
             json.dump(item, f, indent=2)
-        bucket = storage.Client().bucket(STAC_BUCKET)
+        store = GCSStore(bucket=STAC_BUCKET)
         gcs_object = f"{STAC_PREFIX}/{topic.stem}/{topic.stem}.json"
-        bucket.blob(gcs_object).upload_from_filename(local, content_type="application/json")
+        obs.put(store, gcs_object, Path(local), attributes={"Content-Type": "application/json"})
 
     print(f"[{topic.fqn}] stac: gs://{STAC_BUCKET}/{gcs_object}")

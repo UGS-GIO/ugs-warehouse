@@ -20,7 +20,16 @@ A DuckLake lakehouse that forks dataELT's published gold contract
 
 Pipeline is `source → transform → 4 sinks`, env-driven per topic in `ingest.py`.
 
-**State (2026-06-08):** Pipeline end-to-end verified for `emp.geothermal_kgra_current` (GeoParquet archive, PMTiles, STAC artifacts produced in sandbox GCS). Implemented `OVERRIDE_DATA_PATH` to enable sandbox cataloging; `sink_ducklake` remains blocked by GCS authentication failures (403 Forbidden) within the DuckDB `httpfs` extension, documented for further infrastructure review. All changes pushed to `main`.
+**State (2026-06-08):** Three of four sinks verified end-to-end on
+`emp.geothermal_kgra_current` — GeoParquet, PMTiles, STAC in sandbox GCS, now written
+via **obstore** (unified Rust S3/GCS/Azure client; replaced `google-cloud-storage` to
+cut vendor lock-in, CNG-aligned). Postgres source fixed to derive `target_epsg` from
+`ST_SRID` (no longer requires an upstream column). `OVERRIDE_DATA_PATH` added for sandbox
+cataloging. **One holdout — `sink_ducklake`:** DuckDB httpfs writes `gs://` via the
+S3-compat API, which needs **HMAC keys — blocked by org policy** (confirmed: `gcloud
+storage hmac create` denied). Reverted a hardcoded macOS ADC-path hack that broke the
+sink off-Mac and couldn't have worked (DuckDB GCS ignores ADC). DuckLake-on-GCS deferred
+to the Cloud Run step. Not yet deployed.
 
 ---
 
@@ -226,11 +235,12 @@ reach mapping-db via a Cloud SQL unix-socket mount or the `cloud-sql-python-conn
 | Blocker | Owner | Ask |
 |---|---|---|
 | **`schema_reader` login on mapping-db** | marshallrobinson | `CREATE ROLE schema_reader LOGIN PASSWORD '…'; GRANT USAGE + SELECT ON ALL TABLES IN SCHEMA hazards, emp, gen_gis, wetlands, mapping; ALTER DEFAULT PRIVILEGES … GRANT SELECT ON TABLES`. Table SELECT includes `geom` (unlike `web_anon`) — unblocks hazards/gen_gis + full coverage + speed. Asked |
-| **Work-box GCS write auth/IAM** | Clinton | `gcloud auth application-default login`; confirm identity has `storage.objects.create` on `ut-dnr-ugs-maps-prod-public`. Last gate to first real ingest |
-| **Missing `target_epsg` column** | marshallrobinson | `emp.geothermal_kgra_current` table missing `target_epsg` expected by `transform.py`. Ingest dry-run: `FATAL: Binder Error: Referenced column "target_epsg" not found in FROM clause!` |
+| **DuckLake-on-GCS write path** (deferred) | Clinton, at Cloud Run step | `sink_ducklake` 403s because DuckDB httpfs needs GCS **HMAC keys**, blocked by org policy. Not a Marshall ask. Decide at deploy: registry `gcs` community ext (`INSTALL gcs FROM community`, signed but low-adoption) **or** gcsfuse mount (Google-maintained, boring). Until then this sink fails, other 3 succeed (rc=1) |
 
 Resolved this session: catalog write home (`schema_owner` + `METADATA_SCHEMA`); bucket
-name (`ut-dnr-ugs-maps-prod-public`).
+name (`ut-dnr-ugs-maps-prod-public`); work-box GCS write (3 sinks writing to sandbox via
+obstore/ADC); `target_epsg` (derived from `ST_SRID` in `source.py`, commit `2284ad2` —
+this was a warehouse bug, **not** an upstream/Marshall gap as first logged).
 
 ---
 

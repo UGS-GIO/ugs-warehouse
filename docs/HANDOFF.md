@@ -20,13 +20,7 @@ A DuckLake lakehouse that forks dataELT's published gold contract
 
 Pipeline is `source → transform → 4 sinks`, env-driven per topic in `ingest.py`.
 
-**State (2026-06-07):** code end-to-end mock-validated; real-data dry-run validated via
-PostgREST across multiple topics (both reproject-3857→4326 and already-4326 paths).
-Catalog write home **resolved** (`schema_owner` + `METADATA_SCHEMA`). Bucket
-**resolved** (`ut-dnr-ugs-maps-prod-public`). **First real (non-dry-run) ingest is one
-step away** — only gated on work-box GCS auth. Full topic coverage still needs a
-direct-Postgres `schema_reader` login from marshallrobinson (PostgREST hides geom on
-hazards/gen_gis). Not yet deployed.
+**State (2026-06-08):** Pipeline end-to-end verified for `emp.geothermal_kgra_current` (GeoParquet archive, PMTiles, STAC artifacts produced in sandbox GCS). Implemented `OVERRIDE_DATA_PATH` to enable sandbox cataloging; `sink_ducklake` remains blocked by GCS authentication failures (403 Forbidden) within the DuckDB `httpfs` extension, documented for further infrastructure review. All changes pushed to `main`.
 
 ---
 

@@ -8,6 +8,7 @@ No WKB cast, no tz normalize — DuckLake stores native DuckDB types directly.
 """
 from __future__ import annotations
 
+import os
 import duckdb
 
 from . import catalog
@@ -16,6 +17,16 @@ from .topics import Topic
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
     """Overwrite the topic's DuckLake table with the transformed view."""
+    # Explicitly set GCS credentials
+    # DuckDB's httpfs extension picks up these settings
+    con.execute("SET s3_region='us-west3';") # GCS often needs a dummy region or specific bucket region
+    
+    # Try setting GCS specific creds if possible
+    # We can use the ADC path directly if DuckDB supports it via environment
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "/Users/clunn/.config/gcloud/application_default_credentials.json"
+    
+    con.execute("SET enable_http_metadata_cache = false;")
+    
     alias = catalog.attach(con)
     con.execute(f"CREATE SCHEMA IF NOT EXISTS {alias}.{topic.schema}")
     fqn = f"{alias}.{topic.schema}.{topic.stem}"

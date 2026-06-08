@@ -48,10 +48,19 @@ def attach(con: duckdb.DuckDBPyConnection) -> str:
     for ext in ("httpfs", "spatial", "postgres", "ducklake"):
         con.execute(f"INSTALL {ext};")
         con.execute(f"LOAD {ext};")
-    con.execute(
+    
+    # Check if override is enabled
+    override = os.environ.get("OVERRIDE_DATA_PATH", "False") == "True"
+    
+    cmd = (
         f"ATTACH 'ducklake:postgres:{CATALOG_DSN}' AS {CATALOG_ALIAS} "
-        f"(DATA_PATH '{DATA_PATH}', METADATA_SCHEMA '{METADATA_SCHEMA}')"
+        f"(DATA_PATH '{DATA_PATH}', METADATA_SCHEMA '{METADATA_SCHEMA}'"
     )
+    if override:
+        cmd += ", OVERRIDE_DATA_PATH TRUE"
+    cmd += ")"
+    
+    con.execute(cmd)
     return CATALOG_ALIAS
 
 

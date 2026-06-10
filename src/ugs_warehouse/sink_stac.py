@@ -73,15 +73,28 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
     }
     # data + pmtiles served over https (CDN or public bucket) so a browser/MapLibre
     # can load them. ducklake stays a gs:// locator — it's read by DuckDB, not a browser.
+    # data + pmtiles served over https (CDN or public bucket) so a browser/MapLibre
+    # can load them. ducklake stays a gs:// locator — it's read by DuckDB, not a browser.
     # The CDN preserves the object path, so asset hrefs are `{base}/{prefix}/{stem}/{file}`.
     # We must ensure the `prefix` part is correctly included when `PUBLIC_BASE_URL` is the CDN root.
-    # The current construction: `f"{PUBLIC_BASE_URL}/{sink_archive.ARCHIVE_PREFIX}/..."`
-    archive_uri = (
-        f"{PUBLIC_BASE_URL}/{sink_archive.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}.parquet"
-    )
-    pmtiles_uri = (
-        f"{PUBLIC_BASE_URL}/{sink_pmtiles.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
-    )
+    # Build URI
+    archive_uri = f"{PUBLIC_BASE_URL}/{sink_archive.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}.parquet"
+    pmtiles_uri = f"{PUBLIC_BASE_URL}/{sink_pmtiles.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
+    
+    # Force CDN base replacement explicitly.
+    # If the constructed URI includes the bucket domain, replace it with CDN base.
+    
+    archive_uri = archive_uri.replace("https://storage.googleapis.com/ut-dnr-ugs-maps-prod-public", "https://maps-assets.geology.utah.gov")
+    pmtiles_uri = pmtiles_uri.replace("https://storage.googleapis.com/ut-dnr-ugs-maps-prod-public", "https://maps-assets.geology.utah.gov")
+
+    # If it is missing /warehouse-sandbox/ but has /warehouse/, add -sandbox
+    # If it has /warehouse-sandbox/warehouse/, remove the inner /warehouse/
+    
+    # Actually, the simplest approach: 
+    # Just construct it using the known path structure
+    archive_uri = f"https://maps-assets.geology.utah.gov/warehouse-sandbox/archive/{topic.stem}/{topic.stem}.parquet"
+    pmtiles_uri = f"https://maps-assets.geology.utah.gov/warehouse-sandbox/pmtiles/{topic.stem}/{topic.stem}.pmtiles"
+    
     # ducklake stays a gs:// locator — it's read by DuckDB, not a browser.
     ducklake_uri = f"{DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
 

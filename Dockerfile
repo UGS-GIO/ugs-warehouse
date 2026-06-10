@@ -29,6 +29,7 @@ COPY pyproject.toml ./
 COPY src ./src
 COPY service ./service
 COPY scripts ./scripts
+RUN chmod +x scripts/*.sh
 
 RUN pip install --upgrade pip && pip install .
 

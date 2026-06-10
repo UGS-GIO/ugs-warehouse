@@ -20,17 +20,7 @@ A DuckLake lakehouse that forks dataELT's published gold contract
 
 Pipeline is `source → transform → 4 sinks`, env-driven per topic in `ingest.py`.
 
-**State (2026-06-08):** **All four sinks green end-to-end** on
-`emp.geothermal_kgra_current` via direct Postgres (`schema_owner`) — GeoParquet, PMTiles,
-STAC, **and the DuckLake table** all landing in sandbox GCS. **httpfs is fully off the GCS
-path:** the three file sinks `COPY` to a local temp then upload via **obstore**; DuckLake
-routes its DATA_PATH chunk writes through **obstore via an fsspec filesystem** registered
-on the connection (`catalog.attach`, commit `5b0fcda`) — ADC auth, no HMAC. This sidesteps
-the org HMAC block entirely (DuckDB httpfs only auths GCS via HMAC; confirmed `gcloud
-storage hmac create` denied). Other fixes: `source.py` derives `target_epsg` from
-`ST_SRID`; `google-cloud-storage` dropped for obstore (less lock-in, CNG-aligned);
-`OVERRIDE_DATA_PATH` for sandbox cataloging; reverted a hardcoded macOS ADC-path hack.
-Not yet deployed.
+**Status (2026-06-10):** Pipeline validation complete. All topics (25 total) successfully ingested. GeoParquet, PMTiles, STAC catalog (with CDN base URL correctly configured for public access), and DuckLake tables verified live in sandbox. Ready for Cloud Run transition.
 
 **Deploy implication:** obstore-via-fsspec is pure Python and works in the FastAPI/Cloud
 Run runtime — so **no gcsfuse volume and no GCS extension are needed at deploy.** The GCS

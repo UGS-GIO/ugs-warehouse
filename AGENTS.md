@@ -93,12 +93,27 @@ happens on the next publish) to avoid retry storms.
 
 **DuckLake catalog** (`catalog.py`): catalog metadata lives in a DuckLake-managed
 Postgres DB (mapping-db in prod, or a local docker pg for dev); parquet data chunks
-land in GCS under `DUCKLAKE_DATA_PATH`. `attach()` is idempotent and loads the
-`httpfs/spatial/postgres/ducklake` extensions, and pins DuckLake's metadata tables
-into the `METADATA_SCHEMA` (`DUCKLAKE_METADATA_SCHEMA` env, default `ducklake_catalog`)
-so they never land in the catalog DB's `public` — the catalog DSN user (prod:
-`schema_owner`) only needs CREATE on that one schema. `sink_ducklake` does `CREATE OR
-REPLACE TABLE` per ingest — DuckLake's snapshot model keeps prior versions readable by id.
+land in GCS under `DUCKLAKE_DATA_PATH`. `attach()` is idempotent, loads the
+`spatial/postgres/ducklake` extensions, and pins DuckLake's metadata tables into the
+`METADATA_SCHEMA` (`DUCKLAKE_METADATA_SCHEMA` env, default `ducklake_catalog`) so they
+never land in the catalog DB's `public` — the catalog DSN user (prod: `schema_owner`)
+only needs CREATE on that one schema. `sink_ducklake` does `CREATE OR REPLACE TABLE`
+per ingest — DuckLake's snapshot model keeps prior versions readable by id.
+
+**GCS IO — do NOT re-add httpfs for GCS.** DuckDB's `httpfs` reaches GCS only via the
+S3-compat API with **HMAC keys**, which org policy blocks. So nothing in this repo
+writes GCS through httpfs:
+- The file sinks (`sink_archive`, `sink_pmtiles`, `sink_stac`) `COPY`/write to a **local
+  temp file**, then upload with **obstore** (`GCSStore` + `obs.put`, ADC auth).
+- `sink_ducklake` can't stage locally (DuckLake writes its own chunks during `CREATE
+  TABLE`), so on a `gs://` DATA_PATH `catalog.attach()` **skips httpfs** and registers
+  **obstore via fsspec** on the connection (`register("gs")` +
+  `con.register_filesystem(filesystem("gs"))`). DuckLake honors that fsspec filesystem
+  for its DATA_PATH writes (duckdb/ducklake#628) — ADC auth, no HMAC.
+
+All GCS auth is therefore ADC / Workload Identity, identical local and on Cloud Run —
+**no gcsfuse, no GCS extension, no HMAC.** If you see a GCS 403, the fix is the fsspec
+registration, never re-enabling httpfs.
 
 > Note: DuckLake replaced an earlier Iceberg implementation (commit `d62e423`). Some
 > docstrings still say "iceberg" / "sink_iceberg" — those are stale comments, not
@@ -106,7 +121,7 @@ REPLACE TABLE` per ingest — DuckLake's snapshot model keeps prior versions rea
 
 **PMTiles** (`sink_pmtiles.py`) shells out to the `tippecanoe` binary (built into the
 Docker image; not a Python dep) — DuckDB writes GeoJSONSeq to a temp file, tippecanoe
-produces the `.pmtiles`, then it uploads to GCS.
+produces the `.pmtiles`, then it uploads to GCS via obstore.
 
 ## Environment variables
 
@@ -116,13 +131,15 @@ produces the `.pmtiles`, then it uploads to GCS.
 | `POSTGRES_DSN` | `source.py` | libpq DSN; local dev via `cloud_sql_proxy` |
 | `POSTGREST_URL` / `POSTGREST_PAGE` | `source_postgrest.py` | HTTP bandaid backend |
 | `DUCKLAKE_CATALOG_DSN` | `catalog.py` | libpq DSN for catalog Postgres (required) |
-| `DUCKLAKE_DATA_PATH` | `catalog.py` | GCS path for parquet chunks |
+| `DUCKLAKE_DATA_PATH` | `catalog.py` | data-chunk path; `gs://…` triggers the obstore-fsspec route |
 | `DUCKLAKE_METADATA_SCHEMA` | `catalog.py` | Postgres schema for DuckLake metadata tables (default `ducklake_catalog`) |
+| `OVERRIDE_DATA_PATH` | `catalog.py` | `True` adds `OVERRIDE_DATA_PATH TRUE` to ATTACH — use when DATA_PATH differs from what the catalog recorded (e.g. sandbox vs prod) |
 | `WAREHOUSE_{ARCHIVE,PMTILES,STAC}_{BUCKET,PREFIX}` | sinks | GCS output targets |
 | `TIPPECANOE_BIN` / `TIPPECANOE_OPTS` | `sink_pmtiles.py` | binary path + extra flags |
 
-GCS writes go through DuckDB httpfs / `google-cloud-storage`, so the runtime needs
-`gcloud auth application-default login` (local) or a service account (Cloud Run).
+All GCS access (obstore for the file sinks, obstore-fsspec for DuckLake) uses ADC, so
+the runtime needs `gcloud auth application-default login` (local) or a service account /
+Workload Identity (Cloud Run). No HMAC keys, no gcsfuse.
 
 ## Conventions
 

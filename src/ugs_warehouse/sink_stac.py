@@ -30,11 +30,16 @@ from .topics import Topic
 STAC_BUCKET = os.environ.get("WAREHOUSE_STAC_BUCKET", "ut-dnr-ugs-maps-prod-public")
 STAC_PREFIX = os.environ.get("WAREHOUSE_STAC_PREFIX", "warehouse/stac")
 CATALOG_ID = "ugs-warehouse"
-# Public base URL the data/pmtiles assets are served from — the maps-assets CDN.
-# The CDN preserves the object path, so asset hrefs are `{base}/{prefix}/{stem}/{file}`.
-# The raw bucket is NOT public (CDN is the only public read surface), so there is no
-# bucket fallback — required. Browsers/MapLibre can't fetch `gs://`, hence https.
-PUBLIC_BASE_URL = os.environ.get("WAREHOUSE_PUBLIC_BASE_URL", "").rstrip("/")
+# Public base URL the data/pmtiles assets are served from. The raw bucket is private;
+# the maps-assets CDN is the only public read surface, and it maps to the bucket's base
+# folder with the object path preserved — so an object at `<prefix>/<file>` in the bucket
+# is reachable at `https://maps-assets.geology.utah.gov/<prefix>/<file>`. Asset hrefs are
+# therefore `{PUBLIC_BASE_URL}/{prefix}/{stem}/{file}`. Browsers/MapLibre can't fetch
+# `gs://`, so these must be https. Override the env only for a different CDN/host.
+PUBLIC_BASE_URL = os.environ.get(
+    "WAREHOUSE_PUBLIC_BASE_URL",
+    "https://maps-assets.geology.utah.gov",
+).rstrip("/")
 
 
 def _bbox(con: duckdb.DuckDBPyConnection, view: str) -> list[float]:
@@ -71,18 +76,14 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
             [bbox[0], bbox[1]],
         ]],
     }
-    # data + pmtiles served over https (CDN or public bucket) so a browser/MapLibre
-    # can load them. ducklake stays a gs:// locator — it's read by DuckDB, not a browser.
-    # The CDN preserves the object path, so asset hrefs are `{base}/{prefix}/{stem}/{file}`.
-    # We must ensure the `prefix` part is correctly included when `PUBLIC_BASE_URL` is the CDN root.
-    # The current construction: `f"{PUBLIC_BASE_URL}/{sink_archive.ARCHIVE_PREFIX}/..."`
+    # data + pmtiles served over https via the CDN so a browser/MapLibre can load them.
+    # ducklake stays a gs:// locator — it's read by DuckDB, not a browser.
     archive_uri = (
         f"{PUBLIC_BASE_URL}/{sink_archive.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}.parquet"
     )
     pmtiles_uri = (
         f"{PUBLIC_BASE_URL}/{sink_pmtiles.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     )
-    # ducklake stays a gs:// locator — it's read by DuckDB, not a browser.
     ducklake_uri = f"{DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
 
     item = {

@@ -4,7 +4,7 @@
 current state, what's done, what's blocked, the immediate next move.
 
 **Live working doc** — tracked so it syncs across machines. Refresh as state changes;
-retire once deployed. Last refreshed **2026-06-07**.
+retire once deployed. Last refreshed **2026-06-10**.
 
 ---
 
@@ -129,16 +129,48 @@ So PostgREST is fine for iterating on emp/wetlands/mapping spatial topics today,
 - **2026-06-07:** `target_epsg` CRS-default fix; geometry guard (SKIP 0-geom before
   sinks, both modes); DuckLake `METADATA_SCHEMA` pin into `ducklake_catalog`; single
   `AGENTS.md` replacing `CLAUDE.md`/`GEMINI.md`.
+- **2026-06-08:** obstore replaces `google-cloud-storage` (file sinks); DuckLake GCS
+  writes via **obstore-fsspec** — httpfs/HMAC fully sidestepped, all 4 sinks green;
+  postgres source derives `target_epsg` from `ST_SRID`; auto-rebuilt static STAC root
+  catalog after each ingest (`scripts/refresh_stac.py` for on-demand); `docs/RASTER.md`.
+- **2026-06-10:** full `--all` — **25 spatial topics** ingested end-to-end via direct
+  postgres + `schema_owner` (full geom coverage incl. hazards/gen_gis — the postgrest
+  hidden-geom problem is gone on this path). STAC asset hrefs default to the maps-assets
+  CDN (`https://maps-assets.geology.utah.gov`, path-preserved; bucket private).
 
-### Next (immediate) — first real ingest, work-box runbook
+### Next — deploy + viewability
 
-Decisions: reuse bucket `ut-dnr-ugs-maps-prod-public` under a `warehouse-sandbox/`
-prefix (promote to `warehouse/` once it looks right); run manually on the work box
-to validate the full pipeline before any Cloud Run deploy. The four sinks write:
-DuckLake table (parquet chunks on GCS + metadata rows in Postgres), GeoParquet
-archive (parquet), PMTiles, STAC json — so two of four emit parquet, not just STAC.
+Local pipeline is **validated at scale** (25 topics, all 4 artifacts each). Re-run any
+time: `./scripts/run_ingest.sh --all` (or `--topic <schema.layer_current>`) — DB password
+from Secret Manager, config from `.env`. Two tracks from here:
 
-Run top to bottom; check output after each **CHECKPOINT** before continuing.
+**Deploy (Cloud Run).**
+- `cloudbuild.yaml`: build image → Artifact Registry → deploy Cloud Run.
+- GH Actions: **WIF (keyless)** auth + `ruff` gate → trigger Cloud Build. Boss's GH SA
+  has `artifactregistry.writer`; still needs `run.developer` + `iam.serviceAccountUser`
+  (on the runtime SA), or `cloudbuild.builds.editor` if Cloud Build does the deploy.
+- Runtime SA (Cloud Run identity, **≠** the GH SA): `storage.objectAdmin` (bucket) +
+  `cloudsql.client` (mappingdb) + `secretmanager.secretAccessor` (DB password).
+- Mapping-db reach on Cloud Run: unix-socket mount or `cloud-sql-python-connector` (dep
+  present, unused) — no `cloud_sql_proxy` process there.
+- Pub/Sub push from dataELT `publish.sh` → the service (coordinate the emit line with
+  marshallrobinson).
+
+**Viewability.**
+- STAC hrefs use the CDN by default (browsers can't fetch `gs://`). Confirm **CORS on the
+  CDN** — browser-only concern, irrelevant to CI/ingest.
+- Stand up **STAC Browser** (static) → `https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json`.
+- Enrich catalog: per-schema collections + spatial/temporal extents + `proj` extension;
+  fix `datetime` (currently ingest-time, not data validity time).
+- PMTiles render via MapLibre (standalone preview or wire into `ugs-map-viewer`).
+
+**Rasters** (soil-water model + one-off): parallel `raster_ingest` path — COG + STAC
+primary, RaQuet optional. Design in `docs/RASTER.md`. Not started.
+
+### Reference — first-ingest + docker runbook (validated; kept for env/DSN detail)
+
+The commands below are what validated the pipeline; `run_ingest.sh` now wraps this env.
+Kept for the explicit env-var list + the docker dress-rehearsal.
 
 ```bash
 # 1. Code
@@ -216,11 +248,9 @@ reach mapping-db via a Cloud SQL unix-socket mount or the `cloud-sql-python-conn
   (decide per-layer what the warehouse emits, not inherit `web_anon`'s grants).
 - **Non-spatial attribute tables** (chem, lookups) — defer; eventual design = DuckLake +
   GeoParquet siblings cross-linked via STAC parent/child links.
-- **GCP deploy infra** (SA, Artifact Registry, Cloud Run, Pub/Sub) — after first real
-  ingest validates against real data.
 
 ### Not started
-- Tests dir / CI workflow.
+- Tests dir / CI workflow (GH Actions deploy scaffolding is the next concrete artifact).
 - marshallrobinson coordination on `publish.sh` Pub/Sub emit line.
 
 ---

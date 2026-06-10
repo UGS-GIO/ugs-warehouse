@@ -45,10 +45,29 @@ def attach(con: duckdb.DuckDBPyConnection) -> str:
     ).fetchone()
     if row:
         return CATALOG_ALIAS
-    for ext in ("httpfs", "spatial", "postgres", "ducklake"):
+
+    is_gcs = DATA_PATH.startswith(("gs://", "gcs://"))
+
+    # For GCS we route DuckLake's data-file IO through obstore via fsspec, NOT
+    # httpfs: httpfs only auths to GCS with HMAC keys, which org policy blocks.
+    # We skip loading httpfs on the GCS path so it can't shadow the gs:// scheme
+    # the fsspec filesystem handles. (httpfs is still loaded for s3/other.)
+    exts = ("spatial", "postgres", "ducklake") if is_gcs else (
+        "httpfs", "spatial", "postgres", "ducklake"
+    )
+    for ext in exts:
         con.execute(f"INSTALL {ext};")
         con.execute(f"LOAD {ext};")
-    
+
+    if is_gcs:
+        # DuckLake honors a Python-registered fsspec filesystem for its DATA_PATH
+        # writes (duckdb/ducklake#628). obstore's fsspec adapter authenticates via
+        # ADC — no HMAC. Python-client only, which fits our FastAPI/CLI runtime.
+        from fsspec import filesystem
+        from obstore.fsspec import register as register_obstore
+        register_obstore("gs")
+        con.register_filesystem(filesystem("gs"))
+
     # Check if override is enabled
     override = os.environ.get("OVERRIDE_DATA_PATH", "False") == "True"
     

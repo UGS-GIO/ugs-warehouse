@@ -8,6 +8,7 @@ dependencies = [
   "pyarrow>=17",
   "cloud-sql-python-connector>=1.11",
   "obstore>=0.10",       # unified S3/GCS/Azure object client (Rust); GCS sinks
+  "fsspec>=2024.6",      # obstore fsspec adapter -> DuckLake GCS IO (no httpfs/HMAC)
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion

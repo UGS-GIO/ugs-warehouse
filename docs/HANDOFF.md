@@ -20,16 +20,21 @@ A DuckLake lakehouse that forks dataELT's published gold contract
 
 Pipeline is `source → transform → 4 sinks`, env-driven per topic in `ingest.py`.
 
-**State (2026-06-08):** Three of four sinks verified end-to-end on
-`emp.geothermal_kgra_current` — GeoParquet, PMTiles, STAC in sandbox GCS, now written
-via **obstore** (unified Rust S3/GCS/Azure client; replaced `google-cloud-storage` to
-cut vendor lock-in, CNG-aligned). Postgres source fixed to derive `target_epsg` from
-`ST_SRID` (no longer requires an upstream column). `OVERRIDE_DATA_PATH` added for sandbox
-cataloging. **One holdout — `sink_ducklake`:** DuckDB httpfs writes `gs://` via the
-S3-compat API, which needs **HMAC keys — blocked by org policy** (confirmed: `gcloud
-storage hmac create` denied). Reverted a hardcoded macOS ADC-path hack that broke the
-sink off-Mac and couldn't have worked (DuckDB GCS ignores ADC). DuckLake-on-GCS deferred
-to the Cloud Run step. Not yet deployed.
+**State (2026-06-08):** **All four sinks green end-to-end** on
+`emp.geothermal_kgra_current` via direct Postgres (`schema_owner`) — GeoParquet, PMTiles,
+STAC, **and the DuckLake table** all landing in sandbox GCS. **httpfs is fully off the GCS
+path:** the three file sinks `COPY` to a local temp then upload via **obstore**; DuckLake
+routes its DATA_PATH chunk writes through **obstore via an fsspec filesystem** registered
+on the connection (`catalog.attach`, commit `5b0fcda`) — ADC auth, no HMAC. This sidesteps
+the org HMAC block entirely (DuckDB httpfs only auths GCS via HMAC; confirmed `gcloud
+storage hmac create` denied). Other fixes: `source.py` derives `target_epsg` from
+`ST_SRID`; `google-cloud-storage` dropped for obstore (less lock-in, CNG-aligned);
+`OVERRIDE_DATA_PATH` for sandbox cataloging; reverted a hardcoded macOS ADC-path hack.
+Not yet deployed.
+
+**Deploy implication:** obstore-via-fsspec is pure Python and works in the FastAPI/Cloud
+Run runtime — so **no gcsfuse volume and no GCS extension are needed at deploy.** The GCS
+auth story is the same local and on Cloud Run (ADC / Workload Identity).
 
 ---
 
@@ -234,13 +239,13 @@ reach mapping-db via a Cloud SQL unix-socket mount or the `cloud-sql-python-conn
 
 | Blocker | Owner | Ask |
 |---|---|---|
-| **`schema_reader` login on mapping-db** | marshallrobinson | `CREATE ROLE schema_reader LOGIN PASSWORD '…'; GRANT USAGE + SELECT ON ALL TABLES IN SCHEMA hazards, emp, gen_gis, wetlands, mapping; ALTER DEFAULT PRIVILEGES … GRANT SELECT ON TABLES`. Table SELECT includes `geom` (unlike `web_anon`) — unblocks hazards/gen_gis + full coverage + speed. Asked |
-| **DuckLake-on-GCS write path** (deferred) | Clinton, at Cloud Run step | `sink_ducklake` 403s because DuckDB httpfs needs GCS **HMAC keys**, blocked by org policy. Not a Marshall ask. Decide at deploy: registry `gcs` community ext (`INSTALL gcs FROM community`, signed but low-adoption) **or** gcsfuse mount (Google-maintained, boring). Until then this sink fails, other 3 succeed (rc=1) |
+| **`schema_reader` least-priv read login** (prod hardening, not a blocker) | marshallrobinson | Reads currently run as `schema_owner` (works, full geom). That's over-privileged for a runtime read identity — `schema_owner` is a write/owner role. Want a minimal read-only login for prod: `CREATE ROLE schema_reader LOGIN …; GRANT USAGE + SELECT ON ALL TABLES IN SCHEMA hazards, emp, gen_gis, wetlands, mapping; ALTER DEFAULT PRIVILEGES … GRANT SELECT ON TABLES`. Not blocking — downgraded from blocker to hardening |
 
 Resolved this session: catalog write home (`schema_owner` + `METADATA_SCHEMA`); bucket
-name (`ut-dnr-ugs-maps-prod-public`); work-box GCS write (3 sinks writing to sandbox via
-obstore/ADC); `target_epsg` (derived from `ST_SRID` in `source.py`, commit `2284ad2` —
-this was a warehouse bug, **not** an upstream/Marshall gap as first logged).
+name (`ut-dnr-ugs-maps-prod-public`); **all 4 sinks writing to sandbox GCS** via obstore
+(file sinks) + obstore-fsspec (DuckLake, commit `5b0fcda`) — **httpfs/HMAC fully sidestepped**;
+`target_epsg` (derived from `ST_SRID` in `source.py`, commit `2284ad2` — a warehouse bug,
+**not** an upstream/Marshall gap as first logged).
 
 ---
 

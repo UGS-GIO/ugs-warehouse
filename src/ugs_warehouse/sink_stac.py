@@ -30,6 +30,11 @@ from .topics import Topic
 STAC_BUCKET = os.environ.get("WAREHOUSE_STAC_BUCKET", "ut-dnr-ugs-maps-prod-public")
 STAC_PREFIX = os.environ.get("WAREHOUSE_STAC_PREFIX", "warehouse/stac")
 CATALOG_ID = "ugs-warehouse"
+# Public base URL the data/pmtiles assets are served from — the maps-assets CDN.
+# The CDN preserves the object path, so asset hrefs are `{base}/{prefix}/{stem}/{file}`.
+# The raw bucket is NOT public (CDN is the only public read surface), so there is no
+# bucket fallback — required. Browsers/MapLibre can't fetch `gs://`, hence https.
+PUBLIC_BASE_URL = os.environ.get("WAREHOUSE_PUBLIC_BASE_URL", "").rstrip("/")
 
 
 def _bbox(con: duckdb.DuckDBPyConnection, view: str) -> list[float]:
@@ -47,6 +52,11 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
 
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
+    if not PUBLIC_BASE_URL:
+        raise RuntimeError(
+            "WAREHOUSE_PUBLIC_BASE_URL not set — STAC asset hrefs need the public "
+            "CDN base (the raw bucket is private). Set it to the maps-assets CDN."
+        )
     bbox = _bbox(con, view)
     count = _row_count(con, view)
     now = datetime.datetime.now(datetime.UTC).isoformat()
@@ -61,12 +71,14 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
             [bbox[0], bbox[1]],
         ]],
     }
+    # data + pmtiles served over https (CDN or public bucket) so a browser/MapLibre
+    # can load them. ducklake stays a gs:// locator — it's read by DuckDB, not a browser.
     archive_uri = (
-        f"gs://{sink_archive.ARCHIVE_BUCKET}/"
+        f"{PUBLIC_BASE_URL}/"
         f"{sink_archive.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}.parquet"
     )
     pmtiles_uri = (
-        f"gs://{sink_pmtiles.PMTILES_BUCKET}/"
+        f"{PUBLIC_BASE_URL}/"
         f"{sink_pmtiles.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     )
     ducklake_uri = f"{DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"

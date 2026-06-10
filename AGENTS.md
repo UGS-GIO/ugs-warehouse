@@ -146,7 +146,7 @@ produces the `.pmtiles`, then it uploads to GCS via obstore.
 | `DUCKLAKE_METADATA_SCHEMA` | `catalog.py` | Postgres schema for DuckLake metadata tables (default `ducklake_catalog`) |
 | `OVERRIDE_DATA_PATH` | `catalog.py` | `True` adds `OVERRIDE_DATA_PATH TRUE` to ATTACH — use when DATA_PATH differs from what the catalog recorded (e.g. sandbox vs prod) |
 | `WAREHOUSE_{ARCHIVE,PMTILES,STAC}_{BUCKET,PREFIX}` | sinks | GCS output targets |
-| `WAREHOUSE_PUBLIC_BASE_URL` | `sink_stac.py` | https base for STAC asset hrefs — the maps-assets CDN in prod; defaults to the public bucket URL (browsers can't fetch `gs://`) |
+| `WAREHOUSE_PUBLIC_BASE_URL` | `sink_stac.py` | **required** https base for STAC asset hrefs — the maps-assets CDN (path-preserved). No bucket fallback: the raw bucket is private, CDN is the only public read surface. `sink_stac` errors if unset |
 | `TIPPECANOE_BIN` / `TIPPECANOE_OPTS` | `sink_pmtiles.py` | binary path + extra flags |
 
 All GCS access (obstore for the file sinks, obstore-fsspec for DuckLake) uses ADC, so

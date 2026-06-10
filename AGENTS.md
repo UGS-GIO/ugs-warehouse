@@ -91,6 +91,17 @@ try/except: one sink failing is logged to stderr and sets `rc=1` but never crash
 others. The Cloud Run handler acks the Pub/Sub message even on `rc!=0` (recovery
 happens on the next publish) to avoid retry storms.
 
+**STAC catalog auto-refreshes.** `sink_stac.write()` emits a per-topic item; then, after
+the sinks, `_ingest()` calls `sink_stac.refresh_catalog()`, which **lists the item files
+in GCS and rewrites the root `catalog.json`** — so the static catalog stays current with
+no manual regen step. It's derive-from-truth (lists actual items, not a mutated shared
+file), so concurrent ingests just converge (last writer wins, self-heals next ingest).
+Pure helpers `_item_hrefs` / `_catalog_doc` hold the logic; keep them pure for testing.
+
+**Rasters** are a planned parallel pipeline (COG + STAC primary; RaQuet optional),
+sharing the STAC catalog + GCS + obstore layers. See `docs/RASTER.md` — design only,
+not implemented.
+
 **DuckLake catalog** (`catalog.py`): catalog metadata lives in a DuckLake-managed
 Postgres DB (mapping-db in prod, or a local docker pg for dev); parquet data chunks
 land in GCS under `DUCKLAKE_DATA_PATH`. `attach()` is idempotent, loads the

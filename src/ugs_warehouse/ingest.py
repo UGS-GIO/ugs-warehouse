@@ -102,6 +102,16 @@ def _ingest(topic: Topic, dry_run: bool = False) -> int:
             print(f"[{topic.fqn}] sink {name} FAILED: {e}", file=sys.stderr)
             traceback.print_exc()
             rc = 1
+
+    # Rebuild the static root STAC catalog so it reflects this item (and all
+    # prior ones) — keeps discovery current with no manual regen. Same
+    # per-sink isolation: a refresh failure logs + sets rc but never raises.
+    try:
+        sink_stac.refresh_catalog()
+    except Exception as e:
+        print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
+        traceback.print_exc()
+        rc = 1
     return rc
 
 

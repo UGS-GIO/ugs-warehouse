@@ -29,6 +29,7 @@ from .topics import Topic
 
 STAC_BUCKET = os.environ.get("WAREHOUSE_STAC_BUCKET", "ut-dnr-ugs-maps-prod-public")
 STAC_PREFIX = os.environ.get("WAREHOUSE_STAC_PREFIX", "warehouse/stac")
+CATALOG_ID = "ugs-warehouse"
 
 
 def _bbox(con: duckdb.DuckDBPyConnection, view: str) -> list[float]:
@@ -102,7 +103,11 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
                 "title": "DuckLake table (native geometry)",
             },
         },
-        "links": [],
+        "links": [
+            {"rel": "root", "href": "../catalog.json", "type": "application/json"},
+            {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
+            {"rel": "self", "href": f"./{topic.stem}.json", "type": "application/geo+json"},
+        ],
     }
 
     with tempfile.TemporaryDirectory() as tmp:
@@ -114,3 +119,61 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
         obs.put(store, gcs_object, Path(local), attributes={"Content-Type": "application/json"})
 
     print(f"[{topic.fqn}] stac: gs://{STAC_BUCKET}/{gcs_object}")
+
+
+def _item_hrefs(paths: list[str]) -> list[str]:
+    """Catalog-relative item hrefs from GCS object paths under STAC_PREFIX.
+
+    Items live one dir down as `<stem>/<stem>.json`; the root `catalog.json`
+    and any other top-level files are skipped. Sorted for stable output.
+    """
+    hrefs = []
+    for path in paths:
+        if not path.endswith(".json"):
+            continue
+        rel = path[len(STAC_PREFIX):].lstrip("/")
+        if "/" not in rel:  # top-level file (e.g. catalog.json) — not an item
+            continue
+        hrefs.append(f"./{rel}")
+    return sorted(set(hrefs))
+
+
+def _catalog_doc(item_hrefs: list[str]) -> dict:
+    """Build the static root STAC Catalog linking every item."""
+    return {
+        "type": "Catalog",
+        "stac_version": "1.0.0",
+        "id": CATALOG_ID,
+        "description": "UGS warehouse serving catalog — one STAC item per topic, "
+                       "each linking its GeoParquet, PMTiles, and DuckLake artifacts.",
+        "links": [
+            {"rel": "root", "href": "./catalog.json", "type": "application/json"},
+            {"rel": "self", "href": "./catalog.json", "type": "application/json"},
+            *[{"rel": "item", "href": h, "type": "application/geo+json"} for h in item_hrefs],
+        ],
+    }
+
+
+def refresh_catalog() -> None:
+    """Rebuild the static root catalog by listing item files in GCS.
+
+    Derive-from-truth: lists every `<stem>/<stem>.json` under STAC_PREFIX and
+    rewrites `catalog.json`. Called automatically after each ingest, so the
+    catalog stays current with no manual regen step. Idempotent; under
+    concurrent ingests the last writer wins (brief staleness, self-heals next
+    ingest).
+    """
+    store = GCSStore(bucket=STAC_BUCKET)
+    paths: list[str] = []
+    for batch in obs.list(store, prefix=STAC_PREFIX):
+        paths.extend(m["path"] for m in batch)
+
+    hrefs = _item_hrefs(paths)
+    with tempfile.TemporaryDirectory() as tmp:
+        local = os.path.join(tmp, "catalog.json")
+        with open(local, "w") as f:
+            json.dump(_catalog_doc(hrefs), f, indent=2)
+        obs.put(store, f"{STAC_PREFIX}/catalog.json", Path(local),
+                attributes={"Content-Type": "application/json"})
+
+    print(f"[catalog] stac: gs://{STAC_BUCKET}/{STAC_PREFIX}/catalog.json ({len(hrefs)} items)")

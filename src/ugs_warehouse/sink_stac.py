@@ -30,6 +30,9 @@ from .topics import Topic
 STAC_BUCKET = os.environ.get("WAREHOUSE_STAC_BUCKET", "ut-dnr-ugs-maps-prod-public")
 STAC_PREFIX = os.environ.get("WAREHOUSE_STAC_PREFIX", "warehouse/stac")
 CATALOG_ID = "ugs-warehouse"
+# web-map-links extension — lets STAC Browser v4+ render the PMTiles layer on the
+# item page (not just the footprint). https://github.com/stac-extensions/web-map-links
+WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 # Public base URL the data/pmtiles assets are served from. The raw bucket is private;
 # the maps-assets CDN is the only public read surface, and it maps to the bucket's base
 # folder with the object path preserved — so an object at `<prefix>/<file>` in the bucket
@@ -89,6 +92,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
     item = {
         "type": "Feature",
         "stac_version": "1.0.0",
+        "stac_extensions": [WEB_MAP_LINKS_EXT],
         "id": topic.stem,
         "geometry": geometry,
         "bbox": bbox,
@@ -122,6 +126,15 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": f"./{topic.stem}.json", "type": "application/geo+json"},
+            # web-map-links: makes STAC Browser v4+ render the actual layer on the item
+            # page (default/unstyled), not just the footprint. Source-layer name is the
+            # topic stem (tippecanoe `-l {stem}` in sink_pmtiles).
+            {
+                "rel": "pmtiles",
+                "href": pmtiles_uri,
+                "type": "application/vnd.pmtiles",
+                "pmtiles:layers": [topic.stem],
+            },
         ],
     }
 

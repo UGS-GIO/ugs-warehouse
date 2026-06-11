@@ -19,3 +19,6 @@ out/
 tmp/
 *.pmtiles
 *.parquet
+
+# generated discovery dump (not source)
+discovered_topics.txt

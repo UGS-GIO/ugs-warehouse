@@ -21,9 +21,9 @@ pip install -e ".[dev]"          # editable install + pytest/ruff
 ruff check src service scripts    # lint (line-length 100)
 
 # Manual ingest — dotted topic form schema.layer_current
-python -m ugs_warehouse.ingest --topic hazards.hazards_qfaults_current
-python -m ugs_warehouse.ingest --topic emp.geothermal_kgra_current --dry-run
-python -m ugs_warehouse.ingest --all      # runtime-discover every _current in MART_SCHEMAS
+python -m ugs_warehouse.vector.ingest --topic hazards.hazards_qfaults_current
+python -m ugs_warehouse.vector.ingest --topic emp.geothermal_kgra_current --dry-run
+python -m ugs_warehouse.vector.ingest --all      # runtime-discover every _current in MART_SCHEMAS
 
 python -m scripts.bootstrap_catalog        # idempotent: ATTACH DuckLake + create schemas
 
@@ -40,9 +40,21 @@ the sinks — see the geometry guard below.
 smoke recipe (Docker postgis + fake-gcs-server) described in `docs/HANDOFF.md`. If you
 add tests, `pytest` is already a dev dep but no `tests/` dir exists.
 
-## Architecture
+## Layout
 
-Pipeline is `source → transform → 4 sinks`, orchestrated per topic in `ingest.py`:
+Two **producers** on a **shared core**:
+- `core/` — `config` (one `WAREHOUSE_BUCKET` + CDN `PUBLIC_BASE_URL` + prefixes), `gcs` (obstore
+  upload/list + Cache-Control + CDN URLs), `stac` (item builder, collections hierarchy,
+  derive-from-truth catalog refresh, web-map-links, titles). **Both producers emit through this.**
+- `vector/` — producer A: Postgres `_current` topics → DuckLake + GeoParquet + PMTiles + STAC.
+- `pubs/` — producer B (in progress): publications → COG + footprints + units + STAC. See
+  `docs/INTEGRATION_GEOLMAP.md`.
+
+One STAC catalog spans both, laid out with collections (`ugs-serving-topics`, `ugs-publications`).
+
+## Architecture (vector producer)
+
+Pipeline is `source → transform → 4 sinks`, orchestrated per topic in `vector/ingest.py`:
 
 ```
 Pub/Sub {schema, topic} → service/main.py → ingest.ingest_topic(Topic)
@@ -91,12 +103,14 @@ try/except: one sink failing is logged to stderr and sets `rc=1` but never crash
 others. The Cloud Run handler acks the Pub/Sub message even on `rc!=0` (recovery
 happens on the next publish) to avoid retry storms.
 
-**STAC catalog auto-refreshes.** `sink_stac.write()` emits a per-topic item; then, after
-the sinks, `_ingest()` calls `sink_stac.refresh_catalog()`, which **lists the item files
-in GCS and rewrites the root `catalog.json`** — so the static catalog stays current with
-no manual regen step. It's derive-from-truth (lists actual items, not a mutated shared
-file), so concurrent ingests just converge (last writer wins, self-heals next ingest).
-Pure helpers `_item_hrefs` / `_catalog_doc` hold the logic; keep them pure for testing.
+**STAC catalog auto-refreshes.** A producer's stac sink emits an item via
+`core.stac.write_item()`; then, after the sinks, the orchestrator calls
+`core.stac.refresh_catalog()`, which **lists the item files in GCS and rewrites the root
+`catalog.json` + every `collection.json`** — so the catalog stays current with no manual
+regen (`scripts/refresh_stac.py` for on-demand). Derive-from-truth (lists actual items,
+not a mutated shared file), so concurrent ingests converge (last writer wins, self-heals).
+Logic is pure builders in `core/stac.py` (`build_item`, `_group_items`, `_collection_doc`,
+`_root_doc`) — keep them pure for testing.
 
 **Rasters** are a planned parallel pipeline (COG + STAC primary; RaQuet optional),
 sharing the STAC catalog + GCS + obstore layers. See `docs/RASTER.md` — design only,
@@ -145,9 +159,10 @@ produces the `.pmtiles`, then it uploads to GCS via obstore.
 | `DUCKLAKE_DATA_PATH` | `catalog.py` | data-chunk path; `gs://…` triggers the obstore-fsspec route |
 | `DUCKLAKE_METADATA_SCHEMA` | `catalog.py` | Postgres schema for DuckLake metadata tables (default `ducklake_catalog`) |
 | `OVERRIDE_DATA_PATH` | `catalog.py` | `True` adds `OVERRIDE_DATA_PATH TRUE` to ATTACH — use when DATA_PATH differs from what the catalog recorded (e.g. sandbox vs prod) |
-| `WAREHOUSE_{ARCHIVE,PMTILES,STAC}_{BUCKET,PREFIX}` | sinks | GCS output targets |
-| `WAREHOUSE_PUBLIC_BASE_URL` | `sink_stac.py` | **required** https base for STAC asset hrefs — the maps-assets CDN (path-preserved). No bucket fallback: the raw bucket is private, CDN is the only public read surface. `sink_stac` errors if unset |
-| `TIPPECANOE_BIN` / `TIPPECANOE_OPTS` | `sink_pmtiles.py` | binary path + extra flags |
+| `WAREHOUSE_BUCKET` | `core/config.py` | one GCS bucket for all artifacts (private; served via CDN) |
+| `WAREHOUSE_{ARCHIVE,PMTILES,STAC}_PREFIX` | `core/config.py` | per-artifact object prefixes |
+| `WAREHOUSE_PUBLIC_BASE_URL` | `core/config.py` | https base for asset/CDN hrefs — the maps-assets CDN (path-preserved; bucket is private). Defaults to `https://maps-assets.geology.utah.gov` |
+| `TIPPECANOE_BIN` / `TIPPECANOE_OPTS` | `vector/sink_pmtiles.py` | binary path + extra flags |
 
 All GCS access (obstore for the file sinks, obstore-fsspec for DuckLake) uses ADC, so
 the runtime needs `gcloud auth application-default login` (local) or a service account /

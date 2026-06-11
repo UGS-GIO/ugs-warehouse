@@ -59,9 +59,9 @@ src/ugs_warehouse/
     catalog.py             unified catalog refresh (collections, derive-from-truth) [was sink_stac bits]
     gcs.py                 obstore upload/list, Cache-Control, public-URL construction
     config.py              bucket / CDN base / prefixes
-  source.py transform.py   ← producer A (existing vector pipeline) — stays in place,
-  sink_*.py ingest.py        sinks refactored to CALL core/ (no risky file moves)
-  topics.py                  (a future cosmetic move into vector/ is optional, not now)
+  vector/                  ← producer A (the day-old vector pipeline, restructured onto core)
+    source.py transform.py sink_ducklake.py sink_archive.py sink_pmtiles.py
+    ducklake.py topics.py ingest.py
   pubs/                    ← producer B (geolmap core, ported onto the shared core)
     identity.py            Pub(series_id, …) — the Topic analog
     source.py              pubs metadata (CSV/MySQL) + footprints FeatureServer + manifest
@@ -103,12 +103,12 @@ Current catalog is flat (root → items). Change to root → collections → ite
 
 ## Phases (build order — each builds + keeps the 25-topic pipeline green; none deploys until the end)
 
-0. **Extract the shared core.** Create `core/{stac,catalog,gcs,config}.py` by relocating the existing
-   STAC/GCS/CDN/Cache-Control/catalog-refresh code out of `sink_stac`/`sink_archive`/`sink_pmtiles`,
-   then have those sinks **call** the core. The vector files stay in place (no risky package move).
-   Add the **collections** model + **web-map-links** + **titles** in the core (benefits both
-   producers). Verify: `--dry-run` + `ruff` + the offline STAC tests still pass; a vector ingest
-   emits identical artifacts.
+0. **Extract the shared core + restructure vector onto it.** Create `core/{config,gcs,stac}.py`
+   (config = bucket/CDN/prefixes; gcs = obstore upload/list + Cache-Control + CDN href; stac = item +
+   collection builders + web-map-links + titles + the derive-from-truth catalog refresh). Move the
+   vector modules into `vector/` and refactor their sinks to call `core/`. The repo is a day old and
+   unused, so restructure freely. Verify: `ruff` + offline STAC tests pass; a vector `--dry-run`
+   works; update `service/`, `scripts/`, `pyproject` packages, `cloudbuild.yaml` command paths.
 1. **Pubs harvest core** — `pubs/identity.py` + `pubs/source.py` (manifest from CSV + footprints
    FeatureServer) + `pubs/harvest.py` (zip→COG→validate). Prove one map → COG locally.
 2. **Pubs footprints + vectors** — `pubs/footprints.py` (GeoParquet + PMTiles), `pubs/vectors.py`

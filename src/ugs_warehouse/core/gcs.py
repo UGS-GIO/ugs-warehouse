@@ -42,6 +42,15 @@ def put_bytes(data: bytes, object_path: str, *, content_type: str,
     obs.put(_store(), object_path, data, attributes=_attrs(content_type, cache_control))
 
 
+def exists(object_path: str) -> bool:
+    """True if the object exists (HEAD). Used for skip-if-already-harvested."""
+    try:
+        obs.head(_store(), object_path)
+        return True
+    except Exception:
+        return False
+
+
 def list_paths(prefix: str) -> list[str]:
     """All object paths under `prefix` (obstore yields batches of metadata dicts)."""
     out: list[str] = []

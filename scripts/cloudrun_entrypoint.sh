@@ -20,4 +20,4 @@ export POSTGRES_DSN="host=/cloudsql/${CLOUDSQL_INSTANCE} dbname=${DB_NAME:-seaml
 export DUCKLAKE_CATALOG_DSN="${POSTGRES_DSN}"
 export SOURCE_BACKEND="${SOURCE_BACKEND:-postgres}"
 
-exec python -m ugs_warehouse.ingest "$@"
+exec python -m ugs_warehouse.vector.ingest "$@"

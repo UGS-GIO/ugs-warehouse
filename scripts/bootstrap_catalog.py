@@ -17,7 +17,7 @@ import sys
 
 import duckdb
 
-from ugs_warehouse import catalog
+from ugs_warehouse.vector import ducklake as catalog
 
 
 def main() -> int:

@@ -22,6 +22,7 @@ import sys
 import traceback
 from types import ModuleType
 
+from ..core import stac
 from . import (
     sink_archive,
     sink_ducklake,
@@ -107,7 +108,7 @@ def _ingest(topic: Topic, dry_run: bool = False) -> int:
     # prior ones) — keeps discovery current with no manual regen. Same
     # per-sink isolation: a refresh failure logs + sets rc but never raises.
     try:
-        sink_stac.refresh_catalog()
+        stac.refresh_catalog()
     except Exception as e:
         print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
         traceback.print_exc()

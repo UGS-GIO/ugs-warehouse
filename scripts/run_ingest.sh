@@ -13,4 +13,4 @@ export SOURCE_BACKEND="postgres"
 [ -f .env ] && source .env
 
 # Execute requested ingest command
-python -m ugs_warehouse.ingest "$@"
+python -m ugs_warehouse.vector.ingest "$@"

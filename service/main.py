@@ -18,8 +18,8 @@ import logging
 
 from fastapi import FastAPI, HTTPException, Request
 
-from ugs_warehouse.ingest import ingest_topic
-from ugs_warehouse.topics import from_pubsub
+from ugs_warehouse.vector.ingest import ingest_topic
+from ugs_warehouse.vector.topics import from_pubsub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ugs-warehouse.service")

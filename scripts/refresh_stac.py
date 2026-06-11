@@ -15,11 +15,11 @@ from __future__ import annotations
 
 import sys
 
-from ugs_warehouse import sink_stac
+from ugs_warehouse.core import stac
 
 
 def main() -> int:
-    sink_stac.refresh_catalog()
+    stac.refresh_catalog()
     return 0
 
 

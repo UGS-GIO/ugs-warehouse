@@ -7,10 +7,9 @@ Pipeline (all in a temp dir):
 External binary required: tippecanoe (installed in the Cloud Run runtime image).
 
 Env:
-  WAREHOUSE_PMTILES_BUCKET  default ut-dnr-ugs-maps-prod-public
-  WAREHOUSE_PMTILES_PREFIX  default warehouse/pmtiles
   TIPPECANOE_BIN            default tippecanoe
   TIPPECANOE_OPTS           extra flags appended to defaults (space-separated)
+GCS IO + prefix/CDN come from `core` (shared with the pubs producer).
 """
 from __future__ import annotations
 
@@ -19,24 +18,15 @@ import shlex
 import shutil
 import subprocess
 import tempfile
-from pathlib import Path
 
 import duckdb
-import obstore as obs
-from obstore.store import GCSStore
 
+from ..core import config, gcs
 from .topics import Topic
 
-PMTILES_BUCKET = os.environ.get("WAREHOUSE_PMTILES_BUCKET", "ut-dnr-ugs-maps-prod-public")
-PMTILES_PREFIX = os.environ.get("WAREHOUSE_PMTILES_PREFIX", "warehouse/pmtiles")
 TIPPECANOE_BIN = os.environ.get("TIPPECANOE_BIN", "tippecanoe")
 EXTRA_OPTS = shlex.split(os.environ.get("TIPPECANOE_OPTS", ""))
 PMTILES_MIME = "application/vnd.pmtiles"
-
-
-def _upload(local: str, gcs_object: str) -> None:
-    store = GCSStore(bucket=PMTILES_BUCKET)
-    obs.put(store, gcs_object, Path(local), attributes={"Content-Type": PMTILES_MIME})
 
 
 def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
@@ -62,7 +52,9 @@ def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
             geojsonl,
         ]
         subprocess.run(cmd, check=True)
-        gcs_object = f"{PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
-        _upload(pmtiles, gcs_object)
+        gcs_object = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
+        # pmtiles is a "latest" pointer, overwritten each ingest -> revalidate via CDN.
+        gcs.upload(pmtiles, gcs_object, content_type=PMTILES_MIME,
+                   cache_control=gcs.CACHE_MUTABLE)
 
-    print(f"[{topic.fqn}] pmtiles: gs://{PMTILES_BUCKET}/{gcs_object}")
+    print(f"[{topic.fqn}] pmtiles: {config.public_url(gcs_object)}")

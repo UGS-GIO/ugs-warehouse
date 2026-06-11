@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import duckdb
 
-from . import catalog
+from . import ducklake as catalog
 from .topics import Topic
 
 

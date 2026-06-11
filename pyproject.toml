@@ -25,6 +25,7 @@ pubs = [
   "geopandas>=1.0",
   "pyogrio>=0.9",
   "requests>=2.31",
+  "pymysql>=1.1",        # optional: live pub metadata from MySQL (else vendored CSV snapshot)
 ]
 
 [build-system]
@@ -33,6 +34,9 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"ugs_warehouse.pubs" = ["data/*.csv"]   # vendored pub metadata snapshot
 
 [tool.ruff]
 line-length = 100

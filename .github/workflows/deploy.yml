@@ -1,0 +1,33 @@
+name: Deploy Warehouse
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # Required for Workload Identity Federation
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          # Use Workload Identity Federation (WIF)
+          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          service_account: 'warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com'
+
+      - name: Set up Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build and Deploy
+        run: |
+          gcloud builds submit --config=cloudbuild.yaml . \
+            --project=ut-dnr-ugs-backend-tools \
+            --substitutions=_REGION=us-central1,_AR_REPO=ugs-warehouse,_RUNTIME_SA=warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com,_SQL_INSTANCE=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db,_SECRET=dbt-prod-db-password,SHORT_SHA=${GITHUB_SHA::7}

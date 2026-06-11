@@ -42,6 +42,11 @@ def put_bytes(data: bytes, object_path: str, *, content_type: str,
     obs.put(_store(), object_path, data, attributes=_attrs(content_type, cache_control))
 
 
+def get_bytes(object_path: str) -> bytes:
+    """Download an object's bytes from `gs://{BUCKET}/{object_path}`."""
+    return bytes(obs.get(_store(), object_path).bytes())
+
+
 def exists(object_path: str) -> bool:
     """True if the object exists (HEAD). Used for skip-if-already-harvested."""
     try:

@@ -9,7 +9,7 @@ Postgres DSN from the Cloud SQL socket + the Secret-Manager password, then inges
 
 ```bash
 export DEPLOY_PROJECT=ut-dnr-ugs-backend-tools          # where the Job + AR live (compute project)
-export REGION=us-west3
+export REGION=us-central1
 export AR_REPO=ugs-warehouse
 export RUNTIME_SA=warehouse-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com
 export SQL_INSTANCE=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db

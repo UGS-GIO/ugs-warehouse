@@ -120,6 +120,11 @@ def ingest_topic(topic: Topic, dry_run: bool = False) -> int:
     try:
         return _ingest(topic, dry_run=dry_run)
     except Exception as e:
+        # Check if it's the "FATAL: no GEOMETRY column found" case (from source.py or transform.py)
+        # We can handle non-spatial gracefully by just returning 0 (success, nothing to ingest)
+        if "no GEOMETRY column found" in str(e):
+            print(f"[{topic.fqn}] SKIP: non-spatial table (no GEOMETRY column)", file=sys.stderr)
+            return 0
         print(f"[{topic.fqn}] FATAL: {e}", file=sys.stderr)
         traceback.print_exc()
         return 1

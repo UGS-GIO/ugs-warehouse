@@ -1,9 +1,10 @@
 name: Deploy Warehouse
 
+# Deliberate deploys only — click "Run workflow" in the Actions tab. Ingestion is
+# Pub/Sub-driven at runtime; pushing code should NOT auto-deploy mid-integration.
+# (Re-enable `push: branches: [main]` once the pipeline is stable + ready to ship.)
 on:
-  push:
-    branches:
-      - main
+  workflow_dispatch:
 
 jobs:
   build-and-deploy:

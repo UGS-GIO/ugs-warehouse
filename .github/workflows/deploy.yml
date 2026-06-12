@@ -5,6 +5,8 @@ name: Deploy Warehouse
 # (Re-enable `push: branches: [main]` once the pipeline is stable + ready to ship.)
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
 
 jobs:
   build-and-deploy:

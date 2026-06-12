@@ -80,7 +80,8 @@ steps:
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=DB_PASS=${_SECRET}:latest
-      - --set-env-vars=PGF_DATABASE_URL=postgres://schema_owner:$DB_PASS@localhost:5432/seamlessgeolmap
+      # Set env vars carefully - use ^@^ to avoid comma-parsing issues
+      - --set-env-vars=^@^PGF_DATABASE_URL=postgres://schema_owner:$DB_PASS@localhost:5432/seamlessgeolmap
       - --allow-unauthenticated
 
 images:

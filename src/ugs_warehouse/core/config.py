@@ -27,8 +27,11 @@ STAC_PREFIX = os.environ.get("WAREHOUSE_STAC_PREFIX", "warehouse/stac")
 ARCHIVE_PREFIX = os.environ.get("WAREHOUSE_ARCHIVE_PREFIX", "warehouse/geoparquet")
 PMTILES_PREFIX = os.environ.get("WAREHOUSE_PMTILES_PREFIX", "warehouse/pmtiles")
 
-# Root catalog id.
-CATALOG_ID = "ugs-warehouse"
+# OGC API Features endpoint (e.g., pg_featureserv base URL)
+PGF_BASE_URL = os.environ.get(
+    "PGF_BASE_URL",
+    "https://api.geology.utah.gov",  # Replace with actual prod API URL
+).rstrip("/")
 
 
 def public_url(object_path: str) -> str:

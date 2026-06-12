@@ -1,4 +1,4 @@
-# Build the warehouse image, push to Artifact Registry, deploy the Cloud Run Job.
+# Build the warehouse images, push to Artifact Registry, deploy the Cloud Run services.
 #
 # Trigger options (pick one):
 #   - Cloud Build GitHub trigger on push to main (simplest), or
@@ -17,9 +17,11 @@ substitutions:
   _SECRET: dbt-prod-db-password           # Secret Manager secret holding the DB password
   _DATA_PATH: gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/
   _JOB: ugs-warehouse-ingest
+  _API_SERVICE: ugs-warehouse-api
 
 steps:
-  - id: build
+  # Build Warehouse
+  - id: build-warehouse
     name: gcr.io/cloud-builders/docker
     args:
       - build
@@ -28,10 +30,21 @@ steps:
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:latest
       - .
+  
+  # Build API
+  - id: build-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api:$SHORT_SHA
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api:latest
+      - api/
 
   - id: push
     name: gcr.io/cloud-builders/docker
-    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse']
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api']
 
   - id: deploy-job
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -55,8 +68,24 @@ steps:
       - --cpu=2
       - --memory=2Gi
 
+  - id: deploy-api
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_API_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api:$SHORT_SHA
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=DB_PASS=${_SECRET}:latest
+      - --set-env-vars=PGF_DATABASE_URL=postgres://schema_owner:$DB_PASS@localhost:5432/seamlessgeolmap
+      - --allow-unauthenticated
+
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api
 
 options:
   logging: CLOUD_LOGGING_ONLY

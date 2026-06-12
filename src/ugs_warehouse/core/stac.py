@@ -17,6 +17,8 @@ import re
 
 from . import config, gcs
 
+PGF_BASE_URL = config.PGF_BASE_URL
+
 STAC_VERSION = "1.0.0"
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
@@ -130,6 +132,7 @@ def _collection_doc(collection: str, item_ids: list[str]) -> dict:
         "links": [
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./collection.json", "type": "application/json"},
+            {"rel": "service", "href": f"{PGF_BASE_URL}/collections/{collection}", "type": "application/json", "title": "OGC API Features endpoint"},
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json"}
               for i in sorted(item_ids)],
         ],

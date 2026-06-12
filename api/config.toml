@@ -1,0 +1,17 @@
+# pg_featureserv configuration
+# Database connection URL is provided via environment variable PGF_DATABASE_URL
+# which the binary picks up automatically.
+
+[Server]
+Port = 8080
+Host = "0.0.0.0"
+
+[Database]
+# The database connection is handled via PGF_DATABASE_URL env var
+# This will be injected by Cloud Run
+
+[Catalog]
+# Enable all schemas you want to expose.
+# We'll use a dynamic approach to expose all tables.
+# You can restrict this if needed for production.
+schemas = ["hazards", "emp", "gen_gis", "wetlands", "mapping"]

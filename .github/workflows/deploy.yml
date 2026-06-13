@@ -18,7 +18,7 @@ jobs:
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
           service_account: 'warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com'
       - id: vars
         run: echo "tag=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
@@ -39,7 +39,7 @@ jobs:
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
           service_account: 'warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com'
       - name: Deploy Ingest
         run: |
@@ -61,7 +61,7 @@ jobs:
       - id: auth
         uses: google-github-actions/auth@v2
         with:
-          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-pool/providers/github-provider'
+          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
           service_account: 'warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com'
       - name: Deploy API
         run: |

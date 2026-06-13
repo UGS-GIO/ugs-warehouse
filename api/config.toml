@@ -1,10 +1,10 @@
 # pg_featureserv configuration
-# Database connection URL is provided via environment variable PGF_DATABASE_URL
+# Database connection URL is provided via environment variable DATABASE_URL
 # which the binary picks up automatically.
 
 [Server]
-Port = 8080
-Host = "0.0.0.0"
+HttpPort = 8080
+HttpHost = "0.0.0.0"
 
 [Database]
 # The database connection is handled via PGF_DATABASE_URL env var

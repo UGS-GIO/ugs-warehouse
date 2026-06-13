@@ -12,7 +12,7 @@
 substitutions:
   _REGION: us-central1
   _AR_REPO: ugs-warehouse                 # Artifact Registry docker repo name
-  _RUNTIME_SA: ""                         # runtime SA email — storage.objectAdmin + cloudsql.client + secretAccessor
+  _RUNTIME_SA: warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com                         # runtime SA email — storage.objectAdmin + cloudsql.client + secretAccessor
   _SQL_INSTANCE: ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db
   _SECRET: dbt-prod-db-password           # Secret Manager secret holding the DB password
   _DATA_PATH: gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/

@@ -5,69 +5,28 @@ on:
   push:
     branches: [main]
 
+# Single deployer: this only authenticates (WIF) + submits cloudbuild.yaml, which
+# builds/pushes all images AND deploys job + harvest + service + api. No per-service
+# deploy steps here — cloudbuild owns deploy, so the two never race.
 jobs:
-  build:
+  build-and-deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
-    outputs:
-      tag: ${{ steps.vars.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
+
       - id: auth
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
           service_account: 'warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com'
-      - id: vars
-        run: echo "tag=${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
-      - name: Build and Push
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build + deploy via Cloud Build
         run: |
           gcloud builds submit --config=cloudbuild.yaml . \
             --project=ut-dnr-ugs-backend-tools \
             --substitutions=_TAG=${GITHUB_SHA::7}
-
-  deploy-ingest:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
-          service_account: 'warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com'
-      - name: Deploy Ingest
-        run: |
-          gcloud run jobs deploy ugs-warehouse-ingest \
-            --image=us-central1-docker.pkg.dev/ut-dnr-ugs-backend-tools/ugs-warehouse/ugs-warehouse:${{ needs.build.outputs.tag }} \
-            --region=us-central1 \
-            --project=ut-dnr-ugs-backend-tools \
-            --service-account=warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com \
-            --set-cloudsql-instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db
-
-  deploy-api:
-    needs: build
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
-          service_account: 'warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com'
-      - name: Deploy API
-        run: |
-          gcloud run deploy ugs-warehouse-api \
-            --image=us-central1-docker.pkg.dev/ut-dnr-ugs-backend-tools/ugs-warehouse/ugs-api:${{ needs.build.outputs.tag }} \
-            --region=us-central1 \
-            --project=ut-dnr-ugs-backend-tools \
-            --service-account=warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com \
-            --set-cloudsql-instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db

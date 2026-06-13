@@ -24,6 +24,10 @@ whole integration is done** — build all phases, then ship.
 2. **Pubs metadata:** vendored `data/*.csv` snapshot now; `PUBS_DB_URL` (live MySQL) env-optional later.
 3. **Separate harvest image + Cloud Run Job** (`Dockerfile.harvest`, job `geolmap-harvest`) — GDAL +
    poppler + rio-cogeo are too heavy for the slim vector-ingest image. Two images, two jobs.
+4. **Raster *conversion* ownership: open/deferred** — warehouse converts now (`pubs/harvest`,
+   interim, bandwidth-driven); may later move to ugs-ingest (#169 batch-feeds published maps),
+   or #169 may merge into this repo. Cheap to flip either way because conversion (`harvest.py`,
+   swappable) is kept separate from serving (STAC/PMTiles/footprints, stable contract).
 
 ## Architecture principle — shared core, pluggable producers
 

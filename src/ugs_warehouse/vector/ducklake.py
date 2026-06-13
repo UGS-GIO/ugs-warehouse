@@ -16,7 +16,7 @@ import os
 import duckdb
 
 CATALOG_ALIAS = "warehouse"
-CATALOG_DSN = os.environ.get("DUCKLAKE_CATALOG_DSN", "")
+CATALOG_DSN = os.environ.get("DUCKLAKE_CATALOG_DSN") or os.environ.get("POSTGRES_DSN") or ""
 DATA_PATH = os.environ.get(
     "DUCKLAKE_DATA_PATH",
     "gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/",
@@ -71,8 +71,13 @@ def attach(con: duckdb.DuckDBPyConnection) -> str:
     # Check if override is enabled
     override = os.environ.get("OVERRIDE_DATA_PATH", "False") == "True"
     
+    password = os.environ.get("PGPASSWORD")
+    dsn = CATALOG_DSN
+    if password and "password=" not in CATALOG_DSN:
+        dsn = f"{CATALOG_DSN} password={password}"
+
     cmd = (
-        f"ATTACH 'ducklake:postgres:{CATALOG_DSN}' AS {CATALOG_ALIAS} "
+        f"ATTACH 'ducklake:postgres:{dsn}' AS {CATALOG_ALIAS} "
         f"(DATA_PATH '{DATA_PATH}', METADATA_SCHEMA '{METADATA_SCHEMA}'"
     )
     if override:

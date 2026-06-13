@@ -108,6 +108,12 @@ def build_item(p: dict, attachments: list[dict], *,
     if has_ugs_doi(p.get("pub_publisher")):
         extra_links.append({"rel": "cite-as", "href": f"https://doi.org/10.34191/{sid}"})
 
+    extensions = []
+    if has_cog:
+        cog_url = config.public_url(identity.Pub(sid.upper()).cog_object)
+        extra_links.append(stac.cog_link(cog_url))
+        extensions.append(stac.WEB_MAP_LINKS_EXT)
+
     return stac.build_item(
         item_id=sid, collection=identity.PUBLICATIONS_COLLECTION,
         geometry=geom, bbox=bbox, datetime_iso=dt,
@@ -124,4 +130,5 @@ def build_item(p: dict, attachments: list[dict], *,
         },
         assets=assets,
         extra_links=extra_links,
+        stac_extensions=extensions or None,
     )

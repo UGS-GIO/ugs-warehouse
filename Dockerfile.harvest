@@ -1,0 +1,39 @@
+# Multi-stage: tippecanoe build, then python runtime with GDAL & poppler.
+# Cloud Run Job runtime: runs the harvest/ingest CLI task.
+
+FROM debian:bookworm-slim AS tippecanoe-builder
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates libsqlite3-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN git clone --depth=1 https://github.com/felt/tippecanoe.git /src \
+    && cd /src \
+    && make -j"$(nproc)" \
+    && make install PREFIX=/usr/local
+
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# Runtime deps for tippecanoe + GDAL CLI + poppler.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates libsqlite3-0 zlib1g \
+      gdal-bin poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Bring tippecanoe over from the builder stage.
+COPY --from=tippecanoe-builder /usr/local/bin/tippecanoe /usr/local/bin/
+COPY --from=tippecanoe-builder /usr/local/bin/tile-join /usr/local/bin/
+
+WORKDIR /app
+COPY pyproject.toml ./
+COPY src ./src
+COPY service ./service
+COPY scripts ./scripts
+RUN chmod +x scripts/*.sh
+
+RUN pip install --upgrade pip && pip install .[pubs]
+
+# Cloud Run Job does not expose a port; its ENTRYPOINT/CMD runs the CLI.
+# Default to running the harvester over the manifest.
+CMD ["python", "-m", "ugs_warehouse.pubs.harvest", "--all"]

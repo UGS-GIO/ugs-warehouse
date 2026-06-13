@@ -22,6 +22,8 @@ PUBLIC_BASE_URL = os.environ.get(
 # `<STAC_PREFIX>/<collection>/<id>/<id>.json`, with `<STAC_PREFIX>/catalog.json` the root.
 STAC_PREFIX = os.environ.get("WAREHOUSE_STAC_PREFIX", "warehouse/stac")
 
+CATALOG_ID = os.environ.get("WAREHOUSE_CATALOG_ID", "ugs-warehouse")
+
 # Per-artifact data prefixes (overridable). Vector producer defaults below; the pubs
 # producer sets its own (e.g. geolmap/cogs) via its module config.
 ARCHIVE_PREFIX = os.environ.get("WAREHOUSE_ARCHIVE_PREFIX", "warehouse/geoparquet")

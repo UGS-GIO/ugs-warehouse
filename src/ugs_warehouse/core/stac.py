@@ -53,6 +53,11 @@ def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
     return link
 
 
+def cog_link(href: str) -> dict:
+    """A web-map-links `cog` link so STAC Browser draws the raster layer."""
+    return {"rel": "cog", "href": href, "type": "image/tiff; application=geotiff; profile=cloud-optimized"}
+
+
 # ---------------------------------------------------------------- items
 
 def build_item(*, item_id: str, collection: str, geometry: dict | None,

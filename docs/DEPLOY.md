@@ -56,8 +56,9 @@ gcloud builds submit --config cloudbuild.yaml --project=$DEPLOY_PROJECT \
   --substitutions=_REGION=$REGION,_AR_REPO=$AR_REPO,_RUNTIME_SA=$RUNTIME_SA,_SQL_INSTANCE=$SQL_INSTANCE,_SECRET=$SECRET
 ```
 
-## 3. Run the Job
+## 3. Run the Jobs
 
+### Vector Ingest Job
 ```bash
 gcloud run jobs execute ugs-warehouse-ingest --region=$REGION --project=$DEPLOY_PROJECT
 # logs / status
@@ -66,6 +67,16 @@ gcloud run jobs executions list --job=ugs-warehouse-ingest --region=$REGION --pr
 
 Per-topic instead of `--all`: override args at execute time —
 `... execute ugs-warehouse-ingest --args=--topic,hazards.surfacefaultrupture_current ...`
+
+### Geolmap Harvest Job (Publications)
+```bash
+gcloud run jobs execute geolmap-harvest --region=$REGION --project=$DEPLOY_PROJECT
+# logs / status
+gcloud run jobs executions list --job=geolmap-harvest --region=$REGION --project=$DEPLOY_PROJECT
+```
+
+Per-series instead of `--all`: override args at execute time —
+`... execute geolmap-harvest --args=M-283 ...`
 
 ## Scheduling (optional)
 

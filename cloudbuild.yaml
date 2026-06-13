@@ -47,6 +47,19 @@ steps:
     env:
       - DOCKER_BUILDKIT=1
 
+  # Build Harvest
+  - id: build-harvest
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.harvest
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:latest
+      - .
+
   - id: push-warehouse
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse']
@@ -54,6 +67,10 @@ steps:
   - id: push-api
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api']
+
+  - id: push-harvest
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest']
 
   - id: deploy-job
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -76,6 +93,27 @@ steps:
       - --max-retries=1
       - --cpu=2
       - --memory=2Gi
+
+  - id: deploy-harvest-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - geolmap-harvest
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_SECRET}:latest
+      - --set-env-vars=^|^SOURCE_BACKEND=postgres|POSTGRES_DSN=host=/cloudsql/${_SQL_INSTANCE} dbname=seamlessgeolmap user=schema_owner|DUCKLAKE_DATA_PATH=${_DATA_PATH}
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.harvest,--all
+      - --task-timeout=3600
+      - --max-retries=1
+      - --cpu=2
+      - --memory=4Gi
 
   - id: deploy-service
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -110,6 +148,7 @@ steps:
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest
 
 options:
   logging: CLOUD_LOGGING_ONLY

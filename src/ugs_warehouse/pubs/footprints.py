@@ -97,3 +97,18 @@ def geoms() -> dict[str, tuple]:
         geom = row.geometry
         out[str(sid).upper()] = (geom.__geo_interface__, list(geom.bounds), row.footprint_source)
     return out
+
+
+def main() -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="Export publications footprints -> GeoParquet + PMTiles")
+    ap.add_argument("--minzoom", type=int, default=2, help="Tippecanoe min zoom (default 2)")
+    ap.add_argument("--maxzoom", type=int, default=11, help="Tippecanoe max zoom (default 11)")
+    args = ap.parse_args()
+    export(minz=args.minzoom, maxz=args.maxzoom)
+    return 0
+
+
+if __name__ == "__main__":
+    import sys
+    sys.exit(main())

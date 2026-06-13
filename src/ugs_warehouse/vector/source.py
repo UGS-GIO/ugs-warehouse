@@ -30,7 +30,13 @@ def _connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
     con.execute("INSTALL postgres; LOAD postgres;")
     con.execute("INSTALL spatial;  LOAD spatial;")
-    con.execute(f"ATTACH '{POSTGRES_DSN}' AS {PG_ALIAS} (TYPE POSTGRES, READ_ONLY)")
+    # Set password if provided separately
+    password = os.environ.get("PGPASSWORD")
+    if password:
+        dsn = f"{POSTGRES_DSN} password={password}"
+    else:
+        dsn = POSTGRES_DSN
+    con.execute(f"ATTACH '{dsn}' AS {PG_ALIAS} (TYPE POSTGRES, READ_ONLY)")
     return con
 
 

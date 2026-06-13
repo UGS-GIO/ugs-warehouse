@@ -19,6 +19,9 @@ substitutions:
   _JOB: ugs-warehouse-ingest
   _API_SERVICE: ugs-warehouse-api
   _SERVICE: ugs-warehouse-service
+  # public OGC api connects read-only — never schema_owner (role + secret provisioned by Marshall)
+  _API_DB_USER: schema_reader
+  _API_SECRET: schema-reader-db-password
   # Tag used for images (defaults to SHORT_SHA in automated triggers)
   _TAG: $SHORT_SHA
 
@@ -140,9 +143,8 @@ steps:
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
-      - --set-secrets=PGPASSWORD=${_SECRET}:latest
-      # Use custom delimiter ^|^ to specify standard DATABASE_URL and PGFS_DATABASE_DBCONNECTION via Unix socket (PGPASSWORD is read automatically)
-      - --set-env-vars=^|^DATABASE_URL=postgresql://schema_owner@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}|PGFS_DATABASE_DBCONNECTION=postgresql://schema_owner@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^DATABASE_URL=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}|PGFS_DATABASE_DBCONNECTION=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}
       - --allow-unauthenticated
 
 images:

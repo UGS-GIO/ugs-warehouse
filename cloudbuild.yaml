@@ -46,9 +46,13 @@ steps:
     env:
       - DOCKER_BUILDKIT=1
 
-  - id: push
+  - id: push-warehouse
     name: gcr.io/cloud-builders/docker
-    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse', '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api']
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse']
+
+  - id: push-api
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api']
 
   - id: deploy-job
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

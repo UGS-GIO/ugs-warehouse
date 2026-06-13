@@ -10,7 +10,6 @@
 # and iam.serviceAccountUser ON the runtime SA (_RUNTIME_SA).
 
 substitutions:
-substitutions:
   _REGION: us-central1
   _AR_REPO: ugs-warehouse                 # Artifact Registry docker repo name
   _RUNTIME_SA: warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com                         # runtime SA email — storage.objectAdmin + cloudsql.client + secretAccessor
@@ -19,7 +18,6 @@ substitutions:
   _DATA_PATH: gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/
   _JOB: ugs-warehouse-ingest
   _API_SERVICE: ugs-warehouse-api
-  # Default fallback if SHA is missing (manual trigger)
   # Use _SHORT_SHA for tagging. 
   # Note: Cloud Build auto-populates $SHORT_SHA on triggered builds, 
   # but user-defined substitutions take precedence.

@@ -88,8 +88,8 @@ steps:
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=DB_PASS=${_SECRET}:latest
-      # Set env vars carefully - do not use custom delimiter prefix if value contains @
-      - --set-env-vars=PGF_DATABASE_URL=postgres://schema_owner:$$DB_PASS@localhost:5432/seamlessgeolmap
+      # Use custom delimiter ^|^ to specify standard DATABASE_URL and PGFS_DATABASE_DBCONNECTION via Unix socket
+      - --set-env-vars=^|^DATABASE_URL=postgresql://schema_owner:$$DB_PASS@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}|PGFS_DATABASE_DBCONNECTION=postgresql://schema_owner:$$DB_PASS@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}
       - --allow-unauthenticated
 
 images:

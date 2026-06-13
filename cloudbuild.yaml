@@ -41,6 +41,8 @@ steps:
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api:latest
       - api/
+    env:
+      - DOCKER_BUILDKIT=1
 
   - id: push
     name: gcr.io/cloud-builders/docker

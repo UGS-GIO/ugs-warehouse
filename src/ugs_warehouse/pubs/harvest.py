@@ -276,14 +276,15 @@ def prepare_plates(zip_paths, work):
     return gtif, shp_path
 
 
-def harvest_one(series_id: str) -> str:
+def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> str:
     """Harvest a series_id -> COG (+ units parquet, thumbnail) in GCS. Returns ok|skip|fail:*."""
     pub = identity.Pub.parse(series_id)
     series_id = pub.series_id
     if "XXXX" in series_id:
         print(f"{series_id}: SKIP (unpublished placeholder)")
         return "skip"
-    if SKIP_EXISTING and gcs.exists(pub.cog_object):
+    skip_existing = SKIP_EXISTING and not force and not dry_run
+    if skip_existing and gcs.exists(pub.cog_object):
         print(f"{series_id}: SKIP (exists)")
         return "skip"
     gt_url, gis_url = manifest_urls(series_id)
@@ -292,6 +293,11 @@ def harvest_one(series_id: str) -> str:
             gt_url, gis_url = data_php_urls(series_id)
         except Exception:
             gt_url, gis_url = None, None
+
+    if dry_run:
+        print(f"[dry-run] {series_id}: URLs: gt={gt_url}, gis={gis_url}")
+        return "ok"
+
     # high-DPI needs the GIS bundle (carries the geospatial PDF); else the lighter GeoTiff-Zip
     zurls = []
     if COG_DPI > 0 and gis_url and gt_url:
@@ -384,8 +390,39 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
 
 
 def main() -> int:
-    sid = sys.argv[1] if len(sys.argv) > 1 else "M-299DM"
-    return 0 if harvest_one(sid) in ("ok", "skip") else 1
+    import argparse
+    from . import source
+
+    ap = argparse.ArgumentParser(description="Harvest UGS geologic-map publications -> COG")
+    g = ap.add_mutually_exclusive_group(required=True)
+    g.add_argument("series_id", nargs="*", help="Series ID(s) to harvest")
+    g.add_argument("--all", action="store_true", help="Harvest all series IDs from the metadata database/CSV")
+    ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to harvest")
+    ap.add_argument("--dry-run", action="store_true", help="Dry run (check and locate metadata URLs only)")
+    ap.add_argument("--force", action="store_true", help="Force harvest even if COG already exists in GCS")
+    args = ap.parse_args()
+
+    sids = []
+    if args.all:
+        print(f"Loading publications from source: {source.source_name()}")
+        pubs = source.read_pubs()
+        for p in pubs:
+            sid = (p.get("series_id") or "").strip()
+            if sid:
+                sids.append(sid)
+        print(f"Found {len(sids)} publications")
+    else:
+        sids = args.series_id
+
+    if args.limit:
+        sids = sids[:args.limit]
+
+    rc = 0
+    for sid in sids:
+        res = harvest_one(sid, dry_run=args.dry_run, force=args.force)
+        if res.startswith("fail"):
+            rc |= 1
+    return rc
 
 
 if __name__ == "__main__":

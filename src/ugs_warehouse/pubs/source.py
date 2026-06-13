@@ -23,6 +23,58 @@ PUBS_TABLE = os.environ.get("PUBS_TABLE", "pubsdb")
 ATT_TABLE = os.environ.get("PUBS_ATT_TABLE", "pubsattacheddata")
 
 
+def _is_postgres() -> bool:
+    if not PUBS_DB_URL:
+        return False
+    return PUBS_DB_URL.startswith(("postgres://", "postgresql://")) or "host=" in PUBS_DB_URL
+
+
+def _from_postgres(table: str) -> list[dict]:
+    import duckdb
+    con = duckdb.connect()
+    con.execute("INSTALL postgres; LOAD postgres;")
+    password = os.environ.get("PGPASSWORD")
+    dsn = PUBS_DB_URL
+    if password and "password=" not in dsn and not any(f"@{host}" in dsn for host in ("localhost", "127.0.0.1")):
+        if dsn.startswith(("postgres://", "postgresql://")):
+            if "@" in dsn:
+                from urllib.parse import urlparse, urlunparse
+                u = urlparse(dsn)
+                if not u.password:
+                    netloc = f"{u.username}:{password}@{u.hostname}"
+                    if u.port:
+                        netloc += f":{u.port}"
+                    dsn = urlunparse((u.scheme, netloc, u.path, u.params, u.query, u.fragment))
+            else:
+                dsn = f"{dsn} password={password}"
+        else:
+            dsn = f"{dsn} password={password}"
+
+    con.execute(f"ATTACH '{dsn}' AS pg_pubs (TYPE POSTGRES, READ_ONLY)")
+
+    if "." in table:
+        schema, name = table.split(".", 1)
+        db_table = f"pg_pubs.{schema}.{name}"
+    else:
+        db_table = f"pg_pubs.public.{table}"
+
+    rows = con.execute(f"SELECT * FROM {db_table}").fetchall()
+    cols = [c[0] for c in con.execute(f"DESCRIBE SELECT * FROM {db_table}").fetchall()]
+
+    out = []
+    for r in rows:
+        row_dict = {}
+        for k, v in zip(cols, r):
+            if isinstance(v, list):
+                row_dict[k] = ", ".join(str(item) for item in v if item is not None)
+            elif v is None:
+                row_dict[k] = ""
+            else:
+                row_dict[k] = str(v)
+        out.append(row_dict)
+    return out
+
+
 def _from_mysql(table: str) -> list[dict]:
     from urllib.parse import urlparse
 
@@ -55,12 +107,21 @@ def _from_csv(base: str) -> list[dict]:
 
 
 def read_pubs() -> list[dict]:
+    if _is_postgres():
+        table = os.environ.get("PUBS_TABLE", "pubs.ugspubsdraft2")
+        return _from_postgres(table)
     return _from_mysql(PUBS_TABLE) if PUBS_DB_URL else _from_csv("pubsdb")
 
 
 def read_attachments() -> list[dict]:
+    if _is_postgres():
+        table = os.environ.get("PUBS_ATT_TABLE", "pubs.attached_data")
+        return _from_postgres(table)
     return _from_mysql(ATT_TABLE) if PUBS_DB_URL else _from_csv("pubsattacheddata")
 
 
 def source_name() -> str:
+    if _is_postgres():
+        table = os.environ.get("PUBS_TABLE", "pubs.ugspubsdraft2")
+        return f"PostgreSQL:{table}"
     return f"MySQL:{PUBS_TABLE}" if PUBS_DB_URL else "CSV (PUBS_REPO or vendored pubs/data/)"

@@ -89,5 +89,5 @@ def attach(con: duckdb.DuckDBPyConnection) -> str:
 
 
 def schemas_to_ensure() -> tuple[str, ...]:
-    """DuckLake schemas the bootstrap creates (matches mart schemas)."""
-    return ("hazards", "emp", "gen_gis")
+    """DuckLake schemas the bootstrap pre-creates (sink_ducklake also creates on demand)."""
+    return ("hazards", "emp", "gengis")

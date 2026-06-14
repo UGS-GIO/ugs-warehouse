@@ -3,7 +3,7 @@
 Does:
   - ATTACH the warehouse DuckLake (auto-creates its catalog tables in Postgres
     on first ATTACH)
-  - Creates DuckLake schemas: hazards, emp, gen_gis
+  - Creates DuckLake schemas: hazards, emp, gengis
 
 Re-runnable: ATTACH is idempotent; CREATE SCHEMA uses IF NOT EXISTS.
 

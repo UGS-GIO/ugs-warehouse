@@ -13,7 +13,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-MART_SCHEMAS: tuple[str, ...] = ("hazards", "emp", "gen_gis", "wetlands", "mapping")
+# The dbt serving schemas discovery scans. Must match the real Postgres schema names
+# (per dataELT #418: it's `gengis`, not `gen_gis`). `gwportal` is omitted — it lives in a
+# separate DB, so the mapping-db discovery sweep can't reach it (needs its own connection).
+MART_SCHEMAS: tuple[str, ...] = (
+    "hazards", "emp", "gengis", "wetlands", "mapping", "geochron", "boreholes",
+)
 
 
 @dataclass(frozen=True)

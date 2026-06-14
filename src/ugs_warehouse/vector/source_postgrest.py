@@ -5,7 +5,7 @@ mapping-db. Switches off via `SOURCE_BACKEND=postgres` (default) once direct
 DB creds arrive. See followup issue.
 
 Coverage notes (as of writing): web_anon has `SELECT` on emp + wetlands +
-mapping schemas; hazards + gen_gis return 401. Topics in those schemas fail
+mapping schemas; hazards + gengis return 401. Topics in those schemas fail
 fast here — surface that to the operator instead of silently skipping.
 
 Output shape matches `source.read()`:

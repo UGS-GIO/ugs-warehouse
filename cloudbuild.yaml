@@ -135,6 +135,7 @@ steps:
   - id: deploy-api
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
+    allowFailure: true   # gated on schema_reader role+secret; don't red the other deploys
     args:
       - run
       - deploy

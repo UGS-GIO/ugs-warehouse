@@ -4,7 +4,7 @@
 current state, what's done, what's blocked, the immediate next move.
 
 **Live working doc** — tracked so it syncs across machines. Refresh as state changes;
-retire once deployed. Last refreshed **2026-06-10**.
+retire once deployed. Last refreshed **2026-06-15**.
 
 ---
 
@@ -25,6 +25,50 @@ Pipeline is `source → transform → 4 sinks`, env-driven per topic in `ingest.
 **Deploy implication:** obstore-via-fsspec is pure Python and works in the FastAPI/Cloud
 Run runtime — so **no gcsfuse volume and no GCS extension are needed at deploy.** The GCS
 auth story is the same local and on Cloud Run (ADC / Workload Identity).
+
+---
+
+## Current state (2026-06-15) — read this first
+
+Two boxes: this **personal box** (no GCP perms) authors + commits; the **work box**
+(Gemini, has perms) runs deploys/grants/ingests. Hand perm-gated steps off via `docs/`.
+
+**Shipped since 2026-06-10** (all committed on `main`):
+- **Pubs producer** (`src/ugs_warehouse/pubs/`) — publications → COG harvest (GDAL
+  microservice `Dockerfile.harvest`) + footprints + STAC `ugs-publications` collection.
+  Shared `core/` (config, gcs, stac) under both vector + pubs producers.
+- **STAC collections layout** — `core/stac.refresh_catalog()` derives root + per-collection
+  docs from GCS truth. Replaces the old flat catalog. Collections: `ugs-serving-topics`
+  (vector), `ugs-publications` (pubs), `ugs-rasters` (future).
+- **Serving tier** — pg_featureserv (OGC API Features) for ArcGIS Pro/AGOL (`api/`,
+  `_API_SERVICE`). GeoServer killed ($600/mo). Read-only `schema_reader` (fail-closed).
+- **Deploy** — `cloudbuild.yaml` (3 images: warehouse/api/harvest; job + harvest-job +
+  service + api) + `.github/workflows/deploy.yml` (WIF keyless → `gcloud builds submit`).
+- **Pub/Sub ingest (#418)** — `service/main.py` push handler; `cloudbuild` `wire-pubsub`
+  step provisions topic+subscription+invoker. Acks+skips non-`MART_SCHEMAS` (gwportal).
+- **Viewer** (`viewer/`) — React + Vite + Tailwind v4 + TanStack Query + react-map-gl.
+  Two views: **Catalog** (collection cards, search-all, sortable table) + **Map** (PMTiles
+  + footprint). Static client-side, reads the STAC CDN. Dev runs off
+  `viewer/scripts/gen_local_catalog.py` (prod STAC only has pubs so far — see below).
+
+**Critical path → "live and useful" (work box / Gemini, has perms):**
+1. **Build/deploy latest** — gets the gwportal-skip + `wire-pubsub` into the service image.
+2. **Vector ingest → prod** — `gcloud run jobs execute ugs-warehouse-ingest …`. Default
+   prefixes = `warehouse/stac` prod, current code = collections layout. Populates all 25
+   vector topics into the prod catalog → **viewer shows real data, not just pubs**. (Today
+   the only vector run is the stale flat-layout one at `warehouse-sandbox/stac/`.)
+3. **Pub/Sub grants** — `docs/DEPLOY.md §4`: build SA `pubsub.admin` + Pub/Sub agent
+   `tokenCreator` on runtime SA → rerun build → `wire-pubsub` self-provisions.
+
+**Marshall asks** (Clinton has merge + push-to-his-PR rights — "just wants shit done"):
+- **Merge `ugs-ingest` #169** (raster producer `raw.raster_catalog`) — still OPEN.
+- Provision `schema_reader` role + `schema-reader-db-password` secret (unblocks api deploy,
+  currently `allowFailure`).
+- Confirm pubs schema read perms + project for the runtime SA.
+
+**Still TODO (warehouse code):** raster serving consumer (`raw.raster_catalog` → STAC +
+COG promote, after #169); small dataELT raster promote-gate PR; viewer DuckDB-WASM
+downloader (client-side SHP/GPKG export); `gwportal` own-DB discovery (currently skipped).
 
 ---
 
@@ -64,9 +108,9 @@ scoped to `warehouse/...`) · `ut-dnr-ugs-backend-tools` (future Cloud Run + Pub
 ## Architecture
 
 ```
-publish.sh (dataELT) → Pub/Sub {schema, topic}      ← future trigger; not wired yet
-   ↓ push subscription
-Cloud Run service (service/main.py)
+publish.sh (dataELT) → Pub/Sub {schema, topic}      ← #418 wired; awaits work-box perms
+   ↓ push subscription (cloudbuild wire-pubsub)
+Cloud Run service (service/main.py)                 ← acks+skips non-MART_SCHEMAS
    ↓
 source (postgres OR postgrest)                      ← swappable via SOURCE_BACKEND env
    ↓  pyarrow Table: geom_wkb BLOB + target_epsg

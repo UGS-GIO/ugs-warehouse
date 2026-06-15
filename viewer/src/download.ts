@@ -1,17 +1,22 @@
-// Client-side export: read an item's GeoParquet over the CDN in DuckDB-WASM and
-// hand it back as SHP / GeoJSON / CSV — no server, no perms. DuckDB (+ spatial) and
-// the shapefile writer are imported lazily the first time someone exports, so they
-// never weigh down the initial bundle.
+// Client-side export: read an item's GeoParquet over the CDN in DuckDB-WASM, then hand
+// it to gdal3.js (real GDAL/OGR in WASM) for format conversion — no server, no perms.
+// DuckDB + gdal3.js load lazily on first export.
 //
-// Why not DuckDB's GDAL `COPY`: every GDAL output driver (GPKG/GeoJSON/Shapefile)
-// fails in WASM — GPKG's sqlite VFS can't init ("file is not a database") and the
-// GeoJSON/Shapefile drivers error on write ("Cannot write feature"). So we only use
-// DuckDB's NATIVE writers (CSV) + build GeoJSON/SHP in JS from `ST_AsGeoJSON`.
-export type ExportFormat = "shp" | "gpkg" | "geojson" | "csv";
+// Split of responsibilities:
+//   - DuckDB reads the remote GeoParquet (its native CSV writer + ST_AsGeoJSON work;
+//     its GDAL output drivers are broken, so we don't use those).
+//   - GeoJSON is built in JS from ST_AsGeoJSON; CSV via DuckDB's native COPY.
+//   - GPKG / Shapefile / FileGDB / FlatGeobuf go through gdal3.js, whose OGR drivers
+//     write these correctly (incl. Esri .gdb — OpenFileGDB write, GDAL ≥ 3.6). gdal3.js
+//     is ~40 MB (wasm+data), so it's dynamically imported only when one is requested.
+
+export type ExportFormat = "shp" | "gpkg" | "gdb" | "fgb" | "geojson" | "csv";
 
 export const FORMATS: { id: ExportFormat; label: string }[] = [
   { id: "shp", label: "Shapefile (zip)" },
   { id: "gpkg", label: "GeoPackage" },
+  { id: "gdb", label: "File Geodatabase (zip)" },
+  { id: "fgb", label: "FlatGeobuf" },
   { id: "geojson", label: "GeoJSON" },
   { id: "csv", label: "CSV (WKT)" },
 ];
@@ -44,8 +49,7 @@ function triggerDownload(bytes: Uint8Array, filename: string, mime: string): voi
   // Copy into a fresh ArrayBuffer-backed array (DuckDB buffers may be SharedArrayBuffer-backed).
   const copy = new Uint8Array(bytes.byteLength);
   copy.set(bytes);
-  const blob = new Blob([copy], { type: mime });
-  const url = URL.createObjectURL(blob);
+  const url = URL.createObjectURL(new Blob([copy], { type: mime }));
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
@@ -55,12 +59,9 @@ function triggerDownload(bytes: Uint8Array, filename: string, mime: string): voi
   URL.revokeObjectURL(url);
 }
 
-// Arrow rows carry BigInt (int64 cols) + Dates; make them JSON/shapefile-safe.
-function sanitize(v: unknown): unknown {
-  if (typeof v === "bigint") return Number(v);
-  if (v instanceof Date) return v.toISOString();
-  return v;
-}
+// Arrow rows carry BigInt (int64 cols) + Dates; make them JSON-safe.
+const sanitize = (v: unknown): unknown =>
+  typeof v === "bigint" ? Number(v) : v instanceof Date ? v.toISOString() : v;
 
 let seq = 0;
 
@@ -68,58 +69,31 @@ export async function exportItem(parquetUrl: string, stem: string, fmt: ExportFo
   const duckdb = await import("@duckdb/duckdb-wasm");
   const db = await getDB();
   const conn = await db.connect();
-  // Unique src name per export: the DuckDB instance is a singleton, so its virtual FS
-  // and registered files persist between exports.
   const id = ++seq;
   const src = `s${id}.parquet`;
-  const wrote: string[] = [];
+  let csvOut: string | undefined;
   try {
     await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
     // Read FIRST, before loading spatial: spatial's GeoParquet reader trips over the
     // CRS metadata ("stoi: no conversion"). Plain read already yields a GEOMETRY column.
     await conn.query(`CREATE TABLE raw AS SELECT * FROM read_parquet('${src}');`);
     await conn.query("INSTALL spatial; LOAD spatial;");
-
-    // Most sources give GEOMETRY directly; only hydrate if geom landed as raw WKB BLOB.
     const desc = await conn.query(`DESCRIBE raw;`);
     const geomType = String(desc.toArray().find((r) => String(r.column_name) === GEOM)?.column_type ?? "").toUpperCase();
     const geom = geomType.includes("BLOB") ? `ST_GeomFromWKB(${GEOM})` : GEOM;
 
     if (fmt === "csv") {
-      const out = `o${id}.csv`;
-      wrote.push(out);
-      await conn.query(`COPY (SELECT * REPLACE (ST_AsText(${geom}) AS ${GEOM}) FROM raw) TO '${out}' (HEADER, DELIMITER ',');`);
-      triggerDownload(await db.copyFileToBuffer(out), `${stem}.csv`, "text/csv");
+      csvOut = `o${id}.csv`;
+      await conn.query(`COPY (SELECT * REPLACE (ST_AsText(${geom}) AS ${GEOM}) FROM raw) TO '${csvOut}' (HEADER, DELIMITER ',');`);
+      triggerDownload(await db.copyFileToBuffer(csvOut), `${stem}.csv`, "text/csv");
       return;
     }
 
-    if (fmt === "gpkg") {
-      const { buildGpkg, sqliteType } = await import("./gpkg");
-      const columns = desc
-        .toArray()
-        .filter((r) => String(r.column_name) !== GEOM)
-        .map((r) => ({ name: String(r.column_name), sqlType: sqliteType(String(r.column_type)) }));
-      const ext = (await conn.query(
-        `SELECT ST_XMin(e) a, ST_YMin(e) b, ST_XMax(e) c, ST_YMax(e) d FROM (SELECT ST_Extent(${geom}) e FROM raw);`,
-      )).toArray()[0];
-      const bbox: [number, number, number, number] = [Number(ext?.a ?? 0), Number(ext?.b ?? 0), Number(ext?.c ?? 0), Number(ext?.d ?? 0)];
-      const res = await conn.query(`SELECT ST_AsWKB(${geom}) AS __wkb, * EXCLUDE (${GEOM}) FROM raw;`);
-      const rows = res.toArray().map((row) => {
-        const o = row.toJSON() as Record<string, unknown>;
-        const wkb = o.__wkb as Uint8Array;
-        delete o.__wkb;
-        return { wkb, props: columns.map((c) => sanitize(o[c.name]) as string | number | null) };
-      });
-      const bytes = await buildGpkg({ table: stem, columns, bbox, rows });
-      triggerDownload(bytes, `${stem}.gpkg`, "application/geopackage+sqlite3");
-      return;
-    }
-
-    // geojson + shp: build a FeatureCollection in JS from ST_AsGeoJSON (no GDAL).
+    // Build a GeoJSON FeatureCollection in JS (ST_AsGeoJSON for geometry).
     const res = await conn.query(`SELECT * EXCLUDE (${GEOM}), ST_AsGeoJSON(${geom}) AS __g FROM raw;`);
-    const fc: GeoJSON.FeatureCollection = {
+    const fc = {
       type: "FeatureCollection",
-      features: res.toArray().map((row): GeoJSON.Feature => {
+      features: res.toArray().map((row) => {
         const o = row.toJSON() as Record<string, unknown>;
         const g = o.__g as string | null;
         delete o.__g;
@@ -128,19 +102,21 @@ export async function exportItem(parquetUrl: string, stem: string, fmt: ExportFo
         return { type: "Feature", geometry: g ? JSON.parse(g) : null, properties };
       }),
     };
+    const geojson = JSON.stringify(fc);
 
     if (fmt === "geojson") {
-      triggerDownload(new TextEncoder().encode(JSON.stringify(fc)), `${stem}.geojson`, "application/geo+json");
+      triggerDownload(new TextEncoder().encode(geojson), `${stem}.geojson`, "application/geo+json");
       return;
     }
 
-    // shp → pure-JS shapefile writer, returns a zip (shp/shx/dbf/prj, split by geom type).
-    const shpwrite = await import("@mapbox/shp-write");
-    const buf = (await shpwrite.zip(fc, { outputType: "arraybuffer", compression: "DEFLATE" })) as ArrayBuffer;
-    triggerDownload(new Uint8Array(buf), `${stem}.zip`, "application/zip");
+    // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only)
+    const { convertGeoJSON, GDAL_TARGETS } = await import("./gdal");
+    const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt]);
+    triggerDownload(bytes, filename, mime);
   } finally {
     await conn.query("DROP TABLE IF EXISTS raw;").catch(() => {});
     await conn.close();
-    for (const f of [src, ...wrote]) await db.dropFile(f).catch(() => {});
+    await db.dropFile(src).catch(() => {});
+    if (csvOut) await db.dropFile(csvOut).catch(() => {});
   }
 }

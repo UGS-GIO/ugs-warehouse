@@ -10,7 +10,7 @@ export type CollectionSummary = {
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
 const C = {
-  wrap: "h-full w-full overflow-auto px-5 py-4 mx-auto max-w-[1180px]",
+  wrap: "h-full w-full overflow-auto px-3 py-4 mx-auto max-w-[1180px] sm:px-5",
   crumb: "text-primary cursor-pointer",
   muted: "text-xs text-muted-foreground",
   grid: "mt-3.5 grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
@@ -175,6 +175,7 @@ function ItemList({ items, showCollection, query, onOpen }: {
       {rows.length === 0 ? (
         <p className={`${C.muted} mt-3`}>{needle ? "No items match." : "No items."}</p>
       ) : mode === "table" ? (
+        <div className="overflow-x-auto">
         <table className="w-full border-collapse">
           <thead>
             <tr>
@@ -199,6 +200,7 @@ function ItemList({ items, showCollection, query, onOpen }: {
             ))}
           </tbody>
         </table>
+        </div>
       ) : (
         <div className={C.grid}>
           {rows.map((it) => (

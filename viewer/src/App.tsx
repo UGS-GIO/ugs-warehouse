@@ -105,10 +105,10 @@ export function App() {
 
   return (
     <div className="grid h-screen grid-rows-[auto_1fr] bg-background text-sm text-foreground">
-      <header className="flex items-center gap-3 border-b border-border px-4 py-2">
-        <strong className="text-[15px]">UGS Warehouse</strong>
-        <span className="flex-1 break-all text-[11px] text-muted-foreground">{CATALOG_URL}</span>
-        <div className="flex gap-1">
+      <header className="flex items-center gap-3 border-b border-border px-3 py-2 sm:px-4">
+        <strong className="text-[15px] whitespace-nowrap">UGS Warehouse</strong>
+        <span className="hidden flex-1 truncate text-[11px] text-muted-foreground md:block">{CATALOG_URL}</span>
+        <div className="ml-auto flex gap-1 md:ml-0">
           <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
           <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>
           <ThemeToggle />
@@ -132,8 +132,8 @@ export function App() {
           onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl })}
         />
       ) : (
-        <div className="grid h-full grid-cols-[320px_1fr] overflow-hidden">
-          <aside className="overflow-auto border-r border-border p-3">
+        <div className="grid h-full min-h-0 grid-rows-[40vh_1fr] overflow-hidden md:grid-cols-[320px_1fr] md:grid-rows-1">
+          <aside className="overflow-auto border-b border-border p-3 md:border-b-0 md:border-r">
             {catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
             {!collectionUrl &&
               perColl.map((c) => (
@@ -151,8 +151,8 @@ export function App() {
               </>
             )}
           </aside>
-          <main className="grid h-full grid-rows-[1fr_240px] overflow-hidden">
-            <div><ItemMap item={item.data} /></div>
+          <main className="grid h-full min-h-0 grid-rows-[1fr_200px] overflow-hidden md:grid-rows-[1fr_240px]">
+            <div className="min-h-0"><ItemMap item={item.data} /></div>
             <section className="overflow-auto border-t border-border p-3"><MapDetail item={item.data} loading={item.isLoading} /></section>
           </main>
         </div>

@@ -1,10 +1,16 @@
 import maplibregl from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { Layer, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
-import { pmtilesLink, type StacDoc } from "./stac";
+import { type StacDoc } from "./stac";
 
-// Camera permalink: ?m=lng,lat,zoom (preserved alongside ?view/c/i). Restores the exact
-// view on a shared link; written on moveend (replaceState, no history spam).
+// A topic toggled on in the map. Built by App from the active set × allItems.
+export type ActiveLayer = { id: string; title: string; pmHref: string; pmLayer: string; bbox?: number[] };
+
+// Distinct colors cycled per active layer.
+export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
+export const colorFor = (i: number) => LAYER_COLORS[i % LAYER_COLORS.length];
+
+// Camera permalink: ?m=lng,lat,zoom (preserved alongside ?view/c/i/l).
 type Cam = { longitude: number; latitude: number; zoom: number };
 function readCam(): Cam | null {
   const m = new URLSearchParams(location.search).get("m");
@@ -19,64 +25,55 @@ function writeCam({ longitude, latitude, zoom }: Cam): void {
   history.replaceState(null, "", `${location.pathname}?${p}`);
 }
 
-// PMTiles vector layers we render + identify against. fill/line/circle cover polygon/
-// line/point — MapLibre simply draws nothing for non-matching geometry, so all three
-// are safe to mount and make every feature clickable.
-const PM_LAYERS = ["pm-fill", "pm-line", "pm-circle"];
-
-// Keyless basemaps: OpenFreeMap vector styles + Esri World Imagery raster (no API key).
 const ofm = (s: string) => `https://tiles.openfreemap.org/styles/${s}`;
 const SATELLITE: maplibregl.StyleSpecification = {
   version: 8,
-  sources: {
-    sat: {
-      type: "raster",
-      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
-      tileSize: 256,
-      attribution: "Imagery © Esri",
-    },
-  },
+  sources: { sat: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, attribution: "Imagery © Esri" } },
   layers: [{ id: "sat", type: "raster", source: "sat" }],
 };
 const BASEMAPS: Record<string, string | maplibregl.StyleSpecification> = {
-  Streets: ofm("liberty"),
-  Light: ofm("positron"),
-  Satellite: SATELLITE,
+  Streets: ofm("liberty"), Light: ofm("positron"), Satellite: SATELLITE,
 };
 
-type PopupInfo = { lng: number; lat: number; props: Record<string, unknown> };
+type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown> };
 
-// Footprint + PMTiles render are declarative; effects are camera-only (fitBounds) +
-// cursor. onClick identifies the clicked feature.
-export function ItemMap({ item }: { item?: StacDoc }) {
+// Union of layer bboxes → [w,s,e,n], or null.
+function unionBbox(layers: ActiveLayer[]): [number, number, number, number] | null {
+  const bs = layers.map((l) => l.bbox).filter((b): b is number[] => Array.isArray(b) && b.length >= 4);
+  if (!bs.length) return null;
+  return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])),
+          Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
+}
+
+export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[] }) {
   const mapRef = useRef<MapRef>(null);
-  const bbox = item?.bbox;
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
   const [basemap, setBasemap] = useState<keyof typeof BASEMAPS>("Streets");
   const initialCam = useRef(readCam());
   const lastFit = useRef<string | null>(null);
-  const honorCam = useRef(Boolean(initialCam.current)); // shared ?m= wins over the first item's auto-fit
+  const honorCam = useRef(Boolean(initialCam.current));
 
-  // Fit to the selected item's bbox — but only when it actually changes (StrictMode-safe
-  // via lastFit) and not for the first item if a camera came in on the URL.
+  // Fit to the union of active layers when the set changes (StrictMode-safe via lastFit;
+  // a shared ?m= camera wins over the first auto-fit).
+  const fitKey = layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "");
+  const fitBox = unionBbox(layers) ?? (item?.bbox?.slice(0, 4) as [number, number, number, number] | undefined);
   useEffect(() => {
-    const key = bbox?.join(",") ?? null;
-    if (!key || !mapRef.current || key === lastFit.current) return;
-    lastFit.current = key;
-    setPopup(null); // clear stale popup when switching items
+    if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
+    lastFit.current = fitKey;
+    setPopup(null);
     if (honorCam.current) { honorCam.current = false; return; }
-    const [w, s, e, n] = bbox!;
+    const [w, s, e, n] = fitBox;
     mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
-  }, [bbox]);
+  }, [fitKey]);
 
-  const pm = pmtilesLink(item);
-  const pmLayer = pm?.["pmtiles:layers"]?.[0] ?? item?.id;
+  const interactiveIds = layers.flatMap((_, i) => [`pm-${i}-fill`, `pm-${i}-line`, `pm-${i}-circle`]);
 
   const onClick = (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
-    if (f) setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, props: f.properties ?? {} });
-    else setPopup(null);
+    if (!f) return setPopup(null);
+    const idx = Number(/^pm-(\d+)-/.exec(f.layer.id)?.[1] ?? -1);
+    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: layers[idx]?.title ?? "", props: f.properties ?? {} });
   };
 
   return (
@@ -86,7 +83,7 @@ export function ItemMap({ item }: { item?: StacDoc }) {
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
       mapStyle={BASEMAPS[basemap]}
       style={{ width: "100%", height: "100%" }}
-      interactiveLayerIds={pm && pmLayer ? PM_LAYERS : []}
+      interactiveLayerIds={interactiveIds}
       cursor={cursor}
       onMouseEnter={() => setCursor("pointer")}
       onMouseLeave={() => setCursor("")}
@@ -101,21 +98,27 @@ export function ItemMap({ item }: { item?: StacDoc }) {
           </button>
         ))}
       </div>
+
       {item?.geometry && (
         <Source id="footprint" type="geojson" data={{ type: "Feature", properties: {}, geometry: item.geometry }}>
-          <Layer id="fp-fill" type="fill" paint={{ "fill-color": "#2b6cdf", "fill-opacity": 0.08 }} />
-          <Layer id="fp-line" type="line" paint={{ "line-color": "#2b6cdf", "line-width": 1.5, "line-dasharray": [2, 1] }} />
+          <Layer id="fp-line" type="line" paint={{ "line-color": "#888", "line-width": 1, "line-dasharray": [2, 2] }} />
         </Source>
       )}
-      {pm && pmLayer && (
-        <Source id="pm" type="vector" url={`pmtiles://${pm.href}`}>
-          <Layer id="pm-fill" type="fill" source-layer={pmLayer} paint={{ "fill-color": "#d1491c", "fill-opacity": 0.15 }} />
-          <Layer id="pm-line" type="line" source-layer={pmLayer} paint={{ "line-color": "#d1491c", "line-width": 1.2 }} />
-          <Layer id="pm-circle" type="circle" source-layer={pmLayer} paint={{ "circle-color": "#d1491c", "circle-radius": 3, "circle-opacity": 0.8 }} />
-        </Source>
-      )}
+
+      {layers.map((l, i) => {
+        const c = colorFor(i);
+        return (
+          <Source key={l.id} id={`pm-${i}`} type="vector" url={`pmtiles://${l.pmHref}`}>
+            <Layer id={`pm-${i}-fill`} type="fill" source-layer={l.pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
+            <Layer id={`pm-${i}-line`} type="line" source-layer={l.pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
+            <Layer id={`pm-${i}-circle`} type="circle" source-layer={l.pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
+          </Source>
+        );
+      })}
+
       {popup && (
         <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
+          {popup.title && <div className="mb-1 text-[12px] font-semibold text-gray-900">{popup.title}</div>}
           <FeatureProps props={popup.props} />
         </Popup>
       )}

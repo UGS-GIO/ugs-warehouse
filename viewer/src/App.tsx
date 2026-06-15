@@ -1,28 +1,50 @@
 import { useEffect, useState } from "react";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
-import { ItemMap } from "./Map";
-import { CATALOG_URL, childLinks, itemLinks, type StacDoc, useDocs, useStac } from "./stac";
+import { type ActiveLayer, colorFor, ItemMap } from "./Map";
+import { CATALOG_URL, childLinks, itemLinks, pmtilesLink, type StacDoc, useDocs, useStac } from "./stac";
 import { useTheme } from "./theme";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
+const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
-type Nav = { view: "catalog" | "map"; c?: string; i?: string };
+type Nav = { view: "catalog" | "map"; c?: string; i?: string; l?: string[] };
 
 const readUrl = (): Nav => {
   const p = new URLSearchParams(location.search);
-  return { view: p.get("view") === "map" ? "map" : "catalog", c: p.get("c") || undefined, i: p.get("i") || undefined };
+  const l = p.get("l");
+  return {
+    view: p.get("view") === "map" ? "map" : "catalog",
+    c: p.get("c") || undefined, i: p.get("i") || undefined,
+    l: l ? l.split(",").filter(Boolean) : undefined,
+  };
 };
 
-// Write nav state into the URL (preserving ?catalog=). push for user navigation so
-// back/forward work; replace for the initial sync.
+// Write nav state into the URL (preserving ?catalog= and ?m=). push for user navigation
+// so back/forward work; replace for the initial sync.
 const writeUrl = (n: Nav, push: boolean) => {
   const p = new URLSearchParams(location.search);
   n.view === "map" ? p.set("view", "map") : p.delete("view");
   n.c ? p.set("c", n.c) : p.delete("c");
   n.i ? p.set("i", n.i) : p.delete("i");
+  n.l?.length ? p.set("l", n.l.join(",")) : p.delete("l");
   const url = `${location.pathname}${p.toString() ? "?" + p : ""}`;
   (push ? history.pushState : history.replaceState).call(history, null, "", url);
 };
+
+// An ItemRef → map ActiveLayer (null if it has no PMTiles to render).
+function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
+  if (!ref?.data) return null;
+  const pm = pmtilesLink(ref.data);
+  if (!pm) return null;
+  const id = idOf(ref.href);
+  return {
+    id,
+    title: String(ref.data.properties?.title ?? id),
+    pmHref: pm.href,
+    pmLayer: pm["pmtiles:layers"]?.[0] ?? id,
+    bbox: ref.data.bbox,
+  };
+}
 
 const tab = (on: boolean) =>
   `cursor-pointer rounded-md border px-3 py-1.5 text-[13px] ${on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-accent"}`;
@@ -66,11 +88,11 @@ function ThemeToggle() {
 }
 
 export function App() {
-  const [{ view, c: collectionUrl, i: itemUrl }, setNav] = useState<Nav>(readUrl);
+  const [{ view, c: collectionUrl, i: itemUrl, l: layerIds }, setNav] = useState<Nav>(readUrl);
 
   // Sync state ↔ URL: push on user nav (back/forward works); read URL on popstate.
   const go = (next: Nav, push = true) => { writeUrl(next, push); setNav(next); };
-  const setView = (v: "catalog" | "map") => go({ view: v, c: collectionUrl, i: itemUrl });
+  const setView = (v: "catalog" | "map") => go({ view: v, c: collectionUrl, i: itemUrl, l: layerIds });
   useEffect(() => {
     const onPop = () => setNav(readUrl());
     addEventListener("popstate", onPop);
@@ -101,7 +123,18 @@ export function App() {
   const selColl = perColl.find((pc) => pc.id === collectionId);
 
   const openCollection = (href: string) => go({ view, c: href });
-  const openItem = (href: string) => go({ view, c: collectionUrl, i: href });
+  const openItem = (href: string) => go({ view, c: collectionUrl, i: href, l: layerIds });
+  const toggleLayer = (id: string) => {
+    const set = new Set(layerIds ?? []);
+    set.has(id) ? set.delete(id) : set.add(id);
+    go({ view, c: collectionUrl, i: itemUrl, l: [...set] });
+  };
+
+  // Active map layers: the toggled set, else fall back to the detail item (so a plain
+  // ?c=&i= link still shows its layer). Resolved against fetched item data (for PMTiles).
+  const byId = new Map(allItems.map((r) => [idOf(r.href), r]));
+  const idsForMap = layerIds?.length ? layerIds : itemUrl ? [idOf(itemUrl)] : [];
+  const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
 
   return (
     <div className="grid h-screen grid-rows-[auto_1fr] bg-background text-sm text-foreground">
@@ -129,7 +162,7 @@ export function App() {
           onOpenItem={openItem}
           onBackToCollections={() => go({ view })}
           onBackToItems={() => go({ view, c: collectionUrl })}
-          onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl })}
+          onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
         />
       ) : (
         <div className="grid h-full min-h-0 grid-rows-[40vh_1fr] overflow-hidden md:grid-cols-[320px_1fr] md:grid-rows-1">
@@ -143,16 +176,27 @@ export function App() {
               ))}
             {collectionUrl && (
               <>
-                <div className="mb-2 cursor-pointer text-xs text-primary"
-                  onClick={() => go({ view })}>‹ collections</div>
-                {(selColl?.itemLinks ?? []).map((it) => (
-                  <div key={it.href} className={row} onClick={() => openItem(it.href)}>{it.title ?? it.href.split("/").slice(-1)[0]}</div>
-                ))}
+                <div className="mb-2 flex items-center justify-between text-xs">
+                  <span className="cursor-pointer text-primary" onClick={() => go({ view })}>‹ collections</span>
+                  <span className="text-muted-foreground">check to overlay</span>
+                </div>
+                {(selColl?.itemLinks ?? []).map((it) => {
+                  const id = idOf(it.href);
+                  const on = idsForMap.includes(id);
+                  const ci = activeLayers.findIndex((l) => l.id === id);
+                  return (
+                    <div key={it.href} className={`${row} flex items-center gap-2`}>
+                      <input type="checkbox" checked={on} onChange={() => toggleLayer(id)} onClick={(e) => e.stopPropagation()} />
+                      {on && ci >= 0 && <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colorFor(ci) }} />}
+                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>{it.title ?? id}</span>
+                    </div>
+                  );
+                })}
               </>
             )}
           </aside>
           <main className="grid h-full min-h-0 grid-rows-[1fr_200px] overflow-hidden md:grid-rows-[1fr_240px]">
-            <div className="min-h-0"><ItemMap item={item.data} /></div>
+            <div className="min-h-0"><ItemMap item={item.data} layers={activeLayers} /></div>
             <section className="overflow-auto border-t border-border p-3"><MapDetail item={item.data} loading={item.isLoading} /></section>
           </main>
         </div>

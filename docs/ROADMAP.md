@@ -39,9 +39,9 @@ Mobile: ✅ responsive layout (map view stacks, header trims, tables scroll-x).
 - ☐ **stac-geoparquet search** — scale catalog search past static-tree limits (+ stac-map UI).
 
 ## Tier 3 — metadata / data management
-- ☐ **proj + raster + eo STAC extensions** — CRS, bands, EO metadata (today: web-map-links only).
+- ◐ **STAC extensions** — ✅ `proj` (proj:epsg on items); ☐ raster bands / eo metadata.
 - ☐ **ISO 19115 / FGDC metadata export** — formal metadata a state geological survey likely needs; STAC ≠ ISO.
-- ☐ **Real collection extents + data-validity datetime** — extents are a hardcoded Utah bbox; `datetime` is ingest-time, not survey date.
+- ◐ **Real collection extents + data-validity datetime** — ✅ extents now derived from items (bbox union + temporal interval); ☐ `datetime` still ingest-time (no upstream validity timestamp available yet).
 - ☐ **DOI / citation** — dated GeoParquet archives are citable; no DOI minting.
 - ☐ **Data dictionary** — per-layer field definitions.
 

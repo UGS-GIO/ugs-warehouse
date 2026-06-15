@@ -25,6 +25,9 @@ substitutions:
   # public OGC api connects read-only — never schema_owner (role + secret provisioned by Marshall)
   _API_DB_USER: schema_reader
   _API_SECRET: schema-reader-db-password
+  # Static STAC viewer → public bucket → CDN (https://maps-assets.geology.utah.gov/warehouse/viewer/)
+  _PUBLIC_BUCKET: ut-dnr-ugs-maps-prod-public
+  _VIEWER_PREFIX: warehouse/viewer
   # Tag used for images (defaults to SHORT_SHA in automated triggers)
   _TAG: $SHORT_SHA
 
@@ -179,6 +182,32 @@ steps:
       - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
       - --set-env-vars=^|^DATABASE_URL=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}|PGFS_DATABASE_DBCONNECTION=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}
       - --allow-unauthenticated
+
+  # Build the static STAC viewer (Vite, base "./" so it works under any CDN subpath).
+  - id: build-viewer
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        cd viewer
+        npm ci
+        npm run build
+
+  # Publish viewer/dist → public bucket → CDN. Idempotent rsync; index.html revalidates
+  # (hashed assets are immutable). allowFailure until the build SA has objectAdmin on the
+  # bucket (grant in docs/DEPLOY.md §5).
+  - id: deploy-viewer
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    allowFailure: true
+    args:
+      - -c
+      - |
+        gcloud storage rsync viewer/dist gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX} \
+          --recursive --delete-unmatched-destination-objects
+        gcloud storage objects update gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX}/index.html \
+          --cache-control="no-cache"
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse

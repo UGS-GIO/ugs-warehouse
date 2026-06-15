@@ -127,6 +127,23 @@ Nothing to change on the dataELT side — #418 owns `publish.sh`; the warehouse 
 needed to listen. Drop `allowFailure` from `wire-pubsub` once it's green if you want the
 wiring to gate future builds.
 
+## 5. Static viewer → CDN
+
+`cloudbuild.yaml` `build-viewer` + `deploy-viewer` build `viewer/` (Vite) and rsync
+`viewer/dist` → `gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX}` (default
+`warehouse/viewer`), served at **https://maps-assets.geology.utah.gov/warehouse/viewer/**.
+`index.html` is set `no-cache`; hashed assets are immutable. `deploy-viewer` is
+`allowFailure` until the build SA can write the bucket:
+
+```bash
+# build SA needs objectAdmin on the public bucket (one-time)
+gcloud storage buckets add-iam-policy-binding gs://$_PUBLIC_BUCKET \
+  --member="serviceAccount:$CB_SA" --role=roles/storage.objectAdmin
+```
+
+(`$CB_SA` from §4.) After the grant, the next build publishes the viewer. The viewer's
+default catalog is the prod STAC, so no extra config — it just works once live.
+
 ## Scheduling (optional)
 
 Cloud Scheduler → Cloud Run Jobs for a nightly full re-ingest:

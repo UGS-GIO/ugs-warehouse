@@ -1,7 +1,23 @@
 import maplibregl from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
-import { Layer, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source } from "react-map-gl/maplibre";
+import { Layer, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { pmtilesLink, type StacDoc } from "./stac";
+
+// Camera permalink: ?m=lng,lat,zoom (preserved alongside ?view/c/i). Restores the exact
+// view on a shared link; written on moveend (replaceState, no history spam).
+type Cam = { longitude: number; latitude: number; zoom: number };
+function readCam(): Cam | null {
+  const m = new URLSearchParams(location.search).get("m");
+  if (!m) return null;
+  const [lng, lat, z] = m.split(",").map(Number);
+  return Number.isFinite(lng) && Number.isFinite(lat) && Number.isFinite(z)
+    ? { longitude: lng, latitude: lat, zoom: z } : null;
+}
+function writeCam({ longitude, latitude, zoom }: Cam): void {
+  const p = new URLSearchParams(location.search);
+  p.set("m", `${longitude.toFixed(4)},${latitude.toFixed(4)},${zoom.toFixed(2)}`);
+  history.replaceState(null, "", `${location.pathname}?${p}`);
+}
 
 // PMTiles vector layers we render + identify against. fill/line/circle cover polygon/
 // line/point — MapLibre simply draws nothing for non-matching geometry, so all three
@@ -38,13 +54,20 @@ export function ItemMap({ item }: { item?: StacDoc }) {
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
   const [basemap, setBasemap] = useState<keyof typeof BASEMAPS>("Streets");
+  const initialCam = useRef(readCam());
+  const lastFit = useRef<string | null>(null);
+  const honorCam = useRef(Boolean(initialCam.current)); // shared ?m= wins over the first item's auto-fit
 
+  // Fit to the selected item's bbox — but only when it actually changes (StrictMode-safe
+  // via lastFit) and not for the first item if a camera came in on the URL.
   useEffect(() => {
-    if (bbox && mapRef.current) {
-      const [w, s, e, n] = bbox;
-      mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
-    }
+    const key = bbox?.join(",") ?? null;
+    if (!key || !mapRef.current || key === lastFit.current) return;
+    lastFit.current = key;
     setPopup(null); // clear stale popup when switching items
+    if (honorCam.current) { honorCam.current = false; return; }
+    const [w, s, e, n] = bbox!;
+    mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
   }, [bbox]);
 
   const pm = pmtilesLink(item);
@@ -60,13 +83,14 @@ export function ItemMap({ item }: { item?: StacDoc }) {
     <MapGL
       ref={mapRef}
       mapLib={maplibregl}
-      initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
+      initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
       mapStyle={BASEMAPS[basemap]}
       style={{ width: "100%", height: "100%" }}
       interactiveLayerIds={pm && pmLayer ? PM_LAYERS : []}
       cursor={cursor}
       onMouseEnter={() => setCursor("pointer")}
       onMouseLeave={() => setCursor("")}
+      onMoveEnd={(e: ViewStateChangeEvent) => writeCam(e.viewState)}
       onClick={onClick}
     >
       <div className="absolute right-2 top-2 z-10 flex gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">

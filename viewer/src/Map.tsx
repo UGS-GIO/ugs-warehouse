@@ -8,6 +8,26 @@ import { pmtilesLink, type StacDoc } from "./stac";
 // are safe to mount and make every feature clickable.
 const PM_LAYERS = ["pm-fill", "pm-line", "pm-circle"];
 
+// Keyless basemaps: OpenFreeMap vector styles + Esri World Imagery raster (no API key).
+const ofm = (s: string) => `https://tiles.openfreemap.org/styles/${s}`;
+const SATELLITE: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {
+    sat: {
+      type: "raster",
+      tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"],
+      tileSize: 256,
+      attribution: "Imagery © Esri",
+    },
+  },
+  layers: [{ id: "sat", type: "raster", source: "sat" }],
+};
+const BASEMAPS: Record<string, string | maplibregl.StyleSpecification> = {
+  Streets: ofm("liberty"),
+  Light: ofm("positron"),
+  Satellite: SATELLITE,
+};
+
 type PopupInfo = { lng: number; lat: number; props: Record<string, unknown> };
 
 // Footprint + PMTiles render are declarative; effects are camera-only (fitBounds) +
@@ -17,6 +37,7 @@ export function ItemMap({ item }: { item?: StacDoc }) {
   const bbox = item?.bbox;
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
+  const [basemap, setBasemap] = useState<keyof typeof BASEMAPS>("Streets");
 
   useEffect(() => {
     if (bbox && mapRef.current) {
@@ -40,7 +61,7 @@ export function ItemMap({ item }: { item?: StacDoc }) {
       ref={mapRef}
       mapLib={maplibregl}
       initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
-      mapStyle="https://tiles.openfreemap.org/styles/liberty"
+      mapStyle={BASEMAPS[basemap]}
       style={{ width: "100%", height: "100%" }}
       interactiveLayerIds={pm && pmLayer ? PM_LAYERS : []}
       cursor={cursor}
@@ -48,6 +69,14 @@ export function ItemMap({ item }: { item?: StacDoc }) {
       onMouseLeave={() => setCursor("")}
       onClick={onClick}
     >
+      <div className="absolute right-2 top-2 z-10 flex gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
+        {Object.keys(BASEMAPS).map((name) => (
+          <button key={name} onClick={() => setBasemap(name)}
+            className={`rounded px-2 py-0.5 ${basemap === name ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"}`}>
+            {name}
+          </button>
+        ))}
+      </div>
       {item?.geometry && (
         <Source id="footprint" type="geojson" data={{ type: "Feature", properties: {}, geometry: item.geometry }}>
           <Layer id="fp-fill" type="fill" paint={{ "fill-color": "#2b6cdf", "fill-opacity": 0.08 }} />

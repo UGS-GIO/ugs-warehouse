@@ -23,10 +23,12 @@ Status legend: ☐ not started · ◐ partial · ✅ done
 - ✅ **Basemap switcher** — streets / light / satellite (keyless: OpenFreeMap + Esri imagery).
 - ☐ **Bbox / map-extent catalog filter** — filter items spatially (draw box / "in view"), not just text.
 - ☐ **Legend + symbology** — classed/categorical styling per layer + legend (today: single-color lines).
+- ✅ **Map-extent permalink** — `?m=lng,lat,zoom` restores the exact camera (auto-fit only on item change).
 - ☐ **Multi-layer overlay** — stack/compare several topics (today: one item at a time).
 - ☐ **Time slider** — for time-series rasters (soil-water model).
-- ☐ **Map-extent permalink** — deep-link the camera, not just the item.
 - ☐ Geocoder / place search · measure tool · coordinate readout.
+
+Mobile: ✅ responsive layout (map view stacks, header trims, tables scroll-x).
 
 ## Tier 2 — needs a service
 - ☐ **Raster tiles (titiler)** — dynamic COG tiling so rasters render in the viewer + WMTS. DevSeed-recommended. (Pairs with raster consumer / #169.)

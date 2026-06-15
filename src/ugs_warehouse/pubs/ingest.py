@@ -73,6 +73,7 @@ def build_catalog(limit: int | None = None) -> int:
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
         )
+        stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
         stac.write_item(item)
         n += 1
 

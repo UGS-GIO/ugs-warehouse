@@ -131,4 +131,5 @@ def build_item(p: dict, attachments: list[dict], *,
         assets=assets,
         extra_links=extra_links,
         stac_extensions=extensions or None,
+        proj_epsg=4326 if bbox else None,  # footprints/units are 4326
     )

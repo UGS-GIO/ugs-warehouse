@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import config, gcs
+from . import config, gcs, iso
 
 PGF_BASE_URL = config.PGF_BASE_URL
 
@@ -105,6 +105,23 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
 
 def item_object_path(collection: str, item_id: str) -> str:
     return f"{config.STAC_PREFIX}/{collection}/{item_id}/{item_id}.json"
+
+
+def attach_iso(item: dict) -> str:
+    """Write an ISO 19139 sidecar next to the item + add a `metadata` asset (mutates item).
+
+    For gov clearinghouses (data.gov / state portals) that harvest ISO, not STAC. Call
+    before `write_item` so the written item references the sidecar; generated from the item
+    as-is so the metadata asset is not yet present (no self-reference).
+    """
+    path = f"{config.STAC_PREFIX}/{item['collection']}/{item['id']}/{item['id']}.iso.xml"
+    gcs.put_bytes(iso.stac_to_iso19139(item).encode(), path,
+                  content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
+    item.setdefault("assets", {})["metadata"] = {
+        "href": config.public_url(path), "type": "application/xml",
+        "roles": ["metadata"], "title": "ISO 19139 metadata",
+    }
+    return path
 
 
 def write_item(item: dict) -> str:

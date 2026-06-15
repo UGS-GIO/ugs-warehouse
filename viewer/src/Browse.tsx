@@ -1,6 +1,7 @@
 // Catalog-centric browser: metadata over map. Collection cards (with counts) +
 // search-all → sortable item table / cards → item detail. The map is one link out.
 import { useMemo, useState } from "react";
+import { exportItem, type ExportFormat, FORMATS } from "./download";
 import { type Asset, type Link, type StacDoc } from "./stac";
 
 export type CollectionSummary = {
@@ -51,6 +52,47 @@ function AssetChips({ assets }: { assets: Record<string, Asset> }) {
           onClick={(e) => e.stopPropagation()}>{a.title ?? k}</a>
       ))}
     </>
+  );
+}
+
+const parquetAsset = (item: StacDoc): Asset | undefined =>
+  Object.values(item.assets ?? {}).find(
+    (a) => a.type?.includes("parquet") || a.href.endsWith(".parquet"),
+  );
+
+// Client-side export — only for items with a GeoParquet asset (serving topics).
+function ExportPanel({ item }: { item: StacDoc }) {
+  const parquet = parquetAsset(item);
+  const [busy, setBusy] = useState<ExportFormat | null>(null);
+  const [err, setErr] = useState<string>();
+  if (!parquet) return null;
+
+  const run = async (fmt: ExportFormat) => {
+    setErr(undefined);
+    setBusy(fmt);
+    try {
+      await exportItem(parquet.href, String(item.id ?? "export"), fmt);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
+      <div className="mb-1.5 text-xs font-semibold text-gray-600">Download as</div>
+      <div className="flex flex-wrap items-center gap-2">
+        {FORMATS.map((f) => (
+          <button key={f.id} disabled={busy !== null} onClick={() => run(f.id)}
+            className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-800 hover:border-blue-400 disabled:opacity-50">
+            {busy === f.id ? "preparing…" : f.label}
+          </button>
+        ))}
+        {busy && <span className={C.muted}>running in your browser · first export loads DuckDB (~a few MB)</span>}
+      </div>
+      {err && <div className="mt-1.5 text-xs text-red-700">Export failed: {err}</div>}
+    </div>
   );
 }
 
@@ -171,6 +213,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
           View on map ›
         </button>
       )}
+      <ExportPanel item={item} />
       <table className="mt-3 w-full max-w-[760px] border-collapse text-sm">
         <tbody>
           {Object.entries(p).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (

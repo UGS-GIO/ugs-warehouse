@@ -74,8 +74,8 @@ rendering live prod. #418 merged (squash).
 **Marshall asks** (Clinton has merge + push-to-his-PR rights — "just wants shit done"):
 - **Merge `ugs-ingest` #169** (raster producer `raw.raster_catalog`) — still OPEN; unblocks raster consumer.
 - **Merge `dataELT` #420** (adds `dbt_test` schema to CI gate; needs `dbt_test_user`/`dbt-test-db-password` to exist) — unblocks the stuck ucrc PR #419.
-- Provision `schema_reader` role + `schema-reader-db-password` secret (unblocks api deploy, currently `allowFailure`).
 - Confirm pubs schema read perms + project for the runtime SA.
+- ✅ `schema_reader` role + `schema-reader-db-password` secret provisioned (2026-06-15) — `deploy-api` `allowFailure` dropped.
 
 **Still TODO (warehouse code):** finish raster consumer COG promote once #169 lands (the
 `consume.promote` `NotImplementedError` — cross-bucket staged→public copy); small dataELT

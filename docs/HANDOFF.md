@@ -46,29 +46,41 @@ Two boxes: this **personal box** (no GCP perms) authors + commits; the **work bo
   service + api) + `.github/workflows/deploy.yml` (WIF keyless → `gcloud builds submit`).
 - **Pub/Sub ingest (#418)** — `service/main.py` push handler; `cloudbuild` `wire-pubsub`
   step provisions topic+subscription+invoker. Acks+skips non-`MART_SCHEMAS` (gwportal).
-- **Viewer** (`viewer/`) — React + Vite + Tailwind v4 + TanStack Query + react-map-gl.
-  Two views: **Catalog** (collection cards, search-all, sortable table) + **Map** (PMTiles
-  + footprint). Static client-side, reads the STAC CDN. Dev runs off
-  `viewer/scripts/gen_local_catalog.py` (prod STAC only has pubs so far — see below).
+- **Viewer** (`viewer/`) — React 19 + Vite + Tailwind v4 + TanStack Query + react-map-gl 8
+  / maplibre 5 + pmtiles. **Catalog** view (collection cards w/ counts + descriptions,
+  search-all, sortable table) + **Map** view (PMTiles + footprint). **Light/dark theme**
+  matching ugs-map-viewer (burnt-orange tokens, `vite-ui-theme`). **Shareable deep-links**
+  (`?view=&c=&i=`). **Client-side export** (item detail): SHP / GPKG / **FileGDB (.gdb)** /
+  FlatGeobuf via gdal3.js (real OGR in wasm, ~40 MB lazy) + GeoJSON/CSV native — Esri-ready.
+- **Stack currency** — verified vs DevelopmentSeed/2026 best-practice; upgraded React 18→19,
+  react-map-gl 7→8, maplibre 4→5; export switched bespoke→gdal3.js. (DuckLake readiness still
+  unverified.) Future adds for raster: titiler (dynamic COG tiles), stac-geoparquet/stac-map.
+- **Tests + CI** — `tests/` pytest (topic parse, pub/sub gate, stac builders, raster mapping;
+  20 tests) + `.github/workflows/test.yml` (ruff + pytest).
+- **Raster consumer scaffold** (`src/ugs_warehouse/raster/`) — identity + `sink_stac` +
+  provisional `consume` (STAC mapping ready; COG promote `NotImplementedError` pending #169).
+- **Viewer deploy wired** — `cloudbuild.yaml` `build-viewer`/`deploy-viewer` → bucket → CDN
+  `…/warehouse/viewer/` (`allowFailure` until build SA gets bucket objectAdmin; `DEPLOY.md §5`).
 
-**Critical path → "live and useful" (work box / Gemini, has perms):**
-1. **Build/deploy latest** — gets the gwportal-skip + `wire-pubsub` into the service image.
-2. **Vector ingest → prod** — `gcloud run jobs execute ugs-warehouse-ingest …`. Default
-   prefixes = `warehouse/stac` prod, current code = collections layout. Populates all 25
-   vector topics into the prod catalog → **viewer shows real data, not just pubs**. (Today
-   the only vector run is the stale flat-layout one at `warehouse-sandbox/stac/`.)
-3. **Pub/Sub grants** — `docs/DEPLOY.md §4`: build SA `pubsub.admin` + Pub/Sub agent
-   `tokenCreator` on runtime SA → rerun build → `wire-pubsub` self-provisions.
+**Live in prod (Gemini ran 2026-06-15):** images built, jobs+services deployed, Pub/Sub
+`ugs-warehouse-ingest-push` active (OIDC), **vector ingest run → prod catalog has both
+`ugs-publications` + `ugs-serving-topics` (19→25 items)**. Viewer (local dev) confirmed
+rendering live prod. #418 merged (squash).
+
+**Remaining (work box / Gemini, has perms):**
+1. **Grant build SA bucket objectAdmin** → next build publishes the viewer to the CDN (`DEPLOY.md §5`).
+2. **Pub/Sub grants** if not yet done (`DEPLOY.md §4`) — confirm `ugs-warehouse-ingest-push` end-to-end.
 
 **Marshall asks** (Clinton has merge + push-to-his-PR rights — "just wants shit done"):
-- **Merge `ugs-ingest` #169** (raster producer `raw.raster_catalog`) — still OPEN.
-- Provision `schema_reader` role + `schema-reader-db-password` secret (unblocks api deploy,
-  currently `allowFailure`).
+- **Merge `ugs-ingest` #169** (raster producer `raw.raster_catalog`) — still OPEN; unblocks raster consumer.
+- **Merge `dataELT` #420** (adds `dbt_test` schema to CI gate; needs `dbt_test_user`/`dbt-test-db-password` to exist) — unblocks the stuck ucrc PR #419.
+- Provision `schema_reader` role + `schema-reader-db-password` secret (unblocks api deploy, currently `allowFailure`).
 - Confirm pubs schema read perms + project for the runtime SA.
 
-**Still TODO (warehouse code):** raster serving consumer (`raw.raster_catalog` → STAC +
-COG promote, after #169); small dataELT raster promote-gate PR; viewer DuckDB-WASM
-downloader (client-side SHP/GPKG export); `gwportal` own-DB discovery (currently skipped).
+**Still TODO (warehouse code):** finish raster consumer COG promote once #169 lands (the
+`consume.promote` `NotImplementedError` — cross-bucket staged→public copy); small dataELT
+raster promote-gate PR; `gwportal` own-DB discovery (currently acked+skipped). Verify
+DuckLake 2026 production-readiness. (Viewer downloader: DONE — gdal3.js, 6 formats.)
 
 ---
 

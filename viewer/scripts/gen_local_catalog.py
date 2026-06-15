@@ -72,7 +72,7 @@ def fetch(url: str) -> dict:
 
 def nested_links(item_id: str, original: list[dict]) -> list[dict]:
     """Standard nested links + preserved web-map / via / cite-as links."""
-    extra = [l for l in original if l.get("rel") not in STD_RELS]
+    extra = [link for link in original if link.get("rel") not in STD_RELS]
     return [
         {"rel": "root", "href": "../../catalog.json", "type": "application/json"},
         {"rel": "parent", "href": "../collection.json", "type": "application/json"},
@@ -92,8 +92,8 @@ def write_item(collection: str, item: dict) -> None:
 
 
 def item_hrefs(catalog: dict, base: str) -> list[str]:
-    return [urllib.request.urljoin(base + "/", l["href"])
-            for l in catalog.get("links", []) if l["rel"] == "item"]
+    return [urllib.request.urljoin(base + "/", link["href"])
+            for link in catalog.get("links", []) if link["rel"] == "item"]
 
 
 def harvest_flat(base: str, collection: str) -> list[str]:

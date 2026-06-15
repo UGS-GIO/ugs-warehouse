@@ -63,15 +63,18 @@ const parquetAsset = (item: StacDoc): Asset | undefined =>
 // Client-side export — only for items with a GeoParquet asset (serving topics).
 function ExportPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
+  const fullBbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
   const [busy, setBusy] = useState<ExportFormat | null>(null);
   const [err, setErr] = useState<string>();
+  const [clipOn, setClipOn] = useState(false);
+  const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
   if (!parquet) return null;
 
   const run = async (fmt: ExportFormat) => {
     setErr(undefined);
     setBusy(fmt);
     try {
-      await exportItem(parquet.href, String(item.id ?? "export"), fmt);
+      await exportItem(parquet.href, String(item.id ?? "export"), fmt, clipOn ? bbox : undefined);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -79,6 +82,7 @@ function ExportPanel({ item }: { item: StacDoc }) {
     }
   };
 
+  const labels = ["W", "S", "E", "N"];
   return (
     <div className="mt-3 rounded-lg border border-border bg-muted p-3">
       <div className="mb-1.5 text-xs font-semibold text-muted-foreground">Download as</div>
@@ -91,6 +95,27 @@ function ExportPanel({ item }: { item: StacDoc }) {
         ))}
         {busy && <span className={C.muted}>running in your browser · first export loads DuckDB (~a few MB)</span>}
       </div>
+      {fullBbox && (
+        <div className="mt-2 text-xs">
+          <label className="flex items-center gap-1.5 text-muted-foreground">
+            <input type="checkbox" checked={clipOn} onChange={(e) => setClipOn(e.target.checked)} />
+            Clip to area (bbox, EPSG:4326)
+          </label>
+          {clipOn && (
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              {bbox.map((v, i) => (
+                <label key={i} className="flex items-center gap-1 text-muted-foreground">
+                  {labels[i]}
+                  <input type="number" step="0.01" value={v}
+                    onChange={(e) => setBbox((b) => b.map((x, j) => (j === i ? Number(e.target.value) : x)) as typeof b)}
+                    className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+                </label>
+              ))}
+              <button onClick={() => setBbox(fullBbox)} className="text-primary">reset</button>
+            </div>
+          )}
+        </div>
+      )}
       {err && <div className="mt-1.5 text-xs text-destructive">Export failed: {err}</div>}
     </div>
   );

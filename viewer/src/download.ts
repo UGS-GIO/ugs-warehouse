@@ -65,7 +65,12 @@ const sanitize = (v: unknown): unknown =>
 
 let seq = 0;
 
-export async function exportItem(parquetUrl: string, stem: string, fmt: ExportFormat): Promise<void> {
+export async function exportItem(
+  parquetUrl: string,
+  stem: string,
+  fmt: ExportFormat,
+  clip?: [number, number, number, number], // [w,s,e,n] in 4326 — clip to this AOI
+): Promise<void> {
   const duckdb = await import("@duckdb/duckdb-wasm");
   const db = await getDB();
   const conn = await db.connect();
@@ -82,15 +87,26 @@ export async function exportItem(parquetUrl: string, stem: string, fmt: ExportFo
     const geomType = String(desc.toArray().find((r) => String(r.column_name) === GEOM)?.column_type ?? "").toUpperCase();
     const geom = geomType.includes("BLOB") ? `ST_GeomFromWKB(${GEOM})` : GEOM;
 
+    // Optional AOI clip: keep only features intersecting the bbox (features kept whole,
+    // not geometrically cut — a "download what's in this area" filter).
+    let t = "raw";
+    if (clip) {
+      const [w, s, e, n] = clip;
+      await conn.query(
+        `CREATE TABLE clipped AS SELECT * FROM raw WHERE ST_Intersects(${geom}, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}));`,
+      );
+      t = "clipped";
+    }
+
     if (fmt === "csv") {
       csvOut = `o${id}.csv`;
-      await conn.query(`COPY (SELECT * REPLACE (ST_AsText(${geom}) AS ${GEOM}) FROM raw) TO '${csvOut}' (HEADER, DELIMITER ',');`);
+      await conn.query(`COPY (SELECT * REPLACE (ST_AsText(${geom}) AS ${GEOM}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
       triggerDownload(await db.copyFileToBuffer(csvOut), `${stem}.csv`, "text/csv");
       return;
     }
 
     // Build a GeoJSON FeatureCollection in JS (ST_AsGeoJSON for geometry).
-    const res = await conn.query(`SELECT * EXCLUDE (${GEOM}), ST_AsGeoJSON(${geom}) AS __g FROM raw;`);
+    const res = await conn.query(`SELECT * EXCLUDE (${GEOM}), ST_AsGeoJSON(${geom}) AS __g FROM ${t};`);
     const fc = {
       type: "FeatureCollection",
       features: res.toArray().map((row) => {
@@ -114,7 +130,7 @@ export async function exportItem(parquetUrl: string, stem: string, fmt: ExportFo
     const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt]);
     triggerDownload(bytes, filename, mime);
   } finally {
-    await conn.query("DROP TABLE IF EXISTS raw;").catch(() => {});
+    await conn.query("DROP TABLE IF EXISTS raw; DROP TABLE IF EXISTS clipped;").catch(() => {});
     await conn.close();
     await db.dropFile(src).catch(() => {});
     if (csvOut) await db.dropFile(csvOut).catch(() => {});

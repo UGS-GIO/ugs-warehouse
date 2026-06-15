@@ -11,7 +11,7 @@ import datetime
 
 import duckdb
 
-from ..core import config, stac
+from ..core import config, gcs, iso, stac
 from . import ducklake
 from .topics import Topic
 
@@ -69,5 +69,14 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         stac_extensions=[stac.WEB_MAP_LINKS_EXT],
         proj_epsg=4326,  # transform reprojects every topic to 4326
     )
+
+    # ISO 19139 sidecar for gov clearinghouses (data.gov / state portals), linked as a
+    # `metadata` asset. Generated from the item before this asset is added (no self-ref).
+    iso_path = f"{config.STAC_PREFIX}/{COLLECTION}/{topic.stem}/{topic.stem}.iso.xml"
+    gcs.put_bytes(iso.stac_to_iso19139(item).encode(), iso_path,
+                  content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
+    item["assets"]["metadata"] = {"href": config.public_url(iso_path), "type": "application/xml",
+                                  "roles": ["metadata"], "title": "ISO 19139 metadata"}
+
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")

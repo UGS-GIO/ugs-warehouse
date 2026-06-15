@@ -1,1 +1,68 @@
 @import "tailwindcss";
+
+/* class-based dark mode (matches ugs-map-viewer: `.dark` on <html>) */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens mirrored from ugs-map-viewer (HSL triplets). Burnt-orange brand. */
+:root {
+  --background: 0 0% 98%;
+  --foreground: 31 50% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 31 50% 10%;
+  --primary: 28 95% 36%;
+  --primary-foreground: 60 9.1% 97.8%;
+  --secondary: 20 5.9% 90%;
+  --secondary-foreground: 24 9.8% 10%;
+  --muted: 60 4.8% 95.9%;
+  --muted-foreground: 25 5.3% 44.7%;
+  --accent: 60 4.8% 95.9%;
+  --accent-foreground: 24 9.8% 10%;
+  --destructive: 0 72% 45%;
+  --border: 20 5.9% 90%;
+  --input: 20 5.9% 90%;
+  --ring: 31 97.2% 41.8%;
+}
+
+.dark {
+  --background: 0 0% 21%;
+  --foreground: 60 9.1% 97.8%;
+  --card: 0 0% 21%;
+  --card-foreground: 60 9.1% 97.8%;
+  --primary: 27 84% 55%;
+  --primary-foreground: 0 0% 12%;
+  --secondary: 0 0% 25%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 0 0% 27%;
+  --muted-foreground: 24 5.4% 70%;
+  --accent: 0 0% 27%;
+  --accent-foreground: 60 9.1% 97.8%;
+  --destructive: 0 72% 60%;
+  --border: 0 0% 30%;
+  --input: 0 0% 30%;
+  --ring: 31 97.2% 41.8%;
+}
+
+/* Map tokens → Tailwind color utilities (bg-background, text-muted-foreground, …) */
+@theme inline {
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+}
+
+body {
+  background-color: hsl(var(--background));
+  color: hsl(var(--foreground));
+}

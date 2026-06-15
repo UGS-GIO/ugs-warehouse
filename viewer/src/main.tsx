@@ -4,8 +4,12 @@ import { Protocol } from "pmtiles";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import { applyTheme, initialTheme } from "./theme";
 import "./index.css";
 import "maplibre-gl/dist/maplibre-gl.css";
+
+// Apply persisted theme before first paint to avoid a flash.
+applyTheme(initialTheme());
 
 // Register the pmtiles:// protocol once (module load) so react-map-gl can read PMTiles.
 const protocol = new Protocol();

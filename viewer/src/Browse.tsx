@@ -11,21 +11,21 @@ export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
 const C = {
   wrap: "h-full w-full overflow-auto px-5 py-4 mx-auto max-w-[1180px]",
-  crumb: "text-blue-600 cursor-pointer",
-  muted: "text-xs text-gray-500",
+  crumb: "text-primary cursor-pointer",
+  muted: "text-xs text-muted-foreground",
   grid: "mt-3.5 grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
-  card: "rounded-lg border border-gray-200 bg-white px-3.5 py-3 cursor-pointer hover:border-blue-400 hover:shadow-sm transition",
+  card: "rounded-lg border border-border bg-card px-3.5 py-3 cursor-pointer hover:border-primary hover:shadow-sm transition",
   cardTitle: "mb-1.5 text-sm font-semibold leading-tight",
-  badge: "mr-1.5 mt-1 inline-block rounded border border-slate-200 bg-slate-100 px-1.5 py-px text-[11px] text-gray-700",
-  chip: "mr-1.5 mt-1.5 inline-block rounded bg-blue-600 px-2 py-0.5 text-[11px] text-white no-underline hover:bg-blue-700",
-  input: "w-72 rounded-md border border-gray-300 px-2.5 py-1.5 text-sm",
+  badge: "mr-1.5 mt-1 inline-block rounded border border-border bg-muted px-1.5 py-px text-[11px] text-muted-foreground",
+  chip: "mr-1.5 mt-1.5 inline-block rounded bg-primary px-2 py-0.5 text-[11px] text-primary-foreground no-underline hover:opacity-90",
+  input: "w-72 rounded-md border border-input bg-card px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground",
   bar: "my-2 flex flex-wrap items-center gap-2.5",
-  th: "cursor-pointer whitespace-nowrap border-b border-gray-200 px-2.5 py-1.5 text-left text-[11px] uppercase tracking-wide text-gray-500",
-  thPlain: "whitespace-nowrap border-b border-gray-200 px-2.5 py-1.5 text-left text-[11px] uppercase tracking-wide text-gray-500",
-  td: "border-b border-gray-100 px-2.5 py-1.5 align-top text-sm",
+  th: "cursor-pointer whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left text-[11px] uppercase tracking-wide text-muted-foreground",
+  thPlain: "whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left text-[11px] uppercase tracking-wide text-muted-foreground",
+  td: "border-b border-border px-2.5 py-1.5 align-top text-sm",
 };
 const toggle = (on: boolean) =>
-  `cursor-pointer border border-gray-300 px-2.5 py-1 text-xs text-gray-800 ${on ? "bg-slate-100" : "bg-white"}`;
+  `cursor-pointer border border-border px-2.5 py-1 text-xs text-foreground ${on ? "bg-accent" : "bg-card"}`;
 
 const BADGE_KEYS = ["ugs:series", "ugs:pub_type", "ugs:topic", "ugs:scale", "ugs:author"];
 
@@ -80,18 +80,18 @@ function ExportPanel({ item }: { item: StacDoc }) {
   };
 
   return (
-    <div className="mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3">
-      <div className="mb-1.5 text-xs font-semibold text-gray-600">Download as</div>
+    <div className="mt-3 rounded-lg border border-border bg-muted p-3">
+      <div className="mb-1.5 text-xs font-semibold text-muted-foreground">Download as</div>
       <div className="flex flex-wrap items-center gap-2">
         {FORMATS.map((f) => (
           <button key={f.id} disabled={busy !== null} onClick={() => run(f.id)}
-            className="rounded border border-gray-300 bg-white px-2.5 py-1 text-xs text-gray-800 hover:border-blue-400 disabled:opacity-50">
+            className="rounded border border-border bg-card px-2.5 py-1 text-xs text-foreground hover:border-primary disabled:opacity-50">
             {busy === f.id ? "preparing…" : f.label}
           </button>
         ))}
         {busy && <span className={C.muted}>running in your browser · first export loads DuckDB (~a few MB)</span>}
       </div>
-      {err && <div className="mt-1.5 text-xs text-red-700">Export failed: {err}</div>}
+      {err && <div className="mt-1.5 text-xs text-destructive">Export failed: {err}</div>}
     </div>
   );
 }
@@ -105,7 +105,7 @@ function Collections({ collections, onOpen }: { collections: CollectionSummary[]
         <div key={c.href} className={C.card} onClick={() => onOpen(c.href)}>
           <p className={C.cardTitle}>{c.title ?? c.id}</p>
           <div className={C.muted}>{c.id}</div>
-          {c.description && <p className="mt-1 line-clamp-2 text-xs text-gray-500">{c.description}</p>}
+          {c.description && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{c.description}</p>}
           <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>
         </div>
       ))}
@@ -163,8 +163,8 @@ function ItemList({ items, showCollection, query, onOpen }: {
           </thead>
           <tbody>
             {rows.map((it) => (
-              <tr key={it.href} className="cursor-pointer hover:bg-gray-50" onClick={() => onOpen(it.href)}>
-                <td className={`${C.td} text-blue-600`}>{gTitle(it)}</td>
+              <tr key={it.href} className="cursor-pointer hover:bg-muted" onClick={() => onOpen(it.href)}>
+                <td className={`${C.td} text-primary`}>{gTitle(it)}</td>
                 {showCollection && <td className={C.td}>{it.collId}</td>}
                 <td className={C.td}>{gType(it)}</td>
                 <td className={C.td}>{gDate(it)}</td>
@@ -209,7 +209,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
         <span className={C.muted}> / {item.id}</span>
       </div>
       <h2 className="mb-1 text-xl font-semibold">{String(p.title ?? item.id ?? "")}</h2>
-      {typeof p.description === "string" && <p className="max-w-[760px] text-gray-700">{p.description}</p>}
+      {typeof p.description === "string" && <p className="max-w-[760px] text-muted-foreground">{p.description}</p>}
       {item.assets && <div className="my-2"><AssetChips assets={item.assets} /></div>}
       {hasGeom && (
         <button onClick={onMap}
@@ -222,8 +222,8 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
         <tbody>
           {Object.entries(p).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
             <tr key={k}>
-              <td className="whitespace-nowrap border-b border-gray-100 px-2.5 py-1 align-top text-gray-500">{k}</td>
-              <td className="border-b border-gray-100 px-2.5 py-1">{String(v)}</td>
+              <td className="whitespace-nowrap border-b border-border px-2.5 py-1 align-top text-muted-foreground">{k}</td>
+              <td className="border-b border-border px-2.5 py-1">{String(v)}</td>
             </tr>
           ))}
         </tbody>

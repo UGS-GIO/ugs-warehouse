@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { ItemMap } from "./Map";
 import { CATALOG_URL, childLinks, itemLinks, type StacDoc, useDocs, useStac } from "./stac";
+import { useTheme } from "./theme";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 
@@ -24,13 +25,13 @@ const writeUrl = (n: Nav, push: boolean) => {
 };
 
 const tab = (on: boolean) =>
-  `cursor-pointer rounded-md border border-gray-300 px-3 py-1.5 text-[13px] ${on ? "bg-blue-600 text-white" : "bg-white text-gray-700"}`;
-const asset = "mr-1.5 mt-0.5 inline-block rounded bg-blue-600 px-2 py-1 text-xs text-white no-underline hover:bg-blue-700";
-const row = "mb-1.5 cursor-pointer rounded-md border border-gray-200 bg-gray-50 px-2 py-1.5 break-all hover:border-blue-400";
+  `cursor-pointer rounded-md border px-3 py-1.5 text-[13px] ${on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-accent"}`;
+const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
+const row = "mb-1.5 cursor-pointer rounded-md border border-border bg-card px-2 py-1.5 break-all hover:border-primary";
 
 function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
   if (loading) return <em>Loading item…</em>;
-  if (!item) return <em className="text-gray-400">Pick an item to see detail, footprint, and assets.</em>;
+  if (!item) return <em className="text-muted-foreground">Pick an item to see detail, footprint, and assets.</em>;
   const p = item.properties ?? {};
   return (
     <>
@@ -44,13 +45,23 @@ function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
         <tbody>
           {Object.entries(p).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
             <tr key={k}>
-              <td className="whitespace-nowrap px-2 py-0.5 align-top text-gray-500">{k}</td>
-              <td className="border-b border-gray-100 px-2 py-0.5">{String(v)}</td>
+              <td className="whitespace-nowrap px-2 py-0.5 align-top text-muted-foreground">{k}</td>
+              <td className="border-b border-border px-2 py-0.5">{String(v)}</td>
             </tr>
           ))}
         </tbody>
       </table>
     </>
+  );
+}
+
+function ThemeToggle() {
+  const [theme, toggle] = useTheme();
+  return (
+    <button onClick={toggle} aria-label="Toggle theme"
+      className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] text-foreground hover:bg-accent">
+      {theme === "dark" ? "☀" : "☾"}
+    </button>
   );
 }
 
@@ -93,17 +104,18 @@ export function App() {
   const openItem = (href: string) => go({ view, c: collectionUrl, i: href });
 
   return (
-    <div className="grid h-screen grid-rows-[auto_1fr] text-sm text-gray-900">
-      <header className="flex items-baseline gap-3 border-b border-gray-300 px-4 py-2">
+    <div className="grid h-screen grid-rows-[auto_1fr] bg-background text-sm text-foreground">
+      <header className="flex items-center gap-3 border-b border-border px-4 py-2">
         <strong className="text-[15px]">UGS Warehouse</strong>
-        <span className="flex-1 break-all text-[11px] text-gray-500">{CATALOG_URL}</span>
+        <span className="flex-1 break-all text-[11px] text-muted-foreground">{CATALOG_URL}</span>
         <div className="flex gap-1">
           <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
           <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>
+          <ThemeToggle />
         </div>
       </header>
 
-      {catalog.error && <p className="p-4 text-red-700">{String(catalog.error)}</p>}
+      {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
 
       {view === "catalog" ? (
         <Browse
@@ -121,17 +133,17 @@ export function App() {
         />
       ) : (
         <div className="grid h-full grid-cols-[320px_1fr] overflow-hidden">
-          <aside className="overflow-auto border-r border-gray-300 p-3">
-            {catalog.isLoading && <p>Loading catalog…</p>}
+          <aside className="overflow-auto border-r border-border p-3">
+            {catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
             {!collectionUrl &&
               perColl.map((c) => (
                 <div key={c.href} className={row} onClick={() => openCollection(c.href)}>
-                  {c.title ?? c.id} <span className="text-gray-400">· {c.count}</span>
+                  {c.title ?? c.id} <span className="text-muted-foreground">· {c.count}</span>
                 </div>
               ))}
             {collectionUrl && (
               <>
-                <div className="mb-2 cursor-pointer text-xs text-blue-600"
+                <div className="mb-2 cursor-pointer text-xs text-primary"
                   onClick={() => go({ view })}>‹ collections</div>
                 {(selColl?.itemLinks ?? []).map((it) => (
                   <div key={it.href} className={row} onClick={() => openItem(it.href)}>{it.title ?? it.href.split("/").slice(-1)[0]}</div>
@@ -141,7 +153,7 @@ export function App() {
           </aside>
           <main className="grid h-full grid-rows-[1fr_240px] overflow-hidden">
             <div><ItemMap item={item.data} /></div>
-            <section className="overflow-auto border-t border-gray-300 p-3"><MapDetail item={item.data} loading={item.isLoading} /></section>
+            <section className="overflow-auto border-t border-border p-3"><MapDetail item={item.data} loading={item.isLoading} /></section>
           </main>
         </div>
       )}

@@ -40,7 +40,7 @@ Mobile: ✅ responsive layout (map view stacks, header trims, tables scroll-x).
 
 ## Tier 3 — metadata / data management
 - ◐ **STAC extensions** — ✅ `proj` (proj:epsg on items); ☐ raster bands / eo metadata.
-- ◐ **ISO 19115 / FGDC metadata export** — ✅ ISO 19139 sidecar XML per vector topic (title/abstract/extent/CRS/dates/UGS contact/distribution), linked as a `metadata` asset, for gov clearinghouses; ☐ FGDC CSDGM variant + extend to pubs/raster producers if needed.
+- ◐ **ISO 19115 / FGDC metadata export** — ✅ ISO 19139 sidecar per **vector + pubs** item (shared `core.stac.attach_iso`), linked as a `metadata` asset, for gov clearinghouses; ☐ FGDC CSDGM variant + extend to raster (after #169).
 - ◐ **Real collection extents + data-validity datetime** — ✅ extents now derived from items (bbox union + temporal interval); ☐ `datetime` still ingest-time (no upstream validity timestamp available yet).
 - ☐ **DOI / citation** — dated GeoParquet archives are citable; no DOI minting.
 - ☐ **Data dictionary** — per-layer field definitions.

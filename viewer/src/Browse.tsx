@@ -122,19 +122,30 @@ function ExportPanel({ item }: { item: StacDoc }) {
 }
 
 // ---- collection cards ----
+const humanize = (id: string) =>
+  id.replace(/^ugs-/, "").replace(/[-_]+/g, " ").replace(/\b\w/g, (ch) => ch.toUpperCase());
+// The warehouse emits a placeholder "UGS warehouse — {id}." description; hide it as noise.
+const meaningfulDesc = (d?: string) => (d && !/^UGS warehouse — .*\.$/.test(d) ? d : null);
+
 function Collections({ collections, onOpen }: { collections: CollectionSummary[]; onOpen: (href: string) => void }) {
   if (!collections.length) return <p className={`${C.muted} mt-4`}>No collections in this catalog yet.</p>;
   return (
-    <div className={C.grid}>
-      {collections.map((c) => (
-        <div key={c.href} className={C.card} onClick={() => onOpen(c.href)}>
-          <p className={C.cardTitle}>{c.title ?? c.id}</p>
-          <div className={C.muted}>{c.id}</div>
-          {c.description && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{c.description}</p>}
-          <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>
-        </div>
-      ))}
-    </div>
+    <>
+      <h2 className="mb-1 mt-1 text-lg font-semibold">Collections</h2>
+      <div className={C.grid}>
+        {collections.map((c) => {
+          const desc = meaningfulDesc(c.description);
+          return (
+            <div key={c.href} className={C.card} onClick={() => onOpen(c.href)}>
+              <p className="text-base font-semibold leading-tight">{c.title ?? humanize(c.id)}</p>
+              <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{c.id}</div>
+              {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
+              <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>
+            </div>
+          );
+        })}
+      </div>
+    </>
   );
 }
 

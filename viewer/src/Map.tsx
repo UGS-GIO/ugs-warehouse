@@ -90,6 +90,7 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
       onMoveEnd={(e: ViewStateChangeEvent) => writeCam(e.viewState)}
       onClick={onClick}
     >
+      <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
       <div className="absolute right-2 top-2 z-10 flex gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
         {Object.keys(BASEMAPS).map((name) => (
           <button key={name} onClick={() => setBasemap(name)}
@@ -123,6 +124,42 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
         </Popup>
       )}
     </MapGL>
+  );
+}
+
+// Keyless place search via Nominatim (OSM). US-biased; flies the map to the first hit.
+function Geocoder({ onPick }: { onPick: (b: [number, number, number, number]) => void }) {
+  const [q, setQ] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>();
+
+  const search = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!q.trim()) return;
+    setBusy(true);
+    setErr(undefined);
+    try {
+      const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&q=${encodeURIComponent(q)}`;
+      const hits = await (await fetch(u)).json();
+      if (!hits.length) { setErr("not found"); return; }
+      const bb = hits[0].boundingbox.map(Number); // [south, north, west, east]
+      onPick([bb[2], bb[0], bb[3], bb[1]]); // → [w, s, e, n]
+    } catch {
+      setErr("search failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form onSubmit={search} className="absolute left-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search place…"
+        className="w-40 rounded bg-transparent px-1.5 py-0.5 text-foreground placeholder:text-muted-foreground focus:outline-none" />
+      <button type="submit" disabled={busy} className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50">
+        {busy ? "…" : "Go"}
+      </button>
+      {err && <span className="px-1 text-destructive">{err}</span>}
+    </form>
   );
 }
 

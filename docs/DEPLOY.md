@@ -78,6 +78,55 @@ gcloud run jobs executions list --job=geolmap-harvest --region=$REGION --project
 Per-series instead of `--all`: override args at execute time —
 `... execute geolmap-harvest --args=M-283 ...`
 
+## 4. Pub/Sub event-driven ingest (dataELT #418) — WORK-BOX HANDOFF
+
+> **For Gemini on the work box.** Clinton authored this on his personal box (no GCP
+> perms there). The code + `cloudbuild.yaml` wiring is done and committed; what's left
+> is two IAM grants that need work-box perms, then a build to self-provision.
+
+**Contract:** dataELT [`publish.sh` #418](https://github.com/UGS-GIO/dataELT/pull/418)
+publishes `{"schema","topic"}` to the **`ugs-warehouse-ingest`** topic on every prod
+`_current` promote (when `NOTIFY_WAREHOUSE=1`). The warehouse `ugs-warehouse-service`
+(`service/main.py`) is the Pub/Sub **push** target — it ingests that one topic, and
+**acks+skips** any schema not in `MART_SCHEMAS` (e.g. `gwportal`, separate DB).
+
+**What cloudbuild already does** — the `wire-pubsub` step (idempotent, `allowFailure`)
+creates the topic, grabs the service URL, grants `run.invoker` to `$RUNTIME_SA`, and
+creates/updates the `ugs-warehouse-ingest-push` subscription → service `/`. It no-ops
+until the two grants below exist, then self-wires on the next build.
+
+```bash
+# (vars from §0; plus:)
+PROJ_NUM=$(gcloud projects describe $DEPLOY_PROJECT --format='value(projectNumber)')
+CB_SA=${PROJ_NUM}@cloudbuild.gserviceaccount.com          # or the dedicated build SA
+PUBSUB_SA=service-${PROJ_NUM}@gcp-sa-pubsub.iam.gserviceaccount.com
+
+# (1) build SA may create/update the topic + subscription
+gcloud projects add-iam-policy-binding $DEPLOY_PROJECT \
+  --member="serviceAccount:$CB_SA" --role=roles/pubsub.admin
+
+# (2) Pub/Sub service agent may mint OIDC tokens as the push SA (for authenticated
+#     push to the PRIVATE service). Run once; the agent is created on first pubsub use.
+gcloud beta services identity create --service=pubsub --project=$DEPLOY_PROJECT
+gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
+  --member="serviceAccount:$PUBSUB_SA" --role=roles/iam.serviceAccountTokenCreator \
+  --project=$DEPLOY_PROJECT
+```
+
+Then rerun the §2 build — `wire-pubsub` provisions itself. Verify + smoke-test:
+
+```bash
+gcloud pubsub subscriptions describe ugs-warehouse-ingest-push --project=$DEPLOY_PROJECT
+# end-to-end: publish a fake event, watch the service log an ingest
+gcloud pubsub topics publish ugs-warehouse-ingest --project=$DEPLOY_PROJECT \
+  --message='{"schema":"hazards","topic":"hazards_qfaults_current"}'
+gcloud run services logs read ugs-warehouse-service --region=$REGION --project=$DEPLOY_PROJECT --limit=20
+```
+
+Nothing to change on the dataELT side — #418 owns `publish.sh`; the warehouse just
+needed to listen. Drop `allowFailure` from `wire-pubsub` once it's green if you want the
+wiring to gate future builds.
+
 ## Scheduling (optional)
 
 Cloud Scheduler → Cloud Run Jobs for a nightly full re-ingest:
@@ -97,5 +146,5 @@ gcloud scheduler jobs create http warehouse-nightly \
   SA and grant it the same roles.
 - **GeoParquet/PMTiles/STAC** write to GCS via obstore (ADC = the runtime SA on Cloud Run,
   no HMAC). DuckLake writes via obstore-fsspec — same auth. No gcsfuse, no GCS extension.
-- **Service (Pub/Sub push)** is a separate target — add a `gcloud run deploy` step + the
-  dataELT `publish.sh` emit + a push subscription when event-driven ingest is wanted.
+- **Service (Pub/Sub push)** — deployed by `cloudbuild.yaml` (`deploy-service`) and wired
+  by the `wire-pubsub` step. See **§4** for the two IAM grants still needed on the work box.

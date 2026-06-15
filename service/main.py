@@ -19,7 +19,7 @@ import logging
 from fastapi import FastAPI, HTTPException, Request
 
 from ugs_warehouse.vector.ingest import ingest_topic
-from ugs_warehouse.vector.topics import from_pubsub
+from ugs_warehouse.vector.topics import MART_SCHEMAS, from_pubsub
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ugs-warehouse.service")
@@ -48,6 +48,14 @@ async def pubsub_push(req: Request) -> dict[str, str]:
         topic = from_pubsub(payload)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e)) from e
+
+    # dataELT (#418) notifies for every public domain schema, including ones the
+    # warehouse can't reach (e.g. gwportal lives in a separate DB). Ack + skip so
+    # those don't log a doomed ingest or trigger Pub/Sub retries.
+    if topic.schema not in MART_SCHEMAS:
+        log.info("skip unsupported schema: %s", topic.fqn)
+        return {"status": "skipped", "topic": topic.fqn,
+                "reason": f"{topic.schema} not in MART_SCHEMAS"}
 
     log.info("ingest start: %s", topic.fqn)
     rc = ingest_topic(topic)

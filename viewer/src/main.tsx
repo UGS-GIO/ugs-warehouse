@@ -4,6 +4,7 @@ import { Protocol } from "pmtiles";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
+import "./index.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // Register the pmtiles:// protocol once (module load) so react-map-gl can read PMTiles.

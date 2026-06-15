@@ -1,13 +1,16 @@
 // STAC data layer — TanStack Query over the static catalog (catalog.json -> collections
 // -> items) on the CDN. No fetch useEffects; components call these hooks. JSON items stay
 // the source of truth (the warehouse writes them via core/stac).
-import { useQuery } from "@tanstack/react-query";
+import { useQueries, useQuery } from "@tanstack/react-query";
 
 export const DEFAULT_CATALOG =
   "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
-// ?catalog=<url> to point at sandbox / another deployment.
-export const CATALOG_URL =
-  new URLSearchParams(location.search).get("catalog") || DEFAULT_CATALOG;
+// ?catalog=<url> to point at sandbox / another deployment. Resolved to an absolute
+// URL (a relative ?catalog=/stac/... would otherwise be an invalid base for `abs`).
+export const CATALOG_URL = new URL(
+  new URLSearchParams(location.search).get("catalog") || DEFAULT_CATALOG,
+  location.href,
+).href;
 
 export type Link = {
   rel: string;
@@ -51,4 +54,21 @@ export function useStac(url?: string) {
     enabled: Boolean(url),
     staleTime: 5 * 60_000,
   });
+}
+
+/** Fetch many STAC docs by URL in parallel (shares the ["stac", url] cache with
+ *  useStac, so opening one later is instant). Powers counts + the catalog tables. */
+export function useDocs(urls: string[]) {
+  const results = useQueries({
+    queries: urls.map((u) => ({
+      queryKey: ["stac", u],
+      queryFn: () => fetchJson(u),
+      staleTime: 5 * 60_000,
+    })),
+  });
+  return {
+    docs: results.map((r, i) => ({ url: urls[i], data: r.data })),
+    isLoading: results.some((r) => r.isLoading),
+    loaded: results.filter((r) => r.data).length,
+  };
 }

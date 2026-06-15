@@ -89,12 +89,15 @@ def _ingest(topic: Topic, dry_run: bool = False) -> int:
         print(f"  sample row (no geom) : {sample}")
         return 0
 
+    # Per-topic descriptive metadata (raw.schema_registry); {} until #171 + grant land.
+    meta = backend.read_metadata(topic)
+
     rc = 0
     for name, fn in [
         ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
         ("archive",  lambda: sink_archive.write(topic, con, view)),
         ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
-        ("stac",     lambda: sink_stac.write(topic, con, view)),
+        ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta)),
     ]:
         try:
             fn()

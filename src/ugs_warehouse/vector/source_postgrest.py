@@ -129,6 +129,11 @@ def read(topic: Topic) -> pa.Table:
     return pa.Table.from_pylist(rows)
 
 
+def read_metadata(topic: Topic) -> dict:  # noqa: ARG001
+    """PostgREST exposes no schema_registry — descriptive metadata is Postgres-only."""
+    return {}
+
+
 def discover() -> list[Topic]:
     """Enumerate `_current` tables PostgREST advertises per mart schema.
 

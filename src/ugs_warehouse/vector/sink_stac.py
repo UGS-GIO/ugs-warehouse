@@ -34,9 +34,11 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
 
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
-          *, title: str | None = None, description: str | None = None) -> None:
+          *, title: str | None = None, description: str | None = None,
+          metadata: dict | None = None) -> None:
     bbox = _bbox(con, view)
     now = datetime.datetime.now(datetime.UTC).isoformat()
+    md = metadata or {}
 
     archive_path = f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}.parquet"
     pmtiles_path = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
@@ -45,13 +47,23 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     ducklake_uri = f"{ducklake.DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
 
     props = {
-        "title": title or stac.prettify(topic.stem),
+        "title": md.get("display_name") or title or stac.prettify(topic.stem),
         "ugs:dbt_schema": topic.schema,
         "ugs:layer": topic.layer,
         "ugs:row_count": _row_count(con, view),
     }
-    if description:
-        props["description"] = description
+    desc = md.get("abstract") or description
+    if desc:
+        props["description"] = desc
+    # Curated catalog metadata (raw.schema_registry) — flows into STAC + ISO.
+    if md.get("keywords"):
+        props["keywords"] = list(md["keywords"])
+    for src_key, prop in (("iso_topic_category", "ugs:topic_category"),
+                          ("use_constraints", "ugs:use_constraints"),
+                          ("lineage", "ugs:lineage"),
+                          ("point_of_contact", "ugs:point_of_contact")):
+        if md.get(src_key):
+            props[prop] = md[src_key]
 
     item = stac.build_item(
         item_id=topic.stem, collection=COLLECTION,

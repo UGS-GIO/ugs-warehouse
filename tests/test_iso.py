@@ -31,6 +31,24 @@ def test_contains_key_fields():
     assert "gs://b/x" not in xml              # gs:// asset excluded (not browser-fetchable)
 
 
+def test_keywords_and_topic_category():
+    item = {
+        "id": "x", "bbox": [0, 1, 2, 3],
+        "properties": {"keywords": ["faults", "quaternary"], "ugs:topic_category": "geoscientificInformation"},
+        "assets": {},
+    }
+    xml = iso.stac_to_iso19139(item)
+    ET.fromstring(xml)
+    assert "<gmd:descriptiveKeywords>" in xml
+    assert "faults" in xml and "quaternary" in xml
+    assert "geoscientificInformation" in xml
+
+
+def test_topic_category_defaults():
+    xml = iso.stac_to_iso19139({"id": "x", "bbox": [], "properties": {}, "assets": {}})
+    assert "geoscientificInformation" in xml  # default when unset
+
+
 def test_escapes_special_chars():
     xml = iso.stac_to_iso19139({"id": "x", "properties": {"title": "A & B <z>"}, "bbox": [], "assets": {}})
     ET.fromstring(xml)  # still well-formed

@@ -85,6 +85,33 @@ def read(topic: Topic) -> pa.Table:
     ).fetch_arrow_table()
 
 
+# Descriptive (catalog) metadata columns on raw.schema_registry (ugs-ingest #171).
+_META_COLS = ("display_name", "abstract", "keywords", "iso_topic_category",
+              "use_constraints", "lineage", "point_of_contact")
+
+
+def read_metadata(topic: Topic) -> dict:
+    """Per-topic descriptive metadata from `raw.schema_registry` (keyed by domain_topic,
+    which equals the topic stem). Graceful: returns {} if the columns/table/grant aren't
+    there yet (pre-#171, or no SELECT on raw) — the warehouse then falls back to defaults.
+    """
+    stem = topic.stem.replace("'", "''")
+    pg_sql = (
+        "SELECT " + ", ".join(_META_COLS)
+        + f" FROM raw.schema_registry WHERE domain_topic = '{stem}'"
+        + " ORDER BY (status = 'active') DESC LIMIT 1"
+    )
+    try:
+        row = _connect().execute(
+            "SELECT * FROM postgres_query(?, ?)", [PG_ALIAS, pg_sql]
+        ).fetchone()
+    except Exception:  # noqa: BLE001 — missing columns/table/grant → fall back to defaults
+        return {}
+    if not row:
+        return {}
+    return {k: v for k, v in zip(_META_COLS, row, strict=False) if v not in (None, "", [])}
+
+
 def discover() -> list[Topic]:
     """Enumerate `_current` tables in MART_SCHEMAS via direct Postgres."""
     con = _connect()

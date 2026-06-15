@@ -65,6 +65,21 @@ def stac_to_iso19139(item: dict) -> str:
             "</gmd:MD_ReferenceSystem></gmd:referenceSystemInfo>"
         )
 
+    kws = props.get("keywords") or []
+    keywords_xml = ""
+    if kws:
+        kw_items = "".join(f"<gmd:keyword>{_cs(k)}</gmd:keyword>" for k in kws)
+        keywords_xml = (
+            f"<gmd:descriptiveKeywords><gmd:MD_Keywords>{kw_items}</gmd:MD_Keywords>"
+            "</gmd:descriptiveKeywords>"
+        )
+
+    topic_cat = props.get("ugs:topic_category") or "geoscientificInformation"
+    topic_xml = (
+        f"<gmd:topicCategory><gmd:MD_TopicCategoryCode>{escape(str(topic_cat))}"
+        "</gmd:MD_TopicCategoryCode></gmd:topicCategory>"
+    )
+
     transfers = "".join(
         _online(a["href"], a.get("title") or k)
         for k, a in (item.get("assets") or {}).items()
@@ -105,6 +120,8 @@ def stac_to_iso19139(item: dict) -> str:
         "</gmd:CI_Citation></gmd:citation>"
         f"<gmd:abstract>{_cs(abstract)}</gmd:abstract>"
         f"<gmd:pointOfContact>{contact}</gmd:pointOfContact>"
+        f"{keywords_xml}"
+        f"{topic_xml}"
         "<gmd:extent><gmd:EX_Extent>"
         f"{geo}"
         "<gmd:temporalElement><gmd:EX_TemporalExtent><gmd:extent>"

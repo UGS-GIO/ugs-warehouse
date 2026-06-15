@@ -22,3 +22,6 @@ tmp/
 
 # generated discovery dump (not source)
 discovered_topics.txt
+
+# python virtualenv (local test runner)
+.venv/

@@ -18,11 +18,11 @@ Status legend: ☐ not started · ◐ partial · ✅ done
 ---
 
 ## Tier 1 — client-side, high value (fits zero-server; build in the viewer)
-- ☐ **Feature identify** — click a PMTiles feature → attribute popup. Biggest obvious miss.
+- ✅ **Feature identify** — click a feature → attribute popup (fill/line/circle render makes all geom types clickable).
+- ✅ **Clip-to-AOI download** — export only a bbox (DuckDB `ST_Intersects` filter), prefilled from item extent.
+- ✅ **Basemap switcher** — streets / light / satellite (keyless: OpenFreeMap + Esri imagery).
 - ☐ **Bbox / map-extent catalog filter** — filter items spatially (draw box / "in view"), not just text.
-- ☐ **Clip-to-AOI download** — export only a bbox, not the whole layer (DuckDB already in-browser → add spatial WHERE).
 - ☐ **Legend + symbology** — classed/categorical styling per layer + legend (today: single-color lines).
-- ☐ **Basemap switcher** — satellite / topo / terrain (researched, not wired).
 - ☐ **Multi-layer overlay** — stack/compare several topics (today: one item at a time).
 - ☐ **Time slider** — for time-series rasters (soil-water model).
 - ☐ **Map-extent permalink** — deep-link the camera, not just the item.

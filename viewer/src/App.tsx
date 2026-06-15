@@ -1,9 +1,27 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { ItemMap } from "./Map";
 import { CATALOG_URL, childLinks, itemLinks, type StacDoc, useDocs, useStac } from "./stac";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
+
+type Nav = { view: "catalog" | "map"; c?: string; i?: string };
+
+const readUrl = (): Nav => {
+  const p = new URLSearchParams(location.search);
+  return { view: p.get("view") === "map" ? "map" : "catalog", c: p.get("c") || undefined, i: p.get("i") || undefined };
+};
+
+// Write nav state into the URL (preserving ?catalog=). push for user navigation so
+// back/forward work; replace for the initial sync.
+const writeUrl = (n: Nav, push: boolean) => {
+  const p = new URLSearchParams(location.search);
+  n.view === "map" ? p.set("view", "map") : p.delete("view");
+  n.c ? p.set("c", n.c) : p.delete("c");
+  n.i ? p.set("i", n.i) : p.delete("i");
+  const url = `${location.pathname}${p.toString() ? "?" + p : ""}`;
+  (push ? history.pushState : history.replaceState).call(history, null, "", url);
+};
 
 const tab = (on: boolean) =>
   `cursor-pointer rounded-md border border-gray-300 px-3 py-1.5 text-[13px] ${on ? "bg-blue-600 text-white" : "bg-white text-gray-700"}`;
@@ -37,9 +55,16 @@ function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
 }
 
 export function App() {
-  const [view, setView] = useState<"catalog" | "map">("catalog");
-  const [collectionUrl, setCollectionUrl] = useState<string>();
-  const [itemUrl, setItemUrl] = useState<string>();
+  const [{ view, c: collectionUrl, i: itemUrl }, setNav] = useState<Nav>(readUrl);
+
+  // Sync state ↔ URL: push on user nav (back/forward works); read URL on popstate.
+  const go = (next: Nav, push = true) => { writeUrl(next, push); setNav(next); };
+  const setView = (v: "catalog" | "map") => go({ view: v, c: collectionUrl, i: itemUrl });
+  useEffect(() => {
+    const onPop = () => setNav(readUrl());
+    addEventListener("popstate", onPop);
+    return () => removeEventListener("popstate", onPop);
+  }, []);
 
   const catalog = useStac(CATALOG_URL);
   const collections = childLinks(catalog.data, CATALOG_URL);
@@ -49,8 +74,11 @@ export function App() {
   // catalog grows to thousands this should move behind a stac-geoparquet index.
   const collDocs = useDocs(collections.map((c) => c.href));
   const perColl: CollectionSummary[] = collections.map((c, i) => {
-    const links = itemLinks(collDocs.docs[i]?.data, c.href);
-    return { id: collIdOf(c.href) ?? c.href, href: c.href, title: c.title, count: links.length, itemLinks: links };
+    const doc = collDocs.docs[i]?.data;
+    const links = itemLinks(doc, c.href);
+    return { id: collIdOf(c.href) ?? c.href, href: c.href, title: c.title,
+             description: typeof doc?.description === "string" ? doc.description : undefined,
+             count: links.length, itemLinks: links };
   });
 
   const refs = perColl.flatMap((pc) => pc.itemLinks.map((l) => ({ collId: pc.id, href: l.href })));
@@ -61,8 +89,8 @@ export function App() {
   const collectionId = collIdOf(collectionUrl);
   const selColl = perColl.find((pc) => pc.id === collectionId);
 
-  const openCollection = (href: string) => { setCollectionUrl(href); setItemUrl(undefined); };
-  const openItem = (href: string) => setItemUrl(href);
+  const openCollection = (href: string) => go({ view, c: href });
+  const openItem = (href: string) => go({ view, c: collectionUrl, i: href });
 
   return (
     <div className="grid h-screen grid-rows-[auto_1fr] text-sm text-gray-900">
@@ -87,9 +115,9 @@ export function App() {
           itemSelected={Boolean(itemUrl)}
           onOpenCollection={openCollection}
           onOpenItem={openItem}
-          onBackToCollections={() => { setCollectionUrl(undefined); setItemUrl(undefined); }}
-          onBackToItems={() => setItemUrl(undefined)}
-          onViewMap={() => setView("map")}
+          onBackToCollections={() => go({ view })}
+          onBackToItems={() => go({ view, c: collectionUrl })}
+          onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl })}
         />
       ) : (
         <div className="grid h-full grid-cols-[320px_1fr] overflow-hidden">
@@ -104,7 +132,7 @@ export function App() {
             {collectionUrl && (
               <>
                 <div className="mb-2 cursor-pointer text-xs text-blue-600"
-                  onClick={() => { setCollectionUrl(undefined); setItemUrl(undefined); }}>‹ collections</div>
+                  onClick={() => go({ view })}>‹ collections</div>
                 {(selColl?.itemLinks ?? []).map((it) => (
                   <div key={it.href} className={row} onClick={() => openItem(it.href)}>{it.title ?? it.href.split("/").slice(-1)[0]}</div>
                 ))}

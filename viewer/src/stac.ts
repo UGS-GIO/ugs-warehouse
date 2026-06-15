@@ -22,6 +22,7 @@ export type Asset = { href: string; title?: string; type?: string; roles?: strin
 export type StacDoc = {
   id?: string;
   type?: string;
+  description?: string;
   links?: Link[];
   geometry?: GeoJSON.Geometry | null;
   bbox?: number[];

@@ -5,7 +5,7 @@ import { exportItem, type ExportFormat, FORMATS } from "./download";
 import { type Asset, type Link, type StacDoc } from "./stac";
 
 export type CollectionSummary = {
-  id: string; href: string; title?: string; count: number; itemLinks: Link[];
+  id: string; href: string; title?: string; description?: string; count: number; itemLinks: Link[];
 };
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
@@ -98,12 +98,14 @@ function ExportPanel({ item }: { item: StacDoc }) {
 
 // ---- collection cards ----
 function Collections({ collections, onOpen }: { collections: CollectionSummary[]; onOpen: (href: string) => void }) {
+  if (!collections.length) return <p className={`${C.muted} mt-4`}>No collections in this catalog yet.</p>;
   return (
     <div className={C.grid}>
       {collections.map((c) => (
         <div key={c.href} className={C.card} onClick={() => onOpen(c.href)}>
           <p className={C.cardTitle}>{c.title ?? c.id}</p>
           <div className={C.muted}>{c.id}</div>
+          {c.description && <p className="mt-1 line-clamp-2 text-xs text-gray-500">{c.description}</p>}
           <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>
         </div>
       ))}
@@ -145,7 +147,9 @@ function ItemList({ items, showCollection, query, onOpen }: {
         <span className={toggle(mode === "cards")} onClick={() => setMode("cards")}>Cards</span>
       </div>
 
-      {mode === "table" ? (
+      {rows.length === 0 ? (
+        <p className={`${C.muted} mt-3`}>{needle ? "No items match." : "No items."}</p>
+      ) : mode === "table" ? (
         <table className="w-full border-collapse">
           <thead>
             <tr>

@@ -31,6 +31,7 @@ def stac_item_from_record(record: dict) -> dict:
         geometry=record.get("geometry"),
         properties=props,
         has_thumbnail=bool(record.get("has_thumbnail")),
+        proj_epsg=record.get("epsg"),
     )
 
 

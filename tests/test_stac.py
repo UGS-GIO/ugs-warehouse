@@ -42,6 +42,31 @@ def test_build_item_has_nested_links_and_datetime():
     assert item["stac_extensions"] == [stac.WEB_MAP_LINKS_EXT]
 
 
+def test_build_item_proj_extension():
+    item = stac.build_item(
+        item_id="x", collection="c", geometry=None, bbox=[0, 1, 2, 3],
+        datetime_iso=None, properties={}, assets={}, proj_epsg=4326,
+    )
+    assert item["properties"]["proj:epsg"] == 4326
+    assert stac.PROJ_EXT in item["stac_extensions"]
+
+
+def test_extent_unions_bboxes_and_datetimes():
+    items = [
+        {"bbox": [-114, 37, -111, 40], "properties": {"datetime": "2026-01-01T00:00:00Z"}},
+        {"bbox": [-112, 38, -109, 42], "properties": {"datetime": "2026-06-01T00:00:00Z"}},
+    ]
+    ext = stac._extent(items)
+    assert ext["spatial"]["bbox"] == [[-114, 37, -109, 42]]
+    assert ext["temporal"]["interval"] == [["2026-01-01T00:00:00Z", "2026-06-01T00:00:00Z"]]
+
+
+def test_extent_falls_back_to_utah_when_no_bbox():
+    ext = stac._extent([{"properties": {}}])
+    assert ext["spatial"]["bbox"] == [stac.UTAH_BBOX]
+    assert ext["temporal"]["interval"] == [[None, None]]
+
+
 def test_root_doc_sorts_child_collections():
     doc = stac._root_doc(["b", "a"])
     assert doc["type"] == "Catalog"

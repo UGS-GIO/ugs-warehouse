@@ -13,7 +13,8 @@ COG_MIME = "image/tiff; application=geotiff; profile=cloud-optimized"
 
 
 def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None,
-               properties: dict | None = None, has_thumbnail: bool = False) -> dict:
+               properties: dict | None = None, has_thumbnail: bool = False,
+               proj_epsg: int | None = None) -> dict:
     cog_url = config.public_url(raster.cog_object_path)
     assets = {
         "cog": {"href": cog_url, "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
@@ -33,12 +34,15 @@ def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None,
         assets=assets,
         extra_links=[stac.cog_link(cog_url)],
         stac_extensions=[stac.WEB_MAP_LINKS_EXT],
+        proj_epsg=proj_epsg,
     )
 
 
 def write(raster: Raster, *, bbox: list[float], geometry: dict | None = None,
-          properties: dict | None = None, has_thumbnail: bool = False) -> str:
+          properties: dict | None = None, has_thumbnail: bool = False,
+          proj_epsg: int | None = None) -> str:
     """Build + upload the item JSON. Caller runs `core.stac.refresh_catalog()` after."""
     return stac.write_item(build_item(
-        raster, bbox=bbox, geometry=geometry, properties=properties, has_thumbnail=has_thumbnail,
+        raster, bbox=bbox, geometry=geometry, properties=properties,
+        has_thumbnail=has_thumbnail, proj_epsg=proj_epsg,
     ))

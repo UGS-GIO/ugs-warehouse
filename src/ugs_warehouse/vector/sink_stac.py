@@ -67,6 +67,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         },
         extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem])],
         stac_extensions=[stac.WEB_MAP_LINKS_EXT],
+        proj_epsg=4326,  # transform reprojects every topic to 4326
     )
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")

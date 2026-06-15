@@ -22,6 +22,8 @@ PGF_BASE_URL = config.PGF_BASE_URL
 STAC_VERSION = "1.0.0"
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
+# projection: declares the data's native CRS (proj:epsg).
+PROJ_EXT = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
 
 
 # ---------------------------------------------------------------- helpers
@@ -64,11 +66,13 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
                bbox: list[float] | None, datetime_iso: str | None,
                properties: dict, assets: dict,
                extra_links: list[dict] | None = None,
-               stac_extensions: list[str] | None = None) -> dict:
+               stac_extensions: list[str] | None = None,
+               proj_epsg: int | None = None) -> dict:
     """A STAC Item placed in the collection-nested layout.
 
     Adds the standard root/parent/self links relative to `{collection}/{id}/{id}.json`;
-    `extra_links` (web-map-links, via, cite-as, …) are appended.
+    `extra_links` (web-map-links, via, cite-as, …) are appended. `proj_epsg` adds the
+    projection extension + `proj:epsg` (the data's native CRS).
     """
     links = [
         {"rel": "root", "href": "../../catalog.json", "type": "application/json"},
@@ -77,6 +81,12 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
         {"rel": "self", "href": f"./{item_id}.json", "type": "application/geo+json"},
         *(extra_links or []),
     ]
+    props = {"datetime": datetime_iso, **properties}
+    exts = list(stac_extensions or [])
+    if proj_epsg is not None:
+        props["proj:epsg"] = proj_epsg
+        if PROJ_EXT not in exts:
+            exts.append(PROJ_EXT)
     item = {
         "type": "Feature",
         "stac_version": STAC_VERSION,
@@ -84,12 +94,12 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
         "collection": collection,
         "geometry": geometry,
         "bbox": bbox,
-        "properties": {"datetime": datetime_iso, **properties},
+        "properties": props,
         "assets": assets,
         "links": links,
     }
-    if stac_extensions:
-        item["stac_extensions"] = stac_extensions
+    if exts:
+        item["stac_extensions"] = exts
     return item
 
 
@@ -125,15 +135,30 @@ def _group_items(paths: list[str]) -> dict[str, list[str]]:
     return out
 
 
-def _collection_doc(collection: str, item_ids: list[str]) -> dict:
+UTAH_BBOX = [-114.1, 36.9, -108.9, 42.1]  # fallback when items carry no bbox
+
+
+def _extent(items: list[dict]) -> dict:
+    """Real spatial + temporal extent from the collection's items (union bbox, min/max
+    datetime). Falls back to the Utah bbox if no item bboxes are present."""
+    bxs = [it["bbox"] for it in items if it.get("bbox") and len(it["bbox"]) >= 4]
+    dts = sorted(it["properties"]["datetime"] for it in items
+                 if it.get("properties", {}).get("datetime"))
+    bbox = ([min(b[0] for b in bxs), min(b[1] for b in bxs),
+             max(b[2] for b in bxs), max(b[3] for b in bxs)] if bxs else UTAH_BBOX)
+    interval = [[dts[0], dts[-1]]] if dts else [[None, None]]
+    return {"spatial": {"bbox": [bbox]}, "temporal": {"interval": interval}}
+
+
+def _collection_doc(collection: str, item_ids: list[str], extent: dict | None = None) -> dict:
     return {
         "type": "Collection",
         "stac_version": STAC_VERSION,
         "id": collection,
         "description": f"UGS warehouse — {collection}.",
         "license": "proprietary",
-        "extent": {"spatial": {"bbox": [[-114.1, 36.9, -108.9, 42.1]]},
-                   "temporal": {"interval": [[None, None]]}},
+        "extent": extent or {"spatial": {"bbox": [UTAH_BBOX]},
+                             "temporal": {"interval": [[None, None]]}},
         "links": [
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./collection.json", "type": "application/json"},
@@ -173,7 +198,14 @@ def refresh_catalog() -> None:
     """
     groups = _group_items(gcs.list_paths(config.STAC_PREFIX))
     for collection, item_ids in groups.items():
-        _write_json(_collection_doc(collection, item_ids),
+        # Read each item to derive the real spatial/temporal extent (bbox union, datetimes).
+        items = []
+        for iid in sorted(item_ids):
+            try:
+                items.append(json.loads(gcs.get_bytes(item_object_path(collection, iid)).decode()))
+            except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the refresh
+                pass
+        _write_json(_collection_doc(collection, item_ids, _extent(items)),
                     f"{config.STAC_PREFIX}/{collection}/collection.json")
     _write_json(_root_doc(list(groups)), f"{config.STAC_PREFIX}/catalog.json")
     n = sum(len(v) for v in groups.values())

@@ -26,7 +26,8 @@ Status legend: ☐ not started · ◐ partial · ✅ done
 - ✅ **Map-extent permalink** — `?m=lng,lat,zoom` restores the exact camera (auto-fit only on item change).
 - ✅ **Multi-layer overlay** — toggle/compare several topics at once, per-layer color, identify across all, `?l=` set.
 - ☐ **Time slider** — for time-series rasters (soil-water model).
-- ☐ Geocoder / place search · measure tool · coordinate readout.
+- ✅ **Geocoder** — place search via Nominatim (keyless, US-biased), flies to result.
+- ☐ measure tool · coordinate readout.
 
 Mobile: ✅ responsive layout (map view stacks, header trims, tables scroll-x).
 

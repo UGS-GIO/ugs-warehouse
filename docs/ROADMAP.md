@@ -22,7 +22,7 @@ Status legend: ☐ not started · ◐ partial · ✅ done
 - ✅ **Clip-to-AOI download** — export only a bbox (DuckDB `ST_Intersects` filter), prefilled from item extent.
 - ✅ **Basemap switcher** — streets / light / satellite (keyless: OpenFreeMap + Esri imagery).
 - ☐ **Bbox / map-extent catalog filter** — filter items spatially (draw box / "in view"), not just text.
-- ☐ **Legend + symbology** — classed/categorical styling per layer + legend (today: single-color lines).
+- ◐ **Legend + symbology** — classed/categorical styling per layer + legend (today: single-color lines). Design: [STYLING.md](STYLING.md) — bind ugs-styles → STAC `renders` by item id; viewers consume.
 - ✅ **Map-extent permalink** — `?m=lng,lat,zoom` restores the exact camera (auto-fit only on item change).
 - ✅ **Multi-layer overlay** — toggle/compare several topics at once, per-layer color, identify across all, `?l=` set.
 - ☐ **Time slider** — for time-series rasters (soil-water model).

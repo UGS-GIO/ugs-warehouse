@@ -118,6 +118,7 @@ def build_item(p: dict, attachments: list[dict], *,
         item_id=sid, collection=identity.PUBLICATIONS_COLLECTION,
         geometry=geom, bbox=bbox, datetime_iso=dt,
         properties={
+            "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop
             "title": (p.get("pub_name") or "").strip() or stac.prettify(sid),
             "description": (p.get("full_citation") or "").strip(),
             "ugs:pub_type": pub_type_of(p),

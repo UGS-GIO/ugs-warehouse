@@ -41,6 +41,19 @@ export const itemLinks = (d: StacDoc | undefined, base: string): Link[] =>
 export const pmtilesLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "pmtiles");
 
+// Landing page for the publication (rel=via) + the cite-as DOI, where present.
+export const viaLink = (d: StacDoc | undefined): Link | undefined =>
+  (d?.links ?? []).find((l) => l.rel === "via");
+export const citeLink = (d: StacDoc | undefined): Link | undefined =>
+  (d?.links ?? []).find((l) => l.rel === "cite-as");
+
+// Preview image: the thumbnail asset (role=thumbnail) where the harvest produced one.
+export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
+  const assets = Object.values(d?.assets ?? {});
+  return assets.find((a) => a.roles?.includes("thumbnail"))
+    ?? assets.find((a) => a.type?.startsWith("image/"));
+};
+
 async function fetchJson(url: string): Promise<StacDoc> {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);

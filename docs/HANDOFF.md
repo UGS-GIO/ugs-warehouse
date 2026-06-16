@@ -70,6 +70,7 @@ rendering live prod. #418 merged (squash).
 **Remaining (work box / Gemini, has perms):**
 1. **Grant build SA bucket objectAdmin** → next build publishes the viewer to the CDN (`DEPLOY.md §5`).
 2. **Pub/Sub grants** if not yet done (`DEPLOY.md §4`) — confirm `ugs-warehouse-ingest-push` end-to-end.
+3. **Reingest pubs** to land the new `ugs:series_id` property on every item: deploy (registers/updates the `ugs-pubs-ingest` job) then `gcloud run jobs execute ugs-pubs-ingest --region=us-central1`. Viewer already shows the series id from `item.id`; this just adds the labeled property for non-viewer STAC consumers.
 
 **Marshall asks** (Clinton has merge + push-to-his-PR rights — "just wants shit done"):
 - **Merge `ugs-ingest` #169** (raster producer `raw.raster_catalog`) — still OPEN; unblocks raster consumer.
@@ -83,6 +84,36 @@ raster promote-gate PR; `gwportal` own-DB discovery (currently acked+skipped). V
 DuckLake 2026 production-readiness. (Viewer downloader: DONE — gdal3.js, 6 formats.)
 
 ---
+
+## Editing pubs metadata (title/author/description/etc.)
+
+Pub metadata is **derive-from-truth** — the STAC item is a *projection*, rebuilt from the
+source every `pubs.ingest`. Do **not** hand-edit the catalog JSON (mutable / `no-cache` —
+next ingest clobbers it). There is no per-item override layer.
+
+**Where prod metadata actually lives:** `PUBS_DB_URL` is unset in the deploy, so the source
+falls to the **vendored CSV snapshot** baked into the image:
+`src/ugs_warehouse/pubs/data/pubsdb.csv` (+ `pubsattacheddata.csv`). That CSV was exported
+from the upstream MySQL `pubsdb`.
+
+**To edit one pub's metadata:**
+1. Edit the row (by `series_id`) in `src/ugs_warehouse/pubs/data/pubsdb.csv`, commit.
+2. Run the rebuild — **no COG re-harvest** happens:
+   ```
+   gcloud run jobs execute ugs-pubs-ingest --region=us-central1   # work box, has perms
+   # local equivalent: python -m ugs_warehouse.pubs.ingest
+   ```
+
+**Durability catch:** the CSV is a snapshot. A direct CSV edit is **lost** whenever someone
+re-exports a fresh snapshot from MySQL. Durable fix = edit upstream MySQL `pubsdb` (or set
+`PUBS_DB_URL` to read it live), then rebuild. CSV edit = quick patch only.
+
+**`ugs-pubs-ingest` job (new, 2026-06-16):** wired in `cloudbuild.yaml`
+(`deploy-pubs-ingest-job`). Uses the **harvest image** (carries `pubs`/geopandas that
+`footprints.geoms` needs); **no Cloud SQL / DB secret** (source is CSV + GCS). Rebuilds the
+`ugs-publications` STAC items + `refresh_catalog`. This replaces the previously **manual**
+pubs STAC build — it now redeploys on every push, and is run on demand via `jobs execute`.
+(Not scheduled; add a Cloud Scheduler trigger if periodic refresh is wanted.)
 
 ## Agent docs
 

@@ -2,7 +2,7 @@
 // search-all → sortable item table / cards → item detail. The map is one link out.
 import { useMemo, useState } from "react";
 import { exportItem, type ExportFormat, FORMATS } from "./download";
-import { type Asset, type Link, type StacDoc } from "./stac";
+import { type Asset, citeLink, type Link, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string; count: number; itemLinks: Link[];
@@ -31,14 +31,17 @@ const BADGE_KEYS = ["ugs:series", "ugs:pub_type", "ugs:topic", "ugs:scale", "ugs
 
 const idFromHref = (href: string) => href.split("/").slice(-2)[0];
 const props = (it: ItemRef) => it.data?.properties ?? {};
+// The STAC item id IS the publication series id (DS-8, OFR-647, …) / the layer stem.
+const gSeries = (it: ItemRef) => String(it.data?.id ?? idFromHref(it.href));
 const gTitle = (it: ItemRef) => String(props(it).title ?? it.data?.id ?? idFromHref(it.href));
 const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(it).datetime as string).slice(0, 10) : "");
-const gType = (it: ItemRef) => String(props(it)["ugs:series"] ?? props(it)["ugs:pub_type"] ?? props(it)["ugs:topic"] ?? "");
+const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties ?? {})).toLowerCase();
 
-type SortKey = "title" | "date" | "type";
+type SortKey = "id" | "title" | "date" | "type";
 const sorters: Record<SortKey, (a: ItemRef, b: ItemRef) => number> = {
+  id: (a, b) => gSeries(a).localeCompare(gSeries(b), undefined, { numeric: true }),
   title: (a, b) => gTitle(a).localeCompare(gTitle(b)),
   date: (a, b) => gDate(a).localeCompare(gDate(b)),
   type: (a, b) => gType(a).localeCompare(gType(b)),
@@ -190,6 +193,7 @@ function ItemList({ items, showCollection, query, onOpen }: {
         <table className="w-full border-collapse">
           <thead>
             <tr>
+              {head("id", "ID")}
               {head("title", "Title")}
               {showCollection && <th className={C.thPlain}>Collection</th>}
               {head("type", "Type")}
@@ -201,6 +205,7 @@ function ItemList({ items, showCollection, query, onOpen }: {
           <tbody>
             {rows.map((it) => (
               <tr key={it.href} className="cursor-pointer hover:bg-muted" onClick={() => onOpen(it.href)}>
+                <td className={`${C.td} whitespace-nowrap font-mono text-[13px] font-semibold text-foreground`}>{gSeries(it)}</td>
                 <td className={`${C.td} text-primary`}>{gTitle(it)}</td>
                 {showCollection && <td className={C.td}>{it.collId}</td>}
                 <td className={C.td}>{gType(it)}</td>
@@ -216,6 +221,7 @@ function ItemList({ items, showCollection, query, onOpen }: {
         <div className={C.grid}>
           {rows.map((it) => (
             <div key={it.href} className={C.card} onClick={() => onOpen(it.href)}>
+              <div className="font-mono text-[12px] font-semibold text-foreground">{gSeries(it)}</div>
               <p className={C.cardTitle}>{gTitle(it)}</p>
               <div>
                 {showCollection && <span className={C.badge}>{it.collId}</span>}
@@ -233,6 +239,47 @@ function ItemList({ items, showCollection, query, onOpen }: {
   );
 }
 
+// Coordinate rings from a Polygon/MultiPolygon, or synthesized from a bbox.
+function previewRings(geom: GeoJSON.Geometry | null | undefined, bbox?: number[]): number[][][] {
+  if (geom?.type === "Polygon") return geom.coordinates as number[][][];
+  if (geom?.type === "MultiPolygon") return (geom.coordinates as number[][][][]).flat();
+  if (bbox && bbox.length >= 4) {
+    const [w, s, e, n] = bbox;
+    return [[[w, s], [e, s], [e, n], [w, n], [w, s]]];
+  }
+  return [];
+}
+
+// Preview: the harvested thumbnail image where present, else a zero-dependency SVG of the
+// footprint (no map tiles, no network) so every spatial item shows a "where + shape" glance.
+function Preview({ item }: { item: StacDoc }) {
+  const thumb = thumbnailAsset(item);
+  if (thumb) {
+    return (
+      <img src={thumb.href} alt={thumb.title ?? "preview"} loading="lazy"
+        className="mt-2 max-h-60 w-auto rounded-md border border-border bg-muted object-contain" />
+    );
+  }
+  const rings = previewRings(item.geometry, item.bbox);
+  if (!rings.length) return null;
+  const pts = rings.flat();
+  const xs = pts.map((p) => p[0]);
+  const ys = pts.map((p) => p[1]);
+  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
+  const w = maxx - minx || 1, h = maxy - miny || 1, pad = 0.1, W = 260, H = 180;
+  const sx = (x: number) => ((x - minx) / w) * (1 - 2 * pad) * W + pad * W;
+  const sy = (y: number) => H - (((y - miny) / h) * (1 - 2 * pad) * H + pad * H); // flip: lat up
+  const d = rings
+    .map((r) => "M" + r.map((p) => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("L") + "Z")
+    .join(" ");
+  return (
+    <svg width={W} height={H} className="mt-2 rounded-md border border-border bg-muted"
+      role="img" aria-label="footprint preview">
+      <path d={d} fill="rgba(209,73,28,0.22)" stroke="#d1491c" strokeWidth={1.3} strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 // ---- item detail ----
 function ItemDetail({ collectionId, item, onBack, onMap }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
@@ -240,21 +287,39 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
   if (!item) return <em className={C.muted}>Loading…</em>;
   const p = item.properties ?? {};
   const hasGeom = Boolean(item.geometry || item.bbox);
+  const via = viaLink(item);
+  const cite = citeLink(item);
   return (
     <>
       <div className="mb-2.5">
         <span className={C.crumb} onClick={onBack}>{collectionId}</span>
         <span className={C.muted}> / {item.id}</span>
       </div>
+      <div className="font-mono text-sm font-semibold text-primary">{item.id}</div>
       <h2 className="mb-1 text-xl font-semibold">{String(p.title ?? item.id ?? "")}</h2>
       {typeof p.description === "string" && <p className="max-w-[760px] text-muted-foreground">{p.description}</p>}
+      <Preview item={item} />
       {item.assets && <div className="my-2"><AssetChips assets={item.assets} /></div>}
-      {hasGeom && (
-        <button onClick={onMap}
-          className="mt-1.5 inline-block rounded bg-emerald-700 px-2.5 py-1 text-[11px] text-white hover:bg-emerald-800">
-          View on map ›
-        </button>
-      )}
+      <div className="mt-1.5 flex flex-wrap gap-2">
+        {hasGeom && (
+          <button onClick={onMap}
+            className="inline-block rounded bg-emerald-700 px-2.5 py-1 text-[11px] text-white hover:bg-emerald-800">
+            View on map ›
+          </button>
+        )}
+        {via && (
+          <a href={via.href} target="_blank" rel="noopener"
+            className="inline-block rounded bg-primary px-2.5 py-1 text-[11px] text-primary-foreground no-underline hover:opacity-90">
+            {via.title ?? "Publication page"} ↗
+          </a>
+        )}
+        {cite && (
+          <a href={cite.href} target="_blank" rel="noopener"
+            className="inline-block rounded border border-border px-2.5 py-1 text-[11px] text-foreground no-underline hover:border-primary">
+            Cite (DOI) ↗
+          </a>
+        )}
+      </div>
       <ExportPanel item={item} />
       <table className="mt-3 w-full max-w-[760px] border-collapse text-sm">
         <tbody>

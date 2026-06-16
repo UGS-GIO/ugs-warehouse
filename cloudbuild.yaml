@@ -17,6 +17,7 @@ substitutions:
   _SECRET: dbt-prod-db-password           # Secret Manager secret holding the DB password
   _DATA_PATH: gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/
   _JOB: ugs-warehouse-ingest              # Cloud Run job (batch --all reingest). Distinct resource from the Pub/Sub topic of the same name below.
+  _PUBS_JOB: ugs-pubs-ingest              # Cloud Run job: rebuild the ugs-publications STAC collection from pub metadata (no COG re-harvest)
   _API_SERVICE: ugs-warehouse-api
   _SERVICE: ugs-warehouse-service
   # Pub/Sub ingest trigger (dataELT #418 publishes `{schema, topic}` to _INGEST_TOPIC).
@@ -123,6 +124,30 @@ steps:
       - --max-retries=1
       - --cpu=2
       - --memory=4Gi
+
+  # Pubs metadata → STAC rebuild. Decoupled from the COG harvest above: this only re-reads
+  # pub metadata (vendored CSV snapshot today; PUBS_DB_URL later) + lists GCS for harvested
+  # artifacts, then rewrites the ugs-publications items + refresh_catalog. NO GDAL, NO COG
+  # re-harvest. Uses the harvest image (it carries the `pubs` extra / geopandas that
+  # footprints.geoms needs). No Cloud SQL / DB secret — source is the CSV + GCS.
+  # Run after a metadata edit: `gcloud run jobs execute ${_PUBS_JOB} --region=${_REGION}`.
+  - id: deploy-pubs-ingest-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_PUBS_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.ingest
+      - --task-timeout=1800
+      - --max-retries=1
+      - --cpu=1
+      - --memory=2Gi
 
   - id: deploy-service
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

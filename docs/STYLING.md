@@ -182,19 +182,14 @@ so a client that walks assets (not `renders`) still finds it. `renders.<id>.styl
 
 ## 8. Open questions
 
-- **⚠️ Styles CDN origin mismatch — PENDING INFRA DECISION (blocks styles going live).** The two
-  ends point at different buckets, so the bridge currently fetches a 404 → no renders:
-  - `ugs-styles` CI (`publish.yml`) rsyncs → `gs://ut-dnr-ugs-ucrc-public/styles/` (project
-    `ut-dnr-ugs-ucrc-prod`), served via `storage.googleapis.com`.
-  - warehouse bridge reads `STYLES_INDEX_URL` default → `https://maps-assets.geology.utah.gov/styles/index.json`
-    = the `ut-dnr-ugs-maps-prod-public` bucket.
-
-  Pick ONE origin: **(a)** publish styles to `ut-dnr-ugs-maps-prod-public/styles` (single origin =
-  same CDN as STAC/PMTiles/COG/viewer; zero warehouse change; needs the publish SA to write that
-  bucket — cross-project grant), or **(b)** point the warehouse at the ucrc origin via
-  `STYLES_CDN_BASE`/`STYLES_INDEX_URL` (no CI change; 2nd origin, raw GCS, needs CORS for the viewer).
-  Until aligned, the bridge no-ops gracefully (items emit unstyled). Also: `publish.yml` needs its
-  WIF secrets set in the ugs-styles repo.
+- **Styles CDN origin — RESOLVED: single origin = maps-assets.** `ugs-styles` `publish.yml` now
+  rsyncs → `gs://ut-dnr-ugs-maps-prod-public/styles/`, served at
+  `https://maps-assets.geology.utah.gov/styles/` — the warehouse bridge's `STYLES_INDEX_URL` default,
+  so no warehouse config change. Remaining to make styles go live (work box, ugs-styles repo):
+  (1) grant the publish SA `roles/storage.objectAdmin` on `gs://ut-dnr-ugs-maps-prod-public`
+  (cross-project); (2) set `GCP_WIF_PROVIDER` + `GCP_SERVICE_ACCOUNT` secrets; (3) tag a `v*` release
+  (or run the workflow) to publish; (4) reingest the warehouse so the bridge attaches renders.
+  Until then the bridge no-ops gracefully (items emit unstyled).
 - **Manifest freshness** — warehouse fetches `index.json` at ingest. A style added after a layer's
   last ingest won't appear until the next ingest or a `refresh_stac` run. Acceptable (matches the
   derive-from-truth catalog refresh); document it.

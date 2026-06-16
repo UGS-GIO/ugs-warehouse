@@ -11,6 +11,7 @@ in the SAME catalog as the vector serving topics.
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import sys
 
 from ..core import config, gcs, stac
@@ -62,11 +63,10 @@ def build_catalog(limit: int | None = None) -> int:
     foot = _footprint_geoms()
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(units)} unit sets, {len(foot)} footprints")
 
-    n = 0
-    for p in pubs:
+    def process_pub(p: dict) -> bool:
         sid = (p.get("series_id") or "").strip()
         if not sid:
-            continue
+            return False
         up = sid.upper()
         geom, bbox, fp_source = foot.get(up, (None, None, None))
         item = sink_stac.build_item(
@@ -75,7 +75,12 @@ def build_catalog(limit: int | None = None) -> int:
         )
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
         stac.write_item(item)
-        n += 1
+        return True
+
+    print("[pubs] writing STAC items in parallel...")
+    with ThreadPoolExecutor(max_workers=64) as executor:
+        results = list(executor.map(process_pub, pubs))
+    n = sum(1 for r in results if r)
 
     stac.refresh_catalog()
     print(f"[pubs] wrote {n} items -> {config.public_url(config.STAC_PREFIX + '/catalog.json')}")

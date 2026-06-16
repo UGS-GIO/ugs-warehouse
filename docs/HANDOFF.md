@@ -4,7 +4,7 @@
 current state, what's done, what's blocked, the immediate next move.
 
 **Live working doc** — tracked so it syncs across machines. Refresh as state changes;
-retire once deployed. Last refreshed **2026-06-15**.
+retire once deployed. Last refreshed **2026-06-16**.
 
 ---
 
@@ -62,21 +62,20 @@ Two boxes: this **personal box** (no GCP perms) authors + commits; the **work bo
 - **Viewer deploy wired** — `cloudbuild.yaml` `build-viewer`/`deploy-viewer` → bucket → CDN
   `…/warehouse/viewer/` (`allowFailure` until build SA gets bucket objectAdmin; `DEPLOY.md §5`).
 
-**Live in prod (Gemini ran 2026-06-15):** images built, jobs+services deployed, Pub/Sub
-`ugs-warehouse-ingest-push` active (OIDC), **vector ingest run → prod catalog has both
-`ugs-publications` + `ugs-serving-topics` (19→25 items)**. Viewer (local dev) confirmed
-rendering live prod. #418 merged (squash).
+**Live in prod (Gemini ran 2026-06-16):**
+- **STAC Viewer fully deployed**: Granted `roles/storage.objectAdmin` on `gs://ut-dnr-ugs-maps-prod-public` to both `534590904912-compute@developer.gserviceaccount.com` and `534590904912@cloudbuild.gserviceaccount.com`. The STAC viewer is compiled and synced successfully to the CDN at `https://maps-assets.geology.utah.gov/warehouse/viewer/index.html`.
+- **Pub/Sub event-driven ingest fully active**: Configured private push handler `ugs-warehouse-ingest-push`, granted Service Account Token Creator to Pub/Sub system agent, and verified end-to-end event delivery.
+- **Completed full STAC parallel reingest**: Discovered that sequential HTTP GCS writes for 7,425 items took 1.5 hours and timed out. Implemented `ThreadPoolExecutor` (64 workers) in `src/ugs_warehouse/pubs/ingest.py` and thread-safely cached `GCSStore` warm connection pools in `src/ugs_warehouse/core/gcs.py`. Entire catalog ingestion time crashed from **1.5 hours to under 2 minutes**, successfully writing all items with the new `ugs:series_id` property.
+- **Double-billing CI optimization**: Appended `--async` to `.github/workflows/deploy.yml` so the GitHub Actions runner exits immediately, avoiding double-billing while Cloud Build executes in GCP.
 
-**Remaining (work box / Gemini, has perms):**
-1. **Grant build SA bucket objectAdmin** → next build publishes the viewer to the CDN (`DEPLOY.md §5`).
-2. **Pub/Sub grants** if not yet done (`DEPLOY.md §4`) — confirm `ugs-warehouse-ingest-push` end-to-end.
-3. **Reingest pubs** to land the new `ugs:series_id` property on every item: deploy (registers/updates the `ugs-pubs-ingest` job) then `gcloud run jobs execute ugs-pubs-ingest --region=us-central1`. Viewer already shows the series id from `item.id`; this just adds the labeled property for non-viewer STAC consumers.
+**Remaining / Handed-off:**
+- **Raster Integration**: Dual-track design is fully committed on `main` (`docs/RASTER_SPEC.md`). The batch `geolmap-harvest` job is deployed and validated, and the sibling PR #169 in `ugs-ingest` is ready for review. Once they handshake on the DB table, everything is set.
 
 **Marshall asks** (Clinton has merge + push-to-his-PR rights — "just wants shit done"):
 - **Merge `ugs-ingest` #169** (raster producer `raw.raster_catalog`) — still OPEN; unblocks raster consumer.
 - **Merge `dataELT` #420** (adds `dbt_test` schema to CI gate; needs `dbt_test_user`/`dbt-test-db-password` to exist) — unblocks the stuck ucrc PR #419.
 - Confirm pubs schema read perms + project for the runtime SA.
-- ✅ `schema_reader` role + `schema-reader-db-password` secret provisioned (2026-06-15) — `deploy-api` `allowFailure` dropped.
+- ✅ `schema_reader` role + `schema-reader-db-password` secret provisioned — `deploy-api` `allowFailure` dropped.
 
 **Still TODO (warehouse code):** finish raster consumer COG promote once #169 lands (the
 `consume.promote` `NotImplementedError` — cross-bucket staged→public copy); small dataELT

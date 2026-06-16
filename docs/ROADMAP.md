@@ -32,7 +32,8 @@ Status legend: ☐ not started · ◐ partial · ✅ done
 Mobile: ✅ responsive layout (map view stacks, header trims, tables scroll-x).
 
 ## Tier 2 — needs a service
-- ☐ **Raster tiles (titiler)** — dynamic COG tiling so rasters render in the viewer + WMTS. DevSeed-recommended. (Pairs with raster consumer / #169.)
+- ✅ **COG in the viewer (client-side)** — interactive pan/zoom of the actual COG via the `cog://` MapLibre protocol (browser range-reads + geotiff.js, lazy-loaded). Zero-server; one COG at a time. Shows real pixels, no invented styling.
+- ☐ **Raster tiles (titiler)** — dynamic COG tiling + WMTS, for scale/odd-projection COGs the client decoder can't handle + legacy WMTS consumers. DevSeed-recommended. (Client `cog://` covers in-viewer render today.)
 - ☐ **WMS/WMTS** — legacy QGIS/Esri workflows; lost when GeoServer was killed. titiler covers raster WMTS; vector WMS would need something new.
 - ☐ **OGC API Tiles** — vector tiles via API (tipg) vs our static PMTiles; only if consolidating Features+Tiles.
 - ☐ **Native Esri FeatureServer REST** — we serve OGC API Features (ArcGIS reads it); add Esri's own REST only if an AGOL workflow demands it.

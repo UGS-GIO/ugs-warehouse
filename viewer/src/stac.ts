@@ -54,6 +54,14 @@ export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
     ?? assets.find((a) => a.type?.startsWith("image/"));
 };
 
+// The Cloud-Optimized GeoTIFF asset (range-readable, rendered client-side via cog://).
+export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
+  Object.values(d?.assets ?? {}).find(
+    (a) => a.type?.includes("profile=cloud-optimized")
+      || a.roles?.includes("cloud-optimized")
+      || a.href.endsWith(".cog.tif"),
+  );
+
 async function fetchJson(url: string): Promise<StacDoc> {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);

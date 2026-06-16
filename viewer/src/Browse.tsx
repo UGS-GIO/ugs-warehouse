@@ -1,10 +1,10 @@
 // Catalog-centric browser: metadata over map. Collection cards (with counts) +
 // search-all → sortable item table / cards → item detail. The map is one link out.
 import maplibregl from "maplibre-gl";
-import { useMemo, useState } from "react";
-import { Layer, Map as MapGL, Source } from "react-map-gl/maplibre";
+import { useEffect, useMemo, useState } from "react";
+import { Layer, Map as MapGL, NavigationControl, Source } from "react-map-gl/maplibre";
 import { exportItem, type ExportFormat, FORMATS } from "./download";
-import { type Asset, citeLink, type Link, type StacDoc, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, cogAsset, type Link, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string; count: number; itemLinks: Link[];
@@ -248,10 +248,54 @@ const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
   return { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] };
 };
 
-// Preview: the harvested thumbnail image where present, else a non-interactive mini-map of
-// the footprint over a light basemap (fit to bbox) — shows where + shape at a glance. The
-// full interactive map stays behind "View on map".
+const asBounds = (item: StacDoc): [[number, number], [number, number]] | undefined => {
+  const b = item.bbox?.slice(0, 4);
+  return b && b.length === 4 ? [[b[0], b[1]], [b[2], b[3]]] : undefined;
+};
+
+// cog:// protocol registered once, lazily — pulls geotiff.js only when a COG is first viewed.
+let cogReady: Promise<void> | null = null;
+const ensureCogProtocol = (): Promise<void> =>
+  (cogReady ??= import("@geomatico/maplibre-cog-protocol").then(({ cogProtocol }) => {
+    maplibregl.addProtocol("cog", cogProtocol);
+  }));
+
+// Interactive COG explorer — the actual georeferenced raster (real cartography), range-read
+// + decoded client-side. No server, no invented styling. Pannable/zoomable.
+function CogMap({ href, item }: { href: string; item: StacDoc }) {
+  const [ready, setReady] = useState(false);
+  useEffect(() => { let live = true; ensureCogProtocol().then(() => live && setReady(true)); return () => { live = false; }; }, []);
+  const bounds = asBounds(item);
+  return (
+    <div className="mt-2 h-80 w-full max-w-[560px] overflow-hidden rounded-md border border-border bg-muted">
+      {ready
+        ? (
+          <MapGL
+            mapLib={maplibregl}
+            initialViewState={bounds
+              ? { bounds, fitBoundsOptions: { padding: 16 } }
+              : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
+            mapStyle={POSITRON}
+            style={{ width: "100%", height: "100%" }}
+          >
+            <NavigationControl position="top-right" showCompass={false} />
+            <Source id="cog" type="raster" url={`cog://${href}`} tileSize={256}>
+              <Layer id="cog-raster" type="raster" />
+            </Source>
+          </MapGL>
+        )
+        : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">loading COG…</div>}
+    </div>
+  );
+}
+
+// Preview, best-first: interactive COG (the real map), else thumbnail image, else a
+// non-interactive footprint mini-map (locator), else nothing. The full multi-layer map
+// stays behind "View on map".
 function Preview({ item }: { item: StacDoc }) {
+  const cog = cogAsset(item);
+  if (cog) return <CogMap href={cog.href} item={item} />;
+
   const thumb = thumbnailAsset(item);
   if (thumb) {
     return (
@@ -275,8 +319,7 @@ function Preview({ item }: { item: StacDoc }) {
         style={{ width: "100%", height: "100%" }}
       >
         <Source id="fp-mini" type="geojson" data={{ type: "Feature", properties: {}, geometry: geom }}>
-          <Layer id="fp-mini-fill" type="fill" paint={{ "fill-color": "#d1491c", "fill-opacity": 0.2 }} />
-          <Layer id="fp-mini-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 1.5 }} />
+          <Layer id="fp-mini-line" type="line" paint={{ "line-color": "#888", "line-width": 1.5 }} />
         </Source>
       </MapGL>
     </div>

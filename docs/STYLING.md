@@ -182,10 +182,19 @@ so a client that walks assets (not `renders`) still finds it. `renders.<id>.styl
 
 ## 8. Open questions
 
-- **Styles CDN bucket** — `ugs-styles` examples use `ut-dnr-ugs-ucrc-public`; the warehouse bucket is
-  `ut-dnr-ugs-maps-prod-public`. Cross-bucket href is fine (it's a URL); decide whether to keep
-  styles in their own bucket or rsync into the warehouse bucket. Leaning: keep separate, `ugs-styles`
-  owns its CDN.
+- **⚠️ Styles CDN origin mismatch — PENDING INFRA DECISION (blocks styles going live).** The two
+  ends point at different buckets, so the bridge currently fetches a 404 → no renders:
+  - `ugs-styles` CI (`publish.yml`) rsyncs → `gs://ut-dnr-ugs-ucrc-public/styles/` (project
+    `ut-dnr-ugs-ucrc-prod`), served via `storage.googleapis.com`.
+  - warehouse bridge reads `STYLES_INDEX_URL` default → `https://maps-assets.geology.utah.gov/styles/index.json`
+    = the `ut-dnr-ugs-maps-prod-public` bucket.
+
+  Pick ONE origin: **(a)** publish styles to `ut-dnr-ugs-maps-prod-public/styles` (single origin =
+  same CDN as STAC/PMTiles/COG/viewer; zero warehouse change; needs the publish SA to write that
+  bucket — cross-project grant), or **(b)** point the warehouse at the ucrc origin via
+  `STYLES_CDN_BASE`/`STYLES_INDEX_URL` (no CI change; 2nd origin, raw GCS, needs CORS for the viewer).
+  Until aligned, the bridge no-ops gracefully (items emit unstyled). Also: `publish.yml` needs its
+  WIF secrets set in the ugs-styles repo.
 - **Manifest freshness** — warehouse fetches `index.json` at ingest. A style added after a layer's
   last ingest won't appear until the next ingest or a `refresh_stac` run. Acceptable (matches the
   derive-from-truth catalog refresh); document it.

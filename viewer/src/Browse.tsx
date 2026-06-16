@@ -2,9 +2,9 @@
 // search-all → sortable item table / cards → item detail. The map is one link out.
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useState } from "react";
-import { Layer, Map as MapGL, NavigationControl, Source } from "react-map-gl/maplibre";
+import { Layer, type LayerProps, Map as MapGL, NavigationControl, Source } from "react-map-gl/maplibre";
 import { exportItem, type ExportFormat, FORMATS } from "./download";
-import { type Asset, citeLink, cogAsset, type Link, type StacDoc, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, cogAsset, defaultStyleUrl, type Link, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string; count: number; itemLinks: Link[];
@@ -289,12 +289,98 @@ function CogMap({ href, item }: { href: string; item: StacDoc }) {
   );
 }
 
-// Preview, best-first: interactive COG (the real map), else thumbnail image, else a
-// non-interactive footprint mini-map (locator), else nothing. The full multi-layer map
-// stays behind "View on map".
+// Interactive vector preview — the item's actual PMTiles features. Uses the bound ugs-styles
+// GL style (via the render extension) when present; else a neutral gray geometry render (no
+// invented cartography — real styling arrives through `renders`).
+function PmtilesMap({ item }: { item: StacDoc }) {
+  const pm = pmtilesLink(item);
+  const styleUrl = defaultStyleUrl(item);
+  const [styleLayers, setStyleLayers] = useState<Record<string, unknown>[] | null>(null);
+  useEffect(() => {
+    if (!styleUrl) { setStyleLayers(null); return; }
+    let live = true;
+    fetch(styleUrl).then((r) => r.json())
+      .then((d) => { if (live) setStyleLayers(Array.isArray(d?.layers) ? d.layers : null); })
+      .catch(() => { if (live) setStyleLayers(null); });
+    return () => { live = false; };
+  }, [styleUrl]);
+  if (!pm) return null;
+  const sourceLayer = pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "");
+  const bounds = asBounds(item);
+  return (
+    <div className="mt-2 h-80 w-full max-w-[560px] overflow-hidden rounded-md border border-border bg-muted">
+      <MapGL
+        mapLib={maplibregl}
+        initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
+        mapStyle={POSITRON}
+        style={{ width: "100%", height: "100%" }}
+      >
+        <NavigationControl position="top-right" showCompass={false} />
+        <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`}>
+          {styleLayers
+            ? styleLayers.map((l, i) => (
+              <Layer key={i} {...({ ...l, id: `pm-prev-${i}`, "source-layer": sourceLayer } as unknown as LayerProps)} />
+            ))
+            : (
+              <>
+                <Layer id="pm-prev-fill" type="fill" source-layer={sourceLayer} paint={{ "fill-color": "#888", "fill-opacity": 0.1 }} />
+                <Layer id="pm-prev-line" type="line" source-layer={sourceLayer} paint={{ "line-color": "#888", "line-width": 1 }} />
+                <Layer id="pm-prev-circle" type="circle" source-layer={sourceLayer} paint={{ "circle-color": "#888", "circle-radius": 3 }} />
+              </>
+            )}
+        </Source>
+      </MapGL>
+    </div>
+  );
+}
+
+// Canonical datalake glance — first rows of the GeoParquet via DuckDB-WASM (geometry dropped).
+function ParquetTable({ href }: { href: string }) {
+  const [data, setData] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null);
+  const [err, setErr] = useState<string>();
+  useEffect(() => {
+    let live = true;
+    import("./download").then(({ previewRows }) => previewRows(href, 12))
+      .then((d) => { if (live) setData(d); })
+      .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); });
+    return () => { live = false; };
+  }, [href]);
+  if (err) return <div className="mt-2 text-xs text-destructive">data preview failed: {err}</div>;
+  if (!data) return <div className="mt-2 text-xs text-muted-foreground">loading data…</div>;
+  if (!data.rows.length) return null;
+  const cell = (v: unknown) => (v == null ? "" : String(v).slice(0, 80));
+  return (
+    <div className="mt-2 max-w-full overflow-x-auto rounded-md border border-border">
+      <table className="w-full border-collapse text-[12px]">
+        <thead>
+          <tr>{data.columns.map((c) => <th key={c} className={C.thPlain}>{c}</th>)}</tr>
+        </thead>
+        <tbody>
+          {data.rows.map((r, i) => (
+            <tr key={i}>{data.columns.map((c) => <td key={c} className={C.td}>{cell(r[c])}</td>)}</tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+// Preview, best-first by data type: interactive COG (raster) > interactive PMTiles map +
+// GeoParquet data table (vector) > thumbnail image > non-interactive footprint locator >
+// nothing. The full multi-layer map stays behind "View on map".
 function Preview({ item }: { item: StacDoc }) {
   const cog = cogAsset(item);
   if (cog) return <CogMap href={cog.href} item={item} />;
+
+  if (pmtilesLink(item)) {
+    const pq = parquetAsset(item);
+    return (
+      <>
+        <PmtilesMap item={item} />
+        {pq && <ParquetTable href={pq.href} />}
+      </>
+    );
+  }
 
   const thumb = thumbnailAsset(item);
   if (thumb) {

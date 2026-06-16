@@ -65,6 +65,39 @@ const sanitize = (v: unknown): unknown =>
 
 let seq = 0;
 
+/** First `limit` rows of a GeoParquet (geometry column dropped) for an in-page data glance —
+ *  the canonical datalake artifact. Reuses the shared DuckDB-WASM instance (same lazy boot as
+ *  export); no spatial load needed since geometry is excluded. */
+export async function previewRows(
+  parquetUrl: string,
+  limit = 12,
+): Promise<{ columns: string[]; rows: Record<string, unknown>[] }> {
+  const duckdb = await import("@duckdb/duckdb-wasm");
+  const db = await getDB();
+  const conn = await db.connect();
+  const id = ++seq;
+  const src = `p${id}.parquet`;
+  try {
+    await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+    const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${src}');`);
+    const allCols = desc.toArray().map((r) => String(r.column_name));
+    const hasGeom = allCols.includes(GEOM);
+    const columns = allCols.filter((c) => c !== GEOM);
+    const sel = hasGeom ? `* EXCLUDE (${GEOM})` : "*";
+    const res = await conn.query(`SELECT ${sel} FROM read_parquet('${src}') LIMIT ${limit};`);
+    const rows = res.toArray().map((r) => {
+      const o = r.toJSON() as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(o)) out[k] = sanitize(v);
+      return out;
+    });
+    return { columns, rows };
+  } finally {
+    await conn.close();
+    await db.dropFile(src).catch(() => {});
+  }
+}
+
 export async function exportItem(
   parquetUrl: string,
   stem: string,

@@ -62,6 +62,14 @@ export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
       || a.href.endsWith(".cog.tif"),
   );
 
+// Default MapLibre GL style_url from the render extension (ugs-styles bridge), if bound.
+// Falls back to the first render. Undefined when the item carries no `renders`.
+export const defaultStyleUrl = (d: StacDoc | undefined): string | undefined => {
+  const renders = (d?.properties as { renders?: Record<string, { style_url?: string }> } | undefined)?.renders;
+  if (!renders) return undefined;
+  return (renders.default ?? Object.values(renders)[0])?.style_url;
+};
+
 async function fetchJson(url: string): Promise<StacDoc> {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);

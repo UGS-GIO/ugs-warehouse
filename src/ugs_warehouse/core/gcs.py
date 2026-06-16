@@ -18,8 +18,14 @@ CACHE_MUTABLE = "no-cache"               # revalidate every time (catalog.json, 
 CACHE_IMMUTABLE = "public, max-age=31536000, immutable"   # dated/content-addressed artifacts
 
 
+_cached_store: GCSStore | None = None
+
+
 def _store() -> GCSStore:
-    return GCSStore(bucket=config.BUCKET)
+    global _cached_store
+    if _cached_store is None:
+        _cached_store = GCSStore(bucket=config.BUCKET)
+    return _cached_store
 
 
 def _attrs(content_type: str, cache_control: str | None) -> dict[str, str]:

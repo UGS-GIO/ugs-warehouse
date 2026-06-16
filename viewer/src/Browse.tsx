@@ -1,8 +1,8 @@
 // Catalog-centric browser: metadata over map. Collection cards (with counts) +
 // search-all → sortable item table / cards → item detail. The map is one link out.
 import maplibregl from "maplibre-gl";
-import { useEffect, useMemo, useState } from "react";
-import { Layer, type LayerProps, Map as MapGL, NavigationControl, Source } from "react-map-gl/maplibre";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { exportItem, type ExportFormat, FORMATS } from "./download";
 import { type Asset, citeLink, cogAsset, defaultStyleUrl, type Link, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
@@ -264,19 +264,42 @@ const ensureCogProtocol = (): Promise<void> =>
 // + decoded client-side. No server, no invented styling. Pannable/zoomable.
 function CogMap({ href, item }: { href: string; item: StacDoc }) {
   const [ready, setReady] = useState(false);
-  useEffect(() => { let live = true; ensureCogProtocol().then(() => live && setReady(true)); return () => { live = false; }; }, []);
-  const bounds = asBounds(item);
+  const mapRef = useRef<MapRef>(null);
+  const cogBbox = useRef<[number, number, number, number] | undefined>(undefined);
+
+  // Fit to the COG's own extent (most items here have no STAC footprint, so the COG metadata
+  // bbox is the only reliable extent); fall back to the STAC bbox.
+  const fit = () => {
+    const b = cogBbox.current ?? (item.bbox?.slice(0, 4) as [number, number, number, number] | undefined);
+    if (b && mapRef.current) mapRef.current.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 16, duration: 0 });
+  };
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      await ensureCogProtocol();
+      if (!live) return;
+      setReady(true);
+      try {
+        const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
+        const meta = await getCogMetadata(href);
+        if (live && meta?.bbox) { cogBbox.current = meta.bbox; fit(); }
+      } catch { /* keep STAC bbox / default view */ }
+    })();
+    return () => { live = false; };
+  }, [href]);
+
   return (
     <div className="mt-2 h-80 w-full max-w-[560px] overflow-hidden rounded-md border border-border bg-muted">
       {ready
         ? (
           <MapGL
+            ref={mapRef}
             mapLib={maplibregl}
-            initialViewState={bounds
-              ? { bounds, fitBoundsOptions: { padding: 16 } }
-              : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
+            initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
             mapStyle={POSITRON}
             style={{ width: "100%", height: "100%" }}
+            onLoad={fit}
           >
             <NavigationControl position="top-right" showCompass={false} />
             <Source id="cog" type="raster" url={`cog://${href}`} tileSize={256}>

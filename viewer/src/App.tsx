@@ -118,12 +118,20 @@ export function App() {
   const allDocs = useDocs(refs.map((r) => r.href));
   const allItems: ItemRef[] = refs.map((r, i) => ({ ...r, data: allDocs.docs[i]?.data }));
 
-  const item = useStac(itemUrl);
+  // c/i in the URL may be a short id (clean + shareable: ?c=ugs-publications&i=GQ-1560) or a
+  // full STAC URL (older links). collIdOf/idOf already no-op on a bare id; resolve i to an
+  // absolute href for fetching, accepting both forms.
+  const isUrl = (s?: string) => Boolean(s) && /^https?:\/\//.test(s as string);
   const collectionId = collIdOf(collectionUrl);
   const selColl = perColl.find((pc) => pc.id === collectionId);
+  const itemHref = isUrl(itemUrl)
+    ? itemUrl
+    : selColl?.itemLinks.find((l) => idOf(l.href) === itemUrl)?.href
+      ?? allItems.find((r) => idOf(r.href) === itemUrl)?.href;
+  const item = useStac(itemHref);
 
-  const openCollection = (href: string) => go({ view, c: href });
-  const openItem = (href: string) => go({ view, c: collectionUrl, i: href, l: layerIds });
+  const openCollection = (href: string) => go({ view, c: collIdOf(href) });
+  const openItem = (href: string) => go({ view, c: collectionUrl, i: idOf(href), l: layerIds });
   const toggleLayer = (id: string) => {
     const set = new Set(layerIds ?? []);
     set.has(id) ? set.delete(id) : set.add(id);

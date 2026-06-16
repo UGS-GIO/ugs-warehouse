@@ -1,6 +1,8 @@
 // Catalog-centric browser: metadata over map. Collection cards (with counts) +
 // search-all → sortable item table / cards → item detail. The map is one link out.
+import maplibregl from "maplibre-gl";
 import { useMemo, useState } from "react";
+import { Layer, Map as MapGL, Source } from "react-map-gl/maplibre";
 import { exportItem, type ExportFormat, FORMATS } from "./download";
 import { type Asset, citeLink, type Link, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
@@ -239,19 +241,16 @@ function ItemList({ items, showCollection, query, onOpen }: {
   );
 }
 
-// Coordinate rings from a Polygon/MultiPolygon, or synthesized from a bbox.
-function previewRings(geom: GeoJSON.Geometry | null | undefined, bbox?: number[]): number[][][] {
-  if (geom?.type === "Polygon") return geom.coordinates as number[][][];
-  if (geom?.type === "MultiPolygon") return (geom.coordinates as number[][][][]).flat();
-  if (bbox && bbox.length >= 4) {
-    const [w, s, e, n] = bbox;
-    return [[[w, s], [e, s], [e, n], [w, n], [w, s]]];
-  }
-  return [];
-}
+const POSITRON = "https://tiles.openfreemap.org/styles/positron";
 
-// Preview: the harvested thumbnail image where present, else a zero-dependency SVG of the
-// footprint (no map tiles, no network) so every spatial item shows a "where + shape" glance.
+const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
+  const [w, s, e, n] = b;
+  return { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] };
+};
+
+// Preview: the harvested thumbnail image where present, else a non-interactive mini-map of
+// the footprint over a light basemap (fit to bbox) — shows where + shape at a glance. The
+// full interactive map stays behind "View on map".
 function Preview({ item }: { item: StacDoc }) {
   const thumb = thumbnailAsset(item);
   if (thumb) {
@@ -260,23 +259,27 @@ function Preview({ item }: { item: StacDoc }) {
         className="mt-2 max-h-60 w-auto rounded-md border border-border bg-muted object-contain" />
     );
   }
-  const rings = previewRings(item.geometry, item.bbox);
-  if (!rings.length) return null;
-  const pts = rings.flat();
-  const xs = pts.map((p) => p[0]);
-  const ys = pts.map((p) => p[1]);
-  const minx = Math.min(...xs), maxx = Math.max(...xs), miny = Math.min(...ys), maxy = Math.max(...ys);
-  const w = maxx - minx || 1, h = maxy - miny || 1, pad = 0.1, W = 260, H = 180;
-  const sx = (x: number) => ((x - minx) / w) * (1 - 2 * pad) * W + pad * W;
-  const sy = (y: number) => H - (((y - miny) / h) * (1 - 2 * pad) * H + pad * H); // flip: lat up
-  const d = rings
-    .map((r) => "M" + r.map((p) => `${sx(p[0]).toFixed(1)},${sy(p[1]).toFixed(1)}`).join("L") + "Z")
-    .join(" ");
+  const bbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
+  const geom = item.geometry ?? (bbox ? bboxPolygon(bbox) : null);
+  if (!geom) return null;
   return (
-    <svg width={W} height={H} className="mt-2 rounded-md border border-border bg-muted"
-      role="img" aria-label="footprint preview">
-      <path d={d} fill="rgba(209,73,28,0.22)" stroke="#d1491c" strokeWidth={1.3} strokeLinejoin="round" />
-    </svg>
+    <div className="mt-2 h-52 w-full max-w-[420px] overflow-hidden rounded-md border border-border">
+      <MapGL
+        mapLib={maplibregl}
+        initialViewState={bbox
+          ? { bounds: [[bbox[0], bbox[1]], [bbox[2], bbox[3]]], fitBoundsOptions: { padding: 24 } }
+          : { longitude: -111.7, latitude: 39.3, zoom: 5 }}
+        mapStyle={POSITRON}
+        interactive={false}
+        attributionControl={false}
+        style={{ width: "100%", height: "100%" }}
+      >
+        <Source id="fp-mini" type="geojson" data={{ type: "Feature", properties: {}, geometry: geom }}>
+          <Layer id="fp-mini-fill" type="fill" paint={{ "fill-color": "#d1491c", "fill-opacity": 0.2 }} />
+          <Layer id="fp-mini-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 1.5 }} />
+        </Source>
+      </MapGL>
+    </div>
   );
 }
 

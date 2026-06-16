@@ -19,7 +19,6 @@ substitutions:
   _JOB: ugs-warehouse-ingest              # Cloud Run job (batch --all reingest). Distinct resource from the Pub/Sub topic of the same name below.
   _PUBS_JOB: ugs-pubs-ingest              # Cloud Run job: rebuild the ugs-publications STAC collection from pub metadata (no COG re-harvest)
   _API_SERVICE: ugs-warehouse-api
-  _OGCAPI_SERVICE: ugs-warehouse-ogcapi   # serverless OGC API Features (DuckDB over GeoParquet, no DB)
   _SERVICE: ugs-warehouse-service
   # Pub/Sub ingest trigger (dataELT #418 publishes `{schema, topic}` to _INGEST_TOPIC).
   _INGEST_TOPIC: ugs-warehouse-ingest     # topic dataELT publish.sh targets — name is the contract, do not rename
@@ -71,24 +70,9 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:latest
       - .
 
-  # Build OGC API (serverless DuckDB-over-GeoParquet Features service)
-  - id: build-ogcapi
-    name: gcr.io/cloud-builders/docker
-    args:
-      - build
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-ogcapi:${_TAG}
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-ogcapi:latest
-      - ogcapi/
-
   - id: push-warehouse
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse']
-
-  - id: push-ogcapi
-    name: gcr.io/cloud-builders/docker
-    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-ogcapi']
 
   - id: push-api
     name: gcr.io/cloud-builders/docker
@@ -223,23 +207,6 @@ steps:
       - --set-env-vars=^|^DATABASE_URL=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}|PGFS_DATABASE_DBCONNECTION=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}
       - --allow-unauthenticated
 
-  # Serverless OGC API Features — reads GeoParquet off the public CDN via DuckDB, derives
-  # collections from the STAC catalog. No Cloud SQL, no secrets, scale-to-zero (min-instances 0).
-  - id: deploy-ogcapi
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
-    args:
-      - run
-      - deploy
-      - ${_OGCAPI_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-ogcapi:${_TAG}
-      - --region=${_REGION}
-      - --service-account=${_RUNTIME_SA}
-      - --allow-unauthenticated
-      - --cpu=1
-      - --memory=512Mi
-      - --timeout=120
-
   # Build the static STAC viewer (Vite, base "./" so it works under any CDN subpath).
   - id: build-viewer
     name: node:22
@@ -269,7 +236,6 @@ steps:
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api
-  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-ogcapi
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest
 
 options:

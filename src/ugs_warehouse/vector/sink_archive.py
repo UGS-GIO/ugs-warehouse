@@ -28,8 +28,16 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
         local = os.path.join(tmp, f"{topic.stem}.parquet")
         # DuckDB's spatial extension auto-writes GeoParquet metadata when a GEOMETRY
         # column is present and FORMAT PARQUET is requested.
+        #
+        # bbox covering: per-row geometry extent as four plain numeric columns. Combined with
+        # the hilbert ordering (transform), their per-row-group min/max stats let any reader
+        # (DuckDB, DuckDB-WASM in the viewer, a future OGC API) prune row groups on a bbox
+        # without decoding geometry. Cheap; helps analytics + client-side + serving alike.
         con.execute(
-            f"COPY (SELECT * FROM {view}) TO '{local}' (FORMAT PARQUET, COMPRESSION ZSTD)"
+            f"COPY (SELECT *, "
+            f"ST_XMin(geom) AS bbox_xmin, ST_YMin(geom) AS bbox_ymin, "
+            f"ST_XMax(geom) AS bbox_xmax, ST_YMax(geom) AS bbox_ymax "
+            f"FROM {view}) TO '{local}' (FORMAT PARQUET, COMPRESSION ZSTD)"
         )
         base = f"{config.ARCHIVE_PREFIX}/{topic.stem}"
         latest = f"{base}/{topic.stem}.parquet"

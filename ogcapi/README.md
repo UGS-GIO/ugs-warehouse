@@ -1,5 +1,15 @@
 # ogcapi — serverless OGC API Features (DuckDB over GeoParquet)
 
+> **Status: DORMANT — code ready, NOT deployed.** This is the tier-3 *access* adapter over the
+> static lake (per the GeoParquet-vs-OGC-API-Features split: storage=GeoParquet, mgmt=DuckLake,
+> access=OGC API). It's validated but **unwired from `cloudbuild.yaml`** to keep the prod footprint
+> minimal — your own apps already query parquet client-side (DuckDB-WASM) + PMTiles, so this is only
+> for *external* standards clients (ArcGIS/QGIS/federation). **Wire it on demand:** add the
+> build/deploy steps back to `cloudbuild.yaml` (see git history of this dir) when a real OGC-API
+> consumer appears — or swap to off-the-shelf pygeoapi once the parquet carries `bbox_*` covering
+> columns (now emitted by `sink_archive`). Everything here is throwaway/refactorable.
+
+
 A scale-to-zero [OGC API - Features](https://ogcapi.ogc.org/features/) endpoint over the
 warehouse's GeoParquet. **No database.** Collections are derived from the live STAC catalog;
 feature queries run DuckDB over the parquet read straight off the public CDN URL (httpfs), so the

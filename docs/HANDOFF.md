@@ -70,6 +70,7 @@ Two boxes: this **personal box** (no GCP perms) authors + commits; the **work bo
 
 **Remaining / Handed-off:**
 - **Raster Integration**: Dual-track design is fully committed on `main` (`docs/RASTER_SPEC.md`). The batch `geolmap-harvest` job is deployed and validated, and the sibling PR #169 in `ugs-ingest` is ready for review. Once they handshake on the DB table, everything is set.
+- **Viewer bare-prefix serving** (one-time, needs `storage.buckets.update`): `…/warehouse/viewer/` returns GCS `NoSuchKey`; set `--web-main-page-suffix=index.html` on `gs://ut-dnr-ugs-maps-prod-public` so the bare prefix + clean deep-links resolve. Exact cmd + caveat (don't set a bucket-wide 404 page) in `DEPLOY.md §5`. Until then, link `…/warehouse/viewer/index.html`.
 
 **Marshall asks** (Clinton has merge + push-to-his-PR rights — "just wants shit done"):
 - **Merge `ugs-ingest` #169** (raster producer `raw.raster_catalog`) — still OPEN; unblocks raster consumer.

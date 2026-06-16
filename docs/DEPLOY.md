@@ -144,6 +144,23 @@ gcloud storage buckets add-iam-policy-binding gs://$_PUBLIC_BUCKET \
 (`$CB_SA` from §4.) After the grant, the next build publishes the viewer. The viewer's
 default catalog is the prod STAC, so no extra config — it just works once live.
 
+**Bare-prefix serving (one-time, needs `storage.buckets.update`).** The canonical URL is
+`…/warehouse/viewer/index.html`. The *bare* prefix `…/warehouse/viewer/` returns GCS
+`NoSuchKey` because the bucket has no default index document. Fix it so `…/warehouse/viewer/`
+(and the clean deep-links `…/warehouse/viewer/?c=…&i=…`) resolve to `index.html`:
+
+```bash
+# MainPageSuffix makes a directory request serve that dir's index.html. Bucket-global, but
+# only affects directory-style requests, so it's safe for the shared maps-assets bucket.
+gcloud storage buckets update gs://$_PUBLIC_BUCKET --web-main-page-suffix=index.html
+# DO NOT set --web-error-page to the viewer: a bucket-wide 404 page would return the viewer
+# HTML for any missing object (a missing COG/tile would 200 with HTML). Leave NotFoundPage unset.
+```
+
+Routing is query-param (`?c=&i=&view=&l=&m=`) on the single `index.html`, so MainPageSuffix
+alone is sufficient — no per-route rewrite needed. Until this is set, link to the explicit
+`…/warehouse/viewer/index.html`.
+
 ## Scheduling (optional)
 
 Cloud Scheduler → Cloud Run Jobs for a nightly full re-ingest:

@@ -73,10 +73,12 @@ def build_catalog(limit: int | None = None) -> int:
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
         )
+        stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
         stac.write_item(item)
         return True
 
+    stac.styles.warm()  # prime the styles manifest once before the pool (64 threads share it)
     print("[pubs] writing STAC items in parallel...")
     with ThreadPoolExecutor(max_workers=64) as executor:
         results = list(executor.map(process_pub, pubs))

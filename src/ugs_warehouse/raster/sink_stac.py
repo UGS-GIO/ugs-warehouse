@@ -42,7 +42,9 @@ def write(raster: Raster, *, bbox: list[float], geometry: dict | None = None,
           properties: dict | None = None, has_thumbnail: bool = False,
           proj_epsg: int | None = None) -> str:
     """Build + upload the item JSON. Caller runs `core.stac.refresh_catalog()` after."""
-    return stac.write_item(build_item(
+    item = build_item(
         raster, bbox=bbox, geometry=geometry, properties=properties,
         has_thumbnail=has_thumbnail, proj_epsg=proj_epsg,
-    ))
+    )
+    stac.attach_renders(item)  # ugs-styles colormap/rescale -> render extension (graceful if none)
+    return stac.write_item(item)

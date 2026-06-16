@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import re
 
-from . import config, gcs, iso
+from . import config, gcs, iso, styles
 
 PGF_BASE_URL = config.PGF_BASE_URL
 
@@ -122,6 +122,24 @@ def attach_iso(item: dict) -> str:
         "roles": ["metadata"], "title": "ISO 19139 metadata",
     }
     return path
+
+
+def attach_renders(item: dict) -> None:
+    """Attach the render extension + `renders` block (+ a vector `style` asset) by looking the
+    item id up in the ugs-styles manifest. No-op when nothing matches (mutates item in place).
+
+    Call before `write_item`. Best-effort: styling never blocks an ingest (see `core.styles`).
+    """
+    renders, style_asset = styles.renders_for(
+        item["id"], set((item.get("assets") or {}).keys()))
+    if not renders:
+        return
+    item.setdefault("properties", {})["renders"] = renders
+    exts = item.setdefault("stac_extensions", [])
+    if styles.RENDER_EXT not in exts:
+        exts.append(styles.RENDER_EXT)
+    if style_asset:
+        item.setdefault("assets", {}).setdefault("style", style_asset)
 
 
 def write_item(item: dict) -> str:

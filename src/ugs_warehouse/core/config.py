@@ -39,3 +39,12 @@ PGF_BASE_URL = os.environ.get(
 def public_url(object_path: str) -> str:
     """CDN URL for a GCS object path (the CDN preserves the path)."""
     return f"{PUBLIC_BASE_URL}/{object_path.lstrip('/')}"
+
+
+# Styling source — the neighbor repo `ugs-styles` builds MapLibre GL JSON + an `index.json`
+# manifest, published CDN-only. The warehouse reads the manifest at STAC emit and attaches a
+# `renders` block by item id (docs/STYLING.md). Graceful: unreachable manifest -> no renders.
+STYLES_CDN_BASE = os.environ.get(
+    "STYLES_CDN_BASE", f"{PUBLIC_BASE_URL}/styles",
+).rstrip("/")
+STYLES_INDEX_URL = os.environ.get("STYLES_INDEX_URL", f"{STYLES_CDN_BASE}/index.json")

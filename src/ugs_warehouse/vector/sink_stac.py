@@ -81,6 +81,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         stac_extensions=[stac.WEB_MAP_LINKS_EXT],
         proj_epsg=4326,  # transform reprojects every topic to 4326
     )
+    stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
     stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")

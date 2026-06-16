@@ -29,4 +29,5 @@ jobs:
         run: |
           gcloud builds submit --config=cloudbuild.yaml . \
             --project=ut-dnr-ugs-backend-tools \
-            --substitutions=_TAG=${GITHUB_SHA::7}
+            --substitutions=_TAG=${GITHUB_SHA::7} \
+            --async

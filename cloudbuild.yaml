@@ -252,6 +252,20 @@ steps:
       - --memory=512Mi
       - --timeout=120
 
+  # Resolve the deployed OGC API Features URL → file, so the viewer can bake it as
+  # VITE_FEATURES_BASE (the "OGC API" link). Runs after deploy-features (serial order); empty
+  # file if the service isn't up → the viewer link stays hidden (no dead link).
+  - id: resolve-features-url
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run services describe ${_FEATURES_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' > /workspace/features_url 2>/dev/null \
+          || printf '' > /workspace/features_url
+        echo "VITE_FEATURES_BASE=$$(cat /workspace/features_url)"
+
   # Build the static STAC viewer (Vite, base "./" so it works under any CDN subpath).
   - id: build-viewer
     name: node:22
@@ -259,6 +273,7 @@ steps:
     args:
       - -c
       - |
+        export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
         cd viewer
         npm ci
         npm run build

@@ -435,6 +435,12 @@ function Preview({ item }: { item: StacDoc }) {
   );
 }
 
+// Property key/value formatting for the detail table — drop the `ugs:` prefix, underscores →
+// spaces; join arrays, stringify objects, so nothing renders as `[object Object]` or overflows.
+const prettyKey = (k: string) => k.replace(/^ugs:/, "").replace(/_/g, " ");
+const fmtVal = (v: unknown): string =>
+  Array.isArray(v) ? v.join(", ") : v && typeof v === "object" ? JSON.stringify(v) : String(v);
+
 // ---- item detail ----
 function ItemDetail({ collectionId, item, onBack, onMap }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
@@ -476,14 +482,16 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
         )}
       </div>
       <ExportPanel item={item} />
-      <table className="mt-3 w-full max-w-[760px] border-collapse text-sm">
+      <table className="mt-3 w-full max-w-[760px] table-fixed border-collapse text-sm">
         <tbody>
-          {Object.entries(p).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
-            <tr key={k}>
-              <td className="whitespace-nowrap border-b border-border px-2.5 py-1 align-top text-muted-foreground">{k}</td>
-              <td className="border-b border-border px-2.5 py-1">{String(v)}</td>
-            </tr>
-          ))}
+          {Object.entries(p)
+            .filter(([k, v]) => v !== null && v !== "" && k !== "renders")
+            .map(([k, v]) => (
+              <tr key={k}>
+                <td className="w-44 break-words border-b border-border px-2.5 py-1 align-top text-muted-foreground">{prettyKey(k)}</td>
+                <td className="break-words border-b border-border px-2.5 py-1 align-top">{fmtVal(v)}</td>
+              </tr>
+            ))}
         </tbody>
       </table>
     </>

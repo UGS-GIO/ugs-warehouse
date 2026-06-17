@@ -8,6 +8,7 @@ import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { exportItem, type ExportFormat, FORMATS } from "./download";
+import { Legend } from "./legend";
 import { type Asset, citeLink, cogAsset, defaultStyleUrl, featuresCollectionUrl, type Link, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
 export type CollectionSummary = {
@@ -321,22 +322,25 @@ function PmtilesMap({ item }: { item: StacDoc }) {
   const sourceLayer = pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "");
   const bounds = asBounds(item);
   return (
-    <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
-      <MapGL
-        mapLib={maplibregl}
-        initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
-        mapStyle={POSITRON}
-        style={{ width: "100%", height: "100%" }}
-      >
-        <NavigationControl position="top-right" showCompass={false} />
-        <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`} />
-        {(styleLayers ?? NEUTRAL_LAYERS).map((l, i) => (
-          // explicit `source` (+ source-layer) on each Layer — react-map-gl won't inject it into
-          // an array / Fragment, so without this they render with no source (invisible).
-          <Layer key={i} {...({ ...l, id: `pm-prev-${i}`, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />
-        ))}
-      </MapGL>
-    </div>
+    <>
+      <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
+        <MapGL
+          mapLib={maplibregl}
+          initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
+          mapStyle={POSITRON}
+          style={{ width: "100%", height: "100%" }}
+        >
+          <NavigationControl position="top-right" showCompass={false} />
+          <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`} />
+          {(styleLayers ?? NEUTRAL_LAYERS).map((l, i) => (
+            // explicit `source` (+ source-layer) on each Layer — react-map-gl won't inject it into
+            // an array / Fragment, so without this they render with no source (invisible).
+            <Layer key={i} {...({ ...l, id: `pm-prev-${i}`, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />
+          ))}
+        </MapGL>
+      </div>
+      {styleLayers && <Legend layers={styleLayers} />}
+    </>
   );
 }
 

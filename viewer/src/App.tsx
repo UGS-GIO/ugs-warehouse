@@ -144,9 +144,15 @@ export function App() {
   const idsForMap = layerIds?.length ? layerIds : itemUrl ? [idOf(itemUrl)] : [];
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
 
+  // Map view = locked viewport (the map fills the screen, panels scroll internally).
+  // Catalog/detail = a document → the page scrolls naturally, header sticks. (No more
+  // scroll-box stuck in the middle of an item page.)
+  const mapView = view === "map";
   return (
-    <div className="grid h-screen grid-rows-[auto_1fr] bg-background text-sm text-foreground">
-      <header className="flex items-center gap-3 border-b border-border px-3 py-2 sm:px-4">
+    <div className={mapView
+      ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
+      : "min-h-screen bg-background text-sm text-foreground"}>
+      <header className={`flex items-center gap-3 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
         <strong className="text-[15px] whitespace-nowrap">UGS Warehouse</strong>
         <span className="hidden flex-1 truncate text-[11px] text-muted-foreground md:block">{CATALOG_URL}</span>
         <div className="ml-auto flex gap-1 md:ml-0">
@@ -158,7 +164,7 @@ export function App() {
 
       {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
 
-      {view === "catalog" ? (
+      {!mapView ? (
         <Browse
           collections={perColl}
           collectionId={collectionId}

@@ -12,7 +12,7 @@ export type CollectionSummary = {
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
 const C = {
-  wrap: "h-full w-full overflow-auto px-3 py-4 mx-auto max-w-[1180px] sm:px-5",
+  wrap: "w-full px-3 py-4 mx-auto max-w-[1180px] sm:px-5",
   crumb: "text-primary cursor-pointer",
   muted: "text-xs text-muted-foreground",
   grid: "mt-3.5 grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",

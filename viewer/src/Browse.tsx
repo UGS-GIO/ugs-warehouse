@@ -4,7 +4,7 @@ import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { exportItem, type ExportFormat, FORMATS } from "./download";
-import { type Asset, citeLink, cogAsset, defaultStyleUrl, type Link, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, cogAsset, defaultStyleUrl, featuresCollectionUrl, type Link, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string; count: number; itemLinks: Link[];
@@ -450,6 +450,9 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
   const hasGeom = Boolean(item.geometry || item.bbox);
   const via = viaLink(item);
   const cite = citeLink(item);
+  // OGC API Features link — only for vector layers (a featureserv collection == this item id).
+  const ogc = (pmtilesLink(item) || parquetAsset(item))
+    ? featuresCollectionUrl(String(item.id ?? "")) : undefined;
   return (
     <>
       <div className="mb-2.5">
@@ -467,6 +470,12 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
             className="inline-block rounded bg-emerald-700 px-2.5 py-1 text-[11px] text-white hover:bg-emerald-800">
             View on map ›
           </button>
+        )}
+        {ogc && (
+          <a href={ogc} target="_blank" rel="noopener"
+            className="inline-block rounded border border-border px-2.5 py-1 text-[11px] text-foreground no-underline hover:border-primary">
+            OGC API ↗
+          </a>
         )}
         {via && (
           <a href={via.href} target="_blank" rel="noopener"

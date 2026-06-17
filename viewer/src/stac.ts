@@ -54,6 +54,17 @@ export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
     ?? assets.find((a) => a.type?.startsWith("image/"));
 };
 
+// OGC API Features endpoint base (the duckdb_featureserv service). Set at build time via
+// VITE_FEATURES_BASE, or per-session via ?features=<url>. Empty → the link is hidden (no dead
+// link). A serving-topic's STAC item id == its featureserv collection id.
+export const FEATURES_BASE = (
+  new URLSearchParams(location.search).get("features")
+  || ((import.meta as { env?: Record<string, string> }).env?.VITE_FEATURES_BASE)
+  || ""
+).replace(/\/+$/, "");
+export const featuresCollectionUrl = (id: string): string | undefined =>
+  FEATURES_BASE ? `${FEATURES_BASE}/collections/${id}` : undefined;
+
 // The Cloud-Optimized GeoTIFF asset (range-readable, rendered client-side via cog://).
 export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
   Object.values(d?.assets ?? {}).find(

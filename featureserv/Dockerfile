@@ -12,15 +12,13 @@ RUN pip install --no-cache-dir duckdb==1.1.3
 COPY gen_db.py ./
 ARG STAC_CATALOG=https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json
 ENV STAC_CATALOG=${STAC_CATALOG} MODE=view DB_PATH=/build/database.duckdb
-RUN python gen_db.py
+RUN python gen_db.py && chmod 0777 /build/database.duckdb
 
 # Stage 2 — the off-the-shelf server. featureserv loads spatial + httpfs at query time
 # (verified), so the views resolve against the remote parquet. db copied world-writable
 # (DuckDB opens read-write).
 FROM tobilg/duckdb_featureserv:latest
-USER root
 COPY --from=build /build/database.duckdb /data/database.duckdb
-RUN chmod 0777 /data/database.duckdb
 ENV DUCKDBFS_DATABASE_PATH=/data/database.duckdb
 # Cloud Run targets this port (--port=9000 in the deploy).
 EXPOSE 9000

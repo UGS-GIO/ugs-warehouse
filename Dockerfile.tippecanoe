@@ -1,0 +1,15 @@
+# Compile tippecanoe ONCE into a base image. The warehouse + harvest images COPY the binaries
+# from here instead of each compiling from source (~10 min × 2 per deploy → gone). Rebuild this
+# only on a tippecanoe version bump:
+#   gcloud builds submit --config=cloudbuild.tippecanoe.yaml --project=ut-dnr-ugs-backend-tools .
+FROM debian:bookworm-slim AS build
+ARG TIPPECANOE_REF=main
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential git ca-certificates libsqlite3-dev zlib1g-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && git clone --depth=1 --branch "${TIPPECANOE_REF}" https://github.com/felt/tippecanoe.git /src \
+    && cd /src && make -j"$(nproc)" && make install PREFIX=/usr/local
+
+# Minimal final stage — just carries the binaries so other images can COPY --from this.
+FROM debian:bookworm-slim
+COPY --from=build /usr/local/bin/tippecanoe /usr/local/bin/tile-join /usr/local/bin/

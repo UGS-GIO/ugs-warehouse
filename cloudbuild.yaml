@@ -39,6 +39,8 @@ steps:
     name: gcr.io/cloud-builders/docker
     args:
       - build
+      - --build-arg
+      - TIPPECANOE_IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tippecanoe:latest
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
       - -t
@@ -65,6 +67,8 @@ steps:
       - build
       - -f
       - Dockerfile.harvest
+      - --build-arg
+      - TIPPECANOE_IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tippecanoe:latest
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
       - -t

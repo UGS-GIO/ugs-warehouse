@@ -1,0 +1,26 @@
+# Build the prebuilt tippecanoe base image. Run ONCE, and again only on a tippecanoe version
+# bump (optionally pass --substitutions=_TIPPECANOE_REF=<tag> to pin):
+#   gcloud builds submit --config=cloudbuild.tippecanoe.yaml --project=ut-dnr-ugs-backend-tools .
+# The main cloudbuild.yaml then COPYs the binary from this image (no per-deploy compile).
+substitutions:
+  _REGION: us-central1
+  _AR_REPO: ugs-warehouse
+  _TIPPECANOE_REF: main
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -f
+      - Dockerfile.tippecanoe
+      - --build-arg
+      - TIPPECANOE_REF=${_TIPPECANOE_REF}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tippecanoe:latest
+      - .
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tippecanoe
+
+options:
+  logging: CLOUD_LOGGING_ONLY

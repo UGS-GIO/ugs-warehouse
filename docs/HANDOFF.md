@@ -73,7 +73,11 @@ Two boxes: this **personal box** (no GCP perms) authors + commits; the **work bo
 - **Viewer bare-prefix serving** (one-time, needs `storage.buckets.update`): `…/warehouse/viewer/` returns GCS `NoSuchKey`; set `--web-main-page-suffix=index.html` on `gs://ut-dnr-ugs-maps-prod-public` so the bare prefix + clean deep-links resolve. Exact cmd + caveat (don't set a bucket-wide 404 page) in `DEPLOY.md §5`. Until then, link `…/warehouse/viewer/index.html`.
 
 **Work-box checklist — 2026-06-17 session (in order):**
-1. `git pull` main (through `c352a74`).
+1. `git pull` main.
+1b. ⚠ **ONE-TIME (do before step 2, else the deploy's `COPY --from` fails):** build the prebuilt
+   tippecanoe base — `gcloud builds submit --config=cloudbuild.tippecanoe.yaml --project=ut-dnr-ugs-backend-tools .`
+   Compiles tippecanoe once → pushes `ugs-tippecanoe`. After this, warehouse/harvest builds just COPY
+   the binary (no ~10min×2 compile per deploy). Rebuild only on a tippecanoe version bump.
 2. **Deploy** — push to `main` (or `gcloud builds submit --config=cloudbuild.yaml . --project=ut-dnr-ugs-backend-tools --substitutions=_TAG=$(git rev-parse --short HEAD)`). Builds/deploys: **NEW `ugs-warehouse-features`** (OGC API Features for Arc Pro — `featureserv/`, duckdb_featureserv over CDN parquet, scale-to-zero, `--port=9000`), **NEW `ugs-pubs-ingest`** job, viewer (series-id column + COG explorer + per-type preview + short-id deep links), + warehouse/api/harvest. ⚠ `deploy.yml` has `--async` → the GH run goes green on *submit*, not finish — watch the **Cloud Build console** for the real result.
 3. **Vector reingest** — lands the new `bbox_*` covering columns in the GeoParquet: `gcloud run jobs execute ugs-warehouse-ingest --region=us-central1`.
 4. **ArcGIS Pro test (acceptance gate for the OGC API):** URL = `gcloud run services describe ugs-warehouse-features --region=us-central1 --format='value(status.url)'` → Arc Pro: *Insert → Connections → Server → New OGC API Server* → that URL → add a layer. Report whatever Pro complains about (iterate in `featureserv/`).

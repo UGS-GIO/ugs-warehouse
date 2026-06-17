@@ -5,6 +5,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { App } from "./App";
 import { applyTheme, initialTheme } from "./theme";
+import "@utahdts/utah-design-system-header/css";
 import "./index.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 

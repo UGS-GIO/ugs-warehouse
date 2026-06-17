@@ -1,3 +1,4 @@
+import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
 import { useEffect, useState } from "react";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
@@ -97,6 +98,18 @@ export function App() {
     const onPop = () => setNav(readUrl());
     addEventListener("popstate", onPop);
     return () => removeEventListener("popstate", onPop);
+  }, []);
+
+  // Official State of Utah header — injects the state identity bar + maintained logo above the
+  // app (Utah Design System standard). Configured once on mount.
+  useEffect(() => {
+    setUtahHeaderSettings({
+      title: "Utah Geological Survey",
+      showTitle: true,
+      titleUrl: "https://geology.utah.gov",
+      mainMenu: false,
+    });
+    loadHeader();
   }, []);
 
   const catalog = useStac(CATALOG_URL);

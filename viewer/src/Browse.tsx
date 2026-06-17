@@ -1,5 +1,9 @@
 // Catalog-centric browser: metadata over map. Collection cards (with counts) +
 // search-all → sortable item table / cards → item detail. The map is one link out.
+import {
+  type ColumnDef, flexRender, getCoreRowModel, getSortedRowModel,
+  type SortingState, useReactTable,
+} from "@tanstack/react-table";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
@@ -41,13 +45,6 @@ const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ug
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties ?? {})).toLowerCase();
 
-type SortKey = "id" | "title" | "date" | "type";
-const sorters: Record<SortKey, (a: ItemRef, b: ItemRef) => number> = {
-  id: (a, b) => gSeries(a).localeCompare(gSeries(b), undefined, { numeric: true }),
-  title: (a, b) => gTitle(a).localeCompare(gTitle(b)),
-  date: (a, b) => gDate(a).localeCompare(gDate(b)),
-  type: (a, b) => gType(a).localeCompare(gType(b)),
-};
 
 function AssetChips({ assets }: { assets: Record<string, Asset> }) {
   return (
@@ -160,21 +157,25 @@ function ItemList({ items, showCollection, query, onOpen }: {
 }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards">("table");
-  const [sort, setSort] = useState<SortKey>("title");
-  const [asc, setAsc] = useState(true);
 
   const needle = (query ?? q).trim().toLowerCase();
-  const rows = useMemo(() => {
-    const f = needle ? items.filter((it) => haystack(it).includes(needle)) : items;
-    const s = [...f].sort(sorters[sort]);
-    return asc ? s : s.reverse();
-  }, [items, needle, sort, asc]);
-
-  const head = (key: SortKey, label: string) => (
-    <th className={C.th} onClick={() => (sort === key ? setAsc(!asc) : (setSort(key), setAsc(true)))}>
-      {label}{sort === key ? (asc ? " ▲" : " ▼") : ""}
-    </th>
+  const rows = useMemo(
+    () => (needle ? items.filter((it) => haystack(it).includes(needle)) : items),
+    [items, needle],
   );
+
+  const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
+    { id: "id", header: "ID", accessorFn: gSeries, sortingFn: "alphanumeric",
+      cell: (i) => <span className="whitespace-nowrap font-mono text-[13px] font-semibold text-foreground">{String(i.getValue())}</span> },
+    { id: "title", header: "Title", accessorFn: gTitle,
+      cell: (i) => <span className="text-primary">{String(i.getValue())}</span> },
+    ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: (it: ItemRef) => it.collId }] : []),
+    { id: "type", header: "Type", accessorFn: gType },
+    { id: "date", header: "Date", accessorFn: gDate },
+    { id: "scale", header: "Scale", accessorFn: gScale, enableSorting: false },
+    { id: "assets", header: "Assets", enableSorting: false, accessorFn: () => "",
+      cell: ({ row }) => row.original.data?.assets ? <AssetChips assets={row.original.data.assets} /> : "" },
+  ], [showCollection]);
 
   return (
     <>
@@ -192,32 +193,8 @@ function ItemList({ items, showCollection, query, onOpen }: {
         <p className={`${C.muted} mt-3`}>{needle ? "No items match." : "No items."}</p>
       ) : mode === "table" ? (
         <div className="overflow-x-auto">
-        <table className="w-full border-collapse">
-          <thead>
-            <tr>
-              {head("id", "ID")}
-              {head("title", "Title")}
-              {showCollection && <th className={C.thPlain}>Collection</th>}
-              {head("type", "Type")}
-              {head("date", "Date")}
-              <th className={C.thPlain}>Scale</th>
-              <th className={C.thPlain}>Assets</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((it) => (
-              <tr key={it.href} className="cursor-pointer hover:bg-muted" onClick={() => onOpen(it.href)}>
-                <td className={`${C.td} whitespace-nowrap font-mono text-[13px] font-semibold text-foreground`}>{gSeries(it)}</td>
-                <td className={`${C.td} text-primary`}>{gTitle(it)}</td>
-                {showCollection && <td className={C.td}>{it.collId}</td>}
-                <td className={C.td}>{gType(it)}</td>
-                <td className={C.td}>{gDate(it)}</td>
-                <td className={C.td}>{gScale(it)}</td>
-                <td className={C.td}>{it.data?.assets ? <AssetChips assets={it.data.assets} /> : ""}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+          <DataTable columns={columns} data={rows} onRowClick={(it) => onOpen(it.href)}
+            initialSorting={[{ id: "id", desc: false }]} />
         </div>
       ) : (
         <div className={C.grid}>
@@ -364,10 +341,54 @@ function PmtilesMap({ item }: { item: StacDoc }) {
 }
 
 // Canonical datalake glance — first rows of the GeoParquet via DuckDB-WASM (geometry dropped).
+// Reusable sortable table (TanStack Table). Headers toggle sort; pass `onRowClick` for clickable rows.
+function DataTable<T>({ columns, data, onRowClick, initialSorting }: {
+  columns: ColumnDef<T, unknown>[];
+  data: T[];
+  onRowClick?: (row: T) => void;
+  initialSorting?: SortingState;
+}) {
+  const [sorting, setSorting] = useState<SortingState>(initialSorting ?? []);
+  const table = useReactTable({
+    data, columns, state: { sorting }, onSortingChange: setSorting,
+    getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel(),
+  });
+  return (
+    <table className="w-full border-collapse">
+      <thead>
+        {table.getHeaderGroups().map((hg) => (
+          <tr key={hg.id}>
+            {hg.headers.map((h) => {
+              const s = h.column.getIsSorted();
+              return (
+                <th key={h.id} className={h.column.getCanSort() ? C.th : C.thPlain}
+                  onClick={h.column.getToggleSortingHandler()}>
+                  {flexRender(h.column.columnDef.header, h.getContext())}
+                  {s === "asc" ? " ▲" : s === "desc" ? " ▼" : ""}
+                </th>
+              );
+            })}
+          </tr>
+        ))}
+      </thead>
+      <tbody>
+        {table.getRowModel().rows.map((r) => (
+          <tr key={r.id} className={onRowClick ? "cursor-pointer hover:bg-muted" : undefined}
+            onClick={onRowClick ? () => onRowClick(r.original) : undefined}>
+            {r.getVisibleCells().map((c) => (
+              <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
+            ))}
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+// Canonical datalake glance — first rows of the GeoParquet via DuckDB-WASM (TanStack Table, sortable).
 function ParquetTable({ href }: { href: string }) {
   const [data, setData] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null);
   const [err, setErr] = useState<string>();
-  const [sort, setSort] = useState<{ col: string; asc: boolean } | null>(null);
   useEffect(() => {
     let live = true;
     import("./download").then(({ previewRows }) => previewRows(href, 12))
@@ -375,38 +396,25 @@ function ParquetTable({ href }: { href: string }) {
       .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { live = false; };
   }, [href]);
+  const MAX = 12;
+  const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
+    () => (data?.columns ?? []).slice(0, MAX).map((c) => ({
+      id: c, header: c, accessorFn: (row) => row[c], sortingFn: "alphanumeric",
+      cell: (info) => {
+        const v = info.getValue();
+        const s = v == null ? "" : String(v);
+        return <span className="block max-w-[240px] truncate" title={s}>{s}</span>;
+      },
+    })),
+    [data],
+  );
   if (err) return <div className="mt-2 text-xs text-destructive">data preview failed: {err}</div>;
   if (!data) return <div className="mt-2 text-xs text-muted-foreground">loading data…</div>;
   if (!data.rows.length) return null;
-  const cell = (v: unknown) => (v == null ? "" : String(v));
-  const MAX = 12;
-  const cols = data.columns.slice(0, MAX);
-  const more = data.columns.length - cols.length;
-  const rows = sort
-    ? [...data.rows].sort((a, b) => {
-      const c = String(a[sort.col] ?? "").localeCompare(String(b[sort.col] ?? ""), undefined, { numeric: true });
-      return sort.asc ? c : -c;
-    })
-    : data.rows;
-  const onSort = (c: string) => setSort((s) => (s && s.col === c ? { col: c, asc: !s.asc } : { col: c, asc: true }));
+  const more = data.columns.length - Math.min(MAX, data.columns.length);
   return (
-    <div className="mt-2 max-w-full overflow-x-auto rounded-md border border-border">
-      <table className="w-full border-collapse text-[12px]">
-        <thead>
-          <tr>{cols.map((c) => (
-            <th key={c} className={C.th} onClick={() => onSort(c)}>
-              {c}{sort?.col === c ? (sort.asc ? " ▲" : " ▼") : ""}
-            </th>
-          ))}</tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i}>{cols.map((c) => (
-              <td key={c} className={`${C.td} max-w-[220px] truncate`} title={cell(r[c])}>{cell(r[c])}</td>
-            ))}</tr>
-          ))}
-        </tbody>
-      </table>
+    <div className="mt-2 max-w-full overflow-x-auto rounded-md border border-border text-[12px]">
+      <DataTable columns={columns} data={data.rows} />
       {more > 0 && (
         <div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
           +{more} more columns — full data via Download or the OGC API.

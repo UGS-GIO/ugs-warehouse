@@ -3,43 +3,44 @@
 /* class-based dark mode (matches ugs-map-viewer: `.dark` on <html>) */
 @custom-variant dark (&:where(.dark, .dark *));
 
-/* Design tokens mirrored from ugs-map-viewer (HSL triplets). Burnt-orange brand. */
+/* Design tokens — State of Utah Design System palette (neutral grays + Utah blue primary,
+   gold accent, #ba0000 danger), so the app body matches the official light Utah header. */
 :root {
-  --background: 0 0% 98%;
-  --foreground: 31 50% 10%;
+  --background: 0 0% 100%;
+  --foreground: 0 0% 20%;            /* Utah gray-dark #333 */
   --card: 0 0% 100%;
-  --card-foreground: 31 50% 10%;
-  --primary: 28 95% 36%;
-  --primary-foreground: 60 9.1% 97.8%;
-  --secondary: 20 5.9% 90%;
-  --secondary-foreground: 24 9.8% 10%;
-  --muted: 60 4.8% 95.9%;
-  --muted-foreground: 25 5.3% 44.7%;
-  --accent: 60 4.8% 95.9%;
-  --accent-foreground: 24 9.8% 10%;
-  --destructive: 0 72% 45%;
-  --border: 20 5.9% 90%;
-  --input: 20 5.9% 90%;
-  --ring: 31 97.2% 41.8%;
+  --card-foreground: 0 0% 20%;
+  --primary: 222 76% 52%;            /* Utah blue #2765e4 */
+  --primary-foreground: 0 0% 100%;
+  --secondary: 0 0% 95%;
+  --secondary-foreground: 0 0% 20%;
+  --muted: 0 0% 96%;
+  --muted-foreground: 0 0% 38%;      /* Utah gray-medium #616161 */
+  --accent: 41 54% 47%;              /* Utah gold */
+  --accent-foreground: 0 0% 100%;
+  --destructive: 0 100% 36%;         /* Utah danger #ba0000 */
+  --border: 0 0% 84%;                /* Utah gray-border #d7d7d7 */
+  --input: 0 0% 84%;
+  --ring: 222 76% 52%;
 }
 
 .dark {
-  --background: 0 0% 21%;
-  --foreground: 60 9.1% 97.8%;
-  --card: 0 0% 21%;
-  --card-foreground: 60 9.1% 97.8%;
-  --primary: 27 84% 55%;
-  --primary-foreground: 0 0% 12%;
-  --secondary: 0 0% 25%;
-  --secondary-foreground: 0 0% 98%;
-  --muted: 0 0% 27%;
-  --muted-foreground: 24 5.4% 70%;
-  --accent: 0 0% 27%;
-  --accent-foreground: 60 9.1% 97.8%;
+  --background: 0 0% 12%;
+  --foreground: 0 0% 96%;
+  --card: 0 0% 16%;
+  --card-foreground: 0 0% 96%;
+  --primary: 222 70% 64%;
+  --primary-foreground: 0 0% 10%;
+  --secondary: 0 0% 22%;
+  --secondary-foreground: 0 0% 96%;
+  --muted: 0 0% 20%;
+  --muted-foreground: 0 0% 68%;
+  --accent: 41 50% 52%;
+  --accent-foreground: 0 0% 10%;
   --destructive: 0 72% 60%;
-  --border: 0 0% 30%;
-  --input: 0 0% 30%;
-  --ring: 31 97.2% 41.8%;
+  --border: 0 0% 28%;
+  --input: 0 0% 28%;
+  --ring: 222 70% 64%;
 }
 
 /* Map tokens → Tailwind color utilities (bg-background, text-muted-foreground, …) */

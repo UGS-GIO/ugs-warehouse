@@ -5,8 +5,9 @@ import { useEffect, useState } from "react";
 export type Theme = "light" | "dark";
 const KEY = "vite-ui-theme";
 
+// Default light — matches the official (light) State of Utah header.
 export const initialTheme = (): Theme =>
-  (localStorage.getItem(KEY) as Theme | null) ?? "dark";
+  (localStorage.getItem(KEY) as Theme | null) ?? "light";
 
 /** Apply before first paint (call in main.tsx) so there's no flash. */
 export function applyTheme(t: Theme): void {

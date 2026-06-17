@@ -1,5 +1,6 @@
 import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
 import { useEffect, useState } from "react";
+import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
 import { CATALOG_URL, childLinks, itemLinks, pmtilesLink, type StacDoc, useDocs, useStac } from "./stac";
@@ -107,6 +108,7 @@ export function App() {
       title: "Utah Geological Survey",
       showTitle: true,
       titleUrl: "https://geology.utah.gov",
+      logo: { imageUrl: utahLogo },   // generic State of Utah emblem (until UGS has its own brand)
       mainMenu: false,
     });
     loadHeader();

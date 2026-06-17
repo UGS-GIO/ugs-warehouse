@@ -72,6 +72,17 @@ Two boxes: this **personal box** (no GCP perms) authors + commits; the **work bo
 - **Raster Integration**: Dual-track design is fully committed on `main` (`docs/RASTER_SPEC.md`). The batch `geolmap-harvest` job is deployed and validated, and the sibling PR #169 in `ugs-ingest` is ready for review. Once they handshake on the DB table, everything is set.
 - **Viewer bare-prefix serving** (one-time, needs `storage.buckets.update`): `…/warehouse/viewer/` returns GCS `NoSuchKey`; set `--web-main-page-suffix=index.html` on `gs://ut-dnr-ugs-maps-prod-public` so the bare prefix + clean deep-links resolve. Exact cmd + caveat (don't set a bucket-wide 404 page) in `DEPLOY.md §5`. Until then, link `…/warehouse/viewer/index.html`.
 
+**Work-box checklist — 2026-06-17 session (in order):**
+1. `git pull` main (through `c352a74`).
+2. **Deploy** — push to `main` (or `gcloud builds submit --config=cloudbuild.yaml . --project=ut-dnr-ugs-backend-tools --substitutions=_TAG=$(git rev-parse --short HEAD)`). Builds/deploys: **NEW `ugs-warehouse-features`** (OGC API Features for Arc Pro — `featureserv/`, duckdb_featureserv over CDN parquet, scale-to-zero, `--port=9000`), **NEW `ugs-pubs-ingest`** job, viewer (series-id column + COG explorer + per-type preview + short-id deep links), + warehouse/api/harvest. ⚠ `deploy.yml` has `--async` → the GH run goes green on *submit*, not finish — watch the **Cloud Build console** for the real result.
+3. **Vector reingest** — lands the new `bbox_*` covering columns in the GeoParquet: `gcloud run jobs execute ugs-warehouse-ingest --region=us-central1`.
+4. **ArcGIS Pro test (acceptance gate for the OGC API):** URL = `gcloud run services describe ugs-warehouse-features --region=us-central1 --format='value(status.url)'` → Arc Pro: *Insert → Connections → Server → New OGC API Server* → that URL → add a layer. Report whatever Pro complains about (iterate in `featureserv/`).
+5. **Styling go-live** (in the `ugs-styles` repo): (a) grant the publish SA `roles/storage.objectAdmin` on `gs://ut-dnr-ugs-maps-prod-public`; (b) set repo secrets `GCP_WIF_PROVIDER` + `GCP_SERVICE_ACCOUNT`; (c) tag a `v*` release → publishes `dist-json` → CDN `/styles`. Then a warehouse reingest attaches `renders` → viewer shows the styled layer. (`STYLING.md §8`.)
+6. **Viewer bare-prefix:** `gcloud storage buckets update gs://ut-dnr-ugs-maps-prod-public --web-main-page-suffix=index.html` (do NOT set a 404 page — `DEPLOY.md §5`).
+7. **Merges:** `dataELT #419` (ready — #420 already merged); poke `ugs-ingest #169` (raster, still **draft**).
+
+(`ugs:series_id` pubs reingest already done in the 2026-06-16 parallel reingest above — no repeat needed.)
+
 **Marshall asks** (Clinton has merge + push-to-his-PR rights — "just wants shit done"):
 - **Merge `ugs-ingest` #169** (raster producer `raw.raster_catalog`) — still OPEN; unblocks raster consumer.
 - **Merge `dataELT` #420** (adds `dbt_test` schema to CI gate; needs `dbt_test_user`/`dbt-test-db-password` to exist) — unblocks the stuck ucrc PR #419.

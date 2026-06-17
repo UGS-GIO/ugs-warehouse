@@ -8,7 +8,11 @@
 # live (read at query time via httpfs). Rebuild (redeploy) to pick up newly-piped layers.
 FROM python:3.12-slim AS build
 WORKDIR /build
-RUN pip install --no-cache-dir duckdb==1.1.3
+# Pinned to match the warehouse (single duckdb version repo-wide). The runtime server
+# (tobilg/duckdb_featureserv:latest) links libduckdb 1.4.3; it reads this 1.5.3-written
+# file fine — duckdb storage is backward-compatible. No h3 here (views only), so the
+# warehouse's 1.5.4/h3 cap does not apply.
+RUN pip install --no-cache-dir duckdb==1.5.3
 COPY gen_db.py ./
 ARG STAC_CATALOG=https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json
 ENV STAC_CATALOG=${STAC_CATALOG} MODE=view DB_PATH=/build/database.duckdb

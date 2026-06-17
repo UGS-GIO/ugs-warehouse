@@ -12,7 +12,7 @@ export type CollectionSummary = {
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
 const C = {
-  wrap: "w-full px-3 py-4 mx-auto max-w-[1180px] sm:px-5",
+  wrap: "w-full px-3 py-4 mx-auto max-w-[1400px] sm:px-5",
   crumb: "text-primary cursor-pointer",
   muted: "text-xs text-muted-foreground",
   grid: "mt-3.5 grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
@@ -290,7 +290,7 @@ function CogMap({ href, item }: { href: string; item: StacDoc }) {
   }, [href]);
 
   return (
-    <div className="mt-2 h-80 w-full max-w-[560px] overflow-hidden rounded-md border border-border bg-muted">
+    <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
       {ready
         ? (
           <MapGL
@@ -312,8 +312,21 @@ function CogMap({ href, item }: { href: string; item: StacDoc }) {
   );
 }
 
+// Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders
+// (not faux cartography): light fill, clear outline, points. fill/line/circle all added so any
+// geometry type shows.
+const NEUTRAL_LAYERS = [
+  { type: "fill", filter: ["==", ["geometry-type"], "Polygon"],
+    paint: { "fill-color": "#6b7280", "fill-opacity": 0.15, "fill-outline-color": "#374151" } },
+  { type: "line", filter: ["match", ["geometry-type"], ["LineString", "Polygon"], true, false],
+    paint: { "line-color": "#374151", "line-width": 1.1 } },
+  // circles only on actual point features — else maplibre dots every polygon/line vertex.
+  { type: "circle", filter: ["==", ["geometry-type"], "Point"],
+    paint: { "circle-color": "#374151", "circle-radius": 3.5, "circle-opacity": 0.85 } },
+];
+
 // Interactive vector preview — the item's actual PMTiles features. Uses the bound ugs-styles
-// GL style (via the render extension) when present; else a neutral gray geometry render (no
+// GL style (via the render extension) when present; else a neutral geometry render (no
 // invented cartography — real styling arrives through `renders`).
 function PmtilesMap({ item }: { item: StacDoc }) {
   const pm = pmtilesLink(item);
@@ -331,7 +344,7 @@ function PmtilesMap({ item }: { item: StacDoc }) {
   const sourceLayer = pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "");
   const bounds = asBounds(item);
   return (
-    <div className="mt-2 h-80 w-full max-w-[560px] overflow-hidden rounded-md border border-border bg-muted">
+    <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
       <MapGL
         mapLib={maplibregl}
         initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
@@ -339,19 +352,12 @@ function PmtilesMap({ item }: { item: StacDoc }) {
         style={{ width: "100%", height: "100%" }}
       >
         <NavigationControl position="top-right" showCompass={false} />
-        <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`}>
-          {styleLayers
-            ? styleLayers.map((l, i) => (
-              <Layer key={i} {...({ ...l, id: `pm-prev-${i}`, "source-layer": sourceLayer } as unknown as LayerProps)} />
-            ))
-            : (
-              <>
-                <Layer id="pm-prev-fill" type="fill" source-layer={sourceLayer} paint={{ "fill-color": "#888", "fill-opacity": 0.1 }} />
-                <Layer id="pm-prev-line" type="line" source-layer={sourceLayer} paint={{ "line-color": "#888", "line-width": 1 }} />
-                <Layer id="pm-prev-circle" type="circle" source-layer={sourceLayer} paint={{ "circle-color": "#888", "circle-radius": 3 }} />
-              </>
-            )}
-        </Source>
+        <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`} />
+        {(styleLayers ?? NEUTRAL_LAYERS).map((l, i) => (
+          // explicit `source` (+ source-layer) on each Layer — react-map-gl won't inject it into
+          // an array / Fragment, so without this they render with no source (invisible).
+          <Layer key={i} {...({ ...l, id: `pm-prev-${i}`, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />
+        ))}
       </MapGL>
     </div>
   );
@@ -361,6 +367,7 @@ function PmtilesMap({ item }: { item: StacDoc }) {
 function ParquetTable({ href }: { href: string }) {
   const [data, setData] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null);
   const [err, setErr] = useState<string>();
+  const [sort, setSort] = useState<{ col: string; asc: boolean } | null>(null);
   useEffect(() => {
     let live = true;
     import("./download").then(({ previewRows }) => previewRows(href, 12))
@@ -371,19 +378,40 @@ function ParquetTable({ href }: { href: string }) {
   if (err) return <div className="mt-2 text-xs text-destructive">data preview failed: {err}</div>;
   if (!data) return <div className="mt-2 text-xs text-muted-foreground">loading data…</div>;
   if (!data.rows.length) return null;
-  const cell = (v: unknown) => (v == null ? "" : String(v).slice(0, 80));
+  const cell = (v: unknown) => (v == null ? "" : String(v));
+  const MAX = 12;
+  const cols = data.columns.slice(0, MAX);
+  const more = data.columns.length - cols.length;
+  const rows = sort
+    ? [...data.rows].sort((a, b) => {
+      const c = String(a[sort.col] ?? "").localeCompare(String(b[sort.col] ?? ""), undefined, { numeric: true });
+      return sort.asc ? c : -c;
+    })
+    : data.rows;
+  const onSort = (c: string) => setSort((s) => (s && s.col === c ? { col: c, asc: !s.asc } : { col: c, asc: true }));
   return (
     <div className="mt-2 max-w-full overflow-x-auto rounded-md border border-border">
       <table className="w-full border-collapse text-[12px]">
         <thead>
-          <tr>{data.columns.map((c) => <th key={c} className={C.thPlain}>{c}</th>)}</tr>
+          <tr>{cols.map((c) => (
+            <th key={c} className={C.th} onClick={() => onSort(c)}>
+              {c}{sort?.col === c ? (sort.asc ? " ▲" : " ▼") : ""}
+            </th>
+          ))}</tr>
         </thead>
         <tbody>
-          {data.rows.map((r, i) => (
-            <tr key={i}>{data.columns.map((c) => <td key={c} className={C.td}>{cell(r[c])}</td>)}</tr>
+          {rows.map((r, i) => (
+            <tr key={i}>{cols.map((c) => (
+              <td key={c} className={`${C.td} max-w-[220px] truncate`} title={cell(r[c])}>{cell(r[c])}</td>
+            ))}</tr>
           ))}
         </tbody>
       </table>
+      {more > 0 && (
+        <div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
+          +{more} more columns — full data via Download or the OGC API.
+        </div>
+      )}
     </div>
   );
 }
@@ -416,7 +444,7 @@ function Preview({ item }: { item: StacDoc }) {
   const geom = item.geometry ?? (bbox ? bboxPolygon(bbox) : null);
   if (!geom) return null;
   return (
-    <div className="mt-2 h-52 w-full max-w-[420px] overflow-hidden rounded-md border border-border">
+    <div className="mt-2 h-72 w-full max-w-[1100px] overflow-hidden rounded-md border border-border">
       <MapGL
         mapLib={maplibregl}
         initialViewState={bbox

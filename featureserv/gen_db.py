@@ -34,12 +34,12 @@ def main() -> int:
     con.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;")
     cat = _get(CATALOG)
     n = 0
-    for cl in (l for l in cat.get("links", []) if l.get("rel") == "child"):
+    for cl in (lnk for lnk in cat.get("links", []) if lnk.get("rel") == "child"):
         curl = urljoin(CATALOG, cl["href"])
         if curl.rstrip("/").split("/")[-2] in SKIP:
             continue
         coll = _get(curl)
-        for il in (l for l in coll.get("links", []) if l.get("rel") == "item"):
+        for il in (lnk for lnk in coll.get("links", []) if lnk.get("rel") == "item"):
             iurl = urljoin(curl, il["href"])
             cid = iurl.rstrip("/").split("/")[-2]  # …/<id>/<id>.json → <id>
             item = _get(iurl)

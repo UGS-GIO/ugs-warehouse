@@ -18,13 +18,18 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=tippecanoe /usr/local/bin/tippecanoe /usr/local/bin/tile-join /usr/local/bin/
 
 WORKDIR /app
+# Deps layer — cached until pyproject.toml changes (NOT on every code edit). Install deps against
+# an empty package skeleton, then drop it; the real source comes in the next layer.
 COPY pyproject.toml ./
+RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
+    && pip install --upgrade pip && pip install . \
+    && rm -rf src
+
+# App layer — only this rebuilds on a source change (deps already satisfied above).
 COPY src ./src
 COPY service ./service
 COPY scripts ./scripts
-RUN chmod +x scripts/*.sh
-
-RUN pip install --upgrade pip && pip install .
+RUN chmod +x scripts/*.sh && pip install --no-deps --force-reinstall .
 
 EXPOSE 8080
 CMD ["uvicorn", "service.main:app", "--host", "0.0.0.0", "--port", "8080"]

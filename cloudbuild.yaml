@@ -35,17 +35,23 @@ substitutions:
 
 steps:
   # Build Warehouse
+  # Layer cache: pull the prior :latest + --cache-from (inline cache) so unchanged apt/pip-deps
+  # layers are reused — only the app layer rebuilds on a code change. tippecanoe is COPY'd from
+  # the prebuilt base (no compile).
   - id: build-warehouse
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - build
-      - --build-arg
-      - TIPPECANOE_IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tippecanoe:latest
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:latest
-      - .
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse
+        TIP=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tippecanoe:latest
+        docker pull "$$IMG:latest" || true
+        DOCKER_BUILDKIT=1 docker build \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --build-arg TIPPECANOE_IMAGE="$$TIP" \
+          --cache-from "$$IMG:latest" \
+          -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
   
   # Build API
   - id: build-api
@@ -63,17 +69,18 @@ steps:
   # Build Harvest
   - id: build-harvest
     name: gcr.io/cloud-builders/docker
+    entrypoint: bash
     args:
-      - build
-      - -f
-      - Dockerfile.harvest
-      - --build-arg
-      - TIPPECANOE_IMAGE=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tippecanoe:latest
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
-      - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:latest
-      - .
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest
+        TIP=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tippecanoe:latest
+        docker pull "$$IMG:latest" || true
+        DOCKER_BUILDKIT=1 docker build -f Dockerfile.harvest \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --build-arg TIPPECANOE_IMAGE="$$TIP" \
+          --cache-from "$$IMG:latest" \
+          -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
   # OGC API Features for Arc Pro — duckdb_featureserv over GeoParquet (DuckDB views on the CDN
   # parquet). Builds a tiny DuckDB file from the STAC catalog at image-build time (needs network).

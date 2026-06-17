@@ -18,7 +18,9 @@ RUN python gen_db.py
 # (verified), so the views resolve against the remote parquet. db copied world-writable
 # (DuckDB opens read-write).
 FROM tobilg/duckdb_featureserv:latest
-COPY --from=build --chmod=0777 /build/database.duckdb /data/database.duckdb
+USER root
+COPY --from=build /build/database.duckdb /data/database.duckdb
+RUN chmod 0777 /data/database.duckdb
 ENV DUCKDBFS_DATABASE_PATH=/data/database.duckdb
 # Cloud Run targets this port (--port=9000 in the deploy).
 EXPOSE 9000

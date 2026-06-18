@@ -232,7 +232,20 @@ python -m ugs_warehouse.restyle --workers 16          # cap parallelism (default
 | `--collection` | `ugs-serving-topics` | Limit to one collection (matches `cp == name` or `name/` prefix). **`all`** = everything, the old behavior. |
 | `--refresh` | off | After rebinding, rebuild `collection.json` + `items.json` so the index's `style` asset chips stay exact. Renders live on the item.json, so styling takes effect without this — it only keeps the index summaries honest. |
 | `--dry-run` | off | Print what would change (`~` rebound, `+` newly styled, `(style removed)`), write nothing. |
+| `--report` | off | **Diagnose binding** — read-only. For every item in scope prints matched / asset-miss / no-entry, plus **orphan styles** (manifest item ids that match no item in scope). Run this when "some styles refresh but not all" — it names the exact ids/asset-keys that don't line up. |
 | `--workers` | `32` | Thread pool size for the per-item GCS read/rewrite. |
+
+**Two failure modes `--report` surfaces** (a style binds only when *both* hold):
+1. **id match** — `manifest.itemId` must equal the STAC `item.id` exactly (case-sensitive). A
+   style authored under a renamed/typo'd id is an **orphan** — never binds.
+2. **asset match** — `manifest.assets` (e.g. `["pmtiles"]`) must intersect the item's actual
+   **asset keys**. A style targeting `pmtiles` on an item whose tile asset is keyed differently is
+   an **asset-miss**.
+
+**Perf note.** A scoped run (the default) lists only that collection's sub-prefix, not the whole
+catalog — so rebinding ~25 serving-topics does **not** enumerate the ~7k pub items first. `restyle`
+never reads the DB, never rebuilds PMTiles; if a run takes minutes, you're either on `--collection
+all` or you ran the full `ugs-warehouse-ingest` job by mistake (that one *is* a reingest).
 
 **Mechanics.** Per item: strip any existing `renders` + `style` asset (so a *removed* style drops out,
 not lingers), re-match against the freshly warmed manifest, and rewrite only if the item was or is now

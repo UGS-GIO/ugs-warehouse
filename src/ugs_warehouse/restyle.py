@@ -43,18 +43,79 @@ def _clear_renders(item: dict) -> bool:
     return had
 
 
-def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
-            dry_run: bool = False, workers: int = 32) -> int:
-    groups = stac._group_items(gcs.list_paths(config.STAC_PREFIX))
-    n_entries = styles.warm()
-    print(f"[restyle] styles manifest: {n_entries} entries")
+def _scoped_groups(collection: str) -> dict[str, list[str]]:
+    """{collection_path: [item_id]} for the requested scope.
 
+    Lists only the collection's sub-prefix (not the whole catalog) so a 25-item
+    serving-topics rebind doesn't enumerate ~7k pub items first. `all` lists everything.
+    """
+    list_prefix = (
+        config.STAC_PREFIX if collection == "all" else f"{config.STAC_PREFIX}/{collection}/"
+    )
+    groups = stac._group_items(gcs.list_paths(list_prefix))
     if collection != "all":
         groups = {
             cp: iids
             for cp, iids in groups.items()
             if cp == collection or cp.startswith(collection + "/")
         }
+    return groups
+
+
+def report(*, collection: str = "ugs-serving-topics") -> int:
+    """Diagnose binding: for every item in scope say matched / id-miss / asset-miss, and list
+    manifest styles that matched no item in scope. Read-only — writes nothing. Use this when
+    'some styles refresh but not all': it shows exactly which item ids or asset keys don't line up.
+    """
+    styles.warm()
+    manifest = styles._manifest()
+    man_ids = {styles._entry_key(e) for e in manifest}
+    man_assets: dict[str, set[str]] = {}
+    for e in manifest:
+        default = ["cog"] if str(e.get("kind") or "vector") == "raster" else ["pmtiles"]
+        man_assets.setdefault(styles._entry_key(e), set()).update(e.get("assets") or default)
+    print(f"[report] manifest: {len(manifest)} entries, {len(man_ids)} distinct item ids")
+
+    groups = _scoped_groups(collection)
+    matched, asset_miss, no_style, scope_ids = [], [], [], set()
+    for coll_path, iids in groups.items():
+        for iid in sorted(iids):
+            scope_ids.add(iid)
+            try:
+                item = json.loads(gcs.get_bytes(stac.item_object_path(coll_path, iid)).decode())
+            except Exception:  # noqa: BLE001
+                continue
+            keys = set((item.get("assets") or {}).keys())
+            renders, _ = styles.renders_for(iid, keys)
+            if renders:
+                matched.append(iid)
+            elif iid in man_ids:
+                asset_miss.append((iid, sorted(man_assets.get(iid, set())), sorted(keys)))
+            else:
+                no_style.append(iid)
+
+    orphans = sorted(man_ids - scope_ids)
+    print(f"[report] in scope '{collection}': {len(scope_ids)} items — "
+          f"{len(matched)} styled, {len(asset_miss)} asset-miss, {len(no_style)} no manifest entry")
+    if asset_miss:
+        print("  ASSET-MISS (id matches a style, but the targeted asset key isn't on the item):")
+        for iid, want, have in asset_miss:
+            print(f"    {iid}: style wants assets {want}, item has asset keys {have}")
+    if orphans:
+        print(f"  ORPHAN styles ({len(orphans)}) — manifest item ids with no matching item in scope "
+              "(wrong/renamed id, or item lives in another collection):")
+        for iid in orphans:
+            print(f"    {iid}")
+    if no_style:
+        print(f"  no manifest entry ({len(no_style)}): {', '.join(no_style)}")
+    return len(asset_miss) + len(orphans)
+
+
+def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
+            dry_run: bool = False, workers: int = 32) -> int:
+    groups = _scoped_groups(collection)
+    n_entries = styles.warm()
+    print(f"[restyle] styles manifest: {n_entries} entries")
 
     tasks = []
     for coll_path, item_ids in groups.items():
@@ -100,9 +161,14 @@ def main() -> int:
     ap.add_argument("--refresh", action="store_true",
                     help="also rebuild collection.json + items.json (keeps index asset summaries exact)")
     ap.add_argument("--dry-run", action="store_true", help="report changes, write nothing")
+    ap.add_argument("--report", action="store_true",
+                    help="diagnose binding (matched / id-miss / asset-miss + orphan styles); writes nothing")
     ap.add_argument("--workers", type=int, default=32,
                     help="number of parallel threads for GCS operations (default: 32)")
     args = ap.parse_args()
+    if args.report:
+        report(collection=args.collection)
+        return 0
     restyle(collection=args.collection, refresh=args.refresh, dry_run=args.dry_run, workers=args.workers)
     return 0
 

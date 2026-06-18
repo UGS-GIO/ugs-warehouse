@@ -133,3 +133,32 @@ def test_restyle_collection_custom_prefix(monkeypatch):
     assert n == 1
     assert "default" in _props(store, "ugs-publications/DS", "DS-8")["renders"]
     assert "renders" not in _props(store, "ugs-serving-topics", "enmin_ucrc_wells")
+
+
+def test_report_flags_asset_miss_and_orphans(monkeypatch):
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [
+        # matches an item that has the pmtiles asset -> styled
+        {"itemId": "good_layer", "render": "default", "kind": "vector",
+         "assets": ["pmtiles"], "path": "styles/good/default.json"},
+        # id matches an item, but the item lacks the targeted asset key -> ASSET-MISS
+        {"itemId": "wrong_asset", "render": "default", "kind": "vector",
+         "assets": ["pmtiles"], "path": "styles/wa/default.json"},
+        # no item with this id anywhere -> ORPHAN (the classic 'mistranslation')
+        {"itemId": "ghost_layer", "render": "default", "kind": "vector",
+         "assets": ["pmtiles"], "path": "styles/ghost/default.json"},
+    ])
+    stac.write_item(stac.build_item(
+        item_id="good_layer", collection="ugs-serving-topics", geometry=None,
+        bbox=[0, 1, 2, 3], datetime_iso=None, properties={"title": "g"},
+        assets={"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}}))
+    stac.write_item(stac.build_item(
+        item_id="wrong_asset", collection="ugs-serving-topics", geometry=None,
+        bbox=[0, 1, 2, 3], datetime_iso=None, properties={"title": "w"},
+        assets={"tiles": {"href": "h", "type": "application/vnd.pmtiles"}}))  # wrong key!
+
+    before = dict(store)
+    rc = R.report(collection="ugs-serving-topics")
+    # one asset-miss + one orphan
+    assert rc == 2
+    assert store == before  # report writes nothing

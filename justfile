@@ -25,5 +25,9 @@ restyle-all:
 restyle-dry:
     python -m ugs_warehouse.restyle --dry-run
 
+# diagnose binding: which items styled / asset-miss / orphan styles (writes nothing)
+restyle-report:
+    python -m ugs_warehouse.restyle --report
+
 proxy:
     cloud-sql-proxy ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5433

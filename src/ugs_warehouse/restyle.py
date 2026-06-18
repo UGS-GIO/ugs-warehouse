@@ -6,9 +6,11 @@ items already in GCS, rewriting just the item.json files whose `renders` changed
 transform, no PMTiles — seconds, not minutes. Meant to be triggered by the ugs-styles publish
 (after the CDN rsync) so a style edit reaches the viewer hands-free.
 
-    python -m ugs_warehouse.restyle              # rebind all items
-    python -m ugs_warehouse.restyle --refresh    # also rebuild collection.json/items.json
-    python -m ugs_warehouse.restyle --dry-run     # report what would change, write nothing
+    python -m ugs_warehouse.restyle                    # rebind ugs-serving-topics (default scope)
+    python -m ugs_warehouse.restyle --collection all   # every collection, incl. pubs
+    python -m ugs_warehouse.restyle --refresh          # also rebuild collection.json/items.json
+    python -m ugs_warehouse.restyle --dry-run          # report what would change, write nothing
+    python -m ugs_warehouse.restyle --workers 16       # cap parallelism (default 32)
 
 Renders live on the item.json (what the viewer reads for a layer's style_url), so a refresh of
 the items.json index isn't required for styling to take effect — it's offered only to keep the

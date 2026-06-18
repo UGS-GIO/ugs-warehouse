@@ -1,6 +1,7 @@
 # Styling — binding ugs-styles to warehouse layers via STAC
 
-**Status:** design (2026-06-15). Implements the roadmap `☐ Legend + symbology` item.
+**Status:** implemented (design 2026-06-15; pipeline + `restyle` rebind shipped, parallelized
+2026-06-18). Implements the roadmap `☐ Legend + symbology` item. Operating notes in §10.
 **Repos touched:** `ugs-styles` (source of truth), `ugs-warehouse` (bridge), `ugs-map-viewer`
 + this repo's `viewer/` (consumers).
 
@@ -188,11 +189,12 @@ so a client that walks assets (not `renders`) still finds it. `renders.<id>.styl
   so no warehouse config change. Remaining to make styles go live (work box, ugs-styles repo):
   (1) grant the publish SA `roles/storage.objectAdmin` on `gs://ut-dnr-ugs-maps-prod-public`
   (cross-project); (2) set `GCP_WIF_PROVIDER` + `GCP_SERVICE_ACCOUNT` secrets; (3) tag a `v*` release
-  (or run the workflow) to publish; (4) reingest the warehouse so the bridge attaches renders.
-  Until then the bridge no-ops gracefully (items emit unstyled).
-- **Manifest freshness** — warehouse fetches `index.json` at ingest. A style added after a layer's
-  last ingest won't appear until the next ingest or a `refresh_stac` run. Acceptable (matches the
-  derive-from-truth catalog refresh); document it.
+  (or run the workflow) to publish; (4) run `restyle` (§10) to bind renders onto the existing STAC
+  items — **no reingest needed**. Until then the bridge no-ops gracefully (items emit unstyled).
+- **Manifest freshness** — the bridge also attaches renders at ingest, but a style published *after*
+  a layer's last ingest is picked up by `restyle` (§10), which re-fetches `index.json` and rewrites
+  only the item.json files whose `renders` changed. That — not a reingest — is the intended trigger
+  on a style edit; it's meant to fire from the `ugs-styles` publish (after the CDN rsync).
 - **Multiple renders per item** — app-specific variants (e.g. geohaz's 4-way displacement split) are
   additional render ids under the same item id, or a client-side `filter` append (the `ugs-styles`
   README already does the latter). Item id stays the identity either way.
@@ -207,3 +209,40 @@ Per decision: **this doc first**, reviewed across `ugs-warehouse` + `ugs-styles`
 likely order: warehouse `core/styles.py` + wiring (pipeline half, testable in isolation) → `ugs-styles`
 binding + manifest → swap this `viewer/` → `ugs-map-viewer`. Prove the full loop on one vector topic
 (`hazards_qfaults`) before scaling to all layers.
+
+---
+
+## 10. Operating — `restyle` (rebind without a reingest)
+
+A style change (new palette, tweaked spec, newly published render) changes *how* a layer draws, not
+the data. `restyle` re-fetches the `ugs-styles` manifest and re-runs `attach_renders` over the STAC
+items **already in GCS**, rewriting only the item.json files whose `renders` changed. No DB read, no
+transform, no PMTiles — seconds, not minutes. Source: `src/ugs_warehouse/restyle.py`.
+
+```bash
+python -m ugs_warehouse.restyle                       # rebind ugs-serving-topics (default)
+python -m ugs_warehouse.restyle --collection all      # every collection, incl. pubs
+python -m ugs_warehouse.restyle --dry-run             # report changes, write nothing
+python -m ugs_warehouse.restyle --refresh             # also rebuild collection.json + items.json
+python -m ugs_warehouse.restyle --workers 16          # cap parallelism (default 32)
+```
+
+| Flag | Default | Effect |
+|---|---|---|
+| `--collection` | `ugs-serving-topics` | Limit to one collection (matches `cp == name` or `name/` prefix). **`all`** = everything, the old behavior. |
+| `--refresh` | off | After rebinding, rebuild `collection.json` + `items.json` so the index's `style` asset chips stay exact. Renders live on the item.json, so styling takes effect without this — it only keeps the index summaries honest. |
+| `--dry-run` | off | Print what would change (`~` rebound, `+` newly styled, `(style removed)`), write nothing. |
+| `--workers` | `32` | Thread pool size for the per-item GCS read/rewrite. |
+
+**Mechanics.** Per item: strip any existing `renders` + `style` asset (so a *removed* style drops out,
+not lingers), re-match against the freshly warmed manifest, and rewrite only if the item was or is now
+styled. Items that were never styled (e.g. pre-rendered pubs COG plates) are left untouched. The
+manifest is warmed once (`styles.warm()`, an `lru_cache`) before the pool, so workers do read-only
+lookups; each item is a distinct GCS object, so there's no write contention.
+
+**Defaults to know.** The default scope is **`ugs-serving-topics` only** — pubs are skipped unless you
+pass `--collection all`. For pubs this is normally a no-op (plates carry no `renders`), but a pub item
+that *does* hold a render won't be rebound under the default. Use `all` when in doubt.
+
+**Trigger.** Intended to fire from the `ugs-styles` publish (after the CDN rsync) so a style edit
+reaches the viewers hands-free.

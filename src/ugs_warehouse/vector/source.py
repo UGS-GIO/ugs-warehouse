@@ -86,7 +86,7 @@ def read(topic: Topic) -> pa.Table:
 
 
 # Descriptive (catalog) metadata columns on raw.schema_registry (ugs-ingest #171).
-_META_COLS = ("display_name", "abstract", "keywords", "iso_topic_category",
+_META_COLS = ("display_name", "description", "keywords", "iso_topic_category",
               "use_constraints", "lineage", "point_of_contact")
 
 

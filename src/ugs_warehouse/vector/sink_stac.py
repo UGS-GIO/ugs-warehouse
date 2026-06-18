@@ -52,7 +52,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         "ugs:layer": topic.layer,
         "ugs:row_count": _row_count(con, view),
     }
-    desc = md.get("abstract") or description
+    # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
+    desc = md.get("description") or description
     if desc:
         props["description"] = desc
     # Curated catalog metadata (raw.schema_registry) — flows into STAC + ISO.

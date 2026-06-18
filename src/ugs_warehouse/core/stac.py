@@ -67,15 +67,20 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
                properties: dict, assets: dict,
                extra_links: list[dict] | None = None,
                stac_extensions: list[str] | None = None,
-               proj_epsg: int | None = None) -> dict:
+               proj_epsg: int | None = None,
+               collection_path: str | None = None) -> dict:
     """A STAC Item placed in the collection-nested layout.
 
-    Adds the standard root/parent/self links relative to `{collection}/{id}/{id}.json`;
-    `extra_links` (web-map-links, via, cite-as, …) are appended. `proj_epsg` adds the
+    Lives at `{collection_path}/{id}/{id}.json` (default `collection_path` = `collection`,
+    the flat one-level layout; pubs pass a nested `ugs-publications/<SERIES>` path). The
+    root link climbs out to `{STAC_PREFIX}/catalog.json` — its depth follows the path.
+    `extra_links` (web-map-links, via, cite-as, …) are appended; `proj_epsg` adds the
     projection extension + `proj:epsg` (the data's native CRS).
     """
+    depth = (collection_path or collection).count("/") + 1  # collection dirs above the item dir
+    root_rel = "../" * (depth + 1) + "catalog.json"          # + the item's own {id}/ dir
     links = [
-        {"rel": "root", "href": "../../catalog.json", "type": "application/json"},
+        {"rel": "root", "href": root_rel, "type": "application/json"},
         {"rel": "parent", "href": "../collection.json", "type": "application/json"},
         {"rel": "collection", "href": "../collection.json", "type": "application/json"},
         {"rel": "self", "href": f"./{item_id}.json", "type": "application/geo+json"},
@@ -100,11 +105,20 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
     }
     if exts:
         item["stac_extensions"] = exts
+    # Private: the GCS layout path (may differ from the collection id for nested series).
+    # Popped before serialization by write_item — never part of the published item.
+    item["_collection_path"] = collection_path or collection
     return item
 
 
-def item_object_path(collection: str, item_id: str) -> str:
-    return f"{config.STAC_PREFIX}/{collection}/{item_id}/{item_id}.json"
+def _layout_path(item: dict) -> str:
+    return item.get("_collection_path") or item["collection"]
+
+
+def item_object_path(collection_path: str, item_id: str) -> str:
+    """GCS path for an item. `collection_path` is the collection's layout path — a single
+    segment for flat collections, or `ugs-publications/<SERIES>` for nested series."""
+    return f"{config.STAC_PREFIX}/{collection_path}/{item_id}/{item_id}.json"
 
 
 def attach_iso(item: dict) -> str:
@@ -114,7 +128,7 @@ def attach_iso(item: dict) -> str:
     before `write_item` so the written item references the sidecar; generated from the item
     as-is so the metadata asset is not yet present (no self-reference).
     """
-    path = f"{config.STAC_PREFIX}/{item['collection']}/{item['id']}/{item['id']}.iso.xml"
+    path = f"{config.STAC_PREFIX}/{_layout_path(item)}/{item['id']}/{item['id']}.iso.xml"
     gcs.put_bytes(iso.stac_to_iso19139(item).encode(), path,
                   content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
     item.setdefault("assets", {})["metadata"] = {
@@ -144,7 +158,8 @@ def attach_renders(item: dict) -> None:
 
 def write_item(item: dict) -> str:
     """Serialize + upload an item. Mutable (overwritten per ingest) -> no-cache."""
-    path = item_object_path(item["collection"], item["id"])
+    path = item_object_path(_layout_path(item), item["id"])
+    item = {k: v for k, v in item.items() if k != "_collection_path"}  # drop private key
     gcs.put_bytes(json.dumps(item, indent=2).encode(), path,
                   content_type="application/geo+json", cache_control=gcs.CACHE_MUTABLE)
     return path
@@ -153,10 +168,11 @@ def write_item(item: dict) -> str:
 # ---------------------------------------------------------------- catalog refresh
 
 def _group_items(paths: list[str]) -> dict[str, list[str]]:
-    """{collection: [item_id, ...]} from object paths under STAC_PREFIX.
+    """{collection_path: [item_id, ...]} from object paths under STAC_PREFIX.
 
-    Item layout is `<collection>/<id>/<id>.json`; root `catalog.json` and the
-    per-collection `collection.json` are skipped.
+    Item layout is `<collection_path>/<id>/<id>.json`, where `collection_path` is one
+    segment for flat collections (`ugs-serving-topics`) or two for nested series
+    (`ugs-publications/<SERIES>`). catalog.json / collection.json / items.json are skipped.
     """
     out: dict[str, list[str]] = {}
     for path in paths:
@@ -164,9 +180,9 @@ def _group_items(paths: list[str]) -> dict[str, list[str]]:
             continue
         rel = path[len(config.STAC_PREFIX):].lstrip("/")
         parts = rel.split("/")
-        if len(parts) != 3 or parts[2] != f"{parts[1]}.json":
-            continue  # not an <collection>/<id>/<id>.json item
-        out.setdefault(parts[0], []).append(parts[1])
+        if len(parts) < 3 or parts[-1] != f"{parts[-2]}.json":
+            continue  # not an <collection_path>/<id>/<id>.json item
+        out.setdefault("/".join(parts[:-2]), []).append(parts[-2])
     return out
 
 
@@ -185,25 +201,71 @@ def _extent(items: list[dict]) -> dict:
     return {"spatial": {"bbox": [bbox]}, "temporal": {"interval": interval}}
 
 
-def _collection_doc(collection: str, item_ids: list[str], extent: dict | None = None) -> dict:
-    return {
+def _collection_doc(collection: str, path: str, item_ids: list[str],
+                    extent: dict | None = None, *, title: str | None = None,
+                    service: bool | None = None) -> dict:
+    """A collection.json at `{path}/collection.json`. `collection` is its STAC id (a series
+    code like `DS` when nested, else the path). Root/parent links climb out per path depth;
+    the OGC API Features link is added only for flat collections (serving topics — nested
+    pub series aren't in featureserv) unless `service` is set explicitly."""
+    depth = path.count("/") + 1
+    if service is None:
+        service = depth == 1
+    doc = {
         "type": "Collection",
         "stac_version": STAC_VERSION,
         "id": collection,
-        "description": f"UGS warehouse — {collection}.",
+        "title": title or prettify(collection),
+        "description": f"UGS warehouse — {title or collection}.",
         "license": "proprietary",
         "extent": extent or {"spatial": {"bbox": [UTAH_BBOX]},
                              "temporal": {"interval": [[None, None]]}},
         "summaries": {"ugs:item_count": len(item_ids)},
         "links": [
-            {"rel": "root", "href": "../catalog.json", "type": "application/json"},
+            {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
+            {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./collection.json", "type": "application/json"},
-            {"rel": "service", "href": f"{PGF_BASE_URL}/collections/{collection}", "type": "application/json", "title": "OGC API Features endpoint"},
             # Compact items index — one fetch for the whole list (viewers read this instead
             # of N item.json fetches; the per-item docs stay the source of truth for detail).
             {"rel": "items", "href": "./items.json", "type": "application/json", "title": "Items index"},
+            *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections/{collection}", "type": "application/json", "title": "OGC API Features endpoint"}] if service else []),
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json"}
               for i in sorted(item_ids)],
+        ],
+    }
+    return doc
+
+
+def _child_link(href: str, title: str | None, count: int | None) -> dict:
+    """A `rel=child` link carrying title + item count so a viewer can render the next level
+    (catalog → children, with counts) from a single fetch. `ugs:item_count` is a non-standard
+    hint; standard clients ignore it."""
+    link = {"rel": "child", "href": href, "type": "application/json"}
+    if title:
+        link["title"] = title
+    if count is not None:
+        link["ugs:item_count"] = count
+    return link
+
+
+def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None = None,
+                    description: str | None = None) -> dict:
+    """A nesting Catalog (e.g. `ugs-publications`) whose children are per-series collections,
+    each at `./<series>/collection.json`. `children` = [{id, title, count}, …]."""
+    total = sum(c.get("count") or 0 for c in children)
+    return {
+        "type": "Catalog",
+        "stac_version": STAC_VERSION,
+        "id": catalog_id,
+        "title": title or prettify(catalog_id),
+        "description": description or f"UGS warehouse — {catalog_id}, by data series.",
+        "summaries": {"ugs:item_count": total},
+        "links": [
+            {"rel": "root", "href": "../catalog.json", "type": "application/json"},
+            {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
+            {"rel": "self", "href": "./catalog.json", "type": "application/json"},
+            *[_child_link(f"./{c['id']}/collection.json", c.get("title"), c.get("count"))
+              for c in sorted(children, key=lambda c: c["id"])],
         ],
     }
 
@@ -245,7 +307,9 @@ def _index_doc(collection: str, items: list[dict]) -> dict:
             "count": len(entries), "items": entries}
 
 
-def _root_doc(collections: list[str]) -> dict:
+def _root_doc(children: list[dict]) -> dict:
+    """Root catalog. `children` = [{href, title, count}, …] — each top-level child is a flat
+    collection's `collection.json` or a nesting sub-catalog's `catalog.json`."""
     return {
         "type": "Catalog",
         "stac_version": STAC_VERSION,
@@ -255,8 +319,8 @@ def _root_doc(collections: list[str]) -> dict:
         "links": [
             {"rel": "root", "href": "./catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./catalog.json", "type": "application/json"},
-            *[{"rel": "child", "href": f"./{c}/collection.json", "type": "application/json"}
-              for c in sorted(collections)],
+            *[_child_link(c["href"], c.get("title"), c.get("count"))
+              for c in sorted(children, key=lambda c: c["href"])],
         ],
     }
 
@@ -273,19 +337,47 @@ def refresh_catalog() -> None:
     concurrent ingests the last writer wins (brief staleness, self-heals next run).
     """
     groups = _group_items(gcs.list_paths(config.STAC_PREFIX))
-    for collection, item_ids in groups.items():
-        # Read each item to derive the real spatial/temporal extent (bbox union, datetimes).
+
+    # 1. Write each leaf collection.json + items.json (flat or nested). collection id = the
+    #    path's last segment (a series code when nested); title from the items' pub type.
+    #    Record per-path {id, title, count} so the hierarchy links can carry counts.
+    leaf: dict[str, dict] = {}
+    for path, item_ids in groups.items():
         items = []
         for iid in sorted(item_ids):
             try:
-                items.append(json.loads(gcs.get_bytes(item_object_path(collection, iid)).decode()))
+                items.append(json.loads(gcs.get_bytes(item_object_path(path, iid)).decode()))
             except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the refresh
                 pass
-        _write_json(_collection_doc(collection, item_ids, _extent(items)),
-                    f"{config.STAC_PREFIX}/{collection}/collection.json")
-        _write_json(_index_doc(collection, items),
-                    f"{config.STAC_PREFIX}/{collection}/items.json")
-    _write_json(_root_doc(list(groups)), f"{config.STAC_PREFIX}/catalog.json")
+        nested = "/" in path
+        cid = path.split("/")[-1]
+        title = next((it.get("properties", {}).get("ugs:pub_type") for it in items
+                      if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None
+        _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title),
+                    f"{config.STAC_PREFIX}/{path}/collection.json")
+        _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
+        leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids)}
+
+    # 2. Build the hierarchy. A top-level segment with nested children (and no direct items)
+    #    becomes a sub-catalog (e.g. ugs-publications → DS, OFR, … series collections);
+    #    everything else is a flat collection directly under root. Child links carry counts.
+    tops: dict[str, list[str]] = {}
+    for path in groups:
+        tops.setdefault(path.split("/")[0], []).append(path)
+    root_children = []
+    for top, paths in tops.items():
+        if top not in groups:  # sub-catalog (nested, no direct items)
+            kids = [leaf[p] for p in sorted(paths)]
+            ptitle = prettify(top.replace("ugs-", ""))
+            _write_json(_subcatalog_doc(top, kids, title=ptitle),
+                        f"{config.STAC_PREFIX}/{top}/catalog.json")
+            root_children.append({"href": f"./{top}/catalog.json", "title": ptitle,
+                                  "count": sum(k["count"] for k in kids)})
+        else:                  # flat collection
+            root_children.append({"href": f"./{top}/collection.json",
+                                  "title": leaf[top]["title"], "count": leaf[top]["count"]})
+    _write_json(_root_doc(root_children), f"{config.STAC_PREFIX}/catalog.json")
+
     n = sum(len(v) for v in groups.values())
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "
           f"({len(groups)} collections, {n} items)")

@@ -67,19 +67,56 @@ def test_extent_falls_back_to_utah_when_no_bbox():
     assert ext["temporal"]["interval"] == [[None, None]]
 
 
-def test_root_doc_sorts_child_collections():
-    doc = stac._root_doc(["b", "a"])
+def test_root_doc_sorts_child_hrefs():
+    doc = stac._root_doc([{"href": "./b/collection.json", "title": "B", "count": 2},
+                          {"href": "./a/collection.json", "title": "A", "count": 1}])
     assert doc["type"] == "Catalog"
-    children = [link["href"] for link in doc["links"] if link["rel"] == "child"]
-    assert children == ["./a/collection.json", "./b/collection.json"]
+    kids = [(l["href"], l.get("title"), l.get("ugs:item_count"))
+            for l in doc["links"] if l["rel"] == "child"]
+    assert kids == [("./a/collection.json", "A", 1), ("./b/collection.json", "B", 2)]
 
 
 def test_collection_doc_sorts_items_and_has_service_link():
-    doc = stac._collection_doc("ugs-publications", ["i2", "i1"])
+    doc = stac._collection_doc("ugs-serving-topics", "ugs-serving-topics", ["i2", "i1"])
     assert doc["type"] == "Collection"
     items = [link["href"] for link in doc["links"] if link["rel"] == "item"]
     assert items == ["./i1/i1.json", "./i2/i2.json"]
     assert any(link["rel"] == "service" for link in doc["links"])
+    assert any(l["rel"] == "root" and l["href"] == "../catalog.json" for l in doc["links"])
+
+
+def test_collection_doc_nested_series_depth_and_no_service():
+    doc = stac._collection_doc("DS", "ugs-publications/DS", ["DS-2", "DS-1"], title="Data Series")
+    assert doc["id"] == "DS" and doc["title"] == "Data Series"
+    assert any(l["rel"] == "root" and l["href"] == "../../catalog.json" for l in doc["links"])
+    assert any(l["rel"] == "parent" and l["href"] == "../catalog.json" for l in doc["links"])
+    assert not any(l["rel"] == "service" for l in doc["links"])
+
+
+def test_subcatalog_doc_children():
+    doc = stac._subcatalog_doc("ugs-publications",
+                               [{"id": "OFR", "title": "Open File Report", "count": 3},
+                                {"id": "DS", "title": "Data Series", "count": 2}],
+                               title="Publications")
+    assert doc["type"] == "Catalog"
+    assert doc["summaries"]["ugs:item_count"] == 5
+    kids = [(l["href"], l.get("title"), l.get("ugs:item_count"))
+            for l in doc["links"] if l["rel"] == "child"]
+    assert kids == [("./DS/collection.json", "Data Series", 2),
+                    ("./OFR/collection.json", "Open File Report", 3)]
+
+
+def test_group_items_nested_series_paths():
+    p = config.STAC_PREFIX
+    paths = [
+        f"{p}/ugs-publications/DS/DS-8/DS-8.json",
+        f"{p}/ugs-publications/OFR/OFR-1/OFR-1.json",
+        f"{p}/ugs-publications/DS/collection.json",
+        f"{p}/ugs-publications/catalog.json",
+    ]
+    groups = stac._group_items(paths)
+    assert groups["ugs-publications/DS"] == ["DS-8"]
+    assert groups["ugs-publications/OFR"] == ["OFR-1"]
 
 
 def test_group_items_keeps_only_nested_item_paths():

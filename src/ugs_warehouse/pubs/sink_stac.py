@@ -52,6 +52,13 @@ def pub_type_of(p: dict) -> str:
     return (p.get("series") or "").strip() or "Other"
 
 
+def series_code(sid: str) -> str:
+    """Data-series code = alpha prefix of the series id (DS-8 → DS). The nesting key under
+    ugs-publications. Numeric/prefixless ids bucket as OTHER."""
+    m = re.match(r"([A-Za-z]+)", (sid or "").strip())
+    return m.group(1).upper() if m else "OTHER"
+
+
 def media_type(url: str) -> str:
     return MEDIA.get(os.path.splitext(url.split("?")[0])[1].lower(), "application/octet-stream")
 
@@ -114,8 +121,10 @@ def build_item(p: dict, attachments: list[dict], *,
         extra_links.append(stac.cog_link(cog_url))
         extensions.append(stac.WEB_MAP_LINKS_EXT)
 
+    code = series_code(sid)
     return stac.build_item(
-        item_id=sid, collection=identity.PUBLICATIONS_COLLECTION,
+        item_id=sid, collection=code,
+        collection_path=f"{identity.PUBLICATIONS_COLLECTION}/{code}",
         geometry=geom, bbox=bbox, datetime_iso=dt,
         properties={
             "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop

@@ -230,6 +230,10 @@ export function App() {
             {CATALOG_URL.replace(/^https?:\/\//, "")}
           </a>
         </span>
+        <span className="hidden whitespace-nowrap text-[11px] text-muted-foreground lg:block"
+          title={`viewer build — last updated ${__BUILD_DATE__} (${__BUILD_HASH__})`}>
+          updated {__BUILD_DATE__} · {__BUILD_HASH__}
+        </span>
         <div className="ml-auto flex gap-1 md:ml-0">
           <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
           <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>

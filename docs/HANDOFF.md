@@ -81,7 +81,7 @@ Two boxes: this **personal box** (no GCP perms) authors + commits; the **work bo
 2. **Deploy** — push to `main` (or `gcloud builds submit --config=cloudbuild.yaml . --project=ut-dnr-ugs-backend-tools --substitutions=_TAG=$(git rev-parse --short HEAD)`). Builds/deploys: **NEW `ugs-warehouse-features`** (OGC API Features for Arc Pro — `featureserv/`, duckdb_featureserv over CDN parquet, scale-to-zero, `--port=9000`), **NEW `ugs-pubs-ingest`** job, viewer (series-id column + COG explorer + per-type preview + short-id deep links), + warehouse/api/harvest. ⚠ `deploy.yml` has `--async` → the GH run goes green on *submit*, not finish — watch the **Cloud Build console** for the real result.
 3. **Vector reingest** — lands the new `bbox_*` covering columns in the GeoParquet: `gcloud run jobs execute ugs-warehouse-ingest --region=us-central1`.
 4. **ArcGIS Pro test (acceptance gate for the OGC API):** URL = `gcloud run services describe ugs-warehouse-features --region=us-central1 --format='value(status.url)'` → Arc Pro: *Insert → Connections → Server → New OGC API Server* → that URL → add a layer. Report whatever Pro complains about (iterate in `featureserv/`).
-5. **Styling go-live** (in the `ugs-styles` repo): (a) grant the publish SA `roles/storage.objectAdmin` on `gs://ut-dnr-ugs-maps-prod-public`; (b) set repo secrets `GCP_WIF_PROVIDER` + `GCP_SERVICE_ACCOUNT`; (c) tag a `v*` release → publishes `dist-json` → CDN `/styles`. Then a warehouse reingest attaches `renders` → viewer shows the styled layer. (`STYLING.md §8`.)
+5. **Styling go-live** (in the `ugs-styles` repo): (a) grant the publish SA `roles/storage.objectAdmin` on `gs://ut-dnr-ugs-maps-prod-public`; (b) set repo secrets `GCP_WIF_PROVIDER` + `GCP_SERVICE_ACCOUNT`; (c) tag a `v*` release → publishes `dist-json` → CDN `/styles`. Then run `just restyle` (warehouse) to rebind `renders` onto the existing STAC items — **no reingest** → viewer shows the styled layer. (`STYLING.md §8` + §10.)
 6. **Viewer bare-prefix:** `gcloud storage buckets update gs://ut-dnr-ugs-maps-prod-public --web-main-page-suffix=index.html` (do NOT set a 404 page — `DEPLOY.md §5`).
 7. **Merges:** `dataELT #419` (ready — #420 already merged); poke `ugs-ingest #169` (raster, still **draft**).
 
@@ -136,7 +136,7 @@ Each vector style targets a STAC item by its `itemId` (bare topic stem). To defi
 1. **Create Palette / Spec:** Add missing named color palettes in `ugs-styles/src/palettes/` (e.g. `qfaults`, `pipelines-commodity`), write the `spec` files in `ugs-styles/src/styles/`, and add matching TS exports.
 2. **Build and Validate:** Run `npm run build:json` inside `ugs-styles` to generate `dist-json/` files and validate style spec correctness.
 3. **Publish Styles CDN:** Tag a release (`git tag v* && git push origin --tags`) in the `ugs-styles` repo, triggering CI/CD publish to `gs://ut-dnr-ugs-maps-prod-public/styles/`.
-4. **Reingest STAC:** Execute `gcloud run jobs execute ugs-warehouse-ingest` to re-fetch the CDN style manifest and bind the new `renders` metadata into STAC item files.
+4. **Rebind STAC (no reingest):** Run `just restyle` (or `python -m ugs_warehouse.restyle`) to re-fetch the CDN style manifest and bind the new `renders` metadata into the existing STAC item files — seconds, no DB/transform/PMTiles. Use `--collection all` to include pubs. A full reingest is not needed for a style-only change. (`STYLING.md §10`.)
 
 ---
 

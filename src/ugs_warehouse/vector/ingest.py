@@ -49,7 +49,7 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
     backend = _backend()
     label = "PostgREST" if backend is source_postgrest else "Postgres"
 
-    chunk_size = int(os.environ.get("INGEST_CHUNK_SIZE", "15000"))
+    chunk_size = int(os.environ.get("INGEST_CHUNK_SIZE", "5000"))
 
     # 1. Determine if we should use chunked ingestion
     is_chunked = False
@@ -156,6 +156,11 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
                 except Exception as e:
                     print(f"[{topic.fqn}] sink pmtiles chunk {chunk_idx} FAILED: {e}", file=sys.stderr)
                     traceback.print_exc()
+
+                try:
+                    con.close()
+                except Exception:
+                    pass
 
                 chunk_idx += 1
 

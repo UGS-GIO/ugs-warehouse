@@ -223,7 +223,13 @@ export function App() {
       : "min-h-screen bg-background text-sm text-foreground"}>
       <header className={`flex items-center gap-3 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
         <strong className="text-[15px] whitespace-nowrap">UGS Warehouse</strong>
-        <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">STAC catalog · cloud-native geospatial</span>
+        <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">
+          STAC catalog ·{" "}
+          <a href={CATALOG_URL} target="_blank" rel="noreferrer"
+            className="underline decoration-dotted underline-offset-2 hover:text-foreground">
+            {CATALOG_URL.replace(/^https?:\/\//, "")}
+          </a>
+        </span>
         <div className="ml-auto flex gap-1 md:ml-0">
           <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
           <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>

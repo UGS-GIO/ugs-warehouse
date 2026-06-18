@@ -294,8 +294,8 @@ def _index_entry(item: dict) -> dict:
     }
     if assets:
         entry["assets"] = assets
-    wlinks = [{kk: l[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if l.get(kk) is not None}
-              for l in (item.get("links") or []) if l.get("rel") in ("pmtiles", "cog")]
+    wlinks = [{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
+              for lnk in (item.get("links") or []) if lnk.get("rel") in ("pmtiles", "cog")]
     if wlinks:
         entry["links"] = wlinks
     return entry

@@ -71,8 +71,8 @@ def test_root_doc_sorts_child_hrefs():
     doc = stac._root_doc([{"href": "./b/collection.json", "title": "B", "count": 2},
                           {"href": "./a/collection.json", "title": "A", "count": 1}])
     assert doc["type"] == "Catalog"
-    kids = [(l["href"], l.get("title"), l.get("ugs:item_count"))
-            for l in doc["links"] if l["rel"] == "child"]
+    kids = [(lnk["href"], lnk.get("title"), lnk.get("ugs:item_count"))
+            for lnk in doc["links"] if lnk["rel"] == "child"]
     assert kids == [("./a/collection.json", "A", 1), ("./b/collection.json", "B", 2)]
 
 
@@ -82,15 +82,15 @@ def test_collection_doc_sorts_items_and_has_service_link():
     items = [link["href"] for link in doc["links"] if link["rel"] == "item"]
     assert items == ["./i1/i1.json", "./i2/i2.json"]
     assert any(link["rel"] == "service" for link in doc["links"])
-    assert any(l["rel"] == "root" and l["href"] == "../catalog.json" for l in doc["links"])
+    assert any(lnk["rel"] == "root" and lnk["href"] == "../catalog.json" for lnk in doc["links"])
 
 
 def test_collection_doc_nested_series_depth_and_no_service():
     doc = stac._collection_doc("DS", "ugs-publications/DS", ["DS-2", "DS-1"], title="Data Series")
     assert doc["id"] == "DS" and doc["title"] == "Data Series"
-    assert any(l["rel"] == "root" and l["href"] == "../../catalog.json" for l in doc["links"])
-    assert any(l["rel"] == "parent" and l["href"] == "../catalog.json" for l in doc["links"])
-    assert not any(l["rel"] == "service" for l in doc["links"])
+    assert any(lnk["rel"] == "root" and lnk["href"] == "../../catalog.json" for lnk in doc["links"])
+    assert any(lnk["rel"] == "parent" and lnk["href"] == "../catalog.json" for lnk in doc["links"])
+    assert not any(lnk["rel"] == "service" for lnk in doc["links"])
 
 
 def test_subcatalog_doc_children():
@@ -100,8 +100,8 @@ def test_subcatalog_doc_children():
                                title="Publications")
     assert doc["type"] == "Catalog"
     assert doc["summaries"]["ugs:item_count"] == 5
-    kids = [(l["href"], l.get("title"), l.get("ugs:item_count"))
-            for l in doc["links"] if l["rel"] == "child"]
+    kids = [(lnk["href"], lnk.get("title"), lnk.get("ugs:item_count"))
+            for lnk in doc["links"] if lnk["rel"] == "child"]
     assert kids == [("./DS/collection.json", "Data Series", 2),
                     ("./OFR/collection.json", "Open File Report", 3)]
 
@@ -144,7 +144,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
-         patch("ugs_warehouse.core.stac.write_item") as mock_write, \
+         patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as mock_refresh:
 
          mock_read.return_value = [

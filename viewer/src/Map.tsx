@@ -4,7 +4,7 @@ import { Layer, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Sourc
 import { type StacDoc } from "./stac";
 
 // A topic toggled on in the map. Built by App from the active set × allItems.
-export type ActiveLayer = { id: string; title: string; pmHref: string; pmLayer: string; bbox?: number[] };
+export type ActiveLayer = { id: string; title: string; pmHref: string; pmLayer: string; bbox?: number[]; styleUrl?: string };
 
 // Distinct colors cycled per active layer.
 export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
@@ -67,7 +67,43 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
     mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
   }, [fitKey]);
 
-  const interactiveIds = layers.flatMap((_, i) => [`pm-${i}-fill`, `pm-${i}-line`, `pm-${i}-circle`]);
+  const [styleCache, setStyleCache] = useState<Record<string, Record<string, unknown>[]>>({});
+
+  useEffect(() => {
+    let live = true;
+    const pending = layers.filter((l) => l.styleUrl && !styleCache[l.id]);
+    if (!pending.length) return;
+
+    Promise.all(
+      pending.map((l) =>
+        fetch(l.styleUrl!)
+          .then((r) => r.json())
+          .then((d) => ({ id: l.id, layers: Array.isArray(d?.layers) ? d.layers : null }))
+          .catch(() => ({ id: l.id, layers: null }))
+      )
+    ).then((results) => {
+      if (!live) return;
+      setStyleCache((prev) => {
+        const next = { ...prev };
+        for (const res of results) {
+          if (res.layers) {
+            next[res.id] = res.layers;
+          }
+        }
+        return next;
+      });
+    });
+
+    return () => { live = false; };
+  }, [layers]);
+
+  const interactiveIds = layers.flatMap((l, i) => {
+    const styleLayers = styleCache[l.id];
+    if (styleLayers) {
+      return styleLayers.map((_, li) => `pm-${i}-${li}`);
+    }
+    return [`pm-${i}-fill`, `pm-${i}-line`, `pm-${i}-circle`];
+  });
 
   const onClick = (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
@@ -108,11 +144,28 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
 
       {layers.map((l, i) => {
         const c = colorFor(i);
+        const styleLayers = styleCache[l.id];
         return (
           <Source key={l.id} id={`pm-${i}`} type="vector" url={`pmtiles://${l.pmHref}`}>
-            <Layer id={`pm-${i}-fill`} type="fill" source-layer={l.pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
-            <Layer id={`pm-${i}-line`} type="line" source-layer={l.pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
-            <Layer id={`pm-${i}-circle`} type="circle" source-layer={l.pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
+            {styleLayers ? (
+              styleLayers.map((sl, li) => (
+                <Layer
+                  key={li}
+                  {...({
+                    ...sl,
+                    id: `pm-${i}-${li}`,
+                    source: `pm-${i}`,
+                    "source-layer": l.pmLayer,
+                  } as any)}
+                />
+              ))
+            ) : (
+              <>
+                <Layer id={`pm-${i}-fill`} type="fill" source-layer={l.pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
+                <Layer id={`pm-${i}-line`} type="line" source-layer={l.pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
+                <Layer id={`pm-${i}-circle`} type="circle" source-layer={l.pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
+              </>
+            )}
           </Source>
         );
       })}

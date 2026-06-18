@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
-import { CATALOG_URL, childLinks, itemLinks, pmtilesLink, type StacDoc, useDocs, useIndexes, useStac } from "./stac";
+import { CATALOG_URL, childLinks, itemLinks, pmtilesLink, type StacDoc, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
@@ -49,6 +49,7 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
     pmHref: pm.href,
     pmLayer: pm["pmtiles:layers"]?.[0] ?? id,
     bbox: ref.data.bbox,
+    styleUrl: defaultStyleUrl(ref.data),
   };
 }
 

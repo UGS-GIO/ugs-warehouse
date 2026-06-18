@@ -67,6 +67,9 @@ Two boxes: this **personal box** (no GCP perms) authors + commits; the **work bo
 - **Pub/Sub event-driven ingest fully active**: Configured private push handler `ugs-warehouse-ingest-push`, granted Service Account Token Creator to Pub/Sub system agent, and verified end-to-end event delivery.
 - **Completed full STAC parallel reingest**: Discovered that sequential HTTP GCS writes for 7,425 items took 1.5 hours and timed out. Implemented `ThreadPoolExecutor` (64 workers) in `src/ugs_warehouse/pubs/ingest.py` and thread-safely cached `GCSStore` warm connection pools in `src/ugs_warehouse/core/gcs.py`. Entire catalog ingestion time crashed from **1.5 hours to under 2 minutes**, successfully writing all items with the new `ugs:series_id` property.
 - **Double-billing CI optimization**: Appended `--async` to `.github/workflows/deploy.yml` so the GitHub Actions runner exits immediately, avoiding double-billing while Cloud Build executes in GCP.
+- **100% Vector Layer Styling Coverage**: Designed and hand-authored robust, gorgeous MapLibre GL styles for all remaining unstyled layers (achieving 100% coverage across all 19 layers in `ugs-styles`), verified typing/compilation, and published to master.
+- **Map Viewer Render Integration**: Upgraded the main map viewer (`viewer/src/Map.tsx`) to pull the STAC properties/renders dynamically, fetching and compiling custom GL style layers at runtime with a clean fallback.
+- **Fast Production Restyle Rebinding**: Rebound the live GCS production catalog items with their new STAC `renders` and assets in under a second using `just restyle`.
 
 **Remaining / Handed-off:**
 - **Raster Integration**: Dual-track design is fully committed on `main` (`docs/RASTER_SPEC.md`). The batch `geolmap-harvest` job is deployed and validated, and the sibling PR #169 in `ugs-ingest` is ready for review. Once they handshake on the DB table, everything is set.

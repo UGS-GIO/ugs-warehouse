@@ -85,6 +85,35 @@ def read(topic: Topic) -> pa.Table:
     ).fetch_arrow_table()
 
 
+def get_count(topic: Topic) -> int:
+    """Get the total row count of the topic's `_current` table directly from Postgres."""
+    con = _connect()
+    pg_sql = f'SELECT count(*) FROM "{topic.schema}"."{topic.layer}"'
+    row = con.execute(
+        "SELECT * FROM postgres_query(?, ?)",
+        [PG_ALIAS, pg_sql],
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def read_chunk(topic: Topic, limit: int, offset: int) -> pa.Table:
+    """Pull a chunk of `{schema}.{topic}_current` into a pyarrow Table."""
+    con = _connect()
+    cols = _describe(con, topic)
+    geom_col = _geom_column(cols)
+    other = [c for c, _ in cols if c not in (geom_col, "target_epsg")]
+    select_list = (
+        ", ".join(f'"{c}"' for c in other)
+        + f', ST_AsBinary("{geom_col}") AS geom_wkb'
+        + f', COALESCE(NULLIF(ST_SRID("{geom_col}"), 0), 4326) AS target_epsg'
+    )
+    pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}" LIMIT {limit} OFFSET {offset}'
+    return con.execute(
+        "SELECT * FROM postgres_query(?, ?)",
+        [PG_ALIAS, pg_sql],
+    ).fetch_arrow_table()
+
+
 # Descriptive (catalog) metadata columns on raw.schema_registry (ugs-ingest #171).
 _META_COLS = ("display_name", "description", "keywords", "iso_topic_category",
               "use_constraints", "lineage", "point_of_contact")

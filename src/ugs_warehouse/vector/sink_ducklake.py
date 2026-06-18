@@ -14,11 +14,14 @@ from . import ducklake as catalog
 from .topics import Topic
 
 
-def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
-    """Overwrite the topic's DuckLake table with the transformed view."""
+def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool = False) -> None:
+    """Overwrite (or append to) the topic's DuckLake table with the transformed view."""
     alias = catalog.attach(con)
     con.execute(f"CREATE SCHEMA IF NOT EXISTS {alias}.{topic.schema}")
     fqn = f"{alias}.{topic.schema}.{topic.stem}"
-    con.execute(f"CREATE OR REPLACE TABLE {fqn} AS SELECT * FROM {view}")
+    if append:
+        con.execute(f"INSERT INTO {fqn} SELECT * FROM {view}")
+    else:
+        con.execute(f"CREATE OR REPLACE TABLE {fqn} AS SELECT * FROM {view}")
     rows = con.execute(f"SELECT count(*) FROM {fqn}").fetchone()[0]
     print(f"[{topic.fqn}] ducklake: {rows} rows -> {fqn}")

@@ -35,8 +35,10 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           *, title: str | None = None, description: str | None = None,
-          metadata: dict | None = None) -> None:
-    bbox = _bbox(con, view)
+          metadata: dict | None = None, bbox: list[float] | None = None,
+          row_count: int | None = None) -> None:
+    bb = bbox if bbox is not None else _bbox(con, view)
+    rc = row_count if row_count is not None else _row_count(con, view)
     now = datetime.datetime.now(datetime.UTC).isoformat()
     md = metadata or {}
 
@@ -50,7 +52,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         "title": md.get("display_name") or title or stac.prettify(topic.stem),
         "ugs:dbt_schema": topic.schema,
         "ugs:layer": topic.layer,
-        "ugs:row_count": _row_count(con, view),
+        "ugs:row_count": rc,
     }
     # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
     desc = md.get("description") or description
@@ -68,7 +70,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
 
     item = stac.build_item(
         item_id=topic.stem, collection=COLLECTION,
-        geometry=stac.bbox_polygon(bbox), bbox=bbox, datetime_iso=now,
+        geometry=stac.bbox_polygon(bb), bbox=bb, datetime_iso=now,
         properties=props,
         assets={
             "data": {"href": config.public_url(archive_path), "type": PARQUET_MIME,

@@ -129,6 +129,39 @@ def read(topic: Topic) -> pa.Table:
     return pa.Table.from_pylist(rows)
 
 
+def get_count(topic: Topic) -> int:
+    """Get the total row count of the topic's layer via PostgREST."""
+    _, total = _fetch_page(topic, 0, 0)
+    return total
+
+
+def read_chunk(topic: Topic, limit: int, offset: int) -> pa.Table:
+    """Pull a chunk of `{schema}.{layer}` via PostgREST into a pyarrow Table."""
+    rows: list[dict] = []
+    current_offset = offset
+    end_offset = offset + limit
+    while current_offset < end_offset:
+        page_size = min(PAGE, end_offset - current_offset)
+        page, _ = _fetch_page(topic, current_offset, current_offset + page_size - 1)
+        if not page:
+            break
+        rows.extend(page)
+        current_offset += len(page)
+        if len(page) < page_size:
+            break
+
+    if not rows:
+        return pa.table({})
+
+    for r in rows:
+        g = r.pop(GEOM_COLUMN, None)
+        r["geom_wkb"] = _to_wkb(g)
+        epsg = _extract_epsg(g)
+        r["target_epsg"] = epsg if epsg is not None else DEFAULT_EPSG
+
+    return pa.Table.from_pylist(rows)
+
+
 def read_metadata(topic: Topic) -> dict:  # noqa: ARG001
     """PostgREST exposes no schema_registry — descriptive metadata is Postgres-only."""
     return {}

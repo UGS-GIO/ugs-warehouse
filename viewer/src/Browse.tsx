@@ -9,10 +9,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, cogAsset, defaultStyleUrl, featuresCollectionUrl, type Link, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, cogAsset, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
 export type CollectionSummary = {
-  id: string; href: string; title?: string; description?: string; count: number; itemLinks: Link[];
+  id: string; href: string; title?: string; description?: string;
+  count?: number; kind?: "catalog" | "collection"; parentId?: string;
 };
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
@@ -141,11 +142,13 @@ const humanize = (id: string) =>
 // The warehouse emits a placeholder "UGS warehouse — {id}." description; hide it as noise.
 const meaningfulDesc = (d?: string) => (d && !/^UGS warehouse — .*\.$/.test(d) ? d : null);
 
-function Collections({ collections, onOpen }: { collections: CollectionSummary[]; onOpen: (href: string) => void }) {
-  if (!collections.length) return <p className={`${C.muted} mt-4`}>No collections in this catalog yet.</p>;
+function Collections({ collections, heading, onOpen }: {
+  collections: CollectionSummary[]; heading: string; onOpen: (href: string) => void;
+}) {
+  if (!collections.length) return <p className={`${C.muted} mt-4`}>Nothing here yet.</p>;
   return (
     <>
-      <h2 className="mb-1 mt-1 text-lg font-semibold">Collections</h2>
+      <h2 className="mb-1 mt-1 text-lg font-semibold">{heading}</h2>
       <div className={C.grid}>
         {collections.map((c) => {
           const desc = meaningfulDesc(c.description);
@@ -154,12 +157,27 @@ function Collections({ collections, onOpen }: { collections: CollectionSummary[]
               <p className="text-base font-semibold leading-tight">{c.title ?? humanize(c.id)}</p>
               <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{c.id}</div>
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
-              <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>
+              {c.count != null && <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>}
+              {c.kind === "catalog" && <span className={`${C.badge} mt-2`}>by series</span>}
             </div>
           );
         })}
       </div>
     </>
+  );
+}
+
+function Breadcrumb({ crumbs }: { crumbs: { label: string; onClick?: () => void }[] }) {
+  return (
+    <div className="mb-1 text-sm">
+      {crumbs.map((c, i) => (
+        <span key={i}>
+          {i > 0 && <span className={C.muted}> / </span>}
+          {c.onClick ? <span className={C.crumb} onClick={c.onClick}>{c.label}</span>
+            : <span className={i === crumbs.length - 1 ? "" : C.muted}>{c.label}</span>}
+        </span>
+      ))}
+    </div>
   );
 }
 
@@ -592,10 +610,13 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
 }
 
 export function Browse(props: {
-  collections: CollectionSummary[];
+  cards: CollectionSummary[];
   collectionId?: string;
   allItems: ItemRef[];
   itemsLoading: boolean;
+  showItems: boolean;
+  atRoot: boolean;
+  breadcrumb: { label: string; onClick?: () => void }[];
   search: string;
   onSearch: (q: string) => void;
   series: string[];
@@ -604,11 +625,10 @@ export function Browse(props: {
   itemSelected: boolean;
   onOpenCollection: (href: string) => void;
   onOpenItem: (href: string) => void;
-  onBackToCollections: () => void;
   onBackToItems: () => void;
   onViewMap: () => void;
 }) {
-  const { collectionId, itemSelected, search, onSearch, series, onSeries } = props;
+  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, series, onSeries } = props;
 
   // item detail
   if (collectionId && itemSelected) {
@@ -620,32 +640,32 @@ export function Browse(props: {
     );
   }
 
-  // a collection's items
-  if (collectionId) {
+  // a leaf collection's items
+  if (showItems && collectionId) {
     const items = props.allItems.filter((it) => it.collId === collectionId);
     return (
       <div className={C.wrap}>
-        <div className="mb-1">
-          <span className={C.crumb} onClick={props.onBackToCollections}>Collections</span>
-          <span className={C.muted}> / {collectionId}</span>
-          {props.itemsLoading && <span className={C.muted}> · loading…</span>}
-        </div>
+        <Breadcrumb crumbs={props.breadcrumb} />
+        {props.itemsLoading && <span className={C.muted}>loading items…</span>}
         <ItemList items={items} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
       </div>
     );
   }
 
-  // catalog root: search-all OR collection cards
+  // browse level: root catalog (with search-all) OR a sub-catalog's series chooser
   return (
     <div className={C.wrap}>
-      <div className={C.bar}>
-        <input className={C.input} placeholder="Search all collections…" value={search}
-          onChange={(e) => onSearch(e.target.value)} />
-        {props.itemsLoading && <span className={C.muted}>loading items…</span>}
-      </div>
-      {search.trim()
+      {!atRoot && <Breadcrumb crumbs={props.breadcrumb} />}
+      {atRoot && (
+        <div className={C.bar}>
+          <input className={C.input} placeholder="Search all collections…" value={search}
+            onChange={(e) => onSearch(e.target.value)} />
+          {props.itemsLoading && <span className={C.muted}>loading items…</span>}
+        </div>
+      )}
+      {atRoot && search.trim()
         ? <ItemList items={props.allItems} showCollection query={search} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
-        : <Collections collections={props.collections} onOpen={props.onOpenCollection} />}
+        : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} />}
     </div>
   );
 }

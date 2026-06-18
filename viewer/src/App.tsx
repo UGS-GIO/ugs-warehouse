@@ -121,59 +121,63 @@ export function App() {
   const [search, setSearch] = useState("");
 
   const catalog = useStac(CATALOG_URL);
-  const collections = childLinks(catalog.data, CATALOG_URL);
 
-  // Fetch every collection.json (cheap: a couple of files) — gives item counts + the
-  // id→href map. Item-level data loads lazily, never eagerly across the whole catalog.
-  const collDocs = useDocs(collections.map((c) => c.href));
-  const perColl: CollectionSummary[] = collections.map((c, i) => {
-    const doc = collDocs.docs[i]?.data;
-    const links = itemLinks(doc, c.href);
-    return { id: collIdOf(c.href) ?? c.href, href: c.href, title: c.title,
-             description: typeof doc?.description === "string" ? doc.description : undefined,
-             count: links.length, itemLinks: links };
-  });
+  // ---- catalog tree (one level of nesting: root → sub-catalog → series collections) ----
+  // Counts + titles ride on the child links (warehouse emits ugs:item_count), so the landing
+  // and the series chooser render from a single fetch each — no per-collection fan-out. A
+  // child whose href ends in catalog.json is a nesting sub-catalog (ugs-publications); the
+  // rest are leaf collections. (A pre-nesting flat catalog has only leaf collections — this
+  // still works: ugs-publications is then just a leaf you open into items.)
+  const rootChildren: CollectionSummary[] = childLinks(catalog.data, CATALOG_URL).map((l) => ({
+    id: collIdOf(l.href) ?? l.href, href: l.href, title: l.title, count: l["ugs:item_count"],
+    kind: l.href.endsWith("/catalog.json") ? "catalog" : "collection",
+  }));
+  const subCats = rootChildren.filter((c) => c.kind === "catalog");
+  const subDocs = useDocs(subCats.map((c) => c.href));
+  const seriesChildren: CollectionSummary[] = subCats.flatMap((sc, i) =>
+    childLinks(subDocs.docs[i]?.data, sc.href).map((l) => ({
+      id: collIdOf(l.href) ?? l.href, href: l.href, title: l.title,
+      count: l["ugs:item_count"], kind: "collection", parentId: sc.id,
+    })));
+  const leafColls = [...rootChildren.filter((c) => c.kind === "collection"), ...seriesChildren];
 
-  // Item rows come from the per-collection compact index (items.json) — one fetch per
-  // collection, not one per item. Loaded only for what's on screen: the open collection,
-  // or every collection while a global search is active. Graceful fallback: any collection
-  // without an items.json yet (pre-index catalogs) drops back to per-item fetches, scoped
-  // to that collection so it never re-introduces a catalog-wide fan-out.
   const collectionId = collIdOf(collectionUrl);
+  const subCat = subCats.find((c) => c.id === collectionId);
+  const leafColl = leafColls.find((c) => c.id === collectionId);
+  // Cards for the current browse level: none at a leaf (items show); a sub-catalog's series; else root.
+  const cards = leafColl ? [] : subCat ? seriesChildren.filter((c) => c.parentId === subCat.id) : rootChildren;
+
+  // ---- items for the open leaf, index-driven + lazy (one items.json fetch) ----
+  // Loaded for the open leaf, or every leaf while a global search runs. Graceful fallback:
+  // a leaf whose items.json is missing (pre-index catalog) fetches its collection.json for
+  // item links, then those items — scoped, never a catalog-wide fan-out.
   const searching = !collectionId && search.trim().length > 0;
-  const wantColls = collectionId
-    ? perColl.filter((pc) => pc.id === collectionId)
-    : searching ? perColl : [];
+  const wantColls = leafColl ? [leafColl] : searching ? leafColls : [];
   const idx = useIndexes(wantColls.map((c) => ({ id: c.id, href: c.href })));
 
-  const hrefById = new Map<string, string>();
-  perColl.forEach((pc) => pc.itemLinks.forEach((l) => hrefById.set(`${pc.id}/${idOf(l.href)}`, l.href)));
+  const itemHrefIn = (collHref: string, id: string) =>
+    collHref.replace(/collection\.json(\?.*)?$/, `${encodeURIComponent(id)}/${encodeURIComponent(id)}.json`);
 
-  // Fall back to per-item fetches ONLY for a collection whose items.json is confirmed
-  // missing (404) — never while it's still loading, or the load window would re-trigger
-  // the very fan-out the index exists to avoid.
-  const fallbackRefs = wantColls.flatMap((pc, i) =>
-    idx[i]?.missing ? pc.itemLinks.map((l) => ({ collId: pc.id, href: l.href })) : []);
+  const fbColls = wantColls.filter((_, i) => idx[i]?.missing);
+  const fbCollDocs = useDocs(fbColls.map((c) => c.href));
+  const fallbackRefs = fbColls.flatMap((c, i) =>
+    itemLinks(fbCollDocs.docs[i]?.data, c.href).map((l) => ({ collId: c.id, href: l.href })));
   const fbDocs = useDocs(fallbackRefs.map((r) => r.href));
 
   const allItems: ItemRef[] = [
     ...idx.flatMap((r) => (r.index?.items ?? []).map((d) => ({
-      collId: r.id,
-      href: hrefById.get(`${r.id}/${String(d.id)}`) ?? `${r.id}/${String(d.id)}`,
-      data: d,
+      collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d,
     }))),
     ...fallbackRefs.map((r, i) => ({ ...r, data: fbDocs.docs[i]?.data })),
   ];
   const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
 
-  // c/i in the URL may be a short id (clean + shareable: ?c=ugs-publications&i=GQ-1560) or a
-  // full STAC URL (older links). collIdOf/idOf already no-op on a bare id; resolve i to an
-  // absolute href for fetching, accepting both forms.
+  // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
+  // an absolute href: construct from the open leaf, else look it up among loaded items.
   const isUrl = (s?: string) => Boolean(s) && /^https?:\/\//.test(s as string);
-  const selColl = perColl.find((pc) => pc.id === collectionId);
   const itemHref = isUrl(itemUrl)
     ? itemUrl
-    : selColl?.itemLinks.find((l) => idOf(l.href) === itemUrl)?.href
+    : (leafColl && itemUrl ? itemHrefIn(leafColl.href, itemUrl) : undefined)
       ?? allItems.find((r) => idOf(r.href) === itemUrl)?.href;
   const item = useStac(itemHref);
 
@@ -187,6 +191,17 @@ export function App() {
     set.has(id) ? set.delete(id) : set.add(id);
     go({ view, c: collectionUrl, i: itemUrl, l: [...set], s: seriesSel });
   };
+
+  // Breadcrumb trail: Catalog [ / Publications] [ / DS] [ / item]. Each crumb but the last
+  // is clickable. parentOfLeaf is the sub-catalog a series collection hangs under (if any).
+  const parentOfLeaf = leafColl?.parentId ? subCats.find((s) => s.id === leafColl.parentId) : undefined;
+  const crumbs: { label: string; onClick?: () => void }[] = [
+    { label: "Catalog", onClick: collectionId || itemUrl ? () => go({ view }) : undefined },
+  ];
+  if (subCat) crumbs.push({ label: subCat.title ?? subCat.id });
+  if (parentOfLeaf) crumbs.push({ label: parentOfLeaf.title ?? parentOfLeaf.id, onClick: () => go({ view, c: parentOfLeaf.id }) });
+  if (leafColl) crumbs.push({ label: leafColl.title ?? leafColl.id, onClick: itemUrl ? () => go({ view, c: leafColl.id, s: seriesSel }) : undefined });
+  if (itemUrl) crumbs.push({ label: String(itemUrl) });
 
   // Active map layers: the toggled set, else fall back to the detail item (so a plain
   // ?c=&i= link still shows its layer). Resolved against fetched item data (for PMTiles).
@@ -216,10 +231,13 @@ export function App() {
 
       {!mapView ? (
         <Browse
-          collections={perColl}
+          cards={cards}
           collectionId={collectionId}
           allItems={allItems}
           itemsLoading={itemsLoading}
+          showItems={Boolean(leafColl)}
+          atRoot={!collectionId}
+          breadcrumb={crumbs}
           search={search}
           onSearch={setSearch}
           series={seriesSel ?? []}
@@ -228,7 +246,6 @@ export function App() {
           itemSelected={Boolean(itemUrl)}
           onOpenCollection={openCollection}
           onOpenItem={openItem}
-          onBackToCollections={() => go({ view })}
           onBackToItems={() => go({ view, c: collectionUrl, s: seriesSel })}
           onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
         />
@@ -236,19 +253,19 @@ export function App() {
         <div className="grid h-full min-h-0 grid-rows-[40vh_1fr] overflow-hidden md:grid-cols-[320px_1fr] md:grid-rows-1">
           <aside className="overflow-auto border-b border-border p-3 md:border-b-0 md:border-r">
             {catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
-            {!collectionUrl &&
-              perColl.map((c) => (
+            {!leafColl &&
+              (subCat ? cards : leafColls).map((c) => (
                 <div key={c.href} className={row} onClick={() => openCollection(c.href)}>
-                  {c.title ?? c.id} <span className="text-muted-foreground">· {c.count}</span>
+                  {c.title ?? c.id}{c.count != null && <span className="text-muted-foreground"> · {c.count}</span>}
                 </div>
               ))}
-            {collectionUrl && (
+            {leafColl && (
               <>
                 <div className="mb-2 flex items-center justify-between text-xs">
                   <span className="cursor-pointer text-primary" onClick={() => go({ view })}>‹ collections</span>
                   <span className="text-muted-foreground">check to overlay</span>
                 </div>
-                {(selColl?.itemLinks ?? []).map((it) => {
+                {allItems.map((it) => {
                   const id = idOf(it.href);
                   const on = idsForMap.includes(id);
                   const ci = activeLayers.findIndex((l) => l.id === id);
@@ -256,7 +273,7 @@ export function App() {
                     <div key={it.href} className={`${row} flex items-center gap-2`}>
                       <input type="checkbox" checked={on} onChange={() => toggleLayer(id)} onClick={(e) => e.stopPropagation()} />
                       {on && ci >= 0 && <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colorFor(ci) }} />}
-                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>{it.title ?? id}</span>
+                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>{String(it.data?.properties?.title ?? id)}</span>
                     </div>
                   );
                 })}

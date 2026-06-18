@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
-import { CATALOG_URL, childLinks, itemLinks, pmtilesLink, type StacDoc, useDocs, useStac } from "./stac";
+import { CATALOG_URL, childLinks, itemLinks, pmtilesLink, type StacDoc, useDocs, useIndexes, useStac } from "./stac";
 import { useTheme } from "./theme";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
@@ -114,12 +114,13 @@ export function App() {
     loadHeader();
   }, []);
 
+  const [search, setSearch] = useState("");
+
   const catalog = useStac(CATALOG_URL);
   const collections = childLinks(catalog.data, CATALOG_URL);
 
-  // Fetch every collection.json (for item counts + their item links) then every item
-  // (for the metadata tables + global search). Fine for hundreds of items; if the
-  // catalog grows to thousands this should move behind a stac-geoparquet index.
+  // Fetch every collection.json (cheap: a couple of files) — gives item counts + the
+  // id→href map. Item-level data loads lazily, never eagerly across the whole catalog.
   const collDocs = useDocs(collections.map((c) => c.href));
   const perColl: CollectionSummary[] = collections.map((c, i) => {
     const doc = collDocs.docs[i]?.data;
@@ -129,15 +130,42 @@ export function App() {
              count: links.length, itemLinks: links };
   });
 
-  const refs = perColl.flatMap((pc) => pc.itemLinks.map((l) => ({ collId: pc.id, href: l.href })));
-  const allDocs = useDocs(refs.map((r) => r.href));
-  const allItems: ItemRef[] = refs.map((r, i) => ({ ...r, data: allDocs.docs[i]?.data }));
+  // Item rows come from the per-collection compact index (items.json) — one fetch per
+  // collection, not one per item. Loaded only for what's on screen: the open collection,
+  // or every collection while a global search is active. Graceful fallback: any collection
+  // without an items.json yet (pre-index catalogs) drops back to per-item fetches, scoped
+  // to that collection so it never re-introduces a catalog-wide fan-out.
+  const collectionId = collIdOf(collectionUrl);
+  const searching = !collectionId && search.trim().length > 0;
+  const wantColls = collectionId
+    ? perColl.filter((pc) => pc.id === collectionId)
+    : searching ? perColl : [];
+  const idx = useIndexes(wantColls.map((c) => ({ id: c.id, href: c.href })));
+
+  const hrefById = new Map<string, string>();
+  perColl.forEach((pc) => pc.itemLinks.forEach((l) => hrefById.set(`${pc.id}/${idOf(l.href)}`, l.href)));
+
+  // Fall back to per-item fetches ONLY for a collection whose items.json is confirmed
+  // missing (404) — never while it's still loading, or the load window would re-trigger
+  // the very fan-out the index exists to avoid.
+  const fallbackRefs = wantColls.flatMap((pc, i) =>
+    idx[i]?.missing ? pc.itemLinks.map((l) => ({ collId: pc.id, href: l.href })) : []);
+  const fbDocs = useDocs(fallbackRefs.map((r) => r.href));
+
+  const allItems: ItemRef[] = [
+    ...idx.flatMap((r) => (r.index?.items ?? []).map((d) => ({
+      collId: r.id,
+      href: hrefById.get(`${r.id}/${String(d.id)}`) ?? `${r.id}/${String(d.id)}`,
+      data: d,
+    }))),
+    ...fallbackRefs.map((r, i) => ({ ...r, data: fbDocs.docs[i]?.data })),
+  ];
+  const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
 
   // c/i in the URL may be a short id (clean + shareable: ?c=ugs-publications&i=GQ-1560) or a
   // full STAC URL (older links). collIdOf/idOf already no-op on a bare id; resolve i to an
   // absolute href for fetching, accepting both forms.
   const isUrl = (s?: string) => Boolean(s) && /^https?:\/\//.test(s as string);
-  const collectionId = collIdOf(collectionUrl);
   const selColl = perColl.find((pc) => pc.id === collectionId);
   const itemHref = isUrl(itemUrl)
     ? itemUrl
@@ -184,7 +212,9 @@ export function App() {
           collections={perColl}
           collectionId={collectionId}
           allItems={allItems}
-          itemsLoading={allDocs.isLoading}
+          itemsLoading={itemsLoading}
+          search={search}
+          onSearch={setSearch}
           item={item.data}
           itemSelected={Boolean(itemUrl)}
           onOpenCollection={openCollection}

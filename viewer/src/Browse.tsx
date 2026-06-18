@@ -158,11 +158,24 @@ function ItemList({ items, showCollection, query, onOpen }: {
 }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards">("table");
+  const [type, setType] = useState("");
+
+  // Series/type facets — group the list by data series (DS, OFR, Map, …) for browsing.
+  // Counts derive from the full set so they stay stable as you filter.
+  const facets = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of items) {
+      const t = gType(it);
+      if (t) m.set(t, (m.get(t) ?? 0) + 1);
+    }
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [items]);
 
   const needle = (query ?? q).trim().toLowerCase();
   const rows = useMemo(
-    () => (needle ? items.filter((it) => haystack(it).includes(needle)) : items),
-    [items, needle],
+    () => items.filter((it) =>
+      (!needle || haystack(it).includes(needle)) && (!type || gType(it) === type)),
+    [items, needle, type],
   );
 
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
@@ -189,6 +202,15 @@ function ItemList({ items, showCollection, query, onOpen }: {
         <span className={toggle(mode === "table")} onClick={() => setMode("table")}>Table</span>
         <span className={toggle(mode === "cards")} onClick={() => setMode("cards")}>Cards</span>
       </div>
+
+      {facets.length > 1 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          <span className={toggle(type === "")} onClick={() => setType("")}>All · {items.length}</span>
+          {facets.map(([t, n]) => (
+            <span key={t} className={toggle(type === t)} onClick={() => setType(type === t ? "" : t)}>{t} · {n}</span>
+          ))}
+        </div>
+      )}
 
       {rows.length === 0 ? (
         <p className={`${C.muted} mt-3`}>{needle ? "No items match." : "No items."}</p>
@@ -552,6 +574,8 @@ export function Browse(props: {
   collectionId?: string;
   allItems: ItemRef[];
   itemsLoading: boolean;
+  search: string;
+  onSearch: (q: string) => void;
   item?: StacDoc;
   itemSelected: boolean;
   onOpenCollection: (href: string) => void;
@@ -560,8 +584,7 @@ export function Browse(props: {
   onBackToItems: () => void;
   onViewMap: () => void;
 }) {
-  const [search, setSearch] = useState("");
-  const { collectionId, itemSelected } = props;
+  const { collectionId, itemSelected, search, onSearch } = props;
 
   // item detail
   if (collectionId && itemSelected) {
@@ -593,8 +616,8 @@ export function Browse(props: {
     <div className={C.wrap}>
       <div className={C.bar}>
         <input className={C.input} placeholder="Search all collections…" value={search}
-          onChange={(e) => setSearch(e.target.value)} />
-        {props.itemsLoading && <span className={C.muted}>indexing items…</span>}
+          onChange={(e) => onSearch(e.target.value)} />
+        {props.itemsLoading && <span className={C.muted}>loading items…</span>}
       </div>
       {search.trim()
         ? <ItemList items={props.allItems} showCollection query={search} onOpen={props.onOpenItem} />

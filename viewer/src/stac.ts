@@ -113,3 +113,34 @@ export function useDocs(urls: string[]) {
     loaded: results.filter((r) => r.data).length,
   };
 }
+
+// ---- compact items index (items.json, one fetch per collection) ----
+// Each entry is a mini StacDoc (id, bbox, a props subset, asset + web-map-link summaries)
+// — enough to render the list table, facets, and map overlays without N item.json fetches.
+// The full item.json stays the source of truth and loads on open (useStac).
+export type ItemsIndex = { type?: string; collection?: string; count?: number; items: StacDoc[] };
+
+// items.json sits next to collection.json (…/<collection>/items.json).
+const indexUrlFor = (collectionHref: string) =>
+  collectionHref.replace(/collection\.json(\?.*)?$/, "items.json");
+
+/** Fetch the compact items index for each given collection. Per-collection result carries
+ *  the parsed index when present, or an error (e.g. 404 on a pre-index catalog) so the
+ *  caller can fall back to per-item fetches. `retry: false` — a 404 is a fast, final miss. */
+export function useIndexes(collections: { id: string; href: string }[]) {
+  const results = useQueries({
+    queries: collections.map((c) => ({
+      queryKey: ["index", c.href],
+      queryFn: () => fetchJson(indexUrlFor(c.href)) as Promise<unknown>,
+      staleTime: 5 * 60_000,
+      retry: false,
+    })),
+  });
+  return collections.map((c, i) => ({
+    id: c.id,
+    href: c.href,
+    index: results[i].data as ItemsIndex | undefined,
+    isLoading: results[i].isLoading,
+    missing: Boolean(results[i].error),
+  }));
+}

@@ -100,6 +100,46 @@ DuckLake 2026 production-readiness. (Viewer downloader: DONE — gdal3.js, 6 for
 
 ---
 
+## Styling & Reingestion Spec Sheet (2026-06-17)
+
+This section maps out the target styling parameters for the remaining 18 unstyled vector layers in the `ugs-styles` repository, alongside the status of the complete catalog reingestion.
+
+### 1. Reingestion Status
+- **Vector Reingestion:** **SUCCESS**. The Cloud Run job `ugs-warehouse-ingest-2wxmn` was executed and successfully completed. This has regenerated the entire vector STAC catalog under `ugs-serving-topics`, establishing the new `bbox_*` spatial index columns in all GeoParquet archives.
+- **Publications Reingestion:** **SUCCESS**. All 7,425 items were processed in under 2 minutes utilizing parallel ingestion with ThreadPoolExecutor (avoiding Cloud Run timeouts).
+
+### 2. Vector Styling Spec Sheet (the styling worklist)
+Each vector style targets a STAC item by its `itemId` (bare topic stem). To define a style for these unstyled layers, a corresponding TS spec should be created inside `ugs-styles/src/styles/{layer_dir}/` with the specified parameters.
+
+| Item ID (STAC Item) | Recommended Archetype | Styling Field | Recommended Palette / Symbology Design |
+|---|---|---|---|
+| **`hazards_qfaults`** | `categorical` | `faultage` | Maps fault ages: `<15,000` (Red), `<130,000` (Orange), `<750,000` (Yellow), `<2,600,000` (Green), `undetermined` / `<150` (Gray/Light Red). |
+| **`hazards_surfacefaultrupture`** | `simple` | — | Emits line symbols with high-contrast Orange-Red color to indicate active rupture zone boundaries. |
+| **`enmin_pipelines`** | `categorical` | `commodity` | Maps commodities: `Natural Gas` (Blue), `Petroleum` / `Crude Oil` (Brown), `Liquified Petroleum Gases (LPG)` (Purple), default (Gray). |
+| **`enmin_ut_counties`** | `categorical` | `color4` | Maps county polygons to 4 distinctive colors to prevent adjacent counties from having the same fill. |
+| **`enmin_ccus_cbcounty`** | `simple` | — | Boundary lines / light fill for Carbon Capture county areas. |
+| **`enmin_ccus_cbgeoregion`** | `categorical` | `region_name` | Categorical fill representing Carbon Capture geologic regions. |
+| **`enmin_ccus_geochemfieldpolys`** | `simple` | — | Outline/dashed stroke showing geochemical field boundaries. |
+| **`enmin_ccus_geochemistry`** | `point` | `sample_type` | Point symbology marking sample stations colored by type. |
+| **`enmin_geophysics_mtstations`** | `point` | — | Magnetotelluric measurement station markers. |
+| **`enmin_geophysics_tem`** | `point` | — | Transient Electromagnetic measurement station markers. |
+| **`enmin_oilgasfields_ogm`** | `categorical` | `status` | Polygonal fill indicating active fields (Green) vs abandoned/depleted fields (Gray). |
+| **`enmin_plss_sections`** | `simple` | — | Light dashed boundaries for PLSS section grid lines. |
+| **`enmin_plss_townshiprange`** | `simple` | — | Medium solid boundaries for PLSS Township & Range lines. |
+| **`enmin_powerplants`** | `point` | `primary_fuel` | Plant markers colored by fuel: `Coal` (Black), `Natural Gas` (Blue), `Solar` (Yellow), `Hydro` (Cyan). |
+| **`enmin_transmissionlines`** | `categorical` | `voltage_kv` | Graduated line width or colors indicating transmission line voltage ranges. |
+| **`enmin_ucrc_basins`** | `categorical` | `basin_name` | Semi-transparent fills representing separate water basins. |
+| **`geolmap_geolunits_gems`** | `geologic-unit` | `unit_symbol` | Matches unit symbol to authoritative FGDC geologic unit colors. |
+| **`wells_spatial`** | `point` | `well_type` | Point circle markers for borehole/well locations. |
+
+### 3. Execution Plan for New Styles Go-Live
+1. **Create Palette / Spec:** Add missing named color palettes in `ugs-styles/src/palettes/` (e.g. `qfaults`, `pipelines-commodity`), write the `spec` files in `ugs-styles/src/styles/`, and add matching TS exports.
+2. **Build and Validate:** Run `npm run build:json` inside `ugs-styles` to generate `dist-json/` files and validate style spec correctness.
+3. **Publish Styles CDN:** Tag a release (`git tag v* && git push origin --tags`) in the `ugs-styles` repo, triggering CI/CD publish to `gs://ut-dnr-ugs-maps-prod-public/styles/`.
+4. **Reingest STAC:** Execute `gcloud run jobs execute ugs-warehouse-ingest` to re-fetch the CDN style manifest and bind the new `renders` metadata into STAC item files.
+
+---
+
 ## Editing pubs metadata (title/author/description/etc.)
 
 Pub metadata is **derive-from-truth** — the STAC item is a *projection*, rebuilt from the

@@ -1,4 +1,21 @@
+# Build context for `gcloud builds submit` — keep it lean. Cloud Build runs npm ci / pip
+# install in-container, so local deps + build output must NOT be uploaded.
 .venv
 __pycache__
 .git
 .DS_Store
+
+# Node deps + build output (the big one: viewer/node_modules ≈ 450MB of wasm).
+node_modules/
+**/node_modules/
+dist/
+**/dist/
+dist-json/
+*.tsbuildinfo
+
+# Test / tooling artifacts (NOT *.png — viewer/src/assets/*.png is imported by the vite build)
+.playwright-mcp/
+**/.playwright-mcp/
+.pytest_cache/
+.ruff_cache/
+coverage/

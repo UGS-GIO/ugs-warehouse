@@ -28,6 +28,7 @@ PG_ALIAS = "pg"
 
 def _connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
+    con.execute("SET max_memory='128MB';")
     con.execute("INSTALL postgres; LOAD postgres;")
     con.execute("INSTALL spatial;  LOAD spatial;")
     # Set password if provided separately

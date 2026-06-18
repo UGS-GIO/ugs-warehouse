@@ -185,11 +185,15 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
             if parquet_files:
                 try:
                     merge_con = duckdb.connect()
+                    merge_con.execute("SET max_memory='128MB';")
                     merge_con.execute("INSTALL spatial; LOAD spatial;")
-                    merge_con.execute(
-                        f"COPY (SELECT * FROM read_parquet('{parquet_chunks_dir}/*.parquet')) "
-                        f"TO '{local_parquet}' (FORMAT PARQUET, COMPRESSION ZSTD)"
-                    )
+                    try:
+                        merge_con.execute(
+                            f"COPY (SELECT * FROM read_parquet('{parquet_chunks_dir}/*.parquet')) "
+                            f"TO '{local_parquet}' (FORMAT PARQUET, COMPRESSION ZSTD)"
+                        )
+                    finally:
+                        merge_con.close()
                     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
                     base = f"{config.ARCHIVE_PREFIX}/{topic.stem}"
                     latest = f"{base}/{topic.stem}.parquet"
@@ -252,7 +256,11 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
             meta = backend.read_metadata(topic)
             try:
                 stac_con = duckdb.connect()
-                sink_stac.write(topic, stac_con, "", title=None, description=None, metadata=meta, bbox=overall_bbox, row_count=overall_row_count)
+                stac_con.execute("SET max_memory='128MB';")
+                try:
+                    sink_stac.write(topic, stac_con, "", title=None, description=None, metadata=meta, bbox=overall_bbox, row_count=overall_row_count)
+                finally:
+                    stac_con.close()
             except Exception as e:
                 print(f"[{topic.fqn}] sink stac FAILED: {e}", file=sys.stderr)
                 traceback.print_exc()

@@ -24,6 +24,7 @@ TARGET_SRS = 4326
 def run(arrow_in: pa.Table) -> tuple[duckdb.DuckDBPyConnection, str]:
     """Build the `transformed` view; return (connection, view_name)."""
     con = duckdb.connect()
+    con.execute("SET max_memory='128MB';")
     con.execute("INSTALL spatial; LOAD spatial;")
     try:
         con.execute("INSTALL h3 FROM community; LOAD h3;")

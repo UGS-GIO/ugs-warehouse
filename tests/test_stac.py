@@ -141,6 +141,9 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._footprint_geoms", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.core.stac.attach_renders"), \
+         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item") as mock_write, \
          patch("ugs_warehouse.core.stac.refresh_catalog") as mock_refresh:
 

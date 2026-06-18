@@ -45,6 +45,17 @@ const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(
 const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties ?? {})).toLowerCase();
+// Data-series code = the alpha prefix of the publication series id (DS-8 → DS, OFR-647 →
+// OFR). Only items that carry `ugs:series_id` (publications) get a code; everything else
+// (vector serving topics, etc.) returns "" so it never pollutes the series facet. Numeric
+// or prefixless pub ids bucket as "Other". gLabel is the human name for the chip tooltip.
+const gCode = (it: ItemRef) => {
+  const sid = props(it)["ugs:series_id"];
+  if (typeof sid !== "string" || !sid) return "";
+  const m = sid.match(/^[A-Za-z]+/);
+  return m ? m[0].toUpperCase() : "Other";
+};
+const gLabel = (it: ItemRef) => gType(it) || gCode(it);
 
 
 function AssetChips({ assets }: { assets: Record<string, Asset> }) {
@@ -153,29 +164,36 @@ function Collections({ collections, onOpen }: { collections: CollectionSummary[]
 }
 
 // ---- item list: filter + sort + table/cards, reused for a collection and global search ----
-function ItemList({ items, showCollection, query, onOpen }: {
+function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   items: ItemRef[]; showCollection?: boolean; query?: string; onOpen: (href: string) => void;
+  series: string[]; onSeries: (codes: string[]) => void;
 }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards">("table");
-  const [type, setType] = useState("");
 
-  // Series/type facets — group the list by data series (DS, OFR, Map, …) for browsing.
-  // Counts derive from the full set so they stay stable as you filter.
+  // Data-series facets — one chip per series code (DS, OFR, GQ…), with a count and the
+  // human label. Multi-select: pick any combination; the selection lives in the URL
+  // (?s=DS,OFR) so a "just the series I care about" view is shareable. Counts derive from
+  // the full set so they stay stable as you toggle.
   const facets = useMemo(() => {
-    const m = new Map<string, number>();
+    const m = new Map<string, { n: number; label: string }>();
     for (const it of items) {
-      const t = gType(it);
-      if (t) m.set(t, (m.get(t) ?? 0) + 1);
+      const code = gCode(it);
+      if (!code) continue;
+      const cur = m.get(code) ?? { n: 0, label: gLabel(it) };
+      m.set(code, { n: cur.n + 1, label: cur.label });
     }
-    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+    return [...m.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
   }, [items]);
+  const sel = new Set(series);
+  const toggleCode = (code: string) =>
+    onSeries(sel.has(code) ? series.filter((c) => c !== code) : [...series, code]);
 
   const needle = (query ?? q).trim().toLowerCase();
   const rows = useMemo(
     () => items.filter((it) =>
-      (!needle || haystack(it).includes(needle)) && (!type || gType(it) === type)),
-    [items, needle, type],
+      (!needle || haystack(it).includes(needle)) && (!sel.size || sel.has(gCode(it)))),
+    [items, needle, series],
   );
 
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
@@ -204,11 +222,15 @@ function ItemList({ items, showCollection, query, onOpen }: {
       </div>
 
       {facets.length > 1 && (
-        <div className="mb-2 flex flex-wrap gap-1.5">
-          <span className={toggle(type === "")} onClick={() => setType("")}>All · {items.length}</span>
-          {facets.map(([t, n]) => (
-            <span key={t} className={toggle(type === t)} onClick={() => setType(type === t ? "" : t)}>{t} · {n}</span>
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Series</span>
+          {facets.map(([code, { n, label }]) => (
+            <span key={code} className={toggle(sel.has(code))} title={label}
+              onClick={() => toggleCode(code)}>{code} · {n}</span>
           ))}
+          {sel.size > 0 && (
+            <span className="cursor-pointer text-xs text-primary" onClick={() => onSeries([])}>clear</span>
+          )}
         </div>
       )}
 
@@ -576,6 +598,8 @@ export function Browse(props: {
   itemsLoading: boolean;
   search: string;
   onSearch: (q: string) => void;
+  series: string[];
+  onSeries: (codes: string[]) => void;
   item?: StacDoc;
   itemSelected: boolean;
   onOpenCollection: (href: string) => void;
@@ -584,7 +608,7 @@ export function Browse(props: {
   onBackToItems: () => void;
   onViewMap: () => void;
 }) {
-  const { collectionId, itemSelected, search, onSearch } = props;
+  const { collectionId, itemSelected, search, onSearch, series, onSeries } = props;
 
   // item detail
   if (collectionId && itemSelected) {
@@ -606,7 +630,7 @@ export function Browse(props: {
           <span className={C.muted}> / {collectionId}</span>
           {props.itemsLoading && <span className={C.muted}> · loading…</span>}
         </div>
-        <ItemList items={items} onOpen={props.onOpenItem} />
+        <ItemList items={items} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
       </div>
     );
   }
@@ -620,7 +644,7 @@ export function Browse(props: {
         {props.itemsLoading && <span className={C.muted}>loading items…</span>}
       </div>
       {search.trim()
-        ? <ItemList items={props.allItems} showCollection query={search} onOpen={props.onOpenItem} />
+        ? <ItemList items={props.allItems} showCollection query={search} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
         : <Collections collections={props.collections} onOpen={props.onOpenCollection} />}
     </div>
   );

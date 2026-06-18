@@ -9,15 +9,18 @@ import { useTheme } from "./theme";
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
-type Nav = { view: "catalog" | "map"; c?: string; i?: string; l?: string[] };
+// `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
+type Nav = { view: "catalog" | "map"; c?: string; i?: string; l?: string[]; s?: string[] };
 
 const readUrl = (): Nav => {
   const p = new URLSearchParams(location.search);
   const l = p.get("l");
+  const s = p.get("s");
   return {
     view: p.get("view") === "map" ? "map" : "catalog",
     c: p.get("c") || undefined, i: p.get("i") || undefined,
     l: l ? l.split(",").filter(Boolean) : undefined,
+    s: s ? s.split(",").filter(Boolean) : undefined,
   };
 };
 
@@ -29,6 +32,7 @@ const writeUrl = (n: Nav, push: boolean) => {
   n.c ? p.set("c", n.c) : p.delete("c");
   n.i ? p.set("i", n.i) : p.delete("i");
   n.l?.length ? p.set("l", n.l.join(",")) : p.delete("l");
+  n.s?.length ? p.set("s", n.s.join(",")) : p.delete("s");
   const url = `${location.pathname}${p.toString() ? "?" + p : ""}`;
   (push ? history.pushState : history.replaceState).call(history, null, "", url);
 };
@@ -90,11 +94,11 @@ function ThemeToggle() {
 }
 
 export function App() {
-  const [{ view, c: collectionUrl, i: itemUrl, l: layerIds }, setNav] = useState<Nav>(readUrl);
+  const [{ view, c: collectionUrl, i: itemUrl, l: layerIds, s: seriesSel }, setNav] = useState<Nav>(readUrl);
 
   // Sync state ↔ URL: push on user nav (back/forward works); read URL on popstate.
   const go = (next: Nav, push = true) => { writeUrl(next, push); setNav(next); };
-  const setView = (v: "catalog" | "map") => go({ view: v, c: collectionUrl, i: itemUrl, l: layerIds });
+  const setView = (v: "catalog" | "map") => go({ view: v, c: collectionUrl, i: itemUrl, l: layerIds, s: seriesSel });
   useEffect(() => {
     const onPop = () => setNav(readUrl());
     addEventListener("popstate", onPop);
@@ -173,12 +177,15 @@ export function App() {
       ?? allItems.find((r) => idOf(r.href) === itemUrl)?.href;
   const item = useStac(itemHref);
 
+  // Open a collection fresh (series filter is per-collection → cleared). Item open / layer
+  // toggle / back-to-items keep the active series filter so it survives drilling in + out.
   const openCollection = (href: string) => go({ view, c: collIdOf(href) });
-  const openItem = (href: string) => go({ view, c: collectionUrl, i: idOf(href), l: layerIds });
+  const openItem = (href: string) => go({ view, c: collectionUrl, i: idOf(href), l: layerIds, s: seriesSel });
+  const setSeries = (codes: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: layerIds, s: codes });
   const toggleLayer = (id: string) => {
     const set = new Set(layerIds ?? []);
     set.has(id) ? set.delete(id) : set.add(id);
-    go({ view, c: collectionUrl, i: itemUrl, l: [...set] });
+    go({ view, c: collectionUrl, i: itemUrl, l: [...set], s: seriesSel });
   };
 
   // Active map layers: the toggled set, else fall back to the detail item (so a plain
@@ -215,12 +222,14 @@ export function App() {
           itemsLoading={itemsLoading}
           search={search}
           onSearch={setSearch}
+          series={seriesSel ?? []}
+          onSeries={setSeries}
           item={item.data}
           itemSelected={Boolean(itemUrl)}
           onOpenCollection={openCollection}
           onOpenItem={openItem}
           onBackToCollections={() => go({ view })}
-          onBackToItems={() => go({ view, c: collectionUrl })}
+          onBackToItems={() => go({ view, c: collectionUrl, s: seriesSel })}
           onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
         />
       ) : (

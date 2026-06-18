@@ -160,10 +160,12 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
                 />
               ))
             ) : (
+              // Explicit `source` — react-map-gl doesn't inject it for Layers inside a Fragment,
+              // so without it maplibre throws "missing required property source".
               <>
-                <Layer id={`pm-${i}-fill`} type="fill" source-layer={l.pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
-                <Layer id={`pm-${i}-line`} type="line" source-layer={l.pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
-                <Layer id={`pm-${i}-circle`} type="circle" source-layer={l.pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
+                <Layer id={`pm-${i}-fill`} source={`pm-${i}`} type="fill" source-layer={l.pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
+                <Layer id={`pm-${i}-line`} source={`pm-${i}`} type="line" source-layer={l.pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
+                <Layer id={`pm-${i}-circle`} source={`pm-${i}`} type="circle" source-layer={l.pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
               </>
             )}
           </Source>

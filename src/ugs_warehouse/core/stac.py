@@ -288,6 +288,8 @@ def _index_entry(item: dict) -> dict:
         "properties": {k: props[k] for k in _INDEX_PROP_KEYS
                        if props.get(k) not in (None, "", [])},
     }
+    if props.get("renders"):  # bound GL style → lets the map view style from the index alone
+        entry["properties"]["renders"] = props["renders"]
     assets = {
         k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
         for k, a in (item.get("assets") or {}).items()

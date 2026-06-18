@@ -206,7 +206,10 @@ export function App() {
 
   // Active map layers: the toggled set, else fall back to the detail item (so a plain
   // ?c=&i= link still shows its layer). Resolved against fetched item data (for PMTiles).
+  // The compact index records omit `renders`, so prefer the FULL detail item for the open id
+  // (it carries the bound style_url) — otherwise the map can't style the selected layer.
   const byId = new Map(allItems.map((r) => [idOf(r.href), r]));
+  if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
   const idsForMap = layerIds?.length ? layerIds : itemUrl ? [idOf(itemUrl)] : [];
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
 

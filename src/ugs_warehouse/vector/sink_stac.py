@@ -36,7 +36,7 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           *, title: str | None = None, description: str | None = None,
           metadata: dict | None = None, bbox: list[float] | None = None,
-          row_count: int | None = None) -> None:
+          row_count: int | None = None, related_assets: dict | None = None) -> None:
     bb = bbox if bbox is not None else _bbox(con, view)
     rc = row_count if row_count is not None else _row_count(con, view)
     now = datetime.datetime.now(datetime.UTC).isoformat()
@@ -79,6 +79,9 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
                         "roles": ["visual"], "title": "PMTiles vector tiles"},
             "ducklake": {"href": ducklake_uri, "type": "application/x-ducklake-table",
                          "roles": ["data"], "title": "DuckLake table (native geometry)"},
+            # Supporting aspatial tables (e.g. UCRC boxes/photos/attachments), joined by
+            # `ugs:related_key`. Published by vector.related; absent for most topics.
+            **(related_assets or {}),
         },
         extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem])],
         stac_extensions=[stac.WEB_MAP_LINKS_EXT],

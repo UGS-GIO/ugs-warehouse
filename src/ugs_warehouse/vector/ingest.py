@@ -24,6 +24,7 @@ from types import ModuleType
 
 from ..core import stac
 from . import (
+    related,
     sink_archive,
     sink_ducklake,
     sink_pmtiles,
@@ -43,6 +44,16 @@ def _backend() -> ModuleType:
     SOURCE_BACKEND=postgres   -> source (direct Postgres, default)
     """
     return source_postgrest if os.environ.get("SOURCE_BACKEND") == "postgrest" else source
+
+
+def _related(topic: Topic) -> dict:
+    """Publish a topic's supporting aspatial tables (UCRC boxes/photos/attachments) → CDN
+    parquet + related STAC assets. Best-effort: {} for topics with none, never sinks the ingest."""
+    try:
+        return related.publish(topic)
+    except Exception as e:  # noqa: BLE001 — related data never blocks the parent ingest
+        print(f"[{topic.fqn}] related publish FAILED: {e}", file=sys.stderr)
+        return {}
 
 
 def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:
@@ -254,11 +265,12 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
 
             # 3. Write STAC
             meta = backend.read_metadata(topic)
+            related_assets = _related(topic)
             try:
                 stac_con = duckdb.connect()
                 stac_con.execute("SET max_memory='128MB';")
                 try:
-                    sink_stac.write(topic, stac_con, "", title=None, description=None, metadata=meta, bbox=overall_bbox, row_count=overall_row_count)
+                    sink_stac.write(topic, stac_con, "", title=None, description=None, metadata=meta, bbox=overall_bbox, row_count=overall_row_count, related_assets=related_assets)
                 finally:
                     stac_con.close()
             except Exception as e:
@@ -319,13 +331,14 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
 
         # Per-topic descriptive metadata (raw.schema_registry); {} until #171 + grant land.
         meta = backend.read_metadata(topic)
+        related_assets = _related(topic)
 
         rc = 0
         for name, fn in [
             ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
             ("archive",  lambda: sink_archive.write(topic, con, view)),
             ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
-            ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta)),
+            ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related_assets=related_assets)),
         ]:
             try:
                 fn()

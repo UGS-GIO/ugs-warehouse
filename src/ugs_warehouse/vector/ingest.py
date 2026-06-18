@@ -45,7 +45,7 @@ def _backend() -> ModuleType:
     return source_postgrest if os.environ.get("SOURCE_BACKEND") == "postgrest" else source
 
 
-def _ingest(topic: Topic, dry_run: bool = False) -> int:
+def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:
     backend = _backend()
     label = "PostgREST" if backend is source_postgrest else "Postgres"
     print(f"[{topic.fqn}] reading from {label}")
@@ -110,19 +110,20 @@ def _ingest(topic: Topic, dry_run: bool = False) -> int:
     # Rebuild the static root STAC catalog so it reflects this item (and all
     # prior ones) — keeps discovery current with no manual regen. Same
     # per-sink isolation: a refresh failure logs + sets rc but never raises.
-    try:
-        stac.refresh_catalog()
-    except Exception as e:
-        print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
-        traceback.print_exc()
-        rc = 1
+    if not skip_refresh:
+        try:
+            stac.refresh_catalog()
+        except Exception as e:
+            print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
+            traceback.print_exc()
+            rc = 1
     return rc
 
 
-def ingest_topic(topic: Topic, dry_run: bool = False) -> int:
+def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:
     """Ingest a single Topic. Top-level entry point for callers (CLI + service)."""
     try:
-        return _ingest(topic, dry_run=dry_run)
+        return _ingest(topic, dry_run=dry_run, skip_refresh=skip_refresh)
     except Exception as e:
         # Check if it's the "FATAL: no GEOMETRY column found" case (from source.py or transform.py)
         # We can handle non-spatial gracefully by just returning 0 (success, nothing to ingest)
@@ -153,6 +154,22 @@ def main() -> int:
         help="exercise source + transform only; skip all sinks "
              "(no GCS / Iceberg writes — safe smoke against real _current)",
     )
+    ap.add_argument(
+        "--parallel",
+        action="store_true",
+        help="ingest discovered topics in parallel using a ThreadPoolExecutor",
+    )
+    ap.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="number of concurrent worker threads when running in parallel (default: 4)",
+    )
+    ap.add_argument(
+        "--skip-refresh",
+        action="store_true",
+        help="skip the final STAC catalog refresh",
+    )
     args = ap.parse_args()
 
     if args.all:
@@ -160,11 +177,35 @@ def main() -> int:
         discovered = backend.discover()
         print(f"discovered {len(discovered)} topics in {topics.MART_SCHEMAS}")
         rc = 0
-        for t in discovered:
-            rc |= ingest_topic(t, dry_run=args.dry_run)
+
+        # Skip individual refreshes when running all topics to avoid redundant catalog listings/writes.
+        # We will trigger exactly one final refresh at the end instead.
+        skip_indiv = True
+
+        if args.parallel:
+            from concurrent.futures import ThreadPoolExecutor
+            print(f"running ingestion in parallel with {args.workers} workers...")
+            with ThreadPoolExecutor(max_workers=args.workers) as executor:
+                def run_one(t: Topic) -> int:
+                    return ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv)
+                results = list(executor.map(run_one, discovered))
+            rc = 1 if any(r != 0 for r in results) else 0
+        else:
+            for t in discovered:
+                rc |= ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv)
+
+        if not args.skip_refresh:
+            try:
+                print("running final STAC catalog refresh...")
+                stac.refresh_catalog()
+            except Exception as e:
+                print(f"final stac catalog refresh FAILED: {e}", file=sys.stderr)
+                traceback.print_exc()
+                rc = 1
         return rc
 
-    return ingest_topic(Topic.parse(args.topic), dry_run=args.dry_run)
+    topic = Topic.parse(args.topic)
+    return ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh)
 
 
 if __name__ == "__main__":

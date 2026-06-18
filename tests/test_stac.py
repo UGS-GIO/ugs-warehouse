@@ -129,3 +129,47 @@ def test_group_items_keeps_only_nested_item_paths():
     ]
     groups = stac._group_items(paths)
     assert sorted(groups["ugs-serving-topics"]) == ["x", "y"]
+
+
+def test_build_catalog_series_filter():
+    from unittest.mock import patch
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
+         patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
+         patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._footprint_geoms", return_value={}), \
+         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.core.stac.write_item") as mock_write, \
+         patch("ugs_warehouse.core.stac.refresh_catalog") as mock_refresh:
+
+         mock_read.return_value = [
+             {"series_id": "DS-8"},
+             {"series_id": "OFR-12"},
+             {"series_id": "DS-2"},
+         ]
+
+         count = build_catalog(series="DS", skip_refresh=True)
+
+         assert count == 2
+         assert mock_build.call_count == 2
+         mock_refresh.assert_not_called()
+
+
+def test_list_series(capsys):
+    from unittest.mock import patch
+    from ugs_warehouse.pubs.ingest import list_series
+
+    with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read:
+         mock_read.return_value = [
+             {"series_id": "DS-8"},
+             {"series_id": "OFR-12"},
+             {"series_id": "DS-2"},
+         ]
+         rc = list_series()
+         assert rc == 0
+         captured = capsys.readouterr()
+         assert "Discovered series codes:" in captured.out
+         assert "DS" in captured.out
+         assert "OFR" in captured.out

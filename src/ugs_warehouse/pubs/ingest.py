@@ -48,9 +48,13 @@ def _footprint_geoms() -> dict[str, tuple]:
         return {}
 
 
-def build_catalog(limit: int | None = None) -> int:
+def build_catalog(limit: int | None = None, series: str | None = None, skip_refresh: bool = False) -> int:
     print(f"[pubs] metadata source: {source.source_name()}")
     pubs = source.read_pubs()
+    if series:
+        series_upper = series.strip().upper()
+        pubs = [p for p in pubs if sink_stac.series_code(p.get("series_id")) == series_upper]
+        print(f"[pubs] filtered to series {series_upper}: {len(pubs)} publications")
     if limit:
         pubs = pubs[:limit]
     att: dict[str, list[dict]] = {}
@@ -84,16 +88,39 @@ def build_catalog(limit: int | None = None) -> int:
         results = list(executor.map(process_pub, pubs))
     n = sum(1 for r in results if r)
 
-    stac.refresh_catalog()
-    print(f"[pubs] wrote {n} items -> {config.public_url(config.STAC_PREFIX + '/catalog.json')}")
+    if not skip_refresh:
+        stac.refresh_catalog()
+        print(f"[pubs] wrote {n} items -> {config.public_url(config.STAC_PREFIX + '/catalog.json')}")
+    else:
+        print(f"[pubs] wrote {n} items (catalog refresh skipped)")
     return n
+
+
+def list_series() -> int:
+    print(f"[pubs] metadata source: {source.source_name()}")
+    pubs = source.read_pubs()
+    counts: dict[str, int] = {}
+    for p in pubs:
+        code = sink_stac.series_code(p.get("series_id"))
+        counts[code] = counts.get(code, 0) + 1
+    print("Discovered series codes:")
+    for code, count in sorted(counts.items(), key=lambda x: (-x[1], x[0])):
+        print(f"  {code:<10} : {count} publications")
+    return 0
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build the ugs-publications STAC collection")
     ap.add_argument("--limit", type=int, default=None, help="only the first N pubs (smoke test)")
+    ap.add_argument("--series", help="only process publications of this data series code (e.g. DS, OFR, M, etc.)")
+    ap.add_argument("--skip-refresh", action="store_true", help="skip the final STAC catalog refresh")
+    ap.add_argument("--list-series", action="store_true", help="list all unique series codes and counts, then exit")
     args = ap.parse_args()
-    build_catalog(limit=args.limit)
+
+    if args.list_series:
+        return list_series()
+
+    build_catalog(limit=args.limit, series=args.series, skip_refresh=args.skip_refresh)
     return 0
 
 

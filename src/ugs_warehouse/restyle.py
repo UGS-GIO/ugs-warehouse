@@ -17,6 +17,7 @@ index's asset summaries exact (the `style` asset chip).
 from __future__ import annotations
 
 import argparse
+from concurrent.futures import ThreadPoolExecutor
 import json
 import sys
 
@@ -40,32 +41,48 @@ def _clear_renders(item: dict) -> bool:
     return had
 
 
-def restyle(*, refresh: bool = False, dry_run: bool = False) -> int:
+def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
+            dry_run: bool = False, workers: int = 32) -> int:
     groups = stac._group_items(gcs.list_paths(config.STAC_PREFIX))
     n_entries = styles.warm()
     print(f"[restyle] styles manifest: {n_entries} entries")
 
-    changed = 0
+    if collection != "all":
+        groups = {
+            cp: iids
+            for cp, iids in groups.items()
+            if cp == collection or cp.startswith(collection + "/")
+        }
+
+    tasks = []
     for coll_path, item_ids in groups.items():
         for iid in sorted(item_ids):
-            obj = stac.item_object_path(coll_path, iid)
-            try:
-                item = json.loads(gcs.get_bytes(obj).decode())
-            except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the rebind
-                continue
-            had = _clear_renders(item)
-            stac.attach_renders(item)  # re-match against the fresh manifest
-            now = "renders" in (item.get("properties") or {})
-            if not had and not now:
-                continue  # never styled (e.g. a pub COG plate) — leave it untouched
-            changed += 1
-            if dry_run:
-                print(f"  {'~' if had else '+'} {coll_path}/{iid}"
-                      + ("" if now else "  (style removed)"))
-                continue
-            item["_collection_path"] = coll_path  # preserve nested layout on write
-            stac.write_item(item)
-            print(f"  {'~' if had else '+'} {config.public_url(obj)}")
+            tasks.append((coll_path, iid))
+
+    def process_task(task: tuple[str, str]) -> bool:
+        coll_path, iid = task
+        obj = stac.item_object_path(coll_path, iid)
+        try:
+            item = json.loads(gcs.get_bytes(obj).decode())
+        except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the rebind
+            return False
+        had = _clear_renders(item)
+        stac.attach_renders(item)  # re-match against the fresh manifest
+        now = "renders" in (item.get("properties") or {})
+        if not had and not now:
+            return False  # never styled (e.g. a pub COG plate) — leave it untouched
+        if dry_run:
+            print(f"  {'~' if had else '+'} {coll_path}/{iid}"
+                  + ("" if now else "  (style removed)"))
+            return True
+        item["_collection_path"] = coll_path  # preserve nested layout on write
+        stac.write_item(item)
+        print(f"  {'~' if had else '+'} {config.public_url(obj)}")
+        return True
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(process_task, tasks))
+    changed = sum(1 for r in results if r)
 
     if refresh and not dry_run:
         stac.refresh_catalog()
@@ -76,11 +93,15 @@ def restyle(*, refresh: bool = False, dry_run: bool = False) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Rebind ugs-styles renders into STAC (no reingest)")
+    ap.add_argument("--collection", default="ugs-serving-topics",
+                    help="limit restyle to a specific collection (default: ugs-serving-topics; use 'all' for everything)")
     ap.add_argument("--refresh", action="store_true",
                     help="also rebuild collection.json + items.json (keeps index asset summaries exact)")
     ap.add_argument("--dry-run", action="store_true", help="report changes, write nothing")
+    ap.add_argument("--workers", type=int, default=32,
+                    help="number of parallel threads for GCS operations (default: 32)")
     args = ap.parse_args()
-    restyle(refresh=args.refresh, dry_run=args.dry_run)
+    restyle(collection=args.collection, refresh=args.refresh, dry_run=args.dry_run, workers=args.workers)
     return 0
 
 

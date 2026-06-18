@@ -85,3 +85,51 @@ def test_restyle_dry_run_writes_nothing(monkeypatch):
     n = R.restyle(dry_run=True)
     assert n == 1                 # would bind one
     assert store == before        # but wrote nothing
+
+
+def test_restyle_collection_all(monkeypatch):
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [
+        {"itemId": "enmin_ucrc_wells", "render": "by-purpose", "kind": "vector",
+         "assets": ["pmtiles"], "path": "styles/x/by-purpose.json", "title": "wells"},
+        {"itemId": "DS-8", "render": "default", "kind": "vector", "assets": ["publication"],
+         "path": "styles/ds8/default.json", "title": "ds8"},
+    ])
+    wells = stac.build_item(item_id="enmin_ucrc_wells", collection="ugs-serving-topics",
+                            geometry=None, bbox=[-114, 37, -109, 42], datetime_iso="2026-01-01T00:00:00Z",
+                            properties={"title": "Wells"},
+                            assets={"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}})
+    stac.write_item(wells)
+    pub = stac.build_item(item_id="DS-8", collection="DS", collection_path="ugs-publications/DS",
+                          geometry=None, bbox=None, datetime_iso=None, properties={"title": "x"},
+                          assets={"publication": {"href": "p", "type": "application/pdf"}})
+    stac.write_item(pub)
+
+    n = R.restyle(collection="all")
+    assert n == 2
+    assert "by-purpose" in _props(store, "ugs-serving-topics", "enmin_ucrc_wells")["renders"]
+    assert "default" in _props(store, "ugs-publications/DS", "DS-8")["renders"]
+
+
+def test_restyle_collection_custom_prefix(monkeypatch):
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [
+        {"itemId": "enmin_ucrc_wells", "render": "by-purpose", "kind": "vector",
+         "assets": ["pmtiles"], "path": "styles/x/by-purpose.json", "title": "wells"},
+        {"itemId": "DS-8", "render": "default", "kind": "vector", "assets": ["publication"],
+         "path": "styles/ds8/default.json", "title": "ds8"},
+    ])
+    wells = stac.build_item(item_id="enmin_ucrc_wells", collection="ugs-serving-topics",
+                            geometry=None, bbox=[-114, 37, -109, 42], datetime_iso="2026-01-01T00:00:00Z",
+                            properties={"title": "Wells"},
+                            assets={"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}})
+    stac.write_item(wells)
+    pub = stac.build_item(item_id="DS-8", collection="DS", collection_path="ugs-publications/DS",
+                          geometry=None, bbox=None, datetime_iso=None, properties={"title": "x"},
+                          assets={"publication": {"href": "p", "type": "application/pdf"}})
+    stac.write_item(pub)
+
+    n = R.restyle(collection="ugs-publications")
+    assert n == 1
+    assert "default" in _props(store, "ugs-publications/DS", "DS-8")["renders"]
+    assert "renders" not in _props(store, "ugs-serving-topics", "enmin_ucrc_wells")

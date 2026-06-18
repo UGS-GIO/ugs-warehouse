@@ -194,14 +194,55 @@ def _collection_doc(collection: str, item_ids: list[str], extent: dict | None = 
         "license": "proprietary",
         "extent": extent or {"spatial": {"bbox": [UTAH_BBOX]},
                              "temporal": {"interval": [[None, None]]}},
+        "summaries": {"ugs:item_count": len(item_ids)},
         "links": [
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./collection.json", "type": "application/json"},
             {"rel": "service", "href": f"{PGF_BASE_URL}/collections/{collection}", "type": "application/json", "title": "OGC API Features endpoint"},
+            # Compact items index — one fetch for the whole list (viewers read this instead
+            # of N item.json fetches; the per-item docs stay the source of truth for detail).
+            {"rel": "items", "href": "./items.json", "type": "application/json", "title": "Items index"},
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json"}
               for i in sorted(item_ids)],
         ],
     }
+
+
+# Properties carried in the compact index — enough to render the list table + facets
+# (title, date, series/type/topic/scale/author, keywords for search). The long
+# `description`/citation is intentionally omitted; it loads with the full item on open.
+_INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
+                    "ugs:topic", "ugs:scale", "ugs:author", "ugs:dbt_schema", "ugs:layer",
+                    "ugs:row_count", "keywords")
+
+
+def _index_entry(item: dict) -> dict:
+    """A compact, list-renderable subset of a STAC item (mini-doc): id, bbox, a few
+    properties, asset summaries, and any web-map links (pmtiles/cog) for map overlays."""
+    props = item.get("properties") or {}
+    entry: dict = {
+        "id": item["id"],
+        "bbox": item.get("bbox"),
+        "properties": {k: props[k] for k in _INDEX_PROP_KEYS
+                       if props.get(k) not in (None, "", [])},
+    }
+    assets = {
+        k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
+        for k, a in (item.get("assets") or {}).items()
+    }
+    if assets:
+        entry["assets"] = assets
+    wlinks = [{kk: l[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if l.get(kk) is not None}
+              for l in (item.get("links") or []) if l.get("rel") in ("pmtiles", "cog")]
+    if wlinks:
+        entry["links"] = wlinks
+    return entry
+
+
+def _index_doc(collection: str, items: list[dict]) -> dict:
+    entries = [_index_entry(it) for it in sorted(items, key=lambda it: it.get("id", ""))]
+    return {"type": "ugs-items-index", "collection": collection,
+            "count": len(entries), "items": entries}
 
 
 def _root_doc(collections: list[str]) -> dict:
@@ -242,6 +283,8 @@ def refresh_catalog() -> None:
                 pass
         _write_json(_collection_doc(collection, item_ids, _extent(items)),
                     f"{config.STAC_PREFIX}/{collection}/collection.json")
+        _write_json(_index_doc(collection, items),
+                    f"{config.STAC_PREFIX}/{collection}/items.json")
     _write_json(_root_doc(list(groups)), f"{config.STAC_PREFIX}/catalog.json")
     n = sum(len(v) for v in groups.values())
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "

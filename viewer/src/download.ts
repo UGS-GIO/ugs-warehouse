@@ -85,15 +85,23 @@ async function registerUrl(parquetUrl: string): Promise<string> {
   return src;
 }
 
+export type ColType = "number" | "text";
+// Per-column filter: numeric columns get a range (min/max), everything else a substring match.
+export type ColFilter =
+  | { col: string; kind: "number"; min?: number; max?: number }
+  | { col: string; kind: "text"; contains: string };
+
 export interface PageOpts {
   limit: number;
   offset: number;
-  orderBy?: string;   // column to sort by (ignored if not a real column)
+  orderBy?: string;       // column to sort by (ignored if not a real column)
   desc?: boolean;
-  search?: string;    // free-text, matched case-insensitively across every column
+  search?: string;        // free-text, matched case-insensitively across every column
+  filters?: ColFilter[];  // per-column constraints, ANDed together (and with `search`)
 }
 export interface Page {
   columns: string[];
+  types: Record<string, ColType>;   // displayed column → filter UI kind
   rows: Record<string, unknown>[];
   total: number;      // total matching rows (for paging), NOT just this page
   // Per-row [xmin,ymin,xmax,ymax] in 4326 (aligned with `rows`), read from the GeoParquet's
@@ -106,6 +114,24 @@ export interface Page {
 // zoom, hidden from the displayed table (noise) like the geometry column.
 const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
 
+// DuckDB type → filter UI kind. Numeric (range) vs everything else (substring). Date/time stay
+// "text" — a substring on the ISO string is the most useful zero-config filter.
+const colType = (duckType: string): ColType =>
+  /\b(INT|DEC|DOUBLE|FLOAT|REAL|NUMERIC|HUGEINT)\b/.test(duckType.toUpperCase()) ? "number" : "text";
+
+// One SQL predicate from a per-column filter (empty string = no constraint).
+function filterClause(f: ColFilter): string {
+  const c = ident(f.col);
+  if (f.kind === "number") {
+    const parts: string[] = [];
+    if (Number.isFinite(f.min)) parts.push(`${c} >= ${f.min}`);
+    if (Number.isFinite(f.max)) parts.push(`${c} <= ${f.max}`);
+    return parts.join(" AND ");
+  }
+  const t = f.contains.trim();
+  return t ? `CAST(${c} AS VARCHAR) ILIKE ${lit(`%${t}%`)}` : "";
+}
+
 /** Server-side-style paged/sorted/filtered query over a remote GeoParquet, run entirely in
  *  DuckDB-WASM via HTTP range reads. Backs the in-page dataset explorer: COUNT(*) gives the
  *  total for pagination, then LIMIT/OFFSET/ORDER BY/WHERE fetch one page. Geometry excluded. */
@@ -116,16 +142,31 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const src = await registerUrl(parquetUrl);
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
-    const allCols = desc.toArray().map((r) => String(r.column_name));
+    const descRows = desc.toArray();
+    const allCols = descRows.map((r) => String(r.column_name));
     const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
     // Displayed columns: drop geometry + the bbox covering columns (kept only for zoom).
     const hidden = new Set([GEOM, ...(hasBbox ? BBOX_COLS : [])]);
     const columns = allCols.filter((c) => !hidden.has(c));
+    const types: Record<string, ColType> = {};
+    for (const r of descRows) {
+      const name = String(r.column_name);
+      if (!hidden.has(name)) types[name] = colType(String(r.column_type ?? ""));
+    }
 
+    // WHERE = global free-text (OR across all columns) AND each per-column filter.
+    const clauses: string[] = [];
     const s = opts.search?.trim();
-    const where = s
-      ? " WHERE " + columns.map((c) => `CAST(${ident(c)} AS VARCHAR) ILIKE ${lit(`%${s}%`)}`).join(" OR ")
-      : "";
+    if (s) {
+      clauses.push("(" + columns.map((c) => `CAST(${ident(c)} AS VARCHAR) ILIKE ${lit(`%${s}%`)}`).join(" OR ") + ")");
+    }
+    for (const f of opts.filters ?? []) {
+      if (!columns.includes(f.col)) continue;
+      const cl = filterClause(f);
+      if (cl) clauses.push(`(${cl})`);
+    }
+    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+
     const totalRes = await conn.query(`SELECT count(*) AS n FROM ${from}${where};`);
     const total = Number(totalRes.toArray()[0]?.n ?? 0);
 
@@ -147,42 +188,9 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
       const b = BBOX_COLS.map((c) => Number(o[c]));
       return b.every((n) => Number.isFinite(n)) ? (b as [number, number, number, number]) : null;
     });
-    return { columns, rows, total, bboxes };
+    return { columns, types, rows, total, bboxes };
   } finally {
     await conn.close();
-  }
-}
-
-/** First `limit` rows of a GeoParquet (geometry column dropped) for an in-page data glance —
- *  the canonical datalake artifact. Reuses the shared DuckDB-WASM instance (same lazy boot as
- *  export); no spatial load needed since geometry is excluded. */
-export async function previewRows(
-  parquetUrl: string,
-  limit = 12,
-): Promise<{ columns: string[]; rows: Record<string, unknown>[] }> {
-  const duckdb = await import("@duckdb/duckdb-wasm");
-  const db = await getDB();
-  const conn = await db.connect();
-  const id = ++seq;
-  const src = `p${id}.parquet`;
-  try {
-    await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
-    const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${src}');`);
-    const allCols = desc.toArray().map((r) => String(r.column_name));
-    const hasGeom = allCols.includes(GEOM);
-    const columns = allCols.filter((c) => c !== GEOM);
-    const sel = hasGeom ? `* EXCLUDE (${GEOM})` : "*";
-    const res = await conn.query(`SELECT ${sel} FROM read_parquet('${src}') LIMIT ${limit};`);
-    const rows = res.toArray().map((r) => {
-      const o = r.toJSON() as Record<string, unknown>;
-      const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(o)) out[k] = sanitize(v);
-      return out;
-    });
-    return { columns, rows };
-  } finally {
-    await conn.close();
-    await db.dropFile(src).catch(() => {});
   }
 }
 

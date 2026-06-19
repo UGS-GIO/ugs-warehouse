@@ -7,7 +7,7 @@ import {
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
-import { exportItem, type ExportFormat, FORMATS } from "./download";
+import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
 import { type Asset, citeLink, cogAsset, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
 
@@ -500,33 +500,53 @@ function DataExplorer({ href, onPick }: {
   const [pageIndex, setPageIndex] = useState(0);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [search, setSearch] = useState("");
-  const [needle, setNeedle] = useState("");
+  // Raw per-column filter inputs (strings, as typed) → debounced into `applied` (SQL-ready).
+  const [draft, setDraft] = useState<Record<string, { min?: string; max?: string; text?: string }>>({});
+  const [applied, setApplied] = useState<{ search: string; filters: ColFilter[] }>({ search: "", filters: [] });
   const [page, setPage] = useState<{
-    columns: string[]; rows: Record<string, unknown>[]; total: number;
+    columns: string[]; types: Record<string, "number" | "text">;
+    rows: Record<string, unknown>[]; total: number;
     bboxes: ([number, number, number, number] | null)[];
   } | null>(null);
   const [err, setErr] = useState<string>();
   const [loading, setLoading] = useState(true);
 
-  // Debounce the search box; a new term resets to page 1.
+  // Debounce search + per-column filters together into the applied query; any change resets to
+  // page 1. Numeric columns → range (min/max), others → substring (kind from the loaded types).
+  const types = page?.types;
   useEffect(() => {
-    const t = setTimeout(() => { setNeedle(search); setPageIndex(0); }, 300);
+    const t = setTimeout(() => {
+      const filters: ColFilter[] = [];
+      for (const [col, d] of Object.entries(draft)) {
+        const kind = types?.[col] ?? "text";
+        if (kind === "number") {
+          const min = d.min?.trim() ? Number(d.min) : undefined;
+          const max = d.max?.trim() ? Number(d.max) : undefined;
+          if (Number.isFinite(min) || Number.isFinite(max)) filters.push({ col, kind, min, max });
+        } else if (d.text?.trim()) {
+          filters.push({ col, kind: "text", contains: d.text });
+        }
+      }
+      setApplied({ search, filters });
+      setPageIndex(0);
+    }, 300);
     return () => clearTimeout(t);
-  }, [search]);
+  }, [search, draft, types]);
 
   const sort = sorting[0];
+  const filterKey = JSON.stringify(applied.filters);
   useEffect(() => {
     let live = true;
     setLoading(true);
     import("./download").then(({ queryParquet }) => queryParquet(href, {
       limit: PAGE_SIZE, offset: pageIndex * PAGE_SIZE,
-      orderBy: sort?.id, desc: sort?.desc, search: needle,
+      orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
     }))
       .then((d) => { if (live) { setPage(d); setErr(undefined); } })
       .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [href, pageIndex, sort?.id, sort?.desc, needle]);
+  }, [href, pageIndex, sort?.id, sort?.desc, applied.search, filterKey]);
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
     () => (page?.columns ?? []).map((c) => ({
@@ -551,6 +571,10 @@ function DataExplorer({ href, onPick }: {
   const total = page?.total ?? 0;
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
   const btn = "rounded border border-border bg-card px-2 py-0.5 text-xs text-foreground hover:border-primary disabled:opacity-40";
+  const fIn = "w-full min-w-[64px] rounded border border-input bg-card px-1 py-0.5 text-[11px] font-normal normal-case text-foreground";
+  const hasFilters = Boolean(search) || applied.filters.length > 0
+    || Object.values(draft).some((d) => d.min || d.max || d.text);
+  const clearAll = () => { setSearch(""); setDraft({}); };
 
   return (
     <div className="mt-2">
@@ -561,6 +585,7 @@ function DataExplorer({ href, onPick }: {
           {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
           {onPick && page?.bboxes.some(Boolean) ? " · click a row to zoom" : ""}
         </span>
+        {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
       </div>
       {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
       <div className="max-w-full overflow-x-auto rounded-md border border-border text-[12px]">
@@ -579,6 +604,30 @@ function DataExplorer({ href, onPick }: {
                 })}
               </tr>
             ))}
+            {/* Per-column filter row: numeric → min/max range, text → substring. */}
+            <tr>
+              {(page?.columns ?? []).map((col) => {
+                const kind = page?.types[col] ?? "text";
+                const d = draft[col] ?? {};
+                const set = (patch: Partial<{ min: string; max: string; text: string }>) =>
+                  setDraft((prev) => ({ ...prev, [col]: { ...prev[col], ...patch } }));
+                return (
+                  <th key={col} className="border-b border-border px-1.5 py-1 align-top">
+                    {kind === "number" ? (
+                      <div className="flex gap-1">
+                        <input className={fIn} placeholder="min" value={d.min ?? ""} type="number"
+                          onChange={(e) => set({ min: e.target.value })} />
+                        <input className={fIn} placeholder="max" value={d.max ?? ""} type="number"
+                          onChange={(e) => set({ max: e.target.value })} />
+                      </div>
+                    ) : (
+                      <input className={fIn} placeholder="contains…" value={d.text ?? ""}
+                        onChange={(e) => set({ text: e.target.value })} />
+                    )}
+                  </th>
+                );
+              })}
+            </tr>
           </thead>
           <tbody>
             {table.getRowModel().rows.map((r) => {

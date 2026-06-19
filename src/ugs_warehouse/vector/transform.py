@@ -1,26 +1,19 @@
 """DuckDB-side transform: confirm CRS = 4326, add h3_r9, hilbert-sort.
 
-Input: a pyarrow Table from `source.read` carrying `geom_wkb` (BLOB) plus the
-dbt-mart `source_epsg` / `target_epsg` columns.
-
-Output: a DuckDB connection holding a `transformed` view in EPSG:4326 with:
+`materialize` turns a source relation carrying `geom_wkb` (BLOB) + `target_epsg` into a DuckDB
+table in EPSG:4326 with:
   - `geom`  GEOMETRY (4326), hydrated from `geom_wkb`
   - `h3_r9` UBIGINT, H3 cell at resolution 9 from the centroid
   - rows ORDER BY `ST_Hilbert(centroid)` so parquet row-groups bbox-prune well
 
-Each sink reads from the view in the form it needs:
-  - sink_iceberg: SELECT * REPLACE (ST_AsWKB(geom) AS geom) -> BLOB column
-  - sink_archive: COPY ... TO 'gs://.parquet' (FORMAT PARQUET) -> GeoParquet
+The source relation is a postgres_query subquery (see `source.stream_transformed`) — everything
+stays inside DuckDB, no pyarrow. Sinks then read the materialized table.
 """
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
 
 import duckdb
-
-if TYPE_CHECKING:  # pyarrow is heavy RSS — only the arrow path needs it, and only as a type.
-    import pyarrow as pa
 
 H3_RESOLUTION = 9
 TARGET_SRS = 4326
@@ -73,12 +66,3 @@ def materialize(con: duckdb.DuckDBPyConnection, source_rel: str,
     `con` must already have `setup()` run. Returns the table name."""
     con.execute(f"CREATE OR REPLACE TABLE {name} AS {_select(source_rel)}")
     return name
-
-
-def run(arrow_in: pa.Table) -> tuple[duckdb.DuckDBPyConnection, str]:
-    """Arrow path (PostgREST / chunked): register the pyarrow table + materialize the transform.
-    Returns (connection, table_name)."""
-    con = duckdb.connect()
-    setup(con)
-    con.register("source_arrow", arrow_in)
-    return con, materialize(con, "source_arrow")

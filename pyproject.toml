@@ -5,25 +5,27 @@ description = "DuckLake lakehouse for UGS — forks at _current and emits DuckLa
 requires-python = ">=3.11"
 dependencies = [
   "duckdb>=1.5.3,<1.5.4",  # capped: h3 community ext has no v1.5.4 build yet (404). Lift cap when published.
-  "pyarrow>=17",
   "cloud-sql-python-connector>=1.11",
   "obstore>=0.10",       # unified S3/GCS/Azure object client (Rust); GCS sinks
   "fsspec>=2024.6",      # obstore fsspec adapter -> DuckLake GCS IO (no httpfs/HMAC)
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
-  "shapely>=2.0",        # PostgREST source: GeoJSON -> WKB re-encode
+  # NB: no pyarrow / shapely — the vector ingest streams Postgres→DuckDB→CDN entirely in DuckDB
+  # (no Python materialization). They live in the [pubs] extra (geopandas/pyogrio need them).
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.6", "pre-commit>=3.7"]
 # pubs/COG producer — heavy raster deps; installed in Dockerfile.harvest (needs system
-# GDAL CLI + poppler too). duckdb/pyarrow are in the base deps.
+# GDAL CLI + poppler too). duckdb is in the base deps.
 pubs = [
   "rasterio>=1.3",
   "rio-cogeo>=5",
   "geopandas>=1.0",
   "pyogrio>=0.9",
+  "pyarrow>=17",         # geopandas parquet IO (base ingest no longer needs it)
+  "shapely>=2.0",        # geopandas geometry
   "requests>=2.31",
   "pymysql>=1.1",        # optional: live pub metadata from MySQL (else vendored CSV snapshot)
 ]

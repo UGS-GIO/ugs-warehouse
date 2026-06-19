@@ -17,7 +17,6 @@ and `--topic schema.layer_current` ingests one explicitly.
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 import traceback
 from types import ModuleType
@@ -30,26 +29,13 @@ from . import (
     sink_pmtiles,
     sink_stac,
     topics,
-    transform,
 )
 from .topics import Topic
 
 
-def _is_postgrest() -> bool:
-    return os.environ.get("SOURCE_BACKEND") == "postgrest"
-
-
 def _backend() -> ModuleType:
-    """Pick + lazily import the source backend (env-driven), so the unused backend's heavy deps
-    don't load. Default Postgres (`source`) imports no pyarrow at runtime; PostgREST
-    (`source_postgrest`) pulls pyarrow + shapely — only imported when actually selected.
-
-    SOURCE_BACKEND=postgrest  -> source_postgrest (HTTP, no DB login needed)
-    SOURCE_BACKEND=postgres   -> source (direct Postgres, default)
-    """
-    if _is_postgrest():
-        from . import source_postgrest
-        return source_postgrest
+    """The source backend: direct Postgres (Cloud SQL). PostgREST is the public viewer's runtime
+    API, NOT an ingest source — the warehouse reads Postgres and writes parquet/pmtiles/STAC."""
     from . import source
     return source
 
@@ -65,8 +51,8 @@ def _related(topic: Topic) -> dict:
 
 
 def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool) -> int:
-    """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over a transformed
-    table/view → catalog refresh. Shared by the streaming + single-shot arrow paths."""
+    """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over the
+    transformed table → catalog refresh."""
     count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
     non_null = con.execute(f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL").fetchone()[0]
     if non_null == 0:
@@ -117,166 +103,11 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
 
 def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:
     backend = _backend()
-    label = "PostgREST" if _is_postgrest() else "Postgres"
-
-    chunk_size = int(os.environ.get("INGEST_CHUNK_SIZE", "5000"))
-
-    # Preferred path (Postgres): one DuckDB connection streams scan→transform→materialize with
-    # no pyarrow and no Python-held rows; DuckDB spills under its memory cap. No row chunking
-    # needed. (PostgREST can't ATTACH, so it falls through to the arrow/chunked paths below.)
-    if hasattr(backend, "stream_transformed"):
-        print(f"[{topic.fqn}] reading from {label} (streaming, single DuckDB)")
-        con, view = backend.stream_transformed(topic)
-        return _run_sinks(topic, con, view, backend, dry_run, skip_refresh)
-
-    # 1. Determine if we should use chunked ingestion
-    is_chunked = False
-    total_rows = 0
-    if hasattr(backend, "get_count") and hasattr(backend, "iter_chunks"):
-        try:
-            total_rows = backend.get_count(topic)
-            if total_rows > chunk_size:
-                is_chunked = True
-        except Exception as e:
-            print(f"[{topic.fqn}] get_count failed, falling back to non-chunked: {e}", file=sys.stderr)
-
-    if is_chunked:
-        print(f"[{topic.fqn}] reading from {label} in chunks (total rows: {total_rows}, chunk_size: {chunk_size})")
-
-        import math
-        import tempfile
-
-        import duckdb
-
-        overall_bbox = [float("inf"), float("inf"), float("-inf"), float("-inf")]
-        overall_row_count = 0
-        has_geom = False
-        first_write = True  # first non-empty chunk OVERWRITES ducklake; rest APPEND
-
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            parquet_chunks_dir = os.path.join(tmp_dir, "parquet_chunks")
-            os.makedirs(parquet_chunks_dir, exist_ok=True)
-
-            geojsonl_chunks_dir = os.path.join(tmp_dir, "geojsonl_chunks")
-            os.makedirs(geojsonl_chunks_dir, exist_ok=True)
-
-            n_chunks = math.ceil(total_rows / chunk_size)
-            # Keyset-paginated stream (one DB connection, O(n), no row skip/dup). total_rows is
-            # an estimate for the progress line — the generator drives actual termination.
-            for chunk_idx, arrow_chunk in enumerate(backend.iter_chunks(topic, chunk_size)):
-                print(f"[{topic.fqn}] processing chunk {chunk_idx + 1}/~{n_chunks} "
-                      f"({arrow_chunk.num_rows} rows)")
-
-                con, view = transform.run(arrow_chunk)
-
-                count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
-                non_null = con.execute(
-                    f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL"
-                ).fetchone()[0]
-
-                if count == 0:
-                    continue
-
-                if non_null > 0:
-                    has_geom = True
-                    bbox = con.execute(f"""
-                        SELECT
-                          MIN(ST_XMin(geom)), MIN(ST_YMin(geom)),
-                          MAX(ST_XMax(geom)), MAX(ST_YMax(geom))
-                        FROM {view}
-                        WHERE geom IS NOT NULL
-                    """).fetchone()
-                    if bbox and all(v is not None for v in bbox):
-                        overall_bbox[0] = min(overall_bbox[0], float(bbox[0]))
-                        overall_bbox[1] = min(overall_bbox[1], float(bbox[1]))
-                        overall_bbox[2] = max(overall_bbox[2], float(bbox[2]))
-                        overall_bbox[3] = max(overall_bbox[3], float(bbox[3]))
-
-                overall_row_count += count
-
-                if dry_run:
-                    continue
-
-                # Run sink: ducklake — first real chunk overwrites, rest append. (Keyed on a
-                # write flag, not chunk_idx: an empty/skipped early chunk must not flip it.)
-                try:
-                    sink_ducklake.write(topic, con, view, append=not first_write)
-                    first_write = False
-                except Exception as e:
-                    print(f"[{topic.fqn}] sink ducklake chunk {chunk_idx} FAILED: {e}", file=sys.stderr)
-                    traceback.print_exc()
-
-                # Per-chunk artifacts → disk (the sinks own the COPY SQL; merged after the loop).
-                try:
-                    sink_archive.write_chunk(con, view, os.path.join(parquet_chunks_dir, f"chunk_{chunk_idx}.parquet"))
-                except Exception as e:
-                    print(f"[{topic.fqn}] sink archive chunk {chunk_idx} FAILED: {e}", file=sys.stderr)
-                    traceback.print_exc()
-                try:
-                    sink_pmtiles.write_chunk(con, view, os.path.join(geojsonl_chunks_dir, f"chunk_{chunk_idx}.geojsonl"))
-                except Exception as e:
-                    print(f"[{topic.fqn}] sink pmtiles chunk {chunk_idx} FAILED: {e}", file=sys.stderr)
-                    traceback.print_exc()
-
-                try:
-                    con.close()
-                except Exception:
-                    pass
-
-            if not has_geom and overall_row_count > 0:
-                print(f"[{topic.fqn}] SKIP: 0/{overall_row_count} rows have geometry", file=sys.stderr)
-                return 1
-
-            if dry_run:
-                print(f"[{topic.fqn}] DRY-RUN OK (chunked)")
-                print(f"  total rows after transform : {overall_row_count}")
-                if has_geom:
-                    print(f"  overall bbox (4326)        : minx={overall_bbox[0]:.6f} miny={overall_bbox[1]:.6f} "
-                          f"maxx={overall_bbox[2]:.6f} maxy={overall_bbox[3]:.6f}")
-                return 0
-
-            # Merge the per-chunk artifacts → upload (the sinks own merge + tippecanoe + upload,
-            # same code the non-chunked path uses). Per-sink isolation: a failure logs + sets rc.
-            rc = 0
-            for name, fn in (("archive", lambda: sink_archive.finalize(topic, parquet_chunks_dir)),
-                             ("pmtiles", lambda: sink_pmtiles.finalize(topic, geojsonl_chunks_dir))):
-                try:
-                    fn()
-                except Exception as e:
-                    print(f"[{topic.fqn}] sink {name} finalize FAILED: {e}", file=sys.stderr)
-                    traceback.print_exc()
-                    rc = 1
-
-            # Write STAC
-            meta = backend.read_metadata(topic)
-            related_assets = _related(topic)
-            try:
-                stac_con = duckdb.connect()
-                stac_con.execute(f"SET max_memory='{transform.MAX_MEMORY}';")
-                try:
-                    sink_stac.write(topic, stac_con, "", title=None, description=None, metadata=meta, bbox=overall_bbox, row_count=overall_row_count, related_assets=related_assets)
-                finally:
-                    stac_con.close()
-            except Exception as e:
-                print(f"[{topic.fqn}] sink stac FAILED: {e}", file=sys.stderr)
-                traceback.print_exc()
-                rc = 1
-
-            if not skip_refresh:
-                try:
-                    stac.refresh_catalog()
-                except Exception as e:
-                    print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
-                    traceback.print_exc()
-                    rc = 1
-            return rc
-
-    else:
-        print(f"[{topic.fqn}] reading from {label}")
-        arrow_in = backend.read(topic)
-        print(f"[{topic.fqn}] {arrow_in.num_rows} rows in, {len(arrow_in.column_names)} columns")
-        con, view = transform.run(arrow_in)
-        return _run_sinks(topic, con, view, backend, dry_run, skip_refresh)
+    # One DuckDB connection streams Postgres scan → transform → materialize (no pyarrow, no
+    # Python-held rows; DuckDB spills under its memory cap). The sinks read the materialized table.
+    print(f"[{topic.fqn}] reading from Postgres (streaming, single DuckDB)")
+    con, view = backend.stream_transformed(topic)
+    return _run_sinks(topic, con, view, backend, dry_run, skip_refresh)
 
 
 def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:

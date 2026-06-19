@@ -1,9 +1,9 @@
-"""Read `{schema}.{topic}_current` from Postgres into a pyarrow Table.
+"""Read `{schema}.{topic}_current` from Postgres and stream it through DuckDB.
 
-PostGIS geometry is returned as `geom_wkb` (BLOB) via server-side `ST_AsBinary`;
-`transform.py` hydrates it back to a DuckDB GEOMETRY. The dbt-mart `source_epsg`
-and `target_epsg` columns travel with each row so the transform knows whether
-to confirm or reproject.
+`stream_transformed` ATTACHes Postgres and hands a transformed table to the sinks — all in one
+DuckDB connection, no pyarrow, no Python-held rows (DuckDB streams + spills under its memory
+cap). PostGIS geometry crosses as `geom_wkb` (server-side `ST_AsBinary`); the geometry's own
+SRID becomes `target_epsg` so `transform` confirms or reprojects to 4326.
 
 Env:
   POSTGRES_DSN  libpq-style DSN.
@@ -13,13 +13,8 @@ Env:
 from __future__ import annotations
 
 import os
-from collections.abc import Iterator
-from typing import TYPE_CHECKING
 
 import duckdb
-
-if TYPE_CHECKING:  # pyarrow is heavy RSS — only the arrow paths use it, and only as a type.
-    import pyarrow as pa
 
 from .topics import MART_SCHEMAS, Topic
 
@@ -61,88 +56,6 @@ def _geom_column(cols: list[tuple[str, str]]) -> str:
         if name == "geom":
             return name
     raise RuntimeError("no GEOMETRY column found")
-
-
-def read(topic: Topic) -> pa.Table:
-    """Pull `{schema}.{topic}_current` into a pyarrow Table.
-
-    `geom_wkb` is BLOB (server-side `ST_AsBinary`); every other column is
-    passed through as the Postgres type maps it.
-    """
-    con = _connect()
-    try:
-        cols = _describe(con, topic)
-        geom_col = _geom_column(cols)
-        # Derive target_epsg from the geometry's own SRID — the WKB emitted by
-        # ST_AsBinary is in that CRS, so ST_SRID is authoritative. Don't depend on a
-        # literal target_epsg column (not all _current tables carry one yet). Drop
-        # any existing target_epsg to avoid a duplicate. SRID 0 (unset) -> 4326.
-        other = [c for c, _ in cols if c not in (geom_col, "target_epsg")]
-        select_list = (
-            ", ".join(f'"{c}"' for c in other)
-            + f', ST_AsBinary("{geom_col}") AS geom_wkb'
-            + f', COALESCE(NULLIF(ST_SRID("{geom_col}"), 0), 4326) AS target_epsg'
-        )
-        pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}"'
-        return con.execute(
-            "SELECT * FROM postgres_query(?, ?)",
-            [PG_ALIAS, pg_sql],
-        ).fetch_arrow_table()
-    finally:
-        con.close()
-
-
-def get_count(topic: Topic) -> int:
-    """Get the total row count of the topic's `_current` table directly from Postgres."""
-    con = _connect()
-    try:
-        pg_sql = f'SELECT count(*) FROM "{topic.schema}"."{topic.layer}"'
-        row = con.execute(
-            "SELECT * FROM postgres_query(?, ?)",
-            [PG_ALIAS, pg_sql],
-        ).fetchone()
-        return int(row[0]) if row else 0
-    finally:
-        con.close()
-
-
-def iter_chunks(topic: Topic, chunk_size: int) -> Iterator[pa.Table]:
-    """Yield the topic's rows in keyset-paginated chunks, holding ONE connection for the whole
-    scan (describe + ATTACH + extension load happen once, not per chunk).
-
-    Keyset on `ctid` (`WHERE ctid > <last> ORDER BY ctid`) instead of LIMIT/OFFSET:
-      - correct: OFFSET without a stable ORDER BY can skip/duplicate rows across chunks.
-      - fast: O(n) total, vs OFFSET's O(n²) re-scan of skipped rows each chunk.
-    `ctid` is the heap row pointer — present on every table, stable for a `_current` snapshot
-    (no concurrent writes mid-ingest). Peak memory stays ~one chunk.
-    """
-    con = _connect()
-    try:
-        cols = _describe(con, topic)
-        geom_col = _geom_column(cols)
-        other = [c for c, _ in cols if c not in (geom_col, "target_epsg")]
-        select_list = (
-            ", ".join(f'"{c}"' for c in other)
-            + f', ST_AsBinary("{geom_col}") AS geom_wkb'
-            + f', COALESCE(NULLIF(ST_SRID("{geom_col}"), 0), 4326) AS target_epsg'
-            + ', ctid::text AS _ctid'
-        )
-        last: str | None = None
-        while True:
-            where = f"WHERE ctid > '{last}'::tid " if last is not None else ""
-            pg_sql = (f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}" '
-                      f"{where}ORDER BY ctid LIMIT {int(chunk_size)}")
-            tbl = con.execute(
-                "SELECT * FROM postgres_query(?, ?)", [PG_ALIAS, pg_sql]
-            ).fetch_arrow_table()
-            if tbl.num_rows == 0:
-                break
-            last = tbl.column("_ctid")[-1].as_py()
-            yield tbl.drop_columns(["_ctid"])
-            if tbl.num_rows < chunk_size:
-                break
-    finally:
-        con.close()
 
 
 def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:

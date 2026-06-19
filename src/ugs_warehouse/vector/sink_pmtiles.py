@@ -29,8 +29,8 @@ EXTRA_OPTS = shlex.split(os.environ.get("TIPPECANOE_OPTS", ""))
 PMTILES_MIME = "application/vnd.pmtiles"
 
 
-def write_chunk(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
-    """COPY the transformed `view` to one GeoJSONSeq file (used per-chunk by chunked ingest)."""
+def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
+    """COPY the transformed `view` to a GeoJSONSeq file (DuckDB streams it)."""
     con.execute(f"COPY (SELECT * FROM {view}) TO '{path}' (FORMAT GDAL, DRIVER 'GeoJSONSeq')")
 
 
@@ -60,28 +60,9 @@ def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
 
 
 def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
-    """Build + upload PMTiles for the whole transformed view (single-shot, non-chunked)."""
+    """Build + upload PMTiles for the transformed view. DuckDB streams the GeoJSONSeq export and
+    tippecanoe streams its input → bounded memory regardless of table size."""
     with tempfile.TemporaryDirectory() as tmp:
         geojsonl = os.path.join(tmp, f"{topic.stem}.geojsonl")
-        write_chunk(con, view, geojsonl)
+        _write_geojsonl(con, view, geojsonl)
         _tile_and_upload(topic, geojsonl)
-
-
-def finalize(topic: Topic, chunks_dir: str) -> None:
-    """Concatenate per-chunk GeoJSONSeq files (chunked ingest) → tippecanoe → upload. Concat is
-    a streaming file copy (no rows held in memory); tippecanoe streams its input."""
-    import glob
-
-    chunks = sorted(
-        glob.glob(os.path.join(chunks_dir, "*.geojsonl")),
-        key=lambda p: int(os.path.basename(p).split("_")[1].split(".")[0]),
-    )
-    if not chunks:
-        raise RuntimeError("no geojsonl chunks to finalize")
-    with tempfile.TemporaryDirectory() as tmp:
-        combined = os.path.join(tmp, f"{topic.stem}.geojsonl")
-        with open(combined, "wb") as out:
-            for c in chunks:
-                with open(c, "rb") as f:
-                    shutil.copyfileobj(f, out)
-        _tile_and_upload(topic, combined)

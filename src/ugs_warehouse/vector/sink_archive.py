@@ -21,8 +21,8 @@ from .topics import Topic
 PARQUET_MIME = "application/vnd.apache.parquet"
 
 
-def write_chunk(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
-    """COPY the transformed `view` to one GeoParquet file (used per-chunk by chunked ingest).
+def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
+    """COPY the transformed `view` to a GeoParquet file.
 
     DuckDB's spatial extension auto-writes GeoParquet metadata when a GEOMETRY column is present.
     bbox covering: per-row extent as four plain numeric columns — combined with the hilbert
@@ -49,33 +49,9 @@ def _upload(topic: Topic, local: str) -> None:
 
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
-    """Write `{stem}.parquet` (latest) + dated archive to GCS (single-shot, non-chunked)."""
+    """Write `{stem}.parquet` (latest) + dated archive to GCS. DuckDB streams the COPY (with the
+    global hilbert sort) under the memory cap → bounded memory regardless of table size."""
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, f"{topic.stem}.parquet")
-        write_chunk(con, view, local)
-        _upload(topic, local)
-
-
-def finalize(topic: Topic, chunks_dir: str) -> None:
-    """Merge per-chunk GeoParquet files (chunked ingest) into one archive + upload. The merge
-    streams via `read_parquet` under a 128MB cap — bounded memory regardless of total size."""
-    import glob
-
-    import duckdb as _ddb
-
-    from . import transform
-    if not glob.glob(os.path.join(chunks_dir, "*.parquet")):
-        raise RuntimeError("no parquet chunks to finalize")
-    with tempfile.TemporaryDirectory() as tmp:
-        local = os.path.join(tmp, f"{topic.stem}.parquet")
-        merge = _ddb.connect()
-        merge.execute(f"SET max_memory='{transform.MAX_MEMORY}';")
-        merge.execute("INSTALL spatial; LOAD spatial;")
-        try:
-            merge.execute(
-                f"COPY (SELECT * FROM read_parquet('{chunks_dir}/*.parquet')) "
-                f"TO '{local}' (FORMAT PARQUET, COMPRESSION ZSTD)"
-            )
-        finally:
-            merge.close()
+        _copy_geoparquet(con, view, local)
         _upload(topic, local)

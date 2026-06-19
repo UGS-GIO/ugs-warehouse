@@ -96,7 +96,15 @@ export interface Page {
   columns: string[];
   rows: Record<string, unknown>[];
   total: number;      // total matching rows (for paging), NOT just this page
+  // Per-row [xmin,ymin,xmax,ymax] in 4326 (aligned with `rows`), read from the GeoParquet's
+  // plain bbox covering columns — present iff the file carries them. Powers row→map zoom
+  // without loading the spatial extension (no geometry decode).
+  bboxes: ([number, number, number, number] | null)[];
 }
+
+// The plain numeric bbox covering columns the warehouse writes (sink_archive). Read for row→map
+// zoom, hidden from the displayed table (noise) like the geometry column.
+const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
 
 /** Server-side-style paged/sorted/filtered query over a remote GeoParquet, run entirely in
  *  DuckDB-WASM via HTTP range reads. Backs the in-page dataset explorer: COUNT(*) gives the
@@ -109,7 +117,10 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const allCols = desc.toArray().map((r) => String(r.column_name));
-    const columns = allCols.filter((c) => c !== GEOM);
+    const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
+    // Displayed columns: drop geometry + the bbox covering columns (kept only for zoom).
+    const hidden = new Set([GEOM, ...(hasBbox ? BBOX_COLS : [])]);
+    const columns = allCols.filter((c) => !hidden.has(c));
 
     const s = opts.search?.trim();
     const where = s
@@ -120,17 +131,23 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
 
     const order = opts.orderBy && columns.includes(opts.orderBy)
       ? ` ORDER BY ${ident(opts.orderBy)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST` : "";
+    // Select displayed cols + bbox cols explicitly (excluding geom) so bbox survives for zoom.
     const sel = allCols.includes(GEOM) ? `* EXCLUDE (${GEOM})` : "*";
     const res = await conn.query(
       `SELECT ${sel} FROM ${from}${where}${order} LIMIT ${opts.limit} OFFSET ${opts.offset};`,
     );
-    const rows = res.toArray().map((r) => {
-      const o = r.toJSON() as Record<string, unknown>;
+    const raw = res.toArray().map((r) => r.toJSON() as Record<string, unknown>);
+    const rows = raw.map((o) => {
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(o)) out[k] = sanitize(v);
+      for (const [k, v] of Object.entries(o)) if (!hidden.has(k)) out[k] = sanitize(v);
       return out;
     });
-    return { columns, rows, total };
+    const bboxes = raw.map((o): [number, number, number, number] | null => {
+      if (!hasBbox) return null;
+      const b = BBOX_COLS.map((c) => Number(o[c]));
+      return b.every((n) => Number.isFinite(n)) ? (b as [number, number, number, number]) : null;
+    });
+    return { columns, rows, total, bboxes };
   } finally {
     await conn.close();
   }

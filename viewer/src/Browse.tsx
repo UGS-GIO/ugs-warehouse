@@ -368,9 +368,10 @@ const NEUTRAL_LAYERS = [
 // Interactive vector preview — the item's actual PMTiles features. Uses the bound ugs-styles
 // GL style (via the render extension) when present; else a neutral geometry render (no
 // invented cartography — real styling arrives through `renders`).
-function PmtilesMap({ item }: { item: StacDoc }) {
+function PmtilesMap({ item, focus }: { item: StacDoc; focus?: [number, number, number, number] | null }) {
   const pm = pmtilesLink(item);
   const styleUrl = defaultStyleUrl(item);
+  const mapRef = useRef<MapRef>(null);
   const [styleLayers, setStyleLayers] = useState<Record<string, unknown>[] | null>(null);
   useEffect(() => {
     if (!styleUrl) { setStyleLayers(null); return; }
@@ -380,13 +381,26 @@ function PmtilesMap({ item }: { item: StacDoc }) {
       .catch(() => { if (live) setStyleLayers(null); });
     return () => { live = false; };
   }, [styleUrl]);
+
+  // Fly to the picked row's feature (bbox from the parquet covering columns). maxZoom keeps a
+  // point (degenerate bbox) from zooming to street level.
+  useEffect(() => {
+    if (!focus || !mapRef.current) return;
+    mapRef.current.fitBounds([[focus[0], focus[1]], [focus[2], focus[3]]],
+      { padding: 60, maxZoom: 14, duration: 800 });
+  }, [focus]);
+
   if (!pm) return null;
   const sourceLayer = pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "");
   const bounds = asBounds(item);
+  const hlPoly = focus ? bboxPolygon(focus) : null;
+  const hlCenter: GeoJSON.Point | null = focus
+    ? { type: "Point", coordinates: [(focus[0] + focus[2]) / 2, (focus[1] + focus[3]) / 2] } : null;
   return (
     <>
       <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
         <MapGL
+          ref={mapRef}
           mapLib={maplibregl}
           initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
           mapStyle={POSITRON}
@@ -399,9 +413,33 @@ function PmtilesMap({ item }: { item: StacDoc }) {
             // an array / Fragment, so without this they render with no source (invisible).
             <Layer key={i} {...({ ...l, id: `pm-prev-${i}`, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />
           ))}
+          {/* Picked-row highlight: bbox outline (polygons) + center marker (works for points too). */}
+          {hlPoly && (
+            <Source id="pm-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlPoly }}>
+              <Layer id="pm-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
+            </Source>
+          )}
+          {hlCenter && (
+            <Source id="pm-hl-c" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlCenter }}>
+              <Layer id="pm-hl-pt" type="circle" paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
+            </Source>
+          )}
         </MapGL>
       </div>
       {styleLayers && <Legend layers={styleLayers} />}
+    </>
+  );
+}
+
+// Vector asset preview: PMTiles map + full dataset explorer, linked — click a table row and the
+// map flies to that feature (when the parquet carries bbox covering columns).
+function VectorPreview({ item }: { item: StacDoc }) {
+  const pq = parquetAsset(item);
+  const [focus, setFocus] = useState<[number, number, number, number] | null>(null);
+  return (
+    <>
+      <PmtilesMap item={item} focus={focus} />
+      {pq && <DataExplorer href={pq.href} onPick={setFocus} />}
     </>
   );
 }
@@ -456,12 +494,17 @@ function DataTable<T>({ columns, data, onRowClick, initialSorting }: {
 // the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 7000-row tables.
 // Geometry is excluded (use Download / OGC API / the map for geometry).
 const PAGE_SIZE = 25;
-function DataExplorer({ href }: { href: string }) {
+function DataExplorer({ href, onPick }: {
+  href: string; onPick?: (bbox: [number, number, number, number]) => void;
+}) {
   const [pageIndex, setPageIndex] = useState(0);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [search, setSearch] = useState("");
   const [needle, setNeedle] = useState("");
-  const [page, setPage] = useState<{ columns: string[]; rows: Record<string, unknown>[]; total: number } | null>(null);
+  const [page, setPage] = useState<{
+    columns: string[]; rows: Record<string, unknown>[]; total: number;
+    bboxes: ([number, number, number, number] | null)[];
+  } | null>(null);
   const [err, setErr] = useState<string>();
   const [loading, setLoading] = useState(true);
 
@@ -516,6 +559,7 @@ function DataExplorer({ href }: { href: string }) {
           onChange={(e) => setSearch(e.target.value)} />
         <span className={C.muted}>
           {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
+          {onPick && page?.bboxes.some(Boolean) ? " · click a row to zoom" : ""}
         </span>
       </div>
       {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
@@ -537,13 +581,19 @@ function DataExplorer({ href }: { href: string }) {
             ))}
           </thead>
           <tbody>
-            {table.getRowModel().rows.map((r) => (
-              <tr key={r.id}>
-                {r.getVisibleCells().map((c) => (
-                  <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
-                ))}
-              </tr>
-            ))}
+            {table.getRowModel().rows.map((r) => {
+              const bbox = page?.bboxes[r.index] ?? null;
+              const clickable = Boolean(onPick && bbox);
+              return (
+                <tr key={r.id} className={clickable ? "cursor-pointer hover:bg-muted" : undefined}
+                  title={clickable ? "Zoom to feature on map" : undefined}
+                  onClick={clickable ? () => onPick!(bbox!) : undefined}>
+                  {r.getVisibleCells().map((c) => (
+                    <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
+                  ))}
+                </tr>
+              );
+            })}
             {!loading && total === 0 && (
               <tr><td className="px-2.5 py-2 text-muted-foreground" colSpan={Math.max(1, columns.length)}>No rows match.</td></tr>
             )}
@@ -568,15 +618,7 @@ function Preview({ item }: { item: StacDoc }) {
   const cog = cogAsset(item);
   if (cog) return <CogMap href={cog.href} item={item} />;
 
-  if (pmtilesLink(item)) {
-    const pq = parquetAsset(item);
-    return (
-      <>
-        <PmtilesMap item={item} />
-        {pq && <DataExplorer href={pq.href} />}
-      </>
-    );
-  }
+  if (pmtilesLink(item)) return <VectorPreview item={item} />;
 
   const thumb = thumbnailAsset(item);
   if (thumb) {

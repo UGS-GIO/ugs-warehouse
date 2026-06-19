@@ -65,6 +65,77 @@ const sanitize = (v: unknown): unknown =>
 
 let seq = 0;
 
+// Identifier / literal quoting for SQL built from column names + a user search term.
+const ident = (c: string) => `"${c.replace(/"/g, '""')}"`;
+const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
+
+// Register each remote GeoParquet with DuckDB-WASM ONCE, reuse across paged queries — DuckDB
+// pulls only the footer + needed row-groups per query over HTTP range reads, so paging a 7000-row
+// table never downloads the whole file. Cache keyed by URL so the explorer's page/sort/search
+// re-queries hit the same registered handle.
+const registered = new Map<string, string>();
+async function registerUrl(parquetUrl: string): Promise<string> {
+  const hit = registered.get(parquetUrl);
+  if (hit) return hit;
+  const duckdb = await import("@duckdb/duckdb-wasm");
+  const db = await getDB();
+  const src = `q${++seq}.parquet`;
+  await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+  registered.set(parquetUrl, src);
+  return src;
+}
+
+export interface PageOpts {
+  limit: number;
+  offset: number;
+  orderBy?: string;   // column to sort by (ignored if not a real column)
+  desc?: boolean;
+  search?: string;    // free-text, matched case-insensitively across every column
+}
+export interface Page {
+  columns: string[];
+  rows: Record<string, unknown>[];
+  total: number;      // total matching rows (for paging), NOT just this page
+}
+
+/** Server-side-style paged/sorted/filtered query over a remote GeoParquet, run entirely in
+ *  DuckDB-WASM via HTTP range reads. Backs the in-page dataset explorer: COUNT(*) gives the
+ *  total for pagination, then LIMIT/OFFSET/ORDER BY/WHERE fetch one page. Geometry excluded. */
+export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<Page> {
+  const db = await getDB();
+  const conn = await db.connect();
+  try {
+    const src = await registerUrl(parquetUrl);
+    const from = `read_parquet('${src}')`;
+    const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
+    const allCols = desc.toArray().map((r) => String(r.column_name));
+    const columns = allCols.filter((c) => c !== GEOM);
+
+    const s = opts.search?.trim();
+    const where = s
+      ? " WHERE " + columns.map((c) => `CAST(${ident(c)} AS VARCHAR) ILIKE ${lit(`%${s}%`)}`).join(" OR ")
+      : "";
+    const totalRes = await conn.query(`SELECT count(*) AS n FROM ${from}${where};`);
+    const total = Number(totalRes.toArray()[0]?.n ?? 0);
+
+    const order = opts.orderBy && columns.includes(opts.orderBy)
+      ? ` ORDER BY ${ident(opts.orderBy)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST` : "";
+    const sel = allCols.includes(GEOM) ? `* EXCLUDE (${GEOM})` : "*";
+    const res = await conn.query(
+      `SELECT ${sel} FROM ${from}${where}${order} LIMIT ${opts.limit} OFFSET ${opts.offset};`,
+    );
+    const rows = res.toArray().map((r) => {
+      const o = r.toJSON() as Record<string, unknown>;
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(o)) out[k] = sanitize(v);
+      return out;
+    });
+    return { columns, rows, total };
+  } finally {
+    await conn.close();
+  }
+}
+
 /** First `limit` rows of a GeoParquet (geometry column dropped) for an in-page data glance —
  *  the canonical datalake artifact. Reuses the shared DuckDB-WASM instance (same lazy boot as
  *  export); no spatial load needed since geometry is excluded. */

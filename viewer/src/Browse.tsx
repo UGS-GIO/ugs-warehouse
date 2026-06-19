@@ -451,41 +451,112 @@ function DataTable<T>({ columns, data, onRowClick, initialSorting }: {
   );
 }
 
-// Canonical datalake glance — first rows of the GeoParquet via DuckDB-WASM (TanStack Table, sortable).
-function ParquetTable({ href }: { href: string }) {
-  const [data, setData] = useState<{ columns: string[]; rows: Record<string, unknown>[] } | null>(null);
+// Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
+// DuckDB-WASM (HTTP range reads; never downloads the whole file). Server-style manual paging:
+// the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 7000-row tables.
+// Geometry is excluded (use Download / OGC API / the map for geometry).
+const PAGE_SIZE = 25;
+function DataExplorer({ href }: { href: string }) {
+  const [pageIndex, setPageIndex] = useState(0);
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [search, setSearch] = useState("");
+  const [needle, setNeedle] = useState("");
+  const [page, setPage] = useState<{ columns: string[]; rows: Record<string, unknown>[]; total: number } | null>(null);
   const [err, setErr] = useState<string>();
+  const [loading, setLoading] = useState(true);
+
+  // Debounce the search box; a new term resets to page 1.
+  useEffect(() => {
+    const t = setTimeout(() => { setNeedle(search); setPageIndex(0); }, 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  const sort = sorting[0];
   useEffect(() => {
     let live = true;
-    import("./download").then(({ previewRows }) => previewRows(href, 12))
-      .then((d) => { if (live) setData(d); })
-      .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); });
+    setLoading(true);
+    import("./download").then(({ queryParquet }) => queryParquet(href, {
+      limit: PAGE_SIZE, offset: pageIndex * PAGE_SIZE,
+      orderBy: sort?.id, desc: sort?.desc, search: needle,
+    }))
+      .then((d) => { if (live) { setPage(d); setErr(undefined); } })
+      .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); })
+      .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [href]);
-  const MAX = 12;
+  }, [href, pageIndex, sort?.id, sort?.desc, needle]);
+
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
-    () => (data?.columns ?? []).slice(0, MAX).map((c) => ({
-      id: c, header: c, accessorFn: (row) => row[c], sortingFn: "alphanumeric",
+    () => (page?.columns ?? []).map((c) => ({
+      id: c, header: c, accessorFn: (row) => row[c],
       cell: (info) => {
         const v = info.getValue();
         const s = v == null ? "" : String(v);
-        return <span className="block max-w-[240px] truncate" title={s}>{s}</span>;
+        return <span className="block max-w-[280px] truncate" title={s}>{s}</span>;
       },
     })),
-    [data],
+    [page?.columns],
   );
-  if (err) return <div className="mt-2 text-xs text-destructive">data preview failed: {err}</div>;
-  if (!data) return <div className="mt-2 text-xs text-muted-foreground">loading data…</div>;
-  if (!data.rows.length) return null;
-  const more = data.columns.length - Math.min(MAX, data.columns.length);
+
+  // Server-side sort/page: TanStack renders + drives the sort UI only (manualSorting), the SQL
+  // does the work. Resetting to page 1 on a sort change keeps offset valid.
+  const table = useReactTable({
+    data: page?.rows ?? [], columns, state: { sorting },
+    manualSorting: true, onSortingChange: (u) => { setSorting(u); setPageIndex(0); },
+    getCoreRowModel: getCoreRowModel(),
+  });
+
+  const total = page?.total ?? 0;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const btn = "rounded border border-border bg-card px-2 py-0.5 text-xs text-foreground hover:border-primary disabled:opacity-40";
+
   return (
-    <div className="mt-2 max-w-full overflow-x-auto rounded-md border border-border text-[12px]">
-      <DataTable columns={columns} data={data.rows} />
-      {more > 0 && (
-        <div className="px-2.5 py-1.5 text-[11px] text-muted-foreground">
-          +{more} more columns — full data via Download or the OGC API.
-        </div>
-      )}
+    <div className="mt-2">
+      <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <input className={C.input} placeholder="Search all columns…" value={search}
+          onChange={(e) => setSearch(e.target.value)} />
+        <span className={C.muted}>
+          {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
+        </span>
+      </div>
+      {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
+      <div className="max-w-full overflow-x-auto rounded-md border border-border text-[12px]">
+        <table className="w-full border-collapse">
+          <thead>
+            {table.getHeaderGroups().map((hg) => (
+              <tr key={hg.id}>
+                {hg.headers.map((h) => {
+                  const s = h.column.getIsSorted();
+                  return (
+                    <th key={h.id} className={C.th} onClick={h.column.getToggleSortingHandler()}>
+                      {flexRender(h.column.columnDef.header, h.getContext())}
+                      {s === "asc" ? " ▲" : s === "desc" ? " ▼" : ""}
+                    </th>
+                  );
+                })}
+              </tr>
+            ))}
+          </thead>
+          <tbody>
+            {table.getRowModel().rows.map((r) => (
+              <tr key={r.id}>
+                {r.getVisibleCells().map((c) => (
+                  <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
+                ))}
+              </tr>
+            ))}
+            {!loading && total === 0 && (
+              <tr><td className="px-2.5 py-2 text-muted-foreground" colSpan={Math.max(1, columns.length)}>No rows match.</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-1.5 flex items-center gap-1.5 text-xs">
+        <button className={btn} disabled={pageIndex === 0} onClick={() => setPageIndex(0)}>«</button>
+        <button className={btn} disabled={pageIndex === 0} onClick={() => setPageIndex((i) => i - 1)}>‹ Prev</button>
+        <span className="px-1 text-muted-foreground">Page {pageIndex + 1} of {pageCount}</span>
+        <button className={btn} disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex((i) => i + 1)}>Next ›</button>
+        <button className={btn} disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex(pageCount - 1)}>»</button>
+      </div>
     </div>
   );
 }
@@ -502,7 +573,7 @@ function Preview({ item }: { item: StacDoc }) {
     return (
       <>
         <PmtilesMap item={item} />
-        {pq && <ParquetTable href={pq.href} />}
+        {pq && <DataExplorer href={pq.href} />}
       </>
     );
   }
@@ -543,6 +614,57 @@ const prettyKey = (k: string) => k.replace(/^ugs:/, "").replace(/_/g, " ");
 const fmtVal = (v: unknown): string =>
   Array.isArray(v) ? v.join(", ") : v && typeof v === "object" ? JSON.stringify(v) : String(v);
 
+// ---- API & data endpoints ----
+function CopyBtn({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      onClick={() => { navigator.clipboard?.writeText(text); setDone(true); setTimeout(() => setDone(false), 1200); }}
+      className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground hover:border-primary">
+      {done ? "copied" : "copy"}
+    </button>
+  );
+}
+
+const ducklakeAsset = (item: StacDoc): Asset | undefined =>
+  Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"
+    || a.roles?.includes("ducklake") || a.href.includes("ducklake"))?.[1];
+
+// All the ways out to the data: the OGC API Features service (= the modern WFS — REST + GeoJSON,
+// served by featureserv), plus the raw artifacts (GeoParquet, PMTiles, DuckLake). Replaces the
+// lone "OGC API" link that dumped users on a featureserv page with no hint of the other endpoints.
+function EndpointsPanel({ item }: { item: StacDoc }) {
+  const id = String(item.id ?? "");
+  const coll = featuresCollectionUrl(id);
+  const pq = parquetAsset(item);
+  const pm = pmtilesLink(item);
+  const ducklake = ducklakeAsset(item);
+  const rows: { label: string; desc: string; url: string }[] = [];
+  if (coll) {
+    rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
+    rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
+  }
+  if (pq) rows.push({ label: "GeoParquet", desc: "Columnar file — DuckDB / GeoPandas / QGIS", url: pq.href });
+  if (pm) rows.push({ label: "PMTiles", desc: "Vector tiles for web maps", url: pm.href });
+  if (ducklake) rows.push({ label: "DuckLake", desc: "Lakehouse table", url: ducklake.href });
+  if (!rows.length) return null;
+  return (
+    <div className="mt-3 rounded-lg border border-border bg-muted p-3">
+      <div className="mb-1.5 text-xs font-semibold text-muted-foreground">API &amp; data endpoints</div>
+      <div className="flex flex-col gap-1.5">
+        {rows.map((r) => (
+          <div key={r.label} className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="w-36 shrink-0 font-semibold text-foreground" title={r.desc}>{r.label}</span>
+            <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={r.url}>{r.url}</code>
+            <CopyBtn text={r.url} />
+            <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 // ---- item detail ----
 function ItemDetail({ collectionId, item, onBack, onMap }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
@@ -552,9 +674,6 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
   const hasGeom = Boolean(item.geometry || item.bbox);
   const via = viaLink(item);
   const cite = citeLink(item);
-  // OGC API Features link — only for vector layers (a featureserv collection == this item id).
-  const ogc = (pmtilesLink(item) || parquetAsset(item))
-    ? featuresCollectionUrl(String(item.id ?? "")) : undefined;
   return (
     <>
       <div className="mb-2.5">
@@ -573,12 +692,6 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
             View on map ›
           </button>
         )}
-        {ogc && (
-          <a href={ogc} target="_blank" rel="noopener"
-            className="inline-block rounded border border-border px-2.5 py-1 text-[11px] text-foreground no-underline hover:border-primary">
-            OGC API ↗
-          </a>
-        )}
         {via && (
           <a href={via.href} target="_blank" rel="noopener"
             className="inline-block rounded bg-primary px-2.5 py-1 text-[11px] text-primary-foreground no-underline hover:opacity-90">
@@ -593,6 +706,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
         )}
       </div>
       <ExportPanel item={item} />
+      <EndpointsPanel item={item} />
       <table className="mt-3 w-full max-w-[760px] table-fixed border-collapse text-sm">
         <tbody>
           {Object.entries(p)

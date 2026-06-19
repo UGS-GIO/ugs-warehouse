@@ -30,6 +30,7 @@ import os
 import re
 import urllib.error
 import urllib.request
+from collections.abc import Iterator
 
 import pyarrow as pa
 import shapely
@@ -160,6 +161,21 @@ def read_chunk(topic: Topic, limit: int, offset: int) -> pa.Table:
         r["target_epsg"] = epsg if epsg is not None else DEFAULT_EPSG
 
     return pa.Table.from_pylist(rows)
+
+
+def iter_chunks(topic: Topic, chunk_size: int) -> Iterator[pa.Table]:
+    """Offset-paginated chunks. PostgREST exposes no `ctid`, so keyset isn't available here —
+    this is the dev backend; for large prod tables use the Postgres backend (keyset iter_chunks).
+    Note: without a stable server-side order, offset paging can drift under concurrent writes."""
+    offset = 0
+    while True:
+        tbl = read_chunk(topic, chunk_size, offset)
+        if tbl.num_rows == 0:
+            break
+        yield tbl
+        if tbl.num_rows < chunk_size:
+            break
+        offset += chunk_size
 
 
 def read_metadata(topic: Topic) -> dict:  # noqa: ARG001

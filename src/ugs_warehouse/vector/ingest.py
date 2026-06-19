@@ -65,7 +65,7 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
     # 1. Determine if we should use chunked ingestion
     is_chunked = False
     total_rows = 0
-    if hasattr(backend, "get_count") and hasattr(backend, "read_chunk"):
+    if hasattr(backend, "get_count") and hasattr(backend, "iter_chunks"):
         try:
             total_rows = backend.get_count(topic)
             if total_rows > chunk_size:
@@ -86,6 +86,7 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
         overall_bbox = [float("inf"), float("inf"), float("-inf"), float("-inf")]
         overall_row_count = 0
         has_geom = False
+        first_write = True  # first non-empty chunk OVERWRITES ducklake; rest APPEND
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             parquet_chunks_dir = os.path.join(tmp_dir, "parquet_chunks")
@@ -94,17 +95,12 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
             geojsonl_chunks_dir = os.path.join(tmp_dir, "geojsonl_chunks")
             os.makedirs(geojsonl_chunks_dir, exist_ok=True)
 
-            chunk_idx = 0
-            for offset in range(0, total_rows, chunk_size):
-                limit = min(chunk_size, total_rows - offset)
-                print(f"[{topic.fqn}] processing chunk {chunk_idx + 1}/{math.ceil(total_rows / chunk_size)} (offset {offset}, limit {limit})")
-
-                try:
-                    arrow_chunk = backend.read_chunk(topic, limit, offset)
-                except Exception as e:
-                    print(f"[{topic.fqn}] failed to read chunk {chunk_idx}: {e}", file=sys.stderr)
-                    traceback.print_exc()
-                    return 1
+            n_chunks = math.ceil(total_rows / chunk_size)
+            # Keyset-paginated stream (one DB connection, O(n), no row skip/dup). total_rows is
+            # an estimate for the progress line — the generator drives actual termination.
+            for chunk_idx, arrow_chunk in enumerate(backend.iter_chunks(topic, chunk_size)):
+                print(f"[{topic.fqn}] processing chunk {chunk_idx + 1}/~{n_chunks} "
+                      f"({arrow_chunk.num_rows} rows)")
 
                 con, view = transform.run(arrow_chunk)
 
@@ -134,12 +130,13 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
                 overall_row_count += count
 
                 if dry_run:
-                    chunk_idx += 1
                     continue
 
-                # Run sink: ducklake (direct append)
+                # Run sink: ducklake — first real chunk overwrites, rest append. (Keyed on a
+                # write flag, not chunk_idx: an empty/skipped early chunk must not flip it.)
                 try:
-                    sink_ducklake.write(topic, con, view, append=(chunk_idx > 0))
+                    sink_ducklake.write(topic, con, view, append=not first_write)
+                    first_write = False
                 except Exception as e:
                     print(f"[{topic.fqn}] sink ducklake chunk {chunk_idx} FAILED: {e}", file=sys.stderr)
                     traceback.print_exc()
@@ -172,8 +169,6 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
                     con.close()
                 except Exception:
                     pass
-
-                chunk_idx += 1
 
             if not has_geom and overall_row_count > 0:
                 print(f"[{topic.fqn}] SKIP: 0/{overall_row_count} rows have geometry", file=sys.stderr)

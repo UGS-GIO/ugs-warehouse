@@ -27,7 +27,8 @@ def test_ingest_chunked_workflow():
         "name": ["Fault 2"]
     })
 
-    mock_backend.read_chunk.side_effect = [chunk_1, chunk_2]
+    # Keyset streaming: backend yields chunks from a generator (no offset args).
+    mock_backend.iter_chunks.return_value = iter([chunk_1, chunk_2])
     mock_backend.read_metadata.return_value = {}
 
     with patch("ugs_warehouse.vector.ingest._backend", return_value=mock_backend), \
@@ -44,10 +45,8 @@ def test_ingest_chunked_workflow():
          assert rc == 0
          # Verified it gets total rows from get_count
          mock_backend.get_count.assert_called_once_with(topic)
-         # Verified it reads chunks with correct limits/offsets
-         assert mock_backend.read_chunk.call_count == 2
-         mock_backend.read_chunk.assert_any_call(topic, 15000, 0)
-         mock_backend.read_chunk.assert_any_call(topic, 10000, 15000)
+         # Verified it streams via keyset iter_chunks (one call, no offset math)
+         mock_backend.iter_chunks.assert_called_once_with(topic, 15000)
 
          # Verified it calls ducklake write twice (first with append=False, second with append=True)
          assert mock_ducklake.call_count == 2

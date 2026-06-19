@@ -13,6 +13,7 @@ Env:
 from __future__ import annotations
 
 import os
+from collections.abc import Iterator
 
 import duckdb
 import pyarrow as pa
@@ -102,8 +103,16 @@ def get_count(topic: Topic) -> int:
         con.close()
 
 
-def read_chunk(topic: Topic, limit: int, offset: int) -> pa.Table:
-    """Pull a chunk of `{schema}.{topic}_current` into a pyarrow Table."""
+def iter_chunks(topic: Topic, chunk_size: int) -> Iterator[pa.Table]:
+    """Yield the topic's rows in keyset-paginated chunks, holding ONE connection for the whole
+    scan (describe + ATTACH + extension load happen once, not per chunk).
+
+    Keyset on `ctid` (`WHERE ctid > <last> ORDER BY ctid`) instead of LIMIT/OFFSET:
+      - correct: OFFSET without a stable ORDER BY can skip/duplicate rows across chunks.
+      - fast: O(n) total, vs OFFSET's O(n²) re-scan of skipped rows each chunk.
+    `ctid` is the heap row pointer — present on every table, stable for a `_current` snapshot
+    (no concurrent writes mid-ingest). Peak memory stays ~one chunk.
+    """
     con = _connect()
     try:
         cols = _describe(con, topic)
@@ -113,12 +122,22 @@ def read_chunk(topic: Topic, limit: int, offset: int) -> pa.Table:
             ", ".join(f'"{c}"' for c in other)
             + f', ST_AsBinary("{geom_col}") AS geom_wkb'
             + f', COALESCE(NULLIF(ST_SRID("{geom_col}"), 0), 4326) AS target_epsg'
+            + ', ctid::text AS _ctid'
         )
-        pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}" LIMIT {limit} OFFSET {offset}'
-        return con.execute(
-            "SELECT * FROM postgres_query(?, ?)",
-            [PG_ALIAS, pg_sql],
-        ).fetch_arrow_table()
+        last: str | None = None
+        while True:
+            where = f"WHERE ctid > '{last}'::tid " if last is not None else ""
+            pg_sql = (f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}" '
+                      f"{where}ORDER BY ctid LIMIT {int(chunk_size)}")
+            tbl = con.execute(
+                "SELECT * FROM postgres_query(?, ?)", [PG_ALIAS, pg_sql]
+            ).fetch_arrow_table()
+            if tbl.num_rows == 0:
+                break
+            last = tbl.column("_ctid")[-1].as_py()
+            yield tbl.drop_columns(["_ctid"])
+            if tbl.num_rows < chunk_size:
+                break
     finally:
         con.close()
 

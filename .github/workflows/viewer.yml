@@ -1,0 +1,33 @@
+name: Deploy Viewer
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'viewer/**'
+
+# Fast path for viewer-only changes: submit cloudbuild-viewer.yaml (Vite build + rsync, NO image
+# builds) and wait for it (sync) so this run reflects the real deploy result. Full-stack changes
+# go through deploy.yml instead (which ignores viewer-only commits).
+jobs:
+  deploy-viewer:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: 'projects/534590904912/locations/global/workloadIdentityPools/github-actions-pool/providers/github-provider'
+          service_account: 'warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com'
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Build + deploy viewer via Cloud Build
+        run: |
+          gcloud builds submit --config=cloudbuild-viewer.yaml . \
+            --project=ut-dnr-ugs-backend-tools

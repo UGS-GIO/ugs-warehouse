@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, cogAsset, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, type StacDoc, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, type StacDoc, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string;
@@ -673,22 +673,9 @@ function DataExplorer({ href, onPick }: {
   );
 }
 
-// Preview, best-first by data type: interactive COG (raster) > interactive PMTiles map +
-// GeoParquet data table (vector) > thumbnail image > non-interactive footprint locator >
-// nothing. The full multi-layer map stays behind "View on map".
-function Preview({ item }: { item: StacDoc }) {
-  const cog = cogAsset(item);
-  if (cog) return <CogMap href={cog.href} item={item} />;
-
-  if (pmtilesLink(item)) return <VectorPreview item={item} />;
-
-  const thumb = thumbnailAsset(item);
-  if (thumb) {
-    return (
-      <img src={thumb.href} alt={thumb.title ?? "preview"} loading="lazy"
-        className="mt-2 max-h-60 w-auto rounded-md border border-border bg-muted object-contain" />
-    );
-  }
+// Non-interactive footprint locator — the item's geometry/bbox over a basemap. Fallback preview
+// for items with no previewable file (or as a standalone where a map adds context).
+function FootprintMini({ item }: { item: StacDoc }) {
   const bbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
   const geom = item.geometry ?? (bbox ? bboxPolygon(bbox) : null);
   if (!geom) return null;
@@ -710,6 +697,128 @@ function Preview({ item }: { item: StacDoc }) {
       </MapGL>
     </div>
   );
+}
+
+// ---- asset viewer: peruse a publication's files in-page (PDF / image / COG / parquet / text) ----
+type AssetKind = "cog" | "pdf" | "image" | "parquet" | "text" | "other";
+const KIND_RANK: Record<AssetKind, number> = { cog: 0, pdf: 1, parquet: 2, image: 3, text: 4, other: 9 };
+const KIND_LABEL: Record<AssetKind, string> = {
+  cog: "Map", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
+};
+
+const extOf = (href: string) => (href.split("?")[0].split(".").pop() ?? "").toLowerCase();
+function assetKind(a: Asset): AssetKind {
+  const t = (a.type ?? "").toLowerCase();
+  const ext = extOf(a.href);
+  if (t.includes("profile=cloud-optimized") || a.roles?.includes("cloud-optimized") || a.href.endsWith(".cog.tif")) return "cog";
+  if (t === "application/pdf" || ext === "pdf") return "pdf";
+  if (t.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
+  if (t.includes("parquet") || ext === "parquet") return "parquet";
+  if (t.startsWith("text/") || ["csv", "txt", "tsv"].includes(ext)) return "text";
+  return "other";
+}
+
+// Small text/CSV peek — fetch the head of the file and show it; no parsing, just a glance.
+function TextPreview({ href }: { href: string }) {
+  const [txt, setTxt] = useState<string>();
+  const [err, setErr] = useState<string>();
+  useEffect(() => {
+    let live = true;
+    fetch(href).then((r) => r.text())
+      .then((t) => { if (live) setTxt(t.slice(0, 20000)); })
+      .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); });
+    return () => { live = false; };
+  }, [href]);
+  if (err) return <div className="mt-2 text-xs text-destructive">preview failed: {err}</div>;
+  if (txt === undefined) return <div className="mt-2 text-xs text-muted-foreground">loading…</div>;
+  return (
+    <pre className="mt-2 max-h-[600px] max-w-full overflow-auto rounded-md border border-border bg-muted p-3 text-[12px] leading-snug">
+      {txt}{txt.length >= 20000 ? "\n… (truncated — open or download for the full file)" : ""}
+    </pre>
+  );
+}
+
+function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item: StacDoc }) {
+  switch (kind) {
+    case "cog": return <CogMap href={asset.href} item={item} />;
+    case "parquet": return <DataExplorer href={asset.href} />;
+    case "image":
+      return (
+        <img src={asset.href} alt={asset.title ?? "image"} loading="lazy"
+          className="mt-2 max-h-[600px] w-auto max-w-full rounded-md border border-border bg-muted object-contain" />
+      );
+    case "pdf":
+      return (
+        <object data={asset.href} type="application/pdf"
+          className="mt-2 h-[640px] w-full max-w-[1100px] rounded-md border border-border">
+          <div className="p-3 text-xs text-muted-foreground">
+            Can’t embed this PDF — <a href={asset.href} target="_blank" rel="noopener" className="text-primary">open it ↗</a>
+          </div>
+        </object>
+      );
+    case "text": return <TextPreview href={asset.href} />;
+    default:
+      return (
+        <div className="mt-2 rounded-md border border-border bg-muted p-3 text-xs text-muted-foreground">
+          No in-page preview for this file type. <a href={asset.href} target="_blank" rel="noopener" className="text-primary">Download / open ↗</a>
+        </div>
+      );
+  }
+}
+
+// Tabbed viewer over every asset on an item: previewable files (PDF, image, COG, parquet, text)
+// get a tab + inline pane; the rest are listed as download links. The default tab is the
+// highest-priority file (map > pdf > data > image > text).
+function AssetViewer({ item }: { item: StacDoc }) {
+  const entries = useMemo(() => Object.entries(item.assets ?? {})
+    // thumbnails are redundant with the real image/cog; skip as their own tab
+    .filter(([, a]) => !a.roles?.includes("thumbnail"))
+    .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
+    .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
+      || KIND_RANK[x.kind] - KIND_RANK[y.kind]), [item.assets]);
+  const tabs = entries.filter((e) => e.kind !== "other");
+  const others = entries.filter((e) => e.kind === "other");
+  const [activeKey, setActiveKey] = useState<string | undefined>(tabs[0]?.key);
+  useEffect(() => { setActiveKey(tabs[0]?.key); }, [item.id]);   // reset on item change
+
+  if (!tabs.length) {
+    // Nothing previewable — show the footprint (if any) + download links for the raw files.
+    return (
+      <>
+        <FootprintMini item={item} />
+        {others.length > 0 && <div className="mt-2"><AssetChips assets={Object.fromEntries(others.map((e) => [e.key, e.asset]))} /></div>}
+      </>
+    );
+  }
+  const active = tabs.find((e) => e.key === activeKey) ?? tabs[0];
+  return (
+    <div className="mt-2">
+      {tabs.length > 1 && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {tabs.map((e) => (
+            <button key={e.key} onClick={() => setActiveKey(e.key)}
+              className={toggle(e.key === active.key) + " rounded"}>
+              <span className="mr-1 text-muted-foreground">{KIND_LABEL[e.kind]}</span>
+              {e.asset.title ?? e.key}
+            </button>
+          ))}
+        </div>
+      )}
+      <AssetPane kind={active.kind} asset={active.asset} item={item} />
+      {others.length > 0 && (
+        <div className="mt-2 text-xs text-muted-foreground">
+          Other files: <AssetChips assets={Object.fromEntries(others.map((e) => [e.key, e.asset]))} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Preview: vector serving topics → interactive PMTiles map + linked dataset explorer; everything
+// else (publications) → the tabbed asset viewer so users can peruse every file in-page.
+function Preview({ item }: { item: StacDoc }) {
+  if (pmtilesLink(item)) return <VectorPreview item={item} />;
+  return <AssetViewer item={item} />;
 }
 
 // Property key/value formatting for the detail table — drop the `ugs:` prefix, underscores →

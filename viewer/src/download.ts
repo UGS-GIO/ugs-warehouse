@@ -21,8 +21,11 @@ export const FORMATS: { id: ExportFormat; label: string }[] = [
   { id: "csv", label: "CSV (WKT)" },
 ];
 
-// The transform writes the geometry column as `geom` (GEOMETRY 4326).
+// The transform writes the geometry column as `geom` (GEOMETRY 4326); pub/external parquet may
+// use `geometry` / `wkb_geometry`. GEOM = the canonical name (export); GEOM_NAMES = all hidden
+// from the explorer table + probed for the row-geometry fetch.
 const GEOM = "geom";
+const GEOM_NAMES = ["geom", "geometry", "wkb_geometry"];
 
 type DB = import("@duckdb/duckdb-wasm").AsyncDuckDB;
 let dbPromise: Promise<DB> | null = null;
@@ -162,8 +165,9 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const descRows = desc.toArray();
     const allCols = descRows.map((r) => String(r.column_name));
     const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
+    const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
     // Displayed columns: drop geometry + the bbox covering columns (kept only for zoom).
-    const hidden = new Set([GEOM, ...(hasBbox ? BBOX_COLS : [])]);
+    const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : [])]);
     const columns = allCols.filter((c) => !hidden.has(c));
     const types: Record<string, ColType> = {};
     for (const r of descRows) {
@@ -177,8 +181,8 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const total = Number(totalRes.toArray()[0]?.n ?? 0);
 
     const order = buildOrder(columns, opts);
-    // Select displayed cols + bbox cols explicitly (excluding geom) so bbox survives for zoom.
-    const sel = allCols.includes(GEOM) ? `* EXCLUDE (${GEOM})` : "*";
+    // Select displayed cols + bbox cols explicitly (excluding geometry) so bbox survives for zoom.
+    const sel = geomCols.length ? `* EXCLUDE (${geomCols.map(ident).join(", ")})` : "*";
     const res = await conn.query(
       `SELECT ${sel} FROM ${from}${where}${order} LIMIT ${opts.limit} OFFSET ${opts.offset};`,
     );
@@ -212,12 +216,14 @@ export async function fetchGeometry(
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const allCols = desc.toArray().map((r) => String(r.column_name));
-    if (!allCols.includes(GEOM)) return null;
+    const geomCol = GEOM_NAMES.find((c) => allCols.includes(c));
+    if (!geomCol) return null;
     const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-    const columns = allCols.filter((c) => c !== GEOM && !(hasBbox && BBOX_COLS.includes(c)));
+    const hidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : [])]);
+    const columns = allCols.filter((c) => !hidden.has(c));
     const full: PageOpts = { ...opts, limit: 1, offset: rowOffset };
     const res = await conn.query(
-      `SELECT ${ident(GEOM)} AS g FROM ${from}${buildWhere(columns, full)}${buildOrder(columns, full)} LIMIT 1 OFFSET ${rowOffset};`,
+      `SELECT ${ident(geomCol)} AS g FROM ${from}${buildWhere(columns, full)}${buildOrder(columns, full)} LIMIT 1 OFFSET ${rowOffset};`,
     );
     const blob = res.toArray()[0]?.g as Uint8Array | null | undefined;
     if (!blob) return null;

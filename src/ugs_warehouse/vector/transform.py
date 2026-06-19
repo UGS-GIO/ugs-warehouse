@@ -24,13 +24,18 @@ MAX_MEMORY = os.environ.get("DUCKDB_MAX_MEMORY", "128MB")
 
 
 def setup(con: duckdb.DuckDBPyConnection) -> None:
-    """Cap memory (free-tier OOM guard → DuckDB spills to disk) + load spatial/h3."""
+    """Cap memory (free-tier OOM guard → DuckDB spills to disk) + load spatial/h3.
+
+    LOAD first: the Docker image pre-bakes both extensions, so the common path is a local load
+    with NO network call to the extension servers. INSTALL is the fallback for an un-baked env
+    (local dev) — `h3` is a community extension, hence `FROM community`.
+    """
     con.execute(f"SET max_memory='{MAX_MEMORY}';")
-    con.execute("INSTALL spatial; LOAD spatial;")
-    try:
-        con.execute("INSTALL h3 FROM community; LOAD h3;")
-    except duckdb.Error:
-        con.execute("LOAD h3;")
+    for ext, source in (("spatial", ""), ("h3", " FROM community")):
+        try:
+            con.execute(f"LOAD {ext};")
+        except duckdb.Error:
+            con.execute(f"INSTALL {ext}{source}; LOAD {ext};")
 
 
 def _select(source_rel: str) -> str:

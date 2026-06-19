@@ -14,9 +14,12 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
+from typing import TYPE_CHECKING
 
 import duckdb
-import pyarrow as pa
+
+if TYPE_CHECKING:  # pyarrow is heavy RSS — only the arrow paths use it, and only as a type.
+    import pyarrow as pa
 
 from .topics import MART_SCHEMAS, Topic
 

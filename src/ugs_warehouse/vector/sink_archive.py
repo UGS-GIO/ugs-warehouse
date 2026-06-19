@@ -62,12 +62,14 @@ def finalize(topic: Topic, chunks_dir: str) -> None:
     import glob
 
     import duckdb as _ddb
+
+    from . import transform
     if not glob.glob(os.path.join(chunks_dir, "*.parquet")):
         raise RuntimeError("no parquet chunks to finalize")
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, f"{topic.stem}.parquet")
         merge = _ddb.connect()
-        merge.execute("SET max_memory='128MB';")
+        merge.execute(f"SET max_memory='{transform.MAX_MEMORY}';")
         merge.execute("INSTALL spatial; LOAD spatial;")
         try:
             merge.execute(

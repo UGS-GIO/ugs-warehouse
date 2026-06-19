@@ -14,16 +14,25 @@ Each sink reads from the view in the form it needs:
 """
 from __future__ import annotations
 
+import os
+from typing import TYPE_CHECKING
+
 import duckdb
-import pyarrow as pa
+
+if TYPE_CHECKING:  # pyarrow is heavy RSS — only the arrow path needs it, and only as a type.
+    import pyarrow as pa
 
 H3_RESOLUTION = 9
 TARGET_SRS = 4326
 
+# Free-tier OOM guard: DuckDB spills to disk past this. Tunable now that pyarrow no longer
+# loads on the streaming path — raise it for more in-RAM sort (faster, less spill) if headroom.
+MAX_MEMORY = os.environ.get("DUCKDB_MAX_MEMORY", "128MB")
+
 
 def setup(con: duckdb.DuckDBPyConnection) -> None:
     """Cap memory (free-tier OOM guard → DuckDB spills to disk) + load spatial/h3."""
-    con.execute("SET max_memory='128MB';")
+    con.execute(f"SET max_memory='{MAX_MEMORY}';")
     con.execute("INSTALL spatial; LOAD spatial;")
     try:
         con.execute("INSTALL h3 FROM community; LOAD h3;")

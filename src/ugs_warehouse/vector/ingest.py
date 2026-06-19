@@ -29,21 +29,29 @@ from . import (
     sink_ducklake,
     sink_pmtiles,
     sink_stac,
-    source,
-    source_postgrest,
     topics,
     transform,
 )
 from .topics import Topic
 
 
+def _is_postgrest() -> bool:
+    return os.environ.get("SOURCE_BACKEND") == "postgrest"
+
+
 def _backend() -> ModuleType:
-    """Pick the source backend (env-driven).
+    """Pick + lazily import the source backend (env-driven), so the unused backend's heavy deps
+    don't load. Default Postgres (`source`) imports no pyarrow at runtime; PostgREST
+    (`source_postgrest`) pulls pyarrow + shapely — only imported when actually selected.
 
     SOURCE_BACKEND=postgrest  -> source_postgrest (HTTP, no DB login needed)
     SOURCE_BACKEND=postgres   -> source (direct Postgres, default)
     """
-    return source_postgrest if os.environ.get("SOURCE_BACKEND") == "postgrest" else source
+    if _is_postgrest():
+        from . import source_postgrest
+        return source_postgrest
+    from . import source
+    return source
 
 
 def _related(topic: Topic) -> dict:
@@ -109,7 +117,7 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
 
 def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:
     backend = _backend()
-    label = "PostgREST" if backend is source_postgrest else "Postgres"
+    label = "PostgREST" if _is_postgrest() else "Postgres"
 
     chunk_size = int(os.environ.get("INGEST_CHUNK_SIZE", "5000"))
 
@@ -244,7 +252,7 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
             related_assets = _related(topic)
             try:
                 stac_con = duckdb.connect()
-                stac_con.execute("SET max_memory='128MB';")
+                stac_con.execute(f"SET max_memory='{transform.MAX_MEMORY}';")
                 try:
                     sink_stac.write(topic, stac_con, "", title=None, description=None, metadata=meta, bbox=overall_bbox, row_count=overall_row_count, related_assets=related_assets)
                 finally:

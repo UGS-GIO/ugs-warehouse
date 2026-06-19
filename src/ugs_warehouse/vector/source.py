@@ -142,6 +142,32 @@ def iter_chunks(topic: Topic, chunk_size: int) -> Iterator[pa.Table]:
         con.close()
 
 
+def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
+    """Prod streaming path: Postgres → transform → materialize, ALL in one DuckDB connection —
+    no pyarrow, no rows ever in Python. DuckDB streams the postgres scan and spills the global
+    hilbert sort under its memory cap. Returns (connection, table_name) for the sinks to read.
+
+    Faster than the arrow+chunk path (no duckdb→python→duckdb copy, extensions loaded once,
+    one global sort instead of per-chunk sorts) and lower-memory (bounded by DuckDB spill, not a
+    Python-held arrow table).
+    """
+    from . import transform
+    con = _connect()           # postgres ATTACHed (read-only) + spatial
+    transform.setup(con)       # memory cap + spatial + h3
+    cols = _describe(con, topic)
+    geom_col = _geom_column(cols)
+    other = [c for c, _ in cols if c not in (geom_col, "target_epsg")]
+    select_list = (
+        ", ".join(f'"{c}"' for c in other)
+        + f', ST_AsBinary("{geom_col}") AS geom_wkb'
+        + f', COALESCE(NULLIF(ST_SRID("{geom_col}"), 0), 4326) AS target_epsg'
+    )
+    pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}"'
+    # postgres_query subquery as the transform source; $pgq$ dollar-quote avoids escaping.
+    source_rel = f"(SELECT * FROM postgres_query('{PG_ALIAS}', $pgq${pg_sql}$pgq$))"
+    return con, transform.materialize(con, source_rel)
+
+
 # Descriptive (catalog) metadata columns on raw.schema_registry (ugs-ingest #171).
 _META_COLS = ("display_name", "description", "keywords", "iso_topic_category",
               "use_constraints", "lineage", "point_of_contact")

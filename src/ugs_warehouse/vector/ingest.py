@@ -56,11 +56,70 @@ def _related(topic: Topic) -> dict:
         return {}
 
 
+def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool) -> int:
+    """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over a transformed
+    table/view → catalog refresh. Shared by the streaming + single-shot arrow paths."""
+    count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
+    non_null = con.execute(f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL").fetchone()[0]
+    if non_null == 0:
+        cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
+        print(f"[{topic.fqn}] SKIP: 0/{count} rows have geometry "
+              f"(non-spatial table, or geom not readable by this backend)", file=sys.stderr)
+        print(f"  columns : {cols}", file=sys.stderr)
+        return 1
+
+    if dry_run:
+        cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
+        sample = con.execute(f"SELECT * EXCLUDE (geom) FROM {view} LIMIT 1").fetchone()
+        bbox = con.execute(f"SELECT MIN(ST_XMin(geom)), MIN(ST_YMin(geom)), "
+                           f"MAX(ST_XMax(geom)), MAX(ST_YMax(geom)) FROM {view}").fetchone()
+        print(f"[{topic.fqn}] DRY-RUN OK")
+        print(f"  rows after transform : {count} ({non_null} with geometry)")
+        print(f"  bbox (4326)          : minx={bbox[0]:.6f} miny={bbox[1]:.6f} "
+              f"maxx={bbox[2]:.6f} maxy={bbox[3]:.6f}")
+        print(f"  columns              : {cols}")
+        print(f"  sample row (no geom) : {sample}")
+        return 0
+
+    meta = backend.read_metadata(topic)
+    related_assets = _related(topic)
+    rc = 0
+    for name, fn in [
+        ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
+        ("archive",  lambda: sink_archive.write(topic, con, view)),
+        ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
+        ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related_assets=related_assets)),
+    ]:
+        try:
+            fn()
+        except Exception as e:  # per-sink isolation: log + continue, never silent fail
+            print(f"[{topic.fqn}] sink {name} FAILED: {e}", file=sys.stderr)
+            traceback.print_exc()
+            rc = 1
+
+    if not skip_refresh:
+        try:
+            stac.refresh_catalog()
+        except Exception as e:
+            print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
+            traceback.print_exc()
+            rc = 1
+    return rc
+
+
 def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:
     backend = _backend()
     label = "PostgREST" if backend is source_postgrest else "Postgres"
 
     chunk_size = int(os.environ.get("INGEST_CHUNK_SIZE", "5000"))
+
+    # Preferred path (Postgres): one DuckDB connection streams scan→transform→materialize with
+    # no pyarrow and no Python-held rows; DuckDB spills under its memory cap. No row chunking
+    # needed. (PostgREST can't ATTACH, so it falls through to the arrow/chunked paths below.)
+    if hasattr(backend, "stream_transformed"):
+        print(f"[{topic.fqn}] reading from {label} (streaming, single DuckDB)")
+        con, view = backend.stream_transformed(topic)
+        return _run_sinks(topic, con, view, backend, dry_run, skip_refresh)
 
     # 1. Determine if we should use chunked ingestion
     is_chunked = False
@@ -208,74 +267,8 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
         print(f"[{topic.fqn}] reading from {label}")
         arrow_in = backend.read(topic)
         print(f"[{topic.fqn}] {arrow_in.num_rows} rows in, {len(arrow_in.column_names)} columns")
-
         con, view = transform.run(arrow_in)
-
-        count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
-        non_null = con.execute(
-            f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL"
-        ).fetchone()[0]
-
-        if non_null == 0:
-            # No usable geometry — non-spatial table, or the source backend could
-            # not read geom (e.g. PostgREST column-level grant hides it). Writing
-            # sinks here would emit empty/broken artifacts, so bail before them in
-            # both dry-run and real mode.
-            cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
-            print(f"[{topic.fqn}] SKIP: 0/{count} rows have geometry "
-                  f"(non-spatial table, or geom not readable by this backend)",
-                  file=sys.stderr)
-            print(f"  columns : {cols}", file=sys.stderr)
-            return 1
-
-        if dry_run:
-            # Validate source + transform without touching any sink.
-            cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
-            sample = con.execute(f"SELECT * EXCLUDE (geom) FROM {view} LIMIT 1").fetchone()
-            bbox = con.execute(f"""
-                SELECT
-                  MIN(ST_XMin(geom)), MIN(ST_YMin(geom)),
-                  MAX(ST_XMax(geom)), MAX(ST_YMax(geom))
-                FROM {view}
-            """).fetchone()
-            print(f"[{topic.fqn}] DRY-RUN OK")
-            print(f"  rows after transform : {count} ({non_null} with geometry)")
-            print(f"  bbox (4326)          : minx={bbox[0]:.6f} miny={bbox[1]:.6f} "
-                  f"maxx={bbox[2]:.6f} maxy={bbox[3]:.6f}")
-            print(f"  columns              : {cols}")
-            print(f"  sample row (no geom) : {sample}")
-            return 0
-
-        # Per-topic descriptive metadata (raw.schema_registry); {} until #171 + grant land.
-        meta = backend.read_metadata(topic)
-        related_assets = _related(topic)
-
-        rc = 0
-        for name, fn in [
-            ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
-            ("archive",  lambda: sink_archive.write(topic, con, view)),
-            ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
-            ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related_assets=related_assets)),
-        ]:
-            try:
-                fn()
-            except Exception as e:
-                # Per-sink isolation: log + continue, never silent fail.
-                print(f"[{topic.fqn}] sink {name} FAILED: {e}", file=sys.stderr)
-                traceback.print_exc()
-                rc = 1
-
-        # Rebuild the static root STAC catalog so it reflects this item (and all
-        # prior ones) — keeps discovery current with no manual regen. Same
-        # per-sink isolation: a refresh failure logs + sets rc but never raises.
-        if not skip_refresh:
-            try:
-                stac.refresh_catalog()
-            except Exception as e:
-                print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
-                traceback.print_exc()
-                rc = 1
-        return rc
+        return _run_sinks(topic, con, view, backend, dry_run, skip_refresh)
 
 
 def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:

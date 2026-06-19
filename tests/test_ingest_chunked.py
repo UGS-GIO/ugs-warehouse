@@ -10,8 +10,10 @@ from ugs_warehouse.vector.ingest import _ingest
 def test_ingest_chunked_workflow():
     topic = Topic(schema="hazards", layer="hazards_qfaults_current")
 
-    # 1. Mock the backend
+    # 1. Mock the backend (a non-streaming backend, e.g. PostgREST → exercises chunked path;
+    #    a streaming backend would take the single-DuckDB branch instead).
     mock_backend = MagicMock()
+    del mock_backend.stream_transformed
     mock_backend.get_count.return_value = 25000
 
     # Mock read_chunk to return a table with a geometry column

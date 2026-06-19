@@ -25,3 +25,6 @@ discovered_topics.txt
 
 # python virtualenv (local test runner)
 .venv/
+
+# Playwright MCP scratch (snapshots/screenshots)
+.playwright-mcp/

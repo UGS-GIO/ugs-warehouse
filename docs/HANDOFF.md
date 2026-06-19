@@ -4,7 +4,56 @@
 current state, what's done, what's blocked, the immediate next move.
 
 **Live working doc** — tracked so it syncs across machines. Refresh as state changes;
-retire once deployed. Last refreshed **2026-06-16**.
+retire once deployed. Last refreshed **2026-06-19**.
+
+---
+
+## ⚡ Work-box checklist — 2026-06-19 session (DO THESE)
+
+Perm-gated actions for this session's commits. This box has no GCP perms; run on the work box.
+Code is committed + pushed on `main`; deploys are automatic — these are the data/infra steps.
+
+1. **Viewer bare-URL serving** (one-time, `storage.buckets.update`) — still pending; `…/warehouse/viewer/`
+   returns `NoSuchKey`. Makes the bare prefix + clean deep-links resolve to `index.html`:
+   ```bash
+   gcloud storage buckets update gs://ut-dnr-ugs-maps-prod-public --web-main-page-suffix=index.html
+   ```
+   ⚠ Do NOT set `--web-error-page` (a bucket-wide 404 page would return viewer HTML for any missing
+   COG/tile → 200 with HTML). `DEPLOY.md §5`.
+
+2. **Pubs → 3 collections** (commit `94b06a2`). Pubs now route by `collection_group()` into
+   `ugs-publications` (3,103: UGS+UGMS+USGS Utah maps), `ugs-mining-district-files` (4,216 MD),
+   `ugs-external` (112 foreign). **Clear the old flat pub STAC paths first** (refresh_catalog
+   doesn't delete moved items → else duplicates), then reingest:
+   ```bash
+   gcloud storage rm -r gs://ut-dnr-ugs-maps-prod-public/warehouse/stac/ugs-publications/
+   gcloud run jobs execute ugs-pubs-ingest --region=us-central1 --project=ut-dnr-ugs-backend-tools
+   ```
+   (Run after the `deploy.yml` build for `94b06a2` finishes, so the job image carries the routing.)
+
+3. **COG harvest at scale** (optional, heavy) — most map pubs (e.g. GQ-75) have no COG because the
+   harvest never ran broadly; only a tiny sample exists. GQ-75 IS harvestable (footprint + GeoTiff
+   zip), just not yet run. Then reingest pubs to attach the new `cog`/`thumbnail` assets:
+   ```bash
+   gcloud run jobs execute geolmap-harvest --region=us-central1 --project=ut-dnr-ugs-backend-tools
+   gcloud run jobs execute ugs-pubs-ingest --region=us-central1 --project=ut-dnr-ugs-backend-tools
+   ```
+   ⚠ Single task, `--task-timeout=3600`, `SKIP_EXISTING=1` → won't finish all map pubs in one pass;
+   re-run to resume, or ask the personal-box agent to add task-sharding (`CLOUD_RUN_TASK_INDEX/COUNT`)
+   + memory note (tmpfs RAM-bound: each pub's zip/tif/COG live in RAM, not disk) first.
+
+**Already automatic this session (nothing to run):**
+- **Viewer deploy fixed.** Root cause: `cloudbuild.yaml` `deploy-viewer` is `allowFailure` → it had been
+  silently NOT updating the CDN for many deploys. New `viewer.yml` + `cloudbuild-viewer.yaml` (fast path,
+  `viewer/**` pushes, Vite build + rsync, no images, NOT allowFailure) now deploys the viewer reliably —
+  proven live (`index-wwCBmnRM.js`, all 5 new features). `deploy.yml` dropped `--async` (real green/red) +
+  `paths-ignore: viewer/**`. *(Recommended follow-up: also drop `allowFailure` from `cloudbuild.yaml`'s
+  `deploy-viewer` so mixed commits deploy the viewer reliably too — the bucket grant clearly works now.)*
+- **Styles published.** `ugs-styles` v0.1.0 tagged → CI published 15 authoritative styles (dropped the 4
+  invented ones; manifest 19→15) + auto-ran the restyle job (renders rebound). Root cause of the stale CDN:
+  publish CI only fires on `v*` tags, none existed. Tag future style releases to publish.
+- 5 viewer features shipped (full parquet explorer, per-column type-aware filters, row→map zoom with real
+  WKB geometry, API/endpoints panel, tabbed publication asset viewer: PDF/COG/image/parquet/text inline).
 
 ---
 

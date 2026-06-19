@@ -119,6 +119,23 @@ const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
 const colType = (duckType: string): ColType =>
   /\b(INT|DEC|DOUBLE|FLOAT|REAL|NUMERIC|HUGEINT)\b/.test(duckType.toUpperCase()) ? "number" : "text";
 
+// WHERE clause shared by the page query + the single-row geometry fetch, so OFFSET maps to the
+// same row the user sees. `columns` = the displayable (filterable) columns.
+function buildWhere(columns: string[], opts: PageOpts): string {
+  const clauses: string[] = [];
+  const s = opts.search?.trim();
+  if (s) clauses.push("(" + columns.map((c) => `CAST(${ident(c)} AS VARCHAR) ILIKE ${lit(`%${s}%`)}`).join(" OR ") + ")");
+  for (const f of opts.filters ?? []) {
+    if (!columns.includes(f.col)) continue;
+    const cl = filterClause(f);
+    if (cl) clauses.push(`(${cl})`);
+  }
+  return clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+}
+const buildOrder = (columns: string[], opts: PageOpts): string =>
+  opts.orderBy && columns.includes(opts.orderBy)
+    ? ` ORDER BY ${ident(opts.orderBy)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST` : "";
+
 // One SQL predicate from a per-column filter (empty string = no constraint).
 function filterClause(f: ColFilter): string {
   const c = ident(f.col);
@@ -155,23 +172,11 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     }
 
     // WHERE = global free-text (OR across all columns) AND each per-column filter.
-    const clauses: string[] = [];
-    const s = opts.search?.trim();
-    if (s) {
-      clauses.push("(" + columns.map((c) => `CAST(${ident(c)} AS VARCHAR) ILIKE ${lit(`%${s}%`)}`).join(" OR ") + ")");
-    }
-    for (const f of opts.filters ?? []) {
-      if (!columns.includes(f.col)) continue;
-      const cl = filterClause(f);
-      if (cl) clauses.push(`(${cl})`);
-    }
-    const where = clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
-
+    const where = buildWhere(columns, opts);
     const totalRes = await conn.query(`SELECT count(*) AS n FROM ${from}${where};`);
     const total = Number(totalRes.toArray()[0]?.n ?? 0);
 
-    const order = opts.orderBy && columns.includes(opts.orderBy)
-      ? ` ORDER BY ${ident(opts.orderBy)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST` : "";
+    const order = buildOrder(columns, opts);
     // Select displayed cols + bbox cols explicitly (excluding geom) so bbox survives for zoom.
     const sel = allCols.includes(GEOM) ? `* EXCLUDE (${GEOM})` : "*";
     const res = await conn.query(
@@ -189,6 +194,35 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
       return b.every((n) => Number.isFinite(n)) ? (b as [number, number, number, number]) : null;
     });
     return { columns, types, rows, total, bboxes };
+  } finally {
+    await conn.close();
+  }
+}
+
+/** Real geometry of one row (the row at `rowOffset` under the same filter+sort as the page query),
+ *  read as WKB and parsed to GeoJSON in JS — NO spatial extension load (which trips DuckDB-WASM's
+ *  GeoParquet CRS reader). Returns null if the file has no geometry or the row is gone. */
+export async function fetchGeometry(
+  parquetUrl: string, opts: Omit<PageOpts, "limit" | "offset">, rowOffset: number,
+): Promise<GeoJSON.Geometry | null> {
+  const db = await getDB();
+  const conn = await db.connect();
+  try {
+    const src = await registerUrl(parquetUrl);
+    const from = `read_parquet('${src}')`;
+    const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
+    const allCols = desc.toArray().map((r) => String(r.column_name));
+    if (!allCols.includes(GEOM)) return null;
+    const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
+    const columns = allCols.filter((c) => c !== GEOM && !(hasBbox && BBOX_COLS.includes(c)));
+    const full: PageOpts = { ...opts, limit: 1, offset: rowOffset };
+    const res = await conn.query(
+      `SELECT ${ident(GEOM)} AS g FROM ${from}${buildWhere(columns, full)}${buildOrder(columns, full)} LIMIT 1 OFFSET ${rowOffset};`,
+    );
+    const blob = res.toArray()[0]?.g as Uint8Array | null | undefined;
+    if (!blob) return null;
+    const { wkbToGeoJSON } = await import("./wkb");
+    return wkbToGeoJSON(blob);
   } finally {
     await conn.close();
   }

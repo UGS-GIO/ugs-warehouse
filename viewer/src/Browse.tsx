@@ -368,7 +368,9 @@ const NEUTRAL_LAYERS = [
 // Interactive vector preview — the item's actual PMTiles features. Uses the bound ugs-styles
 // GL style (via the render extension) when present; else a neutral geometry render (no
 // invented cartography — real styling arrives through `renders`).
-function PmtilesMap({ item, focus }: { item: StacDoc; focus?: [number, number, number, number] | null }) {
+type FocusSel = { bbox: [number, number, number, number]; geometry?: GeoJSON.Geometry | null };
+
+function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null }) {
   const pm = pmtilesLink(item);
   const styleUrl = defaultStyleUrl(item);
   const mapRef = useRef<MapRef>(null);
@@ -383,19 +385,21 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: [number, number, n
   }, [styleUrl]);
 
   // Fly to the picked row's feature (bbox from the parquet covering columns). maxZoom keeps a
-  // point (degenerate bbox) from zooming to street level.
+  // point (degenerate bbox) from zooming to street level. Keyed on bbox values so a later
+  // geometry update for the same row doesn't re-fly.
+  const fb = focus?.bbox;
   useEffect(() => {
-    if (!focus || !mapRef.current) return;
-    mapRef.current.fitBounds([[focus[0], focus[1]], [focus[2], focus[3]]],
-      { padding: 60, maxZoom: 14, duration: 800 });
-  }, [focus]);
+    if (!fb || !mapRef.current) return;
+    mapRef.current.fitBounds([[fb[0], fb[1]], [fb[2], fb[3]]], { padding: 60, maxZoom: 14, duration: 800 });
+  }, [fb?.[0], fb?.[1], fb?.[2], fb?.[3]]);
 
   if (!pm) return null;
   const sourceLayer = pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "");
   const bounds = asBounds(item);
-  const hlPoly = focus ? bboxPolygon(focus) : null;
-  const hlCenter: GeoJSON.Point | null = focus
-    ? { type: "Point", coordinates: [(focus[0] + focus[2]) / 2, (focus[1] + focus[3]) / 2] } : null;
+  // Highlight the REAL feature geometry once fetched; until then (or if unavailable) fall back to
+  // the bbox outline so the click gives instant feedback. One source, three layers — line/fill for
+  // polygons & lines, circle for points (a layer whose type doesn't match the geom renders nothing).
+  const hlGeom: GeoJSON.Geometry | null = focus?.geometry ?? (fb ? bboxPolygon(fb) : null);
   return (
     <>
       <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
@@ -413,14 +417,11 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: [number, number, n
             // an array / Fragment, so without this they render with no source (invisible).
             <Layer key={i} {...({ ...l, id: `pm-prev-${i}`, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />
           ))}
-          {/* Picked-row highlight: bbox outline (polygons) + center marker (works for points too). */}
-          {hlPoly && (
-            <Source id="pm-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlPoly }}>
+          {/* Picked-row highlight — the real feature geometry (line/fill/circle by geom type). */}
+          {hlGeom && (
+            <Source id="pm-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
+              <Layer id="pm-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
               <Layer id="pm-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
-            </Source>
-          )}
-          {hlCenter && (
-            <Source id="pm-hl-c" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlCenter }}>
               <Layer id="pm-hl-pt" type="circle" paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
             </Source>
           )}
@@ -435,7 +436,7 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: [number, number, n
 // map flies to that feature (when the parquet carries bbox covering columns).
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
-  const [focus, setFocus] = useState<[number, number, number, number] | null>(null);
+  const [focus, setFocus] = useState<FocusSel | null>(null);
   return (
     <>
       <PmtilesMap item={item} focus={focus} />
@@ -495,7 +496,7 @@ function DataTable<T>({ columns, data, onRowClick, initialSorting }: {
 // Geometry is excluded (use Download / OGC API / the map for geometry).
 const PAGE_SIZE = 25;
 function DataExplorer({ href, onPick }: {
-  href: string; onPick?: (bbox: [number, number, number, number]) => void;
+  href: string; onPick?: (sel: FocusSel) => void;
 }) {
   const [pageIndex, setPageIndex] = useState(0);
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -576,6 +577,18 @@ function DataExplorer({ href, onPick }: {
     || Object.values(draft).some((d) => d.min || d.max || d.text);
   const clearAll = () => { setSearch(""); setDraft({}); };
 
+  // Row click → zoom + highlight. Fire the bbox immediately (instant feedback), then fetch the
+  // real geometry (same filter+sort, offset = page start + row index) and upgrade the highlight.
+  const pick = (i: number, bbox: [number, number, number, number]) => {
+    if (!onPick) return;
+    onPick({ bbox });
+    const offset = pageIndex * PAGE_SIZE + i;
+    import("./download").then(({ fetchGeometry }) => fetchGeometry(href,
+      { orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters }, offset))
+      .then((g) => { if (g) onPick({ bbox, geometry: g }); })
+      .catch(() => {});
+  };
+
   return (
     <div className="mt-2">
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
@@ -636,7 +649,7 @@ function DataExplorer({ href, onPick }: {
               return (
                 <tr key={r.id} className={clickable ? "cursor-pointer hover:bg-muted" : undefined}
                   title={clickable ? "Zoom to feature on map" : undefined}
-                  onClick={clickable ? () => onPick!(bbox!) : undefined}>
+                  onClick={clickable ? () => pick(r.index, bbox!) : undefined}>
                   {r.getVisibleCells().map((c) => (
                     <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
                   ))}

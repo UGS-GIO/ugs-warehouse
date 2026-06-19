@@ -77,11 +77,9 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
         print(f"[{topic.fqn}] reading from {label} in chunks (total rows: {total_rows}, chunk_size: {chunk_size})")
 
         import math
-        import shutil
         import tempfile
-        import datetime
+
         import duckdb
-        from ..core import config
 
         overall_bbox = [float("inf"), float("inf"), float("-inf"), float("-inf")]
         overall_row_count = 0
@@ -141,26 +139,14 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
                     print(f"[{topic.fqn}] sink ducklake chunk {chunk_idx} FAILED: {e}", file=sys.stderr)
                     traceback.print_exc()
 
-                # Run sink: archive chunk
+                # Per-chunk artifacts → disk (the sinks own the COPY SQL; merged after the loop).
                 try:
-                    chunk_parquet = os.path.join(parquet_chunks_dir, f"chunk_{chunk_idx}.parquet")
-                    con.execute(
-                        f"COPY (SELECT *, "
-                        f"ST_XMin(geom) AS bbox_xmin, ST_YMin(geom) AS bbox_ymin, "
-                        f"ST_XMax(geom) AS bbox_xmax, ST_YMax(geom) AS bbox_ymax "
-                        f"FROM {view}) TO '{chunk_parquet}' (FORMAT PARQUET, COMPRESSION ZSTD)"
-                    )
+                    sink_archive.write_chunk(con, view, os.path.join(parquet_chunks_dir, f"chunk_{chunk_idx}.parquet"))
                 except Exception as e:
                     print(f"[{topic.fqn}] sink archive chunk {chunk_idx} FAILED: {e}", file=sys.stderr)
                     traceback.print_exc()
-
-                # Run sink: pmtiles chunk
                 try:
-                    chunk_geojsonl = os.path.join(geojsonl_chunks_dir, f"chunk_{chunk_idx}.geojsonl")
-                    con.execute(
-                        f"COPY (SELECT * FROM {view}) TO '{chunk_geojsonl}' "
-                        f"(FORMAT GDAL, DRIVER 'GeoJSONSeq')"
-                    )
+                    sink_pmtiles.write_chunk(con, view, os.path.join(geojsonl_chunks_dir, f"chunk_{chunk_idx}.geojsonl"))
                 except Exception as e:
                     print(f"[{topic.fqn}] sink pmtiles chunk {chunk_idx} FAILED: {e}", file=sys.stderr)
                     traceback.print_exc()
@@ -182,83 +168,19 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> 
                           f"maxx={overall_bbox[2]:.6f} maxy={overall_bbox[3]:.6f}")
                 return 0
 
-            # Now, merge and upload the chunked outputs
+            # Merge the per-chunk artifacts → upload (the sinks own merge + tippecanoe + upload,
+            # same code the non-chunked path uses). Per-sink isolation: a failure logs + sets rc.
             rc = 0
-
-            # 1. Merge and upload Parquet archive
-            local_parquet = os.path.join(tmp_dir, f"{topic.stem}.parquet")
-            parquet_files = [f for f in os.listdir(parquet_chunks_dir) if f.endswith(".parquet")]
-            if parquet_files:
+            for name, fn in (("archive", lambda: sink_archive.finalize(topic, parquet_chunks_dir)),
+                             ("pmtiles", lambda: sink_pmtiles.finalize(topic, geojsonl_chunks_dir))):
                 try:
-                    merge_con = duckdb.connect()
-                    merge_con.execute("SET max_memory='128MB';")
-                    merge_con.execute("INSTALL spatial; LOAD spatial;")
-                    try:
-                        merge_con.execute(
-                            f"COPY (SELECT * FROM read_parquet('{parquet_chunks_dir}/*.parquet')) "
-                            f"TO '{local_parquet}' (FORMAT PARQUET, COMPRESSION ZSTD)"
-                        )
-                    finally:
-                        merge_con.close()
-                    stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
-                    base = f"{config.ARCHIVE_PREFIX}/{topic.stem}"
-                    latest = f"{base}/{topic.stem}.parquet"
-                    dated = f"{base}/{topic.stem}_{stamp}.parquet"
-                    from ..core import gcs
-                    gcs.upload(local_parquet, latest, content_type=sink_archive.PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
-                    gcs.upload(local_parquet, dated, content_type=sink_archive.PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
-                    print(f"[{topic.fqn}] archive: {config.public_url(latest)} (+ dated {stamp})")
+                    fn()
                 except Exception as e:
-                    print(f"[{topic.fqn}] sink archive merge/upload FAILED: {e}", file=sys.stderr)
+                    print(f"[{topic.fqn}] sink {name} finalize FAILED: {e}", file=sys.stderr)
                     traceback.print_exc()
                     rc = 1
-            else:
-                print(f"[{topic.fqn}] sink archive FAILED: no parquet chunks written", file=sys.stderr)
-                rc = 1
 
-            # 2. Merge and build PMTiles
-            local_geojsonl = os.path.join(tmp_dir, f"{topic.stem}.geojsonl")
-            local_pmtiles = os.path.join(tmp_dir, f"{topic.stem}.pmtiles")
-            geojsonl_files = [f for f in os.listdir(geojsonl_chunks_dir) if f.endswith(".geojsonl")]
-            if geojsonl_files:
-                try:
-                    with open(local_geojsonl, "wb") as outfile:
-                        # Sort by chunk index to keep ordering
-                        sorted_files = sorted(geojsonl_files, key=lambda x: int(x.split("_")[1].split(".")[0]))
-                        for fname in sorted_files:
-                            fpath = os.path.join(geojsonl_chunks_dir, fname)
-                            with open(fpath, "rb") as infile:
-                                shutil.copyfileobj(infile, outfile)
-
-                    if not shutil.which(sink_pmtiles.TIPPECANOE_BIN):
-                        raise RuntimeError(f"{sink_pmtiles.TIPPECANOE_BIN} not on PATH")
-
-                    cmd = [
-                        sink_pmtiles.TIPPECANOE_BIN,
-                        "-o", local_pmtiles,
-                        "-l", topic.stem,
-                        "--force",
-                        "--drop-densest-as-needed",
-                        "--extend-zooms-if-still-dropping",
-                        *sink_pmtiles.EXTRA_OPTS,
-                        local_geojsonl,
-                    ]
-                    import subprocess
-                    subprocess.run(cmd, check=True)
-                    gcs_object = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
-                    from ..core import gcs
-                    gcs.upload(local_pmtiles, gcs_object, content_type=sink_pmtiles.PMTILES_MIME,
-                               cache_control=gcs.CACHE_MUTABLE)
-                    print(f"[{topic.fqn}] pmtiles: {config.public_url(gcs_object)}")
-                except Exception as e:
-                    print(f"[{topic.fqn}] sink pmtiles merge/build/upload FAILED: {e}", file=sys.stderr)
-                    traceback.print_exc()
-                    rc = 1
-            else:
-                print(f"[{topic.fqn}] sink pmtiles FAILED: no geojsonl chunks written", file=sys.stderr)
-                rc = 1
-
-            # 3. Write STAC
+            # Write STAC
             meta = backend.read_metadata(topic)
             related_assets = _related(topic)
             try:

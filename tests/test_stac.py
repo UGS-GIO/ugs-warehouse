@@ -1,5 +1,20 @@
 """Shared STAC builders — the collections-layout catalog (derive-from-truth refresh)."""
 from ugs_warehouse.core import config, stac
+from ugs_warehouse.pubs import identity
+from ugs_warehouse.pubs.sink_stac import collection_group
+
+
+def test_collection_group_routes_md_external_and_ugs():
+    # Mining District Files → their own collection regardless of publisher.
+    assert collection_group({"series_id": "MD-100", "pub_publisher": "USGS"}) == identity.MINING_DISTRICT_COLLECTION
+    # UGS / UGMS / blank publisher → the main UGS catalog.
+    assert collection_group({"series_id": "OFR-1", "pub_publisher": "UGS"}) == identity.PUBLICATIONS_COLLECTION
+    assert collection_group({"series_id": "B-1", "pub_publisher": "UGMS"}) == identity.PUBLICATIONS_COLLECTION
+    assert collection_group({"series_id": "M-1", "pub_publisher": ""}) == identity.PUBLICATIONS_COLLECTION
+    # USGS-authored Utah geologic quads stay in the main catalog (the COG-worthy maps).
+    assert collection_group({"series_id": "GQ-968", "pub_publisher": "USGS"}) == identity.PUBLICATIONS_COLLECTION
+    # Foreign publishers UGS only hosts → external.
+    assert collection_group({"series_id": "X-1", "pub_publisher": "BYU"}) == identity.EXTERNAL_COLLECTION
 
 
 def test_bbox_polygon_is_closed_ring():

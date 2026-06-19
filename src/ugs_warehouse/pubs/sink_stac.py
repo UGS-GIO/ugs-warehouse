@@ -76,6 +76,23 @@ def has_ugs_doi(publisher: str | None) -> bool:
     return (not tokens) or bool(tokens & UGS_NAMES)
 
 
+# USGS authored the Utah geologic-quad maps (GQ etc.) UGS publishes — kept in the main catalog.
+CATALOG_PUBLISHERS = UGS_NAMES | {"USGS"}
+
+
+def collection_group(p: dict) -> str:
+    """Top-level STAC collection for a pub. UGS hosts third-party material it didn't author:
+    Mining District Files (scanned mine docs, ~4.2k) and foreign-published pubs. Route those to
+    sibling collections so the UGS geologic catalog (UGS/UGMS-authored + USGS Utah maps) stays
+    clean — nothing dropped, just grouped. Blank publisher = treated as UGS (matches has_ugs_doi)."""
+    if series_code(p.get("series_id")) == "MD":
+        return identity.MINING_DISTRICT_COLLECTION
+    tokens = {t.strip().upper() for t in re.split(r"[,;/&]", p.get("pub_publisher") or "") if t.strip()}
+    if (not tokens) or (tokens & CATALOG_PUBLISHERS):
+        return identity.PUBLICATIONS_COLLECTION
+    return identity.EXTERNAL_COLLECTION
+
+
 def build_item(p: dict, attachments: list[dict], *,
                geom: dict | None = None, bbox: list[float] | None = None,
                fp_source: str | None = None,
@@ -122,9 +139,10 @@ def build_item(p: dict, attachments: list[dict], *,
         extensions.append(stac.WEB_MAP_LINKS_EXT)
 
     code = series_code(sid)
+    group = collection_group(p)  # top-level: UGS catalog / mining-district files / external
     return stac.build_item(
         item_id=sid, collection=code,
-        collection_path=f"{identity.PUBLICATIONS_COLLECTION}/{code}",
+        collection_path=f"{group}/{code}",
         geometry=geom, bbox=bbox, datetime_iso=dt,
         properties={
             "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop

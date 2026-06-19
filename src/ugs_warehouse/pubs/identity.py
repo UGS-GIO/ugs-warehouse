@@ -18,7 +18,11 @@ COG_PREFIX = os.environ.get("GEOLMAP_COG_PREFIX", "geolmap/cogs")
 FOOTPRINTS_PREFIX = os.environ.get("GEOLMAP_FOOTPRINTS_PREFIX", "geolmap/footprints")
 UNITS_PREFIX = os.environ.get("GEOLMAP_UNITS_PREFIX", "geolmap/units")
 
-PUBLICATIONS_COLLECTION = "ugs-publications"
+# Top-level catalog routing. UGS hosts third-party material it didn't author; split it into
+# sibling collections so the UGS geologic catalog stays clean (nothing dropped, just grouped).
+PUBLICATIONS_COLLECTION = "ugs-publications"             # UGS/UGMS-authored + USGS Utah maps
+MINING_DISTRICT_COLLECTION = "ugs-mining-district-files"  # MD series — archived 3rd-party mine files
+EXTERNAL_COLLECTION = "ugs-external"                     # foreign publishers UGS only hosts
 
 
 @dataclass(frozen=True)

@@ -387,7 +387,11 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         if not ok:
             print(f"{series_id}: FAIL cog invalid", file=sys.stderr)
             return "fail:cog"
-        gcs.upload(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_MUTABLE)
+        # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
+        # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
+        # the slow "flood of requests" on zoom. COGs are write-once (SKIP_EXISTING skips rewrites),
+        # so long-cache is safe; a --force re-harvest needs a CDN cache invalidation.
+        gcs.upload(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
         if shp:
             import duckdb
             gpq = os.path.join(work, f"{series_id}.units.parquet")
@@ -398,12 +402,12 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             finally:
                 con.close()
             gcs.upload(gpq, f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet",
-                       content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+                       content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
         if THUMBS:
             th = os.path.join(work, f"{series_id}.thumb.png")
             run(["gdal_translate", "-of", "PNG", "-outsize", "700", "0", cog, th])
             gcs.upload(th, f"{identity.COG_PREFIX}/{series_id}.thumb.png",
-                       content_type="image/png", cache_control=gcs.CACHE_MUTABLE)
+                       content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
         print(f"{series_id}: OK ({COG_DPI}dpi {COG_COMPRESS} q{COG_QUALITY}) -> {pub.cog_object}")
         return "ok"
     except Exception as e:

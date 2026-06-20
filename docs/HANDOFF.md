@@ -42,7 +42,25 @@ Code is committed + pushed on `main`; deploys are automatic — these are the da
    re-run to resume, or ask the personal-box agent to add task-sharding (`CLOUD_RUN_TASK_INDEX/COUNT`)
    + memory note (tmpfs RAM-bound: each pub's zip/tif/COG live in RAM, not disk) first.
 
+4. **Vector reingest — rebuild PMTiles with `-r1`** (commit `294c77f`). Point layers (mt stations,
+   wells, tem, powerplants…) were rendering ~1 dot at low/mid zoom — tippecanoe's default drop-rate
+   thinned dense points. `sink_pmtiles` now passes `-r1` (keep every point at every zoom). The fix is
+   code-only until the tiles are rebuilt:
+   ```bash
+   gcloud run jobs execute ugs-warehouse-ingest --region=us-central1 --project=ut-dnr-ugs-backend-tools
+   ```
+   (Run after the `deploy.yml` build for `abd9294` finishes so the job image has the `-r1` flag. This
+   also re-emits the `bbox_*` covering columns the viewer's row→zoom uses.)
+
 **Already automatic this session (nothing to run):**
+- **Styles v0.1.1 published.** Tag pushed → publish CI rebuilds dist-json + **bakes the wells pie-wedge
+  sprite sheet** (`gen:sprites`) + rsyncs to the styles CDN + runs the restyle job → the prod wells STAC
+  item gets BOTH renders (`by-purpose` + `by-boxtype`). So the viewer's "Symbolize by" switcher + the
+  box-type pie icons go live with **no work-box action**. (Two fixes rode along: paintless-fill→black
+  dropped for 4 outline-only styles; `by-boxtype` is the new pie-wedge icon render ported from
+  ugs-map-viewer.) Sanity-check after the CI run: `curl …/styles/index.json` should list `by-boxtype`,
+  and `…/styles/styles/enmin_ucrc_wells_current/sprite.png` should 200.
+- **Viewer deploy fixed.** Root cause: `cloudbuild.yaml` `deploy-viewer` is `allowFailure` → it had been
 - **Viewer deploy fixed.** Root cause: `cloudbuild.yaml` `deploy-viewer` is `allowFailure` → it had been
   silently NOT updating the CDN for many deploys. New `viewer.yml` + `cloudbuild-viewer.yaml` (fast path,
   `viewer/**` pushes, Vite build + rsync, no images, NOT allowFailure) now deploys the viewer reliably —
@@ -52,8 +70,9 @@ Code is committed + pushed on `main`; deploys are automatic — these are the da
 - **Styles published.** `ugs-styles` v0.1.0 tagged → CI published 15 authoritative styles (dropped the 4
   invented ones; manifest 19→15) + auto-ran the restyle job (renders rebound). Root cause of the stale CDN:
   publish CI only fires on `v*` tags, none existed. Tag future style releases to publish.
-- 5 viewer features shipped (full parquet explorer, per-column type-aware filters, row→map zoom with real
-  WKB geometry, API/endpoints panel, tabbed publication asset viewer: PDF/COG/image/parquet/text inline).
+- Viewer features shipped (full parquet explorer, per-column type-aware filters, row→map zoom with real
+  WKB geometry, API/endpoints panel, tabbed publication asset viewer: PDF/COG/image/parquet/text inline,
+  **multi-render "Symbolize by" switcher + sprite loading** for layers with >1 style).
 
 ---
 

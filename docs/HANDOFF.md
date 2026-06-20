@@ -13,6 +13,28 @@ retire once deployed. Last refreshed **2026-06-19**.
 Perm-gated actions for this session's commits. This box has no GCP perms; run on the work box.
 Code is committed + pushed on `main`; deploys are automatic — these are the data/infra steps.
 
+0a. **COG preview slow → fix CDN caching.** COGs were uploaded `Cache-Control: public,no-cache`, so the
+    CDN edge-caches NONE of the byte-range tile reads — every tile round-trips to GCS origin (the slow
+    "flood of requests" on zoom; verified `age:0` on repeat range requests). Harvest now uploads COG +
+    thumbnail + units **immutable** (commit `99dd0d3`, on branch `fix/srid-0-error-not-assume-4326` —
+    merge to `main` to ship the code). Existing COGs are still no-cache → flip them in place:
+    ```bash
+    gsutil -m setmeta -h "Cache-Control:public, max-age=31536000, immutable" \
+      "gs://ut-dnr-ugs-maps-prod-public/geolmap/cogs/**"
+    ```
+    Verify: `for i in 1 2 3; do curl -sI -r 0-500 https://maps-assets.geology.utah.gov/geolmap/cogs/GQ-968.cog.tif | grep -i age; done`
+    → `age` should now CLIMB (served from edge), not stay 0. If it stays 0, Cloud CDN byte-range caching
+    isn't enabled on the backend bucket → that's an LB/CDN toggle, separate.
+
+0b. **Legend missing on box-type switch → re-bind renders.** Prod `by-boxtype` STAC render block has no
+    `legend` because the `ugs-warehouse-restyle` job ran a STALE image (it wasn't in cloudbuild). Now
+    added (commit `855e195`, on `main`). After the next deploy updates the job image, re-run it:
+    ```bash
+    gcloud run jobs execute ugs-warehouse-restyle --region=us-central1 --project=ut-dnr-ugs-backend-tools
+    ```
+    (The styles manifest already has the legend; this copies it into the STAC render blocks. Viewer needs
+    no redeploy.)
+
 1. **Viewer bare-URL serving** (one-time, `storage.buckets.update`) — still pending; `…/warehouse/viewer/`
    returns `NoSuchKey`. Makes the bare prefix + clean deep-links resolve to `index.html`:
    ```bash

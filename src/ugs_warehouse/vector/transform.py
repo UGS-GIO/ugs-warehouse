@@ -46,6 +46,11 @@ def _select(source_rel: str) -> str:
     GEOMETRY carries no SRID — CRS is attached at GeoParquet write time. Rows are hilbert-sorted
     so parquet row-groups bbox-prune well.
 
+    Each row also gets a stable `feature_id` (1..N in hilbert order). Because the GeoParquet and
+    the PMTiles sinks both read this one materialized table, the id is identical in both — it's
+    the join key the viewer uses to link a clicked map feature to its table row (and back). It is
+    per-ingest stable (consistent across the two artifacts of one run), not a cross-ingest key.
+
     target_epsg = 0 (unstamped geometry) errors loudly rather than silently assuming 4326 — an
     unstamped table reaching here means a CRS provenance gap upstream, not a 4326 default.
     """
@@ -64,7 +69,8 @@ def _select(source_rel: str) -> str:
           SELECT * EXCLUDE (geom_wkb), {geom_hydrate} AS geom FROM {source_rel}
         )
         SELECT *, h3_latlng_to_cell(ST_Y(ST_Centroid(geom)), ST_X(ST_Centroid(geom)),
-                                    {H3_RESOLUTION}) AS h3_r9
+                                    {H3_RESOLUTION}) AS h3_r9,
+               row_number() OVER (ORDER BY ST_Hilbert(ST_Centroid(geom))) AS feature_id
         FROM hydrated
         ORDER BY ST_Hilbert(ST_Centroid(geom))
     """

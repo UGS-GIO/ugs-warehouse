@@ -6,7 +6,7 @@ import {
 } from "@tanstack/react-table";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
+import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
 import { type Asset, citeLink, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, viaLink } from "./stac";
@@ -368,7 +368,7 @@ const NEUTRAL_LAYERS = [
 // Interactive vector preview — the item's actual PMTiles features. Uses the bound ugs-styles
 // GL style (via the render extension) when present; else a neutral geometry render (no
 // invented cartography — real styling arrives through `renders`).
-type FocusSel = { bbox: [number, number, number, number]; geometry?: GeoJSON.Geometry | null };
+type FocusSel = { bbox?: [number, number, number, number]; geometry?: GeoJSON.Geometry | null };
 
 // Load a baked sprite sheet (pie-wedge icons for box-type) into the map via addImage, slicing each
 // frame from the PNG so icon-image names match the style as authored (no sprite-id namespacing).
@@ -387,7 +387,10 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
   }
 }
 
-function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null }) {
+function PmtilesMap({ item, focus, onFeatureClick }: {
+  item: StacDoc; focus?: FocusSel | null;
+  onFeatureClick?: (featureId: number, props: Record<string, unknown>) => void;
+}) {
   const pm = pmtilesLink(item);
   const renders = useMemo(() => rendersOf(item), [item]);
   const renderKeys = Object.keys(renders);
@@ -403,6 +406,9 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
   const [mapLoaded, setMapLoaded] = useState(false);
   const [styleLayers, setStyleLayers] = useState<Record<string, unknown>[] | null>(null);
   const [spriteReady, setSpriteReady] = useState(false);
+  const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown> } | null>(null);
+  // Close the popup when the item changes (a stale popup over a different layer would mislead).
+  useEffect(() => { setPopup(null); }, [item.id]);
 
   useEffect(() => {
     setStyleLayers(null);  // clear immediately so the prior render's layers don't linger on switch
@@ -448,6 +454,19 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
   // flash + an id-reuse "layer type changed" swap). Layer ids include `sel` so switching renders
   // remounts cleanly (different type on the same id otherwise throws in maplibre).
   const layers = sprite && !spriteReady ? [] : (styleLayers ?? NEUTRAL_LAYERS);
+  // Stable ids for the rendered style layers (also the click targets). Computed once so the
+  // <Layer> loop and interactiveLayerIds agree exactly.
+  const layerIds = layers.map((l, i) => `pm-${sel}-${(l as { id?: string }).id ?? i}`);
+  // Click a feature → popup with its attributes + bubble its feature_id up so the table can page
+  // to + highlight the matching row. `f.id` is the native MVT feature id (= the transform's
+  // feature_id, via tippecanoe --use-attribute-for-id); undefined on pre-reingest tiles → no-op.
+  const onMapClick = (e: MapLayerMouseEvent) => {
+    const f = e.features?.[0];
+    if (!f) { setPopup(null); return; }
+    const props = (f.properties ?? {}) as Record<string, unknown>;
+    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, props });
+    if (f.id != null) onFeatureClick?.(Number(f.id), props);
+  };
   return (
     <>
       {renderKeys.length > 1 && (
@@ -466,6 +485,8 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
           onLoad={() => setMapLoaded(true)}
           initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
           mapStyle={POSITRON}
+          interactiveLayerIds={onFeatureClick ? layerIds : undefined}
+          onClick={onFeatureClick ? onMapClick : undefined}
           style={{ width: "100%", height: "100%" }}
         >
           <NavigationControl position="top-right" showCompass={false} />
@@ -475,7 +496,7 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
             // never reuses an id with a different `type` (maplibre throws "layer type changed" and
             // the swap silently fails). `sel` prefix keeps renders fully disjoint. explicit
             // `source`/`source-layer` — react-map-gl won't inject them into an array.
-            const lid = `pm-${sel}-${(l as { id?: string }).id ?? i}`;
+            const lid = layerIds[i];
             return <Layer key={lid} {...({ ...l, id: lid, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />;
           })}
           {/* Picked-row highlight — the real feature geometry (line/fill/circle by geom type). */}
@@ -485,6 +506,22 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
               <Layer id="pm-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
               <Layer id="pm-hl-pt" type="circle" paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
             </Source>
+          )}
+          {popup && (
+            <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
+              <div className="max-h-56 overflow-auto">
+                <table className="border-collapse text-[11px]">
+                  <tbody>
+                    {Object.entries(popup.props).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
+                      <tr key={k}>
+                        <td className="whitespace-nowrap py-0.5 pr-2 align-top text-gray-500">{k}</td>
+                        <td className="py-0.5 text-gray-900">{String(v)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </Popup>
           )}
         </MapGL>
       </div>
@@ -501,10 +538,14 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const [focus, setFocus] = useState<FocusSel | null>(null);
+  // A map-feature click → {id, nonce}. The nonce makes re-clicking the SAME feature re-fire the
+  // explorer effect (a bare id wouldn't change). The explorer pages to + highlights that row.
+  const [pick, setPick] = useState<{ id: number; nonce: number } | null>(null);
+  const onFeatureClick = (id: number) => setPick((p) => ({ id, nonce: (p?.nonce ?? 0) + 1 }));
   return (
     <>
-      <PmtilesMap item={item} focus={focus} />
-      {pq && <DataExplorer href={pq.href} onPick={setFocus} />}
+      <PmtilesMap item={item} focus={focus} onFeatureClick={pq ? onFeatureClick : undefined} />
+      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} />}
     </>
   );
 }
@@ -559,12 +600,15 @@ function DataTable<T>({ columns, data, onRowClick, initialSorting }: {
 // the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 7000-row tables.
 // Geometry is excluded (use Download / OGC API / the map for geometry).
 const PAGE_SIZE = 25;
-function DataExplorer({ href, onPick }: {
+function DataExplorer({ href, onPick, mapPick }: {
   href: string; onPick?: (sel: FocusSel) => void;
+  mapPick?: { id: number; nonce: number } | null;
 }) {
   const [pageIndex, setPageIndex] = useState(0);
   const [sorting, setSorting] = useState<SortingState>([]);
   const [search, setSearch] = useState("");
+  // feature_id of the row picked from the map (or a table click) — highlighted in the table.
+  const [highlightId, setHighlightId] = useState<number | null>(null);
   // Raw per-column filter inputs (strings, as typed) → debounced into `applied` (SQL-ready).
   const [draft, setDraft] = useState<Record<string, { min?: string; max?: string; text?: string }>>({});
   const [applied, setApplied] = useState<{ search: string; filters: ColFilter[] }>({ search: "", filters: [] });
@@ -653,6 +697,28 @@ function DataExplorer({ href, onPick }: {
       .catch(() => {});
   };
 
+  // Map-feature click → highlight + fly to the real feature (looked up by id, independent of the
+  // current filter) AND page the table to it under the current sort/filter. Paging is skipped if
+  // the feature is filtered out of the visible set (ordinal null); the highlight + fly still fire.
+  // Depends only on the click nonce, so it captures the sort/filter as of the click (re-running on
+  // every filter keystroke would yank the page around).
+  useEffect(() => {
+    if (!mapPick) return;
+    let live = true;
+    setHighlightId(mapPick.id);
+    (async () => {
+      const { fetchRowById, ordinalByFeatureId } = await import("./download");
+      const row = await fetchRowById(href, mapPick.id);
+      if (live && row && onPick) onPick({ bbox: row.bbox, geometry: row.geometry });
+      const pos = await ordinalByFeatureId(href, mapPick.id, {
+        orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
+      });
+      if (live && pos != null) setPageIndex(Math.floor(pos / PAGE_SIZE));
+    })();
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mapPick?.nonce]);
+
   return (
     <div className="mt-2">
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
@@ -710,10 +776,13 @@ function DataExplorer({ href, onPick }: {
             {table.getRowModel().rows.map((r) => {
               const bbox = page?.bboxes[r.index] ?? null;
               const clickable = Boolean(onPick && bbox);
+              const fid = r.original.feature_id;
+              const hl = fid != null && Number(fid) === highlightId;
               return (
-                <tr key={r.id} className={clickable ? "cursor-pointer hover:bg-muted" : undefined}
+                <tr key={r.id}
+                  className={`${hl ? "bg-amber-100 dark:bg-amber-900/40" : ""} ${clickable ? "cursor-pointer hover:bg-muted" : ""}`.trim() || undefined}
                   title={clickable ? "Zoom to feature on map" : undefined}
-                  onClick={clickable ? () => pick(r.index, bbox!) : undefined}>
+                  onClick={clickable ? () => { pick(r.index, bbox!); if (fid != null) setHighlightId(Number(fid)); } : undefined}>
                   {r.getVisibleCells().map((c) => (
                     <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
                   ))}

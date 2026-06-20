@@ -117,6 +117,13 @@ export interface Page {
 // zoom, hidden from the displayed table (noise) like the geometry column.
 const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
 
+// Stable per-row id the transform stamps (1..N, hilbert order) into BOTH the GeoParquet and the
+// PMTiles (as the MVT feature id). It's the join key for map↔table linking. Hidden from the
+// displayed columns (synthetic noise) but kept on each row object so the table can highlight a
+// row the map picked, and used as a deterministic ORDER BY tiebreaker so OFFSET paging and the
+// feature_id→ordinal lookup agree exactly.
+const ID_COL = "feature_id";
+
 // DuckDB type → filter UI kind. Numeric (range) vs everything else (substring). Date/time stay
 // "text" — a substring on the ISO string is the most useful zero-config filter.
 const colType = (duckType: string): ColType =>
@@ -135,9 +142,21 @@ function buildWhere(columns: string[], opts: PageOpts): string {
   }
   return clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
 }
-const buildOrder = (columns: string[], opts: PageOpts): string =>
-  opts.orderBy && columns.includes(opts.orderBy)
-    ? ` ORDER BY ${ident(opts.orderBy)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST` : "";
+// Inner ORDER BY expression (no leading " ORDER BY "): the user's sort (if any) then feature_id
+// as a stable tiebreaker, so two rows with an equal sort key always page in the same order — and
+// the feature_id→ordinal lookup (a row_number() window over this same expression) lines up with
+// LIMIT/OFFSET paging exactly. `hasId` is false for pre-reingest parquet with no feature_id.
+function orderExpr(columns: string[], opts: PageOpts, hasId: boolean): string {
+  const parts: string[] = [];
+  if (opts.orderBy && columns.includes(opts.orderBy))
+    parts.push(`${ident(opts.orderBy)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST`);
+  if (hasId) parts.push(`${ident(ID_COL)} ASC`);
+  return parts.join(", ");
+}
+const buildOrder = (columns: string[], opts: PageOpts, hasId: boolean): string => {
+  const e = orderExpr(columns, opts, hasId);
+  return e ? ` ORDER BY ${e}` : "";
+};
 
 // One SQL predicate from a per-column filter (empty string = no constraint).
 function filterClause(f: ColFilter): string {
@@ -165,14 +184,17 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const descRows = desc.toArray();
     const allCols = descRows.map((r) => String(r.column_name));
     const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
+    const hasId = allCols.includes(ID_COL);
     const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
-    // Displayed columns: drop geometry + the bbox covering columns (kept only for zoom).
-    const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : [])]);
-    const columns = allCols.filter((c) => !hidden.has(c));
+    // Row object drops geometry + bbox (noise) but KEEPS feature_id so the table can highlight a
+    // map-picked row. Displayed columns additionally drop feature_id (synthetic, not user data).
+    const rowHidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : [])]);
+    const colHidden = new Set([...rowHidden, ID_COL]);
+    const columns = allCols.filter((c) => !colHidden.has(c));
     const types: Record<string, ColType> = {};
     for (const r of descRows) {
       const name = String(r.column_name);
-      if (!hidden.has(name)) types[name] = colType(String(r.column_type ?? ""));
+      if (!colHidden.has(name)) types[name] = colType(String(r.column_type ?? ""));
     }
 
     // WHERE = global free-text (OR across all columns) AND each per-column filter.
@@ -180,7 +202,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const totalRes = await conn.query(`SELECT count(*) AS n FROM ${from}${where};`);
     const total = Number(totalRes.toArray()[0]?.n ?? 0);
 
-    const order = buildOrder(columns, opts);
+    const order = buildOrder(columns, opts, hasId);
     // Select displayed cols + bbox cols explicitly (excluding geometry) so bbox survives for zoom.
     const sel = geomCols.length ? `* EXCLUDE (${geomCols.map(ident).join(", ")})` : "*";
     const res = await conn.query(
@@ -189,7 +211,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const raw = res.toArray().map((r) => r.toJSON() as Record<string, unknown>);
     const rows = raw.map((o) => {
       const out: Record<string, unknown> = {};
-      for (const [k, v] of Object.entries(o)) if (!hidden.has(k)) out[k] = sanitize(v);
+      for (const [k, v] of Object.entries(o)) if (!rowHidden.has(k)) out[k] = sanitize(v);
       return out;
     });
     const bboxes = raw.map((o): [number, number, number, number] | null => {
@@ -219,16 +241,92 @@ export async function fetchGeometry(
     const geomCol = GEOM_NAMES.find((c) => allCols.includes(c));
     if (!geomCol) return null;
     const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-    const hidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : [])]);
+    const hasId = allCols.includes(ID_COL);
+    const hidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
     const columns = allCols.filter((c) => !hidden.has(c));
     const full: PageOpts = { ...opts, limit: 1, offset: rowOffset };
     const res = await conn.query(
-      `SELECT ${ident(geomCol)} AS g FROM ${from}${buildWhere(columns, full)}${buildOrder(columns, full)} LIMIT 1 OFFSET ${rowOffset};`,
+      `SELECT ${ident(geomCol)} AS g FROM ${from}${buildWhere(columns, full)}${buildOrder(columns, full, hasId)} LIMIT 1 OFFSET ${rowOffset};`,
     );
     const blob = res.toArray()[0]?.g as Uint8Array | null | undefined;
     if (!blob) return null;
     const { wkbToGeoJSON } = await import("./wkb");
     return wkbToGeoJSON(blob);
+  } finally {
+    await conn.close();
+  }
+}
+
+/** 0-based position of the row carrying `featureId` under the SAME sort+filter the explorer shows,
+ *  so the caller can jump the table to page `floor(pos / PAGE_SIZE)` and highlight row
+ *  `pos % PAGE_SIZE`. Returns null if the parquet has no feature_id, or the row is filtered out of
+ *  the current view. Uses the same orderExpr (incl. the feature_id tiebreaker) as the page query,
+ *  so the position aligns with OFFSET paging exactly. */
+export async function ordinalByFeatureId(
+  parquetUrl: string, featureId: number, opts: Omit<PageOpts, "limit" | "offset">,
+): Promise<number | null> {
+  const db = await getDB();
+  const conn = await db.connect();
+  try {
+    const src = await registerUrl(parquetUrl);
+    const from = `read_parquet('${src}')`;
+    const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
+    const allCols = desc.toArray().map((r) => String(r.column_name));
+    if (!allCols.includes(ID_COL)) return null;
+    const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
+    const colHidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
+    const columns = allCols.filter((c) => !colHidden.has(c));
+    const full: PageOpts = { ...opts, limit: 1, offset: 0 };
+    const where = buildWhere(columns, full);
+    const ord = orderExpr(columns, full, true);  // hasId known true here
+    const res = await conn.query(
+      `SELECT pos FROM (
+         SELECT ${ident(ID_COL)} AS fid, row_number() OVER (ORDER BY ${ord}) - 1 AS pos
+         FROM ${from}${where}
+       ) WHERE fid = ${Number(featureId)};`,
+    );
+    const pos = res.toArray()[0]?.pos;
+    return pos == null ? null : Number(pos);
+  } finally {
+    await conn.close();
+  }
+}
+
+/** Geometry + bbox of the row carrying `featureId`, looked up directly by id (independent of the
+ *  current sort/filter) so a map click can highlight + fly to the real feature even when it's
+ *  filtered out of the visible table page. bbox comes from the plain covering columns (no spatial
+ *  extension); geometry from the WKB blob parsed in JS. Returns null if there's no feature_id. */
+export async function fetchRowById(
+  parquetUrl: string, featureId: number,
+): Promise<{ bbox?: [number, number, number, number]; geometry: GeoJSON.Geometry | null } | null> {
+  const db = await getDB();
+  const conn = await db.connect();
+  try {
+    const src = await registerUrl(parquetUrl);
+    const from = `read_parquet('${src}')`;
+    const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
+    const allCols = desc.toArray().map((r) => String(r.column_name));
+    if (!allCols.includes(ID_COL)) return null;
+    const geomCol = GEOM_NAMES.find((c) => allCols.includes(c));
+    const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
+    const sel = [
+      geomCol ? `${ident(geomCol)} AS g` : "NULL AS g",
+      ...(hasBbox ? BBOX_COLS.map((c) => `${ident(c)} AS ${c}`) : []),
+    ].join(", ");
+    const res = await conn.query(
+      `SELECT ${sel} FROM ${from} WHERE ${ident(ID_COL)} = ${Number(featureId)} LIMIT 1;`,
+    );
+    const row = res.toArray()[0];
+    if (!row) return null;
+    let geometry: GeoJSON.Geometry | null = null;
+    const blob = row.g as Uint8Array | null | undefined;
+    if (blob) geometry = (await import("./wkb")).wkbToGeoJSON(blob);
+    let bbox: [number, number, number, number] | undefined;
+    if (hasBbox) {
+      const b = BBOX_COLS.map((c) => Number(row[c]));
+      if (b.every((n) => Number.isFinite(n))) bbox = b as [number, number, number, number];
+    }
+    return { bbox, geometry };
   } finally {
     await conn.close();
   }

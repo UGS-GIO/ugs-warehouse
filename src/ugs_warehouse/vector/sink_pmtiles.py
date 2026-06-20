@@ -54,6 +54,10 @@ def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
         "-r1",
         "--drop-densest-as-needed",
         "--extend-zooms-if-still-dropping",
+        # Promote the transform's `feature_id` to the native MVT feature id, so the viewer can
+        # join a clicked map feature to its GeoParquet table row (both carry the same id). MapLibre
+        # then exposes it as `feature.id` (enables setFeatureState highlight) — no promoteId needed.
+        "--use-attribute-for-id=feature_id",
         *EXTRA_OPTS,
         geojsonl,
     ]

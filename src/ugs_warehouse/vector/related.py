@@ -1,45 +1,109 @@
-"""Related (aspatial) tables published as supporting assets on a serving-topic STAC item.
+"""Relationships — project the upstream FK registry into the STAC catalog, using standards.
 
-Some serving layers have companion tables that aren't geospatial — e.g. the UCRC wells layer
-(`enmin_ucrc_wells`) has core boxes / photos / attachments, joined by `uwi`. They don't warrant
-their own STAC items (no geometry), so the warehouse archives each to GeoParquet-less Parquet on
-the CDN and earmarks it as a `roles:["data","related"]` asset on the parent item, carrying the
-join key in `ugs:related_key`.
+The authoritative foreign keys live in `raw.schema_registry.relationships` (declared/auto-detected
+by ugs-ingest, enforced by dbt `relationships` tests). The warehouse does NOT redefine them; it
+reads that registry per topic and emits two well-known vocabularies onto the topic's STAC item:
 
-Source is the same Postgres `{schema}.{table}` the vector source reads (via DuckDB postgres
-scanner). Best-effort: a missing table / DB error skips that asset, never sinks the parent ingest.
+  * STAC `rel:"related"` links — the relationship GRAPH (item ↔ item). STAC Browser renders these.
+  * Frictionless Table Schema `foreignKeys` — the JOIN detail (which columns reference what), the
+    recognised lightweight standard for tabular FKs. Placed on the asset that is the FK *source*.
+  * STAC Table extension `table:columns` — standard column description for the related Parquet.
+
+A foreign key is declared on the CHILD pointing at the parent (`targetDomainTopic`). So for a topic
+T being ingested we resolve:
+  - T's OUTGOING FKs (T references X): a `related` link to X's item + a `foreignKeys` entry on T's
+    own data asset.
+  - T's INCOMING FKs (a child references T):
+      · spatial child (has its own STAC item): just a `related` link to it.
+      · aspatial child (no geometry → no item of its own, e.g. UCRC boxes/photos/attachments):
+        materialise the child `_current` table to CDN Parquet as a `roles:["data","related"]` asset
+        on T, carrying its own `foreignKeys` (child → T) + `table:columns`.
+
+`domain_topic` → physical table is `{target_schema}.{domain_topic}_current` (registry columns).
+Best-effort throughout: a missing registry / grant / table is logged and skipped, never sinks the
+parent ingest (matches `source.read_metadata`).
 """
 from __future__ import annotations
 
+import json
 import os
+import re
 import tempfile
 
-from ..core import config, gcs
+from ..core import config, gcs, stac
 from . import source
 from .topics import Topic
 
 PARQUET_MIME = "application/vnd.apache.parquet"
-
-# Parent serving-topic stem -> its related aspatial tables.
-#   asset  : STAC asset key on the parent item
-#   schema : Postgres schema holding the `_current` table
-#   table  : the `_current` table name
-#   key    : the column that joins back to the parent layer
-RELATED: dict[str, list[dict]] = {
-    "enmin_ucrc_wells": [
-        {"asset": "boxes", "schema": "energy_mineral",
-         "table": "enmin_ucrc_boxes_current", "key": "uwi", "title": "UCRC core boxes"},
-        {"asset": "photos", "schema": "energy_mineral",
-         "table": "enmin_ucrc_photos_current", "key": "uwi", "title": "UCRC core photos"},
-        {"asset": "attachments", "schema": "energy_mineral",
-         "table": "enmin_ucrc_attachments_current", "key": "uwi", "title": "UCRC attachments"},
-    ],
-}
+# FK targets are serving topics (the common case); their items live in this collection. Cross-
+# collection targets (e.g. a publication) would need richer resolution — a follow-up.
+_SERVING_COLLECTION = "ugs-serving-topics"
+_GEOM_RE = re.compile(r"geometr|geography", re.IGNORECASE)
 
 
-def _publish_one(con, rel: dict, parent_stem: str) -> dict | None:
-    """Archive one related table to CDN Parquet; return its STAC asset (or None on failure)."""
-    schema, table = rel["schema"], rel["table"]
+def _q(s: str) -> str:
+    """SQL string literal. domain_topic is validated `^[a-z0-9_]+$` upstream, but escape anyway."""
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _pg(con, pg_sql: str) -> list[tuple]:
+    """Run native Postgres SQL through the DuckDB postgres scanner (same path as read_metadata)."""
+    return con.execute("SELECT * FROM postgres_query(?, ?)", [source.PG_ALIAS, pg_sql]).fetchall()
+
+
+def _cols(rel: dict, which: str) -> list[str]:
+    """Source/target columns of one relationship — composite (`{which}Columns`) or single."""
+    arr = rel.get(f"{which}Columns")
+    if arr:
+        return [c for c in arr if c]
+    one = rel.get(f"{which}Column")
+    return [one] if one else []
+
+
+def _foreign_key(rel: dict) -> dict | None:
+    """A Frictionless Table Schema foreignKey: this asset's `fields` reference `resource.fields`."""
+    src, tgt = _cols(rel, "source"), _cols(rel, "target")
+    target = rel.get("targetDomainTopic")
+    if not (src and tgt and target):
+        return None
+    return {"fields": src, "reference": {"resource": target, "fields": tgt}}
+
+
+def _related_link(target_stem: str, title: str | None = None) -> dict:
+    """A STAC `related` link to a serving-topic item (absolute CDN href — no relative-depth math)."""
+    href = config.public_url(stac.item_object_path(_SERVING_COLLECTION, target_stem))
+    return {"rel": "related", "href": href, "type": "application/geo+json",
+            "title": title or stac.prettify(target_stem)}
+
+
+def _has_geometry(business_schema: dict) -> bool:
+    """True if any business-schema column is a geometry/geography type (→ the topic is spatial)."""
+    for spec in (business_schema or {}).values():
+        t = spec.get("type", "") if isinstance(spec, dict) else spec
+        if _GEOM_RE.search(str(t)):
+            return True
+    return False
+
+
+def _table_columns(business_schema: dict) -> list[dict]:
+    """STAC Table extension `table:columns` from the registry's business_schema."""
+    cols: list[dict] = []
+    for name, spec in (business_schema or {}).items():
+        spec = spec if isinstance(spec, dict) else {}
+        col = {"name": name}
+        if spec.get("type"):
+            col["type"] = str(spec["type"])
+        if spec.get("description"):
+            col["description"] = spec["description"]
+        cols.append(col)
+    return cols
+
+
+def _materialize_child(con, child_topic: str, schema: str, display: str | None,
+                       rel: dict, business_schema: dict, parent_stem: str) -> dict | None:
+    """Archive an aspatial child `_current` table to CDN Parquet; return its related STAC asset."""
+    table = f"{child_topic}_current"
+    path = f"{config.ARCHIVE_PREFIX}/{parent_stem}/related/{child_topic}.parquet"
     try:
         with tempfile.TemporaryDirectory() as tmp:
             local = os.path.join(tmp, f"{table}.parquet")
@@ -47,32 +111,72 @@ def _publish_one(con, rel: dict, parent_stem: str) -> dict | None:
                 f'COPY (SELECT * FROM {source.PG_ALIAS}."{schema}"."{table}") '
                 f"TO '{local}' (FORMAT PARQUET, COMPRESSION ZSTD)"
             )
-            # Grouped under the parent's archive dir so related data lives with its layer.
-            path = f"{config.ARCHIVE_PREFIX}/{parent_stem}/related/{rel['asset']}.parquet"
             gcs.upload(local, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
     except Exception as e:  # noqa: BLE001 — related data is best-effort; never sink the parent
-        print(f"[{parent_stem}] related '{rel['asset']}' ({schema}.{table}) SKIP: {e}")
+        print(f"[{parent_stem}] related '{child_topic}' ({schema}.{table}) SKIP: {e}")
         return None
-    return {
+    asset = {
         "href": config.public_url(path),
         "type": PARQUET_MIME,
         "roles": ["data", "related"],
-        "title": rel["title"],
-        "ugs:related_key": rel["key"],
+        "title": display or stac.prettify(child_topic),
     }
+    fk = _foreign_key(rel)
+    if fk:
+        asset["foreignKeys"] = [fk]   # Frictionless: child columns → this parent
+    cols = _table_columns(business_schema)
+    if cols:
+        asset["table:columns"] = cols
+    return asset
 
 
-def publish(topic: Topic) -> dict[str, dict]:
-    """Publish every related table for `topic` and return `{asset_key: stac_asset}` to merge
-    into the parent item's assets. Empty for topics with no related tables (the common case)."""
-    rels = RELATED.get(topic.stem, [])
-    if not rels:
-        return {}
+def resolve(topic: Topic) -> dict:
+    """Registry-driven relationships for `topic`, as standard STAC/Frictionless pieces:
+
+        {"assets": {key: asset}, "links": [related_link, ...], "foreign_keys": [fk, ...]}
+
+    `assets` merge into the item's assets, `links` into its links, `foreign_keys` onto the item's
+    own `data` asset. Empty pieces when the registry/grant/relationships are absent (incremental).
+    """
+    empty = {"assets": {}, "links": [], "foreign_keys": []}
+    stem = topic.stem
     con = source._connect()
-    out: dict[str, dict] = {}
-    for rel in rels:
-        asset = _publish_one(con, rel, topic.stem)
-        if asset:
-            out[rel["asset"]] = asset
-            print(f"[{topic.stem}] related: {asset['href']}")
-    return out
+    try:
+        result: dict = {"assets": {}, "links": [], "foreign_keys": []}
+
+        # T's OUTGOING FKs (T is the FK source) → related links + foreignKeys on T's data asset.
+        out = _pg(con, f"SELECT relationships::text FROM raw.schema_registry "
+                       f"WHERE domain_topic = {_q(stem)} LIMIT 1")
+        for rel in (json.loads(out[0][0]) if out and out[0][0] else []):
+            fk = _foreign_key(rel)
+            if fk:
+                result["foreign_keys"].append(fk)
+            if rel.get("targetDomainTopic"):
+                result["links"].append(_related_link(rel["targetDomainTopic"]))
+
+        # T's INCOMING FKs — children whose relationships reference T (jsonb containment).
+        contains = '[{"targetDomainTopic": ' + json.dumps(stem) + "}]"
+        kids = _pg(con,
+                   "SELECT domain_topic, target_schema, display_name, "
+                   "business_schema::text, relationships::text FROM raw.schema_registry "
+                   f"WHERE relationships @> {_q(contains)}::jsonb")
+        for child_topic, tgt_schema, display, bs_text, rel_text in kids:
+            child_rels = json.loads(rel_text) if rel_text else []
+            rel = next((r for r in child_rels if r.get("targetDomainTopic") == stem), None)
+            if rel is None:
+                continue
+            business_schema = json.loads(bs_text) if bs_text else {}
+            if _has_geometry(business_schema):
+                # Spatial child has its own STAC item — link to it; its own asset carries the FK.
+                result["links"].append(_related_link(child_topic, display))
+                continue
+            asset = _materialize_child(con, child_topic, tgt_schema, display, rel,
+                                       business_schema, stem)
+            if asset:
+                result["assets"][child_topic] = asset
+        return result
+    except Exception as e:  # noqa: BLE001 — relationships never block the parent ingest
+        print(f"[{topic.fqn}] relationships SKIP: {e}")
+        return empty
+    finally:
+        con.close()

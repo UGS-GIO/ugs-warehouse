@@ -36,7 +36,11 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           *, title: str | None = None, description: str | None = None,
           metadata: dict | None = None, bbox: list[float] | None = None,
-          row_count: int | None = None, related_assets: dict | None = None) -> None:
+          row_count: int | None = None, related: dict | None = None) -> None:
+    rel = related or {}
+    rel_assets = rel.get("assets") or {}
+    rel_links = rel.get("links") or []
+    rel_fks = rel.get("foreign_keys") or []
     bb = bbox if bbox is not None else _bbox(con, view)
     rc = row_count if row_count is not None else _row_count(con, view)
     now = datetime.datetime.now(datetime.UTC).isoformat()
@@ -68,23 +72,37 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         if md.get(src_key):
             props[prop] = md[src_key]
 
+    # GeoParquet archive. Frictionless `foreignKeys` (this topic's outgoing FKs) ride on it — the
+    # standard way to say "these columns reference that resource". Empty for topics with no FKs.
+    data_asset = {"href": config.public_url(archive_path), "type": PARQUET_MIME,
+                  "roles": ["data"], "title": "GeoParquet archive (native geometry)"}
+    if rel_fks:
+        data_asset["foreignKeys"] = rel_fks
+
+    assets = {
+        "data": data_asset,
+        "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
+                    "roles": ["visual"], "title": "PMTiles vector tiles"},
+        "ducklake": {"href": ducklake_uri, "type": "application/x-ducklake-table",
+                     "roles": ["data"], "title": "DuckLake table (native geometry)"},
+        # Aspatial related tables (e.g. UCRC boxes/photos/attachments) materialised as Parquet,
+        # each carrying its own Frictionless `foreignKeys` (child → this topic) + `table:columns`.
+        # Registry-driven (raw.schema_registry.relationships); absent for most topics.
+        **rel_assets,
+    }
+    # Table extension is in play iff any asset describes its columns.
+    exts = [stac.WEB_MAP_LINKS_EXT]
+    if any("table:columns" in a for a in assets.values()):
+        exts.append(stac.TABLE_EXT)
+
     item = stac.build_item(
         item_id=topic.stem, collection=COLLECTION,
         geometry=stac.bbox_polygon(bb), bbox=bb, datetime_iso=now,
         properties=props,
-        assets={
-            "data": {"href": config.public_url(archive_path), "type": PARQUET_MIME,
-                     "roles": ["data"], "title": "GeoParquet archive (native geometry)"},
-            "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
-                        "roles": ["visual"], "title": "PMTiles vector tiles"},
-            "ducklake": {"href": ducklake_uri, "type": "application/x-ducklake-table",
-                         "roles": ["data"], "title": "DuckLake table (native geometry)"},
-            # Supporting aspatial tables (e.g. UCRC boxes/photos/attachments), joined by
-            # `ugs:related_key`. Published by vector.related; absent for most topics.
-            **(related_assets or {}),
-        },
-        extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem])],
-        stac_extensions=[stac.WEB_MAP_LINKS_EXT],
+        assets=assets,
+        # `related` links (the FK graph) ride alongside the web-map pmtiles link.
+        extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem]), *rel_links],
+        stac_extensions=exts,
         proj_epsg=4326,  # transform reprojects every topic to 4326
     )
     stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)

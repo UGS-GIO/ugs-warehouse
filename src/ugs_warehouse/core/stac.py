@@ -24,6 +24,8 @@ STAC_VERSION = "1.0.0"
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 # projection: declares the data's native CRS (proj:epsg).
 PROJ_EXT = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
+# table: standard column description for tabular assets (`table:columns`) — used on related tables.
+TABLE_EXT = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 
 
 # ---------------------------------------------------------------- helpers

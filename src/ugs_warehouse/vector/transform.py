@@ -45,9 +45,15 @@ def _select(source_rel: str) -> str:
     target_epsg → 4326 (the storage CRS the WKB is in, NOT the provenance source_epsg). DuckDB
     GEOMETRY carries no SRID — CRS is attached at GeoParquet write time. Rows are hilbert-sorted
     so parquet row-groups bbox-prune well.
+
+    target_epsg = 0 (unstamped geometry) errors loudly rather than silently assuming 4326 — an
+    unstamped table reaching here means a CRS provenance gap upstream, not a 4326 default.
     """
     geom_hydrate = (
-        f"CASE WHEN target_epsg = {TARGET_SRS} "
+        f"CASE WHEN target_epsg = 0 "
+        f"  THEN error('source geometry has SRID 0 (unstamped CRS) — refusing to assume "
+        f"EPSG:{TARGET_SRS}; stamp the table SRID upstream') "
+        f"WHEN target_epsg = {TARGET_SRS} "
         f"  THEN ST_GeomFromWKB(geom_wkb) "
         f"  ELSE ST_Transform(ST_GeomFromWKB(geom_wkb), 'EPSG:' || target_epsg, "
         f"    'EPSG:{TARGET_SRS}', always_xy := true) "

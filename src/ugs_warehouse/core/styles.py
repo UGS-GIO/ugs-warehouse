@@ -74,6 +74,11 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
         else:
             url = _style_url(entry)
             block["style_url"] = url
+            # Icon renders (e.g. UCRC wells by box type) carry a pre-baked pie-wedge sprite sheet;
+            # the viewer map.addSprite()s this base URL before applying the symbol layer.
+            sprite = str(entry.get("sprite") or "").lstrip("/")
+            if sprite:
+                block["sprite"] = f"{config.STYLES_CDN_BASE}/{sprite}"
             if render == "default" and style_asset is None:
                 style_asset = {
                     "href": url, "type": "application/json", "roles": ["style"],

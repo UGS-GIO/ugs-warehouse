@@ -9,7 +9,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, Map as MapGL, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, type StacDoc, viaLink } from "./stac";
+import { type Asset, citeLink, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string;
@@ -370,11 +370,40 @@ const NEUTRAL_LAYERS = [
 // invented cartography — real styling arrives through `renders`).
 type FocusSel = { bbox: [number, number, number, number]; geometry?: GeoJSON.Geometry | null };
 
+// Load a baked sprite sheet (pie-wedge icons for box-type) into the map via addImage, slicing each
+// frame from the PNG so icon-image names match the style as authored (no sprite-id namespacing).
+// Picks @2x on retina. Idempotent (skips images already added).
+async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void> {
+  const hi = (window.devicePixelRatio || 1) >= 1.5 ? "@2x" : "";
+  const [index, blob] = await Promise.all([
+    fetch(`${base}${hi}.json`).then((r) => r.json()),
+    fetch(`${base}${hi}.png`).then((r) => r.blob()),
+  ]);
+  const sheet = await createImageBitmap(blob);
+  for (const [name, f] of Object.entries(index as Record<string, { x: number; y: number; width: number; height: number; pixelRatio: number }>)) {
+    if (map.hasImage(name)) continue;
+    const img = await createImageBitmap(sheet, f.x, f.y, f.width, f.height);
+    map.addImage(name, img, { pixelRatio: f.pixelRatio });
+  }
+}
+
 function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null }) {
   const pm = pmtilesLink(item);
-  const styleUrl = defaultStyleUrl(item);
+  const renders = useMemo(() => rendersOf(item), [item]);
+  const renderKeys = Object.keys(renders);
+  // Selected render: prefer `default`, else the first; lets a multi-render layer (wells:
+  // by-purpose / by-boxtype) switch symbology.
+  const [sel, setSel] = useState<string>(() => (renders.default ? "default" : renderKeys[0] ?? ""));
+  useEffect(() => { setSel(renders.default ? "default" : Object.keys(renders)[0] ?? ""); }, [item.id]);
+  const active = renders[sel];
+  const styleUrl = active?.style_url ?? defaultStyleUrl(item);
+  const sprite = active?.sprite;
+
   const mapRef = useRef<MapRef>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
   const [styleLayers, setStyleLayers] = useState<Record<string, unknown>[] | null>(null);
+  const [spriteReady, setSpriteReady] = useState(false);
+
   useEffect(() => {
     if (!styleUrl) { setStyleLayers(null); return; }
     let live = true;
@@ -383,6 +412,20 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
       .catch(() => { if (live) setStyleLayers(null); });
     return () => { live = false; };
   }, [styleUrl]);
+
+  // Preload the render's sprite (icon renders only) before its symbol layers mount, so icons
+  // resolve instead of flashing missing. Non-sprite renders are "ready" immediately.
+  useEffect(() => {
+    if (!sprite) { setSpriteReady(true); return; }
+    setSpriteReady(false);
+    const map = mapRef.current?.getMap();
+    if (!map || !mapLoaded) return;
+    let live = true;
+    loadSpriteImages(map, sprite)
+      .then(() => { if (live) setSpriteReady(true); })
+      .catch(() => { if (live) setSpriteReady(true); });
+    return () => { live = false; };
+  }, [sprite, mapLoaded]);
 
   // Fly to the picked row's feature (bbox from the parquet covering columns). maxZoom keeps a
   // point (degenerate bbox) from zooming to street level. Keyed on bbox values so a later
@@ -400,22 +443,37 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
   // the bbox outline so the click gives instant feedback. One source, three layers — line/fill for
   // polygons & lines, circle for points (a layer whose type doesn't match the geom renders nothing).
   const hlGeom: GeoJSON.Geometry | null = focus?.geometry ?? (fb ? bboxPolygon(fb) : null);
+  // While an icon render's sprite is still loading, render no style layers (avoids a missing-icon
+  // flash + an id-reuse "layer type changed" swap). Layer ids include `sel` so switching renders
+  // remounts cleanly (different type on the same id otherwise throws in maplibre).
+  const layers = sprite && !spriteReady ? [] : (styleLayers ?? NEUTRAL_LAYERS);
   return (
     <>
+      {renderKeys.length > 1 && (
+        <div className="mb-1.5 flex items-center gap-2 text-xs">
+          <span className="text-muted-foreground">Symbolize by</span>
+          <select value={sel} onChange={(e) => setSel(e.target.value)}
+            className="rounded border border-input bg-card px-2 py-1 text-foreground">
+            {renderKeys.map((k) => <option key={k} value={k}>{renders[k].title ?? k}</option>)}
+          </select>
+        </div>
+      )}
       <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
         <MapGL
           ref={mapRef}
           mapLib={maplibregl}
+          onLoad={() => setMapLoaded(true)}
           initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
           mapStyle={POSITRON}
           style={{ width: "100%", height: "100%" }}
         >
           <NavigationControl position="top-right" showCompass={false} />
           <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`} />
-          {(styleLayers ?? NEUTRAL_LAYERS).map((l, i) => (
+          {layers.map((l, i) => (
             // explicit `source` (+ source-layer) on each Layer — react-map-gl won't inject it into
-            // an array / Fragment, so without this they render with no source (invisible).
-            <Layer key={i} {...({ ...l, id: `pm-prev-${i}`, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />
+            // an array / Fragment, so without this they render with no source (invisible). id keyed
+            // by `sel` so a render switch swaps layers cleanly.
+            <Layer key={`${sel}-${i}`} {...({ ...l, id: `pm-${sel}-${i}`, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />
           ))}
           {/* Picked-row highlight — the real feature geometry (line/fill/circle by geom type). */}
           {hlGeom && (

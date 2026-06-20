@@ -74,6 +74,14 @@ export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
       || a.href.endsWith(".cog.tif"),
   );
 
+// One entry of the STAC render extension (a named way to draw the layer).
+export type RenderBlock = { title?: string; assets?: string[]; style_url?: string; sprite?: string };
+
+// All renders on an item (empty when none). A layer can carry several (e.g. wells:
+// by-purpose + by-boxtype) — the viewer offers a switcher over these.
+export const rendersOf = (d?: StacDoc): Record<string, RenderBlock> =>
+  (d?.properties as { renders?: Record<string, RenderBlock> } | undefined)?.renders ?? {};
+
 // Default MapLibre GL style_url from the render extension (ugs-styles bridge), if bound.
 // Falls back to the first render. Undefined when the item carries no `renders`.
 export const defaultStyleUrl = (d: StacDoc | undefined): string | undefined => {

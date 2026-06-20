@@ -75,7 +75,10 @@ export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
   );
 
 // One entry of the STAC render extension (a named way to draw the layer).
-export type RenderBlock = { title?: string; assets?: string[]; style_url?: string; sprite?: string };
+export type RenderBlock = {
+  title?: string; assets?: string[]; style_url?: string; sprite?: string;
+  legend?: { label: string; color: string }[];   // explicit legend for icon renders (no paint)
+};
 
 // All renders on an item (empty when none). A layer can carry several (e.g. wells:
 // by-purpose + by-boxtype) — the viewer offers a switcher over these.

@@ -49,14 +49,20 @@ export function legendFromStyle(
   return null;
 }
 
-export function Legend({ layers }: { layers: Array<Record<string, unknown>> }) {
-  const legend = legendFromStyle(layers);
-  if (!legend) return null;
+// `entries`/`title` override an explicit legend (icon renders carry no derivable paint — e.g.
+// wells by-boxtype pie wedges). Otherwise derive from the style layers as before.
+export function Legend({ layers, entries, title }: {
+  layers?: Array<Record<string, unknown>>; entries?: Entry[]; title?: string;
+}) {
+  const derived = layers ? legendFromStyle(layers) : null;
+  const items = entries ?? derived?.entries;
+  if (!items?.length) return null;
+  const heading = title ?? derived?.field ?? "Legend";
   return (
     <div className="mt-2 rounded-md border border-border bg-card p-2.5 text-xs">
-      <div className="mb-1.5 font-semibold text-muted-foreground">{legend.field ?? "Legend"}</div>
+      <div className="mb-1.5 font-semibold text-muted-foreground">{heading}</div>
       <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-        {legend.entries.map((e, i) => (
+        {items.map((e, i) => (
           <span key={i} className="inline-flex items-center gap-1.5 text-foreground">
             <span className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border" style={{ background: e.color }} />
             {e.label}

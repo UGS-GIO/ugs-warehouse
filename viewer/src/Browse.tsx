@@ -485,7 +485,10 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
           )}
         </MapGL>
       </div>
-      {styleLayers && <Legend layers={styleLayers} />}
+      {/* Legend follows the active render: explicit entries for icon renders (box-type pie wedges),
+          else derived from the style's paint. */}
+      <Legend layers={styleLayers ?? undefined} entries={active?.legend}
+        title={active?.legend ? "box type" : undefined} />
     </>
   );
 }

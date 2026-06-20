@@ -79,6 +79,9 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
             sprite = str(entry.get("sprite") or "").lstrip("/")
             if sprite:
                 block["sprite"] = f"{config.STYLES_CDN_BASE}/{sprite}"
+            # Explicit legend (icon renders have no derivable paint color) — pass through verbatim.
+            if entry.get("legend"):
+                block["legend"] = entry["legend"]
             if render == "default" and style_asset is None:
                 style_asset = {
                     "href": url, "type": "application/json", "roles": ["style"],

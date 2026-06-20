@@ -1,5 +1,6 @@
 import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
 import { useEffect, useState } from "react";
+import { Architecture } from "./Architecture";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
@@ -10,14 +11,16 @@ const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-type Nav = { view: "catalog" | "map"; c?: string; i?: string; l?: string[]; s?: string[] };
+type View = "catalog" | "map" | "arch";
+type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
 const readUrl = (): Nav => {
   const p = new URLSearchParams(location.search);
   const l = p.get("l");
   const s = p.get("s");
+  const v = p.get("view");
   return {
-    view: p.get("view") === "map" ? "map" : "catalog",
+    view: v === "map" ? "map" : v === "arch" ? "arch" : "catalog",
     c: p.get("c") || undefined, i: p.get("i") || undefined,
     l: l ? l.split(",").filter(Boolean) : undefined,
     s: s ? s.split(",").filter(Boolean) : undefined,
@@ -28,7 +31,9 @@ const readUrl = (): Nav => {
 // so back/forward work; replace for the initial sync.
 const writeUrl = (n: Nav, push: boolean) => {
   const p = new URLSearchParams(location.search);
-  n.view === "map" ? p.set("view", "map") : p.delete("view");
+  if (n.view === "map") p.set("view", "map");
+  else if (n.view === "arch") p.set("view", "arch");
+  else p.delete("view");
   n.c ? p.set("c", n.c) : p.delete("c");
   n.i ? p.set("i", n.i) : p.delete("i");
   n.l?.length ? p.set("l", n.l.join(",")) : p.delete("l");
@@ -99,7 +104,7 @@ export function App() {
 
   // Sync state ↔ URL: push on user nav (back/forward works); read URL on popstate.
   const go = (next: Nav, push = true) => { writeUrl(next, push); setNav(next); };
-  const setView = (v: "catalog" | "map") => go({ view: v, c: collectionUrl, i: itemUrl, l: layerIds, s: seriesSel });
+  const setView = (v: View) => go({ view: v, c: collectionUrl, i: itemUrl, l: layerIds, s: seriesSel });
   useEffect(() => {
     const onPop = () => setNav(readUrl());
     addEventListener("popstate", onPop);
@@ -241,13 +246,16 @@ export function App() {
         <div className="ml-auto flex gap-1 md:ml-0">
           <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
           <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>
+          <span className={tab(view === "arch")} onClick={() => setView("arch")}>Architecture</span>
           <ThemeToggle />
         </div>
       </header>
 
       {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
 
-      {!mapView ? (
+      {view === "arch" ? (
+        <Architecture />
+      ) : !mapView ? (
         <Browse
           cards={cards}
           collectionId={collectionId}

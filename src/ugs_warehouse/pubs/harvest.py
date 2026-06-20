@@ -339,6 +339,14 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         if not plate:
             print(f"{series_id}: FAIL no plate", file=sys.stderr)
             return "fail:noplate"
+
+        # Free up tmpfs RAM by aggressively deleting the downloaded ZIPs
+        for zp in zip_paths:
+            try:
+                os.remove(zp)
+            except Exception:
+                pass
+
         clipped = os.path.join(work, "clipped.tif")
         run(["gdalwarp", "-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline",
              "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
@@ -350,7 +358,9 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             prof["quality"] = COG_QUALITY
         elif COG_COMPRESS in ("zstd", "deflate", "lzw"):
             prof["predictor"] = 2
-        cog_translate(ensure_rgb(clipped), cog, prof, web_optimized=True, quiet=True)
+
+        rgb_clipped = ensure_rgb(clipped)
+        cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
         # Fallback: some inputs yield an empty/undersized webp COG -> retry lossless LZW,
         # keeping web_optimized so the result is still tiled+overviewed for range reads.
         if not os.path.exists(cog) or os.path.getsize(cog) < 100_000:
@@ -358,7 +368,20 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             if os.path.exists(cog):
                 os.remove(cog)
             prof["compress"] = "lzw"
-            cog_translate(ensure_rgb(clipped), cog, prof, web_optimized=True, quiet=True)
+            cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
+
+        # Free up tmpfs RAM by deleting the intermediate clipped/rgb and plate images
+        for f in (clipped, rgb_clipped):
+            if f and os.path.exists(f) and f != cog:
+                try:
+                    os.remove(f)
+                except Exception:
+                    pass
+        if plate and os.path.exists(plate) and plate != cog and not plate.endswith(".vrt"):
+            try:
+                os.remove(plate)
+            except Exception:
+                pass
 
         ok, _, _ = cog_validate(cog)
         if not ok:
@@ -369,8 +392,11 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             import duckdb
             gpq = os.path.join(work, f"{series_id}.units.parquet")
             con = duckdb.connect()
-            con.execute("INSTALL spatial; LOAD spatial;")
-            con.execute(f"COPY (SELECT * FROM ST_Read('{shp}')) TO '{gpq}' (FORMAT PARQUET)")
+            try:
+                con.execute("INSTALL spatial; LOAD spatial;")
+                con.execute(f"COPY (SELECT * FROM ST_Read('{shp}')) TO '{gpq}' (FORMAT PARQUET)")
+            finally:
+                con.close()
             gcs.upload(gpq, f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet",
                        content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
         if THUMBS:

@@ -229,7 +229,7 @@ export function App() {
       <header className={`flex items-center gap-3 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
         <button onClick={() => go({ view: "catalog" })} title="Home — catalog root"
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
-          <img src="/favicon.svg" alt="" className="h-5 w-5 shrink-0" />
+          <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="h-5 w-5 shrink-0" />
           <strong className="text-[15px]">UGS Warehouse</strong>
         </button>
         <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">

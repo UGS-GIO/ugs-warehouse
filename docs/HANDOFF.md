@@ -33,14 +33,22 @@ Code is committed + pushed on `main`; deploys are automatic — these are the da
 
 3. **COG harvest at scale** (optional, heavy) — most map pubs (e.g. GQ-75) have no COG because the
    harvest never ran broadly; only a tiny sample exists. GQ-75 IS harvestable (footprint + GeoTiff
-   zip), just not yet run. Then reingest pubs to attach the new `cog`/`thumbnail` assets:
+   zip), just not yet run. Now **task-sharded** (commit adds `CLOUD_RUN_TASK_INDEX/COUNT` slicing —
+   no-op at 1 task). Workflow:
    ```bash
-   gcloud run jobs execute geolmap-harvest --region=us-central1 --project=ut-dnr-ugs-backend-tools
+   # a) PROBE first — 50 pubs, measure real per-pub vCPU-sec in the console before committing $:
+   gcloud run jobs execute geolmap-harvest --region=us-central1 --project=ut-dnr-ugs-backend-tools \
+     --args=-m,ugs_warehouse.pubs.harvest,--all,--limit,50
+   # b) FULL backfill, parallel — N tasks each harvest ~1/N (dodges the 3600s timeout):
+   gcloud run jobs execute geolmap-harvest --region=us-central1 --project=ut-dnr-ugs-backend-tools --tasks=10
+   # c) attach the new cog/thumbnail assets to STAC:
    gcloud run jobs execute ugs-pubs-ingest --region=us-central1 --project=ut-dnr-ugs-backend-tools
    ```
-   ⚠ Single task, `--task-timeout=3600`, `SKIP_EXISTING=1` → won't finish all map pubs in one pass;
-   re-run to resume, or ask the personal-box agent to add task-sharding (`CLOUD_RUN_TASK_INDEX/COUNT`)
-   + memory note (tmpfs RAM-bound: each pub's zip/tif/COG live in RAM, not disk) first.
+   ⚠ `SKIP_EXISTING=1` → safe to re-run to mop up failures. **Free-tier:** ~3,100 map pubs ≈ 1.7× the
+   monthly Cloud Run compute free tier (mem-bound at 4Gi) → ~$4-5 one-time overage, then steady-state
+   ~free (incremental only). Sharding doesn't change total cost, just wall-clock. To stay strictly
+   free, batch with `--limit` under ~1,800 pubs/month. (tmpfs note: each pub's zip/tif/COG live in
+   RAM, not disk — 4Gi is the per-task ceiling for the biggest plates.)
 
 4. **Vector reingest — rebuild PMTiles with `-r1`** (commit `294c77f`). Point layers (mt stations,
    wells, tem, powerplants…) were rendering ~1 dot at low/mid zoom — tippecanoe's default drop-rate

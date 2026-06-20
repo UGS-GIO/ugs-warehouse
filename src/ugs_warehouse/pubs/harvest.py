@@ -414,6 +414,16 @@ def main() -> int:
     else:
         sids = args.series_id
 
+    # Task sharding: split the worklist across parallel Cloud Run tasks (`--tasks=N`). Each task
+    # takes a disjoint stride via CLOUD_RUN_TASK_INDEX/COUNT, so N containers harvest ~1/N each in
+    # parallel (dodges the per-task timeout on a big backfill). Default (1 task) = whole list — a
+    # NO-OP, so single-pub / steady-state runs are unchanged. `--limit` then applies per shard.
+    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
+    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    if n > 1:
+        sids = sids[i::n]
+        print(f"[harvest] shard {i + 1}/{n}: {len(sids)} publications")
+
     if args.limit:
         sids = sids[:args.limit]
 

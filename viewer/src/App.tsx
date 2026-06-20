@@ -4,7 +4,7 @@ import { Architecture } from "./Architecture";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
-import { CATALOG_URL, childLinks, itemLinks, pmtilesLink, type StacDoc, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
+import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, type StacDoc, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
@@ -42,20 +42,25 @@ const writeUrl = (n: Nav, push: boolean) => {
   (push ? history.pushState : history.replaceState).call(history, null, "", url);
 };
 
-// An ItemRef → map ActiveLayer (null if it has no PMTiles to render).
+// An ItemRef → map ActiveLayer. Prefer PMTiles (vector); else fall back to a COG (raster) so
+// publication/raster items render on the overlay too. null if it has neither.
 function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   if (!ref?.data) return null;
-  const pm = pmtilesLink(ref.data);
-  if (!pm) return null;
   const id = idOf(ref.href);
-  return {
-    id,
-    title: String(ref.data.properties?.title ?? id),
-    pmHref: pm.href,
-    pmLayer: pm["pmtiles:layers"]?.[0] ?? id,
-    bbox: ref.data.bbox,
-    styleUrl: defaultStyleUrl(ref.data),
-  };
+  const title = String(ref.data.properties?.title ?? id);
+  const pm = pmtilesLink(ref.data);
+  if (pm) {
+    return {
+      id, title,
+      pmHref: pm.href,
+      pmLayer: pm["pmtiles:layers"]?.[0] ?? id,
+      bbox: ref.data.bbox,
+      styleUrl: defaultStyleUrl(ref.data),
+    };
+  }
+  const cog = cogAsset(ref.data);
+  if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox };
+  return null;
 }
 
 const tab = (on: boolean) =>

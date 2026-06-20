@@ -1,10 +1,17 @@
 import maplibregl from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { Layer, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { ensureCogProtocol } from "./cog";
 import { type StacDoc } from "./stac";
 
-// A topic toggled on in the map. Built by App from the active set × allItems.
-export type ActiveLayer = { id: string; title: string; pmHref: string; pmLayer: string; bbox?: number[]; styleUrl?: string };
+// A topic toggled on in the map. Built by App from the active set × allItems. Either a vector
+// layer (PMTiles → pmHref/pmLayer) OR a raster layer (Cloud-Optimized GeoTIFF → cogHref); never
+// both. A publication item with a COG but no PMTiles becomes a cogHref layer.
+export type ActiveLayer = {
+  id: string; title: string; bbox?: number[];
+  pmHref?: string; pmLayer?: string; styleUrl?: string;
+  cogHref?: string;
+};
 
 // Distinct colors cycled per active layer.
 export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
@@ -37,9 +44,8 @@ const BASEMAPS: Record<string, string | maplibregl.StyleSpecification> = {
 
 type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown> };
 
-// Union of layer bboxes → [w,s,e,n], or null.
-function unionBbox(layers: ActiveLayer[]): [number, number, number, number] | null {
-  const bs = layers.map((l) => l.bbox).filter((b): b is number[] => Array.isArray(b) && b.length >= 4);
+// Union of bboxes → [w,s,e,n], or null.
+function unionBbox(bs: number[][]): [number, number, number, number] | null {
   if (!bs.length) return null;
   return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])),
           Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
@@ -50,14 +56,55 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
   const [basemap, setBasemap] = useState<keyof typeof BASEMAPS>("Streets");
+  // COG (raster) layers need the cog:// protocol registered before their Source mounts. Register
+  // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.
+  const [cogReady, setCogReady] = useState(false);
+  const hasCog = layers.some((l) => l.cogHref);
+  useEffect(() => {
+    if (!hasCog || cogReady) return;
+    let live = true;
+    ensureCogProtocol().then(() => { if (live) setCogReady(true); });
+    return () => { live = false; };
+  }, [hasCog, cogReady]);
+
+  // Pub/raster STAC items often have NO bbox, so the camera can't fit to a toggled COG (you'd see
+  // nothing without knowing where to pan). Read each COG's own extent from its GeoTIFF metadata
+  // (keyed by href, fetched once) and feed it into the fit below.
+  const [cogBoxes, setCogBoxes] = useState<Record<string, [number, number, number, number]>>({});
+  useEffect(() => {
+    const need = layers.filter((l) => l.cogHref && !cogBoxes[l.cogHref]);
+    if (!need.length) return;
+    let live = true;
+    (async () => {
+      await ensureCogProtocol();
+      const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
+      for (const l of need) {
+        try {
+          const meta = await getCogMetadata(l.cogHref!);
+          const bb = meta?.bbox ? (meta.bbox as number[]).slice(0, 4) as [number, number, number, number] : null;
+          if (live && bb) setCogBoxes((p) => ({ ...p, [l.cogHref!]: bb }));
+        } catch { /* keep whatever bbox we have */ }
+      }
+    })();
+    return () => { live = false; };
+  }, [layers]);
+
+  // A layer's effective bbox: its STAC bbox, else (for a COG) its fetched GeoTIFF extent.
+  const effBox = (l: ActiveLayer): [number, number, number, number] | undefined => {
+    const b = l.bbox?.slice(0, 4);
+    if (b && b.length >= 4) return b as [number, number, number, number];
+    return l.cogHref ? cogBoxes[l.cogHref] : undefined;
+  };
   const initialCam = useRef(readCam());
   const lastFit = useRef<string | null>(null);
   const honorCam = useRef(Boolean(initialCam.current));
 
   // Fit to the union of active layers when the set changes (StrictMode-safe via lastFit;
   // a shared ?m= camera wins over the first auto-fit).
-  const fitKey = layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "");
-  const fitBox = unionBbox(layers) ?? (item?.bbox?.slice(0, 4) as [number, number, number, number] | undefined);
+  const activeBoxes = layers.map(effBox).filter((b): b is [number, number, number, number] => Array.isArray(b));
+  // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
+  const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
+  const fitBox = unionBbox(activeBoxes) ?? (item?.bbox?.slice(0, 4) as [number, number, number, number] | undefined);
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
@@ -143,10 +190,22 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
       )}
 
       {layers.map((l, i) => {
+        // Raster COG layer — render the georeferenced GeoTIFF via cog:// (once the protocol is
+        // registered). Distinct `cog-*` ids keep it out of the vector feature-click regex.
+        if (l.cogHref) {
+          if (!cogReady) return null;
+          return (
+            <Source key={l.id} id={`cog-${i}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
+              <Layer id={`cog-${i}-raster`} type="raster" paint={{ "raster-opacity": 0.9 }} />
+            </Source>
+          );
+        }
         const c = colorFor(i);
         const styleLayers = styleCache[l.id];
+        const pmHref = l.pmHref!;
+        const pmLayer = l.pmLayer!;
         return (
-          <Source key={l.id} id={`pm-${i}`} type="vector" url={`pmtiles://${l.pmHref}`}>
+          <Source key={l.id} id={`pm-${i}`} type="vector" url={`pmtiles://${pmHref}`}>
             {styleLayers ? (
               styleLayers.map((sl, li) => (
                 <Layer
@@ -155,7 +214,7 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
                     ...sl,
                     id: `pm-${i}-${li}`,
                     source: `pm-${i}`,
-                    "source-layer": l.pmLayer,
+                    "source-layer": pmLayer,
                   } as any)}
                 />
               ))
@@ -163,9 +222,9 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
               // Explicit `source` — react-map-gl doesn't inject it for Layers inside a Fragment,
               // so without it maplibre throws "missing required property source".
               <>
-                <Layer id={`pm-${i}-fill`} source={`pm-${i}`} type="fill" source-layer={l.pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
-                <Layer id={`pm-${i}-line`} source={`pm-${i}`} type="line" source-layer={l.pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
-                <Layer id={`pm-${i}-circle`} source={`pm-${i}`} type="circle" source-layer={l.pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
+                <Layer id={`pm-${i}-fill`} source={`pm-${i}`} type="fill" source-layer={pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
+                <Layer id={`pm-${i}-line`} source={`pm-${i}`} type="line" source-layer={pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
+                <Layer id={`pm-${i}-circle`} source={`pm-${i}`} type="circle" source-layer={pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
               </>
             )}
           </Source>

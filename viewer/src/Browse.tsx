@@ -7,6 +7,7 @@ import {
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
+import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
 import { type Asset, citeLink, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, viaLink } from "./stac";
@@ -292,13 +293,6 @@ const asBounds = (item: StacDoc): [[number, number], [number, number]] | undefin
   const b = item.bbox?.slice(0, 4);
   return b && b.length === 4 ? [[b[0], b[1]], [b[2], b[3]]] : undefined;
 };
-
-// cog:// protocol registered once, lazily — pulls geotiff.js only when a COG is first viewed.
-let cogReady: Promise<void> | null = null;
-const ensureCogProtocol = (): Promise<void> =>
-  (cogReady ??= import("@geomatico/maplibre-cog-protocol").then(({ cogProtocol }) => {
-    maplibregl.addProtocol("cog", cogProtocol);
-  }));
 
 // Interactive COG explorer — the actual georeferenced raster (real cartography), range-read
 // + decoded client-side. No server, no invented styling. Pannable/zoomable.

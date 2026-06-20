@@ -77,7 +77,7 @@ def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
     select_list = (
         ", ".join(f'"{c}"' for c in other)
         + f', ST_AsBinary("{geom_col}") AS geom_wkb'
-        + f', COALESCE(NULLIF(ST_SRID("{geom_col}"), 0), 4326) AS target_epsg'
+        + f', ST_SRID("{geom_col}") AS target_epsg'  # 0 = unstamped; transform errors, never assumes
     )
     pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}"'
     # postgres_query subquery as the transform source; $pgq$ dollar-quote avoids escaping.

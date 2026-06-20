@@ -338,27 +338,31 @@ def refresh_catalog() -> None:
     Derive-from-truth + idempotent: safe to run after each ingest or on demand. Under
     concurrent ingests the last writer wins (brief staleness, self-heals next run).
     """
+    from concurrent.futures import ThreadPoolExecutor
+
     groups = _group_items(gcs.list_paths(config.STAC_PREFIX))
 
     # 1. Write each leaf collection.json + items.json (flat or nested). collection id = the
     #    path's last segment (a series code when nested); title from the items' pub type.
     #    Record per-path {id, title, count} so the hierarchy links can carry counts.
     leaf: dict[str, dict] = {}
-    for path, item_ids in groups.items():
-        items = []
-        for iid in sorted(item_ids):
-            try:
-                items.append(json.loads(gcs.get_bytes(item_object_path(path, iid)).decode()))
-            except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the refresh
-                pass
-        nested = "/" in path
-        cid = path.split("/")[-1]
-        title = next((it.get("properties", {}).get("ugs:pub_type") for it in items
-                      if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None
-        _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title),
-                    f"{config.STAC_PREFIX}/{path}/collection.json")
-        _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
-        leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids)}
+    with ThreadPoolExecutor(max_workers=64) as executor:
+        for path, item_ids in groups.items():
+            def _fetch_one(iid: str) -> dict | None:
+                try:
+                    return json.loads(gcs.get_bytes(item_object_path(path, iid)).decode())
+                except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the refresh
+                    return None
+
+            items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
+            nested = "/" in path
+            cid = path.split("/")[-1]
+            title = next((it.get("properties", {}).get("ugs:pub_type") for it in items
+                          if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None
+            _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title),
+                        f"{config.STAC_PREFIX}/{path}/collection.json")
+            _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
+            leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids)}
 
     # 2. Build the hierarchy. A top-level segment with nested children (and no direct items)
     #    becomes a sub-catalog (e.g. ugs-publications → DS, OFR, … series collections);

@@ -222,7 +222,11 @@ export function App() {
       ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
       : "min-h-screen bg-background text-sm text-foreground"}>
       <header className={`flex items-center gap-3 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
-        <strong className="text-[15px] whitespace-nowrap">UGS Warehouse</strong>
+        <button onClick={() => go({ view: "catalog" })} title="Home — catalog root"
+          className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
+          <img src="/favicon.svg" alt="" className="h-5 w-5 shrink-0" />
+          <strong className="text-[15px]">UGS Warehouse</strong>
+        </button>
         <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">
           STAC catalog ·{" "}
           <a href={CATALOG_URL} target="_blank" rel="noreferrer"

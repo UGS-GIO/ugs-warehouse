@@ -47,6 +47,11 @@ def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
         "-o", pmtiles,
         "-l", topic.stem,
         "--force",
+        # -r1: keep EVERY point at every zoom. Tippecanoe's default drop-rate (2.5) thins dense
+        # points at low/mid zoom — point layers (mt stations, wells) rendered ~1 dot until z12+.
+        # Lines/polys don't rate-drop, so they looked fine. --drop-densest stays a size-only
+        # safety valve (with -r1 it rarely trips at UGS scale).
+        "-r1",
         "--drop-densest-as-needed",
         "--extend-zooms-if-still-dropping",
         *EXTRA_OPTS,

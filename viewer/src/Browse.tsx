@@ -405,7 +405,8 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
   const [spriteReady, setSpriteReady] = useState(false);
 
   useEffect(() => {
-    if (!styleUrl) { setStyleLayers(null); return; }
+    setStyleLayers(null);  // clear immediately so the prior render's layers don't linger on switch
+    if (!styleUrl) return;
     let live = true;
     fetch(styleUrl).then((r) => r.json())
       .then((d) => { if (live) setStyleLayers(Array.isArray(d?.layers) ? d.layers : null); })
@@ -469,12 +470,14 @@ function PmtilesMap({ item, focus }: { item: StacDoc; focus?: FocusSel | null })
         >
           <NavigationControl position="top-right" showCompass={false} />
           <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`} />
-          {layers.map((l, i) => (
-            // explicit `source` (+ source-layer) on each Layer — react-map-gl won't inject it into
-            // an array / Fragment, so without this they render with no source (invisible). id keyed
-            // by `sel` so a render switch swaps layers cleanly.
-            <Layer key={`${sel}-${i}`} {...({ ...l, id: `pm-${sel}-${i}`, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />
-          ))}
+          {layers.map((l, i) => {
+            // id from the fragment's OWN layer id (e.g. …-circle vs …-boxtype) so switching renders
+            // never reuses an id with a different `type` (maplibre throws "layer type changed" and
+            // the swap silently fails). `sel` prefix keeps renders fully disjoint. explicit
+            // `source`/`source-layer` — react-map-gl won't inject them into an array.
+            const lid = `pm-${sel}-${(l as { id?: string }).id ?? i}`;
+            return <Layer key={lid} {...({ ...l, id: lid, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />;
+          })}
           {/* Picked-row highlight — the real feature geometry (line/fill/circle by geom type). */}
           {hlGeom && (
             <Source id="pm-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>

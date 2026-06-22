@@ -10,7 +10,7 @@ import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type Map
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, viaLink } from "./stac";
+import { type Asset, citeLink, classificationEntries, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, tableColumns, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string;
@@ -527,10 +527,34 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
       </div>
       {/* Legend follows the active render: explicit entries for icon renders (box-type pie wedges),
           else derived from the style's paint. */}
-      <Legend layers={styleLayers ?? undefined} entries={active?.legend}
+      {/* Legend source order: explicit render legend (icon renders) → STAC classification:classes
+          (post-reingest) → derived from the GL style's paint (the pre-reingest fallback). */}
+      <Legend layers={styleLayers ?? undefined} entries={active?.legend ?? classificationEntries(item)}
         title={active?.legend ? "box type" : undefined}
         name={String(item.properties?.title ?? item.id)} />
     </>
+  );
+}
+
+// Schema panel from the STAC Table extension (`table:columns`). The dataset's fields + types
+// straight from the catalog — no parquet read. Hidden pre-reingest (extension not emitted yet).
+function FieldsPanel({ item }: { item: StacDoc }) {
+  const cols = tableColumns(item);
+  if (!cols) return null;
+  return (
+    <details className="mt-2 max-w-[1100px] rounded-md border border-border bg-card text-[12px]">
+      <summary className="cursor-pointer px-3 py-2 font-semibold text-muted-foreground">
+        Fields <span className="font-normal text-muted-foreground">· {cols.length}</span>
+      </summary>
+      <div className="flex flex-wrap gap-x-5 gap-y-1.5 px-3 pb-3">
+        {cols.map((c) => (
+          <span key={c.name} className="inline-flex items-baseline gap-1.5">
+            <span className="font-mono text-foreground">{c.name}</span>
+            {c.type && <span className="text-[11px] text-muted-foreground">{c.type}</span>}
+          </span>
+        ))}
+      </div>
+    </details>
   );
 }
 
@@ -546,6 +570,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
   return (
     <>
       <PmtilesMap item={item} focus={focus} onFeatureClick={pq ? onFeatureClick : undefined} />
+      <FieldsPanel item={item} />
       {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} />}
     </>
   );

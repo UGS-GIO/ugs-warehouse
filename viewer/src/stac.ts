@@ -74,6 +74,31 @@ export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
       || a.href.endsWith(".cog.tif"),
   );
 
+// STAC Table extension: the GeoParquet `data` asset's column schema (name + type). Undefined
+// pre-reingest (the extension isn't emitted yet) → callers fall back / hide the panel.
+export type TableColumn = { name: string; type?: string; description?: string };
+export const tableColumns = (d: StacDoc | undefined): TableColumn[] | undefined => {
+  const data = (d?.assets ?? {})["data"] as (Asset & { "table:columns"?: TableColumn[] }) | undefined;
+  const cols = data?.["table:columns"];
+  return Array.isArray(cols) && cols.length ? cols : undefined;
+};
+
+// STAC Classification extension: categorical value/name/color from properties.classification:classes
+// → legend entries. Undefined pre-reingest → the legend falls back to deriving from the GL style.
+export const classificationEntries = (
+  d: StacDoc | undefined,
+): Array<{ label: string; color: string }> | undefined => {
+  const cls = (d?.properties as Record<string, unknown> | undefined)?.["classification:classes"];
+  if (!Array.isArray(cls) || !cls.length) return undefined;
+  return cls.map((c) => {
+    const o = c as { name?: unknown; title?: unknown; value?: unknown; color_hint?: unknown };
+    return {
+      label: String(o.name ?? o.title ?? o.value ?? ""),
+      color: typeof o.color_hint === "string" ? `#${o.color_hint}` : "#888888",
+    };
+  });
+};
+
 // One entry of the STAC render extension (a named way to draw the layer).
 export type RenderBlock = {
   title?: string; assets?: string[]; style_url?: string; sprite?: string;

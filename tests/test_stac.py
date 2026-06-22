@@ -62,7 +62,8 @@ def test_build_item_proj_extension():
         item_id="x", collection="c", geometry=None, bbox=[0, 1, 2, 3],
         datetime_iso=None, properties={}, assets={}, proj_epsg=4326,
     )
-    assert item["properties"]["proj:epsg"] == 4326
+    assert item["properties"]["proj:code"] == "EPSG:4326"
+    assert "proj:epsg" not in item["properties"]   # full swap to v2.0.0
     assert stac.PROJ_EXT in item["stac_extensions"]
 
 

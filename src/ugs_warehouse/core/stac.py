@@ -22,8 +22,8 @@ PGF_BASE_URL = config.PGF_BASE_URL
 STAC_VERSION = "1.0.0"
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
-# projection: declares the data's native CRS (proj:epsg).
-PROJ_EXT = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
+# projection: v2.0.0 → `proj:code` ("EPSG:xxxx"), replacing the deprecated `proj:epsg`.
+PROJ_EXT = "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
 # table: standard column description for tabular assets (`table:columns`).
 TABLE_EXT = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 # classification: machine-readable categories (value/name/color) for categorical layers.
@@ -79,7 +79,7 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
     the flat one-level layout; pubs pass a nested `ugs-publications/<SERIES>` path). The
     root link climbs out to `{STAC_PREFIX}/catalog.json` — its depth follows the path.
     `extra_links` (web-map-links, via, cite-as, …) are appended; `proj_epsg` adds the
-    projection extension + `proj:epsg` (the data's native CRS).
+    projection extension + `proj:code` (the data's CRS).
     """
     depth = (collection_path or collection).count("/") + 1  # collection dirs above the item dir
     root_rel = "../" * (depth + 1) + "catalog.json"          # + the item's own {id}/ dir
@@ -93,7 +93,8 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
     props = {"datetime": datetime_iso, **properties}
     exts = list(stac_extensions or [])
     if proj_epsg is not None:
-        props["proj:epsg"] = proj_epsg
+        # projection ext v2.0.0: `proj:code` ("EPSG:4326") replaces the deprecated `proj:epsg`.
+        props["proj:code"] = f"EPSG:{proj_epsg}"
         if PROJ_EXT not in exts:
             exts.append(PROJ_EXT)
     item = {

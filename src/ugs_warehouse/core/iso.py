@@ -3,7 +3,7 @@
 State geological surveys publish to clearinghouses (data.gov, GeoPlatform, state GIS
 portals) that expect ISO 19115/19139 or FGDC, not STAC. This emits a well-formed ISO
 19139 record derived from a STAC item — title, abstract, geographic + temporal extent,
-CRS (from proj:epsg), dates, a UGS contact, and the item's assets as distribution
+CRS (from proj:code), dates, a UGS contact, and the item's assets as distribution
 transfer options. Pure string builder (xml.sax escaping; no lxml dependency).
 """
 from __future__ import annotations
@@ -40,7 +40,7 @@ def stac_to_iso19139(item: dict) -> str:
     abstract = str(props.get("description") or title)
     dt = props.get("datetime") or "2000-01-01T00:00:00Z"
     date_only = str(dt)[:10]
-    epsg = props.get("proj:epsg")
+    code = props.get("proj:code")  # projection ext v2.0.0, e.g. "EPSG:4326"
     bbox = item.get("bbox") or []
 
     geo = ""
@@ -56,10 +56,10 @@ def stac_to_iso19139(item: dict) -> str:
         )
 
     crs = ""
-    if epsg is not None:
+    if code is not None:
         crs = (
             "<gmd:referenceSystemInfo><gmd:MD_ReferenceSystem><gmd:referenceSystemIdentifier>"
-            f"<gmd:RS_Identifier><gmd:code>{_cs(f'EPSG:{epsg}')}</gmd:code>"
+            f"<gmd:RS_Identifier><gmd:code>{_cs(str(code))}</gmd:code>"
             f"<gmd:codeSpace>{_cs('EPSG')}</gmd:codeSpace>"
             "</gmd:RS_Identifier></gmd:referenceSystemIdentifier>"
             "</gmd:MD_ReferenceSystem></gmd:referenceSystemInfo>"

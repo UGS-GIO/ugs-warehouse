@@ -8,7 +8,7 @@ ITEM = {
     "bbox": [-114.0, 37.0, -109.0, 42.0],
     "properties": {
         "title": "Quaternary Faults", "description": "Fault traces",
-        "datetime": "2026-06-01T00:00:00Z", "proj:epsg": 4326,
+        "datetime": "2026-06-01T00:00:00Z", "proj:code": "EPSG:4326",
     },
     "assets": {
         "data": {"href": "https://x/a.parquet", "title": "GeoParquet"},

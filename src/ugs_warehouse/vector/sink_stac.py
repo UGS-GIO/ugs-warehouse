@@ -33,6 +33,32 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
     return int(con.execute(f"SELECT count(*) FROM {view}").fetchone()[0])
 
 
+def _table_type(duck_type: str) -> str:
+    """DuckDB column type → STAC Table extension type string."""
+    t = duck_type.upper()
+    if t.startswith("GEOMETRY"):
+        return "geometry"
+    if "INT" in t or t == "HUGEINT":
+        return "integer"
+    if t in ("DOUBLE", "FLOAT", "REAL") or t.startswith("DECIMAL"):
+        return "number"
+    if t in ("BOOLEAN", "BOOL"):
+        return "boolean"
+    if t.startswith("TIMESTAMP"):
+        return "datetime"
+    if t == "DATE":
+        return "date"
+    if "CHAR" in t or t in ("VARCHAR", "TEXT", "STRING"):
+        return "string"
+    return duck_type.lower()
+
+
+def _table_columns(con: duckdb.DuckDBPyConnection, view: str) -> list[dict]:
+    """`table:columns` describing the GeoParquet — the real materialized columns + their types."""
+    return [{"name": r[0], "type": _table_type(str(r[1]))}
+            for r in con.execute(f"DESCRIBE {view}").fetchall()]
+
+
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           *, title: str | None = None, description: str | None = None,
           metadata: dict | None = None, bbox: list[float] | None = None,
@@ -73,8 +99,10 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         geometry=stac.bbox_polygon(bb), bbox=bb, datetime_iso=now,
         properties=props,
         assets={
+            # `table:columns` describes the GeoParquet schema in-catalog (Table extension).
             "data": {"href": config.public_url(archive_path), "type": PARQUET_MIME,
-                     "roles": ["data"], "title": "GeoParquet archive (native geometry)"},
+                     "roles": ["data"], "title": "GeoParquet archive (native geometry)",
+                     "table:columns": _table_columns(con, view)},
             "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
                         "roles": ["visual"], "title": "PMTiles vector tiles"},
             "ducklake": {"href": ducklake_uri, "type": "application/x-ducklake-table",
@@ -84,10 +112,11 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
             **(related_assets or {}),
         },
         extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem])],
-        stac_extensions=[stac.WEB_MAP_LINKS_EXT],
+        stac_extensions=[stac.WEB_MAP_LINKS_EXT, stac.TABLE_EXT],
         proj_epsg=4326,  # transform reprojects every topic to 4326
     )
     stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
+    stac.attach_classification(item)  # classification:classes from the style's categories (graceful)
     stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")

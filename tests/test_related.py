@@ -20,9 +20,11 @@ def test_sink_stac_merges_related_assets(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(sink_stac, "_bbox", lambda c, v: [0, 1, 2, 3])
     monkeypatch.setattr(sink_stac, "_row_count", lambda c, v: 5)
+    monkeypatch.setattr(sink_stac, "_table_columns", lambda c, v: [{"name": "uwi", "type": "string"}])
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "attach_iso", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
 

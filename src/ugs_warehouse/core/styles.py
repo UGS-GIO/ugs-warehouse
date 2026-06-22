@@ -15,6 +15,7 @@ as they do today (the viewer falls back to its own neutral render).
 from __future__ import annotations
 
 import json
+import re
 import urllib.request
 from functools import lru_cache
 
@@ -89,3 +90,106 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
                 }
         renders[render] = block
     return renders, style_asset
+
+
+# ---------------------------------------------------------------- classification
+# Derive categorical classes (value/label + color) from the bound GL style fragment, so the catalog
+# carries machine-readable categories (classification extension) instead of clients reverse-
+# engineering the paint. Mirrors the viewer's legend derivation: `match`/`step` color expressions,
+# else the per-category-layer shape (one flat-color layer + a `filter` per class). Uniform styles
+# (one color, no categories) are NOT a classification → no classes.
+
+@lru_cache(maxsize=128)
+def _fetch_layers(style_url: str) -> tuple:
+    """Fetch a GL style fragment's `layers` (cached per URL). () on any failure (graceful)."""
+    try:
+        with urllib.request.urlopen(style_url, timeout=10) as resp:  # noqa: S310 (https CDN)
+            data = json.loads(resp.read().decode())
+        layers = data.get("layers") if isinstance(data, dict) else None
+        return tuple(lyr for lyr in (layers or []) if isinstance(lyr, dict))
+    except Exception:  # noqa: BLE001 — classification is best-effort; never sink an ingest
+        return ()
+
+
+_FLAT_COLOR_KEYS = ("fill-color", "circle-color", "line-color", "icon-color", "text-color")
+
+
+def _flat_color(paint: dict) -> str | None:
+    for k in _FLAT_COLOR_KEYS:
+        v = paint.get(k)
+        if isinstance(v, str):
+            return v
+    return None
+
+
+def _label_from_filter(f) -> str | None:
+    """Category label from a layer filter: ==, in, match, any/all (recurses)."""
+    if not isinstance(f, list) or not f:
+        return None
+    op = f[0]
+    if op == "==" and len(f) >= 3:
+        a, b = f[1], f[2]
+        lit = a if not isinstance(a, list) else b if not isinstance(b, list) else None
+        return None if lit is None else str(lit)
+    if op == "in" and len(f) >= 2:
+        needle = f[1]
+        if not isinstance(needle, list):
+            return str(needle)
+        vals = [v for v in f[2:] if not isinstance(v, list)]
+        return ", ".join(map(str, vals)) if vals else None
+    if op == "match" and len(f) >= 3:
+        vals = f[2]
+        return ", ".join(map(str, vals)) if isinstance(vals, list) else str(vals)
+    if op in ("all", "any"):
+        for sub in f[1:]:
+            r = _label_from_filter(sub)
+            if r:
+                return r
+    return None
+
+
+def _derive_classes(layers: tuple) -> list[tuple[str, str]]:
+    """(label, color) pairs from the style, or [] for non-categorical/uniform styles."""
+    # 1. data-driven paint (match / step) on a single layer
+    for layer in layers:
+        for key, v in (layer.get("paint") or {}).items():
+            if not (isinstance(key, str) and key.endswith("-color") and isinstance(v, list)):
+                continue
+            if v[0] == "match":
+                pairs = v[2:]
+                has_fb = len(pairs) % 2 == 1
+                body = pairs[:-1] if has_fb else pairs
+                out = [(str(body[i]), str(body[i + 1])) for i in range(0, len(body) - 1, 2)]
+                if has_fb:
+                    out.append(("Other", str(pairs[-1])))
+                if out:
+                    return out
+            if v[0] == "step" and len(v) >= 4:
+                out = [(f"< {v[3]}", str(v[2]))]
+                for i in range(3, len(v) - 1, 2):
+                    out.append((f"≥ {v[i]}", str(v[i + 1])))
+                if out:
+                    return out
+    # 2. per-category-layer shape (flat color + filter)
+    out = [(_label_from_filter(layer.get("filter")), _flat_color(layer.get("paint") or {}))
+           for layer in layers]
+    cats = [(lbl, col) for lbl, col in out if lbl and col]
+    return cats  # [] when uniform (no filters) → not a classification
+
+
+def _color_hint(color: str) -> str | None:
+    """`#7B1FA2` → `7B1FA2` (classification color_hint = 6 hex, no #). None if not hex."""
+    c = color.lstrip("#")
+    return c.upper() if re.fullmatch(r"[0-9a-fA-F]{6}", c) else None
+
+
+def classification_classes(style_url: str) -> list[dict]:
+    """`classification:classes` for the item's default vector render, or [] (graceful)."""
+    classes: list[dict] = []
+    for i, (label, color) in enumerate(_derive_classes(_fetch_layers(style_url))):
+        cls: dict = {"value": i, "name": str(label)}
+        hint = _color_hint(color)
+        if hint:
+            cls["color_hint"] = hint
+        classes.append(cls)
+    return classes

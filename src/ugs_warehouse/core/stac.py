@@ -24,6 +24,10 @@ STAC_VERSION = "1.0.0"
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 # projection: declares the data's native CRS (proj:epsg).
 PROJ_EXT = "https://stac-extensions.github.io/projection/v1.1.0/schema.json"
+# table: standard column description for tabular assets (`table:columns`).
+TABLE_EXT = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
+# classification: machine-readable categories (value/name/color) for categorical layers.
+CLASSIFICATION_EXT = "https://stac-extensions.github.io/classification/v2.0.0/schema.json"
 
 
 # ---------------------------------------------------------------- helpers
@@ -154,6 +158,26 @@ def attach_renders(item: dict) -> None:
         exts.append(styles.RENDER_EXT)
     if style_asset:
         item.setdefault("assets", {}).setdefault("style", style_asset)
+
+
+def attach_classification(item: dict) -> None:
+    """Attach `classification:classes` (categorical value/name/color) derived from the bound GL
+    style's default vector render. No-op for unstyled / uniform / raster items (mutates in place).
+
+    Call AFTER attach_renders (reads the `renders` block). Best-effort: styling never blocks ingest.
+    """
+    renders = (item.get("properties") or {}).get("renders") or {}
+    render = renders.get("default") or next(iter(renders.values()), None)
+    style_url = (render or {}).get("style_url")
+    if not style_url:
+        return
+    classes = styles.classification_classes(style_url)
+    if not classes:
+        return
+    item.setdefault("properties", {})["classification:classes"] = classes
+    exts = item.setdefault("stac_extensions", [])
+    if CLASSIFICATION_EXT not in exts:
+        exts.append(CLASSIFICATION_EXT)
 
 
 def write_item(item: dict) -> str:

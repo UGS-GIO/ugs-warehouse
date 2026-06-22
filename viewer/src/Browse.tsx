@@ -362,7 +362,10 @@ const NEUTRAL_LAYERS = [
 // Interactive vector preview — the item's actual PMTiles features. Uses the bound ugs-styles
 // GL style (via the render extension) when present; else a neutral geometry render (no
 // invented cartography — real styling arrives through `renders`).
-type FocusSel = { bbox?: [number, number, number, number]; geometry?: GeoJSON.Geometry | null };
+// `key` identifies the SELECTION (row offset / feature id), so the map re-flies on every distinct
+// pick — even two features at the same lat/lon (identical bbox). The bbox/geometry upgrade within
+// one pick reuses the same key, so it doesn't double-fly.
+type FocusSel = { bbox?: [number, number, number, number]; geometry?: GeoJSON.Geometry | null; key?: string | number };
 
 // Load a baked sprite sheet (pie-wedge icons for box-type) into the map via addImage, slicing each
 // frame from the PNG so icon-image names match the style as authored (no sprite-id namespacing).
@@ -428,14 +431,17 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
     return () => { live = false; };
   }, [sprite, mapLoaded]);
 
-  // Fly to the picked row's feature (bbox from the parquet covering columns). maxZoom keeps a
-  // point (degenerate bbox) from zooming to street level. Keyed on bbox values so a later
-  // geometry update for the same row doesn't re-fly.
+  // Fly to the picked feature (bbox from the parquet covering columns). maxZoom keeps a point
+  // (degenerate bbox) from zooming to street level. Keyed on the selection `key` (not bbox values)
+  // so picking a DIFFERENT feature at the same lat/lon still re-flies; the geometry upgrade within
+  // one pick keeps the same key, so it doesn't double-fly.
   const fb = focus?.bbox;
+  const focusKey = focus?.key;
   useEffect(() => {
     if (!fb || !mapRef.current) return;
     mapRef.current.fitBounds([[fb[0], fb[1]], [fb[2], fb[3]]], { padding: 60, maxZoom: 14, duration: 800 });
-  }, [fb?.[0], fb?.[1], fb?.[2], fb?.[3]]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [focusKey]);
 
   if (!pm) return null;
   const sourceLayer = pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "");
@@ -614,14 +620,17 @@ function DataExplorer({ href, onPick, mapPick }: {
   const [err, setErr] = useState<string>();
   const [loading, setLoading] = useState(true);
 
-  // Debounce search + per-column filters together into the applied query; any change resets to
+  // Debounce search + per-column filters into the applied query; a filter/search change resets to
   // page 1. Numeric columns → range (min/max), others → substring (kind from the loaded types).
-  const types = page?.types;
+  // `types` is read via a ref, NOT a dep: it's a fresh object on every page fetch, so depending on
+  // it would re-run this (→ setPageIndex(0)) every time you advance a page — snapping back to 1.
+  const typesRef = useRef(page?.types);
+  typesRef.current = page?.types;
   useEffect(() => {
     const t = setTimeout(() => {
       const filters: ColFilter[] = [];
       for (const [col, d] of Object.entries(draft)) {
-        const kind = types?.[col] ?? "text";
+        const kind = typesRef.current?.[col] ?? "text";
         if (kind === "number") {
           const min = d.min?.trim() ? Number(d.min) : undefined;
           const max = d.max?.trim() ? Number(d.max) : undefined;
@@ -634,7 +643,7 @@ function DataExplorer({ href, onPick, mapPick }: {
       setPageIndex(0);
     }, 300);
     return () => clearTimeout(t);
-  }, [search, draft, types]);
+  }, [search, draft]);
 
   const sort = sorting[0];
   const filterKey = JSON.stringify(applied.filters);
@@ -683,11 +692,12 @@ function DataExplorer({ href, onPick, mapPick }: {
   // real geometry (same filter+sort, offset = page start + row index) and upgrade the highlight.
   const pick = (i: number, bbox: [number, number, number, number]) => {
     if (!onPick) return;
-    onPick({ bbox });
     const offset = pageIndex * PAGE_SIZE + i;
+    const key = `row:${offset}`;          // same key for both onPick calls → one fly per click
+    onPick({ bbox, key });
     import("./download").then(({ fetchGeometry }) => fetchGeometry(href,
       { orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters }, offset))
-      .then((g) => { if (g) onPick({ bbox, geometry: g }); })
+      .then((g) => { if (g) onPick({ bbox, geometry: g, key }); })
       .catch(() => {});
   };
 
@@ -700,10 +710,11 @@ function DataExplorer({ href, onPick, mapPick }: {
     if (!mapPick) return;
     let live = true;
     setHighlightId(mapPick.id);
+    const key = `map:${mapPick.nonce}`;   // unique per map click → always re-flies
     (async () => {
       const { fetchRowById, ordinalByFeatureId } = await import("./download");
       const row = await fetchRowById(href, mapPick.id);
-      if (live && row && onPick) onPick({ bbox: row.bbox, geometry: row.geometry });
+      if (live && row && onPick) onPick({ bbox: row.bbox, geometry: row.geometry, key });
       const pos = await ordinalByFeatureId(href, mapPick.id, {
         orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
       });

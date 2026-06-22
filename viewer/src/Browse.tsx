@@ -528,7 +528,8 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
       {/* Legend follows the active render: explicit entries for icon renders (box-type pie wedges),
           else derived from the style's paint. */}
       <Legend layers={styleLayers ?? undefined} entries={active?.legend}
-        title={active?.legend ? "box type" : undefined} />
+        title={active?.legend ? "box type" : undefined}
+        name={String(item.properties?.title ?? item.id)} />
     </>
   );
 }

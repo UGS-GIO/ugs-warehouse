@@ -1,8 +1,12 @@
-# Raster path — design
+# Raster path
 
-Status: **design only, not implemented.** Captures how raster layers extend the
-warehouse. Driver: the soil-water-model project (raster time-series) plus one-off
-raster layers.
+**Status: mostly design, with a provisional scaffold.** The raster→STAC mapping is **built and
+tested** (`raster/consume.py` `stac_item_from_record`, `raster/sink_stac.py`, `tests/test_raster.py`)
+— a raster record becomes a STAC item in the shared catalog. What's **blocked / not wired**: the COG
+**promote** step (`promote()` raises `NotImplementedError` — the staged COG lives in a separate bucket
+and needs a cross-bucket copy) and the `raw.raster_catalog` schema, both pending **ugs-ingest #169**;
+the module isn't called from the live ingest/service yet. Driver: the soil-water-model project (raster
+time-series) plus one-off raster layers. This doc captures the target design.
 
 ## Principle
 

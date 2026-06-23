@@ -25,4 +25,6 @@ export default defineConfig({
     __BUILD_HASH__: JSON.stringify(BUILD_HASH),
     __BUILD_DATE__: JSON.stringify(BUILD_DATE),
   },
+  // Allow importing the canonical docs/*.md (one level above viewer/) for markdown-rendered pages.
+  server: { fs: { allow: [".."] } },
 });

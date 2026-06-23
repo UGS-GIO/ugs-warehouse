@@ -1,6 +1,7 @@
 import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
 import { useEffect, useState } from "react";
 import { Architecture } from "./Architecture";
+import { Guide } from "./Guide";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
@@ -11,7 +12,7 @@ const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-type View = "catalog" | "map" | "arch";
+type View = "catalog" | "map" | "arch" | "guide";
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
 const readUrl = (): Nav => {
@@ -20,7 +21,7 @@ const readUrl = (): Nav => {
   const s = p.get("s");
   const v = p.get("view");
   return {
-    view: v === "map" ? "map" : v === "arch" ? "arch" : "catalog",
+    view: v === "map" ? "map" : v === "arch" ? "arch" : v === "guide" ? "guide" : "catalog",
     c: p.get("c") || undefined, i: p.get("i") || undefined,
     l: l ? l.split(",").filter(Boolean) : undefined,
     s: s ? s.split(",").filter(Boolean) : undefined,
@@ -33,6 +34,7 @@ const writeUrl = (n: Nav, push: boolean) => {
   const p = new URLSearchParams(location.search);
   if (n.view === "map") p.set("view", "map");
   else if (n.view === "arch") p.set("view", "arch");
+  else if (n.view === "guide") p.set("view", "guide");
   else p.delete("view");
   n.c ? p.set("c", n.c) : p.delete("c");
   n.i ? p.set("i", n.i) : p.delete("i");
@@ -252,13 +254,16 @@ export function App() {
           <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
           <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>
           <span className={tab(view === "arch")} onClick={() => setView("arch")}>Architecture</span>
+          <span className={tab(view === "guide")} onClick={() => setView("guide")}>Guide</span>
           <ThemeToggle />
         </div>
       </header>
 
       {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
 
-      {view === "arch" ? (
+      {view === "guide" ? (
+        <Guide />
+      ) : view === "arch" ? (
         <Architecture />
       ) : !mapView ? (
         <Browse

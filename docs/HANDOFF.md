@@ -4,47 +4,59 @@
 current state, what's done, what's blocked, the immediate next move.
 
 **Live working doc** — tracked so it syncs across machines. Refresh as state changes;
-retire once deployed. Last refreshed **2026-06-20**.
+retire once deployed. Last refreshed **2026-06-23**.
 
 ---
 
-## ⚡ Work-box checklist — 2026-06-20 session (DO THESE)
+## ⚡ Work-box checklist — 2026-06-23 (DO THESE)
 
 No GCP perms here; code is committed + pushed on `main`, deploys are automatic. Data/infra steps:
 
-A. **Vector reingest — one job run, three payoffs.** `ugs-warehouse-ingest --all` (the default command):
-   - **gengis discovery fix** (commit `d9e40ca`): prod discovers **0 of ~10 gengis topics** until this runs
-     (the `gen_gis`→`gengis` typo; Marshall flagged it on ugs-ingest#171). The image already has the fix;
-     it's the *data* that's missing.
-   - **`feature_id` join key** (commit `8d60d3f`): the new map↔table linking (click a map feature → popup +
-     highlight + page to its table row) is a **no-op until the parquet + PMTiles carry `feature_id`**. This
-     reingest stamps it (`row_number` hilbert order) + tippecanoe `--use-attribute-for-id`.
-   - Subsumes the `-r1` PMTiles + `bbox_*` columns from the 06-19 item 4 below (same job).
+**A. One vector reingest activates almost everything.** `ugs-warehouse-ingest --all` (default command).
+Run after the `deploy.yml` image build finishes. This single run carries:
+
+   - **gengis discovery** (`d9e40ca`): prod discovers **0 of ~10 gengis topics** until this runs (the
+     `gen_gis`→`gengis` typo). Image has the fix; the *data* is missing.
+   - **`feature_id` join key** (`8d60d3f`): map↔table linking (click a map feature → popup + highlight +
+     page to its row) is a **no-op until the parquet + PMTiles carry `feature_id`**. Stamps it +
+     tippecanoe `--use-attribute-for-id`.
+   - **`classification:classes` + `table:columns` extensions** (`119733a`): per-item categories+colors and
+     the GeoParquet column schema — the viewer's legend + a "Fields" panel read these; absent until reingest.
+   - **`proj:code` migration** (`2a3fb01`): items emit `proj:code` (v2.0.0) instead of the deprecated
+     `proj:epsg` — lands on reingest.
+   - Subsumes the older `-r1` PMTiles + `bbox_*` columns (06-19 item 4 below).
+
    ```bash
    gcloud run jobs execute ugs-warehouse-ingest --region=us-central1 --project=ut-dnr-ugs-backend-tools
    ```
-   (Run after the `deploy.yml` build for `8d60d3f` finishes, so the job image carries the `feature_id`
-   stamp + `--use-attribute-for-id`.)
 
-B. **Schema-registry catalog metadata (ugs-ingest#171, MERGED).** The warehouse reads descriptive columns
-   from `raw.schema_registry` (`display_name`/`description`/`keywords`/`iso_topic_category`/`use_constraints`/
-   `lineage`/`point_of_contact`) into STAC props + the ISO 19139 export. Empty columns fall back to today's
-   prettified-id behavior, so this is incremental. Two steps:
-   1. Grant the ingest role read (one-time):
+**B. `raw.schema_registry` GRANT (one-time).** The ingest role (`schema_owner`) needs read for BOTH the
+#171 catalog metadata AND the FK relationships (PR #3, below):
    ```sql
    GRANT USAGE ON SCHEMA raw TO schema_owner;
    GRANT SELECT ON raw.schema_registry TO schema_owner;
    ```
-   2. Populate `display_name`/`keywords`/etc. per topic in `raw.schema_registry`, then reingest (the same
-      job as A) → STAC + ISO go from skeletal to clearinghouse-grade.
-   (Marshall is provisioning a dedicated `warehouse_user` — if ingest moves off `schema_owner`, the grant
-   moves with it.)
+   Then populate `display_name`/`keywords`/etc. per topic → reingest (job A) → STAC + ISO go from skeletal
+   to clearinghouse-grade. Incremental (empty columns fall back to prettified id). (Marshall provisioning a
+   dedicated `warehouse_user` — grant moves with it if ingest changes role.)
+
+**C. Merge PR #3 (registry FK relationships) — awaiting Marshall.** Projects
+`raw.schema_registry.relationships` into STAC (`related` links + Frictionless `foreignKeys` +
+`table:columns` on related tables). After merge it rides job A; needs the §B grant + the registry
+`relationships` populated upstream. (Replaces the hardcoded UCRC `RELATED` dict.)
 
 **Automatic this session (nothing to run):**
-- **SRID-0 guard** (`source.py`/`transform.py`, merged) — ships with the image. Latent (no `_current` table
-  carries SRID 0 today); errors loudly instead of silently assuming 4326 if an unstamped table ever lands.
-- **Platform Architecture viewer page** (`?view=arch`) — `viewer.yml` auto-deploys it to the CDN. A
-  presentation-ready flow diagram + per-layer build-status of the whole stack.
+- **SRID-0 guard** (merged) — ships with the image; latent (no `_current` carries SRID 0 today).
+- **Viewer pages** — `viewer.yml` auto-deploys: Architecture (`?view=arch`), Guide (`?view=guide`),
+  COG overlay, map↔table linking, classification legend + Fields panel, explorer fixes.
+- **Docs site** (MkDocs Material) — `docs.yml` builds + rsyncs to `…/warehouse/docs/`. **Watch the first
+  run go green** (new pipeline) and eyeball the Architecture mermaid on the live site.
+
+**Known / parked:**
+- **OGC API Features link hidden in the viewer** — the fast `viewer.yml` deploy doesn't bake
+  `VITE_FEATURES_BASE` (only the full `cloudbuild.yaml resolve-features-url` does). The
+  `duckdb_featureserv` service (`ugs-warehouse-features`) is deployed; the viewer just isn't getting its
+  URL. Fix when troubleshooting OGC: bake the features URL into the viewer build (or a custom domain).
 
 ---
 

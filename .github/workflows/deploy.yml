@@ -4,10 +4,14 @@ on:
   workflow_dispatch:
   push:
     branches: [main]
-    # Viewer-only changes deploy via the lighter viewer.yml (Vite build + rsync, no image
-    # builds). A mixed commit (backend + viewer) still runs this full deploy.
+    # Viewer-only changes deploy via viewer.yml; docs-only via docs.yml (both lighter, no image
+    # builds). A mixed commit (backend + viewer/docs) still runs this full deploy.
     paths-ignore:
       - 'viewer/**'
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'docs-requirements.txt'
+      - 'cloudbuild-docs.yaml'
 
 # Single deployer: this only authenticates (WIF) + submits cloudbuild.yaml, which
 # builds/pushes all images AND deploys job + harvest + service + api. No per-service

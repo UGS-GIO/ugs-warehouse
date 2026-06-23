@@ -1,0 +1,3 @@
+# Docs site (MkDocs Material) — separate from the warehouse runtime deps; installed only by the
+# docs build (cloudbuild-docs.yaml). pymdownx + mermaid support ship with mkdocs-material.
+mkdocs-material>=9.6,<10

@@ -41,7 +41,7 @@ Two things that are true everywhere:
 - [Python](#python)
 - [R](#r)
 - [DuckDB](#duckdb)
-- [GDAL / ogr2ogr (command line)](#gdal--ogr2ogr)
+- [GDAL / ogr2ogr (command line)](#gdal-and-ogr2ogr)
 - [BI tools (Tableau / Power BI)](#bi-tools)
 - [Finding data](#finding-data)
 
@@ -82,7 +82,7 @@ tools below.
 COG items directly.
 
 > GeoParquet: Pro's direct Parquet support is limited/version-dependent — prefer the **OGC API**
-> connection for vector, or download via the [web viewer](#web-viewer) / [ogr2ogr](#gdal--ogr2ogr) to
+> connection for vector, or download via the [web viewer](#web-viewer) / [ogr2ogr](#gdal-and-ogr2ogr) to
 > a File GDB.
 
 ---
@@ -213,7 +213,7 @@ Each layer also has dated, immutable snapshots next to the `latest` file
 
 ---
 
-## GDAL / ogr2ogr
+## GDAL and ogr2ogr
 *Command line. Convert any layer to any format, no GUI.*
 
 ```bash
@@ -243,7 +243,7 @@ GIS tools above.
   columns drive the Map / ArcGIS-for-Power-BI visual.
 - **Tableau:** easiest is the **CSV export** from the viewer, or a Parquet connector. Plot points by
   lat/lon; for line/polygon layers, export to a spatial format (GeoPackage) via
-  [ogr2ogr](#gdal--ogr2ogr) and use Tableau's spatial file connector.
+  [ogr2ogr](#gdal-and-ogr2ogr) and use Tableau's spatial file connector.
 - Tip: use **DuckDB** to pre-shape a Parquet/CSV (filter, pick columns, drop geometry) before loading.
 
 ---

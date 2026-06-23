@@ -1,0 +1,33 @@
+# Docs-only deploy — MkDocs Material build + rsync to the CDN, NO Docker image builds.
+# Submitted (sync) by .github/workflows/docs.yml on docs/** | mkdocs.yml pushes. Runs as the same
+# Cloud Build SA as cloudbuild.yaml (already has objectAdmin on the public bucket), so no extra grants.
+# Mirrors cloudbuild-viewer.yaml.
+substitutions:
+  _PUBLIC_BUCKET: ut-dnr-ugs-maps-prod-public
+  _DOCS_PREFIX: warehouse/docs
+
+steps:
+  - id: build-docs
+    name: python:3.12
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        pip install --quiet -r docs-requirements.txt
+        mkdocs build --strict --site-dir site
+
+  # Publish site/ → public bucket → CDN. NOT allowFailure: a failed deploy fails the build so the
+  # GH run (sync) goes red. index.html revalidates; hashed assets are immutable.
+  - id: deploy-docs
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud storage rsync site gs://${_PUBLIC_BUCKET}/${_DOCS_PREFIX} \
+          --recursive --delete-unmatched-destination-objects
+        gcloud storage objects update gs://${_PUBLIC_BUCKET}/${_DOCS_PREFIX}/index.html \
+          --cache-control="no-cache"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -1,0 +1,55 @@
+site_name: UGS Warehouse Documentation
+site_description: How the UGS geologic-data warehouse works and how to consume it.
+site_url: https://maps-assets.geology.utah.gov/warehouse/docs/
+docs_dir: docs
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      toggle: { icon: material/weather-night, name: Dark mode }
+    - scheme: slate
+      primary: indigo
+      toggle: { icon: material/weather-sunny, name: Light mode }
+  features:
+    - navigation.top
+    - navigation.sections
+    - toc.follow
+    - search.suggest
+    - content.code.copy   # copy button on every code block (matters for the user guide)
+
+# Explicit nav = the user + ops doc set. Internal/transient docs (HANDOFF, ROADMAP, specs) stay in
+# docs/ but are intentionally out of the published site.
+nav:
+  - Home: index.md
+  - User Guide: USER_GUIDE.md
+  - Architecture: ARCHITECTURE.md
+  - Serving tier: SERVING.md
+  - Styling: STYLING.md
+  - Deployment: DEPLOY.md
+  - Raster: RASTER.md
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - md_in_html
+  - attr_list
+  - tables
+  - toc: { permalink: true }
+  - pymdownx.highlight: { anchor_linenums: true }
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+# Internal docs live in docs/ but aren't in the nav — don't warn about them.
+validation:
+  nav:
+    omitted_files: ignore
+  not_found: warn

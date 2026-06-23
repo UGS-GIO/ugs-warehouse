@@ -23,12 +23,22 @@ theme:
 # docs/ but are intentionally out of the published site.
 nav:
   - Home: index.md
-  - User Guide: USER_GUIDE.md
-  - Architecture: ARCHITECTURE.md
-  - Serving tier: SERVING.md
-  - Styling: STYLING.md
-  - Deployment: DEPLOY.md
-  - Raster: RASTER.md
+  - Using the data:
+      - User Guide: USER_GUIDE.md
+      - Architecture: ARCHITECTURE.md
+      - Serving tier: SERVING.md
+  - Internals:
+      - Styling: STYLING.md
+      - Raster: RASTER.md
+
+# Internal / transient / infra docs stay in the repo but are NOT published to the public CDN site
+# (DEPLOY carries SA emails + grants; HANDOFF/ROADMAP are working notes; specs are design drafts).
+exclude_docs: |
+  DEPLOY.md
+  HANDOFF.md
+  ROADMAP.md
+  RASTER_SPEC.md
+  INTEGRATION_GEOLMAP.md
 
 plugins:
   - search

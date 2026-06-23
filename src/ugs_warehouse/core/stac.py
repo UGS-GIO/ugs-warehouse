@@ -24,7 +24,7 @@ STAC_VERSION = "1.0.0"
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 # projection: v2.0.0 → `proj:code` ("EPSG:xxxx"), replacing the deprecated `proj:epsg`.
 PROJ_EXT = "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
-# table: standard column description for tabular assets (`table:columns`).
+# table: standard column description for tabular assets (`table:columns`) — data asset + related tables.
 TABLE_EXT = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 # classification: machine-readable categories (value/name/color) for categorical layers.
 CLASSIFICATION_EXT = "https://stac-extensions.github.io/classification/v2.0.0/schema.json"

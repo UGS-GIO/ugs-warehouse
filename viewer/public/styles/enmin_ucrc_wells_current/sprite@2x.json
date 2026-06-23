@@ -1,0 +1,625 @@
+{
+  "box-type-BUTTS": {
+    "x": 0,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS": {
+    "x": 80,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CORE,CUTTINGS,OTHER,SLABS": {
+    "x": 160,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CORE,CUTTINGS,SAMPLES": {
+    "x": 240,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CORE,CUTTINGS,SAMPLES,SLABS": {
+    "x": 320,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CORE,CUTTINGS,SLABS": {
+    "x": 400,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CUTTINGS": {
+    "x": 480,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CUTTINGS,PLUGS,SLABS": {
+    "x": 560,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CUTTINGS,PLUGS,SLABS,THIN SECTIONS": {
+    "x": 640,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CUTTINGS,SAMPLES,SLABS": {
+    "x": 720,
+    "y": 0,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CUTTINGS,SKELETONIZED CORE": {
+    "x": 0,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,CUTTINGS,SLABS": {
+    "x": 80,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,SAMPLES": {
+    "x": 160,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,SAMPLES,SLABS": {
+    "x": 240,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CHIPS,SLABS": {
+    "x": 320,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CONODONTS,CUTTINGS,OTHER,SLABS": {
+    "x": 400,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CORE": {
+    "x": 480,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CORE,CUTTINGS": {
+    "x": 560,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CORE,CUTTINGS,SLABS": {
+    "x": 640,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CORE,SKELETONIZED CORE,SLABS": {
+    "x": 720,
+    "y": 80,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CORE,SLABS": {
+    "x": 0,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CUTTINGS": {
+    "x": 80,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CUTTINGS,DISPLAY,SLABS": {
+    "x": 160,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CUTTINGS,OTHER": {
+    "x": 240,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CUTTINGS,SAMPLES,SLABS": {
+    "x": 320,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CUTTINGS,SLABS": {
+    "x": 400,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,CUTTINGS,SLABS,UNKNOWN": {
+    "x": 480,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,END TRIMS,OTHER,SLABS": {
+    "x": 560,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,END TRIMS,PLUGS,SLABS": {
+    "x": 640,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,OTHER,SLABS": {
+    "x": 720,
+    "y": 160,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,PLUG ENDS,SAMPLES,SLABS": {
+    "x": 0,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,PLUGS": {
+    "x": 80,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,PLUGS,SAMPLES": {
+    "x": 160,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,PLUGS,SAMPLES,SLABS": {
+    "x": 240,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,PLUGS,SLABS": {
+    "x": 320,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,SAMPLES": {
+    "x": 400,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,SAMPLES,SLABS": {
+    "x": 480,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,SKELETONIZED CORE": {
+    "x": 560,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,SKELETONIZED CORE,SLABS": {
+    "x": 640,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-BUTTS,SLABS": {
+    "x": 720,
+    "y": 240,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS": {
+    "x": 0,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CORE": {
+    "x": 80,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CORE,CUTTINGS": {
+    "x": 160,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CORE,CUTTINGS,SAMPLES,SLABS": {
+    "x": 240,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CORE,CUTTINGS,SKELETONIZED CORE": {
+    "x": 320,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CORE,CUTTINGS,SLABS": {
+    "x": 400,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CORE,SKELETONIZED CORE": {
+    "x": 480,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CORE,SLABS": {
+    "x": 560,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CUTTINGS": {
+    "x": 640,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CUTTINGS,SAMPLES": {
+    "x": 720,
+    "y": 320,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CUTTINGS,SKELETONIZED CORE": {
+    "x": 0,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CUTTINGS,SKELETONIZED CORE,SPOT CORES": {
+    "x": 80,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,CUTTINGS,SLABS": {
+    "x": 160,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CHIPS,SLABS": {
+    "x": 240,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE": {
+    "x": 320,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,CUTTINGS": {
+    "x": 400,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,CUTTINGS,OTHER": {
+    "x": 480,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,CUTTINGS,SAMPLES": {
+    "x": 560,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,CUTTINGS,SKELETONIZED CORE": {
+    "x": 640,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,CUTTINGS,SLABS": {
+    "x": 720,
+    "y": 400,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,OUTCROP SAMPLES": {
+    "x": 0,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,PLUGS": {
+    "x": 80,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,SAMPLES": {
+    "x": 160,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,SLABS": {
+    "x": 240,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CORE,SPOT CORES": {
+    "x": 320,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS": {
+    "x": 400,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,OTHER": {
+    "x": 480,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,OTHER,SAMPLES": {
+    "x": 560,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,OUTCROP SAMPLES": {
+    "x": 640,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,PLUG END TRIMS,PLUGS,SLABS": {
+    "x": 720,
+    "y": 480,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,PLUG ENDS": {
+    "x": 0,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,PLUGS": {
+    "x": 80,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,SAMPLES": {
+    "x": 160,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,SIDEWALL": {
+    "x": 240,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,SIDEWALL,SKELETONIZED CORE": {
+    "x": 320,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,SKELETONIZED CORE": {
+    "x": 400,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,SLABS": {
+    "x": 480,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-CUTTINGS,SPOT CORES": {
+    "x": 560,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-DISPLAY": {
+    "x": 640,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-OUTCROP SAMPLES": {
+    "x": 720,
+    "y": 560,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-PLUGS": {
+    "x": 0,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-PLUGS,SLABS": {
+    "x": 80,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-SAMPLES": {
+    "x": 160,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-SAMPLES,SKELETONIZED CORE": {
+    "x": 240,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-SAMPLES,SLABS": {
+    "x": 320,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-SIDEWALL": {
+    "x": 400,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-SKELETONIZED CORE": {
+    "x": 480,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-SLABS": {
+    "x": 560,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  },
+  "box-type-SPOT CORES": {
+    "x": 640,
+    "y": 640,
+    "width": 80,
+    "height": 80,
+    "pixelRatio": 2
+  }
+}

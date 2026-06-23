@@ -1,0 +1,42 @@
+{
+  "layers": [
+    {
+      "id": "enmin_ucrc_wells-boxtype",
+      "type": "symbol",
+      "layout": {
+        "icon-image": [
+          "concat",
+          "box-type-",
+          [
+            "coalesce",
+            [
+              "get",
+              "box_type_codes"
+            ],
+            ""
+          ]
+        ],
+        "icon-size": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          4,
+          0.1,
+          7,
+          0.2,
+          10,
+          0.3,
+          13,
+          0.4,
+          16,
+          0.5
+        ],
+        "icon-allow-overlap": true
+      }
+    }
+  ]
+}

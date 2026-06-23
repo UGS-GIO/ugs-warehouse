@@ -41,12 +41,13 @@ def _backend() -> ModuleType:
 
 
 def _related(topic: Topic) -> dict:
-    """Publish a topic's supporting aspatial tables (UCRC boxes/photos/attachments) → CDN
-    parquet + related STAC assets. Best-effort: {} for topics with none, never sinks the ingest."""
+    """Resolve a topic's FK relationships from the registry → STAC related links + Frictionless
+    foreignKeys + materialised aspatial related assets. Best-effort: empty pieces when there are
+    none (or the registry/grant is absent), never sinks the parent ingest."""
     try:
-        return related.publish(topic)
-    except Exception as e:  # noqa: BLE001 — related data never blocks the parent ingest
-        print(f"[{topic.fqn}] related publish FAILED: {e}", file=sys.stderr)
+        return related.resolve(topic)
+    except Exception as e:  # noqa: BLE001 — relationships never block the parent ingest
+        print(f"[{topic.fqn}] relationships FAILED: {e}", file=sys.stderr)
         return {}
 
 
@@ -76,13 +77,13 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         return 0
 
     meta = backend.read_metadata(topic)
-    related_assets = _related(topic)
+    related_info = _related(topic)
     rc = 0
     for name, fn in [
         ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
         ("archive",  lambda: sink_archive.write(topic, con, view)),
         ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
-        ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related_assets=related_assets)),
+        ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related=related_info)),
     ]:
         try:
             fn()

@@ -29,7 +29,7 @@ def test_streaming_path_runs_sinks_once():
          patch("ugs_warehouse.vector.sink_archive.write") as archive, \
          patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
-         patch("ugs_warehouse.vector.related.publish", return_value={}), \
+         patch("ugs_warehouse.vector.related.resolve", return_value={}), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as refresh:
 
         rc = _ingest(topic, dry_run=False, skip_refresh=False)

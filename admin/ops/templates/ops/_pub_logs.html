@@ -1,13 +1,11 @@
-{% comment %}One publication's harvest log timeline (structured jsonPayload.series_id).{% endcomment %}
-<div class="rounded bg-slate-900 text-slate-100">
-  <div class="flex items-center justify-between px-3 py-1.5 border-b border-slate-700 text-xs">
-    <span class="font-medium font-mono">{{ series_id }} — harvest log</span>
-    <button class="text-slate-300 hover:text-white"
-            hx-get="{% url 'ops:pub_logs' series_id %}" hx-target="#publog-{{ series_id }}" hx-swap="innerHTML">
-      ↻ refresh
-    </button>
+{% comment %}One publication's harvest log timeline — fills the log modal.{% endcomment %}
+<div id="publog-{{ series_id }}" class="flex-1 min-h-0 flex flex-col text-slate-100">
+  <div class="flex items-center justify-between px-4 py-2 border-b border-slate-700 text-sm">
+    <span class="font-medium font-mono">{{ series_id }}<span class="text-slate-400"> — harvest log</span></span>
+    <button class="text-slate-300 hover:text-white text-xs pr-8"
+            hx-get="{% url 'ops:pub_logs' series_id %}" hx-target="#publog-{{ series_id }}" hx-swap="outerHTML">↻ refresh</button>
   </div>
-  <div class="max-h-64 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed">
+  <div class="flex-1 min-h-0 overflow-auto px-4 py-3 font-mono text-xs leading-relaxed">
     {% if log.dry_run %}
       <div class="text-amber-300">{{ log.message }}</div>
     {% elif not log.ok %}

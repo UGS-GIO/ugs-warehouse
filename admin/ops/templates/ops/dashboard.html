@@ -48,12 +48,12 @@
                 hx-post="{% url 'ops:trigger' job.key %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
                 {% if job.danger %}hx-confirm="Run {{ job.label }}? This is heavy / costs money."{% endif %}>Run</button>
               <button class="rounded border border-slate-300 text-slate-700 text-sm px-3 py-1 hover:bg-slate-50"
-                hx-get="{% url 'ops:job_logs' job.key %}" hx-target="#logs-{{ job.key }}" hx-swap="innerHTML">Live logs</button>
+                hx-get="{% url 'ops:job_logs' job.key %}" hx-target="#logmodal-body" hx-swap="innerHTML"
+                onclick="openLogModal()">Live logs</button>
               <span class="text-xs text-slate-400 font-mono truncate">{{ job.name }}</span>
             </div>
             <div id="result-{{ job.key }}" class="mt-2"
                  hx-get="{% url 'ops:job_status' job.key %}" hx-trigger="load" hx-swap="innerHTML"></div>
-            <div id="logs-{{ job.key }}" class="mt-2"></div>
           </div>
           {% endfor %}
         </div>

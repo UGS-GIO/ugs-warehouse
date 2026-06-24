@@ -27,5 +27,22 @@
     </div>
   </header>
   <main class="max-w-5xl mx-auto px-5 py-6">{% block content %}{% endblock %}</main>
+
+  {# Shared log viewer — a big terminal modal. Buttons hx-get a log partial into #logmodal-body. #}
+  <div id="logmodal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div class="absolute inset-0 bg-black/60" onclick="closeLogModal()"></div>
+    <div class="relative w-full max-w-6xl h-[80vh] bg-slate-900 rounded-lg shadow-2xl flex flex-col overflow-hidden ring-1 ring-slate-700">
+      <button class="absolute top-2 right-3 z-10 text-slate-400 hover:text-white text-xl leading-none" onclick="closeLogModal()">✕</button>
+      <div id="logmodal-body" class="flex-1 min-h-0 flex flex-col"></div>
+    </div>
+  </div>
+  <script>
+    function openLogModal() { document.getElementById('logmodal').classList.remove('hidden'); }
+    function closeLogModal() {
+      document.getElementById('logmodal').classList.add('hidden');
+      document.getElementById('logmodal-body').innerHTML = '';  // stop any auto-poll inside
+    }
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLogModal(); });
+  </script>
 </body>
 </html>

@@ -13,6 +13,7 @@ SKIP_EXISTING (1), THUMBS (1).
 """
 from __future__ import annotations
 
+import contextvars
 import csv
 import json
 import os
@@ -58,6 +59,20 @@ _retry = Retry(total=6, connect=6, read=6, backoff_factor=1.5,
                status_forcelist=[429, 500, 502, 503, 504], allowed_methods=["GET"])
 S.mount("https://", HTTPAdapter(max_retries=_retry))
 S.mount("http://", HTTPAdapter(max_retries=_retry))
+
+
+# --- Per-pub structured logging -------------------------------------------------------------
+# Cloud Run's logging agent parses a JSON line on stdout/stderr into `jsonPayload`, so emitting
+# {series_id, step, severity, message} lets the admin pull *all logs for one publication* via
+# `jsonPayload.series_id="OFR-593"` — a per-pub harvest report instead of a flat firehose. The
+# series_id rides a contextvar so helper functions (footprint, corrected_georef, …) tag their lines
+# automatically without threading it through every signature.
+_series_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("series_id", default="")
+
+
+def hlog(message: str, *, step: str = "", level: str = "INFO", err: bool = False) -> None:
+    rec = {"severity": level, "series_id": _series_ctx.get(), "step": step, "message": message}
+    print(json.dumps(rec), file=sys.stderr if err else sys.stdout, flush=True)
 
 
 def _get(url, params):
@@ -118,13 +133,13 @@ def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
     from . import source
     if not _attachments_cache:
         try:
-            print("[harvest] Pre-loading local attachments database...")
+            hlog("pre-loading local attachments database…", step="startup")
             for a in source.read_attachments():
                 sid = (a.get("series_id") or "").strip().upper()
                 _attachments_cache.setdefault(sid, []).append(a)
-            print(f"[harvest] Pre-loaded attachments for {len(_attachments_cache)} publications.")
+            hlog(f"pre-loaded attachments for {len(_attachments_cache)} publications", step="startup")
         except Exception as e:
-            print(f"[harvest] Warning: failed to load attachments: {e}")
+            hlog(f"WARN failed to load attachments: {e}", step="startup", level="WARNING")
             return None, None
 
     gt = gis = None
@@ -234,10 +249,10 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
     if not srs:
         srs = _prj_srs(work)
         if srs:
-            print(f"  georef SRS from bundle .prj: {srs}")
+            hlog(f"georef SRS from bundle .prj: {srs}", step="georef")
     if not (wf and srs):
-        print(f"  WARN georef sidecars missing (wf={bool(wf)} srs={bool(srs)}) "
-              f"for {os.path.basename(gtif)}")
+        hlog(f"WARN georef sidecars missing (wf={bool(wf)} srs={bool(srs)}) "
+             f"for {os.path.basename(gtif)}", step="georef", level="WARNING")
         return gtif
     A, D, B, E, C, F = [float(x) for x in open(wf).read().split()[:6]]
     gt = (C - 0.5 * A - 0.5 * B, A, B, F - 0.5 * D - 0.5 * E, D, E)
@@ -250,7 +265,7 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
     xml = (re.sub(r"<GeoTransform>.*?</GeoTransform>", gtx, xml, flags=re.S)
            if "<GeoTransform>" in xml else xml.replace("</VRTDataset>", gtx + "</VRTDataset>"))
     open(vrt, "w").write(xml)
-    print(f"  georef rebuilt from sidecars: {srs} + {os.path.basename(wf)}")
+    hlog(f"georef rebuilt from sidecars: {srs} + {os.path.basename(wf)}", step="georef")
     return vrt
 
 
@@ -344,12 +359,13 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
     """Harvest a series_id -> COG (+ units parquet, thumbnail) in GCS. Returns ok|skip|fail:*."""
     pub = identity.Pub.parse(series_id)
     series_id = pub.series_id
+    _series_ctx.set(series_id)
     if "XXXX" in series_id:
-        print(f"{series_id}: SKIP (unpublished placeholder)")
+        hlog("SKIP unpublished placeholder", step="resolve")
         return "skip"
     skip_existing = SKIP_EXISTING and not force and not dry_run
     if skip_existing and gcs.exists(pub.cog_object):
-        print(f"{series_id}: SKIP (exists)")
+        hlog("SKIP already harvested (COG exists)", step="resolve")
         return "skip"
     gt_url, gis_url = manifest_urls(series_id)
     if not gt_url and not gis_url:
@@ -361,7 +377,7 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
                 gt_url, gis_url = None, None
 
     if dry_run:
-        print(f"[dry-run] {series_id}: URLs: gt={gt_url}, gis={gis_url}")
+        hlog(f"dry-run URLs: gt={gt_url}, gis={gis_url}", step="resolve")
         return "ok"
 
     # high-DPI needs the GIS bundle (carries the geospatial PDF); else the lighter GeoTiff-Zip
@@ -373,14 +389,14 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
         if zurl:
             zurls = [zurl]
     if not zurls:
-        print(f"{series_id}: FAIL no zip (PDF-only?)", file=sys.stderr)
+        hlog("FAIL no zip (PDF-only?)", step="resolve", level="ERROR", err=True)
         return "fail:nozip"
 
     status = _harvest_attempt(pub, zurls)
     # FALLBACK: the GIS bundle's base raster sometimes has no usable SRS -> the cutline warp dies.
     # The separate GeoTIFF-Zip is the clean georeferenced plate; retry with it alone.
     if status.startswith("fail") and gt_url and zurls != [gt_url]:
-        print(f"{series_id}: GIS source failed -> retry GeoTIFF source only")
+        hlog("GIS source failed → retry GeoTIFF source only", step="source", level="WARNING")
         if _harvest_attempt(pub, [gt_url]) == "ok":
             return "ok"
     return status
@@ -392,11 +408,13 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     from rio_cogeo.profiles import cog_profiles
 
     series_id = pub.series_id
+    _series_ctx.set(series_id)
     work = tempfile.mkdtemp(prefix=f"h_{series_id.replace('/', '_')}_")
     try:
         cut, _ = footprint(series_id, work)
         zip_paths = []
         max_b = MAX_ZIP_SIZE_MB * 1024 * 1024
+        hlog(f"downloading {len(zurls)} source zip(s)", step="download")
         for i, zurl in enumerate(zurls):
             zp = os.path.join(work, f"pub{i}.zip")
             download(encode_url(zurl), zp, max_bytes=max_b)
@@ -404,9 +422,10 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
 
         plate, shp = prepare_plates(zip_paths, work)
         if not plate:
-            print(f"{series_id}: FAIL no plate", file=sys.stderr)
+            hlog("FAIL no plate", step="plate", level="ERROR", err=True)
             return "fail:noplate"
 
+        hlog("warping (cutline + reproject 3857) → COG", step="cog")
         clipped = os.path.join(work, "clipped.tif")
         run(["gdalwarp", "-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline",
              "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
@@ -424,7 +443,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         # Fallback: some inputs yield an empty/undersized webp COG -> retry lossless LZW,
         # keeping web_optimized so the result is still tiled+overviewed for range reads.
         if not os.path.exists(cog) or os.path.getsize(cog) < 100_000:
-            print(f"{series_id}: webp COG empty/undersized -> retry with lzw")
+            hlog("webp COG empty/undersized → retry with lzw", step="cog", level="WARNING")
             if os.path.exists(cog):
                 os.remove(cog)
             prof["compress"] = "lzw"
@@ -452,7 +471,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
 
         ok, _, _ = cog_validate(cog)
         if not ok:
-            print(f"{series_id}: FAIL cog invalid", file=sys.stderr)
+            hlog("FAIL cog invalid", step="validate", level="ERROR", err=True)
             return "fail:cog"
         # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
         # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
@@ -475,15 +494,15 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             run(["gdal_translate", "-of", "PNG", "-outsize", "700", "0", cog, th])
             gcs.upload(th, f"{identity.COG_PREFIX}/{series_id}.thumb.png",
                        content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
-        print(f"{series_id}: OK ({COG_DPI}dpi {COG_COMPRESS} q{COG_QUALITY}) -> {pub.cog_object}")
+        hlog(f"OK ({COG_DPI}dpi {COG_COMPRESS} q{COG_QUALITY}) → {pub.cog_object}", step="result")
         return "ok"
     except ZipTooLargeError as e:
-        print(f"{series_id}: SKIP (zip too large: {e})")
+        hlog(f"SKIP zip too large: {e}", step="download", level="WARNING")
         return "skip:too_large"
     except Exception as e:
         err = (getattr(e, "stderr", "") or str(e)).strip()
         reason = (err.splitlines()[-1] if err.splitlines() else str(e))[:200]
-        print(f"{series_id}: FAIL {reason}", file=sys.stderr)
+        hlog(f"FAIL {reason}", step="result", level="ERROR", err=True)
         return f"fail:{type(e).__name__}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -504,13 +523,13 @@ def main() -> int:
 
     sids = []
     if args.all:
-        print(f"Loading publications from source: {source.source_name()}")
+        hlog(f"loading publications from source: {source.source_name()}", step="startup")
         pubs = source.read_pubs()
         for p in pubs:
             sid = (p.get("series_id") or "").strip()
             if sid:
                 sids.append(sid)
-        print(f"Found {len(sids)} publications")
+        hlog(f"found {len(sids)} publications", step="startup")
     else:
         sids = args.series_id
 
@@ -522,7 +541,7 @@ def main() -> int:
     i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
     if n > 1:
         sids = sids[i::n]
-        print(f"[harvest] shard {i + 1}/{n}: {len(sids)} publications")
+        hlog(f"shard {i + 1}/{n}: {len(sids)} publications", step="shard")
 
     if args.limit:
         sids = sids[:args.limit]

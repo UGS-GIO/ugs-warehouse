@@ -26,7 +26,7 @@
       {{ iap_email|default:"—" }}{% if dry_run %} · <span class="text-amber-300 font-medium">DRY-RUN</span>{% endif %}
     </div>
   </header>
-  <main class="max-w-5xl mx-auto px-5 py-6">{% block content %}{% endblock %}</main>
+  <main class="max-w-[1700px] mx-auto px-5 sm:px-8 py-6">{% block content %}{% endblock %}</main>
 
   {# Shared log viewer — a big terminal modal. Buttons hx-get a log partial into #logmodal-body. #}
   <div id="logmodal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-4">

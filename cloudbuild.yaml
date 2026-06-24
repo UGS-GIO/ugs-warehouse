@@ -24,7 +24,7 @@ substitutions:
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
-  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # dedicated runtime SA — only run.developer on the jobs (run.jobs.run + executions.list)
+  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # runtime SA — run.developer (trigger/status) + logging.viewer (live + per-pub logs) + storage.objectViewer on the COG bucket (registry harvest status)
   _ADMIN_HOSTS: .run.app                                                           # ALLOWED_HOSTS; add the LB/custom domain once IAP is fronted
   _ADMIN_SECRET: warehouse-admin-secret-key                                        # Secret Manager secret — stable Django SECRET_KEY across workers/instances
   # Pub/Sub ingest trigger (dataELT #418 publishes `{schema, topic}` to _INGEST_TOPIC).
@@ -239,9 +239,9 @@ steps:
       # ingest runs synchronously inside the push handler — give it room past the 300s default
       - --timeout=3600
 
-  # Ops console — private (no public invoker); reachable only through the IAP load balancer.
-  # IAP itself (LB + serverless NEG + brand + iap.httpsResourceAccessor grants) is provisioned
-  # out-of-band — this step only ships the service.
+  # Ops console — gated by direct Cloud Run IAP (--iap, no load balancer). Grant users the
+  # iap.httpsResourceAccessor role on the service out-of-band. The runtime SA (_ADMIN_SA) also needs
+  # logging.viewer (live + per-pub logs) and storage.objectViewer on the COG bucket (registry).
   - id: deploy-admin
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud

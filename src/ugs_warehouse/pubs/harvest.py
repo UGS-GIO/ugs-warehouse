@@ -42,7 +42,7 @@ THUMBS = os.environ.get("THUMBS", "1") != "0"
 COG_COMPRESS = os.environ.get("COG_COMPRESS", "webp").lower()
 COG_QUALITY = int(os.environ.get("COG_QUALITY", "90"))
 COG_DPI = int(os.environ.get("COG_DPI", "600"))
-MAX_ZIP_SIZE_MB = int(os.environ.get("MAX_ZIP_SIZE_MB", "250"))
+MAX_ZIP_SIZE_MB = int(os.environ.get("MAX_ZIP_SIZE_MB", "0"))
 
 
 class ZipTooLargeError(Exception):
@@ -449,7 +449,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     try:
         cut, _ = footprint(series_id, work)
         zip_paths = []
-        max_b = MAX_ZIP_SIZE_MB * 1024 * 1024
+        max_b = MAX_ZIP_SIZE_MB * 1024 * 1024 if MAX_ZIP_SIZE_MB > 0 else None
         hlog(f"downloading {len(zurls)} source zip(s)", step="download")
         for i, zurl in enumerate(zurls):
             zp = os.path.join(work, f"pub{i}.zip")

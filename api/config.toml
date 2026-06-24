@@ -14,4 +14,5 @@ HttpHost = "0.0.0.0"
 # Enable all schemas you want to expose.
 # We'll use a dynamic approach to expose all tables.
 # You can restrict this if needed for production.
-schemas = ["hazards", "emp", "gen_gis", "wetlands", "mapping"]
+# The 7 mart schemas the warehouse serves (matches vector/topics.py MART_SCHEMAS).
+schemas = ["hazards", "emp", "gengis", "wetlands", "mapping", "geochron", "boreholes"]

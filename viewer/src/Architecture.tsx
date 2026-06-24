@@ -46,10 +46,13 @@ const DIAGRAM = `flowchart TB
   RS -->|"renders block"| ST
   subgraph PUBS["⑤ Publications"]
     MY["MySQL pubsdb<br/>source of truth"]:::planned
+    PGM["Postgres mirror<br/>via DuckDB postgres ext"]:::planned
     CSV["vendored CSV snapshot<br/>⚠ prod default · can go stale"]:::partial
     HV["harvest · GDAL → COG"]:::done
     PI["pubs ingest → STAC<br/>3 collections"]:::done
     MY -. "manual export" .-> CSV
+    MY -. "PUBS_DB_URL (unset in prod)" .-> PI
+    PGM -. "PUBS_DB_URL (unset in prod)" .-> PI
     CSV --> PI
     HV --> PI
   end
@@ -168,9 +171,9 @@ const LAYERS: Layer[] = [
     points: [
       "Harvest pipeline (GDAL) turns publication zips into validated Cloud-Optimized GeoTIFFs.",
       "Collections: ugs-publications (UGS/UGMS + USGS Utah), ugs-mining-district-files, ugs-external.",
-      "Metadata comes from the `pubsdb` / `pubsattacheddata` tables.",
+      "Metadata source is pluggable (`PUBS_DB_URL`): live MySQL, live Postgres (via the DuckDB postgres extension), or the vendored CSV snapshot — CSV is the prod default.",
     ],
-    note: "Honest gap: `pubsdb` is a MySQL database, but prod does NOT read it live — `PUBS_DB_URL` is unset, so the pipeline reads a vendored CSV snapshot checked into the repo. That snapshot is a point-in-time mirror and goes stale as upstream MySQL changes. Wiring live MySQL (or a Postgres mirror) is the open item.",
+    note: "Honest gap: the `PUBS_DB_URL` plumbing supports live MySQL or Postgres, but prod leaves it unset — so the pipeline reads the vendored CSV snapshot checked into the repo. That snapshot is point-in-time and goes stale as upstream changes. Wiring a live source (MySQL or a Postgres mirror) is the open item.",
   },
   {
     n: "⑥", title: "Storage, serving & consumers", status: "done",

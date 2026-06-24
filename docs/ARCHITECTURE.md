@@ -33,10 +33,13 @@ flowchart TB
   RS -->|"renders block"| ST
   subgraph PUBS["5. Publications"]
     MY["MySQL pubsdb - source of truth"]
+    PGM["Postgres mirror - DuckDB postgres ext"]
     CSV["vendored CSV snapshot - prod default, can go stale"]
     HV["harvest - GDAL to COG"]
     PI["pubs ingest to STAC - 3 collections"]
     MY -. "manual export" .-> CSV
+    MY -. "PUBS_DB_URL (unset in prod)" .-> PI
+    PGM -. "PUBS_DB_URL (unset in prod)" .-> PI
     CSV --> PI
     HV --> PI
   end
@@ -95,9 +98,10 @@ footprints, routed into three collections (`ugs-publications`, `ugs-mining-distr
 `ugs-external`).
 
 !!! note "Honest gap"
-    `pubsdb` is a MySQL database, but prod does **not** read it live — `PUBS_DB_URL` is unset, so the
-    pipeline reads a **vendored CSV snapshot** checked into the repo. That snapshot is point-in-time
-    and goes stale as upstream MySQL changes. Wiring live MySQL (or a Postgres mirror) is the open item.
+    The metadata source is pluggable via `PUBS_DB_URL` — live MySQL, live Postgres (through the
+    DuckDB postgres extension), or the vendored CSV snapshot. Prod leaves `PUBS_DB_URL` **unset**, so
+    it reads the **vendored CSV snapshot** checked into the repo. That snapshot is point-in-time and
+    goes stale as upstream changes. Wiring a live source (MySQL or a Postgres mirror) is the open item.
 
 ### ⑥ Storage, serving & consumers 🟩
 

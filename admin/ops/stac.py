@@ -36,7 +36,7 @@ def cog_coverage() -> dict:
         if not cat:
             out["collections"].append({"id": coll, "items": 0, "cogs": 0, "cog_ids": [], "error": True})
             continue
-        series = [l["href"].split("/")[-2] for l in cat.get("links", []) if l.get("rel") == "child"]
+        series = [lnk["href"].split("/")[-2] for lnk in cat.get("links", []) if lnk.get("rel") == "child"]
 
         def scan(s):
             idx = _get(f"{base}/{coll}/{s}/items.json") or {}

@@ -246,9 +246,6 @@ steps:
   - id: deploy-admin
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
-    # allowFailure until the work box provisions _ADMIN_SA (+ run.developer), the SECRET_KEY secret,
-    # and IAP — then this self-deploys on the next push. Keeps the build green meanwhile.
-    allowFailure: true
     args:
       - run
       - deploy

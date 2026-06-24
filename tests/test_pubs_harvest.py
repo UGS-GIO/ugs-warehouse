@@ -83,3 +83,27 @@ def test_prepare_plates_virtual_vfs():
             zip_path="/tmp/test.zip",
             inner_gtif="plate1.tif"
         )
+
+
+def test_get_attached_zips():
+    from ugs_warehouse.pubs.harvest import _get_attached_zips, _attachments_cache
+
+    # Clear the global cache to force reading from mock
+    _attachments_cache.clear()
+
+    mock_attachments = [
+        {"series_id": "OFR-593", "pub_url": "open_file_reports/ofr-593/ofr-593_plates.zip", "extra_data": "GeoTIFF - Zip"},
+        {"series_id": "OFR-593", "pub_url": "open_file_reports/ofr-593/ofr-593.zip", "extra_data": "GIS Data - Zip"},
+        {"series_id": "M-94", "pub_url": "geologicmaps/M-94_text.pdf", "extra_data": "Text - PDF"},
+    ]
+
+    with patch("ugs_warehouse.pubs.source.read_attachments", return_value=mock_attachments):
+        # Resolve attachments for OFR-593
+        gt, gis = _get_attached_zips("OFR-593")
+        assert gt == "https://ugspub.nr.utah.gov/publications/open_file_reports/ofr-593/ofr-593_plates.zip"
+        assert gis == "https://ugspub.nr.utah.gov/publications/open_file_reports/ofr-593/ofr-593.zip"
+
+        # Resolve attachments for M-94 (which is PDF only, no zips)
+        gt, gis = _get_attached_zips("M-94")
+        assert gt is None
+        assert gis is None

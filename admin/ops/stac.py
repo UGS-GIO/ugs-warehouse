@@ -71,7 +71,7 @@ def get_harvest_status(search_query: str = "", status_filter: str = "", series_f
     """Calculate and filter the harvest status of each publication."""
     from ugs_warehouse.pubs import source
     from ugs_warehouse.core import gcs
-    from ugs_warehouse.vector.sink_stac import series_code
+    from ugs_warehouse.pubs.sink_stac import series_code
 
     # 1. Load publications & attachments
     try:

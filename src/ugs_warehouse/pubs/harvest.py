@@ -109,6 +109,46 @@ def manifest_urls(series_id):
     return None, None
 
 
+_attachments_cache: dict[str, list[dict]] = {}
+
+
+def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
+    """Resolve GeoTIFF and GIS zip URLs from local attachments database (high performance)."""
+    global _attachments_cache
+    from . import source
+    if not _attachments_cache:
+        try:
+            print("[harvest] Pre-loading local attachments database...")
+            for a in source.read_attachments():
+                sid = (a.get("series_id") or "").strip().upper()
+                _attachments_cache.setdefault(sid, []).append(a)
+            print(f"[harvest] Pre-loaded attachments for {len(_attachments_cache)} publications.")
+        except Exception as e:
+            print(f"[harvest] Warning: failed to load attachments: {e}")
+            return None, None
+
+    gt = gis = None
+    sid_upper = series_id.strip().upper()
+    for a in _attachments_cache.get(sid_upper, []):
+        url = (a.get("pub_url") or "").strip()
+        if not url.lower().endswith(".zip"):
+            continue
+        if not url.startswith(("http://", "https://")):
+            url = f"https://ugspub.nr.utah.gov/publications/{url}"
+
+        desc = (a.get("extra_data") or "").lower()
+        if "geotiff" in desc or "geotiff" in url.lower():
+            gt = url
+        elif "gis" in desc or "gis" in url.lower() or "plates" in desc:
+            gis = url
+        else:
+            if not gt:
+                gt = url
+            elif not gis:
+                gis = url
+    return gt, gis
+
+
 def data_php_urls(series_id):
     gt = gis = None
     for k, v in (_get(DATAPHP, {"pub": series_id}).get("downloads") or {}).items():
@@ -313,10 +353,12 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
         return "skip"
     gt_url, gis_url = manifest_urls(series_id)
     if not gt_url and not gis_url:
-        try:
-            gt_url, gis_url = data_php_urls(series_id)
-        except Exception:
-            gt_url, gis_url = None, None
+        gt_url, gis_url = _get_attached_zips(series_id)
+        if not gt_url and not gis_url:
+            try:
+                gt_url, gis_url = data_php_urls(series_id)
+            except Exception:
+                gt_url, gis_url = None, None
 
     if dry_run:
         print(f"[dry-run] {series_id}: URLs: gt={gt_url}, gis={gis_url}")

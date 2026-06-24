@@ -49,7 +49,7 @@ def publications_registry(request):
     display_rows = rows[:100]
 
     # Dynamically discover all unique series codes from the publications DB
-    from ugs_warehouse.vector.sink_stac import series_code
+    from ugs_warehouse.pubs.sink_stac import series_code
     try:
         from ugs_warehouse.pubs import source
         pubs = source.read_pubs()

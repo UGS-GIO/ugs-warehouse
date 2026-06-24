@@ -1,0 +1,32 @@
+{% comment %}Pubs whose latest harvest log is category=attention — the failures worth eyes.{% endcomment %}
+<div class="flex items-center justify-between mb-2">
+  <h3 class="text-sm font-semibold text-slate-600">
+    Needs attention{% if att.ok and not att.dry_run %} ({{ att.pubs|length }}){% endif %}
+  </h3>
+  <button class="text-xs text-slate-500 hover:text-slate-800"
+          hx-get="{% url 'ops:attention' %}" hx-target="#attention" hx-swap="innerHTML">refresh</button>
+</div>
+{% if att.dry_run %}
+  <p class="text-xs text-slate-400">{{ att.message }}</p>
+{% elif not att.ok %}
+  <p class="text-xs text-red-600">⚠ {{ att.message }}</p>
+{% elif not att.pubs %}
+  <p class="text-xs text-green-700">✓ Nothing needs attention — last run was clean (or hasn't run yet).</p>
+{% else %}
+  <div class="rounded-lg border border-red-200 divide-y divide-red-100 overflow-hidden">
+    {% for p in att.pubs %}
+    <div class="flex items-center gap-3 px-3 py-2 bg-red-50/40 text-xs">
+      <span class="font-mono font-bold text-slate-800 w-28 shrink-0">{{ p.id }}</span>
+      {% if p.step %}<span class="text-indigo-700">[{{ p.step }}]</span>{% endif %}
+      <span class="text-red-700 flex-1 truncate" title="{{ p.text }}">{{ p.text }}</span>
+      <button class="text-slate-600 hover:text-slate-900 underline shrink-0"
+              hx-get="{% url 'ops:pub_logs' p.id %}" hx-target="#logmodal-body" hx-swap="innerHTML"
+              onclick="openLogModal()">logs ↗</button>
+      <button class="text-amber-700 hover:text-amber-900 underline shrink-0"
+              hx-post="{% url 'ops:reharvest' p.id %}" hx-target="#reharvest-{{ p.id }}" hx-swap="innerHTML"
+              hx-confirm="Re-harvest {{ p.id }} with --force?">re-harvest</button>
+      <span id="reharvest-{{ p.id }}"></span>
+    </div>
+    {% endfor %}
+  </div>
+{% endif %}

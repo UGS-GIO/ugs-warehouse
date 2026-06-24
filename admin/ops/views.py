@@ -15,9 +15,32 @@ def dashboard(request):
     return render(request, "ops/dashboard.html", {
         "stages": stages,
         "coverage": stac.cog_coverage(),
+        "harvested": stac.harvested_bucket_count(),
         "topics": stac.serving_topics(),
         "dry_run": settings.JOBS_DRY_RUN,
     })
+
+
+@admin_required
+@require_POST
+def cancel(request, key):
+    result = jobs.cancel(request.POST.get("execution", ""))
+    return render(request, "ops/_job_result.html", {
+        "key": key, "job": jobs.JOBS.get(key), "result": result,
+        "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),
+    })
+
+
+@admin_required
+@require_POST
+def reharvest(request, series_id):
+    return render(request, "ops/_reharvest_result.html",
+                  {"series_id": series_id, "result": jobs.reharvest_one(series_id)})
+
+
+@admin_required
+def attention(request):
+    return render(request, "ops/_attention.html", {"att": jobs.attention_pubs()})
 
 
 @admin_required

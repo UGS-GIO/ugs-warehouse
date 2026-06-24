@@ -8,7 +8,10 @@ urlpatterns = [
     path("jobs/<str:key>/run", views.trigger, name="trigger"),
     path("jobs/<str:key>/status", views.job_status, name="job_status"),
     path("jobs/<str:key>/logs", views.job_logs, name="job_logs"),
+    path("jobs/<str:key>/cancel", views.cancel, name="cancel"),
     path("coverage", views.coverage, name="coverage"),
+    path("attention", views.attention, name="attention"),
     path("publications", views.publications_registry, name="publications"),
     path("publications/<path:series_id>/logs", views.pub_logs, name="pub_logs"),
+    path("publications/<path:series_id>/reharvest", views.reharvest, name="reharvest"),
 ]

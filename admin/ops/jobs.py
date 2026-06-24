@@ -101,7 +101,9 @@ def recent(key: str, limit: int = 5) -> list[dict]:
                      if succeeded else "pending")
             out.append({
                 "name": ex.name.split("/")[-1],
+                "full_name": ex.name,
                 "state": state,
+                "cancelable": bool(running),
                 "succeeded": succeeded, "failed": failed, "running": running,
                 "created": ex.create_time.isoformat() if ex.create_time else "",
             })
@@ -188,3 +190,66 @@ def pub_logs(series_id: str, limit: int = 200) -> dict:
         return {"ok": True, "lines": lines}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "lines": [], "message": f"{type(e).__name__}: {e}"}
+
+
+def cancel(execution_full_name: str) -> dict:
+    """Cancel a running execution (so you don't have to open the Cloud Run console)."""
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "message": "DRY-RUN: would cancel the execution", "dry_run": True}
+    try:
+        from google.cloud import run_v2
+        run_v2.ExecutionsClient().cancel_execution(name=execution_full_name)
+        return {"ok": True, "message": "cancel requested"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
+def reharvest_one(series_id: str) -> dict:
+    """Re-harvest a SINGLE publication with --force (fix one bad COG without an --all run). Overrides
+    the harvest job's args for this execution only — base command stays `python`."""
+    job = JOBS.get("harvest")
+    sid = (series_id or "").strip()
+    if not sid:
+        return {"ok": False, "message": "no series id"}
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "message": f"DRY-RUN: would re-harvest {sid} --force", "dry_run": True}
+    try:
+        from google.cloud import run_v2
+        client = run_v2.JobsClient()
+        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
+            args=["-m", "ugs_warehouse.pubs.harvest", sid, "--force"])
+        req = run_v2.RunJobRequest(
+            name=_job_path(job),
+            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
+        client.run_job(request=req)
+        return {"ok": True, "message": f"re-harvesting {sid} (--force)"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
+def attention_pubs(limit: int = 200) -> dict:
+    """Publications whose latest harvest log is category=attention — the failures worth eyes. One
+    row per series_id (most recent), newest first. {ok, pubs, message?}."""
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "dry_run": True, "pubs": [],
+                "message": "DRY-RUN — pubs needing attention appear here after a real run."}
+    try:
+        import google.cloud.logging as gcloud_logging
+        client = gcloud_logging.Client(project=settings.GCP_PROJECT)
+        flt = (f'resource.type="cloud_run_job" resource.labels.job_name="{HARVEST_JOB}" '
+               f'jsonPayload.category="attention"')
+        seen: dict[str, dict] = {}
+        for e in client.list_entries(filter_=flt, order_by="timestamp desc",
+                                     page_size=limit, max_results=limit):
+            p = e.payload if isinstance(e.payload, dict) else {}
+            sid = p.get("series_id", "")
+            if sid and sid not in seen:  # newest first → first seen is the latest
+                seen[sid] = {
+                    "id": sid,
+                    "step": p.get("step", ""),
+                    "text": p.get("message", ""),
+                    "time": e.timestamp.isoformat() if e.timestamp else "",
+                }
+        return {"ok": True, "pubs": list(seen.values())}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "pubs": [], "message": f"{type(e).__name__}: {e}"}

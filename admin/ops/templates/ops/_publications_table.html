@@ -45,10 +45,14 @@
           </div>
           {% else %}<span class="text-slate-400">—</span>{% endif %}
         </td>
-        <td class="px-4 py-3 text-xs">
+        <td class="px-4 py-3 text-xs whitespace-nowrap">
           <button class="text-slate-600 hover:text-slate-900 underline"
                   hx-get="{% url 'ops:pub_logs' r.id %}" hx-target="#logmodal-body" hx-swap="innerHTML"
                   onclick="openLogModal()">logs ↗</button>
+          <button class="ml-2 text-amber-700 hover:text-amber-900 underline"
+                  hx-post="{% url 'ops:reharvest' r.id %}" hx-target="#reharvest-{{ r.id }}" hx-swap="innerHTML"
+                  hx-confirm="Re-harvest {{ r.id }} with --force?">re-harvest</button>
+          <span id="reharvest-{{ r.id }}" class="ml-1"></span>
         </td>
       </tr>
       {% empty %}

@@ -59,14 +59,34 @@
         </div>
 
         {% if stage.n == '⑤' %}
-        <div class="mt-4">
-          <div class="flex items-center justify-between mb-2">
-            <h3 class="text-sm font-semibold text-slate-600">COG coverage (STAC-bound)</h3>
-            <button class="text-xs text-slate-500 hover:text-slate-800"
-                    hx-get="{% url 'ops:coverage' %}" hx-target="#coverage" hx-swap="innerHTML">refresh</button>
+        <div class="mt-4 grid gap-3 sm:grid-cols-2">
+          <div class="rounded-lg border border-slate-200 p-3">
+            <div class="text-xs text-slate-500">Harvested (bucket · live)</div>
+            <div class="text-2xl font-bold">{% if harvested.ok %}{{ harvested.count }}{% else %}<span class="text-slate-300">—</span>{% endif %}</div>
+            <div class="text-xs text-slate-400">COGs in geolmap/cogs/</div>
           </div>
-          <div id="coverage">{% include "ops/_coverage.html" %}</div>
+          <div class="rounded-lg border border-slate-200 p-3">
+            <div class="text-xs text-slate-500">STAC-bound</div>
+            <div class="text-2xl font-bold">{{ coverage.total_cogs }}<span class="text-sm font-normal text-slate-400"> / {{ coverage.total_items }}</span></div>
+            <div class="text-xs text-slate-400">pub items with a COG asset</div>
+          </div>
         </div>
+        {% if harvested.ok and harvested.count > coverage.total_cogs %}
+        <p class="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+          {{ harvested.count }} harvested in the bucket but only {{ coverage.total_cogs }} bound into STAC —
+          run <span class="font-medium">Rebuild pubs STAC</span> above to bind the rest.
+        </p>
+        {% endif %}
+
+        <div id="attention" class="mt-4" hx-get="{% url 'ops:attention' %}" hx-trigger="load" hx-swap="innerHTML"></div>
+
+        <details class="mt-4">
+          <summary class="text-sm font-semibold text-slate-600 cursor-pointer">COG coverage by collection
+            <button class="ml-2 text-xs font-normal text-slate-500 hover:text-slate-800"
+                    hx-get="{% url 'ops:coverage' %}" hx-target="#coverage" hx-swap="innerHTML">refresh</button>
+          </summary>
+          <div id="coverage" class="mt-2">{% include "ops/_coverage.html" %}</div>
+        </details>
         {% endif %}
       </div>
     </div>

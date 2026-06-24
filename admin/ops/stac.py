@@ -102,6 +102,16 @@ def _harvest_inputs() -> tuple[list[dict], dict[str, list[str]], set[str]]:
     return _INPUTS_CACHE["pubs"], _INPUTS_CACHE["att_zips"], _INPUTS_CACHE["cogs"]
 
 
+def harvested_bucket_count() -> dict:
+    """Live count of COGs actually in the bucket (geolmap/cogs/*.cog.tif) — the harvest truth, ahead
+    of STAC (which only updates after pubs-ingest binds them). {ok, count} or {ok: False, message}."""
+    try:
+        _, _, cogs = _harvest_inputs()
+        return {"ok": True, "count": len(cogs)}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
 def harvest_series_codes() -> list[str]:
     """Distinct series codes (OFR, M, …) for the filter dropdown, from cached pubs."""
     from ugs_warehouse.pubs.sink_stac import series_code

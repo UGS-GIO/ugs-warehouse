@@ -8,4 +8,5 @@ urlpatterns = [
     path("jobs/<str:key>/run", views.trigger, name="trigger"),
     path("jobs/<str:key>/status", views.job_status, name="job_status"),
     path("coverage", views.coverage, name="coverage"),
+    path("publications", views.publications_registry, name="publications"),
 ]

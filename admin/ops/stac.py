@@ -65,3 +65,90 @@ def serving_topics() -> list[dict]:
                      "rows": props.get("ugs:row_count")})
     rows.sort(key=lambda r: r["id"])
     return rows
+
+
+def get_harvest_status(search_query: str = "", status_filter: str = "", series_filter: str = "") -> list[dict]:
+    """Calculate and filter the harvest status of each publication."""
+    from ugs_warehouse.pubs import source
+    from ugs_warehouse.core import gcs
+    from ugs_warehouse.vector.sink_stac import series_code
+
+    # 1. Load publications & attachments
+    try:
+        pubs = source.read_pubs()
+        attachments = source.read_attachments()
+    except Exception:
+        return []
+
+    # Map series_id (uppercased) to its list of zip URLs
+    att_zips: dict[str, list[str]] = {}
+    for a in attachments:
+        sid = (a.get("series_id") or "").strip().upper()
+        url = (a.get("pub_url") or "").strip()
+        if url.lower().endswith(".zip"):
+            if not url.startswith(("http://", "https://")):
+                url = f"https://ugspub.nr.utah.gov/publications/{url}"
+            att_zips.setdefault(sid, []).append(url)
+
+    # 2. Fetch existing COGs list from GCS (under prefix "geolmap/cogs")
+    try:
+        existing_paths = gcs.list_paths("geolmap/cogs")
+    except Exception:
+        existing_paths = []
+
+    existing_cogs = set()
+    for p in existing_paths:
+        if p.endswith(".cog.tif"):
+            base = p.split("/")[-1].removesuffix(".cog.tif").upper()
+            existing_cogs.add(base)
+
+    series_filter = (series_filter or "").strip().upper()
+    status_filter = (status_filter or "").strip().lower()
+    search_query = (search_query or "").strip().upper()
+
+    rows = []
+    for p in pubs:
+        sid = (p.get("series_id") or "").strip()
+        if not sid:
+            continue
+        sid_upper = sid.upper()
+
+        # Series filter
+        scode = series_code(sid_upper)
+        if series_filter and scode != series_filter:
+            continue
+
+        # Search filter (ID or title)
+        title = p.get("pub_name") or ""
+        if search_query and (search_query not in sid_upper and search_query not in title.upper()):
+            continue
+
+        zurls = att_zips.get(sid_upper, [])
+        is_spatial = len(zurls) > 0
+
+        # Determine state
+        if "XXXX" in sid_upper:
+            status = "placeholder"
+        elif sid_upper in existing_cogs:
+            status = "harvested"
+        elif not is_spatial:
+            status = "pdf_only"
+        else:
+            status = "pending"
+
+        # Status filter
+        if status_filter and status != status_filter:
+            continue
+
+        rows.append({
+            "id": sid,
+            "title": title,
+            "scale": p.get("pub_scale") or "",
+            "status": status,
+            "zips": [{"url": u, "name": u.split("/")[-1]} for u in zurls],
+            "year": p.get("pub_year") or "",
+        })
+
+    # Sort alphabetical by publication ID
+    rows.sort(key=lambda r: r["id"])
+    return rows

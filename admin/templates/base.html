@@ -15,7 +15,13 @@
 </head>
 <body class="bg-slate-50 text-slate-800">
   <header class="bg-slate-800 text-white px-5 py-3 flex items-center justify-between">
-    <div class="font-semibold">UGS Warehouse · Ops Console</div>
+    <div class="flex items-center gap-6">
+      <a href="{% url 'ops:dashboard' %}" class="font-semibold hover:text-slate-200">UGS Warehouse · Ops Console</a>
+      <nav class="flex gap-4 text-sm font-medium text-slate-300">
+        <a href="{% url 'ops:dashboard' %}" class="hover:text-white transition">Operations</a>
+        <a href="{% url 'ops:publications' %}" class="hover:text-white transition">Harvest Registry</a>
+      </nav>
+    </div>
     <div class="text-xs text-slate-300">
       {{ iap_email|default:"—" }}{% if dry_run %} · <span class="text-amber-300 font-medium">DRY-RUN</span>{% endif %}
     </div>

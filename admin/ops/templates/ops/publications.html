@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Harvest Registry{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-1">Publications Harvest Registry</h1>
+<p class="text-sm text-slate-500 mb-6">
+  Search, filter, and track the real-time Cloud Optimized GeoTIFF (COG) harvest status of each publication.
+</p>
+
+<!-- Interactive Filter and Search Panel -->
+<div class="mb-6 rounded-lg border border-slate-200 bg-white p-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+  <div class="flex-1 min-w-[200px]">
+    <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Search Publication ID or Title</label>
+    <input type="text" name="q" value="{{ q }}" placeholder="e.g. OFR-593, M-94..." 
+           class="w-full rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none focus:ring-1 focus:ring-slate-500"
+           hx-get="{% url 'ops:publications' %}" 
+           hx-trigger="keyup changed delay:300ms, search" 
+           hx-target="#publications-table-container" 
+           hx-include="[name='status'],[name='series']">
+  </div>
+  
+  <div class="w-full sm:w-48">
+    <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Harvest Status</label>
+    <select name="status" class="w-full rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+            hx-get="{% url 'ops:publications' %}"
+            hx-target="#publications-table-container"
+            hx-include="[name='q'],[name='series']">
+      <option value="">All Statuses</option>
+      <option value="harvested" {% if status_filter == 'harvested' %}selected{% endif %}>Harvested (COG Bound)</option>
+      <option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>Pending / Missing COG</option>
+      <option value="pdf_only" {% if status_filter == 'pdf_only' %}selected{% endif %}>PDF-Only (Non-Spatial)</option>
+      <option value="placeholder" {% if status_filter == 'placeholder' %}selected{% endif %}>Placeholder / Unpublished</option>
+    </select>
+  </div>
+  
+  <div class="w-full sm:w-48">
+    <label class="block text-xs font-semibold text-slate-500 uppercase mb-1">Series Code</label>
+    <select name="series" class="w-full rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+            hx-get="{% url 'ops:publications' %}"
+            hx-target="#publications-table-container"
+            hx-include="[name='q'],[name='status']">
+      <option value="">All Series</option>
+      {% for code in series_codes %}
+      <option value="{{ code }}" {% if series_filter == code %}selected{% endif %}>{{ code }}</option>
+      {% endfor %}
+    </select>
+  </div>
+</div>
+
+<!-- Table Container -->
+<div id="publications-table-container" class="rounded-lg border border-slate-200 bg-white overflow-hidden">
+  {% include "ops/_publications_table.html" %}
+</div>
+{% endblock %}

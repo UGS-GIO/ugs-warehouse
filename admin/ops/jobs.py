@@ -24,6 +24,22 @@ class Job:
     tasks: int | None = None  # override task_count (parallel shards) at run time; None = job default
 
 
+# Pipeline stages mirror the Architecture page (docs/ARCHITECTURE.md + viewer Architecture.tsx) so
+# the ops console and the architecture diagram tell the same story. Upstream ①/② (dataELT + Pub/Sub
+# #418) are automatic — not operator-triggered — so the console starts at ③, the first stage an
+# operator drives, and ends at ⑥ (serving) as read-only status.
+STAGES = [
+    {"n": "③", "title": "Warehouse transform", "jobs": ["ingest"],
+     "blurb": "Reproject → EPSG:4326 · h3_r9 · hilbert, then fan out to DuckLake · GeoParquet · "
+              "PMTiles · STAC. One DuckDB streaming pass."},
+    {"n": "④", "title": "Styling", "jobs": ["restyle"],
+     "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt."},
+    {"n": "⑤", "title": "Publications", "jobs": ["harvest", "pubs-ingest"],
+     "blurb": "Scanned geologic maps → COGs (GDAL) → STAC (3 collections). Harvest, then rebuild "
+              "pubs STAC to bind the new COGs."},
+]
+
+
 # The triggerable warehouse jobs (Cloud Run job names from cloudbuild.yaml).
 JOBS: dict[str, Job] = {j.key: j for j in [
     Job("harvest", "geolmap-harvest", "Harvest COGs",

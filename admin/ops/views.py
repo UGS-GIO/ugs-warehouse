@@ -9,8 +9,11 @@ from . import jobs, stac
 
 @admin_required
 def dashboard(request):
+    # Group jobs into pipeline stages (mirrors the Architecture page) so the console reads as the
+    # data flow, not a flat button list.
+    stages = [{**s, "jobs": [jobs.JOBS[k] for k in s["jobs"] if k in jobs.JOBS]} for s in jobs.STAGES]
     return render(request, "ops/dashboard.html", {
-        "jobs": list(jobs.JOBS.values()),
+        "stages": stages,
         "coverage": stac.cog_coverage(),
         "topics": stac.serving_topics(),
         "dry_run": settings.JOBS_DRY_RUN,

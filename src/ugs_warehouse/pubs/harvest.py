@@ -276,7 +276,9 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
     vrt = os.path.join(work, f"{inner_base}.fixed.vrt")
     run(["gdal_translate", "-q", "-of", "VRT", gtif, vrt])
     xml = open(vrt).read()
-    xml = re.sub(r"<SRS[^>]*>.*?</SRS>", f"<SRS>{srs}</SRS>", xml, flags=re.S)
+    import html
+    escaped_srs = html.escape(srs)
+    xml = re.sub(r"<SRS[^>]*>.*?</SRS>", f"<SRS>{escaped_srs}</SRS>", xml, flags=re.S)
     gtx = "<GeoTransform>%.12g, %.12g, %.12g, %.12g, %.12g, %.12g</GeoTransform>" % gt
     xml = (re.sub(r"<GeoTransform>.*?</GeoTransform>", gtx, xml, flags=re.S)
            if "<GeoTransform>" in xml else xml.replace("</VRTDataset>", gtx + "</VRTDataset>"))
@@ -294,7 +296,7 @@ def ensure_rgb(tif):
         n, ci = ds.count, ds.colorinterp
     if ColorInterp.palette in ci:
         out = tif + ".rgb.tif"
-        run(["gdal_translate", "-expand", "rgba", tif, out])
+        run(["gdal_translate", "-expand", "rgba", "-co", "COMPRESS=DEFLATE", tif, out])
         return out
     if ci[:3] == (ColorInterp.red, ColorInterp.green, ColorInterp.blue):
         return tif
@@ -302,11 +304,11 @@ def ensure_rgb(tif):
         out = tif + ".rgb.tif"
         if n >= 3:
             ci_list = "red,green,blue" + (",alpha" if n >= 4 else "")
-            run(["gdal_translate", "-colorinterp", ci_list, tif, out])
+            run(["gdal_translate", "-co", "COMPRESS=DEFLATE", "-colorinterp", ci_list, tif, out])
         else:
             args = ["-b", "1", "-b", "1", "-b", "1"] + (["-b", "2"] if n == 2 else [])
             ci_list = "red,green,blue" + (",alpha" if n == 2 else "")
-            run(["gdal_translate"] + args + ["-colorinterp", ci_list, tif, out])
+            run(["gdal_translate", "-co", "COMPRESS=DEFLATE"] + args + ["-colorinterp", ci_list, tif, out])
         return out
     return tif
 
@@ -357,7 +359,22 @@ def prepare_plates(zip_paths, work):
     gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
     if COG_DPI > 0 and pdf:
         prefix = os.path.join(work, "plate")
-        run(["pdftoppm", "-png", "-r", str(COG_DPI), os.path.join(work, pdf), prefix])
+        dpi = COG_DPI
+        while dpi >= 150:
+            try:
+                run(["pdftoppm", "-png", "-r", str(dpi), os.path.join(work, pdf), prefix])
+                break
+            except Exception as e:
+                hlog(f"pdftoppm failed at {dpi} DPI (likely OOM): {e}. Retrying at lower DPI...",
+                     step="plate", level="WARNING")
+                dpi = dpi // 2
+                # Clean up any partial output
+                for filename in os.listdir(work):
+                    if filename.startswith("plate-") or filename == "plate.png":
+                        try:
+                            os.remove(os.path.join(work, filename))
+                        except Exception:
+                            pass
         png = next((p for p in (prefix + "-1.png", prefix + ".png") if os.path.exists(p)), None)
         with rasterio.open(gtif_path) as g:
             b, crs = g.bounds, g.crs
@@ -449,7 +466,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         clipped = os.path.join(work, "clipped.tif")
         run(["gdalwarp", "-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline",
              "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
-             "-co", "BIGTIFF=YES", plate, clipped])
+             "-co", "BIGTIFF=YES", "-co", "COMPRESS=DEFLATE", plate, clipped])
         cog = os.path.join(work, f"{series_id}.cog.tif")
         prof = dict(cog_profiles.get(COG_COMPRESS))
         prof["bigtiff"] = "IF_SAFER"

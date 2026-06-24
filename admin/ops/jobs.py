@@ -59,6 +59,24 @@ def _job_path(job: Job) -> str:
     return f"projects/{settings.GCP_PROJECT}/locations/{settings.GCP_REGION}/jobs/{job.name}"
 
 
+def _fmt_ts(dt) -> str:
+    """Local human timestamp for an execution time (tz-aware datetime); '' if missing."""
+    if not dt:
+        return ""
+    from django.utils import timezone
+    return timezone.localtime(dt).strftime("%b %d, %H:%M")
+
+
+def _fmt_dur(start, end) -> str:
+    """Run duration 'Nm SSs' / 'Ns' when both ends are known, else ''."""
+    if not (start and end):
+        return ""
+    secs = int((end - start).total_seconds())
+    if secs < 0:
+        return ""
+    return f"{secs // 60}m{secs % 60:02d}s" if secs >= 60 else f"{secs}s"
+
+
 def run(key: str) -> dict:
     """Execute a job. Returns {ok, execution|message}. Honors JOBS_DRY_RUN.
 
@@ -99,13 +117,16 @@ def recent(key: str, limit: int = 5) -> list[dict]:
             succeeded = ex.succeeded_count or 0
             state = ("running" if running else "failed" if failed else "succeeded"
                      if succeeded else "pending")
+            start, done = ex.create_time, ex.completion_time
             out.append({
                 "name": ex.name.split("/")[-1],
                 "full_name": ex.name,
                 "state": state,
                 "cancelable": bool(running),
                 "succeeded": succeeded, "failed": failed, "running": running,
-                "created": ex.create_time.isoformat() if ex.create_time else "",
+                "started": _fmt_ts(start),
+                "duration": _fmt_dur(start, done),
+                "created": start.isoformat() if start else "",
             })
             if len(out) >= limit:
                 break

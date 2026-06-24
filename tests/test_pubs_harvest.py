@@ -6,6 +6,13 @@ import pytest
 
 from ugs_warehouse.pubs.harvest import ZipTooLargeError, download, _harvest_attempt, identity
 
+try:
+    import rasterio  # noqa: F401
+    import rio_cogeo  # noqa: F401
+    HAS_RASTER_DEPS = True
+except ImportError:
+    HAS_RASTER_DEPS = False
+
 
 def test_download_checks_content_length():
     mock_response = MagicMock()
@@ -35,6 +42,7 @@ def test_download_checks_stream_progress():
             assert "downloaded bytes exceeded limit" in str(exc_info.value)
 
 
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
 def test_harvest_attempt_handles_zip_too_large():
     pub = identity.Pub(series_id="OFR-593")
 

@@ -1,0 +1,16 @@
+<div class="grid gap-3 sm:grid-cols-3">
+  {% for c in coverage.collections %}
+  <div class="rounded-lg border border-slate-200 bg-white p-3">
+    <div class="font-mono text-xs text-slate-500">{{ c.id }}</div>
+    <div class="text-2xl font-bold">{{ c.cogs }}<span class="text-sm font-normal text-slate-400"> / {{ c.items }}</span></div>
+    <div class="text-xs text-slate-500">have COGs</div>
+    {% if c.cog_ids %}
+    <details class="mt-1">
+      <summary class="text-xs text-slate-500 cursor-pointer">ids</summary>
+      <div class="text-[11px] text-slate-600 mt-1 max-h-32 overflow-auto">{{ c.cog_ids|join:", " }}</div>
+    </details>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+<p class="text-xs text-slate-500 mt-2">{{ coverage.total_cogs }} of {{ coverage.total_items }} pub items have a COG.</p>

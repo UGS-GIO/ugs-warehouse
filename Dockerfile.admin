@@ -1,0 +1,24 @@
+# Cloud Run service: Django + HTMX ops console behind IAP. Reads the STAC catalog and triggers the
+# warehouse's Cloud Run jobs — stores nothing (SQLite is ephemeral, Django tables only).
+# Build context is the repo root: `docker build -f Dockerfile.admin .`
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+WORKDIR /app
+
+# Deps layer — cached until requirements change.
+COPY admin/requirements.txt ./
+RUN pip install -r requirements.txt
+
+COPY admin/ ./
+
+# Bake the static manifest (whitenoise). SECRET_KEY is a throwaway just for the build command.
+RUN SECRET_KEY=build DEBUG=False python manage.py collectstatic --noinput
+
+EXPOSE 8080
+# Ephemeral migrate (Django's own tables) then serve. $PORT is set by Cloud Run.
+CMD exec sh -c "python manage.py migrate --noinput && \
+  exec gunicorn config.wsgi:application --bind 0.0.0.0:\${PORT:-8080} --workers 2 --timeout 120"

@@ -28,3 +28,7 @@ discovered_topics.txt
 
 # Playwright MCP scratch (snapshots/screenshots)
 .playwright-mcp/
+
+# admin console (Django) — ephemeral db + collected static
+admin/staticfiles/
+*.sqlite3

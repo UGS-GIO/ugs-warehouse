@@ -1,0 +1,13 @@
+{% if recent %}
+<div class="mt-1 space-y-0.5">
+  {% for ex in recent %}
+  <div class="text-xs flex items-center gap-2">
+    <span class="{% if ex.state == 'succeeded' %}text-green-600{% elif ex.state == 'failed' %}text-red-600{% elif ex.state == 'running' %}text-blue-600{% else %}text-slate-400{% endif %}">●</span>
+    <span class="font-mono text-slate-600">{{ ex.name }}</span>
+    <span class="text-slate-400">{{ ex.state }}</span>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="text-xs text-slate-400">no recent runs</div>
+{% endif %}

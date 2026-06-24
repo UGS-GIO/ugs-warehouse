@@ -22,6 +22,12 @@ substitutions:
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
   _SERVICE: ugs-warehouse-service
+  # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
+  _ADMIN_SERVICE: ugs-warehouse-admin
+  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # dedicated runtime SA — only run.developer on the jobs (run.jobs.run + executions.list)
+  _ADMIN_EMAILS: clinton@utah.gov                                                  # IAP-verified allowlist (comma-separated)
+  _ADMIN_HOSTS: .run.app                                                           # ALLOWED_HOSTS; add the LB/custom domain once IAP is fronted
+  _ADMIN_SECRET: warehouse-admin-secret-key                                        # Secret Manager secret — stable Django SECRET_KEY across workers/instances
   # Pub/Sub ingest trigger (dataELT #418 publishes `{schema, topic}` to _INGEST_TOPIC).
   _INGEST_TOPIC: ugs-warehouse-ingest     # topic dataELT publish.sh targets — name is the contract, do not rename
   _INGEST_SUB: ugs-warehouse-ingest-push  # push subscription -> the service `/` endpoint
@@ -95,9 +101,27 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:latest
       - featureserv/
 
+  # Ops console (Django + HTMX). Build context is the repo root (Dockerfile.admin COPYs admin/).
+  - id: build-admin
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin
+        docker pull "$$IMG:latest" || true
+        DOCKER_BUILDKIT=1 docker build -f Dockerfile.admin \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "$$IMG:latest" \
+          -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
+
   - id: push-warehouse
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse']
+
+  - id: push-admin
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin']
 
   - id: push-features
     name: gcr.io/cloud-builders/docker
@@ -216,6 +240,27 @@ steps:
       # ingest runs synchronously inside the push handler — give it room past the 300s default
       - --timeout=3600
 
+  # Ops console — private (no public invoker); reachable only through the IAP load balancer.
+  # IAP itself (LB + serverless NEG + brand + iap.httpsResourceAccessor grants) is provisioned
+  # out-of-band — this step only ships the service.
+  - id: deploy-admin
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    # allowFailure until the work box provisions _ADMIN_SA (+ run.developer), the SECRET_KEY secret,
+    # and IAP — then this self-deploys on the next push. Keeps the build green meanwhile.
+    allowFailure: true
+    args:
+      - run
+      - deploy
+      - ${_ADMIN_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_ADMIN_SA}
+      - --ingress=internal-and-cloud-load-balancing
+      - --no-allow-unauthenticated
+      - --set-secrets=SECRET_KEY=${_ADMIN_SECRET}:latest
+      - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ADMIN_EMAILS=${_ADMIN_EMAILS}|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}
+
   # Wire the Pub/Sub push trigger: topic -> private service. Idempotent (safe to
   # re-run every build). allowFailure until the build SA has pubsub.admin + the
   # Pub/Sub service agent has tokenCreator on the push SA — then it self-provisions.
@@ -318,6 +363,7 @@ steps:
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest

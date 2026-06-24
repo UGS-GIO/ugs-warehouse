@@ -1,0 +1,2 @@
+<div class="text-xs {% if result.ok %}text-green-700{% else %}text-red-700{% endif %}">{{ result.message }}</div>
+<div hx-get="{% url 'ops:job_status' key %}" hx-trigger="load delay:2s, every 10s" hx-swap="innerHTML"></div>

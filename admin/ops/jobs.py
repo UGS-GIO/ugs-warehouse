@@ -59,14 +59,6 @@ def _job_path(job: Job) -> str:
     return f"projects/{settings.GCP_PROJECT}/locations/{settings.GCP_REGION}/jobs/{job.name}"
 
 
-def _fmt_ts(dt) -> str:
-    """Local human timestamp for an execution time (tz-aware datetime); '' if missing."""
-    if not dt:
-        return ""
-    from django.utils import timezone
-    return timezone.localtime(dt).strftime("%b %d, %H:%M")
-
-
 def _fmt_dur(start, end) -> str:
     """Run duration 'Nm SSs' / 'Ns' when both ends are known, else ''."""
     if not (start and end):
@@ -124,9 +116,8 @@ def recent(key: str, limit: int = 5) -> list[dict]:
                 "state": state,
                 "cancelable": bool(running),
                 "succeeded": succeeded, "failed": failed, "running": running,
-                "started": _fmt_ts(start),
                 "duration": _fmt_dur(start, done),
-                "created": start.isoformat() if start else "",
+                "created": start.isoformat() if start else "",  # UTC ISO — formatted client-side
             })
             if len(out) >= limit:
                 break

@@ -22,8 +22,10 @@
         <a href="{% url 'ops:publications' %}" class="hover:text-white transition">Harvest Registry</a>
       </nav>
     </div>
-    <div class="text-xs text-slate-300">
-      {{ iap_email|default:"—" }}{% if dry_run %} · <span class="text-amber-300 font-medium">DRY-RUN</span>{% endif %}
+    <div class="flex items-center gap-3 text-xs text-slate-300">
+      <button id="tzbtn" onclick="toggleTz()" title="Toggle timezone (Local / UTC)"
+              class="rounded border border-slate-600 px-2 py-0.5 hover:bg-slate-700">Local</button>
+      <span>{{ iap_email|default:"—" }}{% if dry_run %} · <span class="text-amber-300 font-medium">DRY-RUN</span>{% endif %}</span>
     </div>
   </header>
   <main class="max-w-[1700px] mx-auto px-5 sm:px-8 py-6">{% block content %}{% endblock %}</main>
@@ -43,6 +45,28 @@
       document.getElementById('logmodal-body').innerHTML = '';  // stop any auto-poll inside
     }
     document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLogModal(); });
+
+    // Timestamps: server sends UTC ISO in <time data-ts>; render in the viewer's local zone or UTC.
+    // "Local" = the browser's own timezone (whatever you're in); UTC always one click away.
+    function tzMode() { return localStorage.getItem('tzmode') || 'local'; }
+    function fmtTimes() {
+      const utc = tzMode() === 'utc';
+      const opts = { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+                     hour12: false, timeZoneName: 'short' };
+      if (utc) opts.timeZone = 'UTC';
+      document.querySelectorAll('time[data-ts]').forEach(el => {
+        const iso = el.getAttribute('data-ts');
+        if (!iso) { el.textContent = ''; return; }
+        const d = new Date(iso);
+        el.textContent = d.toLocaleString('en-US', opts);
+        el.title = d.toISOString();  // raw UTC always on hover
+      });
+      const btn = document.getElementById('tzbtn');
+      if (btn) btn.textContent = utc ? 'UTC' : 'Local';
+    }
+    function toggleTz() { localStorage.setItem('tzmode', tzMode() === 'utc' ? 'local' : 'utc'); fmtTimes(); }
+    document.addEventListener('DOMContentLoaded', fmtTimes);
+    document.body.addEventListener('htmx:afterSwap', fmtTimes);  // re-format after status polls swap
   </script>
 </body>
 </html>

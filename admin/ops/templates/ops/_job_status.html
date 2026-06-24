@@ -5,7 +5,7 @@
     <span class="{% if ex.state == 'succeeded' %}text-green-600{% elif ex.state == 'failed' %}text-red-600{% elif ex.state == 'running' %}text-blue-600{% else %}text-slate-400{% endif %}">●</span>
     <span class="font-mono text-slate-600">{{ ex.name }}</span>
     <span class="text-slate-400">{{ ex.state }}</span>
-    {% if ex.started %}<span class="text-slate-500">{{ ex.started }}</span>{% endif %}
+    {% if ex.created %}<time data-ts="{{ ex.created }}" class="text-slate-500"></time>{% endif %}
     {% if ex.duration %}<span class="text-slate-400">· {{ ex.duration }}</span>{% endif %}
     {% if ex.cancelable %}
     <button class="text-red-600 hover:text-red-800 hover:underline"

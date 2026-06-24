@@ -176,6 +176,7 @@ steps:
       - --max-retries=1
       - --cpu=2
       - --memory=4Gi
+      - --tasks=5
 
   # Pubs metadata → STAC rebuild. Decoupled from the COG harvest above: this only re-reads
   # pub metadata (vendored CSV snapshot today; PUBS_DB_URL later) + lists GCS for harvested

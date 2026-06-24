@@ -70,9 +70,25 @@ S.mount("http://", HTTPAdapter(max_retries=_retry))
 _series_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("series_id", default="")
 
 
-def hlog(message: str, *, step: str = "", level: str = "INFO", err: bool = False) -> None:
+def hlog(message: str, *, step: str = "", level: str = "INFO", category: str = "",
+         err: bool = False) -> None:
     rec = {"severity": level, "series_id": _series_ctx.get(), "step": step, "message": message}
+    if category:
+        rec["category"] = category  # ok | expected | attention — triage in the report
     print(json.dumps(rec), file=sys.stderr if err else sys.stdout, flush=True)
+
+
+# Outcome code → triage category. "expected" = nothing to harvest, legitimately (no action needed);
+# "attention" = had data but processing failed (investigate). PDF-only/no-spatial is EXPECTED, not a
+# failure — it must not flip the task exit code or burn a retry.
+def outcome_category(code: str) -> str:
+    if code == "ok":
+        return "ok"
+    if code.startswith("skip:too_large"):
+        return "attention"  # a real map we couldn't process (size cap) — worth a look
+    if code.startswith("skip"):
+        return "expected"   # placeholder / already-harvested / no spatial data
+    return "attention"      # fail:*
 
 
 def _get(url, params):
@@ -361,12 +377,12 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
     series_id = pub.series_id
     _series_ctx.set(series_id)
     if "XXXX" in series_id:
-        hlog("SKIP unpublished placeholder", step="resolve")
-        return "skip"
+        hlog("SKIP unpublished placeholder", step="resolve", level="NOTICE", category="expected")
+        return "skip:placeholder"
     skip_existing = SKIP_EXISTING and not force and not dry_run
     if skip_existing and gcs.exists(pub.cog_object):
-        hlog("SKIP already harvested (COG exists)", step="resolve")
-        return "skip"
+        hlog("SKIP already harvested (COG exists)", step="resolve", level="NOTICE", category="expected")
+        return "skip:exists"
     gt_url, gis_url = manifest_urls(series_id)
     if not gt_url and not gis_url:
         gt_url, gis_url = _get_attached_zips(series_id)
@@ -389,8 +405,11 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
         if zurl:
             zurls = [zurl]
     if not zurls:
-        hlog("FAIL no zip (PDF-only?)", step="resolve", level="ERROR", err=True)
-        return "fail:nozip"
+        # EXPECTED, not a failure: the publication has no spatial bundle to convert (PDF-only). Do
+        # not return "fail:*" — that would fail the Cloud Run task and trigger a pointless retry.
+        hlog("no spatial data (PDF-only) — nothing to harvest", step="resolve",
+             level="NOTICE", category="expected")
+        return "skip:nodata"
 
     status = _harvest_attempt(pub, zurls)
     # FALLBACK: the GIS bundle's base raster sometimes has no usable SRS -> the cutline warp dies.
@@ -422,7 +441,8 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
 
         plate, shp = prepare_plates(zip_paths, work)
         if not plate:
-            hlog("FAIL no plate", step="plate", level="ERROR", err=True)
+            hlog("FAIL no plate (had a bundle but no usable raster)", step="plate",
+                 level="ERROR", category="attention", err=True)
             return "fail:noplate"
 
         hlog("warping (cutline + reproject 3857) → COG", step="cog")
@@ -471,7 +491,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
 
         ok, _, _ = cog_validate(cog)
         if not ok:
-            hlog("FAIL cog invalid", step="validate", level="ERROR", err=True)
+            hlog("FAIL cog invalid", step="validate", level="ERROR", category="attention", err=True)
             return "fail:cog"
         # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
         # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
@@ -494,15 +514,17 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             run(["gdal_translate", "-of", "PNG", "-outsize", "700", "0", cog, th])
             gcs.upload(th, f"{identity.COG_PREFIX}/{series_id}.thumb.png",
                        content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
-        hlog(f"OK ({COG_DPI}dpi {COG_COMPRESS} q{COG_QUALITY}) → {pub.cog_object}", step="result")
+        hlog(f"OK ({COG_DPI}dpi {COG_COMPRESS} q{COG_QUALITY}) → {pub.cog_object}",
+             step="result", category="ok")
         return "ok"
     except ZipTooLargeError as e:
-        hlog(f"SKIP zip too large: {e}", step="download", level="WARNING")
+        hlog(f"zip too large to process (size cap): {e}", step="download",
+             level="WARNING", category="attention")
         return "skip:too_large"
     except Exception as e:
         err = (getattr(e, "stderr", "") or str(e)).strip()
         reason = (err.splitlines()[-1] if err.splitlines() else str(e))[:200]
-        hlog(f"FAIL {reason}", step="result", level="ERROR", err=True)
+        hlog(f"FAIL {reason}", step="result", level="ERROR", category="attention", err=True)
         return f"fail:{type(e).__name__}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -547,10 +569,16 @@ def main() -> int:
         sids = sids[:args.limit]
 
     rc = 0
+    tally = {"ok": 0, "expected": 0, "attention": 0}
     for sid in sids:
         res = harvest_one(sid, dry_run=args.dry_run, force=args.force)
+        tally[outcome_category(res)] += 1
         if res.startswith("fail"):
             rc |= 1
+    _series_ctx.set("")  # the summary is job-level, not scoped to the last pub
+    hlog(f"run complete: {tally['ok']} ok, {tally['expected']} expected (skip / PDF-only), "
+         f"{tally['attention']} need attention", step="summary",
+         level="WARNING" if tally["attention"] else "NOTICE")
     return rc
 
 

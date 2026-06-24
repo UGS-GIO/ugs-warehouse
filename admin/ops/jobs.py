@@ -123,6 +123,7 @@ def logs(key: str, limit: int = 80) -> dict:
                 "time": e.timestamp.isoformat() if e.timestamp else "",
                 "severity": (e.severity or "DEFAULT"),
                 "task": labels.get("run.googleapis.com/task_index", ""),
+                "category": (p.get("category", "") if isinstance(p, dict) else ""),
                 "text": (text or "").rstrip(),
             })
         lines.reverse()  # oldest → newest, like a tail
@@ -164,6 +165,7 @@ def pub_logs(series_id: str, limit: int = 200) -> dict:
                 "time": e.timestamp.isoformat() if e.timestamp else "",
                 "severity": (e.severity or p.get("severity") or "INFO"),
                 "step": p.get("step", ""),
+                "category": p.get("category", ""),
                 "text": (p.get("message") if isinstance(e.payload, dict) else str(e.payload)) or "",
             })
         lines.reverse()

@@ -18,7 +18,8 @@
       {% for ln in log.lines %}
       <div class="whitespace-pre-wrap {% if ln.severity == 'ERROR' %}text-red-400{% elif ln.severity == 'WARNING' %}text-amber-300{% else %}text-slate-200{% endif %}">
         <span class="text-slate-500">{{ ln.time|slice:"11:19" }}</span>
-        {% if ln.step %}<span class="text-indigo-300">[{{ ln.step }}]</span> {% endif %}{{ ln.text }}
+        {% if ln.step %}<span class="text-indigo-300">[{{ ln.step }}]</span> {% endif %}
+        {% if ln.category == 'attention' %}<span class="text-red-300 font-semibold">⚠ NEEDS ATTENTION</span> {% elif ln.category == 'expected' %}<span class="text-slate-400">· expected</span> {% elif ln.category == 'ok' %}<span class="text-green-400">✓</span> {% endif %}{{ ln.text }}
       </div>
       {% endfor %}
     {% endif %}

@@ -253,7 +253,8 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin:${_TAG}
       - --region=${_REGION}
       - --service-account=${_ADMIN_SA}
-      - --ingress=internal-and-cloud-load-balancing
+      - --ingress=all
+      - --iap
       - --no-allow-unauthenticated
       - --set-secrets=SECRET_KEY=${_ADMIN_SECRET}:latest
       - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ADMIN_EMAILS=${_ADMIN_EMAILS}|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}

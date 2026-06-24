@@ -54,3 +54,32 @@ def test_harvest_attempt_handles_zip_too_large():
 
         res = _harvest_attempt(pub, ["http://fake.com/huge.zip"])
         assert res == "skip:too_large"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_prepare_plates_virtual_vfs():
+    from ugs_warehouse.pubs.harvest import prepare_plates
+
+    mock_zip_instance = MagicMock()
+    mock_zip_instance.namelist.return_value = ["plate1.tif", "plate1.tfw"]
+
+    with patch("zipfile.ZipFile") as mock_zipfile, \
+         patch("ugs_warehouse.pubs.harvest.corrected_georef") as mock_corrected_georef:
+        mock_zipfile.return_value.__enter__.return_value = mock_zip_instance
+        mock_corrected_georef.return_value = "mocked_gtif_path"
+
+        plate, shp = prepare_plates(["/tmp/test.zip"], "/tmp/work")
+
+        assert plate == "mocked_gtif_path"
+        assert shp is None
+
+        # Verify that zip extract was called with the sidecar tfw, but NOT the massive tif!
+        mock_zip_instance.extract.assert_called_once_with("plate1.tfw", "/tmp/work")
+
+        # Verify that corrected_georef was called with the correct /vsizip/ path!
+        mock_corrected_georef.assert_called_once_with(
+            "/vsizip//tmp/test.zip/plate1.tif",
+            "/tmp/work",
+            zip_path="/tmp/test.zip",
+            inner_gtif="plate1.tif"
+        )

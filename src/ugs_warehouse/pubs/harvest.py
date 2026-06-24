@@ -175,15 +175,21 @@ def _is_unreferenced(tif):
     return True
 
 
-def corrected_georef(gtif, work):
+def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
     """If the GeoTIFF's embedded CRS is unusable, rebuild a VRT whose SRS comes from the .aux.xml
     and whose geotransform comes from the world file. Returns the VRT path, or the original gtif
     when the embedded CRS is fine / no sidecars exist."""
     if not _is_unreferenced(gtif):
         return gtif
-    stem = re.sub(r"\.[^.]+$", "", gtif)
-    wf = next((stem + e for e in (".tfwx", ".tfw", ".wld") if os.path.exists(stem + e)), None)
-    aux = gtif + ".aux.xml" if os.path.exists(gtif + ".aux.xml") else None
+    if zip_path and inner_gtif:
+        inner_stem = re.sub(r"\.[^.]+$", "", inner_gtif)
+        wf = next((os.path.join(work, inner_stem + e) for e in (".tfwx", ".tfw", ".wld")
+                   if os.path.exists(os.path.join(work, inner_stem + e))), None)
+        aux = os.path.join(work, inner_gtif + ".aux.xml") if os.path.exists(os.path.join(work, inner_gtif + ".aux.xml")) else None
+    else:
+        stem = re.sub(r"\.[^.]+$", "", gtif)
+        wf = next((stem + e for e in (".tfwx", ".tfw", ".wld") if os.path.exists(stem + e)), None)
+        aux = gtif + ".aux.xml" if os.path.exists(gtif + ".aux.xml") else None
     srs = _aux_srs(aux) if aux else None
     if not srs:
         srs = _prj_srs(work)
@@ -195,7 +201,8 @@ def corrected_georef(gtif, work):
         return gtif
     A, D, B, E, C, F = [float(x) for x in open(wf).read().split()[:6]]
     gt = (C - 0.5 * A - 0.5 * B, A, B, F - 0.5 * D - 0.5 * E, D, E)
-    vrt = stem + ".fixed.vrt"
+    inner_base = os.path.basename(inner_stem if inner_gtif else stem)
+    vrt = os.path.join(work, f"{inner_base}.fixed.vrt")
     run(["gdal_translate", "-q", "-of", "VRT", gtif, vrt])
     xml = open(vrt).read()
     xml = re.sub(r"<SRS[^>]*>.*?</SRS>", f"<SRS>{srs}</SRS>", xml, flags=re.S)
@@ -239,45 +246,49 @@ def prepare_plates(zip_paths, work):
     (plate_path_or_vrt, shapefile_path_or_None)."""
     import rasterio
     gtif = pdf = shp = None
+    target_zip = None
+    inner_gtif = None
     for zip_path in zip_paths:
         with zipfile.ZipFile(zip_path) as z:
             names = z.namelist()
             _gtif = (pick(names, r"plate1.*geotiff\.tiff?$", r"geotiff\.tiff?$",
                           r"utah-500k.*\.tiff?$")
                      or next((n for n in names if n.lower().endswith((".tif", ".tiff")) and not any(
-                         x in n.lower() for x in ("basemap", "topo", "hillshade", "mashup"))), None))
+                          x in n.lower() for x in ("basemap", "topo", "hillshade", "mashup"))), None))
             _pdf = pick(names, r"plate1.*geospatial\.pdf$", r"geospatial\.pdf$",
                         r"GeologicMapOfUtah_plate1\.pdf$")
             _shp = pick(names, r"geologicunits\.shp$", r"units\.shp$")
             if _gtif:
                 gtif = _gtif
+                target_zip = zip_path
+                inner_gtif = _gtif
             if _pdf:
                 pdf = _pdf
             if _shp:
                 shp = _shp
-            want = [n for n in (_gtif, _pdf) if n]
-            if _gtif:
-                gstem = re.sub(r"\.[^.]+$", "", _gtif)
-                want += [n for n in names if n.startswith(gstem + ".")
-                         and n.lower().endswith((".tfwx", ".tfw", ".wld", ".aux.xml"))]
-                _prj = next((n for n in names if n.lower().endswith(".prj")), None)
-                if _prj:
-                    want.append(_prj)
+            want = []
+            if _pdf:
+                want.append(_pdf)
             if _shp:
                 stem = re.sub(r"\.shp$", "", _shp, flags=re.I)
                 want += [n for n in names if re.sub(r"\.[^.]+$", "", n) == stem]
+            if _gtif:
+                gstem = re.sub(r"\.[^.]+$", "", _gtif)
+                want += [n for n in names if n.startswith(gstem + ".")
+                         and n.lower().endswith((".tfwx", ".tfw", ".wld", ".aux.xml", ".prj"))]
             for nm in want:
                 z.extract(nm, work)
 
     shp_path = os.path.join(work, shp) if shp else None
     if not gtif:
         return None, shp_path
-    gtif = corrected_georef(os.path.join(work, gtif), work)
+    virtual_gtif = f"/vsizip/{target_zip}/{inner_gtif}"
+    gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
     if COG_DPI > 0 and pdf:
         prefix = os.path.join(work, "plate")
         run(["pdftoppm", "-png", "-r", str(COG_DPI), os.path.join(work, pdf), prefix])
         png = next((p for p in (prefix + "-1.png", prefix + ".png") if os.path.exists(p)), None)
-        with rasterio.open(gtif) as g:
+        with rasterio.open(gtif_path) as g:
             b, crs = g.bounds, g.crs
         if png and crs is not None:
             srs = os.path.join(work, "srs.wkt")
@@ -286,7 +297,7 @@ def prepare_plates(zip_paths, work):
             run(["gdal_translate", "-q", "-of", "VRT", "-a_srs", srs, "-a_ullr",
                  str(b.left), str(b.top), str(b.right), str(b.bottom), png, vrt])
             return vrt, shp_path
-    return gtif, shp_path
+    return gtif_path, shp_path
 
 
 def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> str:
@@ -354,13 +365,6 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             print(f"{series_id}: FAIL no plate", file=sys.stderr)
             return "fail:noplate"
 
-        # Free up tmpfs RAM by aggressively deleting the downloaded ZIPs
-        for zp in zip_paths:
-            try:
-                os.remove(zp)
-            except Exception:
-                pass
-
         clipped = os.path.join(work, "clipped.tif")
         run(["gdalwarp", "-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline",
              "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
@@ -394,6 +398,13 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         if plate and os.path.exists(plate) and plate != cog and not plate.endswith(".vrt"):
             try:
                 os.remove(plate)
+            except Exception:
+                pass
+
+        # Free up tmpfs RAM by deleting the downloaded ZIPs
+        for zp in zip_paths:
+            try:
+                os.remove(zp)
             except Exception:
                 pass
 

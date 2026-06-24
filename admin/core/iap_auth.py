@@ -1,11 +1,10 @@
-"""Google Cloud IAP auth — adapted from the UCRC app, but stateless (no Django users).
+"""Google Cloud IAP auth — stateless authorization completely delegated to GCP IAM.
 
-In prod, IAP verifies the user before the request reaches Django and injects
-`X-Goog-Authenticated-User-Email`. This middleware reads it onto `request.iap_email` and sets
-`request.is_admin` from the `ADMIN_EMAILS` allowlist. In DEBUG, `DEV_IAP_EMAIL` stands in.
+In prod, IAP verifies the user and validates their IAM role bindings (e.g., IAP-Secured Web App
+User) before the request reaches Cloud Run, injecting X-Goog-Authenticated-User-Email. Any
+non-empty email therefore represents an authenticated and IAM-authorized administrator.
 
-There is no login page and no user table — authN is IAP, authZ is the allowlist. Gate views with
-`@admin_required`.
+In DEBUG, `DEV_IAP_EMAIL` stands in. Gate views with `@admin_required`.
 """
 from functools import wraps
 
@@ -29,20 +28,21 @@ class IAPAuthMiddleware:
         else:
             email = ""
         request.iap_email = email
-        # Empty allowlist in DEBUG = allow the dev user (convenience); in prod an empty allowlist
-        # locks everyone out (fail-closed).
-        allow = set(settings.ADMIN_EMAILS)
-        request.is_admin = bool(email) and (email in allow or (settings.DEBUG and not allow))
+        # Authorization is entirely delegated to GCP IAM role bindings (e.g., IAP-Secured Web App User)
+        request.is_admin = bool(email)
         return self.get_response(request)
 
 
 def admin_required(view):
-    """Allow only IAP-verified emails on the ADMIN_EMAILS allowlist."""
+    """Allow any IAP-authenticated user (authorized via GCP IAM)."""
     @wraps(view)
     def wrapped(request, *args, **kwargs):
         if not getattr(request, "is_admin", False):
             who = getattr(request, "iap_email", "") or "anonymous"
-            return HttpResponseForbidden(f"Not authorized ({who}). Ask to be added to ADMIN_EMAILS.")
+            return HttpResponseForbidden(
+                f"Not authorized ({who}). Ensure you are granted the 'IAP-Secured Web App User' "
+                f"IAM role on the ugs-warehouse-admin service in Google Cloud Console."
+            )
         return view(request, *args, **kwargs)
     return wrapped
 

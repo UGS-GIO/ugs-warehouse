@@ -19,9 +19,7 @@ DEBUG = env("DEBUG")
 ALLOWED_HOSTS = env.list("ALLOWED_HOSTS", default=["localhost", "127.0.0.1"])
 CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
-# Who may use the console — IAP-verified emails on this allowlist (lowercased). In DEBUG with
-# DEV_IAP_EMAIL set, that email is treated as the logged-in user.
-ADMIN_EMAILS = [e.strip().lower() for e in env.list("ADMIN_EMAILS", default=[]) if e.strip()]
+# In DEBUG with DEV_IAP_EMAIL set, that email is treated as the logged-in user.
 DEV_IAP_EMAIL = env("DEV_IAP_EMAIL", default="")
 
 # GCP — the project/region the warehouse Cloud Run jobs live in, and the STAC catalog base.

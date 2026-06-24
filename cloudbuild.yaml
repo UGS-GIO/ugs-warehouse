@@ -25,7 +25,6 @@ substitutions:
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
   _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # dedicated runtime SA — only run.developer on the jobs (run.jobs.run + executions.list)
-  _ADMIN_EMAILS: clinton@utah.gov,clunn@utah.gov,marshallrobinson@utah.gov,npayne@utah.gov                                                  # IAP-verified allowlist (comma-separated)
   _ADMIN_HOSTS: .run.app                                                           # ALLOWED_HOSTS; add the LB/custom domain once IAP is fronted
   _ADMIN_SECRET: warehouse-admin-secret-key                                        # Secret Manager secret — stable Django SECRET_KEY across workers/instances
   # Pub/Sub ingest trigger (dataELT #418 publishes `{schema, topic}` to _INGEST_TOPIC).
@@ -257,7 +256,7 @@ steps:
       - --iap
       - --no-allow-unauthenticated
       - --set-secrets=SECRET_KEY=${_ADMIN_SECRET}:latest
-      - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ADMIN_EMAILS=${_ADMIN_EMAILS}|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}
+      - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}
 
   # Wire the Pub/Sub push trigger: topic -> private service. Idempotent (safe to
   # re-run every build). allowFailure until the build SA has pubsub.admin + the

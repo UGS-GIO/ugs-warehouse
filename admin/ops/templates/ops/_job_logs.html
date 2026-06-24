@@ -1,0 +1,33 @@
+{% comment %}Near-live job log feed. Re-fetches itself every 5s (outerHTML swap).{% endcomment %}
+<div id="job-logs-{{ key }}" class="rounded-lg border border-slate-200 bg-slate-900 text-slate-100"
+     hx-get="{% url 'ops:job_logs' key %}" hx-trigger="every 5s" hx-swap="outerHTML">
+  <div class="flex items-center justify-between px-3 py-1.5 border-b border-slate-700 text-xs">
+    <div class="flex items-center gap-2">
+      <span class="inline-block h-2 w-2 rounded-full bg-green-400 animate-pulse"></span>
+      <span class="font-medium">{{ job.name }} — live</span>
+    </div>
+    <div class="flex items-center gap-3">
+      <button class="text-slate-300 hover:text-white"
+              hx-get="{% url 'ops:job_logs' key %}" hx-target="#job-logs-{{ key }}" hx-swap="outerHTML">
+        ↻ refresh
+      </button>
+      {% if console_url %}<a href="{{ console_url }}" target="_blank" class="text-blue-300 hover:underline">Cloud Console ↗</a>{% endif %}
+    </div>
+  </div>
+  <div class="max-h-72 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed">
+    {% if log.dry_run %}
+      <div class="text-amber-300">{{ log.message }}</div>
+    {% elif not log.ok %}
+      <div class="text-red-400">⚠ {{ log.message }}</div>
+    {% elif not log.lines %}
+      <div class="text-slate-400">No log lines yet — a freshly-started job takes a few seconds to emit.</div>
+    {% else %}
+      {% for ln in log.lines %}
+      <div class="whitespace-pre-wrap {% if ln.severity == 'ERROR' %}text-red-400{% elif ln.severity == 'WARNING' %}text-amber-300{% else %}text-slate-200{% endif %}">
+        <span class="text-slate-500">{{ ln.time|slice:"11:19" }}</span>
+        {% if ln.task %}<span class="text-indigo-300">t{{ ln.task }}</span> {% endif %}{{ ln.text }}
+      </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+</div>

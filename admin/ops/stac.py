@@ -67,41 +67,54 @@ def serving_topics() -> list[dict]:
     return rows
 
 
-def get_harvest_status(search_query: str = "", status_filter: str = "", series_filter: str = "") -> list[dict]:
-    """Calculate and filter the harvest status of each publication."""
-    from ugs_warehouse.pubs import source
+# The registry's inputs are slow (pub-metadata CSV/DB read + a full GCS listing of the COG bucket),
+# but change slowly — so cache them briefly. Without this, every filter keystroke (300ms debounce)
+# would re-list the whole bucket. TTL keeps "harvested" near-live as a run progresses.
+_INPUTS_CACHE: dict = {"ts": -1e9, "pubs": None, "att_zips": None, "cogs": None}
+_INPUTS_TTL = 60.0  # seconds
+COG_PREFIX = "geolmap/cogs"
+
+
+def _harvest_inputs() -> tuple[list[dict], dict[str, list[str]], set[str]]:
+    """Cached (pubs, series_id→zip-urls, harvested-COG basenames). Raises on read failure so the
+    caller can show *why* the registry is empty instead of a silent blank."""
+    import time
+
     from ugs_warehouse.core import gcs
+    from ugs_warehouse.pubs import source
+
+    now = time.monotonic()
+    if _INPUTS_CACHE["pubs"] is None or now - _INPUTS_CACHE["ts"] > _INPUTS_TTL:
+        pubs = source.read_pubs()
+        att_zips: dict[str, list[str]] = {}
+        for a in source.read_attachments():
+            sid = (a.get("series_id") or "").strip().upper()
+            url = (a.get("pub_url") or "").strip()
+            if url.lower().endswith(".zip"):
+                if not url.startswith(("http://", "https://")):
+                    url = f"https://ugspub.nr.utah.gov/publications/{url}"
+                att_zips.setdefault(sid, []).append(url)
+        # Bucket truth: a pub is harvested when geolmap/cogs/{series_id}.cog.tif exists (the same
+        # object the harvester's skip-existing check writes). This is the live harvest count.
+        cogs = {p.split("/")[-1].removesuffix(".cog.tif").upper()
+                for p in gcs.list_paths(COG_PREFIX) if p.endswith(".cog.tif")}
+        _INPUTS_CACHE.update(ts=now, pubs=pubs, att_zips=att_zips, cogs=cogs)
+    return _INPUTS_CACHE["pubs"], _INPUTS_CACHE["att_zips"], _INPUTS_CACHE["cogs"]
+
+
+def harvest_series_codes() -> list[str]:
+    """Distinct series codes (OFR, M, …) for the filter dropdown, from cached pubs."""
+    from ugs_warehouse.pubs.sink_stac import series_code
+    pubs, _, _ = _harvest_inputs()
+    return sorted({c for p in pubs if (c := series_code(p.get("series_id") or ""))})
+
+
+def get_harvest_status(search_query: str = "", status_filter: str = "", series_filter: str = "") -> list[dict]:
+    """Per-publication harvest status (harvested/pending/pdf_only/placeholder), filtered. The
+    'harvested' signal is the COG bucket (live), not STAC (which only updates after pubs-ingest)."""
     from ugs_warehouse.pubs.sink_stac import series_code
 
-    # 1. Load publications & attachments
-    try:
-        pubs = source.read_pubs()
-        attachments = source.read_attachments()
-    except Exception:
-        return []
-
-    # Map series_id (uppercased) to its list of zip URLs
-    att_zips: dict[str, list[str]] = {}
-    for a in attachments:
-        sid = (a.get("series_id") or "").strip().upper()
-        url = (a.get("pub_url") or "").strip()
-        if url.lower().endswith(".zip"):
-            if not url.startswith(("http://", "https://")):
-                url = f"https://ugspub.nr.utah.gov/publications/{url}"
-            att_zips.setdefault(sid, []).append(url)
-
-    # 2. Fetch existing COGs list from GCS (under prefix "geolmap/cogs")
-    try:
-        existing_paths = gcs.list_paths("geolmap/cogs")
-    except Exception:
-        existing_paths = []
-
-    existing_cogs = set()
-    for p in existing_paths:
-        if p.endswith(".cog.tif"):
-            base = p.split("/")[-1].removesuffix(".cog.tif").upper()
-            existing_cogs.add(base)
-
+    pubs, att_zips, existing_cogs = _harvest_inputs()
     series_filter = (series_filter or "").strip().upper()
     status_filter = (status_filter or "").strip().lower()
     search_query = (search_query or "").strip().upper()
@@ -112,31 +125,21 @@ def get_harvest_status(search_query: str = "", status_filter: str = "", series_f
         if not sid:
             continue
         sid_upper = sid.upper()
-
-        # Series filter
-        scode = series_code(sid_upper)
-        if series_filter and scode != series_filter:
+        if series_filter and series_code(sid_upper) != series_filter:
             continue
-
-        # Search filter (ID or title)
         title = p.get("pub_name") or ""
-        if search_query and (search_query not in sid_upper and search_query not in title.upper()):
+        if search_query and search_query not in sid_upper and search_query not in title.upper():
             continue
 
         zurls = att_zips.get(sid_upper, [])
-        is_spatial = len(zurls) > 0
-
-        # Determine state
         if "XXXX" in sid_upper:
             status = "placeholder"
         elif sid_upper in existing_cogs:
             status = "harvested"
-        elif not is_spatial:
+        elif not zurls:
             status = "pdf_only"
         else:
             status = "pending"
-
-        # Status filter
         if status_filter and status != status_filter:
             continue
 
@@ -149,6 +152,5 @@ def get_harvest_status(search_query: str = "", status_filter: str = "", series_f
             "year": p.get("pub_year") or "",
         })
 
-    # Sort alphabetical by publication ID
     rows.sort(key=lambda r: r["id"])
     return rows

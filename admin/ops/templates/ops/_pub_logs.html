@@ -1,0 +1,26 @@
+{% comment %}One publication's harvest log timeline (structured jsonPayload.series_id).{% endcomment %}
+<div class="rounded bg-slate-900 text-slate-100">
+  <div class="flex items-center justify-between px-3 py-1.5 border-b border-slate-700 text-xs">
+    <span class="font-medium font-mono">{{ series_id }} — harvest log</span>
+    <button class="text-slate-300 hover:text-white"
+            hx-get="{% url 'ops:pub_logs' series_id %}" hx-target="#publog-{{ series_id }}" hx-swap="innerHTML">
+      ↻ refresh
+    </button>
+  </div>
+  <div class="max-h-64 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed">
+    {% if log.dry_run %}
+      <div class="text-amber-300">{{ log.message }}</div>
+    {% elif not log.ok %}
+      <div class="text-red-400">⚠ {{ log.message }}</div>
+    {% elif not log.lines %}
+      <div class="text-slate-400">No harvest logs for {{ series_id }} (not harvested yet, or logs aged out).</div>
+    {% else %}
+      {% for ln in log.lines %}
+      <div class="whitespace-pre-wrap {% if ln.severity == 'ERROR' %}text-red-400{% elif ln.severity == 'WARNING' %}text-amber-300{% else %}text-slate-200{% endif %}">
+        <span class="text-slate-500">{{ ln.time|slice:"11:19" }}</span>
+        {% if ln.step %}<span class="text-indigo-300">[{{ ln.step }}]</span> {% endif %}{{ ln.text }}
+      </div>
+      {% endfor %}
+    {% endif %}
+  </div>
+</div>

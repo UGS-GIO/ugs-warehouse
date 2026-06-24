@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.shortcuts import render
 from django.views.decorators.http import require_POST
 
@@ -12,7 +13,7 @@ def dashboard(request):
         "jobs": list(jobs.JOBS.values()),
         "coverage": stac.cog_coverage(),
         "topics": stac.serving_topics(),
-        "dry_run": __import__("django.conf", fromlist=["settings"]).settings.JOBS_DRY_RUN,
+        "dry_run": settings.JOBS_DRY_RUN,
     })
 
 
@@ -21,13 +22,23 @@ def dashboard(request):
 def trigger(request, key):
     result = jobs.run(key)
     return render(request, "ops/_job_result.html", {
-        "key": key, "job": jobs.JOBS.get(key), "result": result, "recent": jobs.recent(key),
+        "key": key, "job": jobs.JOBS.get(key), "result": result,
+        "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),
     })
 
 
 @admin_required
 def job_status(request, key):
     return render(request, "ops/_job_status.html", {"key": key, "recent": jobs.recent(key)})
+
+
+@admin_required
+def job_logs(request, key):
+    """Near-live tail of a job's logs — the in-app feed shown after a trigger (any job)."""
+    return render(request, "ops/_job_logs.html", {
+        "key": key, "job": jobs.JOBS.get(key),
+        "log": jobs.logs(key), "console_url": jobs.console_logs_url(key),
+    })
 
 
 @admin_required
@@ -41,34 +52,34 @@ def publications_registry(request):
     status = request.GET.get("status", "")
     series = request.GET.get("series", "")
 
-    # Get full list of calculated statuses
-    rows = stac.get_harvest_status(search_query=search, status_filter=status, series_filter=series)
-    total_count = len(rows)
-
-    # Paginate/Limit to first 100 rows for lightning-fast HTML rendering
-    display_rows = rows[:100]
-
-    # Dynamically discover all unique series codes from the publications DB
-    from ugs_warehouse.pubs.sink_stac import series_code
+    # One cached read backs both the rows and the series dropdown (no double pub-metadata read).
+    # A read failure (e.g. ugs_warehouse not importable / no bucket access) surfaces as `error`
+    # instead of a silent empty table — the point of an ops console is to show what's wrong.
+    error = ""
+    rows, series_codes = [], []
     try:
-        from ugs_warehouse.pubs import source
-        pubs = source.read_pubs()
-        series_codes = sorted(list(set(series_code(p.get("series_id") or "") for p in pubs if p.get("series_id"))))
-        series_codes = [c for c in series_codes if c]
-    except Exception:
-        series_codes = []
+        rows = stac.get_harvest_status(search_query=search, status_filter=status, series_filter=series)
+        series_codes = stac.harvest_series_codes()
+    except Exception as e:  # noqa: BLE001
+        error = f"{type(e).__name__}: {e}"
 
     context = {
-        "rows": display_rows,
-        "total_count": total_count,
+        "rows": rows[:100],
+        "total_count": len(rows),
         "limit": 100,
         "series_codes": series_codes,
+        "error": error,
         "q": search,
         "status_filter": status,
         "series_filter": series,
     }
+    template = "ops/_publications_table.html" if request.htmx else "ops/publications.html"
+    return render(request, template, context)
 
-    if request.htmx:
-        return render(request, "ops/_publications_table.html", context)
 
-    return render(request, "ops/publications.html", context)
+@admin_required
+def pub_logs(request, series_id):
+    """Per-pub harvest log report (one publication's structured log timeline)."""
+    return render(request, "ops/_pub_logs.html", {
+        "series_id": series_id, "log": jobs.pub_logs(series_id),
+    })

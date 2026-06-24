@@ -9,7 +9,15 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Deps layer — cached until requirements change.
+# The warehouse package (BASE deps only — no GDAL/raster `pubs` extra). The Publications Registry
+# reuses its real pub-metadata + GCS reads (source / gcs / sink_stac.series_code) instead of
+# reimplementing them, so the harvest status can't drift from the harvester. Vendored pub CSVs ship
+# as package-data, so this needs no DB. Listing the COG bucket needs storage.objectViewer on the SA.
+COPY pyproject.toml ./warehouse/
+COPY src ./warehouse/src/
+RUN pip install ./warehouse
+
+# Admin app deps.
 COPY admin/requirements.txt ./
 RUN pip install -r requirements.txt
 

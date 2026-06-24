@@ -1,3 +1,10 @@
+{% if error %}
+<div class="bg-red-50 border-b border-red-200 px-4 py-3 text-sm text-red-700">
+  Could not read harvest status: <span class="font-mono">{{ error }}</span><br>
+  <span class="text-xs text-red-500">The admin needs the <code>ugs_warehouse</code> package in its image and
+  <code>storage.objectViewer</code> on the COG bucket.</span>
+</div>
+{% endif %}
 <div class="overflow-x-auto">
   <table class="w-full text-sm border-collapse">
     <thead>
@@ -8,6 +15,7 @@
         <th class="px-4 py-3">Year</th>
         <th class="px-4 py-3">Status</th>
         <th class="px-4 py-3">Zip Attachments</th>
+        <th class="px-4 py-3">Logs</th>
       </tr>
     </thead>
     <tbody class="divide-y divide-slate-100">
@@ -19,43 +27,35 @@
         <td class="px-4 py-3 text-slate-500">{{ r.year|default:"—" }}</td>
         <td class="px-4 py-3">
           {% if r.status == 'harvested' %}
-          <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">
-            Harvested
-          </span>
+          <span class="inline-flex items-center rounded-full bg-green-50 px-2 py-1 text-xs font-medium text-green-700 ring-1 ring-inset ring-green-600/20">Harvested</span>
           {% elif r.status == 'pending' %}
-          <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-600/20">
-            Pending
-          </span>
+          <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-1 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-600/20">Pending</span>
           {% elif r.status == 'pdf_only' %}
-          <span class="inline-flex items-center rounded-full bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/10">
-            PDF Only
-          </span>
+          <span class="inline-flex items-center rounded-full bg-slate-50 px-2 py-1 text-xs font-medium text-slate-600 ring-1 ring-inset ring-slate-500/10">PDF Only</span>
           {% else %}
-          <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-1 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-600/10">
-            Placeholder
-          </span>
+          <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-1 text-xs font-medium text-red-700 ring-1 ring-inset ring-red-600/10">Placeholder</span>
           {% endif %}
         </td>
         <td class="px-4 py-3 text-xs">
           {% if r.zips %}
           <div class="flex flex-col gap-1 max-h-16 overflow-auto">
             {% for zip in r.zips %}
-            <a href="{{ zip.url }}" target="_blank" class="text-blue-600 hover:underline truncate max-w-xs block" title="{{ zip.url }}">
-              {{ zip.name }}
-            </a>
+            <a href="{{ zip.url }}" target="_blank" class="text-blue-600 hover:underline truncate max-w-xs block" title="{{ zip.url }}">{{ zip.name }}</a>
             {% endfor %}
           </div>
-          {% else %}
-          <span class="text-slate-400">—</span>
-          {% endif %}
+          {% else %}<span class="text-slate-400">—</span>{% endif %}
+        </td>
+        <td class="px-4 py-3 text-xs">
+          <button class="text-slate-600 hover:text-slate-900 underline"
+                  hx-get="{% url 'ops:pub_logs' r.id %}" hx-target="#publog-{{ r.id }}" hx-swap="innerHTML"
+                  onclick="document.getElementById('logrow-{{ r.id }}').classList.toggle('hidden')">
+            logs ▾
+          </button>
         </td>
       </tr>
+      <tr id="logrow-{{ r.id }}" class="hidden"><td colspan="7" class="p-2 bg-slate-50"><div id="publog-{{ r.id }}"></div></td></tr>
       {% empty %}
-      <tr>
-        <td colspan="6" class="px-4 py-8 text-center text-slate-500">
-          No matching publications found. Try adjusting your search query or filters.
-        </td>
-      </tr>
+      <tr><td colspan="7" class="px-4 py-8 text-center text-slate-500">No matching publications found. Try adjusting your search query or filters.</td></tr>
       {% endfor %}
     </tbody>
   </table>
@@ -64,8 +64,6 @@
 <div class="bg-slate-50 px-4 py-3 border-t border-slate-200 flex items-center justify-between text-xs text-slate-500 font-medium">
   <div>
     Showing {{ rows|length }} of {{ total_count }} matching publications.
-    {% if total_count > limit %}
-    <span class="text-amber-600">(Truncated first {{ limit }} rows for rendering speed)</span>
-    {% endif %}
+    {% if total_count > limit %}<span class="text-amber-600">(first {{ limit }} shown for speed)</span>{% endif %}
   </div>
 </div>

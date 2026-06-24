@@ -1,9 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-<h1 class="text-xl font-bold">Operations</h1>
-<p class="text-sm text-slate-500 mb-6">
-  Trigger the warehouse jobs and see catalog coverage.{% if dry_run %} Dry-run mode — triggers are simulated.{% endif %}
-</p>
+<div class="flex items-center justify-between mb-6">
+  <div>
+    <h1 class="text-xl font-bold">Operations</h1>
+    <p class="text-sm text-slate-500">
+      Trigger the warehouse jobs and see catalog coverage.{% if dry_run %} Dry-run mode — triggers are simulated.{% endif %}
+    </p>
+  </div>
+  <a href="{% url 'ops:publications' %}"
+     class="rounded bg-slate-800 text-white text-sm px-3 py-1.5 hover:bg-slate-700 whitespace-nowrap">
+    Publications Registry →
+  </a>
+</div>
 
 <section class="mb-8">
   <h2 class="font-semibold mb-2">Jobs</h2>
@@ -19,10 +27,13 @@
         <button class="rounded bg-slate-800 text-white text-sm px-3 py-1 hover:bg-slate-700"
           hx-post="{% url 'ops:trigger' job.key %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
           {% if job.danger %}hx-confirm="Run {{ job.label }}? This is heavy / costs money."{% endif %}>Run</button>
+        <button class="rounded border border-slate-300 text-slate-700 text-sm px-3 py-1 hover:bg-slate-50"
+          hx-get="{% url 'ops:job_logs' job.key %}" hx-target="#logs-{{ job.key }}" hx-swap="innerHTML">Live logs</button>
         <span class="text-xs text-slate-400 font-mono">{{ job.name }}</span>
       </div>
       <div id="result-{{ job.key }}" class="mt-2"
            hx-get="{% url 'ops:job_status' job.key %}" hx-trigger="load" hx-swap="innerHTML"></div>
+      <div id="logs-{{ job.key }}" class="mt-2"></div>
     </div>
     {% endfor %}
   </div>

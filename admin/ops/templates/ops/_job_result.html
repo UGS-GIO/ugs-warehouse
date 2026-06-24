@@ -1,2 +1,14 @@
 <div class="text-xs {% if result.ok %}text-green-700{% else %}text-red-700{% endif %}">{{ result.message }}</div>
 <div hx-get="{% url 'ops:job_status' key %}" hx-trigger="load delay:2s, every 10s" hx-swap="innerHTML"></div>
+{% if result.ok %}
+<div class="mt-2 flex items-center gap-3 text-xs">
+  <button class="text-slate-600 hover:text-slate-900 underline"
+          hx-get="{% url 'ops:job_logs' key %}" hx-target="#logs-{{ key }}" hx-swap="innerHTML">
+    Show live logs
+  </button>
+  {% if console_url %}
+  <a href="{{ console_url }}" target="_blank" class="text-blue-600 hover:underline">Open in Cloud Console ↗</a>
+  {% endif %}
+</div>
+<div id="logs-{{ key }}" class="mt-2"></div>
+{% endif %}

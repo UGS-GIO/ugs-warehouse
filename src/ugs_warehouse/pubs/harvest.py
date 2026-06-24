@@ -41,6 +41,12 @@ THUMBS = os.environ.get("THUMBS", "1") != "0"
 COG_COMPRESS = os.environ.get("COG_COMPRESS", "webp").lower()
 COG_QUALITY = int(os.environ.get("COG_QUALITY", "90"))
 COG_DPI = int(os.environ.get("COG_DPI", "600"))
+MAX_ZIP_SIZE_MB = int(os.environ.get("MAX_ZIP_SIZE_MB", "250"))
+
+
+class ZipTooLargeError(Exception):
+    """Raised when a publication zip download exceeds the allowed size limit."""
+    pass
 
 COG_MIME = "image/tiff; application=geotiff; profile=cloud-optimized"
 PARQUET_MIME = "application/vnd.apache.parquet"
@@ -71,11 +77,18 @@ def encode_url(u):
     return urlunsplit((s.scheme, s.netloc, quote(s.path, safe="/%"), s.query, s.fragment))
 
 
-def download(url, dest):
+def download(url, dest, max_bytes: int | None = None):
     with S.get(url, stream=True, timeout=900) as r:
         r.raise_for_status()
+        cl = r.headers.get("Content-Length")
+        if cl and max_bytes and int(cl) > max_bytes:
+            raise ZipTooLargeError(f"size {int(cl)} bytes exceeds limit {max_bytes} bytes")
+        written = 0
         with open(dest, "wb") as f:
             for c in r.iter_content(1 << 20):
+                written += len(c)
+                if max_bytes and written > max_bytes:
+                    raise ZipTooLargeError(f"downloaded bytes exceeded limit {max_bytes}")
                 f.write(c)
 
 
@@ -330,9 +343,10 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     try:
         cut, _ = footprint(series_id, work)
         zip_paths = []
+        max_b = MAX_ZIP_SIZE_MB * 1024 * 1024
         for i, zurl in enumerate(zurls):
             zp = os.path.join(work, f"pub{i}.zip")
-            download(encode_url(zurl), zp)
+            download(encode_url(zurl), zp, max_bytes=max_b)
             zip_paths.append(zp)
 
         plate, shp = prepare_plates(zip_paths, work)
@@ -410,6 +424,9 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                        content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
         print(f"{series_id}: OK ({COG_DPI}dpi {COG_COMPRESS} q{COG_QUALITY}) -> {pub.cog_object}")
         return "ok"
+    except ZipTooLargeError as e:
+        print(f"{series_id}: SKIP (zip too large: {e})")
+        return "skip:too_large"
     except Exception as e:
         err = (getattr(e, "stderr", "") or str(e)).strip()
         reason = (err.splitlines()[-1] if err.splitlines() else str(e))[:200]

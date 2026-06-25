@@ -10,7 +10,7 @@ import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type Map
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, classificationEntries, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, tableColumns, viaLink } from "./stac";
+import { type Asset, citeLink, classificationEntries, cogAsset, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, tableColumns, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string;
@@ -47,6 +47,9 @@ const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(
 const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties ?? {})).toLowerCase();
+// "Mappable" = has something to draw on the map: a COG (raster) or PMTiles (vector). Items with
+// neither (metadata-only pubs) do nothing when toggled — the filter hides them.
+const hasMapData = (it: ItemRef) => !!(cogAsset(it.data) || pmtilesLink(it.data));
 // Data-series code = the alpha prefix of the publication series id (DS-8 → DS, OFR-647 →
 // OFR). Only items that carry `ugs:series_id` (publications) get a code; everything else
 // (vector serving topics, etc.) returns "" so it never pollutes the series facet. Numeric
@@ -189,6 +192,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
 }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards">("table");
+  const [mapOnly, setMapOnly] = useState(false);  // hide metadata-only items (no COG / no tiles)
 
   // Data-series facets — one chip per series code (DS, OFR, GQ…), with a count and the
   // human label. Multi-select: pick any combination; the selection lives in the URL
@@ -211,8 +215,10 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const needle = (query ?? q).trim().toLowerCase();
   const rows = useMemo(
     () => items.filter((it) =>
-      (!needle || haystack(it).includes(needle)) && (!sel.size || sel.has(gCode(it)))),
-    [items, needle, series],
+      (!needle || haystack(it).includes(needle))
+      && (!sel.size || sel.has(gCode(it)))
+      && (!mapOnly || hasMapData(it))),
+    [items, needle, series, mapOnly],
   );
 
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
@@ -236,6 +242,8 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         )}
         <span className={C.muted}>{rows.length} of {items.length}</span>
         <span className="flex-1" />
+        <span className={toggle(mapOnly)} title="Only items with a COG or vector tiles to display on the map"
+          onClick={() => setMapOnly((v) => !v)}>Mappable</span>
         <span className={toggle(mode === "table")} onClick={() => setMode("table")}>Table</span>
         <span className={toggle(mode === "cards")} onClick={() => setMode("cards")}>Cards</span>
       </div>

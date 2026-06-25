@@ -102,6 +102,12 @@ def _harvest_inputs() -> tuple[list[dict], dict[str, list[str]], set[str]]:
     return _INPUTS_CACHE["pubs"], _INPUTS_CACHE["att_zips"], _INPUTS_CACHE["cogs"]
 
 
+def harvested_ids() -> set[str]:
+    """Upper-cased series ids that have a COG in the bucket — i.e. successfully harvested."""
+    _, _, cogs = _harvest_inputs()
+    return cogs
+
+
 def harvested_bucket_count() -> dict:
     """Live count of COGs actually in the bucket (geolmap/cogs/*.cog.tif) — the harvest truth, ahead
     of STAC (which only updates after pubs-ingest binds them). {ok, count} or {ok: False, message}."""

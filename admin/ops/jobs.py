@@ -292,6 +292,15 @@ def attention_pubs(limit: int = 200) -> dict:
                     "text": p.get("message", ""),
                     "time": e.timestamp.isoformat() if e.timestamp else "",
                 }
-        return {"ok": True, "pubs": list(seen.values())}
+        pubs = list(seen.values())
+        # A pub that's since been harvested (COG now in the bucket) is no longer attention — a
+        # successful re-run clears it, even though the old "attention" log line still exists.
+        try:
+            from . import stac
+            done = stac.harvested_ids()
+            pubs = [p for p in pubs if p["id"].strip().upper() not in done]
+        except Exception:  # noqa: BLE001 — bucket unreadable → show the raw list rather than nothing
+            pass
+        return {"ok": True, "pubs": pubs}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "pubs": [], "message": f"{type(e).__name__}: {e}"}

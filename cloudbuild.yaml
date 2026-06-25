@@ -259,32 +259,9 @@ steps:
       - --set-secrets=SECRET_KEY=${_ADMIN_SECRET}:latest
       - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=False|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}
 
-  # Wire the Pub/Sub push trigger: topic -> private service. Idempotent (safe to
-  # re-run every build). allowFailure until the build SA has pubsub.admin + the
-  # Pub/Sub service agent has tokenCreator on the push SA — then it self-provisions.
-  - id: wire-pubsub
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    allowFailure: true
-    args:
-      - -c
-      - |
-        set -euo pipefail
-        gcloud pubsub topics create ${_INGEST_TOPIC} --project=$PROJECT_ID || true
-        URL=$$(gcloud run services describe ${_SERVICE} --region=${_REGION} --format='value(status.url)')
-        # let the push SA invoke the private service
-        gcloud run services add-iam-policy-binding ${_SERVICE} --region=${_REGION} \
-          --member="serviceAccount:${_RUNTIME_SA}" --role=roles/run.invoker
-        # create-or-update the push subscription
-        if gcloud pubsub subscriptions describe ${_INGEST_SUB} >/dev/null 2>&1; then
-          gcloud pubsub subscriptions update ${_INGEST_SUB} \
-            --push-endpoint="$$URL/" --push-auth-service-account=${_RUNTIME_SA}
-        else
-          gcloud pubsub subscriptions create ${_INGEST_SUB} \
-            --topic=${_INGEST_TOPIC} --push-endpoint="$$URL/" \
-            --push-auth-service-account=${_RUNTIME_SA} \
-            --ack-deadline=600 --message-retention-duration=1d
-        fi
+  # NB: Pub/Sub topic + push subscription + run.invoker are NOT wired here — they're one-time infra,
+  # provisioned out-of-band by `just provision` (scripts/provision.sh). Builds only build + deploy
+  # code, so they no longer re-assert infra (or log "already exists") every push.
 
   - id: deploy-api
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

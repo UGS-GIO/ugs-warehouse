@@ -31,3 +31,8 @@ restyle-report:
 
 proxy:
     cloud-sql-proxy ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5433
+
+# One-time infra provisioning (Pub/Sub topic + push subscription + run.invoker). Idempotent —
+# run once after the first deploy, or if the service/topic/sub names change. NOT in the build.
+provision:
+    bash scripts/provision.sh

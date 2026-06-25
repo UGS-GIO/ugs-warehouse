@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import json
+import urllib.error
 import urllib.request
 
 from django.conf import settings
@@ -17,6 +18,26 @@ def _get(url: str):
             return json.load(r)
     except Exception:
         return None
+
+
+def service_health() -> list[dict]:
+    """Ping the public serving surfaces (STAC catalog, viewer, + any configured) → up/down lights.
+    Concurrent, short timeouts. This is the *serving* side of observability, not the jobs."""
+    checks = settings.HEALTH_CHECKS
+
+    def ping(c: dict) -> dict:
+        try:
+            req = urllib.request.Request(c["url"], method="GET")  # noqa: S310 (https)
+            with urllib.request.urlopen(req, timeout=8) as r:  # noqa: S310
+                code = r.status
+            return {**c, "ok": 200 <= code < 400, "detail": str(code)}
+        except urllib.error.HTTPError as e:  # reachable but non-2xx
+            return {**c, "ok": False, "detail": f"HTTP {e.code}"}
+        except Exception as e:  # noqa: BLE001
+            return {**c, "ok": False, "detail": f"{type(e).__name__}"}
+
+    with cf.ThreadPoolExecutor(max_workers=8) as ex:
+        return list(ex.map(ping, checks))
 
 
 def _has_cog(item: dict) -> bool:

@@ -1,0 +1,14 @@
+{% comment %}Serving-surface up/down lights. Self-refreshes every 30s.{% endcomment %}
+<div id="svc-health" hx-get="{% url 'ops:service_health' %}" hx-trigger="every 30s" hx-swap="outerHTML"
+     class="flex flex-wrap items-center gap-4 text-xs">
+  <span class="font-semibold uppercase tracking-wide text-slate-400">Serving</span>
+  {% for c in checks %}
+  <a href="{{ c.url }}" target="_blank" class="flex items-center gap-1.5 hover:underline" title="{{ c.url }}">
+    <span class="inline-block h-2.5 w-2.5 rounded-full {% if c.ok %}bg-green-500{% else %}bg-red-500 animate-pulse{% endif %}"></span>
+    <span class="text-slate-600">{{ c.name }}</span>
+    {% if not c.ok %}<span class="text-red-500">{{ c.detail }}</span>{% endif %}
+  </a>
+  {% endfor %}
+  <button class="text-slate-400 hover:text-slate-700"
+          hx-get="{% url 'ops:service_health' %}" hx-target="#svc-health" hx-swap="outerHTML">↻</button>
+</div>

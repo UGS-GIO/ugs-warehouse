@@ -82,6 +82,22 @@ def coverage(request):
 
 
 @admin_required
+def executions(request):
+    """Unified executions feed across all jobs (newest first) + what's running now."""
+    ex = jobs.all_executions()
+    return render(request, "ops/_executions.html", {
+        "executions": ex,
+        "running": [e for e in ex if e["state"] == "running"],
+    })
+
+
+@admin_required
+def service_health(request):
+    """Up/down lights for the public serving surfaces."""
+    return render(request, "ops/_service_health.html", {"checks": stac.service_health()})
+
+
+@admin_required
 def health(request):
     """'What to run next' — aggregate the actionable gaps so one glance shows the next action.
     Loaded async (hx-get on load) so it never blocks the dashboard."""

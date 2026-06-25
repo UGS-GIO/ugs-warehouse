@@ -14,9 +14,15 @@
 </div>
 
 {# Same legend as the Architecture page, so console + diagram read alike. #}
-<div class="flex flex-wrap items-center gap-3 text-xs text-slate-500 mb-4">
+<div class="flex flex-wrap items-center gap-3 text-xs text-slate-500 mb-3">
   <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded" style="background:#1a7f37"></span> built &amp; in production</span>
   <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded" style="background:#9a6700"></span> partial / known gap</span>
+</div>
+
+{# Serving-surface health lights — loads + self-refreshes. #}
+<div class="mb-4 rounded-lg border border-slate-200 bg-white px-3 py-2"
+     hx-get="{% url 'ops:service_health' %}" hx-trigger="load" hx-swap="innerHTML">
+  <span class="text-xs text-slate-400">checking serving…</span>
 </div>
 
 {# Upstream ①/② are automatic — shown for orientation, not operator-triggered. #}
@@ -29,6 +35,13 @@
   <h2 class="font-semibold mb-2 text-sm text-slate-600">What to run next</h2>
   <div hx-get="{% url 'ops:health' %}" hx-trigger="load" hx-swap="innerHTML">
     <div class="text-xs text-slate-400">checking…</div>
+  </div>
+</section>
+
+<section class="mb-5">
+  <h2 class="font-semibold mb-2 text-sm text-slate-600">Executions</h2>
+  <div hx-get="{% url 'ops:executions' %}" hx-trigger="load" hx-swap="innerHTML">
+    <div class="text-xs text-slate-400">loading…</div>
   </div>
 </section>
 

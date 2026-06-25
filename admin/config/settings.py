@@ -26,8 +26,18 @@ DEV_IAP_EMAIL = env("DEV_IAP_EMAIL", default="")
 GCP_PROJECT = env("GCP_PROJECT", default="ut-dnr-ugs-backend-tools")
 GCP_REGION = env("GCP_REGION", default="us-central1")
 STAC_BASE = env("STAC_BASE", default="https://maps-assets.geology.utah.gov/warehouse/stac").rstrip("/")
-# Viewer deep-link base — pub item opens at {VIEWER_BASE}?c=ugs-publications&i={series_id}.
-VIEWER_BASE = env("VIEWER_BASE", default="https://maps-assets.geology.utah.gov/warehouse/viewer/")
+# Viewer deep-link base — pub item opens at {VIEWER_BASE}?c={series_code}&i={series_id}. Must point
+# at index.html: the CDN does NOT serve it for the bare `/viewer/` path (that 404s), only explicitly.
+VIEWER_BASE = env("VIEWER_BASE", default="https://maps-assets.geology.utah.gov/warehouse/viewer/index.html")
+
+# Serving surfaces to ping for the health row. Add more (api, featureserv) via HEALTH_CHECKS env
+# as "Name|url,Name|url". Defaults cover the public CDN surfaces the admin can always reach.
+HEALTH_CHECKS = [
+    {"name": n.strip(), "url": u.strip()}
+    for n, u in (pair.split("|", 1) for pair in env.list(
+        "HEALTH_CHECKS",
+        default=[f"STAC catalog|{STAC_BASE}/catalog.json", f"Viewer|{VIEWER_BASE}"]) if "|" in pair)
+]
 # Dry-run: don't actually execute jobs (local dev / demo). Real runs need the SA + run.developer.
 JOBS_DRY_RUN = env.bool("JOBS_DRY_RUN", default=DEBUG)
 

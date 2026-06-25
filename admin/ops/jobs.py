@@ -173,6 +173,17 @@ def logs(key: str, limit: int = 80) -> dict:
         return {"ok": False, "lines": [], "message": f"{type(e).__name__}: {e}"}
 
 
+def all_executions(limit_per_job: int = 8) -> list[dict]:
+    """Every job's recent executions, merged + newest first — the executions feed. Each row carries
+    its job label/key so one table spans all jobs. [] in dry-run."""
+    out: list[dict] = []
+    for key, job in JOBS.items():
+        for ex in recent(key, limit=limit_per_job):
+            out.append({**ex, "key": key, "job": job.name, "label": job.label})
+    out.sort(key=lambda e: e.get("created") or "", reverse=True)
+    return out
+
+
 def console_logs_url(key: str) -> str:
     """Deep-link to this job's logs in the Cloud Console — the authoritative, always-complete view
     to open whenever a job is kicked off (the in-app tail is a convenience, not a replacement)."""

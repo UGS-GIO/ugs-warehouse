@@ -1,0 +1,51 @@
+{% comment %}Unified executions feed across all jobs. Self-refreshes every 10s.{% endcomment %}
+<div id="executions" hx-get="{% url 'ops:executions' %}" hx-trigger="every 10s" hx-swap="outerHTML">
+  {% if running %}
+  <div class="mb-3 rounded-lg border border-blue-200 bg-blue-50 p-3">
+    <div class="text-xs font-semibold text-blue-700 mb-1.5 flex items-center gap-1.5">
+      <span class="inline-block h-2 w-2 rounded-full bg-blue-500 animate-pulse"></span>Running now ({{ running|length }})
+    </div>
+    {% for e in running %}
+    <div class="text-xs flex items-center gap-2 py-0.5">
+      <span class="font-medium text-slate-700">{{ e.label }}</span>
+      <span class="text-blue-600">▶{{ e.running }} ✓{{ e.succeeded }} ✗{{ e.failed }}</span>
+      <span class="text-slate-500">started <time data-ts="{{ e.created }}" data-sec></time></span>
+      <button class="text-red-600 hover:underline"
+              hx-post="{% url 'ops:cancel' e.key %}" hx-vals='{"execution": "{{ e.full_name }}"}'
+              hx-target="#executions" hx-swap="outerHTML" hx-confirm="Cancel {{ e.name }}?">stop</button>
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if executions %}
+  <div class="overflow-x-auto rounded-lg border border-slate-200">
+    <table class="w-full text-xs">
+      <thead class="bg-slate-50 text-left text-slate-500">
+        <tr><th class="px-3 py-2">Job</th><th class="px-3 py-2">State</th><th class="px-3 py-2">Started</th>
+          <th class="px-3 py-2">Duration</th><th class="px-3 py-2">Tasks</th><th class="px-3 py-2">Logs</th></tr>
+      </thead>
+      <tbody class="divide-y divide-slate-100">
+        {% for e in executions %}
+        <tr class="hover:bg-slate-50">
+          <td class="px-3 py-1.5 font-medium text-slate-700">{{ e.label }}</td>
+          <td class="px-3 py-1.5">
+            <span class="{% if e.state == 'succeeded' %}text-green-600{% elif e.state == 'failed' %}text-red-600{% elif e.state == 'running' %}text-blue-600{% else %}text-slate-400{% endif %}">● {{ e.state }}</span>
+          </td>
+          <td class="px-3 py-1.5"><time data-ts="{{ e.created }}" data-sec class="text-slate-500"></time></td>
+          <td class="px-3 py-1.5 text-slate-500">{{ e.duration|default:"—" }}</td>
+          <td class="px-3 py-1.5 text-slate-500">✓{{ e.succeeded }}{% if e.failed %} <span class="text-red-600">✗{{ e.failed }}</span>{% endif %}{% if e.running %} <span class="text-blue-600">▶{{ e.running }}</span>{% endif %}</td>
+          <td class="px-3 py-1.5">
+            <button class="text-slate-600 hover:text-slate-900 underline"
+                    onclick="toggleAccordion('exlog-{{ e.name }}', '{% url 'ops:job_logs' e.key %}', 'exlogbody-{{ e.name }}')">logs ▾</button>
+          </td>
+        </tr>
+        <tr id="exlog-{{ e.name }}" class="hidden"><td colspan="6" class="px-3 pb-2 bg-slate-50"><div id="exlogbody-{{ e.name }}"></div></td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p class="text-xs text-slate-400">No executions yet{% if dry_run %} (dry-run — trigger a job){% endif %}.</p>
+  {% endif %}
+</div>

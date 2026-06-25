@@ -305,11 +305,19 @@ export function App() {
                   const id = idOf(it.href);
                   const on = idsForMap.includes(id);
                   const ci = activeLayers.findIndex((l) => l.id === id);
+                  // Not overlay-able if there's nothing to draw (no COG, no PMTiles). Stay listed +
+                  // clickable for metadata, but the checkbox is disabled. Unknown-until-loaded → allow.
+                  const mappable = !it.data || toLayer(it) !== null;
                   return (
-                    <div key={it.href} className={`${row} flex items-center gap-2`}>
-                      <input type="checkbox" checked={on} onChange={() => toggleLayer(id)} onClick={(e) => e.stopPropagation()} />
+                    <div key={it.href} className={`${row} flex items-center gap-2 ${mappable ? "" : "opacity-50"}`}>
+                      <input type="checkbox" checked={on} disabled={!mappable}
+                        onChange={() => toggleLayer(id)} onClick={(e) => e.stopPropagation()}
+                        title={mappable ? "" : "No COG or vector tiles to display on the map"} />
                       {on && ci >= 0 && <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colorFor(ci) }} />}
-                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>{String(it.data?.properties?.title ?? id)}</span>
+                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>
+                        {String(it.data?.properties?.title ?? id)}
+                        {!mappable && <span className="ml-1 text-[10px] text-muted-foreground">· no map data</span>}
+                      </span>
                     </div>
                   );
                 })}

@@ -44,6 +44,7 @@ const props = (it: ItemRef) => it.data?.properties ?? {};
 const gSeries = (it: ItemRef) => String(it.data?.id ?? idFromHref(it.href));
 const gTitle = (it: ItemRef) => String(props(it).title ?? it.data?.id ?? idFromHref(it.href));
 const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(it).datetime as string).slice(0, 10) : "");
+const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).slice(0, 4), 10); return Number.isFinite(y) ? y : null; };
 const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties ?? {})).toLowerCase();
@@ -198,6 +199,8 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards">("table");
   const [mapOnly, setMapOnly] = useState(false);  // hide metadata-only items (no COG / no tiles)
+  const [yearMin, setYearMin] = useState("");
+  const [yearMax, setYearMax] = useState("");
 
   // Data-series facets — one chip per series code (DS, OFR, GQ…), with a count and the
   // human label. Multi-select: pick any combination; the selection lives in the URL
@@ -218,12 +221,20 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
     onSeries(sel.has(code) ? series.filter((c) => c !== code) : [...series, code]);
 
   const needle = (query ?? q).trim().toLowerCase();
+  const ymin = parseInt(yearMin, 10);
+  const ymax = parseInt(yearMax, 10);
   const rows = useMemo(
-    () => items.filter((it) =>
-      (!needle || haystack(it).includes(needle))
-      && (!sel.size || sel.has(gCode(it)))
-      && (!mapOnly || hasMapData(it))),
-    [items, needle, series, mapOnly],
+    () => items.filter((it) => {
+      if (needle && !haystack(it).includes(needle)) return false;
+      if (sel.size && !sel.has(gCode(it))) return false;
+      if (mapOnly && !hasMapData(it)) return false;
+      if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
+        const y = gYear(it);
+        if (y == null || (Number.isFinite(ymin) && y < ymin) || (Number.isFinite(ymax) && y > ymax)) return false;
+      }
+      return true;
+    }),
+    [items, needle, series, mapOnly, yearMin, yearMax],
   );
 
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
@@ -247,6 +258,16 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         )}
         <span className={C.muted}>{rows.length} of {items.length}</span>
         <span className="flex-1" />
+        <span className="flex items-center gap-1 text-xs text-muted-foreground" title="Filter by publication year">
+          <span>Year</span>
+          <input type="number" inputMode="numeric" placeholder="from" value={yearMin}
+            onChange={(e) => setYearMin(e.target.value)}
+            className="w-14 rounded border border-border bg-background px-1 py-0.5" />
+          <span>–</span>
+          <input type="number" inputMode="numeric" placeholder="to" value={yearMax}
+            onChange={(e) => setYearMax(e.target.value)}
+            className="w-14 rounded border border-border bg-background px-1 py-0.5" />
+        </span>
         <span className={toggle(mapOnly)} title="Only items with a COG or vector tiles to display on the map"
           onClick={() => setMapOnly((v) => !v)}>Mappable</span>
         <span className={toggle(mode === "table")} onClick={() => setMode("table")}>Table</span>

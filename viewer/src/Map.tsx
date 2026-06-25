@@ -144,19 +144,26 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
     return () => { live = false; };
   }, [layers]);
 
-  const interactiveIds = layers.flatMap((l, i) => {
+  // Source/layer ids are keyed by a STABLE slug of the layer id — NOT the array index. Index-based
+  // ids change when a layer is unchecked (the array shifts), and react-map-gl throws "source id
+  // changed" (you can't rename a mounted maplibre source) → the page crashes. Slugs stay constant.
+  const slugOf = (id: string) => id.replace(/[^a-zA-Z0-9_]/g, "_");
+  const layerByMapId: Record<string, ActiveLayer> = {};
+  const interactiveIds = layers.flatMap((l) => {
+    const s = slugOf(l.id);
     const styleLayers = styleCache[l.id];
-    if (styleLayers) {
-      return styleLayers.map((_, li) => `pm-${i}-${li}`);
-    }
-    return [`pm-${i}-fill`, `pm-${i}-line`, `pm-${i}-circle`];
+    const ids = styleLayers
+      ? styleLayers.map((_, li) => `pm-${s}-${li}`)
+      : [`pm-${s}-fill`, `pm-${s}-line`, `pm-${s}-circle`];
+    for (const mid of ids) layerByMapId[mid] = l;
+    return ids;
   });
 
   const onClick = (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
     if (!f) return setPopup(null);
-    const idx = Number(/^pm-(\d+)-/.exec(f.layer.id)?.[1] ?? -1);
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: layers[idx]?.title ?? "", props: f.properties ?? {} });
+    const l = layerByMapId[f.layer.id];
+    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: l?.title ?? "", props: f.properties ?? {} });
   };
 
   return (
@@ -192,28 +199,29 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
       {layers.map((l, i) => {
         // Raster COG layer — render the georeferenced GeoTIFF via cog:// (once the protocol is
         // registered). Distinct `cog-*` ids keep it out of the vector feature-click regex.
+        const s = slugOf(l.id);
         if (l.cogHref) {
           if (!cogReady) return null;
           return (
-            <Source key={l.id} id={`cog-${i}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
-              <Layer id={`cog-${i}-raster`} type="raster" paint={{ "raster-opacity": 0.9 }} />
+            <Source key={l.id} id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
+              <Layer id={`cog-${s}-raster`} type="raster" paint={{ "raster-opacity": 0.9 }} />
             </Source>
           );
         }
-        const c = colorFor(i);
+        const c = colorFor(i);  // color rotates by position — fine to stay index-based
         const styleLayers = styleCache[l.id];
         const pmHref = l.pmHref!;
         const pmLayer = l.pmLayer!;
         return (
-          <Source key={l.id} id={`pm-${i}`} type="vector" url={`pmtiles://${pmHref}`}>
+          <Source key={l.id} id={`pm-${s}`} type="vector" url={`pmtiles://${pmHref}`}>
             {styleLayers ? (
               styleLayers.map((sl, li) => (
                 <Layer
                   key={li}
                   {...({
                     ...sl,
-                    id: `pm-${i}-${li}`,
-                    source: `pm-${i}`,
+                    id: `pm-${s}-${li}`,
+                    source: `pm-${s}`,
                     "source-layer": pmLayer,
                   } as any)}
                 />
@@ -222,9 +230,9 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
               // Explicit `source` — react-map-gl doesn't inject it for Layers inside a Fragment,
               // so without it maplibre throws "missing required property source".
               <>
-                <Layer id={`pm-${i}-fill`} source={`pm-${i}`} type="fill" source-layer={pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
-                <Layer id={`pm-${i}-line`} source={`pm-${i}`} type="line" source-layer={pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
-                <Layer id={`pm-${i}-circle`} source={`pm-${i}`} type="circle" source-layer={pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
+                <Layer id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
+                <Layer id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
+                <Layer id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
               </>
             )}
           </Source>

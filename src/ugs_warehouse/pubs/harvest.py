@@ -447,7 +447,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     _series_ctx.set(series_id)
     work = tempfile.mkdtemp(prefix=f"h_{series_id.replace('/', '_')}_")
     try:
-        cut, _ = footprint(series_id, work)
+        cut, n_feat = footprint(series_id, work)
         zip_paths = []
         max_b = MAX_ZIP_SIZE_MB * 1024 * 1024 if MAX_ZIP_SIZE_MB > 0 else None
         hlog(f"downloading {len(zurls)} source zip(s)", step="download")
@@ -462,9 +462,17 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                  level="ERROR", category="attention", err=True)
             return "fail:noplate"
 
-        hlog("warping (cutline + reproject 3857) → COG", step="cog")
         clipped = os.path.join(work, "clipped.tif")
-        run(["gdalwarp", "-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline",
+        # No footprint in the index → empty cutline → gdalwarp "cannot compute bounds of cutline".
+        # Fall back to an uncropped warp (full sheet) instead of failing the pub.
+        if n_feat > 0:
+            cutline_args = ["-cutline", cut, "-cutline_srs", "EPSG:4326", "-crop_to_cutline"]
+            hlog("warping (cutline + reproject 3857) → COG", step="cog")
+        else:
+            cutline_args = []
+            hlog("no map footprint in the index — warping uncropped (full sheet)",
+                 step="cog", level="WARNING")
+        run(["gdalwarp", *cutline_args,
              "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
              "-co", "BIGTIFF=YES", "-co", "COMPRESS=DEFLATE", plate, clipped])
         cog = os.path.join(work, f"{series_id}.cog.tif")

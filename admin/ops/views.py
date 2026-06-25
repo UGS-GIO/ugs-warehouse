@@ -45,6 +45,15 @@ def attention(request):
 
 @admin_required
 @require_POST
+def attention_reharvest(request):
+    """Re-harvest only the pubs currently in the attention list (re-queried server-side)."""
+    ids = [p["id"] for p in jobs.attention_pubs().get("pubs", [])]
+    return render(request, "ops/_attention_reharvest_result.html",
+                  {"result": jobs.reharvest_many(ids)})
+
+
+@admin_required
+@require_POST
 def trigger(request, key):
     result = jobs.run(key)
     return render(request, "ops/_job_result.html", {

@@ -239,6 +239,30 @@ def reharvest_one(series_id: str) -> dict:
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 
 
+def reharvest_many(series_ids: list[str]) -> dict:
+    """Re-harvest a SPECIFIC set of pubs (e.g. everything in the attention list) in one job run —
+    passes the ids as args instead of --all, so only these are processed. Sharded for parallelism."""
+    sids = [s.strip() for s in series_ids if s and s.strip()]
+    if not sids:
+        return {"ok": False, "message": "no pubs to re-harvest"}
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "dry_run": True,
+                "message": f"DRY-RUN: would re-harvest {len(sids)} pub(s) --force"}
+    try:
+        from google.cloud import run_v2
+        client = run_v2.JobsClient()
+        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
+            args=["-m", "ugs_warehouse.pubs.harvest", *sids, "--force"])
+        req = run_v2.RunJobRequest(
+            name=_job_path(JOBS["harvest"]),
+            overrides=run_v2.RunJobRequest.Overrides(
+                container_overrides=[override], task_count=min(5, len(sids))))
+        client.run_job(request=req)
+        return {"ok": True, "message": f"re-harvesting {len(sids)} pub(s) (--force, {min(5, len(sids))} shards)"}
+    except Exception as e:  # noqa: BLE001
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
 def attention_pubs(limit: int = 200) -> dict:
     """Publications whose latest harvest log is category=attention — the failures worth eyes. One
     row per series_id (most recent), newest first. {ok, pubs, message?}."""

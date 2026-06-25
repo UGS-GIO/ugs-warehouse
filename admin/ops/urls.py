@@ -11,6 +11,7 @@ urlpatterns = [
     path("jobs/<str:key>/cancel", views.cancel, name="cancel"),
     path("coverage", views.coverage, name="coverage"),
     path("attention", views.attention, name="attention"),
+    path("attention/reharvest", views.attention_reharvest, name="attention_reharvest"),
     path("publications", views.publications_registry, name="publications"),
     path("publications/<path:series_id>/logs", views.pub_logs, name="pub_logs"),
     path("publications/<path:series_id>/reharvest", views.reharvest, name="reharvest"),

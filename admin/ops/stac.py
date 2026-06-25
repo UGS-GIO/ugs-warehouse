@@ -166,6 +166,7 @@ def get_harvest_status(search_query: str = "", status_filter: str = "", series_f
             "status": status,
             "zips": [{"url": u, "name": u.split("/")[-1]} for u in zurls],
             "year": p.get("pub_year") or "",
+            "series_code": series_code(sid_upper),  # viewer collection id (OFR-593 → OFR)
         })
 
     rows.sort(key=lambda r: r["id"])

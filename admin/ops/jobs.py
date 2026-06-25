@@ -9,9 +9,17 @@ Auth: Application Default Credentials. In prod the Cloud Run service account nee
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from django.conf import settings
+
+
+def series_code(sid: str) -> str:
+    """Viewer collection id for a pub = its alpha series prefix (OFR-593 → OFR). Matches the
+    warehouse's sink_stac.series_code so deep-links resolve to the right nested collection."""
+    m = re.match(r"[A-Za-z]+", (sid or "").strip())
+    return m.group(0).upper() if m else "OTHER"
 
 
 @dataclass(frozen=True)
@@ -288,6 +296,7 @@ def attention_pubs(limit: int = 200) -> dict:
             if sid and sid not in seen:  # newest first → first seen is the latest
                 seen[sid] = {
                     "id": sid,
+                    "series_code": series_code(sid),
                     "step": p.get("step", ""),
                     "text": p.get("message", ""),
                     "time": e.timestamp.isoformat() if e.timestamp else "",

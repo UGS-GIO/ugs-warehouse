@@ -22,7 +22,7 @@
       {% for r in rows %}
       <tr class="hover:bg-slate-50">
         <td class="px-4 py-3 font-mono font-bold">
-          <a href="{{ VIEWER_BASE }}?c=ugs-publications&i={{ r.id|urlencode }}" target="_blank"
+          <a href="{{ VIEWER_BASE }}?c={{ r.series_code|urlencode }}&i={{ r.id|urlencode }}" target="_blank"
              class="text-blue-700 hover:underline" title="Open in the warehouse viewer">{{ r.id }}</a>
         </td>
         <td class="px-4 py-3 text-slate-700 max-w-xs truncate" title="{{ r.title }}">{{ r.title }}</td>

@@ -69,6 +69,29 @@
     function toggleTz() { localStorage.setItem('tzmode', tzMode() === 'utc' ? 'local' : 'utc'); fmtTimes(); }
     document.addEventListener('DOMContentLoaded', fmtTimes);
     document.body.addEventListener('htmx:afterSwap', fmtTimes);  // re-format after status polls swap
+
+    // Job-done ping: status partials carry data-job/data-state (newest execution). When a job goes
+    // running → succeeded/failed, fire a browser notification (tab can be in the background).
+    const jobStates = {};
+    function checkJobDone() {
+      document.querySelectorAll('[data-job][data-state]').forEach((el) => {
+        const job = el.getAttribute('data-job'), state = el.getAttribute('data-state'), prev = jobStates[job];
+        if (prev === 'running' && (state === 'succeeded' || state === 'failed')
+            && 'Notification' in window && Notification.permission === 'granted') {
+          new Notification(`Job ${state}: ${job}`, { body: state === 'succeeded' ? '✓ completed' : '⚠ failed — check logs' });
+        }
+        jobStates[job] = state;
+      });
+    }
+    document.body.addEventListener('htmx:afterSwap', checkJobDone);
+    // Ask permission on a real gesture — when you trigger a job.
+    document.body.addEventListener('click', (e) => {
+      const btn = e.target.closest('[hx-post]');
+      if (btn && /\/jobs\/[^/]+\/run/.test(btn.getAttribute('hx-post') || '')
+          && 'Notification' in window && Notification.permission === 'default') {
+        Notification.requestPermission();
+      }
+    });
   </script>
 </body>
 </html>

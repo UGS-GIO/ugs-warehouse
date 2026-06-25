@@ -1,0 +1,23 @@
+{% comment %}"What to run next" — actionable gaps at a glance. Each tile = a count + the next action.{% endcomment %}
+<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+  <div class="rounded-lg border p-3 {% if pending %}border-amber-200 bg-amber-50{% else %}border-slate-200 bg-white{% endif %}">
+    <div class="text-2xl font-bold {% if pending %}text-amber-700{% else %}text-slate-400{% endif %}">{{ pending|default_if_none:"—" }}</div>
+    <div class="text-xs font-medium text-slate-600">Unharvested</div>
+    <div class="text-[11px] text-slate-500">{% if pending %}→ run <span class="font-medium">Harvest COGs</span>{% else %}all harvestable done{% endif %}</div>
+  </div>
+  <div class="rounded-lg border p-3 {% if unbound %}border-amber-200 bg-amber-50{% else %}border-slate-200 bg-white{% endif %}">
+    <div class="text-2xl font-bold {% if unbound %}text-amber-700{% else %}text-slate-400{% endif %}">{{ unbound }}</div>
+    <div class="text-xs font-medium text-slate-600">Harvested, not bound</div>
+    <div class="text-[11px] text-slate-500">{% if unbound %}→ run <span class="font-medium">Rebuild pubs STAC</span>{% else %}STAC in sync{% endif %}</div>
+  </div>
+  <div class="rounded-lg border p-3 {% if unstyled %}border-amber-200 bg-amber-50{% else %}border-slate-200 bg-white{% endif %}">
+    <div class="text-2xl font-bold {% if unstyled %}text-amber-700{% else %}text-slate-400{% endif %}">{{ unstyled }}</div>
+    <div class="text-xs font-medium text-slate-600">Unstyled topics</div>
+    <div class="text-[11px] text-slate-500">{% if unstyled %}→ author a style in ugs-styles{% else %}all styled{% endif %}</div>
+  </div>
+  <div class="rounded-lg border p-3 {% if attention %}border-red-200 bg-red-50{% else %}border-slate-200 bg-white{% endif %}">
+    <div class="text-2xl font-bold {% if attention %}text-red-700{% else %}text-slate-400{% endif %}">{{ attention|default_if_none:"—" }}</div>
+    <div class="text-xs font-medium text-slate-600">Need attention</div>
+    <div class="text-[11px] text-slate-500">{% if attention %}→ re-harvest / investigate below{% else %}clean{% endif %}</div>
+  </div>
+</div>

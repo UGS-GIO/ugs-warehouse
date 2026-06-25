@@ -10,6 +10,7 @@ urlpatterns = [
     path("jobs/<str:key>/logs", views.job_logs, name="job_logs"),
     path("jobs/<str:key>/cancel", views.cancel, name="cancel"),
     path("coverage", views.coverage, name="coverage"),
+    path("whats-next", views.health, name="health"),  # NB: not /health — that's the Cloud Run probe
     path("attention", views.attention, name="attention"),
     path("attention/reharvest", views.attention_reharvest, name="attention_reharvest"),
     path("publications", views.publications_registry, name="publications"),

@@ -82,6 +82,30 @@ def coverage(request):
 
 
 @admin_required
+def health(request):
+    """'What to run next' — aggregate the actionable gaps so one glance shows the next action.
+    Loaded async (hx-get on load) so it never blocks the dashboard."""
+    cov = stac.cog_coverage()
+    hv = stac.harvested_bucket_count()
+    topics = stac.serving_topics()
+    att = jobs.attention_pubs()
+    try:
+        rows = stac.get_harvest_status()
+        pending = sum(1 for r in rows if r["status"] == "pending")  # has a zip, no COG yet
+    except Exception:  # noqa: BLE001
+        pending = None
+    bucket = hv.get("count") if hv.get("ok") else None
+    bound = cov.get("total_cogs")
+    unbound = bucket - bound if (bucket is not None and bound is not None and bucket > bound) else 0
+    return render(request, "ops/_health.html", {
+        "pending": pending,                                   # → run Harvest COGs
+        "unbound": unbound,                                   # → run Rebuild pubs STAC
+        "unstyled": sum(1 for t in topics if not t.get("styled")),  # → author a style in ugs-styles
+        "attention": len(att["pubs"]) if att.get("ok") else None,   # → re-harvest / investigate
+    })
+
+
+@admin_required
 def publications_registry(request):
     search = request.GET.get("q", "")
     status = request.GET.get("status", "")

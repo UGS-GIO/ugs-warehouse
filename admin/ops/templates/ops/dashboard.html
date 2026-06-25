@@ -25,6 +25,13 @@
   the vector pipeline below runs automatically. No operator action here.
 </div>
 
+<section class="mb-5">
+  <h2 class="font-semibold mb-2 text-sm text-slate-600">What to run next</h2>
+  <div hx-get="{% url 'ops:health' %}" hx-trigger="load" hx-swap="innerHTML">
+    <div class="text-xs text-slate-400">checking…</div>
+  </div>
+</section>
+
 <div class="space-y-1">
   {% for stage in stages %}
   <div class="flex justify-center text-slate-300 text-lg leading-none">↓</div>

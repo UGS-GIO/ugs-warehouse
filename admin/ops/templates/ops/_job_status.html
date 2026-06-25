@@ -1,3 +1,5 @@
+{# data-state = newest execution's state; base.html watches running→done to fire a notification #}
+<div data-job="{{ key }}"{% if recent %} data-state="{{ recent.0.state }}"{% endif %}>
 {% if recent %}
 <div class="mt-1 space-y-0.5">
   {% for ex in recent %}
@@ -19,3 +21,4 @@
 {% else %}
 <div class="text-xs text-slate-400">no recent runs</div>
 {% endif %}
+</div>

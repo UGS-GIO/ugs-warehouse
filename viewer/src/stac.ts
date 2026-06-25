@@ -18,6 +18,7 @@ export type Link = {
   title?: string;
   "pmtiles:layers"?: string[];
   "ugs:item_count"?: number;
+  "ugs:mappable_count"?: number;
 };
 export type Asset = { href: string; title?: string; type?: string; roles?: string[] };
 export type StacDoc = {

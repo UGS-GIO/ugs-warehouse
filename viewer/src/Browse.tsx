@@ -14,7 +14,7 @@ import { type Asset, citeLink, classificationEntries, cogAsset, defaultStyleUrl,
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string;
-  count?: number; kind?: "catalog" | "collection"; parentId?: string;
+  count?: number; mappable?: number; kind?: "catalog" | "collection"; parentId?: string;
 };
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
@@ -163,6 +163,11 @@ function Collections({ collections, heading, onOpen }: {
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
               {c.count != null && <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>}
               {c.kind === "catalog" && <span className={`${C.badge} mt-2`}>by series</span>}
+              {c.mappable === 0
+                ? <span className="mt-2 ml-1 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">no map data</span>
+                : c.mappable != null && c.count != null && c.mappable < c.count
+                  ? <span className="mt-2 ml-1 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{c.mappable} on map</span>
+                  : null}
             </div>
           );
         })}

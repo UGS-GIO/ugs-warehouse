@@ -228,7 +228,7 @@ def _extent(items: list[dict]) -> dict:
 
 def _collection_doc(collection: str, path: str, item_ids: list[str],
                     extent: dict | None = None, *, title: str | None = None,
-                    service: bool | None = None) -> dict:
+                    service: bool | None = None, mappable: int | None = None) -> dict:
     """A collection.json at `{path}/collection.json`. `collection` is its STAC id (a series
     code like `DS` when nested, else the path). Root/parent links climb out per path depth;
     the OGC API Features link is added only for flat collections (serving topics — nested
@@ -245,7 +245,8 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
         "license": "proprietary",
         "extent": extent or {"spatial": {"bbox": [UTAH_BBOX]},
                              "temporal": {"interval": [[None, None]]}},
-        "summaries": {"ugs:item_count": len(item_ids)},
+        "summaries": {"ugs:item_count": len(item_ids),
+                      **({"ugs:mappable_count": mappable} if mappable is not None else {})},
         "links": [
             {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
@@ -261,15 +262,28 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
     return doc
 
 
-def _child_link(href: str, title: str | None, count: int | None) -> dict:
-    """A `rel=child` link carrying title + item count so a viewer can render the next level
-    (catalog → children, with counts) from a single fetch. `ugs:item_count` is a non-standard
-    hint; standard clients ignore it."""
+def _is_mappable(item: dict) -> bool:
+    """True if the item has something to draw on a map — a COG asset or a pmtiles/cog web-map link.
+    Drives the per-collection `ugs:mappable_count` so a viewer can flag groups with no map data
+    without fetching their items."""
+    for a in (item.get("assets") or {}).values():
+        t, h, roles = a.get("type") or "", a.get("href") or "", a.get("roles") or []
+        if "cloud-optimized" in t or "cloud-optimized" in roles or h.endswith(".cog.tif"):
+            return True
+    return any(lnk.get("rel") in ("pmtiles", "cog") for lnk in (item.get("links") or []))
+
+
+def _child_link(href: str, title: str | None, count: int | None, mappable: int | None = None) -> dict:
+    """A `rel=child` link carrying title + item count (+ mappable count) so a viewer can render the
+    next level (catalog → children, with counts) from a single fetch. The `ugs:` hints are
+    non-standard; standard clients ignore them."""
     link = {"rel": "child", "href": href, "type": "application/json"}
     if title:
         link["title"] = title
     if count is not None:
         link["ugs:item_count"] = count
+    if mappable is not None:
+        link["ugs:mappable_count"] = mappable
     return link
 
 
@@ -278,18 +292,19 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
     """A nesting Catalog (e.g. `ugs-publications`) whose children are per-series collections,
     each at `./<series>/collection.json`. `children` = [{id, title, count}, …]."""
     total = sum(c.get("count") or 0 for c in children)
+    total_mappable = sum(c.get("mappable") or 0 for c in children)
     return {
         "type": "Catalog",
         "stac_version": STAC_VERSION,
         "id": catalog_id,
         "title": title or prettify(catalog_id),
         "description": description or f"UGS warehouse — {catalog_id}, by data series.",
-        "summaries": {"ugs:item_count": total},
+        "summaries": {"ugs:item_count": total, "ugs:mappable_count": total_mappable},
         "links": [
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./catalog.json", "type": "application/json"},
-            *[_child_link(f"./{c['id']}/collection.json", c.get("title"), c.get("count"))
+            *[_child_link(f"./{c['id']}/collection.json", c.get("title"), c.get("count"), c.get("mappable"))
               for c in sorted(children, key=lambda c: c["id"])],
         ],
     }
@@ -346,7 +361,7 @@ def _root_doc(children: list[dict]) -> dict:
         "links": [
             {"rel": "root", "href": "./catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./catalog.json", "type": "application/json"},
-            *[_child_link(c["href"], c.get("title"), c.get("count"))
+            *[_child_link(c["href"], c.get("title"), c.get("count"), c.get("mappable"))
               for c in sorted(children, key=lambda c: c["href"])],
         ],
     }
@@ -384,10 +399,12 @@ def refresh_catalog() -> None:
             cid = path.split("/")[-1]
             title = next((it.get("properties", {}).get("ugs:pub_type") for it in items
                           if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None
-            _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title),
+            mappable = sum(1 for it in items if _is_mappable(it))
+            _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title, mappable=mappable),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
             _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
-            leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids)}
+            leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),
+                          "mappable": mappable}
 
     # 2. Build the hierarchy. A top-level segment with nested children (and no direct items)
     #    becomes a sub-catalog (e.g. ugs-publications → DS, OFR, … series collections);
@@ -403,10 +420,12 @@ def refresh_catalog() -> None:
             _write_json(_subcatalog_doc(top, kids, title=ptitle),
                         f"{config.STAC_PREFIX}/{top}/catalog.json")
             root_children.append({"href": f"./{top}/catalog.json", "title": ptitle,
-                                  "count": sum(k["count"] for k in kids)})
+                                  "count": sum(k["count"] for k in kids),
+                                  "mappable": sum(k["mappable"] for k in kids)})
         else:                  # flat collection
             root_children.append({"href": f"./{top}/collection.json",
-                                  "title": leaf[top]["title"], "count": leaf[top]["count"]})
+                                  "title": leaf[top]["title"], "count": leaf[top]["count"],
+                                  "mappable": leaf[top]["mappable"]})
     _write_json(_root_doc(root_children), f"{config.STAC_PREFIX}/catalog.json")
 
     n = sum(len(v) for v in groups.values())

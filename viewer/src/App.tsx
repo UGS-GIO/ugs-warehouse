@@ -143,6 +143,7 @@ export function App() {
   // still works: ugs-publications is then just a leaf you open into items.)
   const rootChildren: CollectionSummary[] = childLinks(catalog.data, CATALOG_URL).map((l) => ({
     id: collIdOf(l.href) ?? l.href, href: l.href, title: l.title, count: l["ugs:item_count"],
+    mappable: l["ugs:mappable_count"],
     kind: l.href.endsWith("/catalog.json") ? "catalog" : "collection",
   }));
   const subCats = rootChildren.filter((c) => c.kind === "catalog");
@@ -150,7 +151,7 @@ export function App() {
   const seriesChildren: CollectionSummary[] = subCats.flatMap((sc, i) =>
     childLinks(subDocs.docs[i]?.data, sc.href).map((l) => ({
       id: collIdOf(l.href) ?? l.href, href: l.href, title: l.title,
-      count: l["ugs:item_count"], kind: "collection", parentId: sc.id,
+      count: l["ugs:item_count"], mappable: l["ugs:mappable_count"], kind: "collection", parentId: sc.id,
     })));
   const leafColls = [...rootChildren.filter((c) => c.kind === "collection"), ...seriesChildren];
 
@@ -293,6 +294,7 @@ export function App() {
               (subCat ? cards : leafColls).map((c) => (
                 <div key={c.href} className={row} onClick={() => openCollection(c.href)}>
                   {c.title ?? c.id}{c.count != null && <span className="text-muted-foreground"> · {c.count}</span>}
+                  {c.mappable === 0 && <span className="ml-1 text-[11px] text-muted-foreground">· no map data</span>}
                 </div>
               ))}
             {leafColl && (
@@ -305,11 +307,17 @@ export function App() {
                   const id = idOf(it.href);
                   const on = idsForMap.includes(id);
                   const ci = activeLayers.findIndex((l) => l.id === id);
+                  // Non-blocking hint only — never disable (an item can be "on" via ?i= and must stay
+                  // uncheckable). The index carries assets + web-map links, so this is reliable.
+                  const noMap = it.data && !cogAsset(it.data) && !pmtilesLink(it.data);
                   return (
                     <div key={it.href} className={`${row} flex items-center gap-2`}>
                       <input type="checkbox" checked={on} onChange={() => toggleLayer(id)} onClick={(e) => e.stopPropagation()} />
                       {on && ci >= 0 && <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colorFor(ci) }} />}
-                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>{String(it.data?.properties?.title ?? id)}</span>
+                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>
+                        {String(it.data?.properties?.title ?? id)}
+                        {noMap && <span className="ml-1 text-[10px] text-muted-foreground">· no map data</span>}
+                      </span>
                     </div>
                   );
                 })}

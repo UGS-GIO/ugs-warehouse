@@ -1,11 +1,11 @@
-{% comment %}One publication's harvest log timeline — fills the log modal.{% endcomment %}
-<div id="publog-{{ series_id }}" class="flex-1 min-h-0 flex flex-col text-slate-100">
-  <div class="flex items-center justify-between px-4 py-2 border-b border-slate-700 text-sm">
+{% comment %}One publication's harvest log — inline accordion, refresh-only (it's historical).{% endcomment %}
+<div id="publog-body-{{ series_id }}" class="rounded-lg border border-slate-700 bg-slate-900 text-slate-100">
+  <div class="flex items-center justify-between px-3 py-1.5 border-b border-slate-700 text-xs">
     <span class="font-medium font-mono">{{ series_id }}<span class="text-slate-400"> — harvest log</span></span>
-    <button class="text-slate-300 hover:text-white text-xs pr-8"
-            hx-get="{% url 'ops:pub_logs' series_id %}" hx-target="#publog-{{ series_id }}" hx-swap="outerHTML">↻ refresh</button>
+    <button class="text-slate-300 hover:text-white"
+            hx-get="{% url 'ops:pub_logs' series_id %}" hx-target="#publog-body-{{ series_id }}" hx-swap="outerHTML">↻ refresh</button>
   </div>
-  <div class="flex-1 min-h-0 overflow-auto px-4 py-3 font-mono text-xs leading-relaxed">
+  <div class="max-h-80 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed">
     {% if log.dry_run %}
       <div class="text-amber-300">{{ log.message }}</div>
     {% elif not log.ok %}
@@ -15,7 +15,7 @@
     {% else %}
       {% for ln in log.lines %}
       <div class="whitespace-pre-wrap {% if ln.severity == 'ERROR' %}text-red-400{% elif ln.severity == 'WARNING' %}text-amber-300{% else %}text-slate-200{% endif %}">
-        <span class="text-slate-500">{{ ln.time|slice:"11:19" }}</span>
+        <time data-ts="{{ ln.time }}" data-sec class="text-slate-500"></time>
         {% if ln.step %}<span class="text-indigo-300">[{{ ln.step }}]</span> {% endif %}
         {% if ln.category == 'attention' %}<span class="text-red-300 font-semibold">⚠ NEEDS ATTENTION</span> {% elif ln.category == 'expected' %}<span class="text-slate-400">· expected</span> {% elif ln.category == 'ok' %}<span class="text-green-400">✓</span> {% endif %}{{ ln.text }}
       </div>

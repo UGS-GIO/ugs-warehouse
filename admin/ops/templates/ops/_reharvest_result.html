@@ -1,6 +1,1 @@
-<span class="text-xs {% if result.ok %}text-green-700{% else %}text-red-700{% endif %}">
-  {{ result.message }}{% if result.ok and not result.dry_run %} ·
-  <button class="underline hover:text-slate-900"
-          hx-get="{% url 'ops:pub_logs' series_id %}" hx-target="#logmodal-body" hx-swap="innerHTML"
-          onclick="openLogModal()">view logs ↗</button>{% endif %}
-</span>
+<span class="text-xs {% if result.ok %}text-green-700{% else %}text-red-700{% endif %}">{{ result.message }}</span>

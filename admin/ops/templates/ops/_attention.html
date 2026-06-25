@@ -26,17 +26,19 @@
 {% else %}
   <div class="rounded-lg border border-red-200 divide-y divide-red-100 overflow-hidden">
     {% for p in att.pubs %}
-    <div class="flex items-center gap-3 px-3 py-2 bg-red-50/40 text-xs">
-      <span class="font-mono font-bold text-slate-800 w-28 shrink-0">{{ p.id }}</span>
-      {% if p.step %}<span class="text-indigo-700">[{{ p.step }}]</span>{% endif %}
-      <span class="text-red-700 flex-1 truncate" title="{{ p.text }}">{{ p.text }}</span>
-      <button class="text-slate-600 hover:text-slate-900 underline shrink-0"
-              hx-get="{% url 'ops:pub_logs' p.id %}" hx-target="#logmodal-body" hx-swap="innerHTML"
-              onclick="openLogModal()">logs ↗</button>
-      <button class="text-amber-700 hover:text-amber-900 underline shrink-0"
-              hx-post="{% url 'ops:reharvest' p.id %}" hx-target="#reharvest-{{ p.id }}" hx-swap="innerHTML"
-              hx-confirm="Re-harvest {{ p.id }} with --force?">re-harvest</button>
-      <span id="reharvest-{{ p.id }}"></span>
+    <div>
+      <div class="flex items-center gap-3 px-3 py-2 bg-red-50/40 text-xs">
+        <span class="font-mono font-bold text-slate-800 w-28 shrink-0">{{ p.id }}</span>
+        {% if p.step %}<span class="text-indigo-700">[{{ p.step }}]</span>{% endif %}
+        <span class="text-red-700 flex-1 truncate" title="{{ p.text }}">{{ p.text }}</span>
+        <button class="text-slate-600 hover:text-slate-900 underline shrink-0"
+                onclick="toggleAccordion('attlog-{{ p.id }}', '{% url 'ops:pub_logs' p.id %}', 'attlogbody-{{ p.id }}')">logs ▾</button>
+        <button class="text-amber-700 hover:text-amber-900 underline shrink-0"
+                hx-post="{% url 'ops:reharvest' p.id %}" hx-target="#reharvest-{{ p.id }}" hx-swap="innerHTML"
+                hx-confirm="Re-harvest {{ p.id }} with --force?">re-harvest</button>
+        <span id="reharvest-{{ p.id }}"></span>
+      </div>
+      <div id="attlog-{{ p.id }}" class="hidden px-3 pb-2"><div id="attlogbody-{{ p.id }}"></div></div>
     </div>
     {% endfor %}
   </div>

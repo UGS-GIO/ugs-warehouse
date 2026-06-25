@@ -15,8 +15,8 @@ PROJECT="${PROJECT:-ut-dnr-ugs-backend-tools}"
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-ugs-warehouse-service}"
 RUNTIME_SA="${RUNTIME_SA:-warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com}"
-TOPIC="${TOPIC:-ugs-warehouse-ingest}"
-SUB="${SUB:-ugs-warehouse-ingest-push}"
+TOPIC="${TOPIC:-ugs-warehouse-ingest}"      # dataELT publish.sh targets this name — the contract, do not rename
+SUB="${SUB:-ugs-warehouse-ingest-push}"     # push subscription → the service '/' endpoint
 
 echo "→ topic ${TOPIC}"
 gcloud pubsub topics describe "${TOPIC}" --project="${PROJECT}" >/dev/null 2>&1 \

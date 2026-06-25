@@ -27,9 +27,7 @@ substitutions:
   _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # runtime SA — run.developer (trigger/status) + logging.viewer (live + per-pub logs) + storage.objectViewer on the COG bucket (registry harvest status)
   _ADMIN_HOSTS: .run.app                                                           # ALLOWED_HOSTS; add the LB/custom domain once IAP is fronted
   _ADMIN_SECRET: warehouse-admin-secret-key                                        # Secret Manager secret — stable Django SECRET_KEY across workers/instances
-  # Pub/Sub ingest trigger (dataELT #418 publishes `{schema, topic}` to _INGEST_TOPIC).
-  _INGEST_TOPIC: ugs-warehouse-ingest     # topic dataELT publish.sh targets — name is the contract, do not rename
-  _INGEST_SUB: ugs-warehouse-ingest-push  # push subscription -> the service `/` endpoint
+  # Pub/Sub topic/subscription names live in scripts/provision.sh now (not build inputs).
   # public OGC api connects read-only — never schema_owner (role + secret provisioned by Marshall)
   _API_DB_USER: schema_reader
   _API_SECRET: schema-reader-db-password

@@ -14,6 +14,13 @@
       <div class="text-slate-400">No harvest logs for {{ series_id }} (not harvested yet, or logs aged out).</div>
     {% else %}
       {% for ln in log.lines %}
+      {% ifchanged ln.execution %}{% if ln.execution %}
+      <div class="my-1.5 flex items-center gap-2 {% if ln.execution == log.latest_execution %}text-emerald-300{% else %}text-slate-500{% endif %}">
+        <span class="h-px flex-1 {% if ln.execution == log.latest_execution %}bg-emerald-500/60{% else %}bg-slate-700{% endif %}"></span>
+        <span class="text-[10px] uppercase tracking-wide whitespace-nowrap">{% if ln.execution == log.latest_execution %}▶ latest run{% else %}run{% endif %} · {{ ln.execution }}</span>
+        <span class="h-px flex-1 {% if ln.execution == log.latest_execution %}bg-emerald-500/60{% else %}bg-slate-700{% endif %}"></span>
+      </div>
+      {% endif %}{% endifchanged %}
       <div class="whitespace-pre-wrap {% if ln.severity == 'ERROR' %}text-red-400{% elif ln.severity == 'WARNING' %}text-amber-300{% else %}text-slate-200{% endif %}">
         <time data-ts="{{ ln.time }}" data-sec class="text-slate-500"></time>
         {% if ln.step %}<span class="text-indigo-300">[{{ ln.step }}]</span> {% endif %}

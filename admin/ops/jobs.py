@@ -153,11 +153,14 @@ def logs(key: str, limit: int = 80) -> dict:
                 "time": e.timestamp.isoformat() if e.timestamp else "",
                 "severity": (e.severity or "DEFAULT"),
                 "task": labels.get("run.googleapis.com/task_index", ""),
+                "execution": labels.get("run.googleapis.com/execution_name", "").split("/")[-1],
                 "category": (p.get("category", "") if isinstance(p, dict) else ""),
                 "text": (text or "").rstrip(),
             })
         lines.reverse()  # oldest → newest, like a tail
-        return {"ok": True, "lines": lines}
+        # latest_execution = the newest run → the template draws a "run started here" divider at it.
+        return {"ok": True, "lines": lines,
+                "latest_execution": lines[-1]["execution"] if lines else ""}
     except Exception as e:  # noqa: BLE001 — surface to the operator
         return {"ok": False, "lines": [], "message": f"{type(e).__name__}: {e}"}
 
@@ -191,15 +194,18 @@ def pub_logs(series_id: str, limit: int = 200) -> dict:
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
                                      page_size=limit, max_results=limit):
             p = e.payload if isinstance(e.payload, dict) else {}
+            labels = e.labels or {}
             lines.append({
                 "time": e.timestamp.isoformat() if e.timestamp else "",
                 "severity": (e.severity or p.get("severity") or "INFO"),
                 "step": p.get("step", ""),
+                "execution": labels.get("run.googleapis.com/execution_name", "").split("/")[-1],
                 "category": p.get("category", ""),
                 "text": (p.get("message") if isinstance(e.payload, dict) else str(e.payload)) or "",
             })
         lines.reverse()
-        return {"ok": True, "lines": lines}
+        return {"ok": True, "lines": lines,
+                "latest_execution": lines[-1]["execution"] if lines else ""}
     except Exception as e:  # noqa: BLE001
         return {"ok": False, "lines": [], "message": f"{type(e).__name__}: {e}"}
 

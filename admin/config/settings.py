@@ -26,6 +26,8 @@ DEV_IAP_EMAIL = env("DEV_IAP_EMAIL", default="")
 GCP_PROJECT = env("GCP_PROJECT", default="ut-dnr-ugs-backend-tools")
 GCP_REGION = env("GCP_REGION", default="us-central1")
 STAC_BASE = env("STAC_BASE", default="https://maps-assets.geology.utah.gov/warehouse/stac").rstrip("/")
+# Viewer deep-link base — pub item opens at {VIEWER_BASE}?c=ugs-publications&i={series_id}.
+VIEWER_BASE = env("VIEWER_BASE", default="https://maps-assets.geology.utah.gov/warehouse/viewer/")
 # Dry-run: don't actually execute jobs (local dev / demo). Real runs need the SA + run.developer.
 JOBS_DRY_RUN = env.bool("JOBS_DRY_RUN", default=DEBUG)
 

@@ -48,7 +48,9 @@ def admin_required(view):
 
 
 def context_processor(request):
+    from django.conf import settings
     return {
         "iap_email": getattr(request, "iap_email", ""),
         "is_admin": getattr(request, "is_admin", False),
+        "VIEWER_BASE": settings.VIEWER_BASE,
     }

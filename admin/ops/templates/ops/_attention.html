@@ -28,7 +28,8 @@
     {% for p in att.pubs %}
     <div>
       <div class="flex items-center gap-3 px-3 py-2 bg-red-50/40 text-xs">
-        <span class="font-mono font-bold text-slate-800 w-28 shrink-0">{{ p.id }}</span>
+        <a href="{{ VIEWER_BASE }}?c=ugs-publications&i={{ p.id|urlencode }}" target="_blank"
+           class="font-mono font-bold text-blue-700 hover:underline w-28 shrink-0" title="Open in the warehouse viewer">{{ p.id }}</a>
         {% if p.step %}<span class="text-indigo-700">[{{ p.step }}]</span>{% endif %}
         <span class="text-red-700 flex-1 truncate" title="{{ p.text }}">{{ p.text }}</span>
         <button class="text-slate-600 hover:text-slate-900 underline shrink-0"

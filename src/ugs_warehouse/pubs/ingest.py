@@ -63,9 +63,10 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
 
     cogs = _ids_with_suffix(identity.COG_PREFIX, ".cog.tif")
     thumbs = _ids_with_suffix(identity.COG_PREFIX, ".thumb.png")
+    covers = _ids_with_suffix(identity.PUB_THUMB_PREFIX, ".png")  # PDF first-page covers
     units = _unit_ids()
     foot = _footprint_geoms()
-    print(f"[pubs] harvested: {len(cogs)} cogs, {len(units)} unit sets, {len(foot)} footprints")
+    print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(units)} unit sets, {len(foot)} footprints")
 
     def process_pub(p: dict) -> bool:
         sid = (p.get("series_id") or "").strip()
@@ -76,6 +77,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         item = sink_stac.build_item(
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
+            has_cover=up in covers,
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)

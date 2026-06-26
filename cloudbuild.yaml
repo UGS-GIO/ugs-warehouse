@@ -18,6 +18,7 @@ substitutions:
   _DATA_PATH: gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/
   _JOB: ugs-warehouse-ingest              # Cloud Run job (batch --all reingest). Distinct resource from the Pub/Sub topic of the same name below.
   _PUBS_JOB: ugs-pubs-ingest              # Cloud Run job: rebuild the ugs-publications STAC collection from pub metadata (no COG re-harvest)
+  _PUBTHUMB_JOB: ugs-pubs-thumbs          # Cloud Run job: render PDF first-page cover thumbnails for every pub (poppler)
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
@@ -199,6 +200,28 @@ steps:
       - --max-retries=1
       - --cpu=1
       - --memory=2Gi
+
+  # Cover thumbnails — render each pub's PDF first page → PNG in GCS (poppler/pdftoppm). Covers ALL
+  # pubs incl. non-spatial (Survey Notes, reports). Sharded + skip-existing like the COG harvest;
+  # run a `pubs-ingest` after to bind the new `preview` assets. Harvest image (has poppler); CSV+GCS.
+  - id: deploy-pubthumbs-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_PUBTHUMB_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.thumbs,--all
+      - --task-timeout=3600
+      - --max-retries=1
+      - --cpu=1
+      - --memory=2Gi
+      - --tasks=5
 
   # Rebind ugs-styles renders into STAC items (no reingest). The ugs-styles publish CI executes
   # this after pushing the styles CDN. Deployed here so it tracks the CURRENT warehouse image —

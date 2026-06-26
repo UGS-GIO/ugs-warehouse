@@ -97,7 +97,7 @@ def build_item(p: dict, attachments: list[dict], *,
                geom: dict | None = None, bbox: list[float] | None = None,
                fp_source: str | None = None,
                has_cog: bool = False, has_units: bool = False,
-               has_thumb: bool = False) -> dict:
+               has_thumb: bool = False, has_cover: bool = False) -> dict:
     """Build a pub STAC Item (collection-nested, via core.stac.build_item)."""
     sid = (p.get("series_id") or "").strip()
     yr = (p.get("pub_year") or "").strip()
@@ -122,6 +122,11 @@ def build_item(p: dict, attachments: list[dict], *,
     if has_thumb:
         assets["thumbnail"] = {"href": config.public_url(f"{identity.COG_PREFIX}/{sid.upper()}.thumb.png"),
                                "type": "image/png", "title": "Thumbnail", "roles": ["thumbnail"]}
+    # PDF first-page cover — a preview for ANY pub (incl. non-spatial). The harvested COG thumb (above)
+    # is preferred when present (added first → the viewer picks it); this covers everything else.
+    if has_cover:
+        assets["preview"] = {"href": config.public_url(f"{identity.PUB_THUMB_PREFIX}/{sid.upper()}.png"),
+                             "type": "image/png", "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
     if has_units:
         assets["units"] = {
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),

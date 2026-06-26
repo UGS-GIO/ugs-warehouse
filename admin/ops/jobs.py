@@ -42,9 +42,9 @@ STAGES = [
               "PMTiles · STAC. One DuckDB streaming pass."},
     {"n": "④", "title": "Styling", "jobs": ["restyle"],
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt."},
-    {"n": "⑤", "title": "Publications", "jobs": ["harvest", "pubs-ingest"],
-     "blurb": "Scanned geologic maps → COGs (GDAL) → STAC (3 collections). Harvest, then rebuild "
-              "pubs STAC to bind the new COGs."},
+    {"n": "⑤", "title": "Publications", "jobs": ["harvest", "thumbs", "pubs-ingest"],
+     "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
+              "STAC (3 collections). Harvest/thumbnail, then rebuild pubs STAC to bind."},
 ]
 
 
@@ -55,6 +55,9 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Runs as 5 parallel shards (each task strides 1/5 of the worklist).", danger=True, tasks=5),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
         "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
+    Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
+        "Render each pub's PDF first page → cover PNG (every pub incl. Survey Notes; SKIP_EXISTING; "
+        "5 shards). Then Rebuild pubs STAC to bind the previews.", tasks=5),
     Job("ingest", "ugs-warehouse-ingest", "Vector reingest (--all)",
         "Full vector reingest — gengis, feature_id, classification/table, proj:code, FK relationships.",
         danger=True),

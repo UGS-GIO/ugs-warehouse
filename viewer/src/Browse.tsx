@@ -63,6 +63,13 @@ const gCode = (it: ItemRef) => {
 };
 const gLabel = (it: ItemRef) => gType(it) || gCode(it);
 
+// Group the warehouse's fine ugs:topic into the 4 public map-pub topics (+ Other = sectioned off).
+const TOPIC_GROUP: Record<string, string> = {
+  hazards: "Hazards", "mineral-energy": "Energy & Minerals", hydro: "Groundwater & Wetlands",
+  geologic: "Geologic Map", surficial: "Geologic Map", geophysics: "Geologic Map",
+};
+const gTopic = (it: ItemRef) => TOPIC_GROUP[String(props(it)["ugs:topic"] ?? "")] ?? "Other";
+
 
 function AssetChips({ assets }: { assets: Record<string, Asset> }) {
   return (
@@ -201,6 +208,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const [mapOnly, setMapOnly] = useState(false);  // hide metadata-only items (no COG / no tiles)
   const [yearMin, setYearMin] = useState("");
   const [yearMax, setYearMax] = useState("");
+  const [topics, setTopics] = useState<string[]>([]);  // map-pub topic filter (multi-select)
 
   // Data-series facets — one chip per series code (DS, OFR, GQ…), with a count and the
   // human label. Multi-select: pick any combination; the selection lives in the URL
@@ -220,6 +228,15 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const toggleCode = (code: string) =>
     onSeries(sel.has(code) ? series.filter((c) => c !== code) : [...series, code]);
 
+  // Topic facets (the 4 map-pub topics + Other), only when items carry ugs:topic.
+  const topicFacets = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const it of items) if (props(it)["ugs:topic"]) m.set(gTopic(it), (m.get(gTopic(it)) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+  }, [items]);
+  const tsel = new Set(topics);
+  const toggleTopic = (t: string) => setTopics(tsel.has(t) ? topics.filter((x) => x !== t) : [...topics, t]);
+
   const needle = (query ?? q).trim().toLowerCase();
   const ymin = parseInt(yearMin, 10);
   const ymax = parseInt(yearMax, 10);
@@ -227,6 +244,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
     () => items.filter((it) => {
       if (needle && !haystack(it).includes(needle)) return false;
       if (sel.size && !sel.has(gCode(it))) return false;
+      if (tsel.size && !tsel.has(gTopic(it))) return false;
       if (mapOnly && !hasMapData(it)) return false;
       if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
         const y = gYear(it);
@@ -234,7 +252,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
       }
       return true;
     }),
-    [items, needle, series, mapOnly, yearMin, yearMax],
+    [items, needle, series, topics, mapOnly, yearMin, yearMax],
   );
 
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
@@ -273,6 +291,18 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         <span className={toggle(mode === "table")} onClick={() => setMode("table")}>Table</span>
         <span className={toggle(mode === "cards")} onClick={() => setMode("cards")}>Cards</span>
       </div>
+
+      {topicFacets.length > 1 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Topic</span>
+          {topicFacets.map(([t, n]) => (
+            <span key={t} className={toggle(tsel.has(t))} onClick={() => toggleTopic(t)}>{t} · {n}</span>
+          ))}
+          {tsel.size > 0 && (
+            <span className="cursor-pointer text-xs text-primary" onClick={() => setTopics([])}>clear</span>
+          )}
+        </div>
+      )}
 
       {facets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">

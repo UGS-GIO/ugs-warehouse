@@ -228,7 +228,8 @@ def _extent(items: list[dict]) -> dict:
 
 def _collection_doc(collection: str, path: str, item_ids: list[str],
                     extent: dict | None = None, *, title: str | None = None,
-                    service: bool | None = None, mappable: int | None = None) -> dict:
+                    service: bool | None = None, mappable: int | None = None,
+                    description: str | None = None) -> dict:
     """A collection.json at `{path}/collection.json`. `collection` is its STAC id (a series
     code like `DS` when nested, else the path). Root/parent links climb out per path depth;
     the OGC API Features link is added only for flat collections (serving topics — nested
@@ -241,7 +242,7 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
         "stac_version": STAC_VERSION,
         "id": collection,
         "title": title or prettify(collection),
-        "description": f"UGS warehouse — {title or collection}.",
+        "description": description or f"UGS warehouse — {title or collection}.",
         "license": "proprietary",
         "extent": extent or {"spatial": {"bbox": [UTAH_BBOX]},
                              "temporal": {"interval": [[None, None]]}},
@@ -372,6 +373,21 @@ def _write_json(doc: dict, object_path: str) -> None:
                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
 
 
+# Publication-series descriptions, verbatim from geology.utah.gov/map-pub. Set as the series
+# collection's STAC `description` (any client renders it; the viewer already shows it).
+SERIES_DESC = {
+    "B": "Bulletins are topically and/or geographically comprehensive — mostly original work or a comprehensive synthesis of existing data.",
+    "C": "Circulars address timely subjects, have a limited shelf life, and are geared toward a wide, non-specialized audience.",
+    "DS": "Data Series — datasets, databases, and accompanying documents; a repository for information gathered in support of UGS projects.",
+    "M": "The Map series includes original and compiled geologic quadrangle maps, economic-resource maps, and groundwater recharge/discharge maps.",
+    "MP": "Miscellaneous Publications — the principal series available to non-UGS authors; substantive works that need not conform to UGS format standards.",
+    "OFR": "Open-File Reports are documents intended to stand temporarily or permanently with minimal technical review and editing.",
+    "PI": "Public Information Series — brief topical reports or brochures making nontechnical geologic information available to the public.",
+    "RI": "Reports of Investigation present site- or project-specific investigations by UGS staff; generally of limited scope and/or duration.",
+    "SS": "Special Studies are substantive scientific works (like Bulletins), but with more restricted subject matter.",
+}
+
+
 def refresh_catalog() -> None:
     """Rebuild the root catalog + every collection.json by listing items in GCS.
 
@@ -400,7 +416,9 @@ def refresh_catalog() -> None:
             title = next((it.get("properties", {}).get("ugs:pub_type") for it in items
                           if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None
             mappable = sum(1 for it in items if _is_mappable(it))
-            _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title, mappable=mappable),
+            desc = SERIES_DESC.get(cid) if nested else None  # pub-series description (map-pub text)
+            _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
+                                        mappable=mappable, description=desc),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
             _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
             leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),

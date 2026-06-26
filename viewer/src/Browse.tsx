@@ -10,7 +10,7 @@ import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type Map
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, classificationEntries, cogAsset, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, tableColumns, viaLink } from "./stac";
+import { type Asset, citeLink, classificationEntries, cogAsset, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string;
@@ -204,7 +204,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   series: string[]; onSeries: (codes: string[]) => void;
 }) {
   const [q, setQ] = useState("");
-  const [mode, setMode] = useState<"table" | "cards">("table");
+  const [mode, setMode] = useState<"table" | "cards" | "thumbs">("table");
   const [mapOnly, setMapOnly] = useState(false);  // hide metadata-only items (no COG / no tiles)
   const [yearMin, setYearMin] = useState("");
   const [yearMax, setYearMax] = useState("");
@@ -289,6 +289,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         <span className={toggle(mapOnly)} title="Only items with a COG or vector tiles to display on the map"
           onClick={() => setMapOnly((v) => !v)}>Mappable</span>
         <span className={toggle(mode === "table")} onClick={() => setMode("table")}>Table</span>
+        <span className={toggle(mode === "thumbs")} onClick={() => setMode("thumbs")}>Thumbnails</span>
         <span className={toggle(mode === "cards")} onClick={() => setMode("cards")}>Cards</span>
       </div>
 
@@ -323,6 +324,25 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         <div className="overflow-x-auto">
           <DataTable columns={columns} data={rows} onRowClick={(it) => onOpen(it.href)}
             initialSorting={[{ id: "id", desc: false }]} />
+        </div>
+      ) : mode === "thumbs" ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+          {rows.map((it) => {
+            const th = thumbnailAsset(it.data);
+            return (
+              <div key={it.href} onClick={() => onOpen(it.href)}
+                className="cursor-pointer overflow-hidden rounded-md border border-border bg-card hover:ring-1 hover:ring-primary">
+                <div className="flex aspect-[3/4] items-center justify-center overflow-hidden bg-muted">
+                  {th ? <img src={th.href} alt={gTitle(it)} loading="lazy" className="h-full w-full object-cover" />
+                      : <span className="p-2 text-center font-mono text-xs text-muted-foreground">{gSeries(it)}</span>}
+                </div>
+                <div className="p-1.5">
+                  <div className="font-mono text-[11px] font-semibold text-foreground">{gSeries(it)}</div>
+                  <p className="line-clamp-2 text-[11px] text-muted-foreground">{gTitle(it)}</p>
+                </div>
+              </div>
+            );
+          })}
         </div>
       ) : (
         <div className={C.grid}>

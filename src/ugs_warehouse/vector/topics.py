@@ -1,10 +1,9 @@
 """Topic primitives.
 
 A `Topic` = a `{schema}.{layer}_current` Postgres serving table the warehouse
-ingests. There is no hard-coded registry: topics are discovered at runtime by
-each source backend (`source.discover()` / `source_postgrest.discover()`) or
-carried in the Pub/Sub trigger payload, so adding a new `_current` upstream
-is zero-config here.
+ingests. There is no hard-coded registry: topics are discovered at runtime via
+`source.discover()` or carried in the Pub/Sub trigger payload, so adding a new
+`_current` upstream is zero-config here.
 
 `MART_SCHEMAS` is the small list of dbt mart schemas the warehouse considers —
 discovery only scans these.

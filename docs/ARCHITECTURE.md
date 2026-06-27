@@ -27,10 +27,10 @@ flowchart TB
   end
   subgraph STY["4. Styling - ugs-styles"]
     SM["styles manifest"]
-    RS["restyle job - rebind renders by item id"]
+    RS["restyle job - rebind ugs:renders by item id"]
     SM --> RS
   end
-  RS -->|"renders block"| ST
+  RS -->|"ugs:renders + style asset"| ST
   subgraph PUBS["5. Publications"]
     MY["MySQL pubsdb - source of truth"]
     PGM["Postgres mirror - DuckDB postgres ext"]
@@ -117,7 +117,9 @@ which preserves object paths.
 The vector pipeline is end-to-end in production. The honest gaps:
 
 - ⬜ **Raster consumer** — blocked on ugs-ingest #169 (open draft); the promote step is not yet implemented.
-- ⬜ **Raster ingest** (soil-water time-series + one-off rasters) — design only.
+- 🟧 **Raster ingest** (soil-water time-series + one-off rasters) — the COG→STAC sink exists
+  (`raster/`, tested) and lands items in `ugs-rasters`; the end-to-end consumer is gated on the
+  promote step above.
 - 🟧 **STAC `datetime`** is ingest time, not data-validity time — waiting on an upstream validity timestamp.
 - 🟧 **Live publications source** (MySQL or Postgres mirror) instead of the vendored CSV snapshot.
 - 🟧 **FGDC metadata** variant + raster extension (ISO 19139 done for vector + pubs).

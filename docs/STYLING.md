@@ -61,7 +61,8 @@ The legend is derived from the bound style — no separate legend data, so it ca
 `match`/`step` color expressions, the per-category-layer shape (one flat-color layer + a `filter`
 per class), or a single swatch for a uniform style. The warehouse also emits
 `classification:classes` (value/name/color) on categorical items, which the viewer prefers when
-present. Explicit legend entries (icon renders, e.g. wells by box type) override the derivation.
+present (`value` + a slug `name` + a human `title` + `color_hint` — the viewer shows `title`).
+Explicit legend entries (icon renders, e.g. wells by box type) override the derivation.
 
 ## Operating — `restyle` (rebind without a reingest)
 

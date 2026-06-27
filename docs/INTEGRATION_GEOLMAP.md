@@ -117,7 +117,7 @@ Current catalog is flat (root → items). Change to root → collections → ite
    FeatureServer) + `pubs/harvest.py` (zip→COG→validate). Prove one map → COG locally.
 2. **Pubs footprints + vectors** — `pubs/footprints.py` (GeoParquet + PMTiles), `pubs/vectors.py`
    (GIS → GeoParquet), units PMTiles.
-3. **Pubs STAC via the core** — pub items (+ COG/raster web-map-link, `ugs:topic`, titles) emitted
+3. **Pubs STAC via the core** — pub items (+ cloud-optimized COG asset, `ugs:topic`, titles) emitted
    through `core/stac.py` into the `ugs-publications` collection of the one catalog.
 4. **Packaging + deploy** — `Dockerfile.harvest`, pubs deps as a `pyproject` extra, second Cloud Run
    Job in `cloudbuild.yaml` + `DEPLOY.md`. **Ship only after all phases pass.**
@@ -130,6 +130,7 @@ so it goes first and must leave the vector artifacts byte-for-byte equivalent.
 - COG compression: webp q90 (geolmap default) reads only on webp-enabled GDAL; the harvest image has
   it. Keep that default; document it.
 - `PUBS_DB_URL` (MySQL) is optional — snapshot CSVs are the default source of truth.
-- The `ugs:topic` classifier and web-map-links rendering apply to pub items too (COG via a COG/raster
-  web-map-link, not pmtiles).
+- The `ugs:topic` classifier applies to pub items too. A pub's COG is drawn from its cloud-optimized
+  `cog` asset (media type `…;profile=cloud-optimized`) — STAC Browser/viewer render it natively; no
+  web-map-links `cog` link (that extension defines no `cog` rel).
 - Thumbnails (`build_thumbnails.py`) optional — bring if STAC items want a `thumbnail` asset.

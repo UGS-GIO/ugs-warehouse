@@ -36,9 +36,9 @@ smoke against real `_current` data. It prints row count, 4326 bbox, and a sample
 A topic with **0 rows carrying geometry** is reported `SKIP` (rc=1) and never reaches
 the sinks — see the geometry guard below.
 
-**Tests:** there is no test suite yet. Validation is `ruff` + `--dry-run` + the mock
-smoke recipe (Docker postgis + fake-gcs-server) described in `docs/HANDOFF.md`. If you
-add tests, `pytest` is already a dev dep but no `tests/` dir exists.
+**Tests:** `pytest` over `tests/` — hermetic unit tests (in-memory GCS + fake manifests/DB,
+no network) covering the STAC builders, styles/restyle, related-FK emit, raster + pubs sinks,
+ISO, and topics. Run `python -m pytest tests/ -q`. Plus `ruff` + `--dry-run` for live smoke.
 
 ## Layout
 
@@ -47,10 +47,15 @@ Two **producers** on a **shared core**:
   upload/list + Cache-Control + CDN URLs), `stac` (item builder, collections hierarchy,
   derive-from-truth catalog refresh, web-map-links, titles). **Both producers emit through this.**
 - `vector/` — producer A: Postgres `_current` topics → DuckLake + GeoParquet + PMTiles + STAC.
-- `pubs/` — producer B (in progress): publications → COG + footprints + units + STAC. See
+- `pubs/` — producer B: publications → COG + footprints + units + cover thumbnails + STAC. See
   `docs/INTEGRATION_GEOLMAP.md`.
+- `raster/` — standalone COG → STAC (the `ugs-rasters` collection).
+- `restyle.py` — rebind `ugs:renders` from the ugs-styles manifest, no reingest (`docs/STYLING.md`).
 
-One STAC catalog spans both, laid out with collections (`ugs-serving-topics`, `ugs-publications`).
+Plus, outside `src/`: `admin/` (Django + HTMX ops console behind IAP — drive + observe the Cloud
+Run jobs), `service/` (Pub/Sub push handler), `featureserv/` (OGC API Features), `viewer/` (STAC
+viewer). One STAC catalog spans the producers — collections `ugs-serving-topics`,
+`ugs-publications`, `ugs-rasters`.
 
 ## Architecture (vector producer)
 
@@ -71,21 +76,11 @@ each row carries `target_epsg` (the CRS the WKB bytes are in) and `source_epsg`
 (H3 cell at res 9 from the centroid), and `ORDER BY ST_Hilbert(centroid)` so parquet
 row-groups bbox-prune well. Any new source backend MUST emit this same shape.
 
-**Swappable source backend (`SOURCE_BACKEND` env).** `ingest._backend()` picks the
-module: `postgres` (default, `source.py`, direct libpq via DuckDB postgres extension)
-or `postgrest` (`source_postgrest.py`, HTTP via the public PostgREST instance,
-GeoJSON re-encoded to WKB via shapely). PostgREST is a **bandaid** for running without
-a DB login — it has partial schema coverage (emp/wetlands/mapping only) and is slow.
-Both modules expose `read(topic)` and `discover()`; transform + sinks are unaffected
-by the choice. Swap back to `postgres` once DB creds land (tracked in GH issue #1).
-
-Two PostgREST realities to know: (1) it returns GeoJSON, and per RFC 7946 a geometry
-with **no `crs` member is WGS84/4326** — `source_postgrest` defaults `target_epsg`
-to 4326 in that case (pre-cutover rows carry an explicit `EPSG:3857` CRS extension;
-already-4326 rows omit it). (2) `web_anon` has **column-level grants that hide `geom`**
-on hazards/gen_gis — those topics come back with rows but null geometry (an Esri
-legacy `shape` column shows up instead), so they hit the geometry guard and SKIP.
-Direct `postgres` (a `schema_reader` login) is the real fix for full coverage.
+**Source backend.** `vector/source.py` only — direct libpq via the DuckDB postgres extension
+(a `schema_reader` login on mapping-db). It exposes `read(topic)` + `discover()`; transform +
+sinks are independent of it. (An earlier HTTP-PostgREST `source_postgrest.py` bandaid for running
+without a DB login was removed once direct creds landed — ignore references to `SOURCE_BACKEND`
+in any stale comment.)
 
 **Geometry guard.** `ingest._ingest()` checks geometry presence right after
 `transform.run()` and **before** any sink: if 0 rows have non-null `geom`, it logs
@@ -112,11 +107,11 @@ not a mutated shared file), so concurrent ingests converge (last writer wins, se
 Logic is pure builders in `core/stac.py` (`build_item`, `_group_items`, `_collection_doc`,
 `_root_doc`) — keep them pure for testing.
 
-**Rasters** are a planned parallel pipeline (COG + STAC primary; RaQuet optional),
-sharing the STAC catalog + GCS + obstore layers. See `docs/RASTER.md` — design only,
-not implemented.
+**Rasters** (`raster/`) — a standalone COG → STAC pipeline (`consume.py` + `sink_stac.py`)
+sharing the STAC catalog + GCS + obstore layers, landing items in the `ugs-rasters` collection.
+See `docs/RASTER.md`.
 
-**DuckLake catalog** (`catalog.py`): catalog metadata lives in a DuckLake-managed
+**DuckLake catalog** (`vector/ducklake.py`): catalog metadata lives in a DuckLake-managed
 Postgres DB (mapping-db in prod, or a local docker pg for dev); parquet data chunks
 land in GCS under `DUCKLAKE_DATA_PATH`. `attach()` is idempotent, loads the
 `spatial/postgres/ducklake` extensions, and pins DuckLake's metadata tables into the
@@ -152,13 +147,11 @@ produces the `.pmtiles`, then it uploads to GCS via obstore.
 
 | Var | Used by | Notes |
 |---|---|---|
-| `SOURCE_BACKEND` | `ingest.py` | `postgres` (default) or `postgrest` |
-| `POSTGRES_DSN` | `source.py` | libpq DSN; local dev via `cloud_sql_proxy` |
-| `POSTGREST_URL` / `POSTGREST_PAGE` | `source_postgrest.py` | HTTP bandaid backend |
-| `DUCKLAKE_CATALOG_DSN` | `catalog.py` | libpq DSN for catalog Postgres (required) |
-| `DUCKLAKE_DATA_PATH` | `catalog.py` | data-chunk path; `gs://…` triggers the obstore-fsspec route |
-| `DUCKLAKE_METADATA_SCHEMA` | `catalog.py` | Postgres schema for DuckLake metadata tables (default `ducklake_catalog`) |
-| `OVERRIDE_DATA_PATH` | `catalog.py` | `True` adds `OVERRIDE_DATA_PATH TRUE` to ATTACH — use when DATA_PATH differs from what the catalog recorded (e.g. sandbox vs prod) |
+| `POSTGRES_DSN` | `vector/source.py` | libpq DSN; local dev via `cloud_sql_proxy` |
+| `DUCKLAKE_CATALOG_DSN` | `vector/ducklake.py` | libpq DSN for catalog Postgres (required) |
+| `DUCKLAKE_DATA_PATH` | `vector/ducklake.py` | data-chunk path; `gs://…` triggers the obstore-fsspec route |
+| `DUCKLAKE_METADATA_SCHEMA` | `vector/ducklake.py` | Postgres schema for DuckLake metadata tables (default `ducklake_catalog`) |
+| `OVERRIDE_DATA_PATH` | `vector/ducklake.py` | `True` adds `OVERRIDE_DATA_PATH TRUE` to ATTACH — use when DATA_PATH differs from what the catalog recorded (e.g. sandbox vs prod) |
 | `WAREHOUSE_BUCKET` | `core/config.py` | one GCS bucket for all artifacts (private; served via CDN) |
 | `WAREHOUSE_{ARCHIVE,PMTILES,STAC}_PREFIX` | `core/config.py` | per-artifact object prefixes |
 | `WAREHOUSE_PUBLIC_BASE_URL` | `core/config.py` | https base for asset/CDN hrefs — the maps-assets CDN (path-preserved; bucket is private). Defaults to `https://maps-assets.geology.utah.gov` |

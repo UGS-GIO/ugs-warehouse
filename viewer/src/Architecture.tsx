@@ -40,10 +40,10 @@ const DIAGRAM = `flowchart TB
   end
   subgraph STY["④ Styling — ugs-styles"]
     SM["styles manifest (CDN)"]:::done
-    RS["restyle job<br/>rebind renders by STAC item id"]:::done
+    RS["restyle job<br/>rebind ugs:renders by STAC item id"]:::done
     SM --> RS
   end
-  RS -->|"renders block"| ST
+  RS -->|"ugs:renders + style asset"| ST
   subgraph PUBS["⑤ Publications"]
     MY["MySQL pubsdb<br/>source of truth"]:::planned
     PGM["Postgres mirror<br/>via DuckDB postgres ext"]:::planned

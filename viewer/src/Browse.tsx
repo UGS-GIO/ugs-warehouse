@@ -176,8 +176,9 @@ const humanize = (id: string) =>
 // The warehouse emits a placeholder "UGS warehouse — {id}." description; hide it as noise.
 const meaningfulDesc = (d?: string) => (d && !/^UGS warehouse — .*\.$/.test(d) ? d : null);
 
-function Collections({ collections, heading, onOpen }: {
+function Collections({ collections, heading, onOpen, onOpenItem }: {
   collections: CollectionSummary[]; heading: string; onOpen: (href: string) => void;
+  onOpenItem: (href: string) => void;
 }) {
   if (!collections.length) return <p className={`${C.muted} mt-4`}>Nothing here yet.</p>;
   return (
@@ -192,10 +193,11 @@ function Collections({ collections, heading, onOpen }: {
               <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{c.id}</div>
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
               {c.covers && c.covers.length > 0 && (
-                <div className="mt-2 flex gap-1 overflow-hidden" title="Latest covers">
+                <div className="mt-2 flex gap-1 overflow-hidden" title="Latest covers — click to open">
                   {c.covers.map((cv) => (
-                    <img key={cv.href} src={cv.thumb} alt={cv.title ?? ""} loading="lazy"
-                      className="h-16 w-12 shrink-0 rounded-sm border border-border bg-muted object-cover" />
+                    <img key={cv.href} src={cv.thumb} alt={cv.title ?? ""} loading="lazy" title={cv.title ?? ""}
+                      onClick={(e) => { e.stopPropagation(); onOpenItem(cv.href); }}
+                      className="h-16 w-12 shrink-0 cursor-pointer rounded-sm border border-border bg-muted object-cover hover:ring-1 hover:ring-primary" />
                   ))}
                 </div>
               )}
@@ -1350,6 +1352,7 @@ export function Browse(props: {
   itemSelected: boolean;
   onOpenCollection: (href: string) => void;
   onOpenItem: (href: string) => void;
+  onOpenCover: (href: string) => void;
   onBackToItems: () => void;
   onViewMap: () => void;
 }) {
@@ -1390,7 +1393,7 @@ export function Browse(props: {
       )}
       {atRoot && search.trim()
         ? <ItemList items={props.allItems} showCollection query={search} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
-        : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} />}
+        : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
     </div>
   );
 }

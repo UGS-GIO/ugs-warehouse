@@ -235,6 +235,9 @@ export function App() {
   // toggle / back-to-items keep the active series filter so it survives drilling in + out.
   const openCollection = (href: string) => go({ view, c: collIdOf(href) });
   const openItem = (href: string) => go({ view, c: collectionUrl, i: idOf(href), l: layerIds, s: seriesSel });
+  // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
+  // collection id from the item href (…/<collection>/<id>/<id>.json) so it resolves + the URL stays tidy.
+  const openCover = (href: string) => go({ view, c: href.split("/").slice(-3)[0], i: idOf(href) });
   const setSeries = (codes: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: layerIds, s: codes });
   const toggleLayer = (id: string) => {
     const set = new Set(layerIds ?? []);
@@ -319,6 +322,7 @@ export function App() {
           itemSelected={Boolean(itemUrl)}
           onOpenCollection={openCollection}
           onOpenItem={openItem}
+          onOpenCover={openCover}
           onBackToItems={() => go({ view, c: collectionUrl, s: seriesSel })}
           onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
         />

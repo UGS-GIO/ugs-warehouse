@@ -23,10 +23,10 @@ gcloud pubsub topics describe "${TOPIC}" --project="${PROJECT}" >/dev/null 2>&1 
   || gcloud pubsub topics create "${TOPIC}" --project="${PROJECT}"
 
 echo "→ run.invoker: ${RUNTIME_SA} on ${SERVICE} (idempotent)"
-gcloud run services add-iam-policy-binding "${SERVICE}" --region="${REGION}" \
+gcloud run services add-iam-policy-binding "${SERVICE}" --region="${REGION}" --project="${PROJECT}" \
   --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.invoker --quiet >/dev/null
 
-URL="$(gcloud run services describe "${SERVICE}" --region="${REGION}" --format='value(status.url)')"
+URL="$(gcloud run services describe "${SERVICE}" --region="${REGION}" --project="${PROJECT}" --format='value(status.url)')"
 echo "→ push subscription ${SUB} → ${URL}/"
 if gcloud pubsub subscriptions describe "${SUB}" --project="${PROJECT}" >/dev/null 2>&1; then
   gcloud pubsub subscriptions update "${SUB}" \
@@ -44,10 +44,10 @@ fi
 # executions that run as ${RUNTIME_SA}.
 echo "→ pipeline orchestrator: execute rights on the sub-jobs only (least privilege)"
 for SUBJOB in ugs-pubs-thumbs ugs-pubs-ingest; do
-  gcloud run jobs add-iam-policy-binding "${SUBJOB}" --region="${REGION}" \
+  gcloud run jobs add-iam-policy-binding "${SUBJOB}" --region="${REGION}" --project="${PROJECT}" \
     --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
 done
-gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
+gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" --project="${PROJECT}" \
   --member="serviceAccount:${RUNTIME_SA}" --role=roles/iam.serviceAccountUser --quiet >/dev/null
 
 echo "✓ provisioned"

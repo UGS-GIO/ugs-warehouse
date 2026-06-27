@@ -233,8 +233,8 @@ export function App() {
   return (
     <div className={mapView
       ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
-      : "min-h-screen bg-background text-sm text-foreground"}>
-      <header className={`flex items-center gap-3 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
+      : "min-h-screen overflow-x-hidden bg-background text-sm text-foreground"}>
+      <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
         <button onClick={() => go({ view: "catalog" })} title="Home — catalog root"
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
           <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="h-5 w-5 shrink-0" />

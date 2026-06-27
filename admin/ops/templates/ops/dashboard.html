@@ -64,8 +64,9 @@
             </div>
             <p class="text-xs text-slate-500 mt-1">{{ job.description }}</p>
             <div class="mt-2 flex items-center gap-2">
-              <button class="rounded bg-slate-800 text-white text-sm px-3 py-1 hover:bg-slate-700"
+              <button class="rounded bg-slate-800 text-white text-sm px-3 py-1 hover:bg-slate-700 disabled:opacity-50"
                 hx-post="{% url 'ops:trigger' job.key %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
+                hx-disabled-elt="this"
                 {% if job.danger %}hx-confirm="Run {{ job.label }}? This is heavy / costs money."{% endif %}>Run</button>
               <button class="rounded border border-slate-300 text-slate-700 text-sm px-3 py-1 hover:bg-slate-50"
                 onclick="toggleAccordion('logs-{{ job.key }}', '{% url 'ops:job_logs' job.key %}')">Live logs ▾</button>

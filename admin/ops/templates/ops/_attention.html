@@ -6,8 +6,8 @@
   <div class="flex items-center gap-3 text-xs">
     {% if att.pubs %}
     <span id="attention-reharvest-result"></span>
-    <button class="text-amber-700 hover:text-amber-900 font-medium underline"
-            hx-post="{% url 'ops:attention_reharvest' %}"
+    <button class="text-amber-700 hover:text-amber-900 font-medium underline disabled:opacity-50"
+            hx-post="{% url 'ops:attention_reharvest' %}" hx-disabled-elt="this"
             hx-target="#attention-reharvest-result" hx-swap="innerHTML"
             hx-confirm="Re-harvest all {{ att.pubs|length }} needs-attention pubs (--force)?">
       re-harvest all ({{ att.pubs|length }})

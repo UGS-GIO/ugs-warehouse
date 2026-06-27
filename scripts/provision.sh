@@ -12,6 +12,9 @@
 set -euo pipefail
 
 PROJECT="${PROJECT:-ut-dnr-ugs-backend-tools}"
+# Force EVERY gcloud call to this project, regardless of the active gcloud config (the bucket lives in
+# a different project, so an operator's active config is often the wrong one). Belt + the --project flags.
+export CLOUDSDK_CORE_PROJECT="${PROJECT}"
 REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-ugs-warehouse-service}"
 RUNTIME_SA="${RUNTIME_SA:-warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com}"

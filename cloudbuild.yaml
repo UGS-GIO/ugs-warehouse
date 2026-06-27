@@ -219,8 +219,8 @@ steps:
       - --args=-m,ugs_warehouse.pubs.thumbs,--all
       - --task-timeout=3600
       - --max-retries=1
-      - --cpu=1
-      - --memory=2Gi
+      - --cpu=2
+      - --memory=4Gi
       - --tasks=5
 
   # Rebind ugs-styles renders into STAC items (no reingest). The ugs-styles publish CI executes

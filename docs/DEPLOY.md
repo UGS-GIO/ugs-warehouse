@@ -47,6 +47,28 @@ gcloud projects add-iam-policy-binding $DEPLOY_PROJECT \
 gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
   --member="serviceAccount:$CB_SA" --role=roles/iam.serviceAccountUser --project=$DEPLOY_PROJECT
 # (Cloud Build SA usually already has artifactregistry.writer; grant if not.)
+
+# Admin Console SA — triggers and monitors the Cloud Run jobs
+gcloud iam service-accounts create warehouse-admin-run \
+  --display-name="Warehouse Admin Console Runtime" --project=$DEPLOY_PROJECT
+
+# Admin Console SA roles:
+#   trigger and monitor Cloud Run jobs
+gcloud projects add-iam-policy-binding $DEPLOY_PROJECT \
+  --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
+  --role=roles/run.developer
+#   act as the runtime SA to launch the jobs
+gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
+  --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
+  --role=roles/iam.serviceAccountUser --project=$DEPLOY_PROJECT
+#   read live + per-pub logs
+gcloud projects add-iam-policy-binding $DEPLOY_PROJECT \
+  --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
+  --role=roles/logging.viewer
+#   read COGs from the public bucket
+gcloud storage buckets add-iam-policy-binding gs://ut-dnr-ugs-maps-prod-public \
+  --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
+  --role=roles/storage.objectViewer
 ```
 
 ## 2. Build + deploy (every release)

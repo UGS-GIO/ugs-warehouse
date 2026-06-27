@@ -66,6 +66,17 @@
       const btn = document.getElementById('tzbtn');
       if (btn) btn.textContent = utc ? 'UTC' : 'Local';
     }
+    // Ops tabs (Run/Watch/Data): highlight the clicked one; htmx swaps the body (unmounting the
+    // previous tab's content stops its polling).
+    function opsTab(btn) {
+      document.querySelectorAll('.tab-btn').forEach((b) => {
+        b.classList.remove('border-slate-800', 'font-medium', 'text-slate-800');
+        b.classList.add('border-transparent', 'text-slate-500');
+      });
+      btn.classList.remove('border-transparent', 'text-slate-500');
+      btn.classList.add('border-slate-800', 'font-medium', 'text-slate-800');
+    }
+
     function toggleTz() { localStorage.setItem('tzmode', tzMode() === 'utc' ? 'local' : 'utc'); fmtTimes(); }
     document.addEventListener('DOMContentLoaded', fmtTimes);
     document.body.addEventListener('htmx:afterSwap', fmtTimes);  // re-format after status polls swap

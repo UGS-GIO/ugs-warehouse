@@ -1,147 +1,36 @@
 {% extends "base.html" %}
 {% block content %}
-<div class="flex items-start justify-between mb-4">
+<div class="flex items-start justify-between mb-3">
   <div>
     <h1 class="text-xl font-bold">Operations</h1>
-    <p class="text-sm text-slate-500">
-      The warehouse pipeline, in flow order — drive each stage and watch it work.{% if dry_run %} Dry-run — triggers are simulated.{% endif %}
-    </p>
+    <p class="text-sm text-slate-500">Drive the warehouse pipeline + watch it work.{% if dry_run %} Dry-run — triggers are simulated.{% endif %}</p>
   </div>
   <a href="{% url 'ops:publications' %}"
-     class="rounded bg-slate-800 text-white text-sm px-3 py-1.5 hover:bg-slate-700 whitespace-nowrap">
-    Publications Registry →
-  </a>
+     class="rounded bg-slate-800 text-white text-sm px-3 py-1.5 hover:bg-slate-700 whitespace-nowrap">Publications Registry →</a>
 </div>
 
-{# Same legend as the Architecture page, so console + diagram read alike. #}
-<div class="flex flex-wrap items-center gap-3 text-xs text-slate-500 mb-3">
-  <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded" style="background:#1a7f37"></span> built &amp; in production</span>
-  <span class="flex items-center gap-1.5"><span class="inline-block h-3 w-3 rounded" style="background:#9a6700"></span> partial / known gap</span>
-</div>
-
-{# Serving-surface health lights — loads + self-refreshes. #}
-<div class="mb-4 rounded-lg border border-slate-200 bg-white px-3 py-2"
+{# Serving-surface health lights — always visible, self-refreshes. #}
+<div class="mb-3 rounded-lg border border-slate-200 bg-white px-3 py-2"
      hx-get="{% url 'ops:service_health' %}" hx-trigger="load" hx-swap="innerHTML">
   <span class="text-xs text-slate-400">checking serving…</span>
 </div>
 
-{# Upstream ①/② are automatic — shown for orientation, not operator-triggered. #}
-<div class="rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-2.5 text-xs text-slate-500 mb-1">
-  <span class="font-medium text-slate-600">① dataELT → ② Pub/Sub #418</span> — promote a <code>_current</code> table and
-  the vector pipeline below runs automatically. No operator action here.
+{# "What to run next" — the actionable summary, always on top. #}
+<div class="mb-4" hx-get="{% url 'ops:health' %}" hx-trigger="load" hx-swap="innerHTML">
+  <div class="text-xs text-slate-400">checking…</div>
 </div>
 
-<section class="mb-5">
-  <h2 class="font-semibold mb-2 text-sm text-slate-600">What to run next</h2>
-  <div hx-get="{% url 'ops:health' %}" hx-trigger="load" hx-swap="innerHTML">
-    <div class="text-xs text-slate-400">checking…</div>
-  </div>
-</section>
+{# Tabs — only the active tab's content (and its polling) is mounted. #}
+<div class="flex gap-1 border-b border-slate-200 mb-3 text-sm">
+  <button class="tab-btn px-3 py-1.5 -mb-px border-b-2 border-slate-800 font-medium"
+          onclick="opsTab(this)" hx-get="{% url 'ops:tab_run' %}" hx-target="#tab-body" hx-swap="innerHTML">Run</button>
+  <button class="tab-btn px-3 py-1.5 -mb-px border-b-2 border-transparent text-slate-500 hover:text-slate-800"
+          onclick="opsTab(this)" hx-get="{% url 'ops:executions' %}" hx-target="#tab-body" hx-swap="innerHTML">Watch</button>
+  <button class="tab-btn px-3 py-1.5 -mb-px border-b-2 border-transparent text-slate-500 hover:text-slate-800"
+          onclick="opsTab(this)" hx-get="{% url 'ops:tab_data' %}" hx-target="#tab-body" hx-swap="innerHTML">Data</button>
+</div>
 
-<section class="mb-5">
-  <h2 class="font-semibold mb-2 text-sm text-slate-600">Executions</h2>
-  <div hx-get="{% url 'ops:executions' %}" hx-trigger="load" hx-swap="innerHTML">
-    <div class="text-xs text-slate-400">loading…</div>
-  </div>
-</section>
-
-<div class="space-y-1">
-  {% for stage in stages %}
-  <div class="flex justify-center text-slate-300 text-lg leading-none">↓</div>
-  <section class="rounded-lg border border-slate-200 bg-white p-4">
-    <div class="flex gap-3">
-      <div class="shrink-0 h-8 w-8 rounded-full bg-slate-800 text-white grid place-items-center text-sm font-semibold">{{ stage.n }}</div>
-      <div class="flex-1">
-        <h2 class="font-semibold">{{ stage.title }}</h2>
-        <p class="text-xs text-slate-500 mt-0.5">{{ stage.blurb }}</p>
-
-        <div class="mt-3 grid gap-3 sm:grid-cols-2">
-          {% for job in stage.jobs %}
-          <div class="rounded-lg border border-slate-200 p-3">
-            <div class="flex items-center justify-between">
-              <div class="font-medium text-sm">{{ job.label }}</div>
-              {% if job.danger %}<span class="text-[11px] rounded bg-amber-100 text-amber-800 px-1.5 py-0.5">heavy</span>{% endif %}
-            </div>
-            <p class="text-xs text-slate-500 mt-1">{{ job.description }}</p>
-            <div class="mt-2 flex items-center gap-2">
-              <button class="rounded bg-slate-800 text-white text-sm px-3 py-1 hover:bg-slate-700 disabled:opacity-50"
-                hx-post="{% url 'ops:trigger' job.key %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
-                hx-disabled-elt="this"
-                {% if job.danger %}hx-confirm="Run {{ job.label }}? This is heavy / costs money."{% endif %}>Run</button>
-              <button class="rounded border border-slate-300 text-slate-700 text-sm px-3 py-1 hover:bg-slate-50"
-                onclick="toggleAccordion('logs-{{ job.key }}', '{% url 'ops:job_logs' job.key %}')">Live logs ▾</button>
-              <span class="text-xs text-slate-400 font-mono truncate">{{ job.name }}</span>
-            </div>
-            <div id="result-{{ job.key }}" class="mt-2"
-                 hx-get="{% url 'ops:job_status' job.key %}" hx-trigger="load" hx-swap="innerHTML"></div>
-            <div id="logs-{{ job.key }}" class="hidden mt-2"></div>
-          </div>
-          {% endfor %}
-        </div>
-
-        {% if stage.n == '⑤' %}
-        <div class="mt-4 grid gap-3 sm:grid-cols-2">
-          <div class="rounded-lg border border-slate-200 p-3">
-            <div class="text-xs text-slate-500">Harvested (bucket · live)</div>
-            <div class="text-2xl font-bold">{% if harvested.ok %}{{ harvested.count }}{% else %}<span class="text-slate-300">—</span>{% endif %}</div>
-            <div class="text-xs text-slate-400">COGs in geolmap/cogs/</div>
-          </div>
-          <div class="rounded-lg border border-slate-200 p-3">
-            <div class="text-xs text-slate-500">STAC-bound</div>
-            <div class="text-2xl font-bold">{{ coverage.total_cogs }}<span class="text-sm font-normal text-slate-400"> / {{ coverage.total_items }}</span></div>
-            <div class="text-xs text-slate-400">pub items with a COG asset</div>
-          </div>
-        </div>
-        {% if harvested.ok and harvested.count > coverage.total_cogs %}
-        <p class="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-          {{ harvested.count }} harvested in the bucket but only {{ coverage.total_cogs }} bound into STAC —
-          run <span class="font-medium">Rebuild pubs STAC</span> above to bind the rest.
-        </p>
-        {% endif %}
-
-        <div id="attention" class="mt-4" hx-get="{% url 'ops:attention' %}" hx-trigger="load" hx-swap="innerHTML"></div>
-
-        <details class="mt-4">
-          <summary class="text-sm font-semibold text-slate-600 cursor-pointer">COG coverage by collection
-            <button class="ml-2 text-xs font-normal text-slate-500 hover:text-slate-800"
-                    hx-get="{% url 'ops:coverage' %}" hx-target="#coverage" hx-swap="innerHTML">refresh</button>
-          </summary>
-          <div id="coverage" class="mt-2">{% include "ops/_coverage.html" %}</div>
-        </details>
-        {% endif %}
-      </div>
-    </div>
-  </section>
-  {% endfor %}
-
-  {# ⑥ Storage + Serving — read-only; consumers read straight from the CDN. #}
-  <div class="flex justify-center text-slate-300 text-lg leading-none">↓</div>
-  <section class="rounded-lg border border-slate-200 bg-white p-4">
-    <div class="flex gap-3">
-      <div class="shrink-0 h-8 w-8 rounded-full bg-slate-800 text-white grid place-items-center text-sm font-semibold">⑥</div>
-      <div class="flex-1">
-        <h2 class="font-semibold">Storage + serving</h2>
-        <p class="text-xs text-slate-500 mt-0.5">
-          Artifacts land in the private GCS bucket → served read-only via the maps-assets CDN to the
-          STAC viewer + OGC API Features. No trigger — this reflects what's live.
-        </p>
-        <h3 class="text-sm font-semibold text-slate-600 mt-3 mb-1">Serving topics ({{ topics|length }})</h3>
-        <div class="overflow-x-auto">
-        <table class="w-full text-sm border-collapse">
-          <thead><tr class="text-left text-slate-500 text-xs"><th class="py-1">Topic</th><th>Styled</th><th>Rows</th></tr></thead>
-          <tbody>
-            {% for t in topics %}
-            <tr class="border-t border-slate-100">
-              <td class="py-1 font-mono">{{ t.id }}</td>
-              <td>{% if t.styled %}<span class="text-green-600">✓</span>{% else %}<span class="text-slate-300">—</span>{% endif %}</td>
-              <td class="text-slate-500">{{ t.rows|default:"" }}</td>
-            </tr>
-            {% endfor %}
-          </tbody>
-        </table>
-        </div>
-      </div>
-    </div>
-  </section>
+<div id="tab-body" hx-get="{% url 'ops:tab_run' %}" hx-trigger="load" hx-swap="innerHTML">
+  <div class="text-xs text-slate-400">loading…</div>
 </div>
 {% endblock %}

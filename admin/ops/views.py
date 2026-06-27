@@ -9,15 +9,25 @@ from . import jobs, stac
 
 @admin_required
 def dashboard(request):
-    # Group jobs into pipeline stages (mirrors the Architecture page) so the console reads as the
-    # data flow, not a flat button list.
+    # Lean shell — the tabs (Run/Watch/Data) load their own content, so the slow STAC/GCS reads only
+    # happen when you open the Data tab. Keeps the dashboard instant.
+    return render(request, "ops/dashboard.html", {"dry_run": settings.JOBS_DRY_RUN})
+
+
+@admin_required
+def tab_run(request):
+    """Run tab — the pipeline stages + job triggers (the 'act' surface)."""
     stages = [{**s, "jobs": [jobs.JOBS[k] for k in s["jobs"] if k in jobs.JOBS]} for s in jobs.STAGES]
-    return render(request, "ops/dashboard.html", {
-        "stages": stages,
+    return render(request, "ops/_run.html", {"stages": stages})
+
+
+@admin_required
+def tab_data(request):
+    """Data tab — coverage, attention, serving topics (the 'look' surface)."""
+    return render(request, "ops/_data.html", {
         "coverage": stac.cog_coverage(),
         "harvested": stac.harvested_bucket_count(),
         "topics": stac.serving_topics(),
-        "dry_run": settings.JOBS_DRY_RUN,
     })
 
 

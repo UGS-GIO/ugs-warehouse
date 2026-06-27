@@ -5,6 +5,8 @@ from . import views
 app_name = "ops"
 urlpatterns = [
     path("", views.dashboard, name="dashboard"),
+    path("tab/run", views.tab_run, name="tab_run"),
+    path("tab/data", views.tab_data, name="tab_data"),
     path("jobs/<str:key>/run", views.trigger, name="trigger"),
     path("jobs/<str:key>/status", views.job_status, name="job_status"),
     path("jobs/<str:key>/logs", views.job_logs, name="job_logs"),

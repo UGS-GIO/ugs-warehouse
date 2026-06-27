@@ -1,0 +1,48 @@
+{# Data tab — publications coverage + attention + serving topics (read-only views). #}
+<div class="grid gap-3 sm:grid-cols-2">
+  <div class="rounded-lg border border-slate-200 bg-white p-3">
+    <div class="text-xs text-slate-500">Harvested (bucket · live)</div>
+    <div class="text-2xl font-bold">{% if harvested.ok %}{{ harvested.count }}{% else %}<span class="text-slate-300">—</span>{% endif %}</div>
+    <div class="text-xs text-slate-400">COGs in geolmap/cogs/</div>
+  </div>
+  <div class="rounded-lg border border-slate-200 bg-white p-3">
+    <div class="text-xs text-slate-500">STAC-bound</div>
+    <div class="text-2xl font-bold">{{ coverage.total_cogs }}<span class="text-sm font-normal text-slate-400"> / {{ coverage.total_items }}</span></div>
+    <div class="text-xs text-slate-400">pub items with a COG asset</div>
+  </div>
+</div>
+{% if harvested.ok and harvested.count > coverage.total_cogs %}
+<p class="mt-2 text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+  {{ harvested.count }} harvested in the bucket but only {{ coverage.total_cogs }} bound into STAC —
+  run <span class="font-medium">Rebuild pubs STAC</span> (Run tab) to bind the rest.
+</p>
+{% endif %}
+
+<div id="attention" class="mt-4" hx-get="{% url 'ops:attention' %}" hx-trigger="load" hx-swap="innerHTML"></div>
+
+<details class="mt-4">
+  <summary class="text-sm font-semibold text-slate-600 cursor-pointer">COG coverage by collection
+    <button class="ml-2 text-xs font-normal text-slate-500 hover:text-slate-800"
+            hx-get="{% url 'ops:coverage' %}" hx-target="#coverage" hx-swap="innerHTML">refresh</button>
+  </summary>
+  <div id="coverage" class="mt-2">{% include "ops/_coverage.html" %}</div>
+</details>
+
+<div class="mt-5">
+  <h3 class="text-sm font-semibold text-slate-600 mb-1">Serving topics ({{ topics|length }})</h3>
+  <p class="text-xs text-slate-400 mb-2">Served read-only via the maps-assets CDN (STAC viewer + OGC API Features).</p>
+  <div class="overflow-x-auto">
+    <table class="w-full text-sm border-collapse">
+      <thead><tr class="text-left text-slate-500 text-xs"><th class="py-1">Topic</th><th>Styled</th><th>Rows</th></tr></thead>
+      <tbody>
+        {% for t in topics %}
+        <tr class="border-t border-slate-100">
+          <td class="py-1 font-mono">{{ t.id }}</td>
+          <td>{% if t.styled %}<span class="text-green-600">✓</span>{% else %}<span class="text-slate-300">—</span>{% endif %}</td>
+          <td class="text-slate-500">{{ t.rows|default:"" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>

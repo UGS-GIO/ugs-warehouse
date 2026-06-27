@@ -20,7 +20,13 @@ export type Link = {
   "ugs:item_count"?: number;
   "ugs:mappable_count"?: number;
 };
-export type Asset = { href: string; title?: string; type?: string; roles?: string[] };
+// Frictionless Table Schema foreignKey: this resource's `fields` reference `reference.resource`'s
+// (a serving-topic stem) `reference.fields`. Emitted by the warehouse from the schema registry.
+export type ForeignKey = { fields: string[]; reference: { resource: string; fields: string[] } };
+export type Asset = {
+  href: string; title?: string; type?: string; roles?: string[];
+  foreignKeys?: ForeignKey[]; "table:columns"?: TableColumn[];
+};
 export type StacDoc = {
   id?: string;
   type?: string;
@@ -48,6 +54,21 @@ export const viaLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "via");
 export const citeLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "cite-as");
+
+// Registry-driven relationships (the warehouse emits these from raw.schema_registry):
+//  • related links — the FK graph (item ↔ related serving-topic item)
+//  • related assets — aspatial child tables materialised as Parquet (roles incl "related")
+//  • own foreign keys — this layer's columns → another topic (on its non-related data asset)
+export const relatedLinks = (d: StacDoc | undefined): Link[] =>
+  (d?.links ?? []).filter((l) => l.rel === "related");
+export const relatedAssets = (d: StacDoc | undefined): { key: string; asset: Asset }[] =>
+  Object.entries(d?.assets ?? {})
+    .filter(([, a]) => a.roles?.includes("related"))
+    .map(([key, asset]) => ({ key, asset }));
+export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
+  Object.values(d?.assets ?? {})
+    .filter((a) => !a.roles?.includes("related"))
+    .flatMap((a) => a.foreignKeys ?? []);
 
 // Preview image: the thumbnail asset (role=thumbnail) where the harvest produced one.
 export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {

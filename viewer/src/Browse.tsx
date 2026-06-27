@@ -10,7 +10,7 @@ import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type Map
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, classificationEntries, cogAsset, defaultStyleUrl, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, classificationEntries, cogAsset, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string;
@@ -1128,6 +1128,61 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
 }
 
 // ---- item detail ----
+// A related item's STAC .json href → a viewer deep-link (?c=<collection>&i=<id>).
+const relatedViewerHref = (stacHref: string): string => {
+  const m = stacHref.match(/\/([^/]+)\/([^/]+)\/[^/]+\.json(?:\?.*)?$/);
+  return m ? `?c=${encodeURIComponent(m[1])}&i=${encodeURIComponent(m[2])}` : stacHref;
+};
+
+// Registry-driven relationships (FK graph): related layers, this layer's references, related tables.
+function RelatedPanel({ item }: { item: StacDoc }) {
+  const links = relatedLinks(item);
+  const tables = relatedAssets(item);
+  const fks = ownForeignKeys(item);
+  if (!links.length && !tables.length && !fks.length) return null;
+  return (
+    <section className="mt-4 max-w-[760px] rounded-md border border-border p-3">
+      <h3 className="text-sm font-semibold">Related</h3>
+      {links.length > 0 && (
+        <div className="mt-1.5">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Related layers</div>
+          <ul className="mt-1 space-y-0.5">
+            {links.map((l, i) => (
+              <li key={i}><a href={relatedViewerHref(l.href)} className="text-primary hover:underline">{l.title ?? "related"} ›</a></li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {fks.length > 0 && (
+        <div className="mt-2">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">This layer references</div>
+          <ul className="mt-1 space-y-0.5 text-xs">
+            {fks.map((fk, i) => (
+              <li key={i}><code>{fk.fields.join(", ")}</code> → <span className="font-medium">{humanize(fk.reference.resource)}</span>.<code>{fk.reference.fields.join(", ")}</code></li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {tables.length > 0 && (
+        <div className="mt-2">
+          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Related tables</div>
+          <ul className="mt-1 space-y-1 text-xs">
+            {tables.map(({ key, asset }) => (
+              <li key={key} className="flex flex-wrap items-center gap-2">
+                <span className="font-medium">{asset.title ?? key}</span>
+                <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
+                {asset.foreignKeys?.map((fk, i) => (
+                  <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)</span>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ItemDetail({ collectionId, item, onBack, onMap }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
 }) {
@@ -1169,6 +1224,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
       </div>
       <ExportPanel item={item} />
       <EndpointsPanel item={item} />
+      <RelatedPanel item={item} />
       <table className="mt-3 w-full max-w-[760px] table-fixed border-collapse text-sm">
         <tbody>
           {Object.entries(p)

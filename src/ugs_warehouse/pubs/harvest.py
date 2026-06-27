@@ -29,7 +29,7 @@ import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
-from ..core import gcs
+from ..core import config, gcs
 from . import identity
 
 FOOTPRINTS = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/services/"
@@ -49,8 +49,8 @@ class ZipTooLargeError(Exception):
     """Raised when a publication zip download exceeds the allowed size limit."""
     pass
 
-COG_MIME = "image/tiff; application=geotiff; profile=cloud-optimized"
-PARQUET_MIME = "application/vnd.apache.parquet"
+COG_MIME = config.COG_MIME
+PARQUET_MIME = config.PARQUET_MIME
 
 S = requests.Session()
 S.headers["User-Agent"] = "ugs-warehouse-pubs"

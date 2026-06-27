@@ -27,7 +27,7 @@ const C = {
   cardTitle: "mb-1.5 text-sm font-semibold leading-tight",
   badge: "mr-1.5 mt-1 inline-block rounded border border-border bg-muted px-1.5 py-px text-[11px] text-muted-foreground",
   chip: "mr-1.5 mt-1.5 inline-block rounded bg-primary px-2 py-0.5 text-[11px] text-primary-foreground no-underline hover:opacity-90",
-  input: "w-72 rounded-md border border-input bg-card px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground",
+  input: "w-full sm:w-72 rounded-md border border-input bg-card px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground",
   bar: "my-2 flex flex-wrap items-center gap-2.5",
   th: "cursor-pointer whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left text-[11px] uppercase tracking-wide text-muted-foreground",
   thPlain: "whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left text-[11px] uppercase tracking-wide text-muted-foreground",
@@ -69,6 +69,19 @@ const TOPIC_GROUP: Record<string, string> = {
   geologic: "Geologic Map", surficial: "Geologic Map", geophysics: "Geologic Map",
 };
 const gTopic = (it: ItemRef) => TOPIC_GROUP[String(props(it)["ugs:topic"] ?? "")] ?? "Other";
+
+// Sorted [key, {n, label}] facet counts. `extract` returns "" to skip an item; `label` (optional)
+// is the human name for a chip tooltip. Shared by the series + topic facets.
+function buildFacets(items: ItemRef[], extract: (it: ItemRef) => string, label?: (it: ItemRef) => string) {
+  const m = new Map<string, { n: number; label: string }>();
+  for (const it of items) {
+    const k = extract(it);
+    if (!k) continue;
+    const cur = m.get(k) ?? { n: 0, label: label?.(it) ?? "" };
+    m.set(k, { n: cur.n + 1, label: cur.label });
+  }
+  return [...m.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
+}
 
 
 function AssetChips({ assets }: { assets: Record<string, Asset> }) {
@@ -214,26 +227,14 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   // human label. Multi-select: pick any combination; the selection lives in the URL
   // (?s=DS,OFR) so a "just the series I care about" view is shareable. Counts derive from
   // the full set so they stay stable as you toggle.
-  const facets = useMemo(() => {
-    const m = new Map<string, { n: number; label: string }>();
-    for (const it of items) {
-      const code = gCode(it);
-      if (!code) continue;
-      const cur = m.get(code) ?? { n: 0, label: gLabel(it) };
-      m.set(code, { n: cur.n + 1, label: cur.label });
-    }
-    return [...m.entries()].sort((a, b) => b[1].n - a[1].n || a[0].localeCompare(b[0]));
-  }, [items]);
+  const facets = useMemo(() => buildFacets(items, gCode, gLabel), [items]);
   const sel = new Set(series);
   const toggleCode = (code: string) =>
     onSeries(sel.has(code) ? series.filter((c) => c !== code) : [...series, code]);
 
-  // Topic facets (the 4 map-pub topics + Other), only when items carry ugs:topic.
-  const topicFacets = useMemo(() => {
-    const m = new Map<string, number>();
-    for (const it of items) if (props(it)["ugs:topic"]) m.set(gTopic(it), (m.get(gTopic(it)) ?? 0) + 1);
-    return [...m.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [items]);
+  // Topic facets (the 4 map-pub topics + Other), only over items that carry ugs:topic.
+  const topicFacets = useMemo(
+    () => buildFacets(items, (it) => (props(it)["ugs:topic"] ? gTopic(it) : "")), [items]);
   const tsel = new Set(topics);
   const toggleTopic = (t: string) => setTopics(tsel.has(t) ? topics.filter((x) => x !== t) : [...topics, t]);
 
@@ -296,7 +297,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
       {topicFacets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
           <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Topic</span>
-          {topicFacets.map(([t, n]) => (
+          {topicFacets.map(([t, { n }]) => (
             <span key={t} className={toggle(tsel.has(t))} onClick={() => toggleTopic(t)}>{t} · {n}</span>
           ))}
           {tsel.size > 0 && (
@@ -326,7 +327,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
             initialSorting={[{ id: "id", desc: false }]} />
         </div>
       ) : mode === "thumbs" ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6">
           {rows.map((it) => {
             const th = thumbnailAsset(it.data);
             return (
@@ -998,7 +999,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
     case "pdf":
       return (
         <object data={asset.href} type="application/pdf"
-          className="mt-2 h-[640px] w-full max-w-[1100px] rounded-md border border-border">
+          className="mt-2 h-[400px] sm:h-[640px] w-full max-w-[1100px] rounded-md border border-border">
           <div className="p-3 text-xs text-muted-foreground">
             Can’t embed this PDF — <a href={asset.href} target="_blank" rel="noopener" className="text-primary">open it ↗</a>
           </div>

@@ -29,6 +29,12 @@ CATALOG_ID = os.environ.get("WAREHOUSE_CATALOG_ID", "ugs-warehouse")
 ARCHIVE_PREFIX = os.environ.get("WAREHOUSE_ARCHIVE_PREFIX", "warehouse/geoparquet")
 PMTILES_PREFIX = os.environ.get("WAREHOUSE_PMTILES_PREFIX", "warehouse/pmtiles")
 
+# Canonical media types for the cloud-native artifacts — one source of truth across all producers
+# (was redefined in ~8 sink/harvest modules).
+COG_MIME = "image/tiff; application=geotiff; profile=cloud-optimized"
+PARQUET_MIME = "application/vnd.apache.parquet"
+PMTILES_MIME = "application/vnd.pmtiles"
+
 # OGC API Features endpoint (e.g., pg_featureserv base URL)
 PGF_BASE_URL = os.environ.get(
     "PGF_BASE_URL",

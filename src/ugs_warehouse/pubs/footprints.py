@@ -23,8 +23,8 @@ FOOTPRINTS_URL = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/serv
                   "Geologic_Map_Footprints_View/FeatureServer/0/query")
 PARQUET_OBJECT = f"{identity.FOOTPRINTS_PREFIX}/footprints.parquet"
 PMTILES_OBJECT = f"{identity.FOOTPRINTS_PREFIX}/footprints.pmtiles"
-PARQUET_MIME = "application/vnd.apache.parquet"
-PMTILES_MIME = "application/vnd.pmtiles"
+PARQUET_MIME = config.PARQUET_MIME
+PMTILES_MIME = config.PMTILES_MIME
 
 
 def _fetch() -> list[dict]:

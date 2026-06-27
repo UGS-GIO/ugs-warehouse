@@ -70,6 +70,12 @@ def _job_path(job: Job) -> str:
     return f"projects/{settings.GCP_PROJECT}/locations/{settings.GCP_REGION}/jobs/{job.name}"
 
 
+def _logging_client():
+    """Cloud Logging client (lazy import — keeps the module importable without GCP libs/creds)."""
+    import google.cloud.logging as gcloud_logging
+    return gcloud_logging.Client(project=settings.GCP_PROJECT)
+
+
 def _fmt_dur(start, end) -> str:
     """Run duration 'Nm SSs' / 'Ns' when both ends are known, else ''."""
     if not (start and end):
@@ -150,8 +156,7 @@ def logs(key: str, limit: int = 80) -> dict:
         return {"ok": True, "dry_run": True, "lines": [],
                 "message": "DRY-RUN — live logs show here once a real run is triggered."}
     try:
-        import google.cloud.logging as gcloud_logging
-        client = gcloud_logging.Client(project=settings.GCP_PROJECT)
+        client = _logging_client()
         flt = f'resource.type="cloud_run_job" resource.labels.job_name="{job.name}"'
         lines = []
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
@@ -207,8 +212,7 @@ def pub_logs(series_id: str, limit: int = 200) -> dict:
         return {"ok": True, "dry_run": True, "lines": [],
                 "message": "DRY-RUN — per-pub logs appear here after a real harvest run."}
     try:
-        import google.cloud.logging as gcloud_logging
-        client = gcloud_logging.Client(project=settings.GCP_PROJECT)
+        client = _logging_client()
         sid = (series_id or "").replace('"', "").replace("\\", "")  # guard the filter literal
         flt = (f'resource.type="cloud_run_job" resource.labels.job_name="{HARVEST_JOB}" '
                f'jsonPayload.series_id="{sid}"')
@@ -298,8 +302,7 @@ def attention_pubs(limit: int = 200) -> dict:
         return {"ok": True, "dry_run": True, "pubs": [],
                 "message": "DRY-RUN — pubs needing attention appear here after a real run."}
     try:
-        import google.cloud.logging as gcloud_logging
-        client = gcloud_logging.Client(project=settings.GCP_PROJECT)
+        client = _logging_client()
         flt = (f'resource.type="cloud_run_job" resource.labels.job_name="{HARVEST_JOB}" '
                f'jsonPayload.category="attention"')
         seen: dict[str, dict] = {}

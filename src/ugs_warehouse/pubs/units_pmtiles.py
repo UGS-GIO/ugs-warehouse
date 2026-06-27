@@ -18,7 +18,7 @@ import geopandas as gpd
 import requests
 
 from ..core import config, gcs
-from . import identity
+from . import identity, source
 
 DEFAULT_POSTGREST = "https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app"
 POSTGREST = os.environ.get("POSTGREST_URL", DEFAULT_POSTGREST).rstrip("/")
@@ -26,7 +26,7 @@ TABLE = "seamlessgeolunits"
 COLS = "unit_symbol,unit_name,age,scale,series_id,shape"
 
 PMTILES_OBJECT = f"{identity.UNITS_PREFIX}/units.pmtiles"
-PMTILES_MIME = "application/vnd.pmtiles"
+PMTILES_MIME = config.PMTILES_MIME
 
 
 def _fetch_features() -> list[dict]:
@@ -101,23 +101,7 @@ def build_units(minz: int = 4, maxz: int = 14) -> None:
     is_pg = dsn and (dsn.startswith(("postgres://", "postgresql://")) or "host=" in dsn)
 
     if is_pg:
-        # Append PGPASSWORD if needed
-        password = os.environ.get("PGPASSWORD")
-        if password and "password=" not in dsn and not any(f"@{host}" in dsn for host in ("localhost", "127.0.0.1")):
-            if dsn.startswith(("postgres://", "postgresql://")):
-                if "@" in dsn:
-                    from urllib.parse import urlparse, urlunparse
-                    u = urlparse(dsn)
-                    if not u.password:
-                        netloc = f"{u.username}:{password}@{u.hostname}"
-                        if u.port:
-                            netloc += f":{u.port}"
-                        dsn = urlunparse((u.scheme, netloc, u.path, u.params, u.query, u.fragment))
-                else:
-                    dsn = f"{dsn} password={password}"
-            else:
-                dsn = f"{dsn} password={password}"
-
+        dsn = source.inject_pg_password(dsn)
         gdf = _fetch_from_db(dsn)
     else:
         print(f"Pulling {TABLE} (is_current) from PostgREST: {POSTGREST}")

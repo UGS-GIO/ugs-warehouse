@@ -18,7 +18,7 @@ import duckdb
 from ..core import config, gcs
 from .topics import Topic
 
-PARQUET_MIME = "application/vnd.apache.parquet"
+PARQUET_MIME = config.PARQUET_MIME
 
 
 def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:

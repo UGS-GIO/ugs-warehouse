@@ -9,7 +9,7 @@ from __future__ import annotations
 from ..core import config, stac
 from .identity import Raster
 
-COG_MIME = "image/tiff; application=geotiff; profile=cloud-optimized"
+COG_MIME = config.COG_MIME
 
 
 def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None,

@@ -29,27 +29,32 @@ def _is_postgres() -> bool:
     return PUBS_DB_URL.startswith(("postgres://", "postgresql://")) or "host=" in PUBS_DB_URL
 
 
+def inject_pg_password(dsn: str) -> str:
+    """Fold the PGPASSWORD env var into a Postgres DSN when it isn't already embedded (and isn't a
+    local socket). Shared by the pubs source reader + the units PMTiles builder."""
+    password = os.environ.get("PGPASSWORD")
+    if not (password and "password=" not in dsn
+            and not any(f"@{host}" in dsn for host in ("localhost", "127.0.0.1"))):
+        return dsn
+    if not dsn.startswith(("postgres://", "postgresql://")):
+        return f"{dsn} password={password}"
+    if "@" not in dsn:
+        return f"{dsn} password={password}"
+    from urllib.parse import urlparse, urlunparse
+    u = urlparse(dsn)
+    if u.password:
+        return dsn
+    netloc = f"{u.username}:{password}@{u.hostname}"
+    if u.port:
+        netloc += f":{u.port}"
+    return urlunparse((u.scheme, netloc, u.path, u.params, u.query, u.fragment))
+
+
 def _from_postgres(table: str) -> list[dict]:
     import duckdb
     con = duckdb.connect()
     con.execute("INSTALL postgres; LOAD postgres;")
-    password = os.environ.get("PGPASSWORD")
-    dsn = PUBS_DB_URL
-    if password and "password=" not in dsn and not any(f"@{host}" in dsn for host in ("localhost", "127.0.0.1")):
-        if dsn.startswith(("postgres://", "postgresql://")):
-            if "@" in dsn:
-                from urllib.parse import urlparse, urlunparse
-                u = urlparse(dsn)
-                if not u.password:
-                    netloc = f"{u.username}:{password}@{u.hostname}"
-                    if u.port:
-                        netloc += f":{u.port}"
-                    dsn = urlunparse((u.scheme, netloc, u.path, u.params, u.query, u.fragment))
-            else:
-                dsn = f"{dsn} password={password}"
-        else:
-            dsn = f"{dsn} password={password}"
-
+    dsn = inject_pg_password(PUBS_DB_URL)
     con.execute(f"ATTACH '{dsn}' AS pg_pubs (TYPE POSTGRES, READ_ONLY)")
 
     if "." in table:

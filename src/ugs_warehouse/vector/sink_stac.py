@@ -16,8 +16,8 @@ from . import ducklake
 from .topics import Topic
 
 COLLECTION = "ugs-serving-topics"
-PARQUET_MIME = "application/vnd.apache.parquet"
-PMTILES_MIME = "application/vnd.pmtiles"
+PARQUET_MIME = config.PARQUET_MIME
+PMTILES_MIME = config.PMTILES_MIME
 
 
 def _bbox(con: duckdb.DuckDBPyConnection, view: str) -> list[float]:

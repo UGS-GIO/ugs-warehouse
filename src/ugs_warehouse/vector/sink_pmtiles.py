@@ -26,7 +26,7 @@ from .topics import Topic
 
 TIPPECANOE_BIN = os.environ.get("TIPPECANOE_BIN", "tippecanoe")
 EXTRA_OPTS = shlex.split(os.environ.get("TIPPECANOE_OPTS", ""))
-PMTILES_MIME = "application/vnd.pmtiles"
+PMTILES_MIME = config.PMTILES_MIME
 
 
 def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:

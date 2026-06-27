@@ -34,7 +34,7 @@ from ..core import config, gcs, stac
 from . import source
 from .topics import Topic
 
-PARQUET_MIME = "application/vnd.apache.parquet"
+PARQUET_MIME = config.PARQUET_MIME
 # FK targets are serving topics (the common case); their items live in this collection. Cross-
 # collection targets (e.g. a publication) would need richer resolution — a follow-up.
 _SERVING_COLLECTION = "ugs-serving-topics"

@@ -18,11 +18,11 @@ import sys
 import tempfile
 import zipfile
 
-from ..core import gcs
+from ..core import config, gcs
 from . import identity, source, harvest
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
-PARQUET_MIME = "application/vnd.apache.parquet"
+PARQUET_MIME = config.PARQUET_MIME
 
 
 def _safe(name: str) -> str:

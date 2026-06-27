@@ -3,7 +3,22 @@ name: Test
 on:
   push:
     branches: [main]
+    # Backend tests only — viewer/docs-only commits have no Python to test.
+    paths-ignore:
+      - 'viewer/**'
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'docs-requirements.txt'
+      - 'cloudbuild-docs.yaml'
+      - 'cloudbuild-viewer.yaml'
   pull_request:
+    paths-ignore:
+      - 'viewer/**'
+      - 'docs/**'
+      - 'mkdocs.yml'
+      - 'docs-requirements.txt'
+      - 'cloudbuild-docs.yaml'
+      - 'cloudbuild-viewer.yaml'
 
 jobs:
   pytest:
@@ -13,6 +28,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+          cache: 'pip'
+          cache-dependency-path: 'pyproject.toml'
       - name: Install
         run: pip install -e ".[dev]"
       - name: Ruff

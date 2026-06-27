@@ -33,10 +33,11 @@ jobs:
 
       - uses: google-github-actions/setup-gcloud@v2
 
-      # Sync (no --async): stream Cloud Build logs and block until it finishes, so this run
-      # goes red if the build/deploy actually fails (not just on submit).
+      # --async: fire-and-forget so the GitHub runner exits right after submit instead of
+      # billing minutes while Cloud Build runs. Trade-off: this run goes green on a successful
+      # SUBMIT, not on the build result — check the Cloud Build console for build/deploy status.
       - name: Build + deploy via Cloud Build
         run: |
-          gcloud builds submit --config=cloudbuild.yaml . \
+          gcloud builds submit --async --config=cloudbuild.yaml . \
             --project=ut-dnr-ugs-backend-tools \
             --substitutions=_TAG=${GITHUB_SHA::7}

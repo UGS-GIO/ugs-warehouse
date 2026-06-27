@@ -10,8 +10,9 @@ on:
       - 'docs-requirements.txt'
       - 'cloudbuild-docs.yaml'
 
-# Docs-only fast deploy: submit cloudbuild-docs.yaml (MkDocs build + rsync, NO image builds) and
-# wait for it (sync) so this run reflects the real deploy result. Mirrors viewer.yml.
+# Docs-only fast deploy: submit cloudbuild-docs.yaml (MkDocs build + rsync, NO image builds).
+# --async so the runner exits on submit instead of billing minutes waiting — build result is in
+# the Cloud Build console, not this run's status. Mirrors viewer.yml.
 jobs:
   deploy-docs:
     runs-on: ubuntu-latest
@@ -31,5 +32,5 @@ jobs:
 
       - name: Build + deploy docs via Cloud Build
         run: |
-          gcloud builds submit --config=cloudbuild-docs.yaml . \
+          gcloud builds submit --async --config=cloudbuild-docs.yaml . \
             --project=ut-dnr-ugs-backend-tools

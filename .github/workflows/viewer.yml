@@ -8,8 +8,9 @@ on:
       - 'viewer/**'
 
 # Fast path for viewer-only changes: submit cloudbuild-viewer.yaml (Vite build + rsync, NO image
-# builds) and wait for it (sync) so this run reflects the real deploy result. Full-stack changes
-# go through deploy.yml instead (which ignores viewer-only commits).
+# builds). --async so the runner exits on submit instead of billing minutes waiting — build result
+# is in the Cloud Build console, not this run's status. Full-stack changes go through deploy.yml
+# instead (which ignores viewer-only commits).
 jobs:
   deploy-viewer:
     runs-on: ubuntu-latest
@@ -29,5 +30,5 @@ jobs:
 
       - name: Build + deploy viewer via Cloud Build
         run: |
-          gcloud builds submit --config=cloudbuild-viewer.yaml . \
+          gcloud builds submit --async --config=cloudbuild-viewer.yaml . \
             --project=ut-dnr-ugs-backend-tools

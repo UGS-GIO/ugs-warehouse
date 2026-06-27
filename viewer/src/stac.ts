@@ -20,12 +20,13 @@ export type Link = {
   "ugs:item_count"?: number;
   "ugs:mappable_count"?: number;
 };
-// Frictionless Table Schema foreignKey: this resource's `fields` reference `reference.resource`'s
-// (a serving-topic stem) `reference.fields`. Emitted by the warehouse from the schema registry.
+// ugs:foreign_keys — a UGS-prefixed custom field (FK join detail has no STAC extension). This
+// resource's `fields` reference `reference.resource`'s (a serving-topic stem) `reference.fields`.
+// Value shape mirrors Frictionless Table Schema. Emitted by the warehouse from the schema registry.
 export type ForeignKey = { fields: string[]; reference: { resource: string; fields: string[] } };
 export type Asset = {
   href: string; title?: string; type?: string; roles?: string[];
-  foreignKeys?: ForeignKey[]; "table:columns"?: TableColumn[];
+  "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];
 };
 export type StacDoc = {
   id?: string;
@@ -68,7 +69,7 @@ export const relatedAssets = (d: StacDoc | undefined): { key: string; asset: Ass
 export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
   Object.values(d?.assets ?? {})
     .filter((a) => !a.roles?.includes("related"))
-    .flatMap((a) => a.foreignKeys ?? []);
+    .flatMap((a) => a["ugs:foreign_keys"] ?? []);
 
 // Preview image: the thumbnail asset (role=thumbnail) where the harvest produced one.
 export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
@@ -115,7 +116,8 @@ export const classificationEntries = (
   return cls.map((c) => {
     const o = c as { name?: unknown; title?: unknown; value?: unknown; color_hint?: unknown };
     return {
-      label: String(o.name ?? o.title ?? o.value ?? ""),
+      // `title` is the human label; `name` is a machine token (slug). Prefer the label.
+      label: String(o.title ?? o.name ?? o.value ?? ""),
       color: typeof o.color_hint === "string" ? `#${o.color_hint}` : "#888888",
     };
   });
@@ -130,12 +132,12 @@ export type RenderBlock = {
 // All renders on an item (empty when none). A layer can carry several (e.g. wells:
 // by-purpose + by-boxtype) — the viewer offers a switcher over these.
 export const rendersOf = (d?: StacDoc): Record<string, RenderBlock> =>
-  (d?.properties as { renders?: Record<string, RenderBlock> } | undefined)?.renders ?? {};
+  (d?.properties as { "ugs:renders"?: Record<string, RenderBlock> } | undefined)?.["ugs:renders"] ?? {};
 
-// Default MapLibre GL style_url from the render extension (ugs-styles bridge), if bound.
-// Falls back to the first render. Undefined when the item carries no `renders`.
+// Default MapLibre GL style_url from the `ugs:renders` block (ugs-styles bridge), if bound.
+// Falls back to the first render. Undefined when the item carries no `ugs:renders`.
 export const defaultStyleUrl = (d: StacDoc | undefined): string | undefined => {
-  const renders = (d?.properties as { renders?: Record<string, { style_url?: string }> } | undefined)?.renders;
+  const renders = (d?.properties as { "ugs:renders"?: Record<string, { style_url?: string }> } | undefined)?.["ugs:renders"];
   if (!renders) return undefined;
   return (renders.default ?? Object.values(renders)[0])?.style_url;
 };

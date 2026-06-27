@@ -98,13 +98,15 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         if md.get(src_key):
             props[prop] = md[src_key]
 
-    # GeoParquet archive. `table:columns` describes the schema in-catalog; Frictionless `foreignKeys`
-    # (this topic's outgoing FKs) declare which columns reference what. Both are standard.
+    # GeoParquet archive. `table:columns` is the standard STAC Table extension. `ugs:foreign_keys`
+    # (this topic's outgoing FKs) is a UGS-prefixed custom field — the FK join detail has no STAC
+    # extension, so it's namespaced per STAC best practice (full-spec-compliant: prefixed, not
+    # declared in stac_extensions since there's no resolvable schema). Shape mirrors Frictionless.
     data_asset = {"href": config.public_url(archive_path), "type": PARQUET_MIME,
                   "roles": ["data"], "title": "GeoParquet archive (native geometry)",
                   "table:columns": _table_columns(con, view)}
     if rel_fks:
-        data_asset["foreignKeys"] = rel_fks
+        data_asset["ugs:foreign_keys"] = rel_fks
 
     assets = {
         "data": data_asset,
@@ -113,7 +115,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         "ducklake": {"href": ducklake_uri, "type": "application/x-ducklake-table",
                      "roles": ["data"], "title": "DuckLake table (native geometry)"},
         # Aspatial related tables (e.g. UCRC boxes/photos/attachments) materialised as Parquet,
-        # each carrying its own Frictionless `foreignKeys` (child → this topic) + `table:columns`.
+        # each carrying its own `ugs:foreign_keys` (child → this topic) + `table:columns`.
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }

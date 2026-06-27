@@ -24,7 +24,7 @@ GeoTIFF, and a STAC catalog**, served from a CDN with (mostly) no running servic
 
 - :material-palette: **[Styling](STYLING.md)**
 
-    How `ugs-styles` binds cartography to catalog items via the STAC render extension.
+    How `ugs-styles` binds cartography to catalog items via a `ugs:renders` block + `style` asset.
 
 </div>
 

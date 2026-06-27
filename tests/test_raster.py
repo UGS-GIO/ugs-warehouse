@@ -19,13 +19,17 @@ def test_timeseries_identity():
     assert r.cog_object_path == "raster/cogs/soil_water/soil_water_20260601T000000.cog.tif"
 
 
-def test_build_item_has_cog_asset_and_link():
+def test_build_item_cog_asset_no_webmap_link():
     item = sink_stac.build_item(Raster(layer="slope"), bbox=[-114, 37, -109, 42], geometry=None, has_thumbnail=True)
     assert item["collection"] == RASTERS_COLLECTION
+    # The COG is advertised by its cloud-optimized ASSET (not a web-map-links `cog` link, which
+    # isn't a valid web-map-links rel — see raster.sink_stac). STAC Browser/viewer render the asset.
     assert "cloud-optimized" in item["assets"]["cog"]["type"]
+    assert "visual" in item["assets"]["cog"]["roles"]
     assert item["assets"]["thumbnail"]["roles"] == ["thumbnail"]
     assert item["geometry"]["type"] == "Polygon"  # derived from bbox
-    assert any(link["rel"] == "cog" for link in item["links"])
+    assert not any(link["rel"] == "cog" for link in item["links"])
+    assert "web-map-links" not in " ".join(item.get("stac_extensions") or [])
 
 
 def test_stac_item_from_record_filters_props():

@@ -49,7 +49,7 @@ def test_resolve_emits_links_fks_and_aspatial_assets(monkeypatch):
                         lambda con, child, schema, disp, rel, bs, parent: {
                             "href": "h", "type": related.PARQUET_MIME,
                             "roles": ["data", "related"], "title": disp,
-                            "foreignKeys": [related._foreign_key(rel)]})
+                            "ugs:foreign_keys": [related._foreign_key(rel)]})
 
     def fake_pg(con, sql):
         if "domain_topic =" in sql:  # outgoing FKs of the parent
@@ -117,7 +117,7 @@ def test_sink_stac_wires_related(monkeypatch):
 
     assets = captured["assets"]
     assert {"data", "pmtiles", "ducklake", "boxes"} <= set(assets)
-    assert assets["data"]["foreignKeys"] == related_info["foreign_keys"]  # FK on the data asset
+    assert assets["data"]["ugs:foreign_keys"] == related_info["foreign_keys"]  # FK on the data asset
     assert "related" in assets["boxes"]["roles"]
     # related link appended to the item's links; Table ext declared (boxes has table:columns).
     assert any(lk.get("rel") == "related" for lk in captured["extra_links"])

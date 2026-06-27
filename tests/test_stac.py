@@ -37,12 +37,6 @@ def test_pmtiles_link():
     assert link["pmtiles:layers"] == ["lyr"]
 
 
-def test_cog_link():
-    link = stac.cog_link("http://x/a.tif")
-    assert link["rel"] == "cog"
-    assert "cloud-optimized" in link["type"]
-
-
 def test_build_item_has_nested_links_and_datetime():
     item = stac.build_item(
         item_id="x", collection="ugs-serving-topics", geometry=None, bbox=[0, 1, 2, 3],
@@ -115,7 +109,7 @@ def test_subcatalog_doc_children():
                                 {"id": "DS", "title": "Data Series", "count": 2}],
                                title="Publications")
     assert doc["type"] == "Catalog"
-    assert doc["summaries"]["ugs:item_count"] == 5
+    assert doc["ugs:item_count"] == 5  # top-level prefixed extra, not `summaries` (Catalogs lack it)
     kids = [(lnk["href"], lnk.get("title"), lnk.get("ugs:item_count"))
             for lnk in doc["links"] if lnk["rel"] == "child"]
     assert kids == [("./DS/collection.json", "Data Series", 2),

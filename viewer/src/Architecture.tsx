@@ -161,7 +161,7 @@ const LAYERS: Layer[] = [
     lead: "Cartographers work in the ugs-styles repo; styles bind into the catalog by STAC item id — one namespace, no drift.",
     points: [
       "ugs-styles compiles to a manifest published on the same CDN.",
-      "At STAC emit, a matching style attaches a `renders` block (MapLibre GL style URL) to the item.",
+      "At STAC emit, a matching style attaches a `ugs:renders` block (MapLibre GL style URL) + a `style` asset.",
       "The `restyle` job rebinds renders without a reingest — seconds, no DB, no tiles rebuilt.",
     ],
   },

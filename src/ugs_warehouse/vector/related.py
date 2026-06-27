@@ -5,19 +5,23 @@ by ugs-ingest, enforced by dbt `relationships` tests). The warehouse does NOT re
 reads that registry per topic and emits two well-known vocabularies onto the topic's STAC item:
 
   * STAC `rel:"related"` links — the relationship GRAPH (item ↔ item). STAC Browser renders these.
-  * Frictionless Table Schema `foreignKeys` — the JOIN detail (which columns reference what), the
-    recognised lightweight standard for tabular FKs. Placed on the asset that is the FK *source*.
+    This is the STAC-native, fully-spec-compliant part of the relationship.
+  * `ugs:foreign_keys` — the JOIN detail (which columns reference what). The FK join detail has no
+    STAC extension, so it's a UGS-prefixed custom field (STAC best practice for non-standard fields:
+    namespace, don't pollute the root). Value shape mirrors Frictionless Table Schema foreignKeys.
+    Placed on the asset that is the FK *source*. Not declared in stac_extensions (no schema to
+    resolve) — a prefixed extra field is spec-legal without it.
   * STAC Table extension `table:columns` — standard column description for the related Parquet.
 
 A foreign key is declared on the CHILD pointing at the parent (`targetDomainTopic`). So for a topic
 T being ingested we resolve:
-  - T's OUTGOING FKs (T references X): a `related` link to X's item + a `foreignKeys` entry on T's
-    own data asset.
+  - T's OUTGOING FKs (T references X): a `related` link to X's item + a `ugs:foreign_keys` entry on
+    T's own data asset.
   - T's INCOMING FKs (a child references T):
       · spatial child (has its own STAC item): just a `related` link to it.
       · aspatial child (no geometry → no item of its own, e.g. UCRC boxes/photos/attachments):
         materialise the child `_current` table to CDN Parquet as a `roles:["data","related"]` asset
-        on T, carrying its own `foreignKeys` (child → T) + `table:columns`.
+        on T, carrying its own `ugs:foreign_keys` (child → T) + `table:columns`.
 
 `domain_topic` → physical table is `{target_schema}.{domain_topic}_current` (registry columns).
 Best-effort throughout: a missing registry / grant / table is logged and skipped, never sinks the
@@ -123,7 +127,7 @@ def _materialize_child(con, child_topic: str, schema: str, display: str | None,
     }
     fk = _foreign_key(rel)
     if fk:
-        asset["foreignKeys"] = [fk]   # Frictionless: child columns → this parent
+        asset["ugs:foreign_keys"] = [fk]   # UGS-prefixed: child columns → this parent (Frictionless shape)
     cols = _table_columns(business_schema)
     if cols:
         asset["table:columns"] = cols
@@ -144,7 +148,7 @@ def resolve(topic: Topic) -> dict:
     try:
         result: dict = {"assets": {}, "links": [], "foreign_keys": []}
 
-        # T's OUTGOING FKs (T is the FK source) → related links + foreignKeys on T's data asset.
+        # T's OUTGOING FKs (T is the FK source) → related links + ugs:foreign_keys on T's data asset.
         out = _pg(con, f"SELECT relationships::text FROM raw.schema_registry "
                        f"WHERE domain_topic = {_q(stem)} LIMIT 1")
         for rel in (json.loads(out[0][0]) if out and out[0][0] else []):

@@ -59,11 +59,6 @@ def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
     return link
 
 
-def cog_link(href: str) -> dict:
-    """A web-map-links `cog` link so STAC Browser draws the raster layer."""
-    return {"rel": "cog", "href": href, "type": "image/tiff; application=geotiff; profile=cloud-optimized"}
-
-
 # ---------------------------------------------------------------- items
 
 def build_item(*, item_id: str, collection: str, geometry: dict | None,
@@ -103,7 +98,9 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
         "id": item_id,
         "collection": collection,
         "geometry": geometry,
-        "bbox": bbox,
+        # STAC: bbox is REQUIRED when geometry is non-null, and must be ABSENT (not null) when
+        # geometry is null (aspatial pubs). A literal `bbox: null` fails item-spec validation.
+        **({"bbox": bbox} if geometry is not None and bbox is not None else {}),
         "properties": props,
         "assets": assets,
         "links": links,
@@ -144,19 +141,22 @@ def attach_iso(item: dict) -> str:
 
 
 def attach_renders(item: dict) -> None:
-    """Attach the render extension + `renders` block (+ a vector `style` asset) by looking the
-    item id up in the ugs-styles manifest. No-op when nothing matches (mutates item in place).
+    """Attach a `ugs:renders` block (+ a vector `style` asset) by looking the item id up in the
+    ugs-styles manifest. No-op when nothing matches (mutates item in place).
 
     Call before `write_item`. Best-effort: styling never blocks an ingest (see `core.styles`).
+
+    NOT the STAC render extension: that extension is raster/titiler-oriented, and its v2.0.0 schema
+    *requires* a `rel:"render"` image link whenever web-map-links is also present — but we render
+    vector layers client-side from a MapLibre GL `style_url`, so we have no render-image endpoint.
+    `ugs:renders` is the UGS-prefixed equivalent (identical shape): spec-legal, no schema to fail.
+    The standard `roles:["style"]` `style` asset is the interoperable pointer to the GL style.
     """
     renders, style_asset = styles.renders_for(
         item["id"], set((item.get("assets") or {}).keys()))
     if not renders:
         return
-    item.setdefault("properties", {})["renders"] = renders
-    exts = item.setdefault("stac_extensions", [])
-    if styles.RENDER_EXT not in exts:
-        exts.append(styles.RENDER_EXT)
+    item.setdefault("properties", {})["ugs:renders"] = renders
     if style_asset:
         item.setdefault("assets", {}).setdefault("style", style_asset)
 
@@ -165,9 +165,9 @@ def attach_classification(item: dict) -> None:
     """Attach `classification:classes` (categorical value/name/color) derived from the bound GL
     style's default vector render. No-op for unstyled / uniform / raster items (mutates in place).
 
-    Call AFTER attach_renders (reads the `renders` block). Best-effort: styling never blocks ingest.
+    Call AFTER attach_renders (reads the `ugs:renders` block). Best-effort: styling never blocks ingest.
     """
-    renders = (item.get("properties") or {}).get("renders") or {}
+    renders = (item.get("properties") or {}).get("ugs:renders") or {}
     render = renders.get("default") or next(iter(renders.values()), None)
     style_url = (render or {}).get("style_url")
     if not style_url:
@@ -246,8 +246,11 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
         "license": "proprietary",
         "extent": extent or {"spatial": {"bbox": [UTAH_BBOX]},
                              "temporal": {"interval": [[None, None]]}},
-        "summaries": {"ugs:item_count": len(item_ids),
-                      **({"ugs:mappable_count": mappable} if mappable is not None else {})},
+        # Counts are UGS-prefixed top-level extras, NOT `summaries` — STAC summaries values must be
+        # arrays/ranges/JSON-Schema (they summarize item *property* ranges), so a scalar count there
+        # fails strict validation. A prefixed top-level field is spec-legal (additionalProperties).
+        "ugs:item_count": len(item_ids),
+        **({"ugs:mappable_count": mappable} if mappable is not None else {}),
         "links": [
             {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
@@ -300,7 +303,9 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
         "id": catalog_id,
         "title": title or prettify(catalog_id),
         "description": description or f"UGS warehouse — {catalog_id}, by data series.",
-        "summaries": {"ugs:item_count": total, "ugs:mappable_count": total_mappable},
+        # Top-level prefixed extras (NOT `summaries`, which Catalogs don't even define) — see _collection_doc.
+        "ugs:item_count": total,
+        "ugs:mappable_count": total_mappable,
         "links": [
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
@@ -329,8 +334,8 @@ def _index_entry(item: dict) -> dict:
         "properties": {k: props[k] for k in _INDEX_PROP_KEYS
                        if props.get(k) not in (None, "", [])},
     }
-    if props.get("renders"):  # bound GL style → lets the map view style from the index alone
-        entry["properties"]["renders"] = props["renders"]
+    if props.get("ugs:renders"):  # bound GL style → lets the map view style from the index alone
+        entry["properties"]["ugs:renders"] = props["ugs:renders"]
     assets = {
         k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
         for k, a in (item.get("assets") or {}).items()

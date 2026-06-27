@@ -41,8 +41,8 @@ def _backend() -> ModuleType:
 
 
 def _related(topic: Topic) -> dict:
-    """Resolve a topic's FK relationships from the registry → STAC related links + Frictionless
-    foreignKeys + materialised aspatial related assets. Best-effort: empty pieces when there are
+    """Resolve a topic's FK relationships from the registry → STAC related links + `ugs:foreign_keys`
+    + materialised aspatial related assets. Best-effort: empty pieces when there are
     none (or the registry/grant is absent), never sinks the parent ingest."""
     try:
         return related.resolve(topic)

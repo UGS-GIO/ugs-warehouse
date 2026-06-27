@@ -1,8 +1,10 @@
 """STAC item for a raster COG — built through the shared `core.stac` so rasters land in
 the same collections-layout catalog as vector topics + publications.
 
-The COG asset gets the standard `data` role + a web-map-links `cog` link so STAC Browser
-(and a future titiler) can render it; an optional thumbnail asset is added when present.
+The COG asset gets the standard `data`+`visual` roles (media type `…;profile=cloud-optimized`),
+which STAC Browser and our viewer render natively — no web-map-links `cog` link, because that
+extension defines no `cog` rel (its rels are xyz/wms/wmts/tilejson/pmtiles/3d-tiles) and declaring
+it would force one of those. An optional thumbnail asset is added when present.
 """
 from __future__ import annotations
 
@@ -32,8 +34,6 @@ def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None,
         datetime_iso=raster.datetime_iso,
         properties=properties or {},
         assets=assets,
-        extra_links=[stac.cog_link(cog_url)],
-        stac_extensions=[stac.WEB_MAP_LINKS_EXT],
         proj_epsg=proj_epsg,
     )
 

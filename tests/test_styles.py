@@ -1,4 +1,4 @@
-"""ugs-styles -> STAC render-extension bridge (core.styles + stac.attach_renders)."""
+"""ugs-styles -> `ugs:renders` block + `style` asset (core.styles + stac.attach_renders)."""
 import pytest
 
 from ugs_warehouse.core import stac, styles
@@ -52,13 +52,13 @@ def test_no_match_is_graceful():
 def test_attach_renders_mutates_item():
     item = {"id": "hazards_qfaults", "properties": {}, "assets": {"pmtiles": {"href": "x"}}}
     stac.attach_renders(item)
-    assert "renders" in item["properties"]
-    assert styles.RENDER_EXT in item["stac_extensions"]
+    # Emitted as `ugs:renders` (prefixed), NOT the STAC render extension — see stac.attach_renders.
+    assert "ugs:renders" in item["properties"]
+    assert "render" not in " ".join(item.get("stac_extensions") or [])  # no render-ext declaration
     assert item["assets"]["style"]["roles"] == ["style"]
 
 
 def test_attach_renders_noop_without_match():
     item = {"id": "nope", "properties": {}, "assets": {}}
     stac.attach_renders(item)
-    assert "renders" not in item["properties"]
-    assert "stac_extensions" not in item or styles.RENDER_EXT not in item.get("stac_extensions", [])
+    assert "ugs:renders" not in item["properties"]

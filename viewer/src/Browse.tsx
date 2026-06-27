@@ -1171,7 +1171,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
               <li key={key} className="flex flex-wrap items-center gap-2">
                 <span className="font-medium">{asset.title ?? key}</span>
                 <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
-                {asset.foreignKeys?.map((fk, i) => (
+                {asset["ugs:foreign_keys"]?.map((fk, i) => (
                   <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)</span>
                 ))}
               </li>
@@ -1228,7 +1228,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
       <table className="mt-3 w-full max-w-[760px] table-fixed border-collapse text-sm">
         <tbody>
           {Object.entries(p)
-            .filter(([k, v]) => v !== null && v !== "" && k !== "renders")
+            .filter(([k, v]) => v !== null && v !== "" && k !== "ugs:renders")
             .map(([k, v]) => (
               <tr key={k}>
                 <td className="w-44 break-words border-b border-border px-2.5 py-1 align-top text-muted-foreground">{prettyKey(k)}</td>

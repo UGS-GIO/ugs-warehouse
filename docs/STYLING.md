@@ -1,9 +1,9 @@
 # Styling — ugs-styles → warehouse → viewers, via STAC
 
 **TL;DR:** authoritative MapLibre styling lives in the **`ugs-styles`** repo (cartographers' source
-of truth). The warehouse binds it to layers **by STAC item id** and writes a `renders` block on each
-item; the viewers read `item.renders`. No parallel style namespace, no hand-kept lookup table. A
-style change re-binds via the **`restyle`** job — no reingest.
+of truth). The warehouse binds it to layers **by STAC item id** and writes a `ugs:renders` block on
+each item; the viewers read `item.properties["ugs:renders"]`. No parallel style namespace, no
+hand-kept lookup table. A style change re-binds via the **`restyle`** job — no reingest.
 
 ## How it works
 
@@ -14,13 +14,13 @@ ugs-styles (source of truth)
         ▼  warehouse fetches index.json once per ingest (core/styles.py)
 ugs-warehouse (the bridge)
   at STAC emit, look up item.id in the manifest:
-    vector style → renders.<id> = { title, assets:["pmtiles"], style_url } + a roles:["style"] asset
-    raster render → renders.<id> = { title, assets:["cog"], colormap_name, rescale }
+    vector style → ugs:renders.<id> = { title, assets:["pmtiles"], style_url } + a roles:["style"] asset
+    raster render → ugs:renders.<id> = { title, assets:["cog"], colormap_name, rescale }
     no match     → item emits unchanged (graceful)
         │
-        ▼  viewers read item.renders
+        ▼  viewers read item.properties["ugs:renders"]
 viewers (this repo's viewer/ + ugs-map-viewer)
-  fetch renders.default.style_url → { layers }; add the PMTiles source + each layer
+  fetch ugs:renders.default.style_url → { layers }; add the PMTiles source + each layer
 ```
 
 Join key is the **STAC item id** (`topic.stem` for vector, `series_id` for pubs) — the same id the
@@ -42,14 +42,18 @@ machine identity is the declared `itemId`.
 
 ## Render kind by asset type
 
-| Item asset | `kind` | `renders.<id>` carries | Rendered by |
+| Item asset | `kind` | `ugs:renders.<id>` carries | Rendered by |
 |---|---|---|---|
 | `pmtiles` (vector) | `vector` | `style_url` → GL fragment; paint on `source-layer` | MapLibre (client) |
 | `cog` single-band (e.g. gravity) | `raster` | `colormap_name` / `rescale` / `nodata` | titiler (future) |
 | `cog` RGB geologic plate (pubs) | — | nothing — the plate **is** the cartography | served as-is |
 
-The render extension has no field for a vector GL style, so `style_url` is a local extension; the
-warehouse also emits a `roles:["style"]` asset pointing at the same URL so asset-walking clients find it.
+**Why `ugs:renders`, not the STAC render extension?** That extension is raster/titiler-oriented (it
+has no field for a vector GL `style_url`), and its v2.0.0 schema *requires* a `rel:"render"` image
+link whenever `web-map-links` is present — which we don't have, since we render client-side. So the
+block is a UGS-prefixed custom field (strict-STAC: prefixed extras are spec-legal; no schema to fail).
+The warehouse also emits a standard `roles:["style"]` asset pointing at the same URL so asset-walking
+clients (incl. STAC Browser) find the style without knowing our field.
 
 ## Legend
 
@@ -63,7 +67,7 @@ present. Explicit legend entries (icon renders, e.g. wells by box type) override
 
 A style change alters *how* a layer draws, not the data. `restyle` re-fetches the manifest and
 re-runs the bind over the STAC items **already in GCS**, rewriting only the item.json files whose
-`renders` changed. No DB read, no transform, no PMTiles — seconds. Source: `src/ugs_warehouse/restyle.py`.
+`ugs:renders` changed. No DB read, no transform, no PMTiles — seconds. Source: `src/ugs_warehouse/restyle.py`.
 
 ```bash
 python -m ugs_warehouse.restyle                    # rebind ugs-serving-topics (default scope)

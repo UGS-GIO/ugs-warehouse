@@ -137,11 +137,11 @@ def build_item(p: dict, attachments: list[dict], *,
     if has_ugs_doi(p.get("pub_publisher")):
         extra_links.append({"rel": "cite-as", "href": f"https://doi.org/10.34191/{sid}"})
 
-    extensions = []
-    if has_cog:
-        cog_url = config.public_url(identity.Pub(sid.upper()).cog_object)
-        extra_links.append(stac.cog_link(cog_url))
-        extensions.append(stac.WEB_MAP_LINKS_EXT)
+    # No web-map-links here: that extension's rels are [xyz, wms, wmts, tilejson, pmtiles, 3d-tiles]
+    # — it has no `cog`, and declaring it forces one of those (which a raster pub lacks). The COG is
+    # advertised by its `cog` ASSET (media type `…;profile=cloud-optimized`), which STAC Browser and
+    # our viewer both render natively, and which `_is_mappable`/`cogAsset` detect. No link needed.
+    extensions: list[str] = []
 
     code = series_code(sid)
     group = collection_group(p)  # top-level: UGS catalog / mining-district files / external

@@ -31,9 +31,12 @@ def _clear_renders(item: dict) -> bool:
     """Strip any existing render binding so a re-attach is authoritative (a removed style must
     drop out, not linger). Returns True if the item had a render binding."""
     props = item.get("properties") or {}
-    had = "renders" in props
+    had = "ugs:renders" in props or "renders" in props  # "renders" = pre-rename items, also strip
+    props.pop("ugs:renders", None)
     props.pop("renders", None)
-    exts = [e for e in (item.get("stac_extensions") or []) if e != styles.RENDER_EXT]
+    # Drop any legacy STAC render-extension declaration (we no longer use it — see attach_renders).
+    legacy_render = "stac-extensions.github.io/render/"
+    exts = [e for e in (item.get("stac_extensions") or []) if legacy_render not in e]
     if exts:
         item["stac_extensions"] = exts
     else:
@@ -131,7 +134,7 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
             return False
         had = _clear_renders(item)
         stac.attach_renders(item)  # re-match against the fresh manifest
-        now = "renders" in (item.get("properties") or {})
+        now = "ugs:renders" in (item.get("properties") or {})
         if not had and not now:
             return False  # never styled (e.g. a pub COG plate) — leave it untouched
         if dry_run:

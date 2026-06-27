@@ -1,13 +1,18 @@
-"""Bridge ugs-styles -> the STAC render extension.
+"""Bridge ugs-styles -> the item's `ugs:renders` block + `style` asset.
 
 `ugs-styles` (neighbor repo) is the authoritative system of record for how vector layers are
 styled: it builds MapLibre GL JSON per layer/render + an `index.json` manifest, published
 CDN-only. The warehouse fetches that manifest once per run, looks a topic up by its STAC item
 id, and returns a `renders` block (+ a roles:["style"] asset for the default vector render).
 
+The block is emitted as `ugs:renders` (UGS-prefixed), NOT the STAC render extension: that
+extension is raster/titiler-oriented and its v2.0.0 schema requires a `rel:"render"` image link
+when web-map-links is present — we render vector GL client-side and have none. See
+`core.stac.attach_renders`. The `roles:["style"]` asset is the standard, interoperable pointer.
+
 Join key is the STAC item id (docs/STYLING.md). Manifest entries are expected to carry
 `itemId`; older/transitional manifests keyed by `layer` are tolerated. Render kind follows the
-target asset: vector -> a GL `style_url`; raster -> colormap/rescale (standard render fields).
+target asset: vector -> a GL `style_url`; raster -> colormap/rescale (titiler-style fields).
 
 Graceful by design: an unreachable or empty manifest yields no renders, so items emit exactly
 as they do today (the viewer falls back to its own neutral render).
@@ -20,10 +25,6 @@ import urllib.request
 from functools import lru_cache
 
 from . import config
-
-# render extension — declares the `renders` object on item properties.
-RENDER_EXT = "https://stac-extensions.github.io/render/v1.0.0/schema.json"
-
 
 @lru_cache(maxsize=1)
 def _manifest() -> tuple[dict, ...]:
@@ -183,11 +184,19 @@ def _color_hint(color: str) -> str | None:
     return c.upper() if re.fullmatch(r"[0-9a-fA-F]{6}", c) else None
 
 
+def _class_name(label: str, i: int) -> str:
+    """A classification:classes `name` token. The extension constrains `name` to ^[0-9A-Za-z-_]+$
+    (a machine token, NOT a human label — that's `title`), so slugify and fall back to class_<i>."""
+    slug = re.sub(r"[^0-9A-Za-z_-]+", "_", label).strip("_")
+    return slug or f"class_{i}"
+
+
 def classification_classes(style_url: str) -> list[dict]:
     """`classification:classes` for the item's default vector render, or [] (graceful)."""
     classes: list[dict] = []
     for i, (label, color) in enumerate(_derive_classes(_fetch_layers(style_url))):
-        cls: dict = {"value": i, "name": str(label)}
+        # `name` is the machine token (regex-constrained); `title` carries the human label.
+        cls: dict = {"value": i, "name": _class_name(str(label), i), "title": str(label)}
         hint = _color_hint(color)
         if hint:
             cls["color_hint"] = hint

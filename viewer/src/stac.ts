@@ -71,6 +71,14 @@ export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
     .filter((a) => !a.roles?.includes("related"))
     .flatMap((a) => a["ugs:foreign_keys"] ?? []);
 
+// Survey Notes "In this issue": [{title, page}] parsed from the issue PDF's table of contents
+// (warehouse, ugs:contents) — page is null for "back cover". Undefined when the item carries none.
+export type ContentsEntry = { title: string; page: number | null };
+export const contentsOf = (d: StacDoc | undefined): ContentsEntry[] | undefined => {
+  const c = (d?.properties as Record<string, unknown> | undefined)?.["ugs:contents"];
+  return Array.isArray(c) && c.length ? (c as ContentsEntry[]) : undefined;
+};
+
 // Preview image: the thumbnail asset (role=thumbnail) where the harvest produced one.
 export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
   const assets = Object.values(d?.assets ?? {});

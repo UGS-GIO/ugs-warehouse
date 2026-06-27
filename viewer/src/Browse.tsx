@@ -10,11 +10,15 @@ import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type Map
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, classificationEntries, cogAsset, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 
+// A few latest covers for a collection card (thumbnail strip). `date` = the item datetime, used to
+// merge + re-sort covers across series for a sub-catalog card. Populated by App from the indexes.
+export type CoverRef = { href: string; thumb: string; title?: string; date?: string };
 export type CollectionSummary = {
   id: string; href: string; title?: string; description?: string;
   count?: number; mappable?: number; kind?: "catalog" | "collection"; parentId?: string;
+  covers?: CoverRef[];
 };
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
@@ -182,6 +186,14 @@ function Collections({ collections, heading, onOpen }: {
               <p className="text-base font-semibold leading-tight">{c.title ?? humanize(c.id)}</p>
               <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{c.id}</div>
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
+              {c.covers && c.covers.length > 0 && (
+                <div className="mt-2 flex gap-1 overflow-hidden" title="Latest covers">
+                  {c.covers.map((cv) => (
+                    <img key={cv.href} src={cv.thumb} alt={cv.title ?? ""} loading="lazy"
+                      className="h-16 w-12 shrink-0 rounded-sm border border-border bg-muted object-cover" />
+                  ))}
+                </div>
+              )}
               {c.count != null && <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>}
               {c.kind === "catalog" && <span className={`${C.badge} mt-2`}>by series</span>}
               {c.mappable === 0
@@ -242,17 +254,25 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const ymin = parseInt(yearMin, 10);
   const ymax = parseInt(yearMax, 10);
   const rows = useMemo(
-    () => items.filter((it) => {
-      if (needle && !haystack(it).includes(needle)) return false;
-      if (sel.size && !sel.has(gCode(it))) return false;
-      if (tsel.size && !tsel.has(gTopic(it))) return false;
-      if (mapOnly && !hasMapData(it)) return false;
-      if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
-        const y = gYear(it);
-        if (y == null || (Number.isFinite(ymin) && y < ymin) || (Number.isFinite(ymax) && y > ymax)) return false;
+    () => {
+      const filtered = items.filter((it) => {
+        if (needle && !haystack(it).includes(needle)) return false;
+        if (sel.size && !sel.has(gCode(it))) return false;
+        if (tsel.size && !tsel.has(gTopic(it))) return false;
+        if (mapOnly && !hasMapData(it)) return false;
+        if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
+          const y = gYear(it);
+          if (y == null || (Number.isFinite(ymin) && y < ymin) || (Number.isFinite(ymax) && y > ymax)) return false;
+        }
+        return true;
+      });
+      // Pubs default to newest→oldest in the thumbs/cards modes too (the table sorts itself). No-date
+      // collections (vector topics) keep catalog order.
+      if (filtered.some((it) => gYear(it) != null)) {
+        filtered.sort((a, b) => gDate(b).localeCompare(gDate(a)) || gSeries(a).localeCompare(gSeries(b)));
       }
-      return true;
-    }),
+      return filtered;
+    },
     [items, needle, series, topics, mapOnly, yearMin, yearMax],
   );
 
@@ -268,6 +288,15 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
     { id: "assets", header: "Assets", enableSorting: false, accessorFn: () => "",
       cell: ({ row }) => row.original.data?.assets ? <AssetChips assets={row.original.data.assets} /> : "" },
   ], [showCollection]);
+
+  // Default sort: publications (which carry a real publication year) lead newest→oldest; vector
+  // serving topics (ingest-time datetime only — not meaningful) stay alphabetical by id.
+  const defaultSorting = useMemo<SortingState>(
+    () => (items.some((it) => gYear(it) != null)
+      ? [{ id: "date", desc: true }]
+      : [{ id: "id", desc: false }]),
+    [items],
+  );
 
   return (
     <>
@@ -324,7 +353,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
       ) : mode === "table" ? (
         <div className="overflow-x-auto">
           <DataTable columns={columns} data={rows} onRowClick={(it) => onOpen(it.href)}
-            initialSorting={[{ id: "id", desc: false }]} />
+            initialSorting={defaultSorting} />
         </div>
       ) : mode === "thumbs" ? (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6">
@@ -1183,6 +1212,33 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   );
 }
 
+// "In this issue" — the Survey Notes table of contents (warehouse parses it from the PDF). Each
+// article deep-links the PDF to its page (#page=N), where a page number was captured.
+function IssueContents({ item }: { item: StacDoc }) {
+  const toc = contentsOf(item);
+  if (!toc) return null;
+  const pdf = Object.values(item.assets ?? {}).find((a) => a.type === "application/pdf")?.href;
+  return (
+    <section className="mt-4 rounded-md border border-border bg-card p-3">
+      <h3 className="text-sm font-semibold">In this issue</h3>
+      <ol className="mt-1.5 divide-y divide-border text-sm">
+        {toc.map((e, i) => {
+          const href = pdf ? (e.page != null ? `${pdf}#page=${e.page}` : pdf) : undefined;
+          const label = <><span className="text-foreground">{e.title}</span>
+            {e.page != null && <span className="ml-2 text-xs text-muted-foreground">p. {e.page}</span>}</>;
+          return (
+            <li key={i} className="py-1">
+              {href
+                ? <a href={href} target="_blank" rel="noopener" className="no-underline hover:underline">{label}</a>
+                : label}
+            </li>
+          );
+        })}
+      </ol>
+    </section>
+  );
+}
+
 function ItemDetail({ collectionId, item, onBack, onMap }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
 }) {
@@ -1222,13 +1278,14 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
           </a>
         )}
       </div>
+      <IssueContents item={item} />
       <ExportPanel item={item} />
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />
       <table className="mt-3 w-full max-w-[760px] table-fixed border-collapse text-sm">
         <tbody>
           {Object.entries(p)
-            .filter(([k, v]) => v !== null && v !== "" && k !== "ugs:renders")
+            .filter(([k, v]) => v !== null && v !== "" && k !== "ugs:renders" && k !== "ugs:contents")
             .map(([k, v]) => (
               <tr key={k}>
                 <td className="w-44 break-words border-b border-border px-2.5 py-1 align-top text-muted-foreground">{prettyKey(k)}</td>

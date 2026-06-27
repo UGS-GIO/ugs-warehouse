@@ -1,11 +1,11 @@
 import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Architecture } from "./Architecture";
 import { Guide } from "./Guide";
 import utahLogo from "./assets/utah-logo.png";
-import { Browse, type CollectionSummary, type ItemRef } from "./Browse";
+import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
-import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, type StacDoc, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
+import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
@@ -172,6 +172,42 @@ export function App() {
   const itemHrefIn = (collHref: string, id: string) =>
     collHref.replace(/collection\.json(\?.*)?$/, `${encodeURIComponent(id)}/${encodeURIComponent(id)}.json`);
 
+  // ---- cover strips on the collection cards (latest covers, newest first) ----
+  // Only while cards show (catalog root / a sub-catalog) — not inside a leaf's item list. Fetches
+  // every leaf's items.json so a sub-catalog card (Publications) can aggregate latest-across-series.
+  // Shares the ["index", href] cache with the item-list fetch above, so overlapping leaves load once.
+  const coverColls = leafColl ? [] : leafColls;
+  const coverIdx = useIndexes(coverColls.map((c) => ({ id: c.id, href: c.href })));
+  const coversByColl = useMemo(() => {
+    const out: Record<string, CoverRef[]> = {};
+    for (const r of coverIdx) {
+      const date = (d: StacDoc) => String((d.properties as Record<string, unknown> | undefined)?.datetime ?? "");
+      out[r.id] = (r.index?.items ?? [])
+        .map((d) => ({ d, th: thumbnailAsset(d) }))
+        .filter((x) => x.th)
+        .sort((a, b) => date(b.d).localeCompare(date(a.d)))
+        .slice(0, 5)
+        .map(({ d, th }) => ({
+          href: itemHrefIn(r.href, String(d.id)), thumb: th!.href,
+          title: String((d.properties as Record<string, unknown> | undefined)?.title ?? d.id ?? ""),
+          date: date(d),
+        }));
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [coverIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")]);
+
+  // Attach covers to each card: a leaf uses its own; a sub-catalog (Publications) merges its series'
+  // covers and re-sorts newest-first across all of them.
+  const cardsWithCovers = useMemo<CollectionSummary[]>(() => cards.map((c) => {
+    const covers = c.kind === "catalog"
+      ? seriesChildren.filter((s) => s.parentId === c.id).flatMap((s) => coversByColl[s.id] ?? [])
+          .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? "")).slice(0, 5)
+      : coversByColl[c.id] ?? [];
+    return covers.length ? { ...c, covers } : c;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }), [cards, coversByColl]);
+
   const fbColls = wantColls.filter((_, i) => idx[i]?.missing);
   const fbCollDocs = useDocs(fbColls.map((c) => c.href));
   const fallbackRefs = fbColls.flatMap((c, i) =>
@@ -268,7 +304,7 @@ export function App() {
         <Architecture />
       ) : !mapView ? (
         <Browse
-          cards={cards}
+          cards={cardsWithCovers}
           collectionId={collectionId}
           allItems={allItems}
           itemsLoading={itemsLoading}

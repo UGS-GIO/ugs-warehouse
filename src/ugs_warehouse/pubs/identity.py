@@ -21,10 +21,16 @@ UNITS_PREFIX = os.environ.get("GEOLMAP_UNITS_PREFIX", "geolmap/units")
 PUB_THUMB_PREFIX = os.environ.get("PUB_THUMB_PREFIX", "pubs/thumbs")
 # Issue table-of-contents sidecars (Survey Notes "In this issue"), parsed from the PDF.
 PUB_CONTENTS_PREFIX = os.environ.get("PUB_CONTENTS_PREFIX", "pubs/contents")
+# Per-issue full-text search sidecars (article text by TOC page range); aggregated into one corpus.
+PUB_SEARCH_PREFIX = os.environ.get("PUB_SEARCH_PREFIX", "pubs/search")
 
 
 def pub_contents_object(series_id: str) -> str:
     return f"{PUB_CONTENTS_PREFIX}/{series_id.upper()}.json"
+
+
+def pub_search_object(series_id: str) -> str:
+    return f"{PUB_SEARCH_PREFIX}/{series_id.upper()}.json"
 
 # Top-level catalog routing. UGS hosts third-party material it didn't author; split it into
 # sibling collections so the UGS geologic catalog stays clean (nothing dropped, just grouped).

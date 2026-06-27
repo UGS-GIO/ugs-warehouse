@@ -69,3 +69,27 @@ def extract(pdf_path: str) -> list[dict]:
             if len(entries) > len(best):
                 best = entries
     return best if len(best) >= _MIN_ENTRIES else []
+
+
+_ARTICLE_TEXT_CAP = 20_000  # chars per article kept for the search corpus (bounds corpus size)
+
+
+def article_texts(pdf_path: str, toc: list[dict]) -> list[dict]:
+    """Per-article text for the full-text search corpus: slice the PDF by the TOC's page ranges
+    (article i = its page .. the next article's page-1). [{title, page, text}], empty if no paged TOC."""
+    entries = sorted((e for e in toc if isinstance(e.get("page"), int)), key=lambda e: e["page"])
+    out = []
+    for i, e in enumerate(entries):
+        start = e["page"]
+        end = entries[i + 1]["page"] - 1 if i + 1 < len(entries) else None  # last → to end of doc
+        cmd = ["pdftotext", "-f", str(start)]
+        if end and end >= start:
+            cmd += ["-l", str(end)]
+        cmd += [pdf_path, "-"]
+        try:
+            raw = subprocess.run(cmd, capture_output=True, text=True, timeout=60).stdout
+        except Exception:  # noqa: BLE001
+            raw = ""
+        text = re.sub(r"\s+", " ", raw).strip()[:_ARTICLE_TEXT_CAP]
+        out.append({"title": e["title"], "page": start, "text": text})
+    return out

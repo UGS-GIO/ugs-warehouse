@@ -112,12 +112,46 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         results = list(executor.map(process_pub, pubs))
     n = sum(1 for r in results if r)
 
+    _build_search_corpus()
+
     if not skip_refresh:
         stac.refresh_catalog()
         print(f"[pubs] wrote {n} items -> {config.public_url(config.STAC_PREFIX + '/catalog.json')}")
     else:
         print(f"[pubs] wrote {n} items (catalog refresh skipped)")
     return n
+
+
+def _build_search_corpus() -> None:
+    """Aggregate the per-issue full-text sidecars (pubs/search/{SID}.json, written by the thumbs job)
+    into ONE corpus the viewer loads + indexes client-side: pubs/search/corpus.json, a flat list of
+    {id, sid, volume, issue, title, page, text} per article. Best-effort — skipped on any read error."""
+    prefix = identity.PUB_SEARCH_PREFIX
+    paths = [p for p in gcs.list_paths(prefix) if p.endswith(".json") and not p.endswith("/corpus.json")]
+    if not paths:
+        print("[pubs] no search sidecars — corpus not built")
+        return
+
+    def load(path: str) -> list[dict]:
+        try:
+            doc = json.loads(gcs.get_bytes(path).decode())
+        except Exception:  # noqa: BLE001
+            return []
+        sid, vol, issue, pdf = doc.get("series_id"), doc.get("volume"), doc.get("title"), doc.get("pdf")
+        # id is index-based (not page-based): two TOC entries can share a page, and the search index
+        # requires unique ids.
+        return [{"id": f"{sid}#{i}", "sid": sid, "volume": vol, "issue": issue, "pdf": pdf,
+                 "title": a.get("title"), "page": a.get("page"), "text": a.get("text") or ""}
+                for i, a in enumerate(doc.get("articles") or [])]
+
+    corpus: list[dict] = []
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        for arts in ex.map(load, paths):
+            corpus.extend(arts)
+    gcs.put_bytes(json.dumps(corpus).encode(), f"{prefix}/corpus.json",
+                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+    print(f"[pubs] search corpus: {len(corpus)} articles from {len(paths)} issues "
+          f"-> {config.public_url(prefix + '/corpus.json')}")
 
 
 def list_series() -> int:

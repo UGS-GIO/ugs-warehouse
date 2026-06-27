@@ -78,6 +78,17 @@ def thumb_one(p: dict, force: bool = False) -> str:
                     json.dumps({"series_id": sid.upper(), "contents": toc}, indent=2).encode(),
                     contents_obj, content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
                 hlog(f"OK contents → {len(toc)} entries", step="result", category="ok")
+                # Full-text search corpus: per-article text sliced by the TOC page ranges. Ingest
+                # aggregates these per-issue sidecars into the one corpus the viewer searches.
+                arts = contents.article_texts(pdfp, toc)
+                if arts:
+                    gcs.put_bytes(
+                        json.dumps({"series_id": sid.upper(), "volume": sink_stac.issue_volume(sid),
+                                    "title": (p.get("pub_name") or "").strip(),
+                                    "pdf": sink_stac.href(p.get("pub_url")), "articles": arts}).encode(),
+                        identity.pub_search_object(sid),
+                        content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+                    hlog(f"OK search text → {len(arts)} articles", step="result", category="ok")
             else:
                 # Pre-dot-leader / atypical layout — graceful; hand-author a sidecar to fix it.
                 hlog("no parseable contents (layout)", step="result", level="NOTICE", category="expected")

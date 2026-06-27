@@ -1,6 +1,7 @@
 import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
 import { useEffect, useMemo, useState } from "react";
 import { Architecture } from "./Architecture";
+import { ArticleSearch } from "./search";
 import { Guide } from "./Guide";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
@@ -12,7 +13,7 @@ const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-type View = "catalog" | "map" | "arch" | "guide";
+type View = "catalog" | "map" | "arch" | "guide" | "search";
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
 const readUrl = (): Nav => {
@@ -21,7 +22,7 @@ const readUrl = (): Nav => {
   const s = p.get("s");
   const v = p.get("view");
   return {
-    view: v === "map" ? "map" : v === "arch" ? "arch" : v === "guide" ? "guide" : "catalog",
+    view: v === "map" ? "map" : v === "arch" ? "arch" : v === "guide" ? "guide" : v === "search" ? "search" : "catalog",
     c: p.get("c") || undefined, i: p.get("i") || undefined,
     l: l ? l.split(",").filter(Boolean) : undefined,
     s: s ? s.split(",").filter(Boolean) : undefined,
@@ -35,6 +36,7 @@ const writeUrl = (n: Nav, push: boolean) => {
   if (n.view === "map") p.set("view", "map");
   else if (n.view === "arch") p.set("view", "arch");
   else if (n.view === "guide") p.set("view", "guide");
+  else if (n.view === "search") p.set("view", "search");
   else p.delete("view");
   n.c ? p.set("c", n.c) : p.delete("c");
   n.i ? p.set("i", n.i) : p.delete("i");
@@ -293,6 +295,7 @@ export function App() {
         <div className="ml-auto flex gap-1 md:ml-0">
           <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
           <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>
+          <span className={tab(view === "search")} onClick={() => setView("search")}>Search</span>
           <span className={tab(view === "arch")} onClick={() => setView("arch")}>Architecture</span>
           <span className={tab(view === "guide")} onClick={() => setView("guide")}>Guide</span>
           <ThemeToggle />
@@ -305,6 +308,8 @@ export function App() {
         <Guide />
       ) : view === "arch" ? (
         <Architecture />
+      ) : view === "search" ? (
+        <ArticleSearch />
       ) : !mapView ? (
         <Browse
           cards={cardsWithCovers}

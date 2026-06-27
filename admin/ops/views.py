@@ -181,7 +181,10 @@ def contents_list(request):
         rows = contents.list_issues(search)
     except Exception as e:  # noqa: BLE001 — show why it's empty rather than a blank table
         error = f"{type(e).__name__}: {e}"
-    return render(request, "ops/contents_list.html", {"rows": rows, "q": search, "error": error})
+    have = sum(1 for r in rows if r["has_sidecar"])
+    stats = {"total": len(rows), "have": have, "missing": len(rows) - have}
+    return render(request, "ops/contents_list.html",
+                  {"rows": rows, "q": search, "error": error, "stats": stats})
 
 
 @admin_required

@@ -1,5 +1,11 @@
-"""Cover thumbnails — render each publication's PDF first page → a small PNG in GCS, so the catalog
-shows a real preview for ANY pub (Survey Notes covers, report covers, …), not just harvested maps.
+"""Cover thumbnails — a small preview PNG in GCS for ANY pub (Survey Notes covers, report covers, …),
+not just harvested maps, so the catalog can show a real thumbnail everywhere.
+
+Cover = the PDF's **first page** (the title/cover page). Fallback only when that PDF is unfetchable —
+over the size cap (its `Content-Length` is rejected before any bytes download) or unrenderable: copy
+the harvest's COG overview (`geolmap/cogs/{SID}.thumb.png`) if this pub has one. So the scanned-map
+plates that bust the cap get the map as a cover instead of nothing, with no multi-hundred-MB download,
+while every normal pub keeps its actual title-page cover.
 
 Runs on the harvest image (poppler/pdftoppm). Sharded via CLOUD_RUN_TASK_INDEX/COUNT + skip-existing,
 exactly like the COG harvest. Reuses harvest's download / run / structured-logging helpers.
@@ -55,10 +61,28 @@ def thumb_one(p: dict, force: bool = False) -> str:
     except Exception as e:  # noqa: BLE001
         err = (getattr(e, "stderr", "") or str(e)).strip()
         reason = (err.splitlines()[-1] if err.splitlines() else str(e))[:200]
+        # PDF over the size cap (Content-Length is rejected *before* the download) or unrenderable.
+        # Fall back to the harvest's COG overview if this pub has one — the scanned-map plates that
+        # bust the cap already have geolmap/cogs/{SID}.thumb.png, so they get the map as a cover
+        # instead of nothing, with no giant download. Title-page pubs (no COG) just report the fail.
+        if _cog_cover(sid, obj):
+            hlog(f"cover from COG overview (PDF unavailable: {reason})", step="result", category="ok")
+            return "ok"
         hlog(f"FAIL {reason}", step="result", level="ERROR", category="attention", err=True)
         return f"fail:{type(e).__name__}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _cog_cover(sid: str, obj: str) -> bool:
+    """Copy the harvest's COG overview thumbnail (geolmap/cogs/{SID}.thumb.png) to the pub cover
+    path when it exists — a tiny PNG, no download. Returns True if a cover was written."""
+    cog_thumb = f"{identity.COG_PREFIX}/{sid.upper()}.thumb.png"
+    if not gcs.exists(cog_thumb):
+        return False
+    gcs.put_bytes(gcs.get_bytes(cog_thumb), obj, content_type="image/png",
+                  cache_control=gcs.CACHE_IMMUTABLE)
+    return True
 
 
 def main() -> int:

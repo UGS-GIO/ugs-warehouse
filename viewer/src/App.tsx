@@ -287,7 +287,7 @@ export function App() {
           onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
         />
       ) : (
-        <div className="grid h-full min-h-0 grid-rows-[40vh_1fr] overflow-hidden md:grid-cols-[320px_1fr] md:grid-rows-1">
+        <div className="grid h-full min-h-0 grid-rows-[55vh_1fr] overflow-hidden md:grid-cols-[320px_1fr] md:grid-rows-1">
           <aside className="overflow-auto border-b border-border p-3 md:border-b-0 md:border-r">
             {catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
             {!leafColl &&

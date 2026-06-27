@@ -14,18 +14,18 @@
   </script>
 </head>
 <body class="bg-slate-50 text-slate-800">
-  <header class="bg-slate-800 text-white px-5 py-3 flex items-center justify-between">
-    <div class="flex items-center gap-6">
-      <a href="{% url 'ops:dashboard' %}" class="font-semibold hover:text-slate-200">UGS Warehouse · Ops Console</a>
-      <nav class="flex gap-4 text-sm font-medium text-slate-300">
+  <header class="bg-slate-800 text-white px-4 sm:px-5 py-3 flex items-center justify-between gap-2">
+    <div class="flex items-center gap-3 sm:gap-6 min-w-0">
+      <a href="{% url 'ops:dashboard' %}" class="font-semibold hover:text-slate-200 truncate">UGS Warehouse · Ops Console</a>
+      <nav class="hidden sm:flex gap-4 text-sm font-medium text-slate-300">
         <a href="{% url 'ops:dashboard' %}" class="hover:text-white transition">Operations</a>
         <a href="{% url 'ops:publications' %}" class="hover:text-white transition">Harvest Registry</a>
       </nav>
     </div>
-    <div class="flex items-center gap-3 text-xs text-slate-300">
+    <div class="flex items-center gap-3 text-xs text-slate-300 shrink-0">
       <button id="tzbtn" onclick="toggleTz()" title="Toggle timezone (Local / UTC)"
               class="rounded border border-slate-600 px-2 py-0.5 hover:bg-slate-700">Local</button>
-      <span>{{ iap_email|default:"—" }}{% if dry_run %} · <span class="text-amber-300 font-medium">DRY-RUN</span>{% endif %}</span>
+      <span class="hidden sm:inline max-w-[40vw] truncate">{{ iap_email|default:"—" }}{% if dry_run %} · <span class="text-amber-300 font-medium">DRY-RUN</span>{% endif %}</span>
     </div>
   </header>
   <main class="max-w-[1700px] mx-auto px-5 sm:px-8 py-6">{% block content %}{% endblock %}</main>

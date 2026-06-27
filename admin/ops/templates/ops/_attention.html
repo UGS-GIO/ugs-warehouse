@@ -27,7 +27,7 @@
   <div class="rounded-lg border border-red-200 divide-y divide-red-100 overflow-hidden">
     {% for p in att.pubs %}
     <div>
-      <div class="flex items-center gap-3 px-3 py-2 bg-red-50/40 text-xs">
+      <div class="flex flex-col gap-1.5 sm:flex-row sm:items-center sm:gap-3 px-3 py-2 bg-red-50/40 text-xs">
         <a href="{{ VIEWER_BASE }}?c={{ p.series_code|urlencode }}&i={{ p.id|urlencode }}" target="_blank"
            class="font-mono font-bold text-blue-700 hover:underline w-28 shrink-0" title="Open in the warehouse viewer">{{ p.id }}</a>
         {% if p.step %}<span class="text-indigo-700">[{{ p.step }}]</span>{% endif %}

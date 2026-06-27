@@ -22,8 +22,8 @@
   <div class="overflow-x-auto rounded-lg border border-slate-200">
     <table class="w-full text-xs">
       <thead class="bg-slate-50 text-left text-slate-500">
-        <tr><th class="px-3 py-2">Job</th><th class="px-3 py-2">State</th><th class="px-3 py-2">Started</th>
-          <th class="px-3 py-2">Duration</th><th class="px-3 py-2">Tasks</th><th class="px-3 py-2">Logs</th></tr>
+        <tr><th class="px-3 py-2">Job</th><th class="px-3 py-2">State</th><th class="hidden sm:table-cell px-3 py-2">Started</th>
+          <th class="hidden sm:table-cell px-3 py-2">Duration</th><th class="px-3 py-2">Tasks</th><th class="px-3 py-2">Logs</th></tr>
       </thead>
       <tbody class="divide-y divide-slate-100">
         {% for e in executions %}
@@ -32,8 +32,8 @@
           <td class="px-3 py-1.5">
             <span class="{% if e.state == 'succeeded' %}text-green-600{% elif e.state == 'failed' %}text-red-600{% elif e.state == 'running' %}text-blue-600{% else %}text-slate-400{% endif %}">● {{ e.state }}</span>
           </td>
-          <td class="px-3 py-1.5"><time data-ts="{{ e.created }}" data-sec class="text-slate-500"></time></td>
-          <td class="px-3 py-1.5 text-slate-500">{{ e.duration|default:"—" }}</td>
+          <td class="hidden sm:table-cell px-3 py-1.5"><time data-ts="{{ e.created }}" data-sec class="text-slate-500"></time></td>
+          <td class="hidden sm:table-cell px-3 py-1.5 text-slate-500">{{ e.duration|default:"—" }}</td>
           <td class="px-3 py-1.5 text-slate-500">✓{{ e.succeeded }}{% if e.failed %} <span class="text-red-600">✗{{ e.failed }}</span>{% endif %}{% if e.running %} <span class="text-blue-600">▶{{ e.running }}</span>{% endif %}</td>
           <td class="px-3 py-1.5">
             <button class="text-slate-600 hover:text-slate-900 underline"

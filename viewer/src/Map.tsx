@@ -276,7 +276,7 @@ function Geocoder({ onPick }: { onPick: (b: [number, number, number, number]) =>
   return (
     <form onSubmit={search} className="absolute left-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
       <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search place…"
-        className="w-40 rounded bg-transparent px-1.5 py-0.5 text-foreground placeholder:text-muted-foreground focus:outline-none" />
+        className="w-24 sm:w-40 rounded bg-transparent px-1.5 py-0.5 text-foreground placeholder:text-muted-foreground focus:outline-none" />
       <button type="submit" disabled={busy} className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50">
         {busy ? "…" : "Go"}
       </button>

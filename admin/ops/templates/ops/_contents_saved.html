@@ -1,0 +1,2 @@
+{% if error %}<span class="text-red-600">{{ error }}</span>
+{% else %}<span class="text-green-600">Saved {{ result.count }} entr{{ result.count|pluralize:"y,ies" }} ✓ — run <span class="font-medium">Rebuild pubs STAC</span> to publish.</span>{% endif %}

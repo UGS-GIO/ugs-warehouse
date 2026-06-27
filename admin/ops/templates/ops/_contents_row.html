@@ -1,0 +1,9 @@
+{# One editable TOC row. `name="title"`/`name="page"` post as parallel lists (zipped server-side). #}
+<div class="row flex items-center gap-2">
+  <input name="title" value="{{ e.title|default:'' }}" placeholder="Article title"
+    class="flex-1 rounded border border-slate-300 px-2 py-1 text-sm focus:border-slate-500 focus:outline-none">
+  <input name="page" value="{{ e.page|default_if_none:'' }}" placeholder="pg" inputmode="numeric"
+    class="w-14 rounded border border-slate-300 px-2 py-1 text-sm focus:border-slate-500 focus:outline-none">
+  <button type="button" title="remove" onclick="this.closest('.row').remove()"
+    class="w-4 text-slate-400 hover:text-red-600">✕</button>
+</div>

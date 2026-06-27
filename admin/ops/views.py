@@ -4,7 +4,7 @@ from django.views.decorators.http import require_POST
 
 from core.iap_auth import admin_required
 
-from . import jobs, stac
+from . import contents, jobs, stac
 
 
 @admin_required
@@ -168,3 +168,44 @@ def pub_logs(request, series_id):
     return render(request, "ops/_pub_logs.html", {
         "series_id": series_id, "log": jobs.pub_logs(series_id),
     })
+
+
+# ---- Survey Notes "In this issue" sidecar editor ----
+
+@admin_required
+def contents_list(request):
+    """Survey Notes issues + TOC-sidecar status; pick one to author/correct its contents."""
+    search = request.GET.get("q", "")
+    error, rows = "", []
+    try:
+        rows = contents.list_issues(search)
+    except Exception as e:  # noqa: BLE001 — show why it's empty rather than a blank table
+        error = f"{type(e).__name__}: {e}"
+    return render(request, "ops/contents_list.html", {"rows": rows, "q": search, "error": error})
+
+
+@admin_required
+def contents_edit(request, series_id):
+    """Editor for one issue — embedded PDF + editable {title, page} rows (pre-filled from sidecar)."""
+    return render(request, "ops/_contents_editor.html", {"c": contents.load(series_id)})
+
+
+@admin_required
+@require_POST
+def contents_save(request, series_id):
+    """Persist the edited rows to the GCS sidecar (source=manual). Parallel title[]/page[] fields."""
+    titles = request.POST.getlist("title")
+    pages = request.POST.getlist("page")
+    entries = [{"title": t, "page": p} for t, p in zip(titles, pages)]
+    try:
+        result = contents.save(series_id, entries)
+        return render(request, "ops/_contents_saved.html", {"series_id": series_id, "result": result})
+    except Exception as e:  # noqa: BLE001
+        return render(request, "ops/_contents_saved.html",
+                      {"series_id": series_id, "error": f"{type(e).__name__}: {e}"})
+
+
+@admin_required
+def contents_row(request):
+    """One blank editable row (HTMX 'add row')."""
+    return render(request, "ops/_contents_row.html", {"e": {"title": "", "page": ""}})

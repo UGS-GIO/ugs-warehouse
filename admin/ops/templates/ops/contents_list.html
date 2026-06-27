@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block title %}Issue Contents{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-1">Survey Notes — “In this issue”</h1>
+<p class="text-sm text-slate-500 mb-4">
+  Author or correct each issue's table of contents. The thumbs job auto-parses the PDF; edits here
+  override it (saved as <span class="font-mono">source: manual</span>) and publish on the next
+  <span class="font-medium">Rebuild pubs STAC</span>.
+</p>
+{% if error %}<p class="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">{{ error }}</p>{% endif %}
+
+<input type="text" name="q" value="{{ q }}" placeholder="Filter SNT-…"
+  class="mb-3 w-full sm:w-72 rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+  hx-get="{% url 'ops:contents' %}" hx-trigger="keyup changed delay:300ms" hx-target="#snt-list"
+  hx-select="#snt-list" hx-swap="outerHTML">
+
+<div id="snt-list" class="overflow-x-auto">
+  <table class="w-full text-sm border-collapse">
+    <thead><tr class="text-left text-xs text-slate-500">
+      <th class="py-1">Issue</th><th>Title</th><th>Year</th><th>TOC</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="border-t border-slate-100">
+        <td class="py-1 pr-3 font-mono whitespace-nowrap">{{ r.id }}</td>
+        <td class="pr-3 text-slate-600">{{ r.title|truncatechars:64 }}</td>
+        <td class="pr-3 text-slate-500">{{ r.year }}</td>
+        <td class="pr-3">{% if r.has_sidecar %}<span class="text-green-600" title="has a TOC sidecar">✓</span>{% else %}<span class="text-slate-300" title="no TOC yet">—</span>{% endif %}</td>
+        <td><button class="text-xs font-medium text-blue-700 hover:underline"
+              hx-get="{% url 'ops:contents_edit' r.id %}" hx-target="#editor" hx-swap="innerHTML">Edit ▸</button></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="py-3 text-slate-400">No Survey Notes issues match.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<div id="editor" class="mt-4"></div>
+{% endblock %}

@@ -19,6 +19,7 @@ substitutions:
   _JOB: ugs-warehouse-ingest              # Cloud Run job (batch --all reingest). Distinct resource from the Pub/Sub topic of the same name below.
   _PUBS_JOB: ugs-pubs-ingest              # Cloud Run job: rebuild the ugs-publications STAC collection from pub metadata (no COG re-harvest)
   _PUBTHUMB_JOB: ugs-pubs-thumbs          # Cloud Run job: render PDF first-page cover thumbnails for every pub (poppler)
+  _PIPELINE_JOB: ugs-pubs-pipeline        # Cloud Run job: orchestrator — loops thumbs then runs pubs-ingest (one-click "full refresh")
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
@@ -87,6 +88,16 @@ steps:
           --cache-from "$$IMG:latest" \
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
+  # Thin orchestrator (cloud-sdk + scripts/pipeline.sh) for the one-click publications refresh.
+  - id: build-pipeline
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline
+        docker build -f Dockerfile.pipeline -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
+
   # OGC API Features for Arc Pro — duckdb_featureserv over GeoParquet (DuckDB views on the CDN
   # parquet). Builds a tiny DuckDB file from the STAC catalog at image-build time (needs network).
   - id: build-features
@@ -132,6 +143,10 @@ steps:
   - id: push-harvest
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest']
+
+  - id: push-pipeline
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline']
 
   - id: deploy-job
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -222,6 +237,26 @@ steps:
       - --cpu=2
       - --memory=4Gi
       - --tasks=5
+
+  # One-click "full refresh" orchestrator: loops the thumbs job to completion then runs pubs-ingest
+  # (binds covers/contents/volume + builds the search corpus). Triggered from the ops console. Its SA
+  # needs roles/run.developer + actAs on ${_RUNTIME_SA} to execute the sub-jobs (see scripts/provision.sh).
+  - id: deploy-pipeline-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_PIPELINE_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --set-env-vars=REGION=${_REGION},WAREHOUSE_BUCKET=${_PUBLIC_BUCKET},THUMBS_JOB=${_PUBTHUMB_JOB},INGEST_JOB=${_PUBS_JOB}
+      - --task-timeout=86400
+      - --max-retries=0
+      - --cpu=1
+      - --memory=512Mi
 
   # Rebind ugs-styles renders into STAC items (no reingest). The ugs-styles publish CI executes
   # this after pushing the styles CDN. Deployed here so it tracks the CURRENT warehouse image —
@@ -363,6 +398,7 @@ images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline
 
 options:
   logging: CLOUD_LOGGING_ONLY

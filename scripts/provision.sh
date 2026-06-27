@@ -37,4 +37,13 @@ else
     --ack-deadline=600 --message-retention-duration=1d
 fi
 
+# The pubs "full refresh" orchestrator job (ugs-pubs-pipeline) runs as ${RUNTIME_SA} and shells
+# `gcloud run jobs execute` against the thumbs + pubs-ingest jobs, so it needs run.developer (execute
+# jobs) + actAs on the jobs' runtime SA (itself — they all run as ${RUNTIME_SA}).
+echo "→ pipeline orchestrator: run.developer + actAs on ${RUNTIME_SA} (idempotent)"
+gcloud projects add-iam-policy-binding "${PROJECT}" \
+  --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
+gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
+  --member="serviceAccount:${RUNTIME_SA}" --role=roles/iam.serviceAccountUser --quiet >/dev/null
+
 echo "✓ provisioned"

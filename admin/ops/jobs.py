@@ -42,14 +42,19 @@ STAGES = [
               "PMTiles · STAC. One DuckDB streaming pass."},
     {"n": "④", "title": "Styling", "jobs": ["restyle"],
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt."},
-    {"n": "⑤", "title": "Publications", "jobs": ["harvest", "thumbs", "pubs-ingest"],
+    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
-              "STAC (3 collections). Harvest/thumbnail, then rebuild pubs STAC to bind."},
+              "STAC (3 collections). One-click Full refresh runs thumbnails → rebuild for you, or "
+              "step through harvest / thumbnail / rebuild individually."},
 ]
 
 
 # The triggerable warehouse jobs (Cloud Run job names from cloudbuild.yaml).
 JOBS: dict[str, Job] = {j.key: j for j in [
+    Job("pubs-pipeline", "ugs-pubs-pipeline", "Full refresh (one click)",
+        "Orchestrator: loops Cover thumbnails to completion, then Rebuild pubs STAC — binds covers / "
+        "in-this-issue / volume + builds the search corpus. Runs server-side for as long as it takes "
+        "(survives closing this tab). Use this instead of the 3-step dance.", danger=True),
     Job("harvest", "geolmap-harvest", "Harvest COGs",
         "Convert publication map plates → COGs (SKIP_EXISTING; safe to re-run). Heavy. "
         "Runs as 5 parallel shards (each task strides 1/5 of the worklist).", danger=True, tasks=5),

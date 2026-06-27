@@ -1,0 +1,6 @@
+# Thin orchestrator image for the publications "full refresh" Cloud Run Job: gcloud CLI + the
+# pipeline script that chains thumbs (looped) -> pubs-ingest. No app code, no Python deps.
+FROM gcr.io/google.com/cloudsdktool/cloud-sdk:slim
+COPY scripts/pipeline.sh /pipeline.sh
+RUN chmod +x /pipeline.sh
+ENTRYPOINT ["/pipeline.sh"]

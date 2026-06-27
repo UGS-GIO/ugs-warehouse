@@ -9,8 +9,7 @@
   <div class="flex justify-center text-slate-300 text-lg leading-none">↓</div>
   <section class="rounded-lg border border-slate-200 bg-white p-4">
     <div class="flex gap-3">
-      {# Stage number: decorative sequence marker. The circle is hidden on mobile (it ate width +
-         height for nothing); the number folds inline into the title instead. Circle returns at sm. #}
+      {# Stage number: decorative marker — circle hidden on mobile (folds inline into the title), returns at sm. #}
       <div class="hidden sm:grid shrink-0 h-8 w-8 rounded-full bg-slate-800 text-white place-items-center text-sm font-semibold">{{ stage.n }}</div>
       <div class="flex-1 min-w-0">
         <h2 class="font-semibold"><span class="sm:hidden text-slate-400 font-normal mr-1">{{ stage.n }}</span>{{ stage.title }}</h2>

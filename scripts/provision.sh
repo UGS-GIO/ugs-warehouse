@@ -38,11 +38,15 @@ else
 fi
 
 # The pubs "full refresh" orchestrator job (ugs-pubs-pipeline) runs as ${RUNTIME_SA} and shells
-# `gcloud run jobs execute` against the thumbs + pubs-ingest jobs, so it needs run.developer (execute
-# jobs) + actAs on the jobs' runtime SA (itself — they all run as ${RUNTIME_SA}).
-echo "→ pipeline orchestrator: run.developer + actAs on ${RUNTIME_SA} (idempotent)"
-gcloud projects add-iam-policy-binding "${PROJECT}" \
-  --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
+# `gcloud run jobs execute` against the thumbs + pubs-ingest jobs. Least privilege: grant the
+# execute role at the JOB resource level (only those two jobs), NOT project-wide — so a compromised
+# orchestrator can't touch any other Cloud Run resource. + actAs the runtime SA (itself) to launch
+# executions that run as ${RUNTIME_SA}.
+echo "→ pipeline orchestrator: execute rights on the sub-jobs only (least privilege)"
+for SUBJOB in ugs-pubs-thumbs ugs-pubs-ingest; do
+  gcloud run jobs add-iam-policy-binding "${SUBJOB}" --region="${REGION}" \
+    --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
+done
 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" \
   --member="serviceAccount:${RUNTIME_SA}" --role=roles/iam.serviceAccountUser --quiet >/dev/null
 

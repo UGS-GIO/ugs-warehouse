@@ -240,7 +240,8 @@ steps:
 
   # One-click "full refresh" orchestrator: loops the thumbs job to completion then runs pubs-ingest
   # (binds covers/contents/volume + builds the search corpus). Triggered from the ops console. Its SA
-  # needs roles/run.developer + actAs on ${_RUNTIME_SA} to execute the sub-jobs (see scripts/provision.sh).
+  # needs execute rights on ONLY the two sub-jobs (job-level run.developer, least privilege) + actAs
+  # on ${_RUNTIME_SA} — both granted by scripts/provision.sh.
   - id: deploy-pipeline-job
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud

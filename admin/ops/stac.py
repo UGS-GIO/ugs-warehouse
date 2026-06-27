@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import concurrent.futures as cf
 import json
+import time
 import urllib.error
 import urllib.request
 
@@ -18,6 +19,22 @@ def _get(url: str):
             return json.load(r)
     except Exception:
         return None
+
+
+# The catalog changes slowly, but the dashboard reads it from several panels/tabs. Memoize the
+# whole-catalog scans for a short TTL so a page load (health panel + Data tab) does ONE scan, not N.
+_CACHE: dict = {}
+_CACHE_TTL = 60.0
+
+
+def _cached(key: str, fn):
+    now = time.monotonic()
+    hit = _CACHE.get(key)
+    if hit and now - hit[0] < _CACHE_TTL:
+        return hit[1]
+    val = fn()
+    _CACHE[key] = (now, val)
+    return val
 
 
 def service_health() -> list[dict]:
@@ -49,7 +66,11 @@ def _has_cog(item: dict) -> bool:
 
 
 def cog_coverage() -> dict:
-    """Per publication-collection: total items + how many carry a COG, with the COG item ids."""
+    """Per publication-collection COG coverage. Cached (TTL) — scanned by both panels on a page."""
+    return _cached("cog_coverage", _cog_coverage)
+
+
+def _cog_coverage() -> dict:
     base = settings.STAC_BASE
     out = {"collections": [], "total_items": 0, "total_cogs": 0}
     for coll in PUB_COLLECTIONS:
@@ -77,7 +98,11 @@ def cog_coverage() -> dict:
 
 
 def serving_topics() -> list[dict]:
-    """Vector serving topics + whether each has a bound style render (quick catalog glance)."""
+    """Vector serving topics + whether each has a bound style render. Cached (TTL)."""
+    return _cached("serving_topics", _serving_topics)
+
+
+def _serving_topics() -> list[dict]:
     idx = _get(f"{settings.STAC_BASE}/ugs-serving-topics/items.json") or {}
     rows = []
     for it in idx.get("items", []):

@@ -249,9 +249,32 @@ function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void
     </div>
   );
 }
-function ThumbGrid({ rows, onOpen }: { rows: ItemRef[]; onOpen: (href: string) => void }) {
+// A card in the Cards view (text-forward; same data as the table row).
+function CardItem({ it, showCollection, onOpen }: { it: ItemRef; showCollection?: boolean; onOpen: (href: string) => void }) {
+  return (
+    <div className={C.card} onClick={() => onOpen(it.href)}>
+      <div className="font-mono text-[12px] font-semibold text-foreground">{gSeries(it)}</div>
+      <p className={C.cardTitle}>{gTitle(it)}</p>
+      <div>
+        {showCollection && <span className={C.badge}>{it.collId}</span>}
+        {gDate(it) && <span className={C.badge}>{gDate(it)}</span>}
+        {BADGE_KEYS.filter((k) => props(it)[k]).map((k) => (
+          <span key={k} className={C.badge}>{String(props(it)[k])}</span>
+        ))}
+      </div>
+      {it.data?.assets && <div><AssetChips assets={it.data.assets} /></div>}
+    </div>
+  );
+}
+
+// Wrap any grid renderer with Survey Notes "Volume N" section headers (newest volume first) when the
+// items carry ugs:volume — otherwise a single flat grid. Shared by the Thumbnails + Cards views so
+// volume grouping is consistent, not view-specific.
+function VolumeGrouped({ rows, gridClass, render }: {
+  rows: ItemRef[]; gridClass: string; render: (it: ItemRef) => React.ReactNode;
+}) {
   if (!rows.some((it) => gVol(it) != null))
-    return <div className={THUMB_GRID}>{rows.map((it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />)}</div>;
+    return <div className={gridClass}>{rows.map(render)}</div>;
   const groups = new Map<number, ItemRef[]>();
   const other: ItemRef[] = [];
   for (const it of rows) {
@@ -259,21 +282,16 @@ function ThumbGrid({ rows, onOpen }: { rows: ItemRef[]; onOpen: (href: string) =
     if (v == null) other.push(it);
     else (groups.get(v) ?? groups.set(v, []).get(v)!).push(it);
   }
-  const ordered = [...groups.keys()].sort((a, b) => b - a);
+  const sections: [string, ItemRef[]][] = [...groups.keys()].sort((a, b) => b - a).map((v) => [`Volume ${v}`, groups.get(v)!]);
+  if (other.length) sections.push(["Other", other]);
   return (
     <div className="space-y-4">
-      {ordered.map((v) => (
-        <div key={v}>
-          <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Volume {v}</h3>
-          <div className={THUMB_GRID}>{groups.get(v)!.map((it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />)}</div>
+      {sections.map(([label, items]) => (
+        <div key={label}>
+          <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">{label}</h3>
+          <div className={gridClass}>{items.map(render)}</div>
         </div>
       ))}
-      {other.length > 0 && (
-        <div>
-          <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Other</h3>
-          <div className={THUMB_GRID}>{other.map((it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />)}</div>
-        </div>
-      )}
     </div>
   );
 }
@@ -331,18 +349,21 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
     [items, needle, series, topics, mapOnly, yearMin, yearMax],
   );
 
+  const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
     { id: "id", header: "ID", accessorFn: gSeries, sortingFn: "alphanumeric",
       cell: (i) => <span className="whitespace-nowrap font-mono text-[13px] font-semibold text-foreground">{String(i.getValue())}</span> },
     { id: "title", header: "Title", accessorFn: gTitle,
       cell: (i) => <span className="text-primary">{String(i.getValue())}</span> },
     ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: (it: ItemRef) => it.collId }] : []),
+    // Volume column only when items carry one (Survey Notes) — consistent with the grouped grid views.
+    ...(hasVolumes ? [{ id: "volume", header: "Vol", accessorFn: (it: ItemRef) => gVol(it) ?? "" }] : []),
     { id: "type", header: "Type", accessorFn: gType },
     { id: "date", header: "Date", accessorFn: gDate },
     { id: "scale", header: "Scale", accessorFn: gScale, enableSorting: false },
     { id: "assets", header: "Assets", enableSorting: false, accessorFn: () => "",
       cell: ({ row }) => row.original.data?.assets ? <AssetChips assets={row.original.data.assets} /> : "" },
-  ], [showCollection]);
+  ], [showCollection, hasVolumes]);
 
   // Default sort: publications (which carry a real publication year) lead newest→oldest; vector
   // serving topics (ingest-time datetime only — not meaningful) stay alphabetical by id.
@@ -411,24 +432,11 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
             initialSorting={defaultSorting} />
         </div>
       ) : mode === "thumbs" ? (
-        <ThumbGrid rows={rows} onOpen={onOpen} />
+        <VolumeGrouped rows={rows} gridClass={THUMB_GRID}
+          render={(it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />} />
       ) : (
-        <div className={C.grid}>
-          {rows.map((it) => (
-            <div key={it.href} className={C.card} onClick={() => onOpen(it.href)}>
-              <div className="font-mono text-[12px] font-semibold text-foreground">{gSeries(it)}</div>
-              <p className={C.cardTitle}>{gTitle(it)}</p>
-              <div>
-                {showCollection && <span className={C.badge}>{it.collId}</span>}
-                {gDate(it) && <span className={C.badge}>{gDate(it)}</span>}
-                {BADGE_KEYS.filter((k) => props(it)[k]).map((k) => (
-                  <span key={k} className={C.badge}>{String(props(it)[k])}</span>
-                ))}
-              </div>
-              {it.data?.assets && <div><AssetChips assets={it.data.assets} /></div>}
-            </div>
-          ))}
-        </div>
+        <VolumeGrouped rows={rows} gridClass={C.grid}
+          render={(it) => <CardItem key={it.href} it={it} showCollection={showCollection} onOpen={onOpen} />} />
       )}
     </>
   );

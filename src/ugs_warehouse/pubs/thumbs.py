@@ -12,13 +12,14 @@ exactly like the COG harvest. Reuses harvest's download / run / structured-loggi
 """
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import sys
 import tempfile
 
 from ..core import gcs
-from . import identity, sink_stac, source
+from . import contents, identity, sink_stac, source
 from .harvest import _series_ctx, download, encode_url, hlog, outcome_category, run
 
 THUMB_PX = int(os.environ.get("PUB_THUMB_PX", "400"))
@@ -38,40 +39,85 @@ def thumb_one(p: dict, force: bool = False) -> str:
     if not pdf or not pdf.lower().split("?")[0].endswith(".pdf"):
         hlog("no PDF — no cover", step="resolve", level="NOTICE", category="expected")
         return "skip:nopdf"
-    obj = thumb_object(sid)
-    if not force and gcs.exists(obj):
-        hlog("cover already exists", step="resolve", level="NOTICE", category="expected")
+
+    cover_obj = thumb_object(sid)
+    contents_obj = identity.pub_contents_object(sid)
+    is_snt = sink_stac.series_code(sid) == "SNT"
+    need_cover = force or not gcs.exists(cover_obj)
+    # Survey Notes get an "In this issue" sidecar parsed from the PDF. A hand-authored sidecar (saved
+    # from the ops console as source=manual) is never clobbered — not even with --force; skip-existing
+    # protects an auto-parsed one too, so re-runs only fill gaps.
+    need_contents = is_snt and (force or not gcs.exists(contents_obj)) and not _manual_contents(contents_obj)
+    if not need_cover and not need_contents:
+        hlog("cover + contents already present", step="resolve", level="NOTICE", category="expected")
         return "skip:exists"
+
     work = tempfile.mkdtemp(prefix=f"t_{sid.replace('/', '_')}_")
     try:
         pdfp = os.path.join(work, "pub.pdf")
-        hlog("downloading PDF", step="download")
-        download(encode_url(pdf), pdfp, max_bytes=MAX_PDF_MB * 1024 * 1024)
-        out = os.path.join(work, "cover")
-        # First page only, width scaled to THUMB_PX (height proportional). -singlefile → out.png.
-        run(["pdftoppm", "-png", "-f", "1", "-l", "1", "-scale-to-x", str(THUMB_PX),
-             "-scale-to-y", "-1", "-singlefile", pdfp, out])
-        png = out + ".png"
-        if not os.path.exists(png):
-            hlog("FAIL no page rendered", step="render", level="ERROR", category="attention", err=True)
+        try:
+            hlog("downloading PDF", step="download")
+            download(encode_url(pdf), pdfp, max_bytes=MAX_PDF_MB * 1024 * 1024)
+        except Exception as e:  # noqa: BLE001 — over the size cap (rejected pre-download) or unfetchable
+            reason = _reason(e)
+            # The cover can still come from the harvest's COG overview (scanned-map plates that bust
+            # the cap already have geolmap/cogs/{SID}.thumb.png); the contents parse can't.
+            if need_cover and _cog_cover(sid, cover_obj):
+                hlog(f"cover from COG overview (PDF unavailable: {reason})", step="result", category="ok")
+                return "ok"
+            hlog(f"FAIL {reason}", step="result", level="ERROR", category="attention", err=True)
+            return f"fail:{type(e).__name__}"
+
+        # PDF in hand — derive whatever's missing, independently.
+        if need_cover and not _render_cover(sid, pdfp, work, cover_obj):
             return "fail:norender"
-        gcs.upload(png, obj, content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
-        hlog(f"OK cover → {obj}", step="result", category="ok")
+        if need_contents:
+            toc = contents.extract(pdfp)
+            if toc:
+                gcs.put_bytes(
+                    json.dumps({"series_id": sid.upper(), "contents": toc}, indent=2).encode(),
+                    contents_obj, content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+                hlog(f"OK contents → {len(toc)} entries", step="result", category="ok")
+            else:
+                # Pre-dot-leader / atypical layout — graceful; hand-author a sidecar to fix it.
+                hlog("no parseable contents (layout)", step="result", level="NOTICE", category="expected")
         return "ok"
-    except Exception as e:  # noqa: BLE001
-        err = (getattr(e, "stderr", "") or str(e)).strip()
-        reason = (err.splitlines()[-1] if err.splitlines() else str(e))[:200]
-        # PDF over the size cap (Content-Length is rejected *before* the download) or unrenderable.
-        # Fall back to the harvest's COG overview if this pub has one — the scanned-map plates that
-        # bust the cap already have geolmap/cogs/{SID}.thumb.png, so they get the map as a cover
-        # instead of nothing, with no giant download. Title-page pubs (no COG) just report the fail.
-        if _cog_cover(sid, obj):
-            hlog(f"cover from COG overview (PDF unavailable: {reason})", step="result", category="ok")
-            return "ok"
-        hlog(f"FAIL {reason}", step="result", level="ERROR", category="attention", err=True)
-        return f"fail:{type(e).__name__}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+def _manual_contents(obj: str) -> bool:
+    """True if a hand-authored (source=manual) contents sidecar exists — auto-parse must not touch it."""
+    if not gcs.exists(obj):
+        return False
+    try:
+        return json.loads(gcs.get_bytes(obj).decode()).get("source") == "manual"
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def _reason(e: Exception) -> str:
+    err = (getattr(e, "stderr", "") or str(e)).strip()
+    return (err.splitlines()[-1] if err.splitlines() else str(e))[:200]
+
+
+def _render_cover(sid: str, pdfp: str, work: str, obj: str) -> bool:
+    """Render the PDF first page → cover PNG in GCS. On a render miss, fall back to the COG overview.
+    Returns False only when there's no cover at all (caller reports fail:norender)."""
+    out = os.path.join(work, "cover")
+    # First page only, width scaled to THUMB_PX (height proportional). -singlefile → out.png.
+    run(["pdftoppm", "-png", "-f", "1", "-l", "1", "-scale-to-x", str(THUMB_PX),
+         "-scale-to-y", "-1", "-singlefile", pdfp, out])
+    png = out + ".png"
+    if not os.path.exists(png):
+        if _cog_cover(sid, obj):
+            hlog("cover from COG overview (page-1 render failed)", step="result", category="ok")
+            return True
+        hlog("FAIL no page rendered", step="render", level="ERROR", category="attention", err=True)
+        return False
+    gcs.upload(png, obj, content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
+    hlog(f"OK cover → {obj}", step="result", category="ok")
+    return True
 
 
 def _cog_cover(sid: str, obj: str) -> bool:

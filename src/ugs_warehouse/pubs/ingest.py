@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 from concurrent.futures import ThreadPoolExecutor
+import json
 import sys
 
 from ..core import config, gcs, stac
@@ -24,6 +25,25 @@ def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
         name = path.rsplit("/", 1)[-1]
         if name.endswith(suffix):
             out.add(name[: -len(suffix)].upper())
+    return out
+
+
+def _contents_by_sid() -> dict[str, list[dict]]:
+    """{SID: [{title, page}, …]} from the Survey Notes TOC sidecars (parsed or hand-authored)."""
+    paths = [p for p in gcs.list_paths(identity.PUB_CONTENTS_PREFIX) if p.endswith(".json")]
+
+    def load(path: str) -> tuple[str, list[dict]]:
+        sid = path.rsplit("/", 1)[-1][: -len(".json")].upper()
+        try:
+            return sid, (json.loads(gcs.get_bytes(path).decode()).get("contents") or [])
+        except Exception:  # noqa: BLE001 — a bad sidecar just means no panel for that issue
+            return sid, []
+
+    out: dict[str, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        for sid, toc in ex.map(load, paths):
+            if toc:
+                out[sid] = toc
     return out
 
 
@@ -64,9 +84,11 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     cogs = _ids_with_suffix(identity.COG_PREFIX, ".cog.tif")
     thumbs = _ids_with_suffix(identity.COG_PREFIX, ".thumb.png")
     covers = _ids_with_suffix(identity.PUB_THUMB_PREFIX, ".png")  # PDF first-page covers
+    toc = _contents_by_sid()  # Survey Notes "In this issue" sidecars
     units = _unit_ids()
     foot = _footprint_geoms()
-    print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(units)} unit sets, {len(foot)} footprints")
+    print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
+          f"{len(units)} unit sets, {len(foot)} footprints")
 
     def process_pub(p: dict) -> bool:
         sid = (p.get("series_id") or "").strip()
@@ -77,7 +99,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         item = sink_stac.build_item(
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
-            has_cover=up in covers,
+            has_cover=up in covers, contents=toc.get(up),
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)

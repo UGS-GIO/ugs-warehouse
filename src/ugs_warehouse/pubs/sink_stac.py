@@ -97,7 +97,8 @@ def build_item(p: dict, attachments: list[dict], *,
                geom: dict | None = None, bbox: list[float] | None = None,
                fp_source: str | None = None,
                has_cog: bool = False, has_units: bool = False,
-               has_thumb: bool = False, has_cover: bool = False) -> dict:
+               has_thumb: bool = False, has_cover: bool = False,
+               contents: list[dict] | None = None) -> dict:
     """Build a pub STAC Item (collection-nested, via core.stac.build_item)."""
     sid = (p.get("series_id") or "").strip()
     yr = (p.get("pub_year") or "").strip()
@@ -160,6 +161,9 @@ def build_item(p: dict, attachments: list[dict], *,
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
             "ugs:footprint_source": fp_source,
             "keywords": (p.get("keywords") or "").strip(),
+            # Survey Notes "In this issue": [{title, page}] parsed from the PDF TOC (or hand-authored).
+            # UGS-prefixed custom field — no STAC extension fits; the viewer renders an issue contents list.
+            **({"ugs:contents": contents} if contents else {}),
         },
         assets=assets,
         extra_links=extra_links,

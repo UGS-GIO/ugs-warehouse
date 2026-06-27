@@ -148,6 +148,7 @@ def test_build_catalog_series_filter():
     with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
          patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
          patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._contents_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._footprint_geoms", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \

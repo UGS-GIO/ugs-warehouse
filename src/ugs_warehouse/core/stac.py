@@ -321,7 +321,7 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
 # `description`/citation is intentionally omitted; it loads with the full item on open.
 _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
                     "ugs:topic", "ugs:scale", "ugs:author", "ugs:dbt_schema", "ugs:layer",
-                    "ugs:row_count", "keywords")
+                    "ugs:row_count", "ugs:volume", "keywords")
 
 
 def _index_entry(item: dict) -> dict:

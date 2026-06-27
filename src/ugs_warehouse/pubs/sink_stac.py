@@ -59,6 +59,13 @@ def series_code(sid: str) -> str:
     return m.group(1).upper() if m else "OTHER"
 
 
+def issue_volume(sid: str) -> int | None:
+    """Survey Notes volume from the id: SNT-{volume}-{issue} → volume (SNT-58-2 → 58, SNT-22-1-2 → 22).
+    Lets the viewer group issues under their volume. None for non-SNT or unparseable ids."""
+    m = re.match(r"^SNT-(\d+)-", (sid or "").strip().upper())
+    return int(m.group(1)) if m else None
+
+
 def media_type(url: str) -> str:
     return MEDIA.get(os.path.splitext(url.split("?")[0])[1].lower(), "application/octet-stream")
 
@@ -161,6 +168,8 @@ def build_item(p: dict, attachments: list[dict], *,
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
             "ugs:footprint_source": fp_source,
             "keywords": (p.get("keywords") or "").strip(),
+            # Survey Notes volume (from SNT-{vol}-{issue}) so the viewer can group issues by volume.
+            **({"ugs:volume": vol} if (vol := issue_volume(sid)) is not None else {}),
             # Survey Notes "In this issue": [{title, page}] parsed from the PDF TOC (or hand-authored).
             # UGS-prefixed custom field — no STAC extension fits; the viewer renders an issue contents list.
             **({"ugs:contents": contents} if contents else {}),

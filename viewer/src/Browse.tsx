@@ -44,6 +44,11 @@ const BADGE_KEYS = ["ugs:series", "ugs:pub_type", "ugs:topic", "ugs:scale", "ugs
 
 const idFromHref = (href: string) => href.split("/").slice(-2)[0];
 const props = (it: ItemRef) => it.data?.properties ?? {};
+// Survey Notes volume (warehouse ugs:volume, from SNT-{vol}-{issue}) → group issues under it.
+const gVol = (it: ItemRef): number | null => {
+  const v = props(it)["ugs:volume"];
+  return typeof v === "number" ? v : null;
+};
 // The STAC item id IS the publication series id (DS-8, OFR-647, …) / the layer stem.
 const gSeries = (it: ItemRef) => String(it.data?.id ?? idFromHref(it.href));
 const gTitle = (it: ItemRef) => String(props(it).title ?? it.data?.id ?? idFromHref(it.href));
@@ -223,6 +228,54 @@ function Breadcrumb({ crumbs }: { crumbs: { label: string; onClick?: () => void 
   );
 }
 
+// Thumbnail (cover) grid. When items carry a Survey Notes volume (ugs:volume), they're grouped
+// under "Volume N" headers, newest volume first; otherwise a single flat grid.
+const THUMB_GRID = "grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6";
+function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void }) {
+  const th = thumbnailAsset(it.data);
+  return (
+    <div onClick={() => onOpen(it.href)}
+      className="cursor-pointer overflow-hidden rounded-md border border-border bg-card hover:ring-1 hover:ring-primary">
+      <div className="flex aspect-[3/4] items-center justify-center overflow-hidden bg-muted">
+        {th ? <img src={th.href} alt={gTitle(it)} loading="lazy" className="h-full w-full object-cover" />
+            : <span className="p-2 text-center font-mono text-xs text-muted-foreground">{gSeries(it)}</span>}
+      </div>
+      <div className="p-1.5">
+        <div className="font-mono text-[11px] font-semibold text-foreground">{gSeries(it)}</div>
+        <p className="line-clamp-2 text-[11px] text-muted-foreground">{gTitle(it)}</p>
+      </div>
+    </div>
+  );
+}
+function ThumbGrid({ rows, onOpen }: { rows: ItemRef[]; onOpen: (href: string) => void }) {
+  if (!rows.some((it) => gVol(it) != null))
+    return <div className={THUMB_GRID}>{rows.map((it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />)}</div>;
+  const groups = new Map<number, ItemRef[]>();
+  const other: ItemRef[] = [];
+  for (const it of rows) {
+    const v = gVol(it);
+    if (v == null) other.push(it);
+    else (groups.get(v) ?? groups.set(v, []).get(v)!).push(it);
+  }
+  const ordered = [...groups.keys()].sort((a, b) => b - a);
+  return (
+    <div className="space-y-4">
+      {ordered.map((v) => (
+        <div key={v}>
+          <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Volume {v}</h3>
+          <div className={THUMB_GRID}>{groups.get(v)!.map((it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />)}</div>
+        </div>
+      ))}
+      {other.length > 0 && (
+        <div>
+          <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Other</h3>
+          <div className={THUMB_GRID}>{other.map((it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />)}</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ---- item list: filter + sort + table/cards, reused for a collection and global search ----
 function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   items: ItemRef[]; showCollection?: boolean; query?: string; onOpen: (href: string) => void;
@@ -356,24 +409,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
             initialSorting={defaultSorting} />
         </div>
       ) : mode === "thumbs" ? (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6">
-          {rows.map((it) => {
-            const th = thumbnailAsset(it.data);
-            return (
-              <div key={it.href} onClick={() => onOpen(it.href)}
-                className="cursor-pointer overflow-hidden rounded-md border border-border bg-card hover:ring-1 hover:ring-primary">
-                <div className="flex aspect-[3/4] items-center justify-center overflow-hidden bg-muted">
-                  {th ? <img src={th.href} alt={gTitle(it)} loading="lazy" className="h-full w-full object-cover" />
-                      : <span className="p-2 text-center font-mono text-xs text-muted-foreground">{gSeries(it)}</span>}
-                </div>
-                <div className="p-1.5">
-                  <div className="font-mono text-[11px] font-semibold text-foreground">{gSeries(it)}</div>
-                  <p className="line-clamp-2 text-[11px] text-muted-foreground">{gTitle(it)}</p>
-                </div>
-              </div>
-            );
-          })}
-        </div>
+        <ThumbGrid rows={rows} onOpen={onOpen} />
       ) : (
         <div className={C.grid}>
           {rows.map((it) => (

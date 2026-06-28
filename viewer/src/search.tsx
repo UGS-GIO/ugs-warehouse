@@ -42,18 +42,31 @@ function useArticleIndex(enabled: boolean) {
   });
 }
 
-// A short snippet of the article text around the first query-term hit.
-function snippet(text: string, q: string): string {
-  const terms = q.toLowerCase().split(/\s+/).filter(Boolean);
+// The data-series code (alpha prefix) of an id — the viewer's leaf collection id (SNT-58-2 → SNT).
+const seriesCode = (sid: string) => sid.match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? sid;
+
+// A snippet around the first query-term hit, with the matched terms highlighted.
+function Snippet({ text, q }: { text: string; q: string }) {
+  const terms = q.toLowerCase().split(/\s+/).filter((t) => t.length > 1);
   const lower = text.toLowerCase();
   let at = -1;
   for (const t of terms) { const i = lower.indexOf(t); if (i >= 0) { at = i; break; } }
-  if (at < 0) return text.slice(0, 160);
-  const start = Math.max(0, at - 60);
-  return (start ? "…" : "") + text.slice(start, start + 200).trim() + "…";
+  const start = at < 0 ? 0 : Math.max(0, at - 60);
+  const body = (start ? "…" : "") + text.slice(start, start + 220).trim() + "…";
+  // Split on the terms (longest first) and wrap matches in <mark>.
+  const re = terms.length ? new RegExp(`(${terms.sort((a, b) => b.length - a.length).map(esc).join("|")})`, "gi") : null;
+  const parts = re ? body.split(re) : [body];
+  return (
+    <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">
+      {parts.map((p, i) => (re && re.test(p)
+        ? <mark key={i} className="bg-yellow-200 text-foreground dark:bg-yellow-500/40">{p}</mark>
+        : <span key={i}>{p}</span>))}
+    </p>
+  );
 }
+const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-export function ArticleSearch() {
+export function ArticleSearch({ onOpen }: { onOpen?: (collId: string, itemId: string) => void }) {
   const [q, setQ] = useState("");
   const { data, isLoading, error } = useArticleIndex(true);
   const results = useMemo(() => {
@@ -79,21 +92,23 @@ export function ArticleSearch() {
       )}
       <ol className="mt-1 divide-y divide-border">
         {results.map((r) => {
-          const href = r.pdf ? (r.page != null ? `${r.pdf}#page=${r.page}` : r.pdf) : undefined;
-          const body = (
-            <>
+          const pdfHref = r.pdf ? (r.page != null ? `${r.pdf}#page=${r.page}` : r.pdf) : undefined;
+          return (
+            <li key={r.id} className="py-2">
               <div className="flex flex-wrap items-baseline gap-x-2">
                 <span className="font-medium text-foreground">{r.title}</span>
                 <span className="text-xs text-muted-foreground">
                   {r.issue || r.sid}{r.volume != null ? ` · Vol ${r.volume}` : ""}{r.page != null ? ` · p. ${r.page}` : ""}
                 </span>
               </div>
-              <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">{snippet(r.text, q)}</p>
-            </>
-          );
-          return (
-            <li key={r.id} className="py-2">
-              {href ? <a href={href} target="_blank" rel="noopener" className="block no-underline hover:opacity-80">{body}</a> : body}
+              <Snippet text={r.text} q={q} />
+              <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
+                {pdfHref && <a href={pdfHref} target="_blank" rel="noopener" className="text-primary hover:underline">
+                  Open PDF{r.page != null ? ` · p. ${r.page}` : ""} ↗</a>}
+                {/* Catalog page: the issue's detail in the viewer (in-app nav, no reload). */}
+                <button className="text-primary hover:underline"
+                  onClick={() => onOpen?.(seriesCode(r.sid), r.sid)}>Catalog page</button>
+              </div>
             </li>
           );
         })}

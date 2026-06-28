@@ -309,7 +309,7 @@ export function App() {
       ) : view === "arch" ? (
         <Architecture />
       ) : view === "search" ? (
-        <ArticleSearch />
+        <ArticleSearch onOpen={(collId, itemId) => go({ view: "catalog", c: collId, i: itemId })} />
       ) : !mapView ? (
         <Browse
           cards={cardsWithCovers}

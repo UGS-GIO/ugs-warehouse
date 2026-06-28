@@ -7,6 +7,8 @@ import { useQuery } from "@tanstack/react-query";
 import MiniSearch from "minisearch";
 import { type ReactNode, useMemo, useState } from "react";
 
+import { searchPubs } from "./ftsearch";
+
 // A small toggle chip for the search filters.
 function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
   return (
@@ -73,6 +75,15 @@ export function ArticleSearch({ catalog = [], onOpen }: {
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | "article" | "item">("all");
   const [colls, setColls] = useState<string[]>([]);
+  const [fullText, setFullText] = useState(false);
+  // Heavy full-text-of-every-pub search (duckdb-wasm over the remote FTS db) — only runs when the
+  // toggle is on, and only re-queries when the text settles (manual trigger via the query key).
+  const pubFts = useQuery({
+    queryKey: ["pubfts", q],
+    queryFn: () => searchPubs(q),
+    enabled: fullText && q.trim().length >= 2,
+    staleTime: 60_000, retry: false,
+  });
   const corpus = useCorpus(true);
   const index = useMemo(() => buildIndex(corpus.data ?? [], catalog), [corpus.data, catalog]);
   const raw = useMemo(() => (q.trim().length < 2 ? [] : index.search(q) as unknown as Hit[]), [index, q]);
@@ -105,6 +116,11 @@ export function ArticleSearch({ catalog = [], onOpen }: {
         placeholder="e.g. Moqui marbles, Wasatch fault, gilsonite, geothermal…"
         className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
 
+      <label className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
+        <input type="checkbox" checked={fullText} onChange={(e) => setFullText(e.target.checked)} />
+        Search the <b>full text of every publication</b> (~7000 docs, BM25 — loads a query engine on first use)
+      </label>
+
       {corpus.isError && <p className="mt-3 text-xs text-muted-foreground">Article full text isn't loaded (built on reingest) — searching catalog metadata only.</p>}
 
       {raw.length > 0 && (
@@ -128,6 +144,30 @@ export function ArticleSearch({ catalog = [], onOpen }: {
           ? <ArticleHit key={r.id} r={r} q={q} onOpen={onOpen} />
           : <ItemHit key={r.id} r={r} onOpen={onOpen} />)}
       </ol>
+
+      {fullText && q.trim().length >= 2 && (
+        <section className="mt-5">
+          <h3 className="text-sm font-semibold">Full text · all publications</h3>
+          {pubFts.isLoading && <p className="mt-1 text-xs text-muted-foreground">Loading the query engine + searching…</p>}
+          {pubFts.isError && <p className="mt-1 text-xs text-muted-foreground">Full-text index not available yet (built by the FTS job on reingest).</p>}
+          {pubFts.data && <p className="mt-1 text-xs text-muted-foreground">{pubFts.data.length} match{pubFts.data.length === 1 ? "" : "es"}</p>}
+          <ol className="mt-1 divide-y divide-border">
+            {(pubFts.data ?? []).map((r) => (
+              <li key={r.id} className="py-2">
+                <div className="flex flex-wrap items-baseline gap-x-2">
+                  {r.series && <span className="rounded bg-muted px-1.5 text-[10px] uppercase text-muted-foreground">{r.series}</span>}
+                  <span className="font-medium text-foreground">{r.title}</span>
+                  <span className="font-mono text-xs text-muted-foreground">{r.id}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
+                  {r.pdf && <a href={r.pdf} target="_blank" rel="noopener" className="text-primary hover:underline">Open PDF ↗</a>}
+                  <button className="text-primary hover:underline" onClick={() => onOpen?.(seriesCode(r.id), r.id)}>Catalog page</button>
+                </div>
+              </li>
+            ))}
+          </ol>
+        </section>
+      )}
     </div>
   );
 }

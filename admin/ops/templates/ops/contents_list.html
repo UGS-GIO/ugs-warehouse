@@ -25,6 +25,9 @@
   hx-get="{% url 'ops:contents' %}" hx-trigger="keyup changed delay:300ms" hx-target="#snt-list"
   hx-select="#snt-list" hx-swap="outerHTML">
 
+{# Editor loads here, ABOVE the (long) list, so clicking Edit on any row shows it immediately. #}
+<div id="editor" class="mb-4 empty:hidden"></div>
+
 <div id="snt-list" class="overflow-x-auto">
   <table class="w-full text-sm border-collapse">
     <thead><tr class="text-left text-xs text-slate-500">
@@ -37,7 +40,7 @@
         <td class="pr-3 text-slate-500">{{ r.year }}</td>
         <td class="pr-3">{% if r.has_sidecar %}<span class="text-green-600" title="has a TOC sidecar">✓</span>{% else %}<span class="text-slate-300" title="no TOC yet">—</span>{% endif %}</td>
         <td><button class="text-xs font-medium text-blue-700 hover:underline"
-              hx-get="{% url 'ops:contents_edit' r.id %}" hx-target="#editor" hx-swap="innerHTML">Edit ▸</button></td>
+              hx-get="{% url 'ops:contents_edit' r.id %}" hx-target="#editor" hx-swap="innerHTML show:top">Edit ▸</button></td>
       </tr>
       {% empty %}
       <tr><td colspan="5" class="py-3 text-slate-400">No Survey Notes issues match.</td></tr>
@@ -45,6 +48,4 @@
     </tbody>
   </table>
 </div>
-
-<div id="editor" class="mt-4"></div>
 {% endblock %}

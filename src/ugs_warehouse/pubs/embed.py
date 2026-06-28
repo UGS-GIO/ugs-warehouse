@@ -19,6 +19,9 @@ from . import identity, sink_stac, source
 
 VSS_OBJECT = os.environ.get("PUB_VSS_OBJECT", "pubs/search/pubs-vss.duckdb")
 MODEL = os.environ.get("EMBED_MODEL", "BAAI/bge-small-en-v1.5")  # 384-dim; viewer uses the Xenova/ ONNX twin
+# Where fastembed keeps the model. The harvest image warms this dir at build time so the job never
+# downloads from HF at runtime (an unauthenticated HF pull rate-limited + timed out the embed job once).
+MODEL_CACHE = os.environ.get("FASTEMBED_CACHE") or None
 CHUNK_CHARS = int(os.environ.get("EMBED_CHUNK_CHARS", "1200"))   # ~250 words/chunk — passage granularity
 DIM = 384
 
@@ -49,7 +52,7 @@ def build() -> int:
         print("[embed] no fulltext sidecars — run the thumbs full-text pass first; skipping")
         return 0
     print(f"[embed] {len(paths)} docs; loading model {MODEL}…")
-    model = TextEmbedding(MODEL)
+    model = TextEmbedding(MODEL, cache_dir=MODEL_CACHE)  # pre-warmed in the image; no runtime HF pull
 
     work = tempfile.mkdtemp(prefix="vss_")
     db_path = os.path.join(work, "pubs-vss.duckdb")

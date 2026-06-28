@@ -72,6 +72,18 @@ def extract(pdf_path: str) -> list[dict]:
 
 
 _ARTICLE_TEXT_CAP = 20_000  # chars per article kept for the search corpus (bounds corpus size)
+_FULLTEXT_CAP = 200_000     # chars per whole publication kept for the full-pub FTS corpus
+
+
+def full_text(pdf_path: str) -> str:
+    """Whole-document text for the all-pub full-text index (one entry per publication), capped.
+    Uses the PDF's existing text layer (present even on UGS's old scans) — no OCR. '' on failure."""
+    try:
+        raw = subprocess.run(["pdftotext", pdf_path, "-"],
+                             capture_output=True, text=True, timeout=180).stdout
+    except Exception:  # noqa: BLE001
+        return ""
+    return re.sub(r"\s+", " ", raw).strip()[:_FULLTEXT_CAP]
 
 
 def article_texts(pdf_path: str, toc: list[dict]) -> list[dict]:

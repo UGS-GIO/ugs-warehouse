@@ -183,6 +183,37 @@ Routing is query-param (`?c=&i=&view=&l=&m=`) on the single `index.html`, so Mai
 alone is sufficient — no per-route rewrite needed. Until this is set, link to the explicit
 `…/warehouse/viewer/index.html`.
 
+## 5a. Pub search assets → CDN
+
+Client-side pub search (full-text + semantic) reads two kinds of static asset, both served
+same-origin as the viewer (so **no CORS** — only HTTP **range** support matters, see below):
+
+- **Search databases** `pubs/search/pubs-fts.duckdb` + `pubs/search/pubs-vss.duckdb` —
+  built and uploaded by the pipeline (the `ugs-pubs-fts` / `ugs-pubs-embed` Cloud Run jobs).
+  Nothing extra to deploy; they appear when the pipeline runs.
+- **Query-embedding model** `pubs/models/Xenova/bge-small-en-v1.5/…` — the bge ONNX weights the
+  browser loads to embed a semantic query. Self-hosted (not HuggingFace) so the read path has no
+  third-party dependency. Vendor it once:
+
+  ```bash
+  ./scripts/vendor_search_assets.sh           # download bge model + rsync → gs://…/pubs/models/
+  # needs storage.objectAdmin on the public bucket (same grant as §5); immutable, ~34MB, one-time
+  ```
+
+**Range support (the one real prerequisite).** duckdb-wasm queries the `.duckdb` files by
+**range-reading** them (206 Partial Content — it fetches only the index pages a query touches,
+never the whole file). GCS + the maps-assets CDN honour `Range`/`Accept-Ranges` on static objects
+by default, so this works out of the box — but if a CDN rule ever strips `Range` on `*.duckdb`,
+the whole client-side search degrades to full-file downloads. Smoke-test after deploy:
+
+```bash
+curl -sI -H 'Range: bytes=0-99' \
+  https://maps-assets.geology.utah.gov/pubs/search/pubs-fts.duckdb | grep -i '206\|content-range'
+```
+
+The viewer's engine (duckdb-wasm) and model host are self-hosted by default; `?ftsdb=`, `?vssdb=`,
+`?models=`, and `?extrepo=` override them for local spikes (see `viewer/src/duckdb.ts` / `vsearch.ts`).
+
 ## Scheduling (optional)
 
 Cloud Scheduler → Cloud Run Jobs for a nightly full re-ingest:

@@ -25,6 +25,9 @@ PUB_CONTENTS_PREFIX = os.environ.get("PUB_CONTENTS_PREFIX", "pubs/contents")
 PUB_SEARCH_PREFIX = os.environ.get("PUB_SEARCH_PREFIX", "pubs/search")
 # Per-pub whole-document text (one .txt per publication) — source for the all-pub full-text index.
 PUB_FULLTEXT_PREFIX = os.environ.get("PUB_FULLTEXT_PREFIX", "pubs/fulltext")
+# Per-pub cached chunk embeddings (one .npz per publication). Pubs are immutable, so a pub is embedded
+# once and reused on every later VSS rebuild — only NEW pubs get embedded. See pubs/embed.py.
+PUB_EMB_PREFIX = os.environ.get("PUB_EMB_PREFIX", "pubs/embeddings")
 
 
 def pub_contents_object(series_id: str) -> str:

@@ -1,7 +1,7 @@
 import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
 import { useEffect, useMemo, useState } from "react";
 import { Architecture } from "./Architecture";
-import { ArticleSearch } from "./search";
+import { ArticleSearch, type CatalogDoc } from "./search";
 import { Guide } from "./Guide";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
@@ -199,6 +199,21 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [coverIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")]);
 
+  // Every catalog item flattened for the Search view (title + id + keywords + topic), so search
+  // covers all pubs + map layers, not just Survey Notes. Same indexes the cover strips load.
+  const catalogDocs = useMemo<CatalogDoc[]>(() =>
+    coverIdx.flatMap((r) => (r.index?.items ?? []).map((d) => {
+      const p = (d.properties ?? {}) as Record<string, unknown>;
+      return {
+        id: `${r.id}/${d.id}`, collId: r.id, itemId: String(d.id),
+        title: String(p.title ?? d.id),
+        keywords: String(p.keywords ?? ""),
+        meta: [p["ugs:series"], p["ugs:topic"], p["ugs:pub_type"]].filter(Boolean).join(" · "),
+      };
+    })),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [coverIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")]);
+
   // Attach covers to each card: a leaf uses its own; a sub-catalog (Publications) merges its series'
   // covers and re-sorts newest-first across all of them.
   const cardsWithCovers = useMemo<CollectionSummary[]>(() => cards.map((c) => {
@@ -309,7 +324,7 @@ export function App() {
       ) : view === "arch" ? (
         <Architecture />
       ) : view === "search" ? (
-        <ArticleSearch onOpen={(collId, itemId) => go({ view: "catalog", c: collId, i: itemId })} />
+        <ArticleSearch catalog={catalogDocs} onOpen={(collId, itemId) => go({ view: "catalog", c: collId, i: itemId })} />
       ) : !mapView ? (
         <Browse
           cards={cardsWithCovers}

@@ -32,3 +32,6 @@ discovered_topics.txt
 # admin console (Django) — ephemeral db + collected static
 admin/staticfiles/
 *.sqlite3
+
+# vendored search model (regen: scripts/vendor_search_assets.sh --local)
+/search-assets/

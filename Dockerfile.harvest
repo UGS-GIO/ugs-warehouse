@@ -26,6 +26,12 @@ RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
     && pip install --upgrade pip && pip install .[pubs] \
     && rm -rf src
 
+# Pre-warm the fastembed model into the image so the embed job never pulls from HuggingFace at
+# runtime (an unauthenticated HF download rate-limited + timed out the job once). Cached in its own
+# layer, keyed to the deps layer above. embed.py reads the same dir via FASTEMBED_CACHE.
+ENV FASTEMBED_CACHE=/opt/fastembed
+RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-small-en-v1.5', cache_dir='/opt/fastembed')"
+
 # App layer — only this rebuilds on a source change (deps already satisfied above).
 COPY src ./src
 COPY service ./service

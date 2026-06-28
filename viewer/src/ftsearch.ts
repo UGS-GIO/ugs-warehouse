@@ -1,8 +1,9 @@
 // Full-text search across ALL publications — client-side, no server. Queries the warehouse-built
 // DuckDB FTS database (pubs/search/pubs-fts.duckdb) in the browser via duckdb-wasm, which
 // **range-reads** the remote file (fetches only the index pages a query touches — spiked + confirmed).
-// duckdb-wasm is loaded lazily from the jsDelivr CDN on first use, so it costs nothing until the
-// "full text" toggle is switched on.
+// The engine is self-hosted (see ./duckdb); the DB is fetched lazily on first use, so it costs nothing
+// until the "full text" toggle is switched on.
+import { attach, type Conn } from "./duckdb";
 
 export type PubHit = { id: string; title: string; series: string; pdf?: string; score: number };
 
@@ -12,26 +13,8 @@ export const FTS_DB_URL = new URL(
   location.href,
 ).href;
 
-// duckdb-wasm ESM from the CDN — dynamic, runtime, not bundled by vite.
-const DUCKDB_ESM = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
-
-let _conn: Promise<{ query: (sql: string) => Promise<{ toArray: () => Record<string, unknown>[] }> }> | null = null;
-
-async function connect() {
-  const duckdb = await import(/* @vite-ignore */ DUCKDB_ESM);
-  const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
-  const worker = await duckdb.createWorker(bundle.mainWorker);
-  const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-  await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-  const conn = await db.connect();
-  await db.registerFileURL("pubs-fts.duckdb", FTS_DB_URL, duckdb.DuckDBDataProtocol.HTTP, false);
-  await conn.query("INSTALL fts; LOAD fts;");
-  await conn.query("ATTACH 'pubs-fts.duckdb' AS s (READ_ONLY)");
-  await conn.query("USE s");   // so the FTS macro's tables resolve in the attached db
-  return conn;
-}
-
-function conn() { return (_conn ??= connect()); }
+let _conn: Promise<Conn> | null = null;
+function conn() { return (_conn ??= attach(FTS_DB_URL, "s", "fts")); }
 
 /** BM25 full-text search over every publication's whole-document text. */
 export async function searchPubs(q: string): Promise<PubHit[]> {

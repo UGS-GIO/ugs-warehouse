@@ -2,10 +2,11 @@
 // (transformers.js, Xenova/bge-small-en-v1.5 — the ONNX twin of the model the warehouse used) and
 // runs nearest-neighbour search against the DuckDB VSS database (pubs/search/pubs-vss.duckdb) via
 // duckdb-wasm, which **range-reads** the remote HNSW index (spiked + confirmed). Both engines load
-// lazily from CDN on first use, so this costs nothing until the "semantic" toggle is switched on.
+// lazily on first use, so this costs nothing until the "semantic" toggle is switched on.
 //
-// PROD NOTE: the model + duckdb-wasm/vss bundles load from HF / jsDelivr / duckdb.org here. For
-// production, self-host them on the maps-assets CDN and set transformers.js `env.remoteHost`.
+// Self-hosted: the DuckDB engine ships from our own bundle (see ./duckdb). The bge model is served
+// from the maps-assets CDN (override the host with `?models=`), so the read path has no HF dependency.
+import { attach, type Conn } from "./duckdb";
 
 export type VHit = { pubId: string; title: string; series: string; pdf?: string; snippet: string; dist: number };
 
@@ -15,37 +16,28 @@ export const VSS_DB_URL = new URL(
   location.href,
 ).href;
 
-const XFORMERS_ESM = "https://cdn.jsdelivr.net/npm/@xenova/transformers@2.17.2";
-const DUCKDB_ESM = "https://cdn.jsdelivr.net/npm/@duckdb/duckdb-wasm@1.29.0/+esm";
+// Where the ONNX model files live. Default = our CDN (self-hosted); `?models=` overrides for spikes.
+// Trailing slash matters — transformers.js joins host + "{model}/" + file into the fetch URL.
+const MODEL_HOST = (new URLSearchParams(location.search).get("models")
+  || "https://maps-assets.geology.utah.gov/pubs/models").replace(/\/?$/, "/");
 // bge retrieval: passages are embedded as-is (the warehouse did), the QUERY gets this instruction.
 const QUERY_PREFIX = "Represent this sentence for searching relevant passages: ";
 
 let _embed: Promise<(t: string, o: object) => Promise<{ data: Float32Array }>> | null = null;
-let _conn: Promise<{ query: (sql: string) => Promise<{ toArray: () => Record<string, unknown>[] }> }> | null = null;
+let _conn: Promise<Conn> | null = null;
 
 function embedder() {
   return (_embed ??= (async () => {
-    const t = await import(/* @vite-ignore */ XFORMERS_ESM);
-    t.env.allowLocalModels = false;   // skip the local-model probe → straight to the model host
-    return await t.pipeline("feature-extraction", "Xenova/bge-small-en-v1.5");
+    const { pipeline, env } = await import("@xenova/transformers");   // lazy — onnxruntime stays out of main
+    env.allowLocalModels = false;          // skip the local-model probe → straight to the model host
+    env.remoteHost = MODEL_HOST;           // self-hosted: bge-small ONNX from our CDN, not HF
+    env.remotePathTemplate = "{model}/";   // {host}{model}/file → maps-assets/pubs/models/Xenova/bge.../…
+    return await pipeline("feature-extraction", "Xenova/bge-small-en-v1.5") as unknown as
+      (t: string, o: object) => Promise<{ data: Float32Array }>;
   })());
 }
 
-function conn() {
-  return (_conn ??= (async () => {
-    const duckdb = await import(/* @vite-ignore */ DUCKDB_ESM);
-    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
-    const worker = await duckdb.createWorker(bundle.mainWorker);
-    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
-    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    const c = await db.connect();
-    await db.registerFileURL("pubs-vss.duckdb", VSS_DB_URL, duckdb.DuckDBDataProtocol.HTTP, false);
-    await c.query("INSTALL vss; LOAD vss;");
-    await c.query("ATTACH 'pubs-vss.duckdb' AS s (READ_ONLY)");
-    await c.query("USE s");
-    return c;
-  })());
-}
+function conn() { return (_conn ??= attach(VSS_DB_URL, "s", "vss")); }
 
 /** Semantic (vector) search: nearest publication chunks to the query, deduped to one row per pub. */
 export async function semanticSearch(q: string): Promise<VHit[]> {

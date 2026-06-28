@@ -42,14 +42,17 @@ def thumb_one(p: dict, force: bool = False) -> str:
 
     cover_obj = thumb_object(sid)
     contents_obj = identity.pub_contents_object(sid)
+    fulltext_obj = identity.pub_fulltext_object(sid)
     is_snt = sink_stac.series_code(sid) == "SNT"
     need_cover = force or not gcs.exists(cover_obj)
     # Survey Notes get an "In this issue" sidecar parsed from the PDF. A hand-authored sidecar (saved
     # from the ops console as source=manual) is never clobbered — not even with --force; skip-existing
     # protects an auto-parsed one too, so re-runs only fill gaps.
     need_contents = is_snt and (force or not gcs.exists(contents_obj)) and not _manual_contents(contents_obj)
-    if not need_cover and not need_contents:
-        hlog("cover + contents already present", step="resolve", level="NOTICE", category="expected")
+    # Whole-document text for the all-pub full-text index — every pub, not just Survey Notes.
+    need_fulltext = force or not gcs.exists(fulltext_obj)
+    if not need_cover and not need_contents and not need_fulltext:
+        hlog("cover + contents + text already present", step="resolve", level="NOTICE", category="expected")
         return "skip:exists"
 
     work = tempfile.mkdtemp(prefix=f"t_{sid.replace('/', '_')}_")
@@ -96,6 +99,15 @@ def thumb_one(p: dict, force: bool = False) -> str:
                         hlog("no parseable contents (layout)", step="result", level="NOTICE", category="expected")
                 except Exception as e:  # noqa: BLE001
                     hlog(f"contents extraction failed: {e}", step="contents", level="WARNING")
+            if need_fulltext:
+                try:
+                    text = contents.full_text(pdfp)
+                    if text:
+                        gcs.put_bytes(text.encode(), fulltext_obj,
+                                      content_type="text/plain; charset=utf-8", cache_control=gcs.CACHE_MUTABLE)
+                        hlog(f"OK full text → {len(text)} chars", step="result", category="ok")
+                except Exception as e:  # noqa: BLE001
+                    hlog(f"full-text extraction failed: {e}", step="fulltext", level="WARNING")
         except Exception as e:  # noqa: BLE001
             hlog(f"processing failed: {e}", step="process", level="ERROR", category="attention", err=True)
             return f"fail:{type(e).__name__}"

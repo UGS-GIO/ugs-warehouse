@@ -1071,15 +1071,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
         <img src={asset.href} alt={asset.title ?? "image"} loading="lazy"
           className="mt-2 max-h-[600px] w-auto max-w-full rounded-md border border-border bg-muted object-contain" />
       );
-    case "pdf":
-      return (
-        <object data={asset.href} type="application/pdf"
-          className="mt-2 h-[400px] sm:h-[640px] w-full max-w-[1100px] rounded-md border border-border">
-          <div className="p-3 text-xs text-muted-foreground">
-            Can’t embed this PDF — <a href={asset.href} target="_blank" rel="noopener" className="text-primary">open it ↗</a>
-          </div>
-        </object>
-      );
+    case "pdf": return <PdfPreview asset={asset} item={item} />;
     case "text": return <TextPreview href={asset.href} />;
     default:
       return (
@@ -1088,6 +1080,40 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
         </div>
       );
   }
+}
+
+// PDF preview is click-to-load: the cover thumbnail shows instantly as a poster, and the (often
+// 50–70MB, cross-origin) PDF only embeds when asked. Avoids a heavy auto-download + a blank box
+// while a big file streams in. The cover + open-in-tab link always work regardless.
+function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
+  const [show, setShow] = useState(false);
+  const poster = thumbnailAsset(item)?.href;
+  if (show) {
+    return (
+      <object data={asset.href} type="application/pdf"
+        className="mt-2 h-[400px] w-full max-w-[1100px] rounded-md border border-border sm:h-[640px]">
+        <div className="p-3 text-xs text-muted-foreground">
+          Can’t embed this PDF — <a href={asset.href} target="_blank" rel="noopener" className="text-primary">open it ↗</a>
+        </div>
+      </object>
+    );
+  }
+  return (
+    <div className="mt-2 max-w-[1100px]">
+      <button onClick={() => setShow(true)} title="Load the full PDF preview"
+        className="group relative block w-full overflow-hidden rounded-md border border-border bg-muted">
+        {poster
+          ? <img src={poster} alt={asset.title ?? "PDF cover"} className="max-h-[640px] w-full object-contain" />
+          : <div className="flex h-64 items-center justify-center text-xs text-muted-foreground">PDF</div>}
+        <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/20">
+          <span className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground shadow">View PDF ▸</span>
+        </span>
+      </button>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Large file — loads on click. Or <a href={asset.href} target="_blank" rel="noopener" className="text-primary hover:underline">open in a new tab ↗</a>.
+      </p>
+    </div>
+  );
 }
 
 // Tabbed viewer over every asset on an item: previewable files (PDF, image, COG, parquet, text)

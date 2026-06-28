@@ -71,19 +71,20 @@ def extract(pdf_path: str) -> list[dict]:
     return best if len(best) >= _MIN_ENTRIES else []
 
 
-_ARTICLE_TEXT_CAP = 20_000  # chars per article kept for the search corpus (bounds corpus size)
-_FULLTEXT_CAP = 200_000     # chars per whole publication kept for the full-pub FTS corpus
+_ARTICLE_TEXT_CAP = 20_000  # chars per article snippet for the MiniSearch corpus (display only — the
+                            # full text is searched losslessly via the FTS/VSS index built from full_text)
 
 
 def full_text(pdf_path: str) -> str:
-    """Whole-document text for the all-pub full-text index (one entry per publication), capped.
-    Uses the PDF's existing text layer (present even on UGS's old scans) — no OCR. '' on failure."""
+    """Whole-document text for the full-pub FTS + semantic index — NOT capped (lossless: every word of
+    even a 1000-page monograph is ~MB of text). Uses the PDF's existing text layer (present even on
+    UGS's old scans) — no OCR. '' on failure."""
     try:
         raw = subprocess.run(["pdftotext", pdf_path, "-"],
-                             capture_output=True, text=True, timeout=180).stdout
+                             capture_output=True, text=True, timeout=600).stdout
     except Exception:  # noqa: BLE001
         return ""
-    return re.sub(r"\s+", " ", raw).strip()[:_FULLTEXT_CAP]
+    return re.sub(r"\s+", " ", raw).strip()
 
 
 def article_texts(pdf_path: str, toc: list[dict]) -> list[dict]:

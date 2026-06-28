@@ -23,7 +23,10 @@ from . import contents, identity, sink_stac, source
 from .harvest import _series_ctx, download, encode_url, hlog, outcome_category, run
 
 THUMB_PX = int(os.environ.get("PUB_THUMB_PX", "400"))
-MAX_PDF_MB = int(os.environ.get("PUB_THUMB_MAX_PDF_MB", "150"))
+# Download cap. The biggest pub PDF in the whole catalog is ~650MB (a swept fact), so 1000 covers
+# every pub losslessly with headroom — Cloud Run holds that in RAM fine. The over-cap path (COG
+# overview cover, no text) only triggers for a genuinely pathological future file.
+MAX_PDF_MB = int(os.environ.get("PUB_THUMB_MAX_PDF_MB", "1000"))
 
 
 def thumb_object(sid: str) -> str:

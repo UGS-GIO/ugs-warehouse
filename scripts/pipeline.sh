@@ -13,6 +13,7 @@ BUCKET="${WAREHOUSE_BUCKET:-ut-dnr-ugs-maps-prod-public}"
 THUMBS_JOB="${THUMBS_JOB:-ugs-pubs-thumbs}"
 INGEST_JOB="${INGEST_JOB:-ugs-pubs-ingest}"
 FTS_JOB="${FTS_JOB:-ugs-pubs-fts}"
+EMBED_JOB="${EMBED_JOB:-ugs-pubs-embed}"
 MAX_THUMB_ROUNDS="${MAX_THUMB_ROUNDS:-8}"
 
 run_job() {  # execute a Cloud Run Job and wait for it; a timed-out task is fine (we loop/check)
@@ -43,5 +44,8 @@ run_job "$INGEST_JOB"
 
 # Build the all-pub full-text-search DuckDB index from the fulltext sidecars the thumbs pass wrote.
 run_job "$FTS_JOB"
+
+# Build the semantic-search DuckDB VSS index (chunk + embed every pub).
+run_job "$EMBED_JOB"
 
 echo "[pipeline] ✓ publications refresh complete"

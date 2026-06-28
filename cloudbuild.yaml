@@ -237,7 +237,9 @@ steps:
       - --task-timeout=3600
       - --max-retries=1
       - --cpu=2
-      - --memory=4Gi
+      # 8Gi headroom: the biggest pub PDF is ~650MB (swept) and Cloud Run /tmp is RAM-backed, so the
+      # download + poppler render/extract of a giant fits with margin. No spot VM, no GB-RAM bills.
+      - --memory=8Gi
       - --tasks=5
 
   # One-click "full refresh" orchestrator: loops the thumbs job to completion then runs pubs-ingest

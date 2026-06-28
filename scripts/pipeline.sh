@@ -12,6 +12,7 @@ REGION="${REGION:-us-central1}"
 BUCKET="${WAREHOUSE_BUCKET:-ut-dnr-ugs-maps-prod-public}"
 THUMBS_JOB="${THUMBS_JOB:-ugs-pubs-thumbs}"
 INGEST_JOB="${INGEST_JOB:-ugs-pubs-ingest}"
+FTS_JOB="${FTS_JOB:-ugs-pubs-fts}"
 MAX_THUMB_ROUNDS="${MAX_THUMB_ROUNDS:-8}"
 
 run_job() {  # execute a Cloud Run Job and wait for it; a timed-out task is fine (we loop/check)
@@ -39,5 +40,8 @@ done
 
 # Bind covers/contents/volume into STAC + aggregate the search corpus + refresh the catalog.
 run_job "$INGEST_JOB"
+
+# Build the all-pub full-text-search DuckDB index from the fulltext sidecars the thumbs pass wrote.
+run_job "$FTS_JOB"
 
 echo "[pipeline] ✓ publications refresh complete"

@@ -20,6 +20,7 @@ substitutions:
   _PUBS_JOB: ugs-pubs-ingest              # Cloud Run job: rebuild the ugs-publications STAC collection from pub metadata (no COG re-harvest)
   _PUBTHUMB_JOB: ugs-pubs-thumbs          # Cloud Run job: render PDF first-page cover thumbnails for every pub (poppler)
   _PIPELINE_JOB: ugs-pubs-pipeline        # Cloud Run job: orchestrator — loops thumbs then runs pubs-ingest (one-click "full refresh")
+  _FTS_JOB: ugs-pubs-fts                  # Cloud Run job: build the all-pub full-text-search DuckDB (BM25 FTS) → CDN, queried by duckdb-wasm
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
@@ -253,7 +254,7 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
-      - --set-env-vars=REGION=${_REGION},WAREHOUSE_BUCKET=${_PUBLIC_BUCKET},THUMBS_JOB=${_PUBTHUMB_JOB},INGEST_JOB=${_PUBS_JOB}
+      - --set-env-vars=REGION=${_REGION},WAREHOUSE_BUCKET=${_PUBLIC_BUCKET},THUMBS_JOB=${_PUBTHUMB_JOB},INGEST_JOB=${_PUBS_JOB},FTS_JOB=${_FTS_JOB}
       - --task-timeout=86400
       - --max-retries=0
       - --cpu=1
@@ -280,6 +281,28 @@ steps:
       - --max-retries=1
       - --cpu=1
       - --memory=2Gi
+
+  # Build the all-pub full-text-search DuckDB (BM25 FTS over pubs/fulltext/*.txt) → CDN. Warehouse
+  # image (has duckdb; INSTALL fts fetches the extension at runtime). Memory-heavy: holds the whole
+  # text corpus + index while building. Run after the thumbs full-text pass; the viewer queries the
+  # result client-side via duckdb-wasm range reads.
+  - id: deploy-fts-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_FTS_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.fts
+      - --task-timeout=3600
+      - --max-retries=1
+      - --cpu=2
+      - --memory=8Gi
 
   - id: deploy-service
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

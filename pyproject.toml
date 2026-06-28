@@ -28,6 +28,7 @@ pubs = [
   "shapely>=2.0",        # geopandas geometry
   "requests>=2.31",
   "pymysql>=1.1",        # optional: live pub metadata from MySQL (else vendored CSV snapshot)
+  "fastembed>=0.3",      # semantic-search embeddings (bge-small via ONNX, no torch) — pubs/embed.py
 ]
 
 [build-system]

@@ -46,7 +46,7 @@ fi
 # orchestrator can't touch any other Cloud Run resource. + actAs the runtime SA (itself) to launch
 # executions that run as ${RUNTIME_SA}.
 echo "→ pipeline orchestrator: execute rights on the sub-jobs only (least privilege)"
-for SUBJOB in ugs-pubs-thumbs ugs-pubs-ingest ugs-pubs-fts; do
+for SUBJOB in ugs-pubs-thumbs ugs-pubs-ingest ugs-pubs-fts ugs-pubs-embed; do
   gcloud run jobs add-iam-policy-binding "${SUBJOB}" --region="${REGION}" --project="${PROJECT}" \
     --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
 done

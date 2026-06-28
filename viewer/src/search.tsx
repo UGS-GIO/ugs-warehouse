@@ -5,7 +5,16 @@
 // in-app catalog detail.
 import { useQuery } from "@tanstack/react-query";
 import MiniSearch from "minisearch";
-import { useMemo, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
+
+// A small toggle chip for the search filters.
+function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
+  return (
+    <button onClick={onClick} className={`rounded border px-2 py-0.5 ${on
+      ? "border-primary bg-primary text-primary-foreground"
+      : "border-border bg-card text-foreground hover:bg-accent"}`}>{children}</button>
+  );
+}
 
 export const CORPUS_URL = new URL(
   new URLSearchParams(location.search).get("searchCorpus")
@@ -62,9 +71,27 @@ export function ArticleSearch({ catalog = [], onOpen }: {
   catalog?: CatalogDoc[]; onOpen?: (collId: string, itemId: string) => void;
 }) {
   const [q, setQ] = useState("");
+  const [kind, setKind] = useState<"all" | "article" | "item">("all");
+  const [colls, setColls] = useState<string[]>([]);
   const corpus = useCorpus(true);
   const index = useMemo(() => buildIndex(corpus.data ?? [], catalog), [corpus.data, catalog]);
-  const results = useMemo(() => (q.trim().length < 2 ? [] : index.search(q).slice(0, 60) as unknown as Hit[]), [index, q]);
+  const raw = useMemo(() => (q.trim().length < 2 ? [] : index.search(q) as unknown as Hit[]), [index, q]);
+
+  // Facets over the current matches: the publication collections present (for the item filter).
+  const collFacets = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of raw) if (r.kind === "item" && r.collId) m.set(r.collId, (m.get(r.collId) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [raw]);
+  const nArt = raw.filter((r) => r.kind === "article").length;
+  const sel = new Set(colls);
+  const toggleColl = (c: string) => setColls(sel.has(c) ? colls.filter((x) => x !== c) : [...colls, c]);
+
+  const results = useMemo(() => raw.filter((r) => {
+    if (kind !== "all" && r.kind !== kind) return false;
+    if (r.kind === "item" && colls.length && !(r.collId && sel.has(r.collId))) return false;
+    return true;
+  }).slice(0, 60), [raw, kind, colls]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const nArticles = corpus.data?.length ?? 0;
   return (
@@ -80,8 +107,21 @@ export function ArticleSearch({ catalog = [], onOpen }: {
 
       {corpus.isError && <p className="mt-3 text-xs text-muted-foreground">Article full text isn't loaded (built on reingest) — searching catalog metadata only.</p>}
 
+      {raw.length > 0 && (
+        <div className="mt-3 flex flex-wrap items-center gap-1.5 text-xs">
+          <Chip on={kind === "all"} onClick={() => setKind("all")}>All · {raw.length}</Chip>
+          {nArt > 0 && <Chip on={kind === "article"} onClick={() => setKind(kind === "article" ? "all" : "article")}>Articles · {nArt}</Chip>}
+          {collFacets.length > 0 && <Chip on={kind === "item"} onClick={() => setKind(kind === "item" ? "all" : "item")}>Publications · {raw.length - nArt}</Chip>}
+          {kind !== "article" && collFacets.length > 1 && <span className="mx-0.5 text-muted-foreground">|</span>}
+          {kind !== "article" && collFacets.map(([c, n]) => (
+            <Chip key={c} on={sel.has(c)} onClick={() => toggleColl(c)}>{c} · {n}</Chip>
+          ))}
+          {colls.length > 0 && <button className="text-primary hover:underline" onClick={() => setColls([])}>clear</button>}
+        </div>
+      )}
+
       {q.trim().length >= 2 && (
-        <p className="mt-3 text-xs text-muted-foreground">{results.length} result{results.length === 1 ? "" : "s"}</p>
+        <p className="mt-2 text-xs text-muted-foreground">{results.length} shown</p>
       )}
       <ol className="mt-1 divide-y divide-border">
         {results.map((r) => r.kind === "article"

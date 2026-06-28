@@ -94,6 +94,15 @@ export function ArticleSearch({ catalog = [], onOpen }: {
     staleTime: 60_000, retry: false,
   });
   const corpus = useCorpus(true);
+  // Resolve a pub's real collection from the loaded catalog (itemId → collId). The FTS/VSS dbs only
+  // carry the series code, which is NOT a collection id — opening the catalog page needs the actual
+  // collection (ugs-publications / -external / -mining-district-files). seriesCode is a last resort.
+  const collOf = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const c of catalog) m.set(c.itemId.toUpperCase(), c.collId);
+    return m;
+  }, [catalog]);
+  const openPub = (id: string) => onOpen?.(collOf.get(id.toUpperCase()) ?? seriesCode(id), id);
   const index = useMemo(() => buildIndex(corpus.data ?? [], catalog), [corpus.data, catalog]);
   const raw = useMemo(() => (q.trim().length < 2 ? [] : index.search(q) as unknown as Hit[]), [index, q]);
 
@@ -154,7 +163,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
       )}
       <ol className="mt-1 divide-y divide-border">
         {results.map((r) => r.kind === "article"
-          ? <ArticleHit key={r.id} r={r} q={q} onOpen={onOpen} />
+          ? <ArticleHit key={r.id} r={r} q={q} openPub={openPub} />
           : <ItemHit key={r.id} r={r} onOpen={onOpen} />)}
       </ol>
 
@@ -174,7 +183,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
                 </div>
                 <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
                   {r.pdf && <a href={r.pdf} target="_blank" rel="noopener" className="text-primary hover:underline">Open PDF ↗</a>}
-                  <button className="text-primary hover:underline" onClick={() => onOpen?.(seriesCode(r.id), r.id)}>Catalog page</button>
+                  <button className="text-primary hover:underline" onClick={() => openPub(r.id)}>Catalog page</button>
                 </div>
               </li>
             ))}
@@ -199,7 +208,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
                 {r.snippet && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">…{r.snippet}…</p>}
                 <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
                   {r.pdf && <a href={r.pdf} target="_blank" rel="noopener" className="text-primary hover:underline">Open PDF ↗</a>}
-                  <button className="text-primary hover:underline" onClick={() => onOpen?.(seriesCode(r.pubId), r.pubId)}>Catalog page</button>
+                  <button className="text-primary hover:underline" onClick={() => openPub(r.pubId)}>Catalog page</button>
                 </div>
               </li>
             ))}
@@ -225,7 +234,7 @@ function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
   return ms;
 }
 
-function ArticleHit({ r, q, onOpen }: { r: Hit; q: string; onOpen?: (c: string, i: string) => void }) {
+function ArticleHit({ r, q, openPub }: { r: Hit; q: string; openPub: (id: string) => void }) {
   const pdfHref = r.pdf ? (r.page != null ? `${r.pdf}#page=${r.page}` : r.pdf) : undefined;
   return (
     <li className="py-2">
@@ -241,7 +250,7 @@ function ArticleHit({ r, q, onOpen }: { r: Hit; q: string; onOpen?: (c: string, 
         {pdfHref && <a href={pdfHref} target="_blank" rel="noopener" className="text-primary hover:underline">
           Open PDF{r.page != null ? ` · p. ${r.page}` : ""} ↗</a>}
         {r.sid && <button className="text-primary hover:underline"
-          onClick={() => onOpen?.(seriesCode(r.sid!), r.sid!)}>Catalog page</button>}
+          onClick={() => openPub(r.sid!)}>Catalog page</button>}
       </div>
     </li>
   );

@@ -3,7 +3,8 @@
 # the whole thing with one button instead of a 3-step dance. Runs as the `ugs-pubs-pipeline` Cloud
 # Run Job (server-side, survives the operator closing the tab).
 #
-#   thumbs (loop until covers/contents/search sidecars stop growing) -> pubs-ingest (bind + corpus)
+#   thumbs (loop until covers/contents/fulltext sidecars stop growing) -> pubs-ingest (bind + corpus)
+#     -> pubs-fts (all-pub BM25 index) -> pubs-embed (semantic VSS index)
 #
 # Its runtime SA needs roles/run.developer (execute the sub-jobs) + actAs on their runtime SA.
 set -uo pipefail

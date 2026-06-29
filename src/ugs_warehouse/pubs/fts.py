@@ -61,9 +61,11 @@ def build() -> int:
                 batch.append(row)
                 if len(batch) >= 500:
                     con.executemany("INSERT INTO docs VALUES (?,?,?,?,?,?)", batch)
-                    n += len(batch); batch = []
+                    n += len(batch)
+                    batch = []
         if batch:
-            con.executemany("INSERT INTO docs VALUES (?,?,?,?,?,?)", batch); n += len(batch)
+            con.executemany("INSERT INTO docs VALUES (?,?,?,?,?,?)", batch)
+            n += len(batch)
         print(f"[fts] inserted {n} docs; building FTS index…")
         # `id` is the document key; title + body are indexed (title weighted higher at query time).
         con.execute("PRAGMA create_fts_index('docs', 'id', 'title', 'body', overwrite=1)")

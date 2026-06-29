@@ -1,4 +1,5 @@
 import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Architecture } from "./Architecture";
 import { ArticleSearch, type CatalogDoc } from "./search";
@@ -15,36 +16,6 @@ const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its fo
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
 type View = "catalog" | "map" | "arch" | "guide" | "search";
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
-
-const readUrl = (): Nav => {
-  const p = new URLSearchParams(location.search);
-  const l = p.get("l");
-  const s = p.get("s");
-  const v = p.get("view");
-  return {
-    view: v === "map" ? "map" : v === "arch" ? "arch" : v === "guide" ? "guide" : v === "search" ? "search" : "catalog",
-    c: p.get("c") || undefined, i: p.get("i") || undefined,
-    l: l ? l.split(",").filter(Boolean) : undefined,
-    s: s ? s.split(",").filter(Boolean) : undefined,
-  };
-};
-
-// Write nav state into the URL (preserving ?catalog= and ?m=). push for user navigation
-// so back/forward work; replace for the initial sync.
-const writeUrl = (n: Nav, push: boolean) => {
-  const p = new URLSearchParams(location.search);
-  if (n.view === "map") p.set("view", "map");
-  else if (n.view === "arch") p.set("view", "arch");
-  else if (n.view === "guide") p.set("view", "guide");
-  else if (n.view === "search") p.set("view", "search");
-  else p.delete("view");
-  n.c ? p.set("c", n.c) : p.delete("c");
-  n.i ? p.set("i", n.i) : p.delete("i");
-  n.l?.length ? p.set("l", n.l.join(",")) : p.delete("l");
-  n.s?.length ? p.set("s", n.s.join(",")) : p.delete("s");
-  const url = `${location.pathname}${p.toString() ? "?" + p : ""}`;
-  (push ? history.pushState : history.replaceState).call(history, null, "", url);
-};
 
 // An ItemRef → map ActiveLayer. Prefer PMTiles (vector); else fall back to a COG (raster) so
 // publication/raster items render on the overlay too. null if it has neither.
@@ -111,16 +82,44 @@ function ThemeToggle() {
 }
 
 export function App() {
-  const [{ view, c: collectionUrl, i: itemUrl, l: layerIds, s: seriesSel }, setNav] = useState<Nav>(readUrl);
+  // Nav state ← URL search (TanStack Router). l/s stay as csv strings in the URL; the override params
+  // (catalog, m, ftsdb, …) ride in the same search untouched (see router.tsx validateSearch).
+  const sp = useSearch({ strict: false }) as { view?: View; c?: string; i?: string; l?: string; s?: string };
+  // Loose navigate signature — the router types it strictly against the search schema, but we manage
+  // these params dynamically (and pass override params through), so a permissive reducer is intended.
+  const navigate = useNavigate() as unknown as (opts: {
+    replace?: boolean; search: (prev: Record<string, unknown>) => Record<string, unknown>;
+  }) => void;
+  const view: View = sp.view ?? "catalog";
+  const collectionUrl = sp.c;
+  const itemUrl = sp.i;
+  const layerIds = sp.l ? sp.l.split(",").filter(Boolean) : undefined;
+  const seriesSel = sp.s ? sp.s.split(",").filter(Boolean) : undefined;
 
-  // Sync state ↔ URL: push on user nav (back/forward works); read URL on popstate.
-  const go = (next: Nav, push = true) => { writeUrl(next, push); setNav(next); };
-  const setView = (v: View) => go({ view: v, c: collectionUrl, i: itemUrl, l: layerIds, s: seriesSel });
-  useEffect(() => {
-    const onPop = () => setNav(readUrl());
-    addEventListener("popstate", onPop);
-    return () => removeEventListener("popstate", onPop);
-  }, []);
+  // Navigate by setting the nav search params; everything else in the search is preserved. push for
+  // user nav (back/forward works via the router), replace for programmatic syncs.
+  const go = (next: Nav, push = true) => {
+    navigate({
+      replace: !push,
+      search: (prev) => {
+        const { view: _v, c: _c, i: _i, l: _l, s: _s, ...rest } = prev;  // keep override params
+        return {
+          ...rest,
+          view: next.view === "catalog" ? undefined : next.view,
+          c: next.c || undefined,
+          i: next.i || undefined,
+          l: next.l?.length ? next.l.join(",") : undefined,
+          s: next.s?.length ? next.s.join(",") : undefined,
+        };
+      },
+    });
+  };
+  // Tabs: catalog + map share the selection (c/i/l/s); the content views (search/arch/guide) reset
+  // it, so the URL stays clean and returning to the catalog doesn't dump you back on an old item.
+  const setView = (v: View) =>
+    go(v === "catalog" || v === "map"
+      ? { view: v, c: collectionUrl, i: itemUrl, l: layerIds, s: seriesSel }
+      : { view: v });
 
   // Official State of Utah header — injects the state identity bar + maintained logo above the
   // app (Utah Design System standard). Configured once on mount.

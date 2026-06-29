@@ -18,10 +18,14 @@ function conn() { return (_conn ??= attach(FTS_DB_URL, "s", "fts")); }
 
 /** BM25 full-text search over every publication's whole-document text. */
 export async function searchPubs(q: string): Promise<PubHit[]> {
-  const safe = q.replace(/'/g, "''");
+  // Tokenize to words before handing the query to match_bm25: punctuation/quotes can't form a
+  // degenerate query (and the quote-escape becomes moot), so a real error here means the engine/db
+  // failed — not bad input. A query with no word characters has nothing to match.
+  const terms = (q.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
+  if (!terms) return [];
   const c = await conn();
   const res = await c.query(
-    `SELECT d.id, d.title, d.series, d.pdf, fts_main_docs.match_bm25(d.id, '${safe}') AS score
+    `SELECT d.id, d.title, d.series, d.pdf, fts_main_docs.match_bm25(d.id, '${terms}') AS score
      FROM docs d WHERE score IS NOT NULL ORDER BY score DESC LIMIT 50`);
   return res.toArray().map((r: Record<string, unknown>) => ({
     id: String(r.id), title: String(r.title ?? r.id), series: String(r.series ?? ""),

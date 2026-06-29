@@ -43,8 +43,8 @@ DEFAULT_TIER = "24k"          # COG present but scale unparseable/blank -> fines
 # Max web-mercator zoom per tier — the real fix for the build timeout. The COGs are 600 DPI, so
 # GDAL's native max zoom is ~z18; tiling a STATEWIDE mosaic to z18 is astronomically many tiles and
 # never finishes. Each tier is capped to the zoom its scale actually warrants (and where it's legible
-# in the viewer): a 1:500k map adds nothing past ~z11, 24k past ~z14. Override with --maxzoom.
-TIER_MAXZOOM = {"24k": 14, "250k": 12, "500k": 11}
+# in the viewer): a 1:500k map adds nothing past ~z12, 24k past ~z14. Override with --maxzoom.
+TIER_MAXZOOM = {"24k": 14, "250k": 12, "500k": 12}
 # How far down to build overviews (lower zoom levels) off the capped base tiles.
 OVERVIEW_LEVELS = ("2", "4", "8", "16", "32", "64", "128", "256", "512", "1024", "2048")
 
@@ -152,14 +152,14 @@ def build_tier(tier: str, sids: list[str], maxz: int | None = None) -> bool:
         # Lossless PNG tiles (alpha → transparent gaps where no map covers). Cap the base zoom to the
         # tier's level (--maxzoom overrides) — without this the 600 DPI native zoom blows the build up.
         mz = maxz if maxz is not None else TIER_MAXZOOM.get(tier)
-        tr = ["gdal_translate", "-of", "MBTILES", "-co", "TILE_FORMAT=PNG"]
+        tr = ["gdal_translate", "-of", "MBTILES", "-r", "bilinear", "-co", "TILE_FORMAT=PNG"]
         if mz is not None:
             tr += ["-co", f"ZOOM_LEVEL={mz}"]
         print(f"[mosaics] {tier}: rendering base tiles -> MBTiles (max zoom {mz})")
         subprocess.run([*tr, vrt, mbtiles], env=gdal_env, check=True)
 
         print(f"[mosaics] {tier}: building overviews (lower zooms)")
-        subprocess.run(["gdaladdo", "-r", "average", mbtiles, *OVERVIEW_LEVELS], env=gdal_env, check=True)
+        subprocess.run(["gdaladdo", "-r", "bilinear", mbtiles, *OVERVIEW_LEVELS], env=gdal_env, check=True)
 
         print(f"[mosaics] {tier}: MBTiles -> PMTiles")
         subprocess.run(["pmtiles", "convert", mbtiles, pmtiles], check=True)

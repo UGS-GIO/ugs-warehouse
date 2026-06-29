@@ -785,6 +785,30 @@ function FieldsPanel({ item }: { item: StacDoc }) {
 
 // Vector asset preview: PMTiles map + full dataset explorer, linked — click a table row and the
 // map flies to that feature (when the parquet carries bbox covering columns).
+function RasterMosaicPreview({ item }: { item: StacDoc }) {
+  const asset = rasterTilesAsset(item);
+  const mapRef = useRef<MapRef>(null);
+  if (!asset) return null;
+  const bounds = asBounds(item);
+
+  return (
+    <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
+      <MapGL
+        ref={mapRef}
+        mapLib={maplibregl}
+        initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
+        mapStyle={POSITRON}
+        style={{ width: "100%", height: "100%" }}
+      >
+        <NavigationControl position="top-right" showCompass={false} />
+        <Source id="raster-mosaic" type="raster" url={`pmtiles://${asset.href}`} tileSize={256}>
+          <Layer id="raster-mosaic-layer" type="raster" paint={{ "raster-opacity": 1 }} />
+        </Source>
+      </MapGL>
+    </div>
+  );
+}
+
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const [focus, setFocus] = useState<FocusSel | null>(null);
@@ -1229,10 +1253,12 @@ function AssetViewer({ item }: { item: StacDoc }) {
   );
 }
 
-// Preview: vector serving topics → interactive PMTiles map + linked dataset explorer; everything
-// else (publications) → the tabbed asset viewer so users can peruse every file in-page.
+// Preview: vector serving topics → interactive PMTiles map + linked dataset explorer;
+// geologic map mosaics → interactive raster PMTiles map; everything else (publications) →
+// the tabbed asset viewer so users can peruse every file in-page.
 function Preview({ item }: { item: StacDoc }) {
   if (pmtilesLink(item)) return <VectorPreview item={item} />;
+  if (rasterTilesAsset(item)) return <RasterMosaicPreview item={item} />;
   return <AssetViewer item={item} />;
 }
 

@@ -2,7 +2,13 @@
 
 Pulls from the PostgREST seamlessgeolmap service, pages through features with adaptive
 paging, converts EPSG:3857 coordinates to EPSG:4326, runs tippecanoe to compile the
-vector tile layer, and uploads the final units.pmtiles to GCS.
+vector tile layers, and uploads the final units.pmtiles to GCS.
+
+Mirrors the old geolMapPortal's scale tiers: the source `scale` column splits the units into three
+independent layers in the one PMTiles — `units_small` (~1:500k), `units_intermediate` (~1:100k),
+`units_large` (~1:24k). All three tile the full zoom range (visible at every zoom; the viewer
+toggles them). Tiling is lossless-as-possible — no feature dropping or geometry simplification —
+so files are large, but this is regenerated only every few months.
 
     python -m ugs_warehouse.pubs.units_pmtiles
 """
@@ -90,8 +96,17 @@ def _fetch_from_db(dsn: str) -> gpd.GeoDataFrame:
     return gdf.to_crs(4326)
 
 
-def build_units(minz: int = 4, maxz: int = 14) -> None:
-    """Download, process, tile and upload the statewide units layer."""
+# The seamless source partitions every unit polygon into one of three cartographic scale tiers
+# (the `scale` column). These become three independent vector-tile layers in the one PMTiles, each
+# tiled across the FULL zoom range so all three are visible at every zoom — the viewer toggles them
+# (NOT zoom-banded). Anything with an unexpected/missing scale falls into the mid tier, so no unit
+# is ever dropped. small = coarse (~1:500k), intermediate = ~1:100k (the bulk), large = ~1:24k detail.
+SCALE_LAYERS = {"small": "units_small", "intermediate": "units_intermediate", "large": "units_large"}
+DEFAULT_TIER = "intermediate"
+
+
+def build_units(minz: int = 0, maxz: int = 14) -> None:
+    """Download, process, tile and upload the statewide units layer (3 scale-tier sub-layers)."""
     import geopandas as gpd
 
     dsn = (os.environ.get("POSTGRES_DSN") or
@@ -109,25 +124,40 @@ def build_units(minz: int = 4, maxz: int = 14) -> None:
         print(f"{len(feats)} unit polygons -> converting EPSG:3857 -> EPSG:4326")
         gdf = gpd.GeoDataFrame.from_features(feats, crs="EPSG:3857").to_crs(4326)
 
-    with tempfile.TemporaryDirectory() as tmp:
-        geojsonl = os.path.join(tmp, "units.geojsonl")
-        pmtiles = os.path.join(tmp, "units.pmtiles")
-        gdf.to_file(geojsonl, driver="GeoJSONSeq")
+    # Route every feature to a tier; unknown/missing scale -> mid tier so nothing is lost.
+    tier = gdf["scale"].where(gdf["scale"].isin(SCALE_LAYERS), DEFAULT_TIER)
 
-        print("Running tippecanoe to compile vector PMTiles...")
+    with tempfile.TemporaryDirectory() as tmp:
+        pmtiles = os.path.join(tmp, "units.pmtiles")
+        layer_args: list[str] = []
+        for scale_val, layer_name in SCALE_LAYERS.items():
+            sub = gdf[tier == scale_val]
+            path = os.path.join(tmp, f"{layer_name}.geojsonl")
+            if len(sub):
+                sub.to_file(path, driver="GeoJSONSeq")
+            else:  # empty layer still declared so the schema is stable across regens
+                open(path, "w").close()
+            print(f"  {layer_name}: {len(sub)} polygons")
+            layer_args += ["-L", f"{layer_name}:{path}"]
+
+        # Lossless-as-possible: no feature dropping, no geometry simplification, no tiny-polygon or
+        # density reduction, full zoom range. Big tiles are fine (regenerated only every few months).
+        print("Running tippecanoe to compile vector PMTiles (3 scale layers, lossless)...")
         subprocess.run(
             [
                 "tippecanoe",
                 "-o", pmtiles,
-                "-l", "units",
                 "-n", "UGS seamless geologic units",
                 "-Z", str(minz),
                 "-z", str(maxz),
-                "--coalesce-densest-as-needed",
+                "--no-feature-dropping",        # keep every unit at every zoom (-pf)
+                "--no-tiny-polygon-reduction",  # keep slivers (-pt)
+                "--no-line-simplification",     # full-resolution geometry at all zooms (-ps)
+                "-r1",                           # no density-based thinning
+                "--maximum-tile-bytes=30000000",
                 "--extend-zooms-if-still-dropping",
-                "--maximum-tile-bytes=5000000",
                 "--force",
-                geojsonl,
+                *layer_args,
             ],
             check=True,
         )
@@ -140,7 +170,7 @@ def build_units(minz: int = 4, maxz: int = 14) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build statewide units vector PMTiles and upload to GCS")
-    ap.add_argument("--minzoom", type=int, default=4, help="Min zoom for Tippecanoe (default 4)")
+    ap.add_argument("--minzoom", type=int, default=0, help="Min zoom for Tippecanoe (default 0 — visible at all scales)")
     ap.add_argument("--maxzoom", type=int, default=14, help="Max zoom for Tippecanoe (default 14)")
     args = ap.parse_args()
 

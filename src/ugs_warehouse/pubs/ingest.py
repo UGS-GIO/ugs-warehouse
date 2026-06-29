@@ -48,13 +48,16 @@ def _contents_by_sid() -> dict[str, list[dict]]:
 
 
 def _unit_ids() -> set[str]:
+    """Series ids that have a per-map units sidecar (geolmap/units/<series_id>/…). Only directory
+    segments count — files sitting at the prefix root (the statewide units.pmtiles / units.parquet)
+    are NOT series ids and must be skipped, or they'd register as bogus units."""
     pfx = identity.UNITS_PREFIX.rstrip("/") + "/"
     out: set[str] = set()
     for path in gcs.list_paths(identity.UNITS_PREFIX):
         rest = path[len(pfx):] if path.startswith(pfx) else path
-        seg = rest.split("/", 1)[0]
-        if seg:
-            out.add(seg.upper())
+        head, sep, _ = rest.partition("/")
+        if sep and head:           # has a sub-path → it's a per-series directory, not a root file
+            out.add(head.upper())
     return out
 
 

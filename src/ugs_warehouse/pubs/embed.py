@@ -31,7 +31,7 @@ def _emb_object(sid: str) -> str:
     return f"{identity.PUB_EMB_PREFIX}/{sid.upper()}.npz"
 
 
-def _pub_vectors(sid: str, text: str, get_model):
+def _pub_vectors(sid: str, path: str, text: str | None, cached: bool, get_model):
     """(snippets, embeddings) for a pub — from the per-pub cache if present, else embed + cache it.
 
     Pubs are immutable, so this is computed once per pub and reused on every later rebuild; only NEW
@@ -39,12 +39,19 @@ def _pub_vectors(sid: str, text: str, get_model):
     import numpy as np
 
     obj = _emb_object(sid)
-    if gcs.exists(obj):
+    if cached:
         try:
             with np.load(io.BytesIO(gcs.get_bytes(obj)), allow_pickle=True) as z:
                 return list(z["snippets"]), z["emb"]
         except Exception:  # noqa: BLE001 — a corrupt cache entry just gets recomputed below
             pass
+
+    if text is None:
+        try:
+            text = gcs.get_bytes(path).decode("utf-8", "ignore")
+        except Exception:  # noqa: BLE001
+            return [], None
+
     chs = chunk(text)
     if not chs:
         return [], None
@@ -82,6 +89,14 @@ def build() -> int:
     if not paths:
         print("[embed] no fulltext sidecars — run the thumbs full-text pass first; skipping")
         return 0
+
+    print(f"[embed] checking existing embeddings in gs://{config.BUCKET}/{identity.PUB_EMB_PREFIX}...")
+    existing_embs = {
+        p.rsplit("/", 1)[-1][:-len(".npz")].upper()
+        for p in gcs.list_paths(identity.PUB_EMB_PREFIX)
+        if p.endswith(".npz")
+    }
+
     # Model loads lazily — only if a pub is missing from the embedding cache. A pure rebuild (every
     # pub already embedded) never touches the model at all.
     _model = []
@@ -96,17 +111,14 @@ def build() -> int:
     try:
         con = duckdb.connect(db_path)
         con.execute("INSTALL vss; LOAD vss; SET hnsw_enable_experimental_persistence=true;")
+        con.execute("SET max_memory='3GB'")
         con.execute(f"CREATE TABLE chunks(pub_id VARCHAR, title VARCHAR, series VARCHAR, "
                     f"pdf VARCHAR, snippet VARCHAR, emb FLOAT[{DIM}])")
         total, embedded = 0, 0
-        for path in paths:
+        for i, path in enumerate(paths):
             sid = path.rsplit("/", 1)[-1][:-len(".txt")].upper()
-            try:
-                text = gcs.get_bytes(path).decode("utf-8", "ignore")
-            except Exception:  # noqa: BLE001
-                continue
-            cached = gcs.exists(_emb_object(sid))
-            snippets, embs = _pub_vectors(sid, text, get_model)
+            cached = sid in existing_embs
+            snippets, embs = _pub_vectors(sid, path, None, cached, get_model)
             if embs is None or len(snippets) == 0:
                 continue
             if not cached:
@@ -119,6 +131,12 @@ def build() -> int:
                     for snip, emb in zip(snippets, embs)]
             con.executemany("INSERT INTO chunks VALUES (?,?,?,?,?,?)", rows)
             total += len(rows)
+
+            if (i + 1) % 250 == 0:
+                con.execute("CHECKPOINT")
+                import gc
+                gc.collect()
+
         print(f"[embed] {embedded} pubs newly embedded; {len(paths) - embedded} reused from cache")
         print(f"[embed] {total} chunks; building HNSW index…")
         con.execute("CREATE INDEX hidx ON chunks USING HNSW (emb) WITH (metric='cosine')")

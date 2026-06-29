@@ -45,9 +45,12 @@ export async function semanticSearch(q: string): Promise<VHit[]> {
   const o = await embed(QUERY_PREFIX + q, { pooling: "mean", normalize: true });
   const vlit = "[" + Array.from(o.data).join(",") + "]::FLOAT[384]";
   const c = await conn();
+  // Over-fetch chunks, then keep the best chunk per pub. A pub is only as close as its nearest
+  // chunk, but many pubs have several near chunks — a tight 40 fills up with a few pubs' duplicates
+  // and drops pubs whose best chunk ranks just past the cut. 200 candidates → a fuller top-20 pubs.
   const res = await c.query(
     `SELECT pub_id, title, series, pdf, snippet, array_cosine_distance(emb, ${vlit}) AS dist
-     FROM chunks ORDER BY dist LIMIT 40`);
+     FROM chunks ORDER BY dist LIMIT 200`);
   const seen = new Set<string>();
   const out: VHit[] = [];
   for (const r of res.toArray()) {

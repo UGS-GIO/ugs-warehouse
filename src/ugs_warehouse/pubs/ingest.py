@@ -16,7 +16,7 @@ import json
 import sys
 
 from ..core import config, gcs, stac
-from . import identity, sink_stac, source
+from . import identity, sink_stac, source, topic
 
 
 def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
@@ -143,8 +143,11 @@ def _build_search_corpus() -> None:
         sid, vol, issue, pdf = doc.get("series_id"), doc.get("volume"), doc.get("title"), doc.get("pdf")
         # id is index-based (not page-based): two TOC entries can share a page, and the search index
         # requires unique ids.
+        # Classify each article from its (topical) title + the start of its body — so Survey Notes
+        # articles get a real topic instead of the whole issue collapsing to one.
         return [{"id": f"{sid}#{i}", "sid": sid, "volume": vol, "issue": issue, "pdf": pdf,
-                 "title": a.get("title"), "page": a.get("page"), "text": a.get("text") or ""}
+                 "title": a.get("title"), "page": a.get("page"), "text": a.get("text") or "",
+                 "topic": topic.LABELS[topic.classify(a.get("title"), (a.get("text") or "")[:300])]}
                 for i, a in enumerate(doc.get("articles") or [])]
 
     corpus: list[dict] = []

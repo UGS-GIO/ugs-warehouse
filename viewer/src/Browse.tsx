@@ -56,6 +56,17 @@ const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(
 const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).slice(0, 4), 10); return Number.isFinite(y) ? y : null; };
 const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
+const gAuthor = (it: ItemRef) => String(props(it)["ugs:author"] ?? "");
+// Bin a free-text publication scale into a tier (matches the raster-mosaic tiers). "" = unknown.
+const scaleTierOf = (it: ItemRef): string => {
+  const s = gScale(it).replace(/,/g, "").toLowerCase();
+  let m = s.match(/1\s*:\s*(\d+)/);
+  let d = m ? +m[1] : NaN;
+  if (!Number.isFinite(d)) { m = s.match(/1\s*in(?:ch)?\s*=\s*([\d.]+)\s*feet/); if (m) d = +m[1] * 12; }
+  if (!Number.isFinite(d)) { m = s.match(/1\s*in(?:ch)?\s*=\s*([\d.]+)\s*mile/); if (m) d = +m[1] * 63360; }
+  if (!Number.isFinite(d)) return "";
+  return d <= 62500 ? "24k" : d <= 350000 ? "250k" : "500k";
+};
 const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties ?? {})).toLowerCase();
 // "Mappable" = has something to draw on the map: a COG (raster), vector PMTiles, or a raster PMTiles
 // mosaic. Items with none (metadata-only pubs) do nothing when toggled — the filter hides them.
@@ -307,6 +318,8 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const [yearMin, setYearMin] = useState("");
   const [yearMax, setYearMax] = useState("");
   const [topics, setTopics] = useState<string[]>([]);  // map-pub topic filter (multi-select)
+  const [author, setAuthor] = useState("");            // author substring filter (→ all pubs by X)
+  const [scaleTier, setScaleTier] = useState<string | null>(null);  // 24k / 250k / 500k
 
   // Data-series facets — one chip per series code (DS, OFR, GQ…), with a count and the
   // human label. Multi-select: pick any combination; the selection lives in the URL
@@ -323,6 +336,15 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const tsel = new Set(topics);
   const toggleTopic = (t: string) => setTopics(tsel.has(t) ? topics.filter((x) => x !== t) : [...topics, t]);
 
+  // Scale-tier facets (24k/250k/500k) + the distinct author names for autocomplete.
+  const scaleFacets = useMemo(() => buildFacets(items, scaleTierOf), [items]);
+  const authorList = useMemo(() => {
+    const s = new Set<string>();
+    for (const it of items) { const a = gAuthor(it); if (a) s.add(a); }
+    return [...s].sort();
+  }, [items]);
+  const authorNeedle = author.trim().toLowerCase();
+
   const needle = (query ?? q).trim().toLowerCase();
   const ymin = parseInt(yearMin, 10);
   const ymax = parseInt(yearMax, 10);
@@ -332,6 +354,8 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         if (needle && !haystack(it).includes(needle)) return false;
         if (sel.size && !sel.has(gCode(it))) return false;
         if (tsel.size && !tsel.has(gTopic(it))) return false;
+        if (authorNeedle && !gAuthor(it).toLowerCase().includes(authorNeedle)) return false;
+        if (scaleTier && scaleTierOf(it) !== scaleTier) return false;
         if (mapOnly && !hasMapData(it)) return false;
         if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
           const y = gYear(it);
@@ -346,7 +370,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
       }
       return filtered;
     },
-    [items, needle, series, topics, mapOnly, yearMin, yearMax],
+    [items, needle, series, topics, author, scaleTier, mapOnly, yearMin, yearMax],
   );
 
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
@@ -382,6 +406,14 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         )}
         <span className={C.muted}>{rows.length} of {items.length}</span>
         <span className="flex-1" />
+        {authorList.length > 0 && (
+          <span className="flex items-center gap-1 text-xs text-muted-foreground" title="Filter by author">
+            <input list="bx-authors" placeholder="Author…" value={author}
+              onChange={(e) => setAuthor(e.target.value)}
+              className="w-36 rounded border border-border bg-background px-1.5 py-0.5" />
+            <datalist id="bx-authors">{authorList.map((a) => <option key={a} value={a} />)}</datalist>
+          </span>
+        )}
         <span className="flex items-center gap-1 text-xs text-muted-foreground" title="Filter by publication year">
           <span>Year</span>
           <input type="number" inputMode="numeric" placeholder="from" value={yearMin}
@@ -407,6 +439,19 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
           ))}
           {tsel.size > 0 && (
             <span className="cursor-pointer text-xs text-primary" onClick={() => setTopics([])}>clear</span>
+          )}
+        </div>
+      )}
+
+      {scaleFacets.length > 1 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Scale</span>
+          {scaleFacets.map(([t, { n }]) => (
+            <span key={t} className={toggle(scaleTier === t)}
+              onClick={() => setScaleTier(scaleTier === t ? null : t)}>{t} · {n}</span>
+          ))}
+          {scaleTier && (
+            <span className="cursor-pointer text-xs text-primary" onClick={() => setScaleTier(null)}>clear</span>
           )}
         </div>
       )}

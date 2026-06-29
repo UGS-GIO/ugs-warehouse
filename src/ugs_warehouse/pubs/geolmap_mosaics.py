@@ -40,7 +40,12 @@ UTAH_GEOM = {"type": "Polygon", "coordinates": [[
 # its 1:N denominator: <=62.5k detail, <=350k intermediate, else overview.
 TIERS = ("24k", "250k", "500k")
 DEFAULT_TIER = "24k"          # COG present but scale unparseable/blank -> finest tier (+ logged)
-# How far down to build overviews (lower zoom levels) off the native-resolution base tiles.
+# Max web-mercator zoom per tier — the real fix for the build timeout. The COGs are 600 DPI, so
+# GDAL's native max zoom is ~z18; tiling a STATEWIDE mosaic to z18 is astronomically many tiles and
+# never finishes. Each tier is capped to the zoom its scale actually warrants (and where it's legible
+# in the viewer): a 1:500k map adds nothing past ~z11, 24k past ~z14. Override with --maxzoom.
+TIER_MAXZOOM = {"24k": 14, "250k": 12, "500k": 11}
+# How far down to build overviews (lower zoom levels) off the capped base tiles.
 OVERVIEW_LEVELS = ("2", "4", "8", "16", "32", "64", "128", "256", "512", "1024", "2048")
 
 
@@ -144,11 +149,13 @@ def build_tier(tier: str, sids: list[str], maxz: int | None = None) -> bool:
         subprocess.run(["gdalbuildvrt", "-q", "-addalpha", "-input_file_list", listfile, vrt],
                        env=gdal_env, check=True)
 
-        # Lossless PNG tiles (alpha → transparent gaps where no map covers). MBTiles base = native res.
+        # Lossless PNG tiles (alpha → transparent gaps where no map covers). Cap the base zoom to the
+        # tier's level (--maxzoom overrides) — without this the 600 DPI native zoom blows the build up.
+        mz = maxz if maxz is not None else TIER_MAXZOOM.get(tier)
         tr = ["gdal_translate", "-of", "MBTILES", "-co", "TILE_FORMAT=PNG"]
-        if maxz is not None:
-            tr += ["-co", f"ZOOM_LEVEL=AUTO({maxz})"]
-        print(f"[mosaics] {tier}: rendering base tiles -> MBTiles")
+        if mz is not None:
+            tr += ["-co", f"ZOOM_LEVEL={mz}"]
+        print(f"[mosaics] {tier}: rendering base tiles -> MBTiles (max zoom {mz})")
         subprocess.run([*tr, vrt, mbtiles], env=gdal_env, check=True)
 
         print(f"[mosaics] {tier}: building overviews (lower zooms)")

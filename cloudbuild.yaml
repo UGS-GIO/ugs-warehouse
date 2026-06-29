@@ -347,7 +347,9 @@ steps:
       - --service-account=${_RUNTIME_SA}
       - --command=python
       - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,all
-      - --task-timeout=7200
+      # Zoom is now capped per tier (TIER_MAXZOOM), so the build is bounded; 4h is generous headroom
+      # for the 24k tier (the others are fast). Run a single heavy tier with --scale 24k if needed.
+      - --task-timeout=14400
       - --max-retries=1
       - --cpu=4
       - --memory=16Gi

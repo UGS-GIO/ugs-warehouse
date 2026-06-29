@@ -8,7 +8,7 @@ def test_oneoff_identity():
     assert not r.time_series
     assert r.collection == RASTERS_COLLECTION
     assert r.item_id == "slope"
-    assert r.cog_object_path == "raster/cogs/1offs/slope.cog.tif"
+    assert r.cog_object_path == "raster/cogs/slope/slope.cog.tif"
 
 
 def test_timeseries_identity():

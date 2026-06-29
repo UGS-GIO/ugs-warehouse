@@ -28,6 +28,35 @@ TIPPECANOE_BIN = os.environ.get("TIPPECANOE_BIN", "tippecanoe")
 EXTRA_OPTS = shlex.split(os.environ.get("TIPPECANOE_OPTS", ""))
 PMTILES_MIME = config.PMTILES_MIME
 
+# Bump when the tiling logic below changes in a way that should force a rebuild of unchanged
+# topics (new flag, different feature-id handling, etc.). Folded into the content fingerprint.
+PMTILES_BUILD_VERSION = 1
+
+# Fixed tippecanoe flags (everything but -o/-l/the input). Hoisted so the build command and the
+# tiling fingerprint share ONE source of truth — see _tile_and_upload + tiling_signature.
+TILE_OPTS = [
+    "--force",
+    # -r1: keep EVERY point at every zoom. Tippecanoe's default drop-rate (2.5) thins dense
+    # points at low/mid zoom — point layers (mt stations, wells) rendered ~1 dot until z12+.
+    # Lines/polys don't rate-drop, so they looked fine. --drop-densest stays a size-only
+    # safety valve (with -r1 it rarely trips at UGS scale).
+    "-r1",
+    "--drop-densest-as-needed",
+    "--extend-zooms-if-still-dropping",
+    # Promote the transform's `feature_id` to the native MVT feature id, so the viewer can join a
+    # clicked map feature to its GeoParquet table row (both carry the same id). MapLibre then
+    # exposes it as `feature.id` (enables setFeatureState highlight) — no promoteId needed.
+    "--use-attribute-for-id=feature_id",
+]
+
+
+def tiling_signature() -> str:
+    """Stable string of the tiling inputs (build version + fixed flags + env opts). Folded into the
+    content fingerprint so a change in HOW a topic is tiled forces a rebuild even when the data is
+    byte-identical. `--force` is excluded — it's not a tiling-output input."""
+    opts = [o for o in (*TILE_OPTS, *EXTRA_OPTS) if o != "--force"]
+    return "|".join([f"v{PMTILES_BUILD_VERSION}", *opts])
+
 
 def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
     """COPY the transformed `view` to a GeoJSONSeq file (DuckDB streams it)."""
@@ -46,18 +75,7 @@ def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
         TIPPECANOE_BIN,
         "-o", pmtiles,
         "-l", topic.stem,
-        "--force",
-        # -r1: keep EVERY point at every zoom. Tippecanoe's default drop-rate (2.5) thins dense
-        # points at low/mid zoom — point layers (mt stations, wells) rendered ~1 dot until z12+.
-        # Lines/polys don't rate-drop, so they looked fine. --drop-densest stays a size-only
-        # safety valve (with -r1 it rarely trips at UGS scale).
-        "-r1",
-        "--drop-densest-as-needed",
-        "--extend-zooms-if-still-dropping",
-        # Promote the transform's `feature_id` to the native MVT feature id, so the viewer can
-        # join a clicked map feature to its GeoParquet table row (both carry the same id). MapLibre
-        # then exposes it as `feature.id` (enables setFeatureState highlight) — no promoteId needed.
-        "--use-attribute-for-id=feature_id",
+        *TILE_OPTS,
         *EXTRA_OPTS,
         geojsonl,
     ]

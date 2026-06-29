@@ -62,7 +62,8 @@ def _table_columns(con: duckdb.DuckDBPyConnection, view: str) -> list[dict]:
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           *, title: str | None = None, description: str | None = None,
           metadata: dict | None = None, bbox: list[float] | None = None,
-          row_count: int | None = None, related: dict | None = None) -> None:
+          row_count: int | None = None, related: dict | None = None,
+          content_hash: str | None = None) -> None:
     rel = related or {}
     rel_assets = rel.get("assets") or {}
     rel_links = rel.get("links") or []
@@ -84,6 +85,10 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         "ugs:layer": topic.layer,
         "ugs:row_count": rc,
     }
+    # Content fingerprint (skip-unchanged ingest). Lets a later `--skip-unchanged` run detect that
+    # nothing changed and skip the rebuild. Absent when the caller didn't compute one.
+    if content_hash:
+        props["ugs:content_hash"] = content_hash
     # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
     desc = md.get("description") or description
     if desc:

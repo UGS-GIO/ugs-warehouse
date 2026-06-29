@@ -43,10 +43,12 @@ STAGES = [
               "PMTiles · STAC. One DuckDB streaming pass."},
     {"n": "④", "title": "Styling", "jobs": ["restyle"],
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt."},
-    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest"],
+    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest",
+                                                 "fts", "embed"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
               "STAC (3 collections). One-click Full refresh runs thumbnails → rebuild for you, or "
-              "step through harvest / thumbnail / rebuild individually."},
+              "step through harvest / thumbnail / rebuild individually. Search corpora (full-text + "
+              "semantic) rebuild from the same pub set."},
     {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
      "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
               "Rebuild all tiers at once, or regenerate a single scale tier on its own."},
@@ -72,6 +74,11 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         danger=True),
     Job("restyle", "ugs-warehouse-restyle", "Rebind styles",
         "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
+    Job("fts", "ugs-pubs-fts", "Build full-text search",
+        "Rebuild the all-pub full-text-search DuckDB (BM25 FTS) → CDN. Run after pub text changes."),
+    Job("embed", "ugs-pubs-embed", "Build semantic search",
+        "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
+        "classification changes.", danger=True),
     Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (all tiers)",
         "Rebuild the per-scale raster PMTiles mosaics of the published geologic maps. Heavy "
         "(GDAL warp + tile). Use the per-tier buttons to regenerate just one scale.",

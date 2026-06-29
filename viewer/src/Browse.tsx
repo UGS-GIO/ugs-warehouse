@@ -57,6 +57,7 @@ const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).sli
 const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const gAuthor = (it: ItemRef) => String(props(it)["ugs:author"] ?? "");
+const gCounty = (it: ItemRef) => String(props(it)["ugs:county"] ?? "");
 // Bin a free-text publication scale into a tier (matches the raster-mosaic tiers). "" = unknown.
 const scaleTierOf = (it: ItemRef): string => {
   const s = gScale(it).replace(/,/g, "").toLowerCase();
@@ -320,6 +321,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const [topics, setTopics] = useState<string[]>([]);  // map-pub topic filter (multi-select)
   const [author, setAuthor] = useState("");            // author substring filter (→ all pubs by X)
   const [scaleTier, setScaleTier] = useState<string | null>(null);  // 24k / 250k / 500k
+  const [counties, setCounties] = useState<string[]>([]);  // county filter (multi-select)
 
   // Data-series facets — one chip per series code (DS, OFR, GQ…), with a count and the
   // human label. Multi-select: pick any combination; the selection lives in the URL
@@ -335,6 +337,11 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
     () => buildFacets(items, (it) => (props(it)["ugs:topic"] ? gTopic(it) : "")), [items]);
   const tsel = new Set(topics);
   const toggleTopic = (t: string) => setTopics(tsel.has(t) ? topics.filter((x) => x !== t) : [...topics, t]);
+
+  // County facets (derived from lat/lon, so only over items that carry one).
+  const countyFacets = useMemo(() => buildFacets(items, gCounty), [items]);
+  const csel = new Set(counties);
+  const toggleCounty = (c: string) => setCounties(csel.has(c) ? counties.filter((x) => x !== c) : [...counties, c]);
 
   // Scale-tier facets (24k/250k/500k) + the distinct author names for autocomplete.
   const scaleFacets = useMemo(() => buildFacets(items, scaleTierOf), [items]);
@@ -356,6 +363,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         if (tsel.size && !tsel.has(gTopic(it))) return false;
         if (authorNeedle && !gAuthor(it).toLowerCase().includes(authorNeedle)) return false;
         if (scaleTier && scaleTierOf(it) !== scaleTier) return false;
+        if (csel.size && !csel.has(gCounty(it))) return false;
         if (mapOnly && !hasMapData(it)) return false;
         if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
           const y = gYear(it);
@@ -370,7 +378,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
       }
       return filtered;
     },
-    [items, needle, series, topics, author, scaleTier, mapOnly, yearMin, yearMax],
+    [items, needle, series, topics, author, scaleTier, counties, mapOnly, yearMin, yearMax],
   );
 
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
@@ -439,6 +447,18 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
           ))}
           {tsel.size > 0 && (
             <span className="cursor-pointer text-xs text-primary" onClick={() => setTopics([])}>clear</span>
+          )}
+        </div>
+      )}
+
+      {countyFacets.length > 1 && (
+        <div className="mb-2 flex flex-wrap items-center gap-1.5">
+          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">County</span>
+          {countyFacets.map(([c, { n }]) => (
+            <span key={c} className={toggle(csel.has(c))} onClick={() => toggleCounty(c)}>{c} · {n}</span>
+          ))}
+          {csel.size > 0 && (
+            <span className="cursor-pointer text-xs text-primary" onClick={() => setCounties([])}>clear</span>
           )}
         </div>
       )}

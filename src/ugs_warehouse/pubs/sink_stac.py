@@ -14,7 +14,7 @@ import os
 import re
 
 from ..core import config, stac
-from . import identity, topic
+from . import counties, identity, topic
 
 UGSPUB = "https://ugspub.nr.utah.gov/publications/"
 LANDING = "https://geology.utah.gov/publication-details/?pub="
@@ -168,6 +168,9 @@ def build_item(p: dict, attachments: list[dict], *,
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
             "ugs:footprint_source": fp_source,
             "keywords": (p.get("keywords") or "").strip(),
+            # County derived from the pub's lat/lon via the vendored SGID boundaries (point-in-polygon).
+            # Only present for pubs that carry coordinates; empty values are dropped by the index.
+            **({"ugs:county": cty} if (cty := counties.county_of_pub(p)) else {}),
             # Survey Notes volume (from SNT-{vol}-{issue}) so the viewer can group issues by volume.
             **({"ugs:volume": vol} if (vol := issue_volume(sid)) is not None else {}),
             # Survey Notes "In this issue": [{title, page}] parsed from the PDF TOC (or hand-authored).

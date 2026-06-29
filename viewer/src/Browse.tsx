@@ -1359,8 +1359,9 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const [verticalExaggeration, setVerticalExaggeration] = useState(2.5);
   
   // Layer and rendering toggles
+  const [layout, setLayout] = useState<"split" | "superimposed">("split");
   const [showMap, setShowMap] = useState(true);
-  const [showDem, setShowDem] = useState(false);
+  const [showDem, setShowDem] = useState(true);
   const [showPolygons, setShowPolygons] = useState(true);
   const [showLines, setShowLines] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
@@ -1376,10 +1377,13 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const fitOverview = () => {
     const b = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
     if (b && overviewMapRef.current) {
-      overviewMapRef.current.fitBounds(
+      const map = overviewMapRef.current.getMap();
+      map.fitBounds(
         [[b[0], b[1]], [b[2], b[3]]],
         { padding: 24, duration: 0 }
       );
+      map.setBearing(-theta * (180 / Math.PI));
+      map.setPitch(phi * (180 / Math.PI));
     }
   };
 
@@ -1390,11 +1394,13 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         pitch: 48,
         duration: 800
       });
+      setPhi(48 * (Math.PI / 180));
     } else if (!enabled && overviewMapRef.current) {
       overviewMapRef.current.getMap().easeTo({
         pitch: 0,
         duration: 800
       });
+      setPhi(0);
     }
   };
 
@@ -1638,10 +1644,10 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         const x1 = pt.x * Math.cos(theta) - pt.y * Math.sin(theta);
         const y1 = pt.x * Math.sin(theta) + pt.y * Math.cos(theta);
         
-        // Rotate around X axis (Pitch)
+        // Pitch/tilt rotation in the vertical plane (Y-Z plane)
         const adjustedZ = (pt.z - center.z) * verticalExaggeration;
-        const y2 = y1 * Math.cos(phi) - adjustedZ * Math.sin(phi);
-        const z2 = y1 * Math.sin(phi) + adjustedZ * Math.cos(phi);
+        const y2 = y1 * Math.sin(phi) + adjustedZ * Math.cos(phi);
+        const z2 = -y1 * Math.cos(phi) + adjustedZ * Math.sin(phi);
 
         // Project orthographically centered
         const sx = logicWidth / 2 + x1 * scale + panX;
@@ -1807,8 +1813,17 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     
     if (mouseButton.current === 0 && !e.shiftKey) {
       // Orbit rotation (Yaw and Pitch)
-      setTheta((t) => t + dx * 0.0075);
-      setPhi((p) => Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, p - dy * 0.0075)));
+      const newTheta = theta + dx * 0.0075;
+      const newPhi = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, phi - dy * 0.0075));
+      setTheta(newTheta);
+      setPhi(newPhi);
+
+      // Sync 3D Canvas camera to the 2D MapLibre map
+      if (overviewMapRef.current) {
+        const map = overviewMapRef.current.getMap();
+        map.setBearing(-newTheta * (180 / Math.PI));
+        map.setPitch(newPhi * (180 / Math.PI));
+      }
     } else if (mouseButton.current === 2 || (mouseButton.current === 0 && e.shiftKey)) {
       // Panning
       setPanX((px) => px + dx);
@@ -1834,6 +1849,14 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     setPhi(pitch);
     setPanX(0);
     setPanY(0);
+    if (overviewMapRef.current) {
+      const map = overviewMapRef.current.getMap();
+      map.easeTo({
+        bearing: -yaw * (180 / Math.PI),
+        pitch: pitch * (180 / Math.PI),
+        duration: 500
+      });
+    }
   };
 
   if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries...</div>;
@@ -1842,50 +1865,21 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   return (
     <div ref={containerRef} className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-[640px]">
       
-      {/* Main interactive area: 3D Canvas + Optional 2D Map */}
-      <div className="flex-1 flex flex-col lg:flex-row relative bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden h-[400px] md:h-full">
+      {/* Main interactive area: 3D Canvas + 2D Map */}
+      <div className="flex-1 relative bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden h-[400px] md:h-full flex flex-col lg:flex-row">
         
-        {/* 3D Interactive Canvas */}
-        <div className={`relative flex-1 bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden select-none h-full ${showMap ? "lg:border-r lg:border-border" : ""}`}>
-          <canvas
-            ref={canvasRef}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onWheel={handleWheel}
-            onContextMenu={(e) => e.preventDefault()}
-            className="w-full h-full cursor-grab active:cursor-grabbing block"
-          />
-          
-          {/* On-screen Camera Overlays */}
-          <div className="absolute top-3 left-3 flex flex-col gap-2 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs">
-            <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
-              <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
-              3D Subsurface
-            </div>
-            <div className="text-muted-foreground leading-snug">
-              Drag to Rotate<br />
-              Shift+Drag to Pan<br />
-              Scroll to Zoom
-            </div>
-          </div>
-
-          {/* Display Presets */}
-          <div className="absolute bottom-3 left-3 flex gap-1.5 bg-card/85 backdrop-blur-sm border border-border p-1.5 rounded-md shadow-sm">
-            <button onClick={() => resetView(-Math.PI/6, Math.PI/4)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Perspective</button>
-            <button onClick={() => resetView(0, Math.PI/2 - 0.01)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Top</button>
-            <button onClick={() => resetView(0, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">East</button>
-            <button onClick={() => resetView(-Math.PI/2, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">North</button>
-          </div>
-        </div>
-
-        {/* 2D Overview Map Trace */}
+        {/* Map Container */}
         {showMap && (
-          <div className="w-full lg:w-[320px] xl:w-[420px] h-[200px] lg:h-full border-t lg:border-t-0 lg:border-l border-border relative bg-muted flex flex-col">
-            <div className="absolute top-3 left-3 z-10 bg-card/85 backdrop-blur-sm border border-border px-2.5 py-1.5 rounded-md shadow-sm text-xs font-semibold text-foreground">
-              2D Locator & Trace Map
-            </div>
+          <div className={
+            layout === "split"
+              ? "w-full lg:w-[320px] xl:w-[420px] h-[200px] lg:h-full border-t lg:border-t-0 lg:border-l border-border order-2 relative bg-muted flex flex-col"
+              : "absolute inset-0 z-0 bg-muted flex flex-col"
+          }>
+            {layout === "split" && (
+              <div className="absolute top-3 left-3 z-10 bg-card/85 backdrop-blur-sm border border-border px-2.5 py-1.5 rounded-md shadow-sm text-xs font-semibold text-foreground">
+                2D Locator & Trace Map
+              </div>
+            )}
             {mapReady ? (
               <MapGL
                 ref={overviewMapRef}
@@ -1896,6 +1890,11 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
                 onLoad={fitOverview}
                 maxPitch={85}
                 terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
+                onMove={(evt) => {
+                  const { bearing = 0, pitch = 0 } = evt.viewState;
+                  setTheta(-bearing * (Math.PI / 180));
+                  setPhi(pitch * (Math.PI / 180));
+                }}
               >
                 <NavigationControl position="top-right" showCompass={false} />
                 
@@ -1924,7 +1923,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
                       type="fill"
                       paint={{
                         "fill-color": fillColorExpression as any,
-                        "fill-opacity": 0.35,
+                        "fill-opacity": layout === "split" ? 0.35 : 0.22,
                         "fill-outline-color": "#475569"
                       }}
                     />
@@ -1957,18 +1956,76 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
                 )}
               </MapGL>
             ) : (
-              <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">
+              <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground bg-muted">
                 loading locator map…
               </div>
             )}
           </div>
         )}
 
+        {/* 3D Interactive Canvas Container */}
+        <div className={
+          layout === "split"
+            ? `relative flex-1 bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden select-none h-full order-1 ${showMap ? "lg:border-r lg:border-border" : ""}`
+            : "absolute inset-0 z-10 bg-transparent pointer-events-auto select-none h-full"
+        }>
+          <canvas
+            ref={canvasRef}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            onWheel={handleWheel}
+            onContextMenu={(e) => e.preventDefault()}
+            className="w-full h-full cursor-grab active:cursor-grabbing block bg-transparent"
+          />
+          
+          {/* On-screen Camera Overlays */}
+          <div className="absolute top-3 left-3 flex flex-col gap-2 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs pointer-events-auto">
+            <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
+              {layout === "split" ? "3D Subsurface" : "Unified Subsurface & Terrain"}
+            </div>
+            <div className="text-muted-foreground leading-snug">
+              Drag to Rotate<br />
+              Shift+Drag to Pan<br />
+              Scroll to Zoom
+            </div>
+          </div>
+
+          {/* Display Presets */}
+          <div className="absolute bottom-3 left-3 flex gap-1.5 bg-card/85 backdrop-blur-sm border border-border p-1.5 rounded-md shadow-sm pointer-events-auto">
+            <button onClick={() => resetView(-Math.PI/6, Math.PI/4)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Perspective</button>
+            <button onClick={() => resetView(0, Math.PI/2 - 0.01)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Top</button>
+            <button onClick={() => resetView(0, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">East</button>
+            <button onClick={() => resetView(-Math.PI/2, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">North</button>
+          </div>
+        </div>
+
       </div>
 
       {/* Control Sidebar & Geologic Legend */}
       <div className="w-full md:w-[320px] bg-background border-t md:border-t-0 md:border-l border-border p-4 flex flex-col gap-4 overflow-y-auto h-[240px] md:h-full">
         
+        {/* Layout Mode */}
+        <div className="border-b border-border pb-3">
+          <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Layout Mode</h3>
+          <div className="grid grid-cols-2 gap-1.5 p-1 bg-muted rounded-md text-xs">
+            <button
+              onClick={() => setLayout("split")}
+              className={`py-1 rounded text-center transition ${layout === "split" ? "bg-card text-foreground font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              Split View
+            </button>
+            <button
+              onClick={() => setLayout("superimposed")}
+              className={`py-1 rounded text-center transition ${layout === "superimposed" ? "bg-card text-foreground font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              Overlay View
+            </button>
+          </div>
+        </div>
+
         {/* Layer Controls */}
         <div className="border-b border-border pb-3">
           <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Display Settings</h3>

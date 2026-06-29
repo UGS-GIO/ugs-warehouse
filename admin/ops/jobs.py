@@ -30,6 +30,7 @@ class Job:
     description: str
     danger: bool = False  # costs money / heavy → extra confirm in the UI
     tasks: int | None = None  # override task_count (parallel shards) at run time; None = job default
+    tiers: tuple[tuple[str, str], ...] | None = None  # per-variant regen (value, label); e.g. mosaic scale tiers
 
 
 # Pipeline stages mirror the Architecture page (docs/ARCHITECTURE.md + viewer Architecture.tsx) so
@@ -46,6 +47,9 @@ STAGES = [
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
               "STAC (3 collections). One-click Full refresh runs thumbnails → rebuild for you, or "
               "step through harvest / thumbnail / rebuild individually."},
+    {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
+     "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
+              "Rebuild all tiers at once, or regenerate a single scale tier on its own."},
 ]
 
 
@@ -68,6 +72,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         danger=True),
     Job("restyle", "ugs-warehouse-restyle", "Rebind styles",
         "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
+    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (all tiers)",
+        "Rebuild the per-scale raster PMTiles mosaics of the published geologic maps. Heavy "
+        "(GDAL warp + tile). Use the per-tier buttons to regenerate just one scale.",
+        danger=True, tiers=(("24k", "1:24,000"), ("250k", "1:250,000"), ("500k", "1:500,000"))),
 ]}
 
 
@@ -113,6 +121,32 @@ def run(key: str) -> dict:
         exec_name = (op.metadata.name if op.metadata else "") or "(started)"
         return {"ok": True, "message": f"started {job.name}{shards}", "execution": exec_name}
     except Exception as e:  # noqa: BLE001 — surface the error to the operator, don't crash the view
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
+MOSAIC_MODULE = "ugs_warehouse.pubs.geolmap_mosaics"
+
+
+def rebuild_mosaic(tier: str) -> dict:
+    """Regenerate ONE scale tier's raster mosaic (e.g. just 24k) without rebuilding the others.
+    Overrides the mosaics job's args for this execution only — base command stays `python`."""
+    job = JOBS.get("mosaics")
+    valid = {t for t, _ in (job.tiers or ())}
+    if tier not in valid:
+        return {"ok": False, "message": f"unknown mosaic tier {tier!r}"}
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "message": f"DRY-RUN: would rebuild the {tier} mosaic", "dry_run": True}
+    try:
+        from google.cloud import run_v2
+        client = run_v2.JobsClient()
+        override = run_v2.RunJobRequest.Overrides.ContainerOverride(
+            args=["-m", MOSAIC_MODULE, "--scale", tier])
+        req = run_v2.RunJobRequest(
+            name=_job_path(job),
+            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
+        client.run_job(request=req)
+        return {"ok": True, "message": f"rebuilding the {tier} mosaic"}
+    except Exception as e:  # noqa: BLE001 — surface the error to the operator
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 
 

@@ -49,6 +49,18 @@ def reharvest(request, series_id):
 
 
 @admin_required
+@require_POST
+def rebuild_mosaic(request, tier):
+    """Regenerate one scale tier's raster mosaic. Reuses the standard job-result partial so the
+    tier buttons report into the same #result-mosaics slot as the all-tiers Run button."""
+    result = jobs.rebuild_mosaic(tier)
+    return render(request, "ops/_job_result.html", {
+        "key": "mosaics", "job": jobs.JOBS.get("mosaics"), "result": result,
+        "recent": jobs.recent("mosaics"), "console_url": jobs.console_logs_url("mosaics"),
+    })
+
+
+@admin_required
 def attention(request):
     return render(request, "ops/_attention.html", {"att": jobs.attention_pubs()})
 

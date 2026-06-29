@@ -127,19 +127,32 @@ def build_tier(tier: str, sids: list[str], maxz: int | None = None) -> bool:
         mbtiles = os.path.join(tmp, f"{tier}.mbtiles")
         pmtiles = os.path.join(tmp, f"{tier}.pmtiles")
 
+        # Performance-tuned GDAL environment variables for high-throughput cloud storage reading.
+        gdal_env = os.environ.copy()
+        gdal_env.update({
+            "GDAL_CACHEMAX": "4096",                         # Use 4 GB cache (out of 16 GB available on runner)
+            "GDAL_NUM_THREADS": "ALL_CPUS",                  # Parallelize tile rendering and compression
+            "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # Prevent redundant sequential GCS directory scans
+            "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt", # Limit seeking of non-existent sidecar files
+            "VSI_CACHE": "TRUE",                             # Enable GDAL VSI file caching
+            "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
+            "GDAL_HTTP_MAX_RETRY": "10",                     # Keep connections resilient against transient hiccups
+            "GDAL_HTTP_RETRY_DELAY": "1",
+        })
+
         print(f"[mosaics] {tier}: VRT over {len(sids)} COGs")
         subprocess.run(["gdalbuildvrt", "-q", "-addalpha", "-input_file_list", listfile, vrt],
-                       check=True)
+                       env=gdal_env, check=True)
 
         # Lossless PNG tiles (alpha → transparent gaps where no map covers). MBTiles base = native res.
         tr = ["gdal_translate", "-of", "MBTILES", "-co", "TILE_FORMAT=PNG"]
         if maxz is not None:
             tr += ["-co", f"ZOOM_LEVEL=AUTO({maxz})"]
         print(f"[mosaics] {tier}: rendering base tiles -> MBTiles")
-        subprocess.run([*tr, vrt, mbtiles], check=True)
+        subprocess.run([*tr, vrt, mbtiles], env=gdal_env, check=True)
 
         print(f"[mosaics] {tier}: building overviews (lower zooms)")
-        subprocess.run(["gdaladdo", "-r", "average", mbtiles, *OVERVIEW_LEVELS], check=True)
+        subprocess.run(["gdaladdo", "-r", "average", mbtiles, *OVERVIEW_LEVELS], env=gdal_env, check=True)
 
         print(f"[mosaics] {tier}: MBTiles -> PMTiles")
         subprocess.run(["pmtiles", "convert", mbtiles, pmtiles], check=True)

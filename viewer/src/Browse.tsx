@@ -1210,7 +1210,7 @@ function getUnitColor(unit: string, label: string): string {
   return `hsl(${h}, 65%, 60%)`;
 }
 
-function ThreeDViewer({ asset }: { asset: Asset }) {
+function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
   
@@ -1236,20 +1236,62 @@ function ThreeDViewer({ asset }: { asset: Asset }) {
   const [verticalExaggeration, setVerticalExaggeration] = useState(2.5);
   
   // Layer and rendering toggles
+  const [showMap, setShowMap] = useState(true);
   const [showPolygons, setShowPolygons] = useState(true);
   const [showLines, setShowLines] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
   const [hoveredUnit, setHoveredUnit] = useState<string | null>(null);
   const [search, setSearch] = useState("");
 
+  const polyUrl = asset.href;
+  const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
+
+  const [mapReady, setMapReady] = useState(false);
+  const overviewMapRef = useRef<MapRef>(null);
+
+  const fitOverview = () => {
+    const b = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
+    if (b && overviewMapRef.current) {
+      overviewMapRef.current.fitBounds(
+        [[b[0], b[1]], [b[2], b[3]]],
+        { padding: 24, duration: 0 }
+      );
+    }
+  };
+
+  const fillColorExpression = useMemo(() => {
+    if (legend.length === 0) return "#808080";
+    const expr: any[] = ["match", ["coalesce", ["get", "MapUnit"], ["get", "unit"], ""]];
+    legend.forEach((item) => {
+      expr.push(item.unit);
+      expr.push(item.color);
+      expr.push(item.unit.toLowerCase());
+      expr.push(item.color);
+    });
+    expr.push("#808080"); // fallback
+    return expr;
+  }, [legend]);
+
+  const lineStyleExpression = useMemo(() => {
+    return [
+      "case",
+      ["boolean", ["get", "is_fault"], ["get", "isFault"], ["to-boolean", ["match", ["coalesce", ["get", "Type"], ["get", "type"], ""], ["fault", "Fault"], true, false]]],
+      "#dc2626", // faults are crimson red
+      "#475569"  // contacts are slate grey
+    ];
+  }, []);
+
+  useEffect(() => {
+    if (showMap) {
+      ensureCogProtocol().then(() => setMapReady(true));
+    }
+  }, [showMap]);
+
   // Load and parse the 3D GeoJSON data
   useEffect(() => {
     let active = true;
     setLoading(true);
     setError(null);
-
-    const polyUrl = asset.href;
-    const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
 
     Promise.all([
       fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
@@ -1661,39 +1703,116 @@ function ThreeDViewer({ asset }: { asset: Asset }) {
   return (
     <div ref={containerRef} className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-[640px]">
       
-      {/* 3D Interactive Canvas */}
-      <div className="relative flex-1 bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden select-none h-[400px] md:h-full">
-        <canvas
-          ref={canvasRef}
-          onMouseDown={handleMouseDown}
-          onMouseMove={handleMouseMove}
-          onMouseUp={handleMouseUp}
-          onMouseLeave={handleMouseUp}
-          onWheel={handleWheel}
-          onContextMenu={(e) => e.preventDefault()}
-          className="w-full h-full cursor-grab active:cursor-grabbing block"
-        />
+      {/* Main interactive area: 3D Canvas + Optional 2D Map */}
+      <div className="flex-1 flex flex-col lg:flex-row relative bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden h-[400px] md:h-full">
         
-        {/* On-screen Camera Overlays */}
-        <div className="absolute top-3 left-3 flex flex-col gap-2 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs">
-          <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
-            <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
-            3D Orbit View
+        {/* 3D Interactive Canvas */}
+        <div className={`relative flex-1 bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden select-none h-full ${showMap ? "lg:border-r lg:border-border" : ""}`}>
+          <canvas
+            ref={canvasRef}
+            onMouseDown={handleMouseDown}
+            onMouseMove={handleMouseMove}
+            onMouseUp={handleMouseUp}
+            onMouseLeave={handleMouseUp}
+            onWheel={handleWheel}
+            onContextMenu={(e) => e.preventDefault()}
+            className="w-full h-full cursor-grab active:cursor-grabbing block"
+          />
+          
+          {/* On-screen Camera Overlays */}
+          <div className="absolute top-3 left-3 flex flex-col gap-2 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs">
+            <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
+              <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
+              3D Subsurface
+            </div>
+            <div className="text-muted-foreground leading-snug">
+              Drag to Rotate<br />
+              Shift+Drag to Pan<br />
+              Scroll to Zoom
+            </div>
           </div>
-          <div className="text-muted-foreground leading-snug">
-            Drag to Rotate<br />
-            Shift+Drag to Pan<br />
-            Scroll to Zoom
+
+          {/* Display Presets */}
+          <div className="absolute bottom-3 left-3 flex gap-1.5 bg-card/85 backdrop-blur-sm border border-border p-1.5 rounded-md shadow-sm">
+            <button onClick={() => resetView(-Math.PI/6, Math.PI/4)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Perspective</button>
+            <button onClick={() => resetView(0, Math.PI/2 - 0.01)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Top</button>
+            <button onClick={() => resetView(0, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">East</button>
+            <button onClick={() => resetView(-Math.PI/2, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">North</button>
           </div>
         </div>
 
-        {/* Display Presets */}
-        <div className="absolute bottom-3 left-3 flex gap-1.5 bg-card/85 backdrop-blur-sm border border-border p-1.5 rounded-md shadow-sm">
-          <button onClick={() => resetView(-Math.PI/6, Math.PI/4)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Perspective</button>
-          <button onClick={() => resetView(0, Math.PI/2 - 0.01)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Top</button>
-          <button onClick={() => resetView(0, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">East</button>
-          <button onClick={() => resetView(-Math.PI/2, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">North</button>
-        </div>
+        {/* 2D Overview Map Trace */}
+        {showMap && (
+          <div className="w-full lg:w-[320px] xl:w-[420px] h-[200px] lg:h-full border-t lg:border-t-0 lg:border-l border-border relative bg-muted flex flex-col">
+            <div className="absolute top-3 left-3 z-10 bg-card/85 backdrop-blur-sm border border-border px-2.5 py-1.5 rounded-md shadow-sm text-xs font-semibold text-foreground">
+              2D Locator & Trace Map
+            </div>
+            {mapReady ? (
+              <MapGL
+                ref={overviewMapRef}
+                mapLib={maplibregl}
+                initialViewState={{ longitude: -111.2, latitude: 40.5, zoom: 11 }}
+                mapStyle={POSITRON}
+                style={{ width: "100%", height: "100%" }}
+                onLoad={fitOverview}
+              >
+                <NavigationControl position="top-right" showCompass={false} />
+                
+                {/* Geologic Map Sheet COG (if available) */}
+                {cogAsset(item) && (
+                  <Source id="overview-cog" type="raster" url={`cog://${cogAsset(item)!.href}`} tileSize={256}>
+                    <Layer id="overview-cog-raster" type="raster" paint={{ "raster-opacity": 0.55 }} />
+                  </Source>
+                )}
+
+                {/* 3D Polygons flattened onto map */}
+                {showPolygons && (
+                  <Source id="overview-polys" type="geojson" data={polyUrl}>
+                    <Layer
+                      id="overview-polys-layer"
+                      type="fill"
+                      paint={{
+                        "fill-color": fillColorExpression as any,
+                        "fill-opacity": 0.35,
+                        "fill-outline-color": "#475569"
+                      }}
+                    />
+                  </Source>
+                )}
+
+                {/* 3D Lines/Contacts flattened onto map */}
+                {showLines && (
+                  <Source id="overview-lines" type="geojson" data={lineUrl}>
+                    <Layer
+                      id="overview-lines-layer"
+                      type="line"
+                      paint={{
+                        "line-color": lineStyleExpression as any,
+                        "line-width": [
+                          "case",
+                          ["boolean", ["get", "is_fault"], ["get", "isFault"], ["to-boolean", ["match", ["coalesce", ["get", "Type"], ["get", "type"], ""], ["fault", "Fault"], true, false]]],
+                          2.5,
+                          1.2
+                        ],
+                        "line-dasharray": [
+                          "case",
+                          ["boolean", ["get", "is_fault"], ["get", "isFault"], ["to-boolean", ["match", ["coalesce", ["get", "Type"], ["get", "type"], ""], ["fault", "Fault"], true, false]]],
+                          ["literal", [2, 2]],
+                          ["literal", [1, 0]]
+                        ]
+                      }}
+                    />
+                  </Source>
+                )}
+              </MapGL>
+            ) : (
+              <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground">
+                loading locator map…
+              </div>
+            )}
+          </div>
+        )}
+
       </div>
 
       {/* Control Sidebar & Geologic Legend */}
@@ -1703,6 +1822,10 @@ function ThreeDViewer({ asset }: { asset: Asset }) {
         <div className="border-b border-border pb-3">
           <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Display Settings</h3>
           <div className="flex flex-col gap-2 text-xs">
+            <label className="flex items-center gap-2 text-foreground cursor-pointer">
+              <input type="checkbox" checked={showMap} onChange={(e) => setShowMap(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+              <span>Show 2D Map Trace</span>
+            </label>
             <label className="flex items-center gap-2 text-foreground cursor-pointer">
               <input type="checkbox" checked={showPolygons} onChange={(e) => setShowPolygons(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
               <span>Show Stratigraphic Units</span>
@@ -1773,7 +1896,7 @@ function ThreeDViewer({ asset }: { asset: Asset }) {
 function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item: StacDoc }) {
   switch (kind) {
     case "cog": return <CogMap href={asset.href} item={item} />;
-    case "threeD": return <ThreeDViewer asset={asset} />;
+    case "threeD": return <ThreeDViewer asset={asset} item={item} />;
     case "parquet": return <DataExplorer href={asset.href} />;
     case "image":
       return (

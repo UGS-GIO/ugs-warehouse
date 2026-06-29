@@ -33,6 +33,11 @@ COLS = "unit_symbol,unit_name,age,scale,series_id,shape"
 
 PMTILES_OBJECT = f"{identity.UNITS_PREFIX}/units.pmtiles"
 PMTILES_MIME = config.PMTILES_MIME
+# Full-fidelity seamless units as GeoParquet alongside the tiles — the lossless source of truth for
+# download / analysis / DuckDB, paired with the .pmtiles (render) on one STAC item. Same pattern as
+# footprints.py. Because this holds every vertex, the tiles can simplify low zooms freely.
+PARQUET_OBJECT = f"{identity.UNITS_PREFIX}/units.parquet"
+PARQUET_MIME = config.PARQUET_MIME
 
 
 def _fetch_features() -> list[dict]:
@@ -128,6 +133,12 @@ def build_units(minz: int = 0, maxz: int = 14) -> None:
     tier = gdf["scale"].where(gdf["scale"].isin(SCALE_LAYERS), DEFAULT_TIER)
 
     with tempfile.TemporaryDirectory() as tmp:
+        # Lossless source of truth: the full seamless units as GeoParquet (every vertex + attribute).
+        parquet = os.path.join(tmp, "units.parquet")
+        gdf.to_parquet(parquet)
+        print(f"Uploading units.parquet ({os.path.getsize(parquet)//1024//1024} MB) to GCS...")
+        gcs.upload(parquet, PARQUET_OBJECT, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+
         pmtiles = os.path.join(tmp, "units.pmtiles")
         layer_args: list[str] = []
         for scale_val, layer_name in SCALE_LAYERS.items():
@@ -140,9 +151,11 @@ def build_units(minz: int = 0, maxz: int = 14) -> None:
             print(f"  {layer_name}: {len(sub)} polygons")
             layer_args += ["-L", f"{layer_name}:{path}"]
 
-        # Lossless-as-possible: no feature dropping, no geometry simplification, no tiny-polygon or
-        # density reduction, full zoom range. Big tiles are fine (regenerated only every few months).
-        print("Running tippecanoe to compile vector PMTiles (3 scale layers, lossless)...")
+        # Keep every feature at every zoom (no dropping, no tiny-polygon/density reduction). Geometry
+        # IS simplified at low zoom (no -ps) — invisible when zoomed out, and tippecanoe always keeps
+        # full resolution at maxzoom; the lossless full geometry also lives in units.parquet above.
+        # So low-zoom tiles stay small while detail + the source of truth are preserved.
+        print("Running tippecanoe to compile vector PMTiles (3 scale layers)...")
         subprocess.run(
             [
                 "tippecanoe",
@@ -152,7 +165,6 @@ def build_units(minz: int = 0, maxz: int = 14) -> None:
                 "-z", str(maxz),
                 "--no-feature-dropping",        # keep every unit at every zoom (-pf)
                 "--no-tiny-polygon-reduction",  # keep slivers (-pt)
-                "--no-line-simplification",     # full-resolution geometry at all zooms (-ps)
                 "-r1",                           # no density-based thinning
                 "--maximum-tile-bytes=30000000",
                 "--extend-zooms-if-still-dropping",

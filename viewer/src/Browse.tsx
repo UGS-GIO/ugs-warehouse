@@ -1113,16 +1113,17 @@ function FootprintMini({ item }: { item: StacDoc }) {
 }
 
 // ---- asset viewer: peruse a publication's files in-page (PDF / image / COG / parquet / text) ----
-type AssetKind = "cog" | "pdf" | "image" | "parquet" | "text" | "other";
-const KIND_RANK: Record<AssetKind, number> = { cog: 0, pdf: 1, parquet: 2, image: 3, text: 4, other: 9 };
+type AssetKind = "cog" | "threeD" | "pdf" | "image" | "parquet" | "text" | "other";
+const KIND_RANK: Record<AssetKind, number> = { cog: 0, threeD: 1, pdf: 2, parquet: 3, image: 4, text: 5, other: 9 };
 const KIND_LABEL: Record<AssetKind, string> = {
-  cog: "Map", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
+  cog: "Map", threeD: "3D", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
 };
 
 const extOf = (href: string) => (href.split("?")[0].split(".").pop() ?? "").toLowerCase();
 function assetKind(a: Asset): AssetKind {
   const t = (a.type ?? "").toLowerCase();
   const ext = extOf(a.href);
+  if (a.roles?.includes("3d-vector") || ext.includes("3d") || a.href.includes("3d_polygons")) return "threeD";
   if (t.includes("profile=cloud-optimized") || a.roles?.includes("cloud-optimized") || a.href.endsWith(".cog.tif")) return "cog";
   if (t === "application/pdf" || ext === "pdf") return "pdf";
   if (t.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
@@ -1151,9 +1152,628 @@ function TextPreview({ href }: { href: string }) {
   );
 }
 
+// ---- Interactive 3D Fence Diagram Viewer (Pure HTML5 Canvas 2D with 3D projection & sorting) ----
+interface Point3D {
+  x: number;
+  y: number;
+  z: number;
+}
+
+interface Polygon3D {
+  id: string;
+  unit: string;
+  label: string;
+  color: string;
+  rings: Point3D[][]; // outer and inners
+  centroid: Point3D;
+  depth: number;
+}
+
+interface Line3D {
+  unit: string;
+  label: string;
+  isFault: boolean;
+  points: Point3D[];
+}
+
+const GEOLOGIC_COLORS: Record<string, string> = {
+  "red pine shale": "#556B2F",
+  "zur": "#556B2F",
+  "weber sandstone": "#EEDC82",
+  "ipw": "#EEDC82",
+  "gardison limestone": "#4682B4",
+  "mg": "#4682B4",
+  "deseret limestone": "#B0C4DE",
+  "md": "#B0C4DE",
+  "humbug formation": "#D2B48C",
+  "mh": "#D2B48C",
+  "keetley volcanics": "#BA55D3",
+  "tk": "#BA55D3",
+  "alluvium": "#FFFACD",
+  "qal": "#FFFACD",
+  "glacial till": "#DCDCDC",
+  "qg": "#DCDCDC",
+};
+
+function getUnitColor(unit: string, label: string): string {
+  const u = (unit ?? "").toLowerCase().trim();
+  const l = (label ?? "").toLowerCase().trim();
+  if (GEOLOGIC_COLORS[u]) return GEOLOGIC_COLORS[u];
+  if (GEOLOGIC_COLORS[l]) return GEOLOGIC_COLORS[l];
+  // Standard string hashing for stable geologic pastel color
+  let hash = 0;
+  const str = u || l || "unknown";
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  const h = Math.abs(hash) % 360;
+  return `hsl(${h}, 65%, 60%)`;
+}
+
+function ThreeDViewer({ asset }: { asset: Asset }) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  
+  // 3D vector data state
+  const [polygons, setPolygons] = useState<Polygon3D[]>([]);
+  const [lines, setLines] = useState<Line3D[]>([]);
+  const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
+  const [center, setCenter] = useState<Point3D>({ x: 0, y: 0, z: 0 });
+  const [bounds, setBounds] = useState<{ min: Point3D; max: Point3D }>({
+    min: { x: 0, y: 0, z: 0 },
+    max: { x: 0, y: 0, z: 0 },
+  });
+
+  // Camera, rotation, and render settings
+  const [theta, setTheta] = useState(-Math.PI / 6); // Yaw rotation angle (around Z axis)
+  const [phi, setPhi] = useState(Math.PI / 4);     // Pitch rotation angle (around X axis)
+  const [scale, setScale] = useState(1.0);
+  const [panX, setPanX] = useState(0);
+  const [panY, setPanY] = useState(0);
+  const [verticalExaggeration, setVerticalExaggeration] = useState(2.5);
+  
+  // Layer and rendering toggles
+  const [showPolygons, setShowPolygons] = useState(true);
+  const [showLines, setShowLines] = useState(true);
+  const [showGrid, setShowGrid] = useState(true);
+  const [hoveredUnit, setHoveredUnit] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  // Load and parse the 3D GeoJSON data
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    setError(null);
+
+    const polyUrl = asset.href;
+    const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
+
+    Promise.all([
+      fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
+      fetch(lineUrl).then((r) => r.json()).catch(() => null) // lines are optional/best-effort
+    ])
+    .then(([polyData, lineData]) => {
+      if (!active) return;
+      
+      const parsedPolys: Polygon3D[] = [];
+      const parsedLines: Line3D[] = [];
+      
+      let sumLon = 0, sumLat = 0, sumZ = 0, countPts = 0;
+      let minLon = Infinity, maxLon = -Infinity;
+      let minLat = Infinity, maxLat = -Infinity;
+      let minZ = Infinity, maxZ = -Infinity;
+
+      // Helper to capture geographic coordinate statistics
+      const ingestPoint = (lon: number, lat: number, z: number) => {
+        sumLon += lon;
+        sumLat += lat;
+        sumZ += z;
+        countPts++;
+        if (lon < minLon) minLon = lon;
+        if (lon > maxLon) maxLon = lon;
+        if (lat < minLat) minLat = lat;
+        if (lat > maxLat) maxLat = lat;
+        if (z < minZ) minZ = z;
+        if (z > maxZ) maxZ = z;
+      };
+
+      // 1. Parse polygons
+      const features = polyData.features || [];
+      features.forEach((feat: any, idx: number) => {
+        const props = feat.properties || {};
+        const unit = props.MapUnit || props.unit || "Unknown Unit";
+        const label = props.Label || props.label || "Unit";
+        const color = getUnitColor(unit, label);
+        const geom = feat.geometry || {};
+        const type = geom.type;
+        const ringsList: number[][][][] = [];
+
+        if (type === "Polygon") {
+          ringsList.push(geom.coordinates);
+        } else if (type === "MultiPolygon") {
+          geom.coordinates.forEach((c: any) => ringsList.push(c));
+        }
+
+        ringsList.forEach((rings: any) => {
+          const parsedRings: Point3D[][] = rings.map((ring: any) => {
+            return ring.map((pt: any) => {
+              const lon = pt[0], lat = pt[1], z = pt[2] ?? 0;
+              ingestPoint(lon, lat, z);
+              return { x: lon, y: lat, z: z };
+            });
+          });
+          
+          if (parsedRings.length > 0 && parsedRings[0].length > 0) {
+            // Compute centroid
+            let cx = 0, cy = 0, cz = 0;
+            parsedRings[0].forEach((pt) => { cx += pt.x; cy += pt.y; cz += pt.z; });
+            cx /= parsedRings[0].length;
+            cy /= parsedRings[0].length;
+            cz /= parsedRings[0].length;
+
+            parsedPolys.push({
+              id: `${idx}-${parsedPolys.length}`,
+              unit,
+              label,
+              color,
+              rings: parsedRings,
+              centroid: { x: cx, y: cy, z: cz },
+              depth: 0,
+            });
+          }
+        });
+      });
+
+      // 2. Parse lines
+      if (lineData && lineData.features) {
+        lineData.features.forEach((feat: any) => {
+          const props = feat.properties || {};
+          const unit = props.MapUnit || props.unit || "";
+          const label = props.Label || props.label || "";
+          const geom = feat.geometry || {};
+          const type = geom.type;
+          const isFault = (props.Type || "").toLowerCase().includes("fault") || (feat.properties?.is_fault);
+          
+          const coordsList: number[][][] = [];
+          if (type === "LineString") {
+            coordsList.push(geom.coordinates);
+          } else if (type === "MultiLineString") {
+            geom.coordinates.forEach((c: any) => coordsList.push(c));
+          }
+
+          coordsList.forEach((coords) => {
+            const pts = coords.map((pt: any) => {
+              const lon = pt[0], lat = pt[1], z = pt[2] ?? 0;
+              ingestPoint(lon, lat, z);
+              return { x: lon, y: lat, z: z };
+            });
+            if (pts.length > 0) {
+              parsedLines.push({ unit, label, isFault: !!isFault, points: pts });
+            }
+          });
+        });
+      }
+
+      if (countPts === 0) {
+        throw new Error("No valid coordinates found in the 3D dataset");
+      }
+
+      // 3. Compute coordinate system center and convert coordinates to local meters
+      const centerLon = (minLon + maxLon) / 2;
+      const centerLat = (minLat + maxLat) / 2;
+      const centerZ = (minZ + maxZ) / 2;
+      const cosLat = Math.cos((centerLat * Math.PI) / 180);
+
+      const toLocal = (pt: Point3D) => ({
+        x: (pt.x - centerLon) * 111320 * cosLat,
+        y: (pt.y - centerLat) * 110574,
+        z: pt.z,
+      });
+
+      // Convert all polygons
+      const localPolys = parsedPolys.map((p) => ({
+        ...p,
+        centroid: toLocal(p.centroid),
+        rings: p.rings.map((ring) => ring.map(toLocal)),
+      }));
+
+      // Convert all lines
+      const localLines = parsedLines.map((l) => ({
+        ...l,
+        points: l.points.map(toLocal),
+      }));
+
+      // Calculate local dimensions for bounding box
+      const minLocal = toLocal({ x: minLon, y: minLat, z: minZ });
+      const maxLocal = toLocal({ x: maxLon, y: maxLat, z: maxZ });
+
+      // Generate distinct legend items
+      const legendMap = new Map<string, { label: string; color: string }>();
+      localPolys.forEach((p) => legendMap.set(p.unit, { label: p.label, color: p.color }));
+      const legendItems = Array.from(legendMap.entries()).map(([unit, val]) => ({
+        unit,
+        label: val.label,
+        color: val.color,
+      })).sort((a, b) => a.unit.localeCompare(b.unit));
+
+      // Calculate base scale to fit the canvas bounds
+      const spanX = Math.abs(maxLocal.x - minLocal.x);
+      const spanY = Math.abs(maxLocal.y - minLocal.y);
+      const spanZ = Math.abs(maxLocal.z - minLocal.z);
+      const spanMax = Math.max(spanX, spanY, spanZ);
+      const baseScale = spanMax > 0 ? 320 / spanMax : 1.0;
+
+      if (active) {
+        setPolygons(localPolys);
+        setLines(localLines);
+        setLegend(legendItems);
+        setCenter({ x: 0, y: 0, z: centerZ });
+        setBounds({ min: minLocal, max: maxLocal });
+        setScale(baseScale);
+        setPanX(0);
+        setPanY(0);
+        setLoading(false);
+      }
+    })
+    .catch((err) => {
+      if (active) {
+        setError(err.message || "Failed to load 3D data files");
+        setLoading(false);
+      }
+    });
+
+    return () => { active = false; };
+  }, [asset.href]);
+
+  // Handle Resize and Drawing Loop
+  useEffect(() => {
+    if (loading || error || !canvasRef.current) return;
+    
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    let animId: number;
+
+    const renderFrame = () => {
+      const width = canvas.width = canvas.clientWidth * window.devicePixelRatio;
+      const height = canvas.height = canvas.clientHeight * window.devicePixelRatio;
+      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
+      
+      const logicWidth = width / window.devicePixelRatio;
+      const logicHeight = height / window.devicePixelRatio;
+
+      // Clear Canvas
+      ctx.clearRect(0, 0, logicWidth, logicHeight);
+      ctx.lineJoin = "round";
+      ctx.lineCap = "round";
+
+      // 3D Projection Math
+      const project = (pt: Point3D): { sx: number; sy: number; sz: number } => {
+        // Rotate around Z axis (Yaw)
+        const x1 = pt.x * Math.cos(theta) - pt.y * Math.sin(theta);
+        const y1 = pt.x * Math.sin(theta) + pt.y * Math.cos(theta);
+        
+        // Rotate around X axis (Pitch)
+        const adjustedZ = (pt.z - center.z) * verticalExaggeration;
+        const y2 = y1 * Math.cos(phi) - adjustedZ * Math.sin(phi);
+        const z2 = y1 * Math.sin(phi) + adjustedZ * Math.cos(phi);
+
+        // Project orthographically centered
+        const sx = logicWidth / 2 + x1 * scale + panX;
+        const sy = logicHeight / 2 - y2 * scale + panY;
+        
+        return { sx, sy, sz: z2 };
+      };
+
+      // 1. Draw 3D Grid Box
+      if (showGrid) {
+        ctx.strokeStyle = "rgba(156, 163, 175, 0.25)";
+        ctx.lineWidth = 1;
+        ctx.font = "9px sans-serif";
+        ctx.fillStyle = "rgba(107, 114, 128, 0.65)";
+
+        const { min, max } = bounds;
+        const corners = [
+          { x: min.x, y: min.y, z: min.z }, // 0
+          { x: max.x, y: min.y, z: min.z }, // 1
+          { x: max.x, y: max.y, z: min.z }, // 2
+          { x: min.x, y: max.y, z: min.z }, // 3
+          { x: min.x, y: min.y, z: max.z }, // 4
+          { x: max.x, y: min.y, z: max.z }, // 5
+          { x: max.x, y: max.y, z: max.z }, // 6
+          { x: min.x, y: max.y, z: max.z }, // 7
+        ].map(project);
+
+        const edges = [
+          [0, 1], [1, 2], [2, 3], [3, 0], // Bottom ring
+          [4, 5], [5, 6], [6, 7], [7, 4], // Top ring
+          [0, 4], [1, 5], [2, 6], [3, 7], // Columns
+        ];
+
+        edges.forEach(([a, b]) => {
+          ctx.beginPath();
+          ctx.moveTo(corners[a].sx, corners[a].sy);
+          ctx.lineTo(corners[b].sx, corners[b].sy);
+          ctx.stroke();
+        });
+
+        // Draw scale ticks on the Z columns
+        const zLevels = [min.z, (min.z + max.z)/2, max.z];
+        zLevels.forEach((zVal) => {
+          const tickPt = project({ x: min.x, y: min.y, z: zVal });
+          ctx.beginPath();
+          ctx.arc(tickPt.sx, tickPt.sy, 2, 0, Math.PI * 2);
+          ctx.fill();
+          ctx.fillText(`${Math.round(zVal)}m`, tickPt.sx - 38, tickPt.sy + 3);
+        });
+
+        // Draw horizontal scale indicator
+        const scalePt1 = project({ x: min.x, y: min.y, z: min.z });
+        const scalePt2 = project({ x: min.x + 1000, y: min.y, z: min.z }); // 1km line
+        const dx = scalePt2.sx - scalePt1.sx;
+        const dy = scalePt2.sy - scalePt1.sy;
+        const len = Math.sqrt(dx*dx + dy*dy);
+        if (len > 15) {
+          ctx.strokeStyle = "rgba(75, 85, 99, 0.8)";
+          ctx.lineWidth = 1.5;
+          ctx.beginPath();
+          ctx.moveTo(scalePt1.sx, scalePt1.sy + 15);
+          ctx.lineTo(scalePt2.sx, scalePt2.sy + 15);
+          ctx.stroke();
+          ctx.fillText("1 km", (scalePt1.sx + scalePt2.sx)/2 - 10, scalePt1.sy + 28);
+        }
+      }
+
+      // 2. Render Polygons (Sorted back-to-front via Painters Algorithm)
+      if (showPolygons && polygons.length > 0) {
+        // Compute current rotated depth for each polygon
+        const sortedPolys = polygons.map((p) => {
+          const rotatedCentroid = project(p.centroid);
+          return { ...p, depth: rotatedCentroid.sz };
+        }).sort((a, b) => a.depth - b.depth); // back-to-front sorting
+
+        sortedPolys.forEach((p) => {
+          const isHovered = hoveredUnit === p.unit;
+          const matchesSearch = !search || p.unit.toLowerCase().includes(search.toLowerCase()) || p.label.toLowerCase().includes(search.toLowerCase());
+          
+          if (search && !matchesSearch) return;
+
+          ctx.fillStyle = p.color;
+          ctx.strokeStyle = "rgba(0, 0, 0, 0.4)";
+          ctx.lineWidth = isHovered ? 2.5 : 0.5;
+          ctx.globalAlpha = hoveredUnit ? (isHovered ? 0.9 : 0.25) : 0.65;
+
+          p.rings.forEach((ring) => {
+            if (ring.length === 0) return;
+            const projPts = ring.map(project);
+            
+            ctx.beginPath();
+            ctx.moveTo(projPts[0].sx, projPts[0].sy);
+            for (let i = 1; i < projPts.length; i++) {
+              ctx.lineTo(projPts[i].sx, projPts[i].sy);
+            }
+            ctx.closePath();
+            ctx.fill();
+            ctx.stroke();
+          });
+
+          // Draw label in the center of the first outer ring
+          if (isHovered && p.rings[0] && p.rings[0].length > 0) {
+            const centroidProj = project(p.centroid);
+            ctx.globalAlpha = 1.0;
+            ctx.fillStyle = "#000000";
+            ctx.font = "bold 11px sans-serif";
+            ctx.fillText(p.label, centroidProj.sx - 8, centroidProj.sy + 4);
+          }
+        });
+        ctx.globalAlpha = 1.0;
+      }
+
+      // 3. Render 3D Contacts & Faults Lines
+      if (showLines && lines.length > 0) {
+        ctx.globalAlpha = hoveredUnit ? 0.35 : 0.9;
+        lines.forEach((l) => {
+          const isFault = l.isFault;
+          ctx.strokeStyle = isFault ? "rgba(239, 68, 68, 0.95)" : "rgba(17, 24, 39, 0.8)";
+          ctx.lineWidth = isFault ? 2.0 : 1.0;
+          
+          if (showGrid) {
+            ctx.setLineDash(isFault ? [5, 3] : []);
+          }
+
+          ctx.beginPath();
+          const first = project(l.points[0]);
+          ctx.moveTo(first.sx, first.sy);
+          for (let i = 1; i < l.points.length; i++) {
+            const pt = project(l.points[i]);
+            ctx.lineTo(pt.sx, pt.sy);
+          }
+          ctx.stroke();
+        });
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 1.0;
+      }
+    };
+
+    const scheduleFrame = () => {
+      renderFrame();
+      animId = requestAnimationFrame(scheduleFrame);
+    };
+
+    scheduleFrame();
+    return () => cancelAnimationFrame(animId);
+  }, [loading, error, polygons, lines, theta, phi, scale, panX, panY, verticalExaggeration, showPolygons, showLines, showGrid, hoveredUnit, search]);
+
+  // Mouse Interaction Handlers
+  const lastMousePos = useRef<{ x: number; y: number } | null>(null);
+  const mouseButton = useRef<number | null>(null);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    lastMousePos.current = { x: e.clientX, y: e.clientY };
+    mouseButton.current = e.button;
+    e.preventDefault();
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (!lastMousePos.current || mouseButton.current === null) return;
+    
+    const dx = e.clientX - lastMousePos.current.x;
+    const dy = e.clientY - lastMousePos.current.y;
+    
+    if (mouseButton.current === 0 && !e.shiftKey) {
+      // Orbit rotation (Yaw and Pitch)
+      setTheta((t) => t + dx * 0.0075);
+      setPhi((p) => Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, p - dy * 0.0075)));
+    } else if (mouseButton.current === 2 || (mouseButton.current === 0 && e.shiftKey)) {
+      // Panning
+      setPanX((px) => px + dx);
+      setPanY((py) => py + dy);
+    }
+
+    lastMousePos.current = { x: e.clientX, y: e.clientY };
+  };
+
+  const handleMouseUp = () => {
+    lastMousePos.current = null;
+    mouseButton.current = null;
+  };
+
+  const handleWheel = (e: React.WheelEvent) => {
+    const factor = e.deltaY < 0 ? 1.15 : 0.85;
+    setScale((s) => Math.max(0.01, Math.min(50, s * factor)));
+  };
+
+  // View presets
+  const resetView = (yaw: number, pitch: number) => {
+    setTheta(yaw);
+    setPhi(pitch);
+    setPanX(0);
+    setPanY(0);
+  };
+
+  if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries...</div>;
+  if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;
+
+  return (
+    <div ref={containerRef} className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-[640px]">
+      
+      {/* 3D Interactive Canvas */}
+      <div className="relative flex-1 bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden select-none h-[400px] md:h-full">
+        <canvas
+          ref={canvasRef}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onWheel={handleWheel}
+          onContextMenu={(e) => e.preventDefault()}
+          className="w-full h-full cursor-grab active:cursor-grabbing block"
+        />
+        
+        {/* On-screen Camera Overlays */}
+        <div className="absolute top-3 left-3 flex flex-col gap-2 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs">
+          <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
+            3D Orbit View
+          </div>
+          <div className="text-muted-foreground leading-snug">
+            Drag to Rotate<br />
+            Shift+Drag to Pan<br />
+            Scroll to Zoom
+          </div>
+        </div>
+
+        {/* Display Presets */}
+        <div className="absolute bottom-3 left-3 flex gap-1.5 bg-card/85 backdrop-blur-sm border border-border p-1.5 rounded-md shadow-sm">
+          <button onClick={() => resetView(-Math.PI/6, Math.PI/4)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Perspective</button>
+          <button onClick={() => resetView(0, Math.PI/2 - 0.01)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Top</button>
+          <button onClick={() => resetView(0, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">East</button>
+          <button onClick={() => resetView(-Math.PI/2, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">North</button>
+        </div>
+      </div>
+
+      {/* Control Sidebar & Geologic Legend */}
+      <div className="w-full md:w-[320px] bg-background border-t md:border-t-0 md:border-l border-border p-4 flex flex-col gap-4 overflow-y-auto h-[240px] md:h-full">
+        
+        {/* Layer Controls */}
+        <div className="border-b border-border pb-3">
+          <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Display Settings</h3>
+          <div className="flex flex-col gap-2 text-xs">
+            <label className="flex items-center gap-2 text-foreground cursor-pointer">
+              <input type="checkbox" checked={showPolygons} onChange={(e) => setShowPolygons(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+              <span>Show Stratigraphic Units</span>
+            </label>
+            <label className="flex items-center gap-2 text-foreground cursor-pointer">
+              <input type="checkbox" checked={showLines} onChange={(e) => setShowLines(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+              <span>Show Contacts & Faults</span>
+            </label>
+            <label className="flex items-center gap-2 text-foreground cursor-pointer">
+              <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+              <span>Show Bounding Grid</span>
+            </label>
+          </div>
+        </div>
+
+        {/* Vertical Exaggeration Slider */}
+        <div className="border-b border-border pb-3">
+          <div className="flex justify-between items-center text-xs mb-1.5">
+            <span className="font-semibold text-foreground uppercase tracking-wider">Vertical Stretch</span>
+            <span className="text-muted-foreground font-mono">{verticalExaggeration.toFixed(1)}x</span>
+          </div>
+          <input
+            type="range" min="0.5" max="5.0" step="0.1"
+            value={verticalExaggeration}
+            onChange={(e) => setVerticalExaggeration(parseFloat(e.target.value))}
+            className="w-full h-1.5 rounded-lg bg-muted appearance-none cursor-pointer accent-primary"
+          />
+        </div>
+
+        {/* Geologic Legend Search */}
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex justify-between items-center text-xs mb-2">
+            <h3 className="font-semibold text-foreground uppercase tracking-wider">Geologic Legend</h3>
+            <span className="text-[10px] text-muted-foreground font-mono">{legend.length} units</span>
+          </div>
+          <input
+            type="text" placeholder="Filter units..." value={search} onChange={(e) => setSearch(e.target.value)}
+            className="w-full text-xs border border-border bg-card px-2.5 py-1.5 rounded mb-2.5 focus:outline-none focus:border-primary"
+          />
+          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 max-h-[220px] md:max-h-none">
+            {legend
+              .filter((item) => !search || item.unit.toLowerCase().includes(search.toLowerCase()) || item.label.toLowerCase().includes(search.toLowerCase()))
+              .map((item) => (
+                <div
+                  key={item.unit}
+                  onMouseEnter={() => setHoveredUnit(item.unit)}
+                  onMouseLeave={() => setHoveredUnit(null)}
+                  className={`flex items-start gap-2.5 p-1.5 rounded border text-xs cursor-default transition ${
+                    hoveredUnit === item.unit
+                      ? "border-primary bg-primary/5 font-medium"
+                      : "border-transparent hover:bg-muted"
+                  }`}
+                >
+                  <span className="inline-block w-4 h-4 rounded border border-black/10 shrink-0" style={{ backgroundColor: item.color }} />
+                  <div className="flex-1 leading-snug">
+                    <span className="font-bold font-mono mr-1.5">{item.label}</span>
+                    <span className="text-foreground">{item.unit}</span>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item: StacDoc }) {
   switch (kind) {
     case "cog": return <CogMap href={asset.href} item={item} />;
+    case "threeD": return <ThreeDViewer asset={asset} />;
     case "parquet": return <DataExplorer href={asset.href} />;
     case "image":
       return (

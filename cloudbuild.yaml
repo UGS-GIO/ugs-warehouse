@@ -23,6 +23,7 @@ substitutions:
   _FTS_JOB: ugs-pubs-fts                  # Cloud Run job: build the all-pub full-text-search DuckDB (BM25 FTS) → CDN, queried by duckdb-wasm
   _EMBED_JOB: ugs-pubs-embed              # Cloud Run job: chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN, for semantic search
   _MOSAICS_JOB: ugs-geolmap-mosaics       # Cloud Run job: per-scale raster PMTiles mosaics of the published geologic maps (GDAL + pmtiles)
+  _GRAPH_JOB: ugs-pubs-graph              # Cloud Run job: build the pubs knowledge graph (nodes/edges Parquet) — citation + co-author + semantic edges
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
@@ -353,6 +354,27 @@ steps:
       - --max-retries=1
       - --cpu=4
       - --memory=16Gi
+
+  # Publications knowledge graph: nodes/edges Parquet (authored/coauthor/in_series/has_topic +
+  # cites mined from full text + semantic 'similar' from embeddings). Harvest image (pandas/pyarrow/
+  # numpy via [pubs]). Reads fulltext + embeddings from GCS; run after the FTS + embed jobs.
+  - id: deploy-graph-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_GRAPH_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.graph
+      - --task-timeout=3600
+      - --max-retries=1
+      - --cpu=4
+      - --memory=8Gi
 
   - id: deploy-service
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

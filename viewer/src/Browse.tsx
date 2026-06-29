@@ -523,6 +523,7 @@ const asBounds = (item: StacDoc): [[number, number], [number, number]] | undefin
 // + decoded client-side. No server, no invented styling. Pannable/zoomable.
 function CogMap({ href, item }: { href: string; item: StacDoc }) {
   const [ready, setReady] = useState(false);
+  const [showDem, setShowDem] = useState(false);
   const mapRef = useRef<MapRef>(null);
   const cogBbox = useRef<[number, number, number, number] | undefined>(undefined);
 
@@ -559,8 +560,48 @@ function CogMap({ href, item }: { href: string; item: StacDoc }) {
             mapStyle={POSITRON}
             style={{ width: "100%", height: "100%" }}
             onLoad={fit}
+            maxPitch={85}
+            terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
           >
             <NavigationControl position="top-right" showCompass={false} />
+            
+            {/* Floating 3D Terrain Toggle */}
+            <div className="absolute top-2.5 right-12 z-10">
+              <button
+                onClick={() => {
+                  const next = !showDem;
+                  setShowDem(next);
+                  if (mapRef.current) {
+                    mapRef.current.getMap().easeTo({
+                      pitch: next ? 48 : 0,
+                      duration: 500
+                    });
+                  }
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
+                  showDem
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
+                }`}
+                title="Toggle 3D Topography"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                </svg>
+                <span>3D Terrain</span>
+              </button>
+            </div>
+
+            {showDem && (
+              <Source
+                id="terrain-rgb-source"
+                type="raster-dem"
+                tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
+                encoding="terrarium"
+                tileSize={256}
+              />
+            )}
+
             <Source id="cog" type="raster" url={`cog://${href}`} tileSize={256}>
               <Layer id="cog-raster" type="raster" />
             </Source>
@@ -626,6 +667,7 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
 
   const mapRef = useRef<MapRef>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [showDem, setShowDem] = useState(false);
   const [styleLayers, setStyleLayers] = useState<Record<string, unknown>[] | null>(null);
   const [spriteReady, setSpriteReady] = useState(false);
   const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown> } | null>(null);
@@ -713,8 +755,48 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
           interactiveLayerIds={onFeatureClick ? layerIds : undefined}
           onClick={onFeatureClick ? onMapClick : undefined}
           style={{ width: "100%", height: "100%" }}
+          maxPitch={85}
+          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
         >
           <NavigationControl position="top-right" showCompass={false} />
+
+          {/* Floating 3D Terrain Toggle */}
+          <div className="absolute top-2.5 right-12 z-10">
+            <button
+              onClick={() => {
+                const next = !showDem;
+                setShowDem(next);
+                if (mapRef.current) {
+                  mapRef.current.getMap().easeTo({
+                    pitch: next ? 48 : 0,
+                    duration: 500
+                  });
+                }
+              }}
+              className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
+                showDem
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
+              }`}
+              title="Toggle 3D Topography"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+              </svg>
+              <span>3D Terrain</span>
+            </button>
+          </div>
+
+          {showDem && (
+            <Source
+              id="terrain-rgb-source"
+              type="raster-dem"
+              tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
+              encoding="terrarium"
+              tileSize={256}
+            />
+          )}
+
           <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`} />
           {layers.map((l, i) => {
             // id from the fragment's OWN layer id (e.g. …-circle vs …-boxtype) so switching renders
@@ -788,6 +870,7 @@ function FieldsPanel({ item }: { item: StacDoc }) {
 function RasterMosaicPreview({ item }: { item: StacDoc }) {
   const asset = rasterTilesAsset(item);
   const mapRef = useRef<MapRef>(null);
+  const [showDem, setShowDem] = useState(false);
   if (!asset) return null;
   const bounds = asBounds(item);
 
@@ -799,8 +882,48 @@ function RasterMosaicPreview({ item }: { item: StacDoc }) {
         initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
         mapStyle={POSITRON}
         style={{ width: "100%", height: "100%" }}
+        maxPitch={85}
+        terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
       >
         <NavigationControl position="top-right" showCompass={false} />
+
+        {/* Floating 3D Terrain Toggle */}
+        <div className="absolute top-2.5 right-12 z-10">
+          <button
+            onClick={() => {
+              const next = !showDem;
+              setShowDem(next);
+              if (mapRef.current) {
+                mapRef.current.getMap().easeTo({
+                  pitch: next ? 48 : 0,
+                  duration: 500
+                });
+              }
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
+              showDem
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
+            }`}
+            title="Toggle 3D Topography"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            </svg>
+            <span>3D Terrain</span>
+          </button>
+        </div>
+
+        {showDem && (
+          <Source
+            id="terrain-rgb-source"
+            type="raster-dem"
+            tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
+            encoding="terrarium"
+            tileSize={256}
+          />
+        )}
+
         <Source id="raster-mosaic" type="raster" url={`pmtiles://${asset.href}`} tileSize={256}>
           <Layer id="raster-mosaic-layer" type="raster" paint={{ "raster-opacity": 1 }} />
         </Source>
@@ -1237,6 +1360,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   
   // Layer and rendering toggles
   const [showMap, setShowMap] = useState(true);
+  const [showDem, setShowDem] = useState(false);
   const [showPolygons, setShowPolygons] = useState(true);
   const [showLines, setShowLines] = useState(true);
   const [showGrid, setShowGrid] = useState(true);
@@ -1256,6 +1380,21 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         [[b[0], b[1]], [b[2], b[3]]],
         { padding: 24, duration: 0 }
       );
+    }
+  };
+
+  const toggleDem = (enabled: boolean) => {
+    setShowDem(enabled);
+    if (enabled && overviewMapRef.current) {
+      overviewMapRef.current.getMap().easeTo({
+        pitch: 48,
+        duration: 800
+      });
+    } else if (!enabled && overviewMapRef.current) {
+      overviewMapRef.current.getMap().easeTo({
+        pitch: 0,
+        duration: 800
+      });
     }
   };
 
@@ -1755,9 +1894,21 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
                 mapStyle={POSITRON}
                 style={{ width: "100%", height: "100%" }}
                 onLoad={fitOverview}
+                maxPitch={85}
+                terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
               >
                 <NavigationControl position="top-right" showCompass={false} />
                 
+                {showDem && (
+                  <Source
+                    id="terrain-rgb-source"
+                    type="raster-dem"
+                    tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
+                    encoding="terrarium"
+                    tileSize={256}
+                  />
+                )}
+
                 {/* Geologic Map Sheet COG (if available) */}
                 {cogAsset(item) && (
                   <Source id="overview-cog" type="raster" url={`cog://${cogAsset(item)!.href}`} tileSize={256}>
@@ -1826,6 +1977,12 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
               <input type="checkbox" checked={showMap} onChange={(e) => setShowMap(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
               <span>Show 2D Map Trace</span>
             </label>
+            {showMap && (
+              <label className="flex items-center gap-2 pl-4 text-foreground cursor-pointer">
+                <input type="checkbox" checked={showDem} onChange={(e) => toggleDem(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+                <span>Enable 3D Terrain overlay</span>
+              </label>
+            )}
             <label className="flex items-center gap-2 text-foreground cursor-pointer">
               <input type="checkbox" checked={showPolygons} onChange={(e) => setShowPolygons(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
               <span>Show Stratigraphic Units</span>

@@ -11,9 +11,16 @@ ENV PYTHONUNBUFFERED=1 \
 
 # Runtime deps for tippecanoe + GDAL CLI + poppler.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      ca-certificates libsqlite3-0 zlib1g \
+      ca-certificates curl libsqlite3-0 zlib1g \
       gdal-bin poppler-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# go-pmtiles CLI — converts the GDAL-built raster MBTiles into PMTiles (pubs/geolmap_mosaics.py).
+ARG PMTILES_VERSION=1.22.3
+RUN arch="$(dpkg --print-architecture)"; case "$arch" in amd64) a=x86_64;; arm64) a=arm64;; *) a="$arch";; esac; \
+    curl -fsSL "https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VERSION}/go-pmtiles_${PMTILES_VERSION}_Linux_${a}.tar.gz" \
+      | tar -xz -C /usr/local/bin pmtiles \
+    && chmod +x /usr/local/bin/pmtiles && pmtiles version
 
 # Bring tippecanoe over from the prebuilt base image.
 COPY --from=tippecanoe /usr/local/bin/tippecanoe /usr/local/bin/tile-join /usr/local/bin/

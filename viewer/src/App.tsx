@@ -6,7 +6,7 @@ import { Guide } from "./Guide";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, ItemMap } from "./Map";
-import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
+import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
@@ -64,6 +64,8 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   }
   const cog = cogAsset(ref.data);
   if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox };
+  const raster = rasterTilesAsset(ref.data);
+  if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };
   return null;
 }
 
@@ -369,7 +371,7 @@ export function App() {
                   const ci = activeLayers.findIndex((l) => l.id === id);
                   // Non-blocking hint only — never disable (an item can be "on" via ?i= and must stay
                   // uncheckable). The index carries assets + web-map links, so this is reliable.
-                  const noMap = it.data && !cogAsset(it.data) && !pmtilesLink(it.data);
+                  const noMap = it.data && !cogAsset(it.data) && !pmtilesLink(it.data) && !rasterTilesAsset(it.data);
                   return (
                     <div key={it.href} className={`${row} flex items-center gap-2`}>
                       <input type="checkbox" checked={on} onChange={() => toggleLayer(id)} onClick={(e) => e.stopPropagation()} />

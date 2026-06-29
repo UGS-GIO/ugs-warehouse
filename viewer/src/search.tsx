@@ -27,7 +27,7 @@ export const CORPUS_URL = new URL(
 
 export type Article = {
   id: string; sid: string; volume: number | null; issue?: string;
-  pdf?: string; title: string; page: number | null; text: string;
+  pdf?: string; title: string; page: number | null; text: string; topic?: string;
 };
 // A catalog item flattened for search (pub or vector layer). Passed in from App's loaded indexes.
 export type CatalogDoc = {
@@ -35,7 +35,7 @@ export type CatalogDoc = {
 };
 type Hit = { id: string; kind: "article" | "item"; title: string; text?: string;
   sid?: string; pdf?: string; page?: number | null; volume?: number | null; issue?: string;
-  collId?: string; itemId?: string; score: number };
+  collId?: string; itemId?: string; topic?: string; score: number };
 
 const seriesCode = (sid: string) => sid.match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? sid;
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -76,6 +76,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
   const [q, setQ] = useState("");
   const [kind, setKind] = useState<"all" | "article" | "item">("all");
   const [colls, setColls] = useState<string[]>([]);
+  const [topicSel, setTopicSel] = useState<string | null>(null);  // Survey Notes article topic filter
   const [fullText, setFullText] = useState(false);
   // Heavy full-text-of-every-pub search (duckdb-wasm over the remote FTS db) — only runs when the
   // toggle is on, and only re-queries when the text settles (manual trigger via the query key).
@@ -112,6 +113,12 @@ export function ArticleSearch({ catalog = [], onOpen }: {
     for (const r of raw) if (r.kind === "item" && r.collId) m.set(r.collId, (m.get(r.collId) ?? 0) + 1);
     return [...m.entries()].sort((a, b) => b[1] - a[1]);
   }, [raw]);
+  // Topics present among the matching Survey Notes articles (now that each article is classified).
+  const topicFacets = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of raw) if (r.kind === "article" && r.topic) m.set(r.topic, (m.get(r.topic) ?? 0) + 1);
+    return [...m.entries()].sort((a, b) => b[1] - a[1]);
+  }, [raw]);
   const nArt = raw.filter((r) => r.kind === "article").length;
   const sel = new Set(colls);
   const toggleColl = (c: string) => setColls(sel.has(c) ? colls.filter((x) => x !== c) : [...colls, c]);
@@ -119,8 +126,9 @@ export function ArticleSearch({ catalog = [], onOpen }: {
   const results = useMemo(() => raw.filter((r) => {
     if (kind !== "all" && r.kind !== kind) return false;
     if (r.kind === "item" && colls.length && !(r.collId && sel.has(r.collId))) return false;
+    if (r.kind === "article" && topicSel && r.topic !== topicSel) return false;
     return true;
-  }).slice(0, 60), [raw, kind, colls]);  // eslint-disable-line react-hooks/exhaustive-deps
+  }).slice(0, 60), [raw, kind, colls, topicSel]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const nArticles = corpus.data?.length ?? 0;
   return (
@@ -155,6 +163,16 @@ export function ArticleSearch({ catalog = [], onOpen }: {
             <Chip key={c} on={sel.has(c)} onClick={() => toggleColl(c)}>{c} · {n}</Chip>
           ))}
           {colls.length > 0 && <button className="text-primary hover:underline" onClick={() => setColls([])}>clear</button>}
+        </div>
+      )}
+
+      {kind !== "item" && topicFacets.length > 1 && (
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Article topic</span>
+          {topicFacets.map(([t, n]) => (
+            <Chip key={t} on={topicSel === t} onClick={() => setTopicSel(topicSel === t ? null : t)}>{t} · {n}</Chip>
+          ))}
+          {topicSel && <button className="text-primary hover:underline" onClick={() => setTopicSel(null)}>clear</button>}
         </div>
       )}
 
@@ -223,7 +241,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
 function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
   const ms = new MiniSearch({
     fields: ["title", "text", "keywords"],
-    storeFields: ["kind", "title", "text", "sid", "pdf", "page", "volume", "issue", "collId", "itemId"],
+    storeFields: ["kind", "title", "text", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic"],
     searchOptions: { boost: { title: 4 }, prefix: true, fuzzy: 0.2, combineWith: "AND" },
   });
   ms.addAll(articles.map((a) => ({ ...a, kind: "article", keywords: "" })));
@@ -240,6 +258,7 @@ function ArticleHit({ r, q, openPub }: { r: Hit; q: string; openPub: (id: string
     <li className="py-2">
       <div className="flex flex-wrap items-baseline gap-x-2">
         <span className="rounded bg-muted px-1.5 text-[10px] uppercase text-muted-foreground">article</span>
+        {r.topic && <span className="rounded bg-primary/10 px-1.5 text-[10px] text-primary">{r.topic}</span>}
         <span className="font-medium text-foreground">{r.title}</span>
         <span className="text-xs text-muted-foreground">
           {r.issue || r.sid}{r.volume != null ? ` · Vol ${r.volume}` : ""}{r.page != null ? ` · p. ${r.page}` : ""}

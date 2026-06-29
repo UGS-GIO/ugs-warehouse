@@ -77,7 +77,11 @@ def attention_reharvest(request):
 @admin_required
 @require_POST
 def trigger(request, key):
-    result = jobs.run(key)
+    # The ingest card carries an optional "force" checkbox (rebuild even unchanged topics).
+    if key == "ingest" and request.POST.get("force"):
+        result = jobs.run_ingest(force=True)
+    else:
+        result = jobs.run(key)
     return render(request, "ops/_job_result.html", {
         "key": key, "job": jobs.JOBS.get(key), "result": result,
         "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),

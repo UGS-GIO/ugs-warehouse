@@ -31,6 +31,7 @@ class Job:
     danger: bool = False  # costs money / heavy → extra confirm in the UI
     tasks: int | None = None  # override task_count (parallel shards) at run time; None = job default
     tiers: tuple[tuple[str, str], ...] | None = None  # per-variant regen (value, label); e.g. mosaic scale tiers
+    force_toggle: bool = False  # render a "force rebuild" checkbox (ingest: override the default skip-unchanged)
 
 
 # Pipeline stages mirror the Architecture page (docs/ARCHITECTURE.md + viewer Architecture.tsx) so
@@ -70,8 +71,9 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Render each pub's PDF first page → cover PNG (every pub incl. Survey Notes; SKIP_EXISTING; "
         "5 shards). Then Rebuild pubs STAC to bind the previews.", tasks=5),
     Job("ingest", "ugs-warehouse-ingest", "Vector reingest (--all)",
-        "Full vector reingest — gengis, feature_id, classification/table, proj:code, FK relationships.",
-        danger=True),
+        "Vector reingest — gengis, feature_id, classification/table, proj:code, FK relationships. "
+        "Skips topics whose content + tiling is unchanged; tick Force to rebuild every topic.",
+        danger=True, force_toggle=True),
     Job("restyle", "ugs-warehouse-restyle", "Rebind styles",
         "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
     Job("fts", "ugs-pubs-fts", "Build full-text search",
@@ -128,6 +130,35 @@ def run(key: str) -> dict:
         exec_name = (op.metadata.name if op.metadata else "") or "(started)"
         return {"ok": True, "message": f"started {job.name}{shards}", "execution": exec_name}
     except Exception as e:  # noqa: BLE001 — surface the error to the operator, don't crash the view
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
+# The ingest job is deployed with command=cloudrun_entrypoint.sh, args=[--all]; the entrypoint
+# execs `python -m ugs_warehouse.vector.ingest "$@"`. Overriding args to add --force turns OFF the
+# default skip-unchanged (rebuilds every topic). Args REPLACE the configured ones, so --all stays.
+INGEST_FORCE_ARGS = ["--all", "--force"]
+
+
+def run_ingest(force: bool = False) -> dict:
+    """Execute the vector reingest. Default runs it as configured (--all, which now skips unchanged
+    topics). force=True overrides args to add --force so every topic rebuilds regardless."""
+    if not force:
+        return run("ingest")
+    job = JOBS["ingest"]
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "message": f"DRY-RUN: would execute {job.name} --all --force",
+                "dry_run": True}
+    try:
+        from google.cloud import run_v2
+        client = run_v2.JobsClient()
+        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=INGEST_FORCE_ARGS)
+        req = run_v2.RunJobRequest(
+            name=_job_path(job),
+            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override]))
+        op = client.run_job(request=req)
+        exec_name = (op.metadata.name if op.metadata else "") or "(started)"
+        return {"ok": True, "message": f"started {job.name} --all --force", "execution": exec_name}
+    except Exception as e:  # noqa: BLE001 — surface the error to the operator
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 
 

@@ -10,7 +10,7 @@ import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type Map
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 
 // A few latest covers for a collection card (thumbnail strip). `date` = the item datetime, used to
 // merge + re-sort covers across series for a sub-catalog card. Populated by App from the indexes.
@@ -57,9 +57,9 @@ const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).sli
 const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties ?? {})).toLowerCase();
-// "Mappable" = has something to draw on the map: a COG (raster) or PMTiles (vector). Items with
-// neither (metadata-only pubs) do nothing when toggled — the filter hides them.
-const hasMapData = (it: ItemRef) => !!(cogAsset(it.data) || pmtilesLink(it.data));
+// "Mappable" = has something to draw on the map: a COG (raster), vector PMTiles, or a raster PMTiles
+// mosaic. Items with none (metadata-only pubs) do nothing when toggled — the filter hides them.
+const hasMapData = (it: ItemRef) => !!(cogAsset(it.data) || pmtilesLink(it.data) || rasterTilesAsset(it.data));
 // Data-series code = the alpha prefix of the publication series id (DS-8 → DS, OFR-647 →
 // OFR). Only items that carry `ugs:series_id` (publications) get a code; everything else
 // (vector serving topics, etc.) returns "" so it never pollutes the series facet. Numeric

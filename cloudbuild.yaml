@@ -22,6 +22,7 @@ substitutions:
   _PIPELINE_JOB: ugs-pubs-pipeline        # Cloud Run job: orchestrator — loops thumbs then runs pubs-ingest (one-click "full refresh")
   _FTS_JOB: ugs-pubs-fts                  # Cloud Run job: build the all-pub full-text-search DuckDB (BM25 FTS) → CDN, queried by duckdb-wasm
   _EMBED_JOB: ugs-pubs-embed              # Cloud Run job: chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN, for semantic search
+  _MOSAICS_JOB: ugs-geolmap-mosaics       # Cloud Run job: per-scale raster PMTiles mosaics of the published geologic maps (GDAL + pmtiles)
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
@@ -327,6 +328,29 @@ steps:
       - --max-retries=1
       - --cpu=4
       - --memory=8Gi
+
+  # Per-scale raster PMTiles mosaics of the published geologic maps (old ArcGIS MD_* equivalent).
+  # Harvest image (GDAL CLI + the go-pmtiles binary). Reads the COGs in place over /vsigs (no full
+  # download), but the rendered MBTiles lands in RAM-backed /tmp — so the 24k tier is the heavy one.
+  # Defaults to --scale all; for the big 24k tier, execute with --args override + more memory, e.g.
+  #   gcloud run jobs execute ugs-geolmap-mosaics --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,24k
+  - id: deploy-mosaics-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_MOSAICS_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,all
+      - --task-timeout=7200
+      - --max-retries=1
+      - --cpu=4
+      - --memory=16Gi
 
   - id: deploy-service
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

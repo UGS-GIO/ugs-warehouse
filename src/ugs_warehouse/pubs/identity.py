@@ -28,6 +28,9 @@ PUB_FULLTEXT_PREFIX = os.environ.get("PUB_FULLTEXT_PREFIX", "pubs/fulltext")
 # Per-pub cached chunk embeddings (one .npz per publication). Pubs are immutable, so a pub is embedded
 # once and reused on every later VSS rebuild — only NEW pubs get embedded. See pubs/embed.py.
 PUB_EMB_PREFIX = os.environ.get("PUB_EMB_PREFIX", "pubs/embeddings")
+# Per-scale seamless RASTER mosaics of the published geologic maps (the old ArcGIS MD_500K/250K/24K
+# equivalent), as raster PMTiles — one per scale tier. Built by pubs/geolmap_mosaics.py from the COGs.
+MOSAIC_PREFIX = os.environ.get("GEOLMAP_MOSAIC_PREFIX", "geolmap/mosaics")
 
 
 def pub_contents_object(series_id: str) -> str:

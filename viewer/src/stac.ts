@@ -105,6 +105,15 @@ export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
       || a.href.endsWith(".cog.tif"),
   );
 
+// A RASTER PMTiles asset (the per-scale geologic-map mosaics) — rendered as raster tiles via the
+// pmtiles:// protocol. Distinguished from VECTOR PMTiles, which are declared as a web-map LINK
+// (see pmtilesLink), not an asset: a `visual` pmtiles ASSET is a raster mosaic.
+export const rasterTilesAsset = (d: StacDoc | undefined): Asset | undefined =>
+  Object.values(d?.assets ?? {}).find(
+    (a) => a.type?.includes("pmtiles")
+      && (a.roles?.includes("visual") || (a as { "ugs:render"?: string })["ugs:render"] === "raster"),
+  );
+
 // STAC Table extension: the GeoParquet `data` asset's column schema (name + type). Undefined
 // pre-reingest (the extension isn't emitted yet) → callers fall back / hide the panel.
 export type TableColumn = { name: string; type?: string; description?: string };

@@ -4,13 +4,14 @@ import { Layer, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Sourc
 import { ensureCogProtocol } from "./cog";
 import { type StacDoc } from "./stac";
 
-// A topic toggled on in the map. Built by App from the active set × allItems. Either a vector
-// layer (PMTiles → pmHref/pmLayer) OR a raster layer (Cloud-Optimized GeoTIFF → cogHref); never
-// both. A publication item with a COG but no PMTiles becomes a cogHref layer.
+// A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
+// layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
+// (rasterPmHref — the per-scale geologic-map mosaics, served via the pmtiles:// protocol).
 export type ActiveLayer = {
   id: string; title: string; bbox?: number[];
   pmHref?: string; pmLayer?: string; styleUrl?: string;
   cogHref?: string;
+  rasterPmHref?: string;
 };
 
 // Distinct colors cycled per active layer.
@@ -197,9 +198,18 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
       )}
 
       {layers.map((l, i) => {
+        const s = slugOf(l.id);
+        // Raster PMTiles mosaic — the per-scale geologic-map tiles, served via the already-registered
+        // pmtiles:// protocol as a raster source. No styling: it's the published map image.
+        if (l.rasterPmHref) {
+          return (
+            <Source key={l.id} id={`rpm-${s}`} type="raster" url={`pmtiles://${l.rasterPmHref}`} tileSize={256}>
+              <Layer id={`rpm-${s}-raster`} type="raster" paint={{ "raster-opacity": 1 }} />
+            </Source>
+          );
+        }
         // Raster COG layer — render the georeferenced GeoTIFF via cog:// (once the protocol is
         // registered). Distinct `cog-*` ids keep it out of the vector feature-click regex.
-        const s = slugOf(l.id);
         if (l.cogHref) {
           if (!cogReady) return null;
           return (

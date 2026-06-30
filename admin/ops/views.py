@@ -49,6 +49,18 @@ def reharvest(request, series_id):
 
 
 @admin_required
+@require_POST
+def rebuild_mosaic(request, tier):
+    """Regenerate one scale tier's raster mosaic. Reuses the standard job-result partial so the
+    tier buttons report into the same #result-mosaics slot as the all-tiers Run button."""
+    result = jobs.rebuild_mosaic(tier)
+    return render(request, "ops/_job_result.html", {
+        "key": "mosaics", "job": jobs.JOBS.get("mosaics"), "result": result,
+        "recent": jobs.recent("mosaics"), "console_url": jobs.console_logs_url("mosaics"),
+    })
+
+
+@admin_required
 def attention(request):
     return render(request, "ops/_attention.html", {"att": jobs.attention_pubs()})
 
@@ -65,7 +77,11 @@ def attention_reharvest(request):
 @admin_required
 @require_POST
 def trigger(request, key):
-    result = jobs.run(key)
+    # The ingest card carries an optional "force" checkbox (rebuild even unchanged topics).
+    if key == "ingest" and request.POST.get("force"):
+        result = jobs.run_ingest(force=True)
+    else:
+        result = jobs.run(key)
     return render(request, "ops/_job_result.html", {
         "key": key, "job": jobs.JOBS.get(key), "result": result,
         "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),

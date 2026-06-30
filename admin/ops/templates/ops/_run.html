@@ -26,11 +26,31 @@
               <button class="rounded bg-slate-800 text-white text-sm px-3 py-1 hover:bg-slate-700 disabled:opacity-50"
                 hx-post="{% url 'ops:trigger' job.key %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
                 hx-disabled-elt="this"
+                {% if job.force_toggle %}hx-include="#force-{{ job.key }}"{% endif %}
                 {% if job.danger %}hx-confirm="Run {{ job.label }}? This is heavy / costs money."{% endif %}>Run</button>
               <button class="rounded border border-slate-300 text-slate-700 text-sm px-3 py-1 hover:bg-slate-50"
                 onclick="toggleAccordion('logs-{{ job.key }}', '{% url 'ops:job_logs' job.key %}')">Live logs ▾</button>
               <span class="text-xs text-slate-400 font-mono truncate">{{ job.name }}</span>
             </div>
+            {% if job.force_toggle %}
+            {# Force = override the default skip-unchanged so every topic rebuilds. Sent with Run via hx-include. #}
+            <label class="mt-2 flex items-center gap-1.5 text-xs text-slate-500 cursor-pointer">
+              <input type="checkbox" id="force-{{ job.key }}" name="force" value="1" class="rounded border-slate-300">
+              Force rebuild — ignore the unchanged-skip (rebuilds every topic)
+            </label>
+            {% endif %}
+            {% if job.tiers %}
+            {# Per-variant regen (mosaic scale tiers): each rebuilds ONE tier, reporting into the same result slot. #}
+            <div class="mt-2 flex items-center gap-1.5 flex-wrap">
+              <span class="text-xs text-slate-400">Just one tier:</span>
+              {% for value, label in job.tiers %}
+              <button class="rounded border border-slate-300 text-slate-700 text-xs px-2 py-1 hover:bg-slate-50 disabled:opacity-50"
+                hx-post="{% url 'ops:rebuild_mosaic' value %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
+                hx-disabled-elt="this"
+                hx-confirm="Rebuild only the {{ label }} mosaic? Heavy / costs money.">{{ label }}</button>
+              {% endfor %}
+            </div>
+            {% endif %}
             <div id="result-{{ job.key }}" class="mt-2"
                  hx-get="{% url 'ops:job_status' job.key %}" hx-trigger="load" hx-swap="innerHTML"></div>
             <div id="logs-{{ job.key }}" class="hidden mt-2"></div>

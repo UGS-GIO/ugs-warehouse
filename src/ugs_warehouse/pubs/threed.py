@@ -275,14 +275,107 @@ def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict
     return meta
 
 
+# ---- work-box wrapper: localize source → convert → upload → stamp the STAC item -----------------
+
+THREED_PREFIX = "geolmap/3d"  # CDN object prefix (matches the existing csa_3d GeoJSON assets)
+GLTF_MIME = "model/gltf-binary"
+
+
+def _localize(uri: str, dest: str) -> str:
+    """Bring a gs:// or https:// file local; pass a local path through."""
+    import subprocess
+    import urllib.request
+    if uri.startswith("gs://"):
+        subprocess.run(["gcloud", "storage", "cp", uri, dest], check=True)
+        return dest
+    if uri.startswith("http://") or uri.startswith("https://"):
+        urllib.request.urlretrieve(uri, dest)  # noqa: S310 — fetching our own pub assets
+        return dest
+    return uri
+
+
+def _localize_gdb(uri: str, tmp: str) -> str:
+    """Localize a GDB given as a .zip (downloaded + unzipped) or an existing .gdb directory."""
+    import zipfile
+    from pathlib import Path as _P
+    if uri.endswith(".gdb"):
+        return _localize(uri, uri)  # already a dir (local)
+    z = _localize(uri, f"{tmp}/gdb.zip")
+    with zipfile.ZipFile(z) as zf:
+        zf.extractall(f"{tmp}/gdb")
+    gdb = next(_P(f"{tmp}/gdb").rglob("*.gdb"), None)
+    if not gdb:
+        raise FileNotFoundError(f"no .gdb inside {uri}")
+    return str(gdb)
+
+
+def _upload_outputs(meta: dict, series_id: str) -> dict:
+    """Upload the GeoParquet + glTF to the CDN; return the STAC asset dicts (immutable, content-addressed
+    by the series id path)."""
+    from ..core import config, gcs
+    out = {}
+    specs = [
+        ("fence_polygons", meta["polygons_parquet"], f"{series_id}_3d_polygons.parquet",
+         config.PARQUET_MIME, ["data", "3d-vector"], "3D fence polygons (GeoParquet)"),
+        ("fence_lines", meta["lines_parquet"], f"{series_id}_3d_lines.parquet",
+         config.PARQUET_MIME, ["data", "3d-vector"], "3D fence contacts & faults (GeoParquet)"),
+        ("fence_mesh", meta["gltf"], f"{series_id}_3d.glb",
+         GLTF_MIME, ["data", "visual"], "3D fence mesh (glTF)"),
+    ]
+    for key, local, name, mime, roles, title in specs:
+        obj = f"{THREED_PREFIX}/{name}"
+        gcs.upload(local, obj, content_type=mime, cache_control=gcs.CACHE_IMMUTABLE)
+        out[key] = {"href": config.public_url(obj), "type": mime, "roles": roles, "title": title}
+    return out
+
+
+def _stamp_item(series_id: str, assets: dict, classes: list[dict]) -> None:
+    """Patch the published pub STAC item: add the cloud-native 3D assets + classification:classes (the
+    standard per-unit colour mechanism) + the extension. Leaves existing assets/links intact."""
+    from ..core import config, gcs, stac
+    series = re.match(r"[A-Za-z]+", series_id)
+    coll = f"ugs-publications/{(series.group(0).upper() if series else 'OTHER')}"
+    obj = stac.item_object_path(coll, series_id)
+    item = json.loads(gcs.get_bytes(obj))
+    item.setdefault("assets", {}).update(assets)
+    item.setdefault("properties", {})["classification:classes"] = classes
+    exts = item.setdefault("stac_extensions", [])
+    if stac.CLASSIFICATION_EXT not in exts:
+        exts.append(stac.CLASSIFICATION_EXT)
+    gcs.put_bytes(json.dumps(item).encode(), obj, content_type="application/geo+json",
+                  cache_control=gcs.CACHE_MUTABLE)
+    print(f"  stamped {config.public_url(obj)}")
+
+
+def ingest(series_id: str, gdb_uri: str, mapx_uri: str, out_dir: str | None = None) -> dict:
+    """Full 3D ingest (work box): localize the pub's GDB + .mapx → convert → upload outputs → stamp the
+    STAC item → refresh the catalog. Returns the conversion meta."""
+    import tempfile
+
+    from ..core import stac
+    with tempfile.TemporaryDirectory() as tmp:
+        gdb = _localize_gdb(gdb_uri, tmp)
+        mapx = _localize(mapx_uri, f"{tmp}/scene.mapx")
+        meta = convert(gdb, mapx, series_id, out_dir or f"{tmp}/out")
+        assets = _upload_outputs(meta, series_id)
+        _stamp_item(series_id, assets, meta["classification:classes"])
+        stac.refresh_catalog()
+        print(f"3D ingest complete for {series_id}: {meta['units']} units, {meta['gltf_triangles']} tris")
+    return meta
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Convert a 3D GeMS pub (GDB + .mapx) to GeoParquet-3D")
-    ap.add_argument("--gdb", required=True, help="path to the .gdb directory")
-    ap.add_argument("--mapx", required=True, help="path to the ArcGIS scene .mapx (authored symbology)")
+    ap.add_argument("--gdb", required=True,
+                    help="local .gdb dir (convert), or a .gdb.zip path/gs://-/https:// URI (--upload)")
+    ap.add_argument("--mapx", required=True, help="the ArcGIS scene .mapx (path or gs://-/https:// URI)")
     ap.add_argument("--id", required=True, help="series id, e.g. OFR-778DM")
     ap.add_argument("--out", default="out/3d", help="output directory")
+    ap.add_argument("--upload", action="store_true",
+                    help="work box: localize → convert → upload to CDN → stamp the STAC item → refresh")
     args = ap.parse_args()
-    m = convert(args.gdb, args.mapx, args.id, args.out)
+    m = ingest(args.id, args.gdb, args.mapx, args.out) if args.upload \
+        else convert(args.gdb, args.mapx, args.id, args.out)
     print(json.dumps({k: v for k, v in m.items() if k != "classification:classes"}, indent=2))
     print(f"classification:classes: {len(m['classification:classes'])} units"
           f"{', uncolored ' + ','.join(m['uncolored']) if m['uncolored'] else ''}")

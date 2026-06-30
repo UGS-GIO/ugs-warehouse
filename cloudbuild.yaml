@@ -24,6 +24,7 @@ substitutions:
   _EMBED_JOB: ugs-pubs-embed              # Cloud Run job: chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN, for semantic search
   _MOSAICS_JOB: ugs-geolmap-mosaics       # Cloud Run job: per-scale raster PMTiles mosaics of the published geologic maps (GDAL + pmtiles)
   _GRAPH_JOB: ugs-pubs-graph              # Cloud Run job: build the pubs knowledge graph (nodes/edges Parquet) — citation + co-author + semantic edges
+  _THREED_JOB: ugs-pubs-threed            # Cloud Run job: 3D GeMS pub (GDB+.mapx) → GeoParquet-3D + glTF + classification:classes; per-pub via --args override
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
@@ -354,6 +355,29 @@ steps:
       - --max-retries=1
       - --cpu=4
       - --memory=16Gi
+
+  # 3D GeMS publication ingest: GDB + .mapx → GeoParquet-3D (polys+lines, WKB-Z) + glTF mesh +
+  # classification:classes, then stamp the pub's STAC item. Harvest image ([pubs] extra: geopandas/
+  # pyogrio/pygltflib/mapbox-earcut). Per-pub — execute with the id + source URIs as an --args override:
+  #   gcloud run jobs execute ugs-pubs-threed --args=-m,ugs_warehouse.pubs.threed,--upload,\
+  #     --id,OFR-778DM,--gdb,<gs://…/OFR-778DM_Woodland_gdb.zip>,--mapx,<gs://…/…_CSA_3D.mapx>
+  - id: deploy-3d-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_THREED_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.threed,--help   # placeholder; real per-pub runs override --args
+      - --task-timeout=3600
+      - --max-retries=1
+      - --cpu=2
+      - --memory=8Gi
 
   # Publications knowledge graph: nodes/edges Parquet (authored/coauthor/in_series/has_topic +
   # cites mined from full text + semantic 'similar' from embeddings). Harvest image (pandas/pyarrow/

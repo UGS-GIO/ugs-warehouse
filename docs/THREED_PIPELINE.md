@@ -121,9 +121,25 @@ old `build_terrain_rgb.py` (DEM tile hosting) is obsolete and removed.
 Not currently installed: **GDAL / pyogrio / geopandas** (GDB read) and **pygltflib / trimesh** (glTF).
 Add to the harvest/pubs runtime image as part of this work.
 
-## Source note
+## Work-box wrapper — BUILT (untested; runs on the work box)
 
-The GDB download is reachable on our CDN
-(`maps-assets.geology.utah.gov/publications/OFR/OFR-778DM/OFR-778DM_Woodland_gdb.zip`) even though the
-STAC `geodatabase_zip` href is broken (a doubled-path `ugspub.nr.utah.gov/.../publications/publications/…`
-that 404s — fix the href construction in the same pass).
+`pubs/threed.py` now has the impure wrapper around `convert()`:
+- `ingest(series_id, gdb_uri, mapx_uri)` — localize the GDB(.zip)/.mapx (gs:// or https://) → `convert()`
+  → upload GeoParquet + glTF to the CDN (`geolmap/3d/`) → stamp the pub STAC item (add `fence_polygons`/
+  `fence_lines`/`fence_mesh` assets + `classification:classes` + the extension) → `refresh_catalog()`.
+- CLI: `python -m ugs_warehouse.pubs.threed --upload --id <id> --gdb <gdb.zip uri> --mapx <mapx uri>`.
+- Calls verified against the real `core.gcs` / `core.stac` / `core.config` signatures; `convert()` still
+  passes locally.
+
+Deps added to the `[pubs]` extra: `pygltflib`, `mapbox-earcut` (geopandas/pyogrio/pyarrow/shapely already
+there; pyproj rides geopandas). Cloud Run job `ugs-pubs-threed` added to `cloudbuild.yaml` (harvest image),
+per-pub via `--args` override.
+
+## Still to do on the work box
+
+- **Run it** for OFR-778DM (the GDB is on our CDN at
+  `maps-assets.geology.utah.gov/publications/OFR/OFR-778DM/OFR-778DM_Woodland_gdb.zip`, the .mapx alongside).
+- **Admin trigger** — a small form (id + GDB/.mapx URIs); a plain button can't supply per-pub URIs. (Future.)
+- **OFR-778DM doc hrefs** — the broken `geodatabase_zip` (doubled-path 404) is the deleted one-off's bad
+  `pub_url` data, NOT a code bug (`sink_stac.href()` is correct). A proper pubs-metadata ingest of
+  OFR-778DM rebuilds the doc hrefs; the 3D pipeline doesn't touch them.

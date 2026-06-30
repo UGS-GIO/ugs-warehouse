@@ -182,6 +182,7 @@ def thumb_one(item: dict, force: bool = False) -> str:
     # Items live NESTED at <collection>/<id>/<id>.json — not flat. Writing the flat path stamps a
     # stray object the catalog never references (so the viewer never sees the thumbnail).
     stac_path = f"{config.STAC_PREFIX}/{COLLECTION}/{stem}/{stem}.json"
+    flat_stray = f"{config.STAC_PREFIX}/{COLLECTION}/{stem}.json"  # legacy mis-write to clean up
     thumb_href = config.public_url(png_obj)
 
     def ensure_stac_thumbnail() -> None:
@@ -200,6 +201,11 @@ def thumb_one(item: dict, force: bool = False) -> str:
                 content_type="application/json",
                 cache_control=gcs.CACHE_MUTABLE,
             )
+        # Self-heal: drop the flat stray an earlier build mis-wrote. `stem` is a topic id, never
+        # "collection", so collection.json (same level) is never touched.
+        if gcs.exists(flat_stray):
+            gcs.delete(flat_stray)
+            hlog(f"removed stray flat item {flat_stray}", step="stac")
 
     if not force and gcs.exists(png_obj) and gcs.exists(sha_obj):
         try:

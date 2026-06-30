@@ -62,6 +62,14 @@ def exists(object_path: str) -> bool:
         return False
 
 
+def delete(object_path: str) -> None:
+    """Delete an object. Best-effort — a missing object is not an error (used to clean up strays)."""
+    try:
+        obs.delete(_store(), object_path)
+    except Exception:  # noqa: BLE001 — already gone / race → nothing to clean
+        pass
+
+
 def list_paths(prefix: str) -> list[str]:
     """All object paths under `prefix` (obstore yields batches of metadata dicts)."""
     out: list[str] = []

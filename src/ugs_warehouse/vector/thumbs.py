@@ -178,10 +178,32 @@ def thumb_one(item: dict, force: bool = False) -> str:
     style_url = _style_url(item)
     want_hash, style_bytes = _style_hash(style_url)
     png_obj, sha_obj = thumb_object(stem), sha_object(stem)
+
+    stac_path = f"{config.STAC_PREFIX}/{COLLECTION}/{stem}.json"
+    thumb_href = config.public_url(png_obj)
+
+    def ensure_stac_thumbnail() -> None:
+        assets = item.setdefault("assets", {})
+        if "thumbnail" not in assets or assets["thumbnail"].get("href") != thumb_href:
+            assets["thumbnail"] = {
+                "href": thumb_href,
+                "type": "image/png",
+                "roles": ["thumbnail"],
+                "title": "Styled preview",
+            }
+            hlog(f"stamping thumbnail asset on STAC item JSON -> {stac_path}", step="stac")
+            gcs.put_bytes(
+                json.dumps(item, indent=2).encode("utf-8"),
+                stac_path,
+                content_type="application/json",
+                cache_control=gcs.CACHE_MUTABLE,
+            )
+
     if not force and gcs.exists(png_obj) and gcs.exists(sha_obj):
         try:
             if gcs.get_bytes(sha_obj).decode().strip() == want_hash:
                 hlog("thumbnail up to date (style unchanged)", step="resolve", level="NOTICE", category="expected")
+                ensure_stac_thumbnail()
                 return "skip:exists"
         except Exception:  # noqa: BLE001 — unreadable sidecar → re-render
             pass
@@ -203,6 +225,7 @@ def thumb_one(item: dict, force: bool = False) -> str:
         gcs.upload(out, png_obj, content_type="image/png", cache_control=gcs.CACHE_MUTABLE)
         gcs.put_bytes(want_hash.encode(), sha_obj, content_type="text/plain", cache_control=gcs.CACHE_MUTABLE)
         hlog(f"OK thumbnail → {png_obj}", step="result", category="ok")
+        ensure_stac_thumbnail()
         return "ok"
     finally:
         import shutil

@@ -15,6 +15,7 @@ import re
 
 from ..core import config, stac
 from . import counties, identity, topic
+from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
 
 UGSPUB = "https://ugspub.nr.utah.gov/publications/"
 LANDING = "https://geology.utah.gov/publication-details/?pub="
@@ -105,6 +106,7 @@ def build_item(p: dict, attachments: list[dict], *,
                fp_source: str | None = None,
                has_cog: bool = False, has_units: bool = False,
                has_thumb: bool = False, has_cover: bool = False,
+               has_3d: bool = False, classes_3d: list[dict] | None = None,
                contents: list[dict] | None = None) -> dict:
     """Build a pub STAC Item (collection-nested, via core.stac.build_item)."""
     sid = (p.get("series_id") or "").strip()
@@ -139,6 +141,20 @@ def build_item(p: dict, attachments: list[dict], *,
         assets["units"] = {
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
             "type": PARQUET_MIME, "title": "Geologic unit polygons (GeoParquet)", "roles": ["data"]}
+    # Cloud-native 3D fence diagram (GeoParquet-3D polys/lines + glTF mesh), converted by pubs/threed
+    # from the pub's CSA_3D gdb + .mapx. Presence-driven like the COG: the convert step writes the
+    # artifacts, this stamps the assets. classification:classes (authored per-unit colors) rides in
+    # the item properties — see the classification ext added below.
+    if has_3d:
+        assets["fence_polygons"] = {"href": config.public_url(threed_object(sid, POLY_NAME)),
+                                    "type": PARQUET_MIME, "roles": ["data", "3d-vector"],
+                                    "title": "3D fence polygons (GeoParquet)"}
+        assets["fence_lines"] = {"href": config.public_url(threed_object(sid, LINE_NAME)),
+                                 "type": PARQUET_MIME, "roles": ["data", "3d-vector"],
+                                 "title": "3D fence contacts & faults (GeoParquet)"}
+        assets["fence_mesh"] = {"href": config.public_url(threed_object(sid, MESH_NAME)),
+                                "type": "model/gltf-binary", "roles": ["data", "visual"],
+                                "title": "3D fence mesh (glTF)"}
 
     extra_links = [{"rel": "via", "href": f"{LANDING}{sid}", "type": "text/html",
                     "title": "UGS publication landing page"}]
@@ -150,6 +166,8 @@ def build_item(p: dict, attachments: list[dict], *,
     # advertised by its `cog` ASSET (media type `…;profile=cloud-optimized`), which STAC Browser and
     # our viewer both render natively, and which `_is_mappable`/`cogAsset` detect. No link needed.
     extensions: list[str] = []
+    if has_3d and classes_3d:
+        extensions.append(stac.CLASSIFICATION_EXT)  # per-unit authored colors for the 3D fence
 
     code = series_code(sid)
     group = collection_group(p)  # top-level: UGS catalog / mining-district files / external
@@ -176,6 +194,9 @@ def build_item(p: dict, attachments: list[dict], *,
             # Survey Notes "In this issue": [{title, page}] parsed from the PDF TOC (or hand-authored).
             # UGS-prefixed custom field — no STAC extension fits; the viewer renders an issue contents list.
             **({"ugs:contents": contents} if contents else {}),
+            # Authored per-unit colors for the 3D fence (classification ext), persisted by the convert
+            # step and read back here so a pubs-ingest rebuild keeps them.
+            **({"classification:classes": classes_3d} if has_3d and classes_3d else {}),
         },
         assets=assets,
         extra_links=extra_links,

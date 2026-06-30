@@ -17,6 +17,9 @@ from dataclasses import dataclass
 COG_PREFIX = os.environ.get("GEOLMAP_COG_PREFIX", "geolmap/cogs")
 FOOTPRINTS_PREFIX = os.environ.get("GEOLMAP_FOOTPRINTS_PREFIX", "geolmap/footprints")
 UNITS_PREFIX = os.environ.get("GEOLMAP_UNITS_PREFIX", "geolmap/units")
+# Cloud-native 3D fence-diagram artifacts (GeoParquet-3D polys/lines + glTF mesh + classes sidecar),
+# converted from a pub's CSA_3D GeMS gdb + .mapx. Presence here drives the STAC 3D-asset stamping.
+THREED_PREFIX = os.environ.get("GEOLMAP_3D_PREFIX", "geolmap/3d")
 # Cover thumbnails (PDF first page) for ANY pub — spatial or not (Survey Notes, reports, …).
 PUB_THUMB_PREFIX = os.environ.get("PUB_THUMB_PREFIX", "pubs/thumbs")
 # Issue table-of-contents sidecars (Survey Notes "In this issue"), parsed from the PDF.

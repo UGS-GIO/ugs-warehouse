@@ -277,8 +277,21 @@ def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict
 
 # ---- ingest: localize source → convert → upload → stamp the STAC item ---------------------------
 
-THREED_PREFIX = "geolmap/3d"  # CDN object prefix (matches the existing csa_3d GeoJSON assets)
+from . import identity  # noqa: E402
+
+THREED_PREFIX = identity.THREED_PREFIX  # CDN object prefix for the 3D artifacts
 GLTF_MIME = "model/gltf-binary"
+
+
+def threed_object(series_id: str, name: str) -> str:
+    """Object path for a 3D artifact, keyed on the UPPER series id so presence detection + STAC
+    stamping (which use sid.upper()) line up with what the convert step writes."""
+    return f"{THREED_PREFIX}/{series_id.upper()}_{name}"
+
+
+# The three STAC assets a converted pub carries, plus the classes sidecar — single source of truth so
+# the convert step (writes them) and the pubs ingest (presence-stamps them) never drift.
+POLY_NAME, LINE_NAME, MESH_NAME, CLASSES_NAME = "3d_polygons.parquet", "3d_lines.parquet", "3d.glb", "3d_classes.json"
 
 
 def _localize(uri: str, dest: str) -> str:
@@ -309,71 +322,105 @@ def _localize_gdb(uri: str, tmp: str) -> str:
     return str(gdb)
 
 
-def _upload_outputs(meta: dict, series_id: str) -> dict:
-    """Upload the GeoParquet + glTF to the CDN; return the STAC asset dicts (immutable, content-addressed
-    by the series id path)."""
+def _upload_outputs(meta: dict, series_id: str) -> None:
+    """Upload the GeoParquet + glTF + a classes sidecar to the CDN (immutable). The STAC assets are NOT
+    stamped here — the pubs ingest does that presence-driven (it detects these objects exist). So this
+    is a pure harvest step: produce artifacts, let ingest bind them."""
     from ..core import config, gcs
-    out = {}
-    specs = [
-        ("fence_polygons", meta["polygons_parquet"], f"{series_id}_3d_polygons.parquet",
-         config.PARQUET_MIME, ["data", "3d-vector"], "3D fence polygons (GeoParquet)"),
-        ("fence_lines", meta["lines_parquet"], f"{series_id}_3d_lines.parquet",
-         config.PARQUET_MIME, ["data", "3d-vector"], "3D fence contacts & faults (GeoParquet)"),
-        ("fence_mesh", meta["gltf"], f"{series_id}_3d.glb",
-         GLTF_MIME, ["data", "visual"], "3D fence mesh (glTF)"),
-    ]
-    for key, local, name, mime, roles, title in specs:
-        obj = f"{THREED_PREFIX}/{name}"
-        gcs.upload(local, obj, content_type=mime, cache_control=gcs.CACHE_IMMUTABLE)
-        out[key] = {"href": config.public_url(obj), "type": mime, "roles": roles, "title": title}
-    return out
-
-
-def _stamp_item(series_id: str, assets: dict, classes: list[dict]) -> None:
-    """Patch the published pub STAC item: add the cloud-native 3D assets + classification:classes (the
-    standard per-unit colour mechanism) + the extension. Leaves existing assets/links intact."""
-    from ..core import config, gcs, stac
-    series = re.match(r"[A-Za-z]+", series_id)
-    coll = f"ugs-publications/{(series.group(0).upper() if series else 'OTHER')}"
-    obj = stac.item_object_path(coll, series_id)
-    item = json.loads(gcs.get_bytes(obj))
-    item.setdefault("assets", {}).update(assets)
-    item.setdefault("properties", {})["classification:classes"] = classes
-    exts = item.setdefault("stac_extensions", [])
-    if stac.CLASSIFICATION_EXT not in exts:
-        exts.append(stac.CLASSIFICATION_EXT)
-    gcs.put_bytes(json.dumps(item).encode(), obj, content_type="application/geo+json",
-                  cache_control=gcs.CACHE_MUTABLE)
-    print(f"  stamped {config.public_url(obj)}")
+    for local, name, mime in [
+        (meta["polygons_parquet"], POLY_NAME, config.PARQUET_MIME),
+        (meta["lines_parquet"], LINE_NAME, config.PARQUET_MIME),
+        (meta["gltf"], MESH_NAME, GLTF_MIME),
+    ]:
+        gcs.upload(local, threed_object(series_id, name), content_type=mime, cache_control=gcs.CACHE_IMMUTABLE)
+    # classification:classes can't be recomputed from the artifacts (it's the .mapx symbology), so
+    # persist it next to them; the pubs ingest reads it back when stamping classification:classes.
+    gcs.put_bytes(json.dumps(meta["classification:classes"]).encode(),
+                  threed_object(series_id, CLASSES_NAME),
+                  content_type="application/json", cache_control=gcs.CACHE_IMMUTABLE)
 
 
 def ingest(series_id: str, gdb_uri: str, mapx_uri: str, out_dir: str | None = None) -> dict:
-    """Full 3D ingest: localize the pub's GDB + .mapx → convert → upload outputs → stamp the STAC item
-    → refresh the catalog. Needs GCS write perms. Returns the conversion meta."""
+    """Convert one pub's GDB + .mapx → 3D artifacts → upload to the CDN. Does NOT stamp/refresh: the
+    pubs ingest binds the assets (presence-driven). Needs GCS write perms. Returns the conversion meta."""
     import tempfile
-
-    from ..core import stac
     with tempfile.TemporaryDirectory() as tmp:
         gdb = _localize_gdb(gdb_uri, tmp)
         mapx = _localize(mapx_uri, f"{tmp}/scene.mapx")
         meta = convert(gdb, mapx, series_id, out_dir or f"{tmp}/out")
-        assets = _upload_outputs(meta, series_id)
-        _stamp_item(series_id, assets, meta["classification:classes"])
-        stac.refresh_catalog()
-        print(f"3D ingest complete for {series_id}: {meta['units']} units, {meta['gltf_triangles']} tris")
+        _upload_outputs(meta, series_id)
+        print(f"3D convert complete for {series_id}: {meta['units']} units, {meta['gltf_triangles']} tris")
     return meta
 
 
+# ---- discovery: which published pubs carry a CSA_3D source (gdb + .mapx) ------------------------
+
+def _threed_sources() -> list[tuple[str, str, str]]:
+    """(series_id, gdb_uri, mapx_uri) for every pub whose attachments include BOTH a GeMS gdb (.gdb.zip)
+    and an ArcGIS scene (.mapx) — the CSA_3D source pair. This is the auto-detection that makes 3D
+    "come from ingest": drop the gdb+mapx on a pub, and a convert run picks it up."""
+    from . import sink_stac, source
+    by_sid: dict[str, dict[str, str]] = {}
+    for a in source.read_attachments():
+        sid = (a.get("series_id") or "").strip()
+        url = sink_stac.href(a.get("pub_url"))
+        if not sid or not url:
+            continue
+        low = url.lower().split("?")[0]
+        if low.endswith(".mapx"):
+            by_sid.setdefault(sid.upper(), {})["mapx"] = url
+        elif low.endswith(".gdb.zip") or low.endswith("_gdb.zip"):
+            by_sid.setdefault(sid.upper(), {})["gdb"] = url
+    return [(sid, v["gdb"], v["mapx"]) for sid, v in sorted(by_sid.items())
+            if "gdb" in v and "mapx" in v]
+
+
+def run_all(force: bool = False, limit: int | None = None) -> int:
+    """Convert every 3D-eligible pub whose artifacts aren't already present (skip-existing). Sharded via
+    CLOUD_RUN_TASK_INDEX/COUNT — the pubs "harvest" of 3D, run before pubs-ingest binds the assets."""
+    import os
+
+    from ..core import gcs
+    srcs = _threed_sources()
+    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
+    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
+    if n > 1:
+        srcs = srcs[i::n]
+    if limit:
+        srcs = srcs[:limit]
+    print(f"[3d] {len(srcs)} 3D-eligible pubs (shard {i + 1}/{n})")
+    rc = 0
+    for sid, gdb_uri, mapx_uri in srcs:
+        if not force and gcs.exists(threed_object(sid, POLY_NAME)):
+            print(f"[3d] {sid}: skip (exists)")
+            continue
+        try:
+            ingest(sid, gdb_uri, mapx_uri)
+        except Exception as e:  # noqa: BLE001 — one bad pub shouldn't sink the shard
+            print(f"[3d] {sid}: FAIL {type(e).__name__}: {e}")
+            rc |= 1
+    return rc
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser(description="Convert a 3D GeMS pub (GDB + .mapx) to GeoParquet-3D")
-    ap.add_argument("--gdb", required=True,
-                    help="local .gdb dir (convert), or a .gdb.zip path/gs://-/https:// URI (--upload)")
-    ap.add_argument("--mapx", required=True, help="the ArcGIS scene .mapx (path or gs://-/https:// URI)")
-    ap.add_argument("--id", required=True, help="series id, e.g. OFR-778DM")
+    ap = argparse.ArgumentParser(description="Convert 3D GeMS pubs (GDB + .mapx) → GeoParquet-3D + glTF")
+    # --all: the Cloud Run path — auto-discover every 3D-eligible pub + convert (skip-existing). The
+    # pubs ingest binds the assets afterward. One-off path: --gdb/--mapx/--id (+ --upload to push).
+    ap.add_argument("--all", action="store_true", help="convert every 3D-eligible pub (gdb+mapx), skip-existing")
+    ap.add_argument("--force", action="store_true", help="with --all: re-convert even if artifacts exist")
+    ap.add_argument("--limit", type=int, default=None, help="with --all: cap the number of pubs")
+    ap.add_argument("--gdb", help="local .gdb dir (convert), or a .gdb.zip path/gs://-/https:// URI (--upload)")
+    ap.add_argument("--mapx", help="the ArcGIS scene .mapx (path or gs://-/https:// URI)")
+    ap.add_argument("--id", help="series id, e.g. OFR-778DM")
     ap.add_argument("--out", default="out/3d", help="output directory")
     ap.add_argument("--upload", action="store_true",
-                    help="localize → convert → upload to CDN → stamp the STAC item → refresh (needs GCS perms)")
+                    help="localize → convert → upload artifacts to CDN (pubs ingest binds them; needs GCS perms)")
     args = ap.parse_args()
+
+    if args.all:
+        return run_all(force=args.force, limit=args.limit)
+    if not (args.gdb and args.mapx and args.id):
+        ap.error("one-off mode needs --gdb, --mapx, and --id (or use --all)")
     m = ingest(args.id, args.gdb, args.mapx, args.out) if args.upload \
         else convert(args.gdb, args.mapx, args.id, args.out)
     print(json.dumps({k: v for k, v in m.items() if k != "classification:classes"}, indent=2))

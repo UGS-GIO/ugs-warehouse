@@ -1372,6 +1372,15 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
 
   const [mapReady, setMapReady] = useState(false);
+  const [mapOpacity, setMapOpacity] = useState(0.65);
+  const [geoCenter, setGeoCenter] = useState<{ lon: number; lat: number }>({ lon: -111.2, lat: 40.5 });
+  const [mapViewState, setMapViewState] = useState({
+    longitude: -111.2,
+    latitude: 40.5,
+    zoom: 11,
+    bearing: 30,
+    pitch: 45
+  });
   const overviewMapRef = useRef<MapRef>(null);
 
   const fitOverview = () => {
@@ -1384,6 +1393,18 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       );
       map.setBearing(-theta * (180 / Math.PI));
       map.setPitch(phi * (180 / Math.PI));
+
+      const center = map.getCenter();
+      const zoom = map.getZoom();
+      const bearing = map.getBearing();
+      const pitch = map.getPitch();
+      setMapViewState({
+        longitude: center.lng,
+        latitude: center.lat,
+        zoom: zoom,
+        bearing: bearing,
+        pitch: pitch
+      });
     }
   };
 
@@ -1598,6 +1619,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         setLines(localLines);
         setLegend(legendItems);
         setCenter({ x: 0, y: 0, z: centerZ });
+        setGeoCenter({ lon: centerLon, lat: centerLat });
         setBounds({ min: minLocal, max: maxLocal });
         setScale(baseScale);
         setPanX(0);
@@ -1640,20 +1662,45 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
       // 3D Projection Math
       const project = (pt: Point3D): { sx: number; sy: number; sz: number } => {
-        // Rotate around Z axis (Yaw)
-        const x1 = pt.x * Math.cos(theta) - pt.y * Math.sin(theta);
-        const y1 = pt.x * Math.sin(theta) + pt.y * Math.cos(theta);
-        
-        // Pitch/tilt rotation in the vertical plane (Y-Z plane)
-        const adjustedZ = (pt.z - center.z) * verticalExaggeration;
-        const y2 = y1 * Math.sin(phi) + adjustedZ * Math.cos(phi);
-        const z2 = -y1 * Math.cos(phi) + adjustedZ * Math.sin(phi);
+        if (layout === "superimposed") {
+          const latRad = mapViewState.latitude * Math.PI / 180;
+          const metersPerPixel = 156543.03392 * Math.cos(latRad) / Math.pow(2, mapViewState.zoom);
+          const currentScale = 1.0 / metersPerPixel;
 
-        // Project orthographically centered
-        const sx = logicWidth / 2 + x1 * scale + panX;
-        const sy = logicHeight / 2 - y2 * scale + panY;
-        
-        return { sx, sy, sz: z2 };
+          const cosLat = Math.cos(latRad);
+          const dx = (geoCenter.lon - mapViewState.longitude) * 111320 * cosLat;
+          const dy = (geoCenter.lat - mapViewState.latitude) * 110574;
+
+          const x_rel = pt.x + dx;
+          const y_rel = pt.y + dy;
+
+          const currentTheta = -mapViewState.bearing * (Math.PI / 180);
+          const currentPhi = mapViewState.pitch * (Math.PI / 180);
+
+          const x1 = x_rel * Math.cos(currentTheta) - y_rel * Math.sin(currentTheta);
+          const y1 = x_rel * Math.sin(currentTheta) + y_rel * Math.cos(currentTheta);
+
+          const adjustedZ = (pt.z - center.z) * verticalExaggeration;
+          const y2 = y1 * Math.sin(currentPhi) + adjustedZ * Math.cos(currentPhi);
+          const z2 = -y1 * Math.cos(currentPhi) + adjustedZ * Math.sin(currentPhi);
+
+          const sx = logicWidth / 2 + x1 * currentScale;
+          const sy = logicHeight / 2 - y2 * currentScale;
+
+          return { sx, sy, sz: z2 };
+        } else {
+          const x1 = pt.x * Math.cos(theta) - pt.y * Math.sin(theta);
+          const y1 = pt.x * Math.sin(theta) + pt.y * Math.cos(theta);
+          
+          const adjustedZ = (pt.z - center.z) * verticalExaggeration;
+          const y2 = y1 * Math.sin(phi) + adjustedZ * Math.cos(phi);
+          const z2 = -y1 * Math.cos(phi) + adjustedZ * Math.sin(phi);
+
+          const sx = logicWidth / 2 + x1 * scale + panX;
+          const sy = logicHeight / 2 - y2 * scale + panY;
+          
+          return { sx, sy, sz: z2 };
+        }
       };
 
       // 1. Draw 3D Grid Box
@@ -1793,7 +1840,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
     scheduleFrame();
     return () => cancelAnimationFrame(animId);
-  }, [loading, error, polygons, lines, theta, phi, scale, panX, panY, verticalExaggeration, showPolygons, showLines, showGrid, hoveredUnit, search]);
+  }, [loading, error, polygons, lines, theta, phi, scale, panX, panY, verticalExaggeration, showPolygons, showLines, showGrid, hoveredUnit, search, layout, mapViewState, geoCenter]);
 
   // Mouse Interaction Handlers
   const lastMousePos = useRef<{ x: number; y: number } | null>(null);
@@ -1870,11 +1917,14 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         
         {/* Map Container */}
         {showMap && (
-          <div className={
-            layout === "split"
-              ? "w-full lg:w-[320px] xl:w-[420px] h-[200px] lg:h-full border-t lg:border-t-0 lg:border-l border-border order-2 relative bg-muted flex flex-col"
-              : "absolute inset-0 z-0 bg-muted flex flex-col"
-          }>
+          <div
+            className={
+              layout === "split"
+                ? "w-full lg:w-[320px] xl:w-[420px] h-[200px] lg:h-full border-t lg:border-t-0 lg:border-l border-border order-2 relative bg-muted flex flex-col"
+                : "absolute inset-0 z-0 bg-muted flex flex-col"
+            }
+            style={{ opacity: layout === "superimposed" ? mapOpacity : 1.0 }}
+          >
             {layout === "split" && (
               <div className="absolute top-3 left-3 z-10 bg-card/85 backdrop-blur-sm border border-border px-2.5 py-1.5 rounded-md shadow-sm text-xs font-semibold text-foreground">
                 2D Locator & Trace Map
@@ -1891,9 +1941,10 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
                 maxPitch={85}
                 terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
                 onMove={(evt) => {
-                  const { bearing = 0, pitch = 0 } = evt.viewState;
+                  const { bearing = 0, pitch = 0, longitude, latitude, zoom } = evt.viewState;
                   setTheta(-bearing * (Math.PI / 180));
                   setPhi(pitch * (Math.PI / 180));
+                  setMapViewState({ longitude, latitude, zoom, bearing, pitch });
                 }}
               >
                 <NavigationControl position="top-right" showCompass={false} />
@@ -1967,7 +2018,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         <div className={
           layout === "split"
             ? `relative flex-1 bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden select-none h-full order-1 ${showMap ? "lg:border-r lg:border-border" : ""}`
-            : "absolute inset-0 z-10 bg-transparent pointer-events-auto select-none h-full"
+            : "absolute inset-0 z-10 bg-transparent pointer-events-none select-none h-full"
         }>
           <canvas
             ref={canvasRef}
@@ -2039,6 +2090,20 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
                 <input type="checkbox" checked={showDem} onChange={(e) => toggleDem(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
                 <span>Enable 3D Terrain overlay</span>
               </label>
+            )}
+            {showMap && layout === "superimposed" && (
+              <div className="pl-4 mt-1 mb-2 flex flex-col gap-1.5">
+                <div className="flex justify-between items-center text-[10px] text-muted-foreground uppercase tracking-wider">
+                  <span>Ground/Map Opacity</span>
+                  <span className="font-mono">{Math.round(mapOpacity * 100)}%</span>
+                </div>
+                <input
+                  type="range" min="0.0" max="1.0" step="0.05"
+                  value={mapOpacity}
+                  onChange={(e) => setMapOpacity(parseFloat(e.target.value))}
+                  className="w-full h-1 rounded bg-muted appearance-none cursor-pointer accent-primary"
+                />
+              </div>
             )}
             <label className="flex items-center gap-2 text-foreground cursor-pointer">
               <input type="checkbox" checked={showPolygons} onChange={(e) => setShowPolygons(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />

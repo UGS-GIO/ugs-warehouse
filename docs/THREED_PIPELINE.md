@@ -116,14 +116,14 @@ old `build_terrain_rgb.py` (DEM tile hosting) is obsolete and removed.
 
 - glTF triangulation of vertical fence panels — orientation / winding correct (phase 2).
 
-## Work-box image deps to add (Dockerfile)
+## Image deps to add (Dockerfile)
 
 Not currently installed: **GDAL / pyogrio / geopandas** (GDB read) and **pygltflib / trimesh** (glTF).
 Add to the harvest/pubs runtime image as part of this work.
 
-## Work-box wrapper — BUILT (untested; runs on the work box)
+## Ingest wrapper — built (untested; needs GCS write perms to run)
 
-`pubs/threed.py` now has the impure wrapper around `convert()`:
+`pubs/threed.py` wraps `convert()`:
 - `ingest(series_id, gdb_uri, mapx_uri)` — localize the GDB(.zip)/.mapx (gs:// or https://) → `convert()`
   → upload GeoParquet + glTF to the CDN (`geolmap/3d/`) → stamp the pub STAC item (add `fence_polygons`/
   `fence_lines`/`fence_mesh` assets + `classification:classes` + the extension) → `refresh_catalog()`.
@@ -135,7 +135,7 @@ Deps added to the `[pubs]` extra: `pygltflib`, `mapbox-earcut` (geopandas/pyogri
 there; pyproj rides geopandas). Cloud Run job `ugs-pubs-threed` added to `cloudbuild.yaml` (harvest image),
 per-pub via `--args` override.
 
-## Still to do on the work box
+## Still to do (needs GCS write perms)
 
 - **Run it** for OFR-778DM (the GDB is on our CDN at
   `maps-assets.geology.utah.gov/publications/OFR/OFR-778DM/OFR-778DM_Woodland_gdb.zip`, the .mapx alongside).

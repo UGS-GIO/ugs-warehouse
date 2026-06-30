@@ -18,8 +18,8 @@ it differs from the plan-view map plate.
 Line cartography is data-driven from the GeMS `Type` + `Symbol` fields: contact / fault / section
 boundary, and "approximately located" (→ dashed) vs "well located" (→ solid).
 
-Pure conversion (GDB+mapx → local files + asset metadata); GCS upload + STAC write is a thin wrapper
-(work box). Runnable + verifiable locally against an extracted GDB — see `convert()` / `main()`.
+`convert()` is pure (GDB+mapx → local files + asset metadata); `ingest()` adds GCS upload + STAC write.
+Runnable against an extracted GDB — see `convert()` / `main()`.
 """
 from __future__ import annotations
 
@@ -275,7 +275,7 @@ def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict
     return meta
 
 
-# ---- work-box wrapper: localize source → convert → upload → stamp the STAC item -----------------
+# ---- ingest: localize source → convert → upload → stamp the STAC item ---------------------------
 
 THREED_PREFIX = "geolmap/3d"  # CDN object prefix (matches the existing csa_3d GeoJSON assets)
 GLTF_MIME = "model/gltf-binary"
@@ -348,8 +348,8 @@ def _stamp_item(series_id: str, assets: dict, classes: list[dict]) -> None:
 
 
 def ingest(series_id: str, gdb_uri: str, mapx_uri: str, out_dir: str | None = None) -> dict:
-    """Full 3D ingest (work box): localize the pub's GDB + .mapx → convert → upload outputs → stamp the
-    STAC item → refresh the catalog. Returns the conversion meta."""
+    """Full 3D ingest: localize the pub's GDB + .mapx → convert → upload outputs → stamp the STAC item
+    → refresh the catalog. Needs GCS write perms. Returns the conversion meta."""
     import tempfile
 
     from ..core import stac
@@ -372,7 +372,7 @@ def main() -> int:
     ap.add_argument("--id", required=True, help="series id, e.g. OFR-778DM")
     ap.add_argument("--out", default="out/3d", help="output directory")
     ap.add_argument("--upload", action="store_true",
-                    help="work box: localize → convert → upload to CDN → stamp the STAC item → refresh")
+                    help="localize → convert → upload to CDN → stamp the STAC item → refresh (needs GCS perms)")
     args = ap.parse_args()
     m = ingest(args.id, args.gdb, args.mapx, args.out) if args.upload \
         else convert(args.gdb, args.mapx, args.id, args.out)

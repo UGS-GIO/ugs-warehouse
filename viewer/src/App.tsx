@@ -13,6 +13,10 @@ import { useTheme } from "./theme";
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
+// Viewer root URL (the bundle's own directory, no search params) — used as the logo's <a href> so
+// modifier/middle-click opens the catalog in a new tab. Matches router.tsx's basepath derivation.
+const ROOT_HREF = new URL(".", document.baseURI).pathname || "/";
+
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
 type View = "catalog" | "map" | "arch" | "guide" | "search";
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
@@ -298,11 +302,18 @@ export function App() {
       ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
       : "min-h-screen overflow-x-hidden bg-background text-sm text-foreground"}>
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
-        <button onClick={() => go({ view: "catalog" })} title="Home — catalog root"
+        {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
+            plain click still does in-app SPA nav. href is the viewer root (no search params). */}
+        <a href={ROOT_HREF} title="Home — catalog root"
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            e.preventDefault();
+            go({ view: "catalog" });
+          }}
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
           <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="h-5 w-5 shrink-0" />
           <strong className="text-[15px]">UGS Warehouse</strong>
-        </button>
+        </a>
         <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">
           STAC catalog ·{" "}
           <a href={CATALOG_URL} target="_blank" rel="noreferrer"

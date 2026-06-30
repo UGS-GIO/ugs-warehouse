@@ -132,6 +132,89 @@ def _line_kind(t: str) -> str:
     return "fault" if "fault" in t else "boundary" if "boundary" in t else "contact"
 
 
+def _triangulate(ring: list) -> list[int]:
+    """Triangle indices for one 3D ring (Newell normal → drop dominant axis → earcut). Fence panels
+    are near-planar, so a planar projection triangulates them correctly."""
+    import mapbox_earcut as earcut
+    import numpy as np
+    n = [0.0, 0.0, 0.0]
+    m = len(ring)
+    for i in range(m):
+        a, b = ring[i], ring[(i + 1) % m]
+        n[0] += (a[1] - b[1]) * (a[2] + b[2])
+        n[1] += (a[2] - b[2]) * (a[0] + b[0])
+        n[2] += (a[0] - b[0]) * (a[1] + b[1])
+    ax = max(range(3), key=lambda i: abs(n[i]))  # project away the dominant-normal axis
+    keep = [i for i in range(3) if i != ax]
+    verts2d = np.array([[p[keep[0]], p[keep[1]]] for p in ring], dtype=np.float32)
+    return list(earcut.triangulate_float32(verts2d, np.array([m])))
+
+
+def build_gltf(polys, colors: dict[str, str], center: tuple[float, float], out_path: Path) -> int:
+    """Triangulate the fence polygons → a binary glTF (.glb) mesh for download/interop. Local metres,
+    Y-up (glTF convention: X=east, Y=elevation, Z=−north). Per-vertex colour = authored unit fill.
+    Returns the triangle count."""
+    import numpy as np
+    import pygltflib
+    from shapely.geometry import MultiPolygon, Polygon
+
+    cLon, cLat = center
+    mLon = 111320 * np.cos(np.radians(cLat))
+    pos: list[list[float]] = []
+    col: list[list[float]] = []
+    idx: list[int] = []
+    for geom, unit in zip(polys.geometry, polys["MapUnit"], strict=False):
+        rgb = colors.get(str(unit), "#808080").lstrip("#")
+        c = [int(rgb[i:i + 2], 16) / 255 for i in (0, 2, 4)] + [1.0]
+        parts = geom.geoms if isinstance(geom, MultiPolygon) else [geom]
+        for poly in parts:
+            if not isinstance(poly, Polygon):
+                continue
+            ring = [[(x - cLon) * mLon, z, -(y - cLat) * 110574]  # X east, Y up (elev), Z −north
+                    for x, y, z in poly.exterior.coords]
+            base = len(pos)
+            pos.extend(ring)
+            col.extend([c] * len(ring))
+            for t in _triangulate(ring):
+                idx.append(base + t)
+    if not idx:
+        return 0
+
+    positions = np.array(pos, dtype=np.float32)
+    colors_arr = np.array(col, dtype=np.float32)
+    indices = np.array(idx, dtype=np.uint32)
+    blob = indices.tobytes() + positions.tobytes() + colors_arr.tobytes()
+    # accessor 0 = indices, 1 = POSITION, 2 = COLOR_0
+    g = pygltflib.GLTF2(
+        scene=0, scenes=[pygltflib.Scene(nodes=[0])], nodes=[pygltflib.Node(mesh=0)],
+        meshes=[pygltflib.Mesh(primitives=[pygltflib.Primitive(
+            attributes=pygltflib.Attributes(POSITION=1, COLOR_0=2), indices=0, material=0)])],
+        materials=[pygltflib.Material(
+            pbrMetallicRoughness=pygltflib.PbrMetallicRoughness(metallicFactor=0, roughnessFactor=1),
+            doubleSided=True)],
+        accessors=[
+            pygltflib.Accessor(bufferView=0, componentType=pygltflib.UNSIGNED_INT, count=len(indices),
+                               type=pygltflib.SCALAR, max=[int(indices.max())], min=[0]),
+            pygltflib.Accessor(bufferView=1, componentType=pygltflib.FLOAT, count=len(positions),
+                               type=pygltflib.VEC3, max=positions.max(0).tolist(), min=positions.min(0).tolist()),
+            pygltflib.Accessor(bufferView=2, componentType=pygltflib.FLOAT, count=len(colors_arr),
+                               type=pygltflib.VEC4, max=[1, 1, 1, 1], min=[0, 0, 0, 1]),
+        ],
+        bufferViews=[
+            pygltflib.BufferView(buffer=0, byteOffset=0, byteLength=indices.nbytes,
+                                 target=pygltflib.ELEMENT_ARRAY_BUFFER),
+            pygltflib.BufferView(buffer=0, byteOffset=indices.nbytes, byteLength=positions.nbytes,
+                                 target=pygltflib.ARRAY_BUFFER),
+            pygltflib.BufferView(buffer=0, byteOffset=indices.nbytes + positions.nbytes,
+                                 byteLength=colors_arr.nbytes, target=pygltflib.ARRAY_BUFFER),
+        ],
+        buffers=[pygltflib.Buffer(byteLength=len(blob))],
+    )
+    g.set_binary_blob(blob)
+    g.save_binary(str(out_path))
+    return len(indices) // 3
+
+
 def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict:
     """GDB + .mapx → GeoParquet-3D (polys, lines) + classification:classes. Returns asset metadata.
     Pure/local: writes files under out_dir, no GCS. Z is preserved (WKB-Z in the GeoParquet)."""
@@ -150,6 +233,11 @@ def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict
     poly_cols = [c for c in ("MapUnit", "label", "fill", "geometry") if c in polys.columns]
     poly_path = out / f"{series_id}_3d_polygons.parquet"
     polys[poly_cols].to_parquet(poly_path, index=False)
+
+    # glTF mesh (download/interop) — triangulated panels, authored per-vertex colour, local metres.
+    b = polys.total_bounds
+    gltf_path = out / f"{series_id}_3d.glb"
+    tris = build_gltf(polys, colors, ((b[0] + b[2]) / 2, (b[1] + b[3]) / 2), gltf_path)
 
     # Lines: contact/fault/boundary + dashed (approximately located) from Type/Symbol.
     lines = gpd.read_file(gdb_path, layer=LINE_LAYER).to_crs(4326)
@@ -177,6 +265,8 @@ def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict
         "series_id": series_id,
         "polygons_parquet": str(poly_path),
         "lines_parquet": str(line_path),
+        "gltf": str(gltf_path),
+        "gltf_triangles": tris,
         "classification:classes": classes,
         "units": len(units),
         "uncolored": [u for u in units if not colors.get(u)],

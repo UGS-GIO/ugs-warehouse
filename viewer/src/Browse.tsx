@@ -1360,6 +1360,9 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
   const [extent, setExtent] = useState<{ spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] } | null>(null);
   const [terrainMesh, setTerrainMesh] = useState<TerrainMesh | null>(null);
+  // Authored geologic colors (MapUnit → hex) from the publication's ArcGIS symbology — the real
+  // cartography. Interim: a baked per-pub sidecar (the 3D pipeline will fold this into the GeoParquet).
+  const [authored, setAuthored] = useState<Record<string, string>>({});
 
   const [vex, setVex] = useState(2.5);
   const [showUnits, setShowUnits] = useState(true);
@@ -1455,6 +1458,19 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     return () => { active = false; };
   }, [extent]);
 
+  // Authored geologic colors for this pub (interim baked sidecar). Absent → falls back to getUnitColor.
+  useEffect(() => {
+    let active = true;
+    fetch(`${import.meta.env.BASE_URL}3d-colors/${item.id}.json`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((c) => { if (active) setAuthored(c); })
+      .catch(() => { /* no sidecar → keep fallback */ });
+    return () => { active = false; };
+  }, [item.id]);
+
+  // Real authored color for a unit when we have it; else the (placeholder) derived color.
+  const colorOf = (unit: string) => authored[unit] ?? getUnitColor(unit, "");
+
   const layers = useMemo(() => {
     const out: unknown[] = [];
     if (showSheet && extent && terrainMesh) {
@@ -1490,13 +1506,14 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
         _full3d: true,
         getPolygon: ((d: { rings: number[][][] }) => d.rings.map((ring) => ring.map((p) => [p[0], p[1], p[2] * vex]))) as never,
-        getFillColor: (d: { unit: string; rgb: [number, number, number] }) => {
+        getFillColor: (d: { unit: string }) => {
+          const [r, g, b] = hexToRgb(colorOf(d.unit));
           const a = hovered ? (d.unit === hovered ? 240 : 55) : 200;
-          return [d.rgb[0], d.rgb[1], d.rgb[2], a];
+          return [r, g, b, a];
         },
         pickable: true,
         onHover: (info: { object?: { unit: string } }) => setHovered(info?.object?.unit ?? null),
-        updateTriggers: { getPolygon: [vex], getFillColor: [hovered] },
+        updateTriggers: { getPolygon: [vex], getFillColor: [hovered, authored] },
       }) as unknown);
     }
     if (showLines) {
@@ -1513,7 +1530,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       }) as unknown);
     }
     return out;
-  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, terrainMesh, vex, hovered]);
+  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, terrainMesh, vex, hovered, authored]);
 
   if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries…</div>;
   if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;
@@ -1595,7 +1612,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
               .map((l) => (
                 <div key={l.unit} onMouseEnter={() => setHovered(l.unit)} onMouseLeave={() => setHovered(null)}
                   className={`flex items-start gap-2.5 p-1.5 rounded border text-xs cursor-default transition ${hovered === l.unit ? "border-primary bg-primary/5 font-medium" : "border-transparent hover:bg-muted"}`}>
-                  <span className="inline-block w-4 h-4 rounded border border-black/10 shrink-0" style={{ backgroundColor: l.color }} />
+                  <span className="inline-block w-4 h-4 rounded border border-black/10 shrink-0" style={{ backgroundColor: colorOf(l.unit) }} />
                   <div className="flex-1 leading-snug">
                     <span className="font-bold font-mono mr-1.5">{l.label}</span>
                     <span className="text-foreground">{l.unit}</span>

@@ -26,9 +26,16 @@ they're fine as-is. Cloud-native formats are *added derivatives*, served to the 
 | `fence_lines` | 3D GeoParquet | contacts / faults | `data`, `3d-vector` |
 | `fence_mesh` | **glTF / GLB** | download + interop (Blender, ArcGIS Pro, web 3D) | `data`, `visual` |
 
-Each GeoParquet row carries `fill_rgb` (hex), `label`, and `hierarchy_key`, joined from
-`DescriptionOfMapUnits.AreaFillRGB`. So **cloud-native format + authored cartography + a
-stratigraphically-ordered legend all fall out of one GDB read.**
+Each GeoParquet row carries `fill_rgb` (hex), `label`, and `hierarchy_key`. So **cloud-native format
++ authored cartography + a stratigraphically-ordered legend all fall out of one GDB read.**
+
+⚠️ **Color source (verified on OFR-778DM):** `DescriptionOfMapUnits.AreaFillRGB` is **empty** — the
+authored colors live in the **ArcGIS symbology** (`.mapx`), as a `CIMUniqueValueRenderer` keyed on the
+`Symbol` field (`"24_Tk_Keetley…"` → MapUnit `Tk`), with the RGB in a `CIMRGBColor`. The DMU table
+still supplies `Name` + `HierarchyKey` (legend label + stratigraphic order). Proven locally: `pyogrio`
+(GDAL-bundled wheel, no system GDAL) reads the GDB; a parser walks the `.mapx` JSON for the colors. An
+interim baked sidecar (`viewer/public/3d-colors/<id>.json`) already wires real colors into the viewer;
+the pipeline folds this into the GeoParquet's `fill_rgb`.
 
 ## Why GeoParquet (not the current GeoJSON)
 
@@ -40,9 +47,10 @@ explorer), so it can read the fence straight from Parquet.
 ## Steps
 
 1. Read GDB layers (pyogrio / GDAL `OpenFileGDB`).
-2. Extract `DescriptionOfMapUnits` → `MapUnit → {AreaFillRGB, Name, HierarchyKey}`.
+2. Parse the `.mapx` `CIMUniqueValueRenderer` → `MapUnit → fill_rgb` (Symbol-keyed, see above).
+   `DescriptionOfMapUnits` → `MapUnit → {Name, HierarchyKey}` (label + order).
 3. Reproject to 4326, **keep Z**.
-4. Join authored colors to features (`fill_rgb`, `label`, `hierarchy_key`).
+4. Join colors + DMU to features (`fill_rgb`, `label`, `hierarchy_key`).
 5. Write GeoParquet (polygons, lines), WKB-Z geometry.
 6. Triangulate fence panels → glTF/GLB.
 7. Write STAC assets + ISO sidecar.

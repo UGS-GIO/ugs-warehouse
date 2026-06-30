@@ -179,7 +179,9 @@ def thumb_one(item: dict, force: bool = False) -> str:
     want_hash, style_bytes = _style_hash(style_url)
     png_obj, sha_obj = thumb_object(stem), sha_object(stem)
 
-    stac_path = f"{config.STAC_PREFIX}/{COLLECTION}/{stem}.json"
+    # Items live NESTED at <collection>/<id>/<id>.json — not flat. Writing the flat path stamps a
+    # stray object the catalog never references (so the viewer never sees the thumbnail).
+    stac_path = f"{config.STAC_PREFIX}/{COLLECTION}/{stem}/{stem}.json"
     thumb_href = config.public_url(png_obj)
 
     def ensure_stac_thumbnail() -> None:

@@ -11,7 +11,7 @@ import datetime
 
 import duckdb
 
-from ..core import config, stac
+from ..core import config, gcs, stac
 from . import ducklake
 from .topics import Topic
 
@@ -62,7 +62,8 @@ def _table_columns(con: duckdb.DuckDBPyConnection, view: str) -> list[dict]:
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           *, title: str | None = None, description: str | None = None,
           metadata: dict | None = None, bbox: list[float] | None = None,
-          row_count: int | None = None, related: dict | None = None) -> None:
+          row_count: int | None = None, related: dict | None = None,
+          content_hash: str | None = None) -> None:
     rel = related or {}
     rel_assets = rel.get("assets") or {}
     rel_links = rel.get("links") or []
@@ -84,6 +85,10 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         "ugs:layer": topic.layer,
         "ugs:row_count": rc,
     }
+    # Content fingerprint (skip-unchanged ingest). Lets a later `--skip-unchanged` run detect that
+    # nothing changed and skip the rebuild. Absent when the caller didn't compute one.
+    if content_hash:
+        props["ugs:content_hash"] = content_hash
     # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
     desc = md.get("description") or description
     if desc:
@@ -119,6 +124,13 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }
+    # Rendered preview PNG (styled PMTiles → image), written independently by the ugs-topics-thumbs
+    # job. Presence-driven, exactly like the pubs cover/thumbnail: stamp the asset iff the PNG exists,
+    # so the catalog shows a real styled preview for topics that have one (sand placeholder otherwise).
+    thumb_path = f"{config.THUMBS_PREFIX}/{topic.stem}/{topic.stem}.png"
+    if gcs.exists(thumb_path):
+        assets["thumbnail"] = {"href": config.public_url(thumb_path), "type": "image/png",
+                               "roles": ["thumbnail"], "title": "Styled preview"}
     # Table extension is in play iff any asset describes its columns.
     exts = [stac.WEB_MAP_LINKS_EXT]
     if any("table:columns" in a for a in assets.values()):

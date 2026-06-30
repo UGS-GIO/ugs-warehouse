@@ -28,6 +28,10 @@ CATALOG_ID = os.environ.get("WAREHOUSE_CATALOG_ID", "ugs-warehouse")
 # producer sets its own (e.g. geolmap/cogs) via its module config.
 ARCHIVE_PREFIX = os.environ.get("WAREHOUSE_ARCHIVE_PREFIX", "warehouse/geoparquet")
 PMTILES_PREFIX = os.environ.get("WAREHOUSE_PMTILES_PREFIX", "warehouse/pmtiles")
+# Rendered preview thumbnails for vector serving-topics (styled PMTiles → PNG). One per stem,
+# overwritten when its style changes (so CACHE_MUTABLE); a `.sha` sidecar holds the style hash
+# the PNG was rendered from, for content-addressed skip-existing.
+THUMBS_PREFIX = os.environ.get("WAREHOUSE_THUMBS_PREFIX", "warehouse/thumbs")
 
 # Canonical media types for the cloud-native artifacts — one source of truth across all producers
 # (was redefined in ~8 sink/harvest modules).

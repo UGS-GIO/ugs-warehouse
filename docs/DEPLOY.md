@@ -1,6 +1,6 @@
 # Deploy — Cloud Run Job via Cloud Build
 
-Run these on the **work box** (has GCP auth + perms), or wire them into GH Actions.
+Run these with GCP auth + perms, or wire them into GH Actions.
 The build artifact is `cloudbuild.yaml` (build image → Artifact Registry → deploy the
 Cloud Run Job). The Job runs `scripts/cloudrun_entrypoint.sh --all`, which builds the
 Postgres DSN from the Cloud SQL socket + the Secret-Manager password, then ingests.
@@ -100,11 +100,10 @@ gcloud run jobs executions list --job=geolmap-harvest --region=$REGION --project
 Per-series instead of `--all`: override args at execute time —
 `... execute geolmap-harvest --args=M-283 ...`
 
-## 4. Pub/Sub event-driven ingest (dataELT #418) — WORK-BOX HANDOFF
+## 4. Pub/Sub event-driven ingest (dataELT #418)
 
-> **For Gemini on the work box.** Clinton authored this on his personal box (no GCP
-> perms there). The code + `cloudbuild.yaml` wiring is done and committed; what's left
-> is two IAM grants that need work-box perms, then a build to self-provision.
+> The code + `cloudbuild.yaml` wiring is done and committed; what's left is two IAM grants
+> (need GCP perms), then a build to self-provision.
 
 **Contract:** dataELT [`publish.sh` #418](https://github.com/UGS-GIO/dataELT/pull/418)
 publishes `{"schema","topic"}` to the **`ugs-warehouse-ingest`** topic on every prod
@@ -234,4 +233,4 @@ gcloud scheduler jobs create http warehouse-nightly \
 - **GeoParquet/PMTiles/STAC** write to GCS via obstore (ADC = the runtime SA on Cloud Run,
   no HMAC). DuckLake writes via obstore-fsspec — same auth. No gcsfuse, no GCS extension.
 - **Service (Pub/Sub push)** — deployed by `cloudbuild.yaml` (`deploy-service`) and wired
-  by the `wire-pubsub` step. See **§4** for the two IAM grants still needed on the work box.
+  by the `wire-pubsub` step. See **§4** for the two IAM grants still needed (GCP perms).

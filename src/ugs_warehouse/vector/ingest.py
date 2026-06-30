@@ -23,6 +23,7 @@ from types import ModuleType
 
 from ..core import stac
 from . import (
+    fingerprint,
     related,
     sink_archive,
     sink_ducklake,
@@ -51,9 +52,14 @@ def _related(topic: Topic) -> dict:
         return {}
 
 
-def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool) -> int:
+def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refresh: bool,
+               skip_unchanged: bool = True) -> int:
     """Geometry check → dry-run report → sinks (ducklake/archive/pmtiles/stac) over the
-    transformed table → catalog refresh."""
+    transformed table → catalog refresh.
+
+    `skip_unchanged` (default on; `--force` turns it off) compares a content fingerprint of the
+    transformed view to the published STAC item; an exact match (with the PMTiles still present)
+    skips all sinks — the expensive tippecanoe rebuild would produce byte-identical output."""
     count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
     non_null = con.execute(f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL").fetchone()[0]
     if non_null == 0:
@@ -76,6 +82,14 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         print(f"  sample row (no geom) : {sample}")
         return 0
 
+    # Content fingerprint — always computed (so every run records a fresh `ugs:content_hash`, even a
+    # forced one, keeping future skips correct). Only acted on when --skip-unchanged is set.
+    fp = fingerprint.compute(con, view)
+    if skip_unchanged and fingerprint.is_unchanged(topic, fp):
+        print(f"[{topic.fqn}] UNCHANGED: content + tiling identical to the published item — "
+              f"skipping sinks (no tile rebuild)")
+        return 0
+
     meta = backend.read_metadata(topic)
     related_info = _related(topic)
     rc = 0
@@ -83,7 +97,8 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
         ("archive",  lambda: sink_archive.write(topic, con, view)),
         ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
-        ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related=related_info)),
+        ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related=related_info,
+                                             content_hash=fp)),
     ]:
         try:
             fn()
@@ -102,19 +117,25 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     return rc
 
 
-def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:
+def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,
+            skip_unchanged: bool = True) -> int:
     backend = _backend()
     # One DuckDB connection streams Postgres scan → transform → materialize (no pyarrow, no
     # Python-held rows; DuckDB spills under its memory cap). The sinks read the materialized table.
     print(f"[{topic.fqn}] reading from Postgres (streaming, single DuckDB)")
     con, view = backend.stream_transformed(topic)
-    return _run_sinks(topic, con, view, backend, dry_run, skip_refresh)
+    return _run_sinks(topic, con, view, backend, dry_run, skip_refresh, skip_unchanged)
 
 
-def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False) -> int:
-    """Ingest a single Topic. Top-level entry point for callers (CLI + service)."""
+def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,
+                 skip_unchanged: bool = True) -> int:
+    """Ingest a single Topic. Top-level entry point for callers (CLI + service).
+
+    `skip_unchanged` defaults on — an unchanged topic (fingerprint matches the published item) is
+    skipped without rebuilding tiles. Pass `skip_unchanged=False` (CLI `--force`) to always rebuild."""
     try:
-        return _ingest(topic, dry_run=dry_run, skip_refresh=skip_refresh)
+        return _ingest(topic, dry_run=dry_run, skip_refresh=skip_refresh,
+                       skip_unchanged=skip_unchanged)
     except Exception as e:
         # Check if it's the "FATAL: no GEOMETRY column found" case (from source.py or transform.py)
         # We can handle non-spatial gracefully by just returning 0 (success, nothing to ingest)
@@ -161,7 +182,15 @@ def main() -> int:
         action="store_true",
         help="skip the final STAC catalog refresh",
     )
+    ap.add_argument(
+        "--force",
+        action="store_true",
+        help="rebuild every topic even when its content + tiling fingerprint is unchanged. "
+             "Default is to SKIP unchanged topics (no tile rebuild); the first run after deploy "
+             "still rebuilds everything since no published item carries a fingerprint yet",
+    )
     args = ap.parse_args()
+    skip_unchanged = not args.force
 
     if args.all:
         backend = _backend()
@@ -178,12 +207,14 @@ def main() -> int:
             print(f"running ingestion in parallel with {args.workers} workers...")
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 def run_one(t: Topic) -> int:
-                    return ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv)
+                    return ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
+                                        skip_unchanged=skip_unchanged)
                 results = list(executor.map(run_one, discovered))
             rc = 1 if any(r != 0 for r in results) else 0
         else:
             for t in discovered:
-                rc |= ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv)
+                rc |= ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
+                                   skip_unchanged=skip_unchanged)
 
         if not args.skip_refresh:
             try:
@@ -196,7 +227,8 @@ def main() -> int:
         return rc
 
     topic = Topic.parse(args.topic)
-    return ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh)
+    return ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh,
+                        skip_unchanged=skip_unchanged)
 
 
 if __name__ == "__main__":

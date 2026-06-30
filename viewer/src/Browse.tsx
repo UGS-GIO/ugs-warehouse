@@ -4,13 +4,19 @@ import {
   type ColumnDef, flexRender, getCoreRowModel, getSortedRowModel,
   type SortingState, useReactTable,
 } from "@tanstack/react-table";
+import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
+import { PathStyleExtension } from "@deck.gl/extensions";
+import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
+import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
+import DeckGL from "@deck.gl/react";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
-import { type Asset, citeLink, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
+import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 
 // A few latest covers for a collection card (thumbnail strip). `date` = the item datetime, used to
 // merge + re-sort covers across series for a sub-catalog card. Populated by App from the indexes.
@@ -54,6 +60,17 @@ const gSeries = (it: ItemRef) => String(it.data?.id ?? idFromHref(it.href));
 const gTitle = (it: ItemRef) => String(props(it).title ?? it.data?.id ?? idFromHref(it.href));
 const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(it).datetime as string).slice(0, 10) : "");
 const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).slice(0, 4), 10); return Number.isFinite(y) ? y : null; };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Show the date precision we actually have. UGS pubs carry year-only (stored as a Jan-1 placeholder)
+// or year+month; the day is never real — so don't render a misleading "2026-01-01". Sorting still uses
+// the raw ISO from gDate; this is display-only.
+const fmtDate = (iso: string): string => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  if (m === "01" && d === "01") return y;                  // year-only placeholder → just the year
+  if (d === "01") return `${MONTHS[+m - 1] ?? m} ${y}`;    // month precision → "Sep 2026"
+  return iso;                                              // genuine full date
+};
 const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const gAuthor = (it: ItemRef) => String(props(it)["ugs:author"] ?? "");
@@ -72,6 +89,8 @@ const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties 
 // "Mappable" = has something to draw on the map: a COG (raster), vector PMTiles, or a raster PMTiles
 // mosaic. Items with none (metadata-only pubs) do nothing when toggled — the filter hides them.
 const hasMapData = (it: ItemRef) => !!(cogAsset(it.data) || pmtilesLink(it.data) || rasterTilesAsset(it.data));
+// Item carries an interactive 3D fence-diagram asset (role 3d-vector) → eligible for the 3D viewer.
+const has3D = (it: ItemRef) => Object.values(it.data?.assets ?? {}).some((a) => assetKind(a as Asset) === "threeD");
 // Data-series code = the alpha prefix of the publication series id (DS-8 → DS, OFR-647 →
 // OFR). Only items that carry `ugs:series_id` (publications) get a code; everything else
 // (vector serving topics, etc.) returns "" so it never pollutes the series facet. Numeric
@@ -269,7 +288,7 @@ function CardItem({ it, showCollection, onOpen }: { it: ItemRef; showCollection?
       <p className={C.cardTitle}>{gTitle(it)}</p>
       <div>
         {showCollection && <span className={C.badge}>{it.collId}</span>}
-        {gDate(it) && <span className={C.badge}>{gDate(it)}</span>}
+        {gDate(it) && <span className={C.badge}>{fmtDate(gDate(it))}</span>}
         {BADGE_KEYS.filter((k) => props(it)[k]).map((k) => (
           <span key={k} className={C.badge}>{String(props(it)[k])}</span>
         ))}
@@ -309,9 +328,9 @@ function VolumeGrouped({ rows, gridClass, render }: {
 }
 
 // ---- item list: filter + sort + table/cards, reused for a collection and global search ----
-function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
+function ItemList({ items, showCollection, query, onOpen, series, onSeries, force3D }: {
   items: ItemRef[]; showCollection?: boolean; query?: string; onOpen: (href: string) => void;
-  series: string[]; onSeries: (codes: string[]) => void;
+  series: string[]; onSeries: (codes: string[]) => void; force3D?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards" | "thumbs">("table");
@@ -365,6 +384,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         if (scaleTier && scaleTierOf(it) !== scaleTier) return false;
         if (csel.size && !csel.has(gCounty(it))) return false;
         if (mapOnly && !hasMapData(it)) return false;
+        if (force3D && !has3D(it)) return false;
         if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
           const y = gYear(it);
           if (y == null || (Number.isFinite(ymin) && y < ymin) || (Number.isFinite(ymax) && y > ymax)) return false;
@@ -378,7 +398,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
       }
       return filtered;
     },
-    [items, needle, series, topics, author, scaleTier, counties, mapOnly, yearMin, yearMax],
+    [items, needle, series, topics, author, scaleTier, counties, mapOnly, force3D, yearMin, yearMax],
   );
 
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
@@ -391,7 +411,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
     // Volume column only when items carry one (Survey Notes) — consistent with the grouped grid views.
     ...(hasVolumes ? [{ id: "volume", header: "Vol", accessorFn: (it: ItemRef) => gVol(it) ?? "" }] : []),
     { id: "type", header: "Type", accessorFn: gType },
-    { id: "date", header: "Date", accessorFn: gDate },
+    { id: "date", header: "Date", accessorFn: gDate, cell: (i) => fmtDate(String(i.getValue())) },
     { id: "scale", header: "Scale", accessorFn: gScale, enableSorting: false },
     { id: "assets", header: "Assets", enableSorting: false, accessorFn: () => "",
       cell: ({ row }) => row.original.data?.assets ? <AssetChips assets={row.original.data.assets} /> : "" },
@@ -523,6 +543,7 @@ const asBounds = (item: StacDoc): [[number, number], [number, number]] | undefin
 // + decoded client-side. No server, no invented styling. Pannable/zoomable.
 function CogMap({ href, item }: { href: string; item: StacDoc }) {
   const [ready, setReady] = useState(false);
+  const [showDem, setShowDem] = useState(false);
   const mapRef = useRef<MapRef>(null);
   const cogBbox = useRef<[number, number, number, number] | undefined>(undefined);
 
@@ -559,8 +580,48 @@ function CogMap({ href, item }: { href: string; item: StacDoc }) {
             mapStyle={POSITRON}
             style={{ width: "100%", height: "100%" }}
             onLoad={fit}
+            maxPitch={85}
+            terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
           >
             <NavigationControl position="top-right" showCompass={false} />
+            
+            {/* Floating 3D Terrain Toggle */}
+            <div className="absolute top-2.5 right-12 z-10">
+              <button
+                onClick={() => {
+                  const next = !showDem;
+                  setShowDem(next);
+                  if (mapRef.current) {
+                    mapRef.current.getMap().easeTo({
+                      pitch: next ? 48 : 0,
+                      duration: 500
+                    });
+                  }
+                }}
+                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
+                  showDem
+                    ? "bg-primary text-primary-foreground border-primary"
+                    : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
+                }`}
+                title="Toggle 3D Topography"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+                </svg>
+                <span>3D Terrain</span>
+              </button>
+            </div>
+
+            {showDem && (
+              <Source
+                id="terrain-rgb-source"
+                type="raster-dem"
+                tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
+                encoding="terrarium"
+                tileSize={256}
+              />
+            )}
+
             <Source id="cog" type="raster" url={`cog://${href}`} tileSize={256}>
               <Layer id="cog-raster" type="raster" />
             </Source>
@@ -626,6 +687,7 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
 
   const mapRef = useRef<MapRef>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
+  const [showDem, setShowDem] = useState(false);
   const [styleLayers, setStyleLayers] = useState<Record<string, unknown>[] | null>(null);
   const [spriteReady, setSpriteReady] = useState(false);
   const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown> } | null>(null);
@@ -713,8 +775,48 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
           interactiveLayerIds={onFeatureClick ? layerIds : undefined}
           onClick={onFeatureClick ? onMapClick : undefined}
           style={{ width: "100%", height: "100%" }}
+          maxPitch={85}
+          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
         >
           <NavigationControl position="top-right" showCompass={false} />
+
+          {/* Floating 3D Terrain Toggle */}
+          <div className="absolute top-2.5 right-12 z-10">
+            <button
+              onClick={() => {
+                const next = !showDem;
+                setShowDem(next);
+                if (mapRef.current) {
+                  mapRef.current.getMap().easeTo({
+                    pitch: next ? 48 : 0,
+                    duration: 500
+                  });
+                }
+              }}
+              className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
+                showDem
+                  ? "bg-primary text-primary-foreground border-primary"
+                  : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
+              }`}
+              title="Toggle 3D Topography"
+            >
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+              </svg>
+              <span>3D Terrain</span>
+            </button>
+          </div>
+
+          {showDem && (
+            <Source
+              id="terrain-rgb-source"
+              type="raster-dem"
+              tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
+              encoding="terrarium"
+              tileSize={256}
+            />
+          )}
+
           <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`} />
           {layers.map((l, i) => {
             // id from the fragment's OWN layer id (e.g. …-circle vs …-boxtype) so switching renders
@@ -785,6 +887,71 @@ function FieldsPanel({ item }: { item: StacDoc }) {
 
 // Vector asset preview: PMTiles map + full dataset explorer, linked — click a table row and the
 // map flies to that feature (when the parquet carries bbox covering columns).
+function RasterMosaicPreview({ item }: { item: StacDoc }) {
+  const asset = rasterTilesAsset(item);
+  const mapRef = useRef<MapRef>(null);
+  const [showDem, setShowDem] = useState(false);
+  if (!asset) return null;
+  const bounds = asBounds(item);
+
+  return (
+    <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
+      <MapGL
+        ref={mapRef}
+        mapLib={maplibregl}
+        initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
+        mapStyle={POSITRON}
+        style={{ width: "100%", height: "100%" }}
+        maxPitch={85}
+        terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
+      >
+        <NavigationControl position="top-right" showCompass={false} />
+
+        {/* Floating 3D Terrain Toggle */}
+        <div className="absolute top-2.5 right-12 z-10">
+          <button
+            onClick={() => {
+              const next = !showDem;
+              setShowDem(next);
+              if (mapRef.current) {
+                mapRef.current.getMap().easeTo({
+                  pitch: next ? 48 : 0,
+                  duration: 500
+                });
+              }
+            }}
+            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
+              showDem
+                ? "bg-primary text-primary-foreground border-primary"
+                : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
+            }`}
+            title="Toggle 3D Topography"
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
+            </svg>
+            <span>3D Terrain</span>
+          </button>
+        </div>
+
+        {showDem && (
+          <Source
+            id="terrain-rgb-source"
+            type="raster-dem"
+            tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
+            encoding="terrarium"
+            tileSize={256}
+          />
+        )}
+
+        <Source id="raster-mosaic" type="raster" url={`pmtiles://${asset.href}`} tileSize={256}>
+          <Layer id="raster-mosaic-layer" type="raster" paint={{ "raster-opacity": 1 }} />
+        </Source>
+      </MapGL>
+    </div>
+  );
+}
+
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const [focus, setFocus] = useState<FocusSel | null>(null);
@@ -1089,16 +1256,17 @@ function FootprintMini({ item }: { item: StacDoc }) {
 }
 
 // ---- asset viewer: peruse a publication's files in-page (PDF / image / COG / parquet / text) ----
-type AssetKind = "cog" | "pdf" | "image" | "parquet" | "text" | "other";
-const KIND_RANK: Record<AssetKind, number> = { cog: 0, pdf: 1, parquet: 2, image: 3, text: 4, other: 9 };
+type AssetKind = "cog" | "threeD" | "pdf" | "image" | "parquet" | "text" | "other";
+const KIND_RANK: Record<AssetKind, number> = { cog: 0, threeD: 1, pdf: 2, parquet: 3, image: 4, text: 5, other: 9 };
 const KIND_LABEL: Record<AssetKind, string> = {
-  cog: "Map", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
+  cog: "Map", threeD: "3D", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
 };
 
 const extOf = (href: string) => (href.split("?")[0].split(".").pop() ?? "").toLowerCase();
 function assetKind(a: Asset): AssetKind {
   const t = (a.type ?? "").toLowerCase();
   const ext = extOf(a.href);
+  if (a.roles?.includes("3d-vector") || ext.includes("3d") || a.href.includes("3d_polygons")) return "threeD";
   if (t.includes("profile=cloud-optimized") || a.roles?.includes("cloud-optimized") || a.href.endsWith(".cog.tif")) return "cog";
   if (t === "application/pdf" || ext === "pdf") return "pdf";
   if (t.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
@@ -1127,9 +1295,460 @@ function TextPreview({ href }: { href: string }) {
   );
 }
 
+// ---- Interactive 3D Fence Diagram Viewer (deck.gl SolidPolygon/Path layers over maplibre 3D) ----
+const GEOLOGIC_COLORS: Record<string, string> = {
+  "red pine shale": "#556B2F",
+  "zur": "#556B2F",
+  "weber sandstone": "#EEDC82",
+  "ipw": "#EEDC82",
+  "gardison limestone": "#4682B4",
+  "mg": "#4682B4",
+  "deseret limestone": "#B0C4DE",
+  "md": "#B0C4DE",
+  "humbug formation": "#D2B48C",
+  "mh": "#D2B48C",
+  "keetley volcanics": "#BA55D3",
+  "tk": "#BA55D3",
+  "alluvium": "#FFFACD",
+  "qal": "#FFFACD",
+  "glacial till": "#DCDCDC",
+  "qg": "#DCDCDC",
+};
+
+// HSL → hex so every unit color is a hex string — deck.gl needs RGB tuples (see hexToRgb), and a
+// single format keeps the legend swatch and the 3D fill in sync.
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const c = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return Math.round(255 * c).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
+function getUnitColor(unit: string, label: string): string {
+  const u = (unit ?? "").toLowerCase().trim();
+  const l = (label ?? "").toLowerCase().trim();
+  if (GEOLOGIC_COLORS[u]) return GEOLOGIC_COLORS[u];
+  if (GEOLOGIC_COLORS[l]) return GEOLOGIC_COLORS[l];
+  // Standard string hashing for stable geologic pastel color
+  let hash = 0;
+  const str = u || l || "unknown";
+  for (let i = 0; i < str.length; i++) {
+    hash = str.charCodeAt(i) + ((hash << 5) - hash);
+  }
+  return hslToHex(Math.abs(hash) % 360, 65, 60);
+}
+
+// "#rrggbb" → [r,g,b]; deck.gl color accessors want a numeric tuple, not a CSS string.
+function hexToRgb(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  if (!m) return [128, 128, 128];
+  return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+}
+
+// Parsed fence + sampled terrain are expensive (network fetch/parse; ~tens of 3DEP requests) and the
+// viewer re-mounts every time the 3D tab is selected. Cache both per item.id at module scope so a
+// second visit is instant instead of re-doing all the work.
+type FenceData = {
+  polygons: { unit: string; rings: number[][][] }[];
+  lines: { kind: "fault" | "contact" | "boundary"; dashed: boolean; path: number[][] }[];
+  legend: { unit: string; label: string; color: string }[];
+  parquetFill: Record<string, string>;
+  extent: { spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] };
+};
+const fenceCache = new Map<string, FenceData>();
+const terrainCache = new Map<string, TerrainMesh | null>();
+
+function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
+  const itemId = item.id ?? asset.href;  // stable cache key (item.id is optional on StacDoc)
+  const [loading, setLoading] = useState(() => !fenceCache.has(itemId));
+  const [error, setError] = useState<string | null>(null);
+  // Terrain runs after the fence draws; track it so the canvas can show a real progress indicator.
+  const [terrainPending, setTerrainPending] = useState(false);
+
+  // Fence parsed to LOCAL metres centred on the dataset. OrbitView is a Cartesian 3D camera (unlike
+  // maplibre's 2.5D map camera) so it can orbit freely — including under the surface to look up at
+  // the slice, which is the whole point of a fence diagram.
+  const [polygons, setPolygons] = useState<{ unit: string; rings: number[][][] }[]>([]);
+  const [lines, setLines] = useState<{ kind: "fault" | "contact" | "boundary"; dashed: boolean; path: number[][] }[]>([]);
+  const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
+  const [extent, setExtent] = useState<{ spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] } | null>(null);
+  const [terrainMesh, setTerrainMesh] = useState<TerrainMesh | null>(null);
+  // Authored geologic colors (MapUnit → hex) from the publication's ArcGIS symbology — the real
+  // cartography. Interim: a baked per-pub sidecar (the 3D pipeline will fold this into the GeoParquet).
+  const [authored, setAuthored] = useState<Record<string, string>>({});
+  // Per-unit fill carried in the GeoParquet `fill` column (cloud-native path) — authored, highest
+  // precedence. Empty on the GeoJSON path.
+  const [parquetFill, setParquetFill] = useState<Record<string, string>>({});
+
+  const [vex, setVex] = useState(2.5);
+  const [showUnits, setShowUnits] = useState(true);
+  const [showLines, setShowLines] = useState(true);
+  const [showSheet, setShowSheet] = useState(true);
+  const [hovered, setHovered] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+
+  const polyUrl = asset.href;
+  const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
+  const cog = cogAsset(item);
+  // Drape the geologic map sheet — the COG's PNG overview (browsers can't texture a COG directly).
+  const sheetImg = cog ? cog.href.replace(/\.cog\.tif$/i, ".thumb.png") : undefined;
+
+  useEffect(() => {
+    let active = true;
+    // Cache hit → restore parsed fence synchronously, skip the fetch/parse entirely.
+    const hit = fenceCache.get(itemId);
+    if (hit) {
+      setPolygons(hit.polygons); setLines(hit.lines); setLegend(hit.legend);
+      setParquetFill(hit.parquetFill); setExtent(hit.extent);
+      setError(null); setLoading(false);
+      return () => { active = false; };
+    }
+    setLoading(true);
+    setError(null);
+
+    // A fence feature, normalised across both sources: GeoJSON geometry (with Z) + flat props.
+    type Feat = { geometry: { type?: string; coordinates?: unknown } | null; props: Record<string, unknown> };
+
+    // Cloud-native first: 3D GeoParquet (duckdb-wasm, WKB-Z) — ONLY when the item carries a real
+    // `.parquet` 3d-vector asset (the pipeline output). No same-origin probing: a missing file makes
+    // duckdb throw, which the route error-boundary would catch and reset the URL. Else: GeoJSON.
+    async function loadFence(): Promise<{ polyFeats: Feat[]; lineFeats: Feat[]; parquet: boolean }> {
+      const assets = Object.values(item.assets ?? {}) as Asset[];
+      const pq = (re: RegExp) => assets.find((a) => /\.parquet$/i.test(a.href) && re.test(a.href))?.href;
+      const polyPq = pq(/polygon/i), linePq = pq(/line/i);
+      if (polyPq) {
+        try {
+          const { readFeatures3D } = await import("./download");
+          const [pf, lf] = await Promise.all([
+            readFeatures3D(polyPq),
+            linePq ? readFeatures3D(linePq).catch(() => []) : Promise.resolve([]),
+          ]);
+          if (pf.length) return { polyFeats: pf as Feat[], lineFeats: lf as Feat[], parquet: true };
+        } catch { /* parquet read failed → GeoJSON */ }
+      }
+      const [pd, ld] = await Promise.all([
+        fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
+        fetch(lineUrl).then((r) => r.json()).catch(() => null),
+      ]);
+      const toFeat = (f: { geometry?: unknown; properties?: unknown }): Feat =>
+        ({ geometry: (f.geometry ?? null) as Feat["geometry"], props: (f.properties ?? {}) as Record<string, unknown> });
+      return {
+        polyFeats: ((pd?.features ?? []) as { geometry?: unknown; properties?: unknown }[]).map(toFeat),
+        lineFeats: ((ld?.features ?? []) as { geometry?: unknown; properties?: unknown }[]).map(toFeat),
+        parquet: false,
+      };
+    }
+
+    loadFence()
+      .then(({ polyFeats, lineFeats }) => {
+        if (!active) return;
+        // Pass 1: collect raw [lon,lat,z] + bounds (centre needed before the local-metre projection).
+        const rawPolys: { unit: string; rings: number[][][] }[] = [];
+        const rawLines: { kind: "fault" | "contact" | "boundary"; dashed: boolean; path: number[][] }[] = [];
+        const legendMap = new Map<string, string>();
+        const pFill: Record<string, string> = {};
+        let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity, count = 0;
+        const scan = (lon: number, lat: number, z: number) => {
+          minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
+          minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
+          minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); count++;
+        };
+        const xyz = (pt: number[]): number[] => { const c = [pt[0], pt[1], pt[2] ?? 0]; scan(c[0], c[1], c[2]); return c; };
+
+        for (const feat of polyFeats) {
+          const p = feat.props;
+          const unit = String(p.MapUnit ?? p.unit ?? "Unknown Unit");
+          const label = String(p.label ?? p.Label ?? unit);
+          if (typeof p.fill === "string") pFill[unit] = p.fill; // authored fill from the parquet
+          const geom = feat.geometry || {};
+          const multi: number[][][][] = geom.type === "MultiPolygon" ? geom.coordinates as number[][][][]
+            : geom.type === "Polygon" ? [geom.coordinates as number[][][]] : [];
+          for (const rings of multi) {
+            const r3 = rings.map((ring) => ring.map(xyz));
+            if (r3.length && r3[0].length) { rawPolys.push({ unit, rings: r3 }); legendMap.set(unit, label); }
+          }
+        }
+        for (const feat of lineFeats) {
+          const p = feat.props;
+          // Authored line cartography from the GeMS Type/Symbol (parquet carries kind/dashed directly).
+          const type = String(p.Type ?? "").toLowerCase();
+          const sym = String(p.Symbol ?? "").toLowerCase();
+          const kind: "fault" | "contact" | "boundary" = p.kind === "fault" || p.kind === "boundary" || p.kind === "contact"
+            ? p.kind as "fault" | "contact" | "boundary"
+            : type.includes("fault") ? "fault" : type.includes("boundary") ? "boundary" : "contact";
+          const dashed = typeof p.dashed === "boolean" ? p.dashed : sym.includes("approxim");
+          const geom = feat.geometry || {};
+          const multi: number[][][] = geom.type === "MultiLineString" ? geom.coordinates as number[][][]
+            : geom.type === "LineString" ? [geom.coordinates as number[][]] : [];
+          for (const coords of multi) {
+            const path = coords.map(xyz);
+            if (path.length) rawLines.push({ kind, dashed, path });
+          }
+        }
+        if (!count) throw new Error("No valid coordinates found in the 3D dataset");
+
+        // Pass 2: lon/lat → local metres centred on the dataset (z stays absolute-elevation metres).
+        const cLon = (minLon + maxLon) / 2, cLat = (minLat + maxLat) / 2;
+        const mLon = 111320 * Math.cos((cLat * Math.PI) / 180), mLat = 110574;
+        const toLocal = (p: number[]): number[] => [(p[0] - cLon) * mLon, (p[1] - cLat) * mLat, p[2]];
+
+        const halfX = ((maxLon - minLon) / 2) * mLon, halfY = ((maxLat - minLat) / 2) * mLat;
+        const fence: FenceData = {
+          polygons: rawPolys.map((d) => ({ ...d, rings: d.rings.map((r) => r.map(toLocal)) })),
+          lines: rawLines.map((l) => ({ ...l, path: l.path.map(toLocal) })),
+          legend: Array.from(legendMap.entries()).map(([unit, label]) => ({ unit, label, color: "" })).sort((a, b) => a.unit.localeCompare(b.unit)),
+          parquetFill: pFill,
+          extent: {
+            spanXY: Math.max(halfX, halfY) * 2, zTop: maxZ, zMid: (minZ + maxZ) / 2, half: [halfX, halfY],
+            bbox: [minLon, minLat, maxLon, maxLat], center: [cLon, cLat], scale: [mLon, mLat],
+          },
+        };
+        fenceCache.set(itemId, fence);
+        if (!active) return;
+        setParquetFill(fence.parquetFill);
+        setPolygons(fence.polygons);
+        setLines(fence.lines);
+        setLegend(fence.legend);
+        setExtent(fence.extent);
+        setLoading(false);
+      })
+      .catch((err) => { if (active) { setError(err instanceof Error ? err.message : "Failed to load 3D data files"); setLoading(false); } });
+
+    return () => { active = false; };
+  }, [item.id, polyUrl, lineUrl]);
+
+  // Build the DEM terrain mesh once the dataset extent is known. Span the MAP-SHEET bbox (item.bbox),
+  // not the fence bbox — the fence is only a transect (~40% of the quad), so draping the full-quad COG
+  // over the fence extent would mis-size + misregister it. Built in the fence's local frame so the
+  // fence sits as a transect within the full-size map; the COG textures it correctly.
+  useEffect(() => {
+    if (!extent) { setTerrainMesh(null); return; }
+    let active = true;
+    // Cache hit → reuse the sampled mesh, skip the ~tens of 3DEP requests.
+    if (terrainCache.has(itemId)) {
+      setTerrainMesh(terrainCache.get(itemId) ?? null);
+      setTerrainPending(false);
+      return () => { active = false; };
+    }
+    const mapBbox = (item.bbox?.slice(0, 4) as [number, number, number, number] | undefined) ?? extent.bbox;
+    // Live USGS 3DEP (CORS-open, public domain, 1 m lidar over Utah) — no hosting, any pub's bbox.
+    // Progressive: a coarse grid lands in ~1–2 s so the surface shows immediately, then a fine grid
+    // samples in the background and swaps in (smooth — no facets, the draped sheet stops looking
+    // tessellated). Cache the fine result so revisits skip both passes.
+    setTerrainPending(true);
+    (async () => {
+      try {
+        const coarse = await buildMeshFrom3DEP(mapBbox, extent.center, extent.scale, 48);
+        if (!active) return;
+        if (coarse) setTerrainMesh(coarse);
+        const fine = await buildMeshFrom3DEP(mapBbox, extent.center, extent.scale, 160);
+        terrainCache.set(itemId, fine ?? coarse);
+        if (!active) return;
+        if (fine ?? coarse) setTerrainMesh(fine ?? coarse);
+      } catch { if (active) setTerrainMesh(null); }
+      finally { if (active) setTerrainPending(false); }
+    })();
+    return () => { active = false; };
+  }, [extent, item]);
+
+  // Authored geologic colors for this pub (interim baked sidecar). Absent → falls back to getUnitColor.
+  useEffect(() => {
+    let active = true;
+    fetch(`${import.meta.env.BASE_URL}3d-colors/${item.id}.json`)
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((c) => { if (active) setAuthored(c); })
+      .catch(() => { /* no sidecar → keep fallback */ });
+    return () => { active = false; };
+  }, [item.id]);
+
+  // Unit colour, standard-first: STAC classification:classes (the warehouse's built-in mechanism, what
+  // the 3D pipeline will stamp) → interim per-pub sidecar → derived placeholder.
+  const clsColors = useMemo(() => classificationColors(item), [item]);
+  // Precedence: GeoParquet `fill` column → STAC classification:classes → interim sidecar → placeholder.
+  const colorOf = (unit: string) => parquetFill[unit] ?? clsColors[unit] ?? authored[unit] ?? getUnitColor(unit, "");
+
+  const layers = useMemo(() => {
+    const out: unknown[] = [];
+    if (showSheet && extent && terrainMesh) {
+      // Terrain surface: DEM mesh, exaggerated via getScale (z only) to match the fence, draped with
+      // the geologic map sheet. getColor white = show the texture as-is.
+      out.push(new SimpleMeshLayer({
+        id: "terrain",
+        data: [{ position: [0, 0, 0] }],
+        coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
+        mesh: terrainMesh as never,
+        texture: sheetImg,
+        getPosition: () => [0, 0, 0],
+        getColor: [255, 255, 255],
+        getScale: [1, 1, vex],
+        material: false,
+        updateTriggers: { getScale: [vex] },
+      }) as unknown);
+    } else if (showSheet && sheetImg && extent) {
+      // Fallback flat plane while the DEM mesh loads (or where there's no terrarium coverage).
+      const z = extent.zTop * vex, [hx, hy] = extent.half;
+      out.push(new BitmapLayer({
+        id: "map-sheet",
+        coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
+        image: sheetImg,
+        bounds: [[-hx, -hy, z], [-hx, hy, z], [hx, hy, z], [hx, -hy, z]] as never,
+        opacity: 0.9,
+      }) as unknown);
+    }
+    if (showUnits) {
+      out.push(new SolidPolygonLayer({
+        id: "fence-units",
+        data: polygons,
+        coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
+        _full3d: true,
+        getPolygon: ((d: { rings: number[][][] }) => d.rings.map((ring) => ring.map((p) => [p[0], p[1], p[2] * vex]))) as never,
+        getFillColor: (d: { unit: string }) => {
+          const [r, g, b] = hexToRgb(colorOf(d.unit));
+          const a = hovered ? (d.unit === hovered ? 240 : 55) : 200;
+          return [r, g, b, a];
+        },
+        pickable: true,
+        onHover: (info: { object?: { unit: string } }) => setHovered(info?.object?.unit ?? null),
+        updateTriggers: { getPolygon: [vex], getFillColor: [hovered, authored, clsColors, parquetFill] },
+      }) as unknown);
+    }
+    if (showLines) {
+      out.push(new PathLayer({
+        id: "fence-lines",
+        data: lines,
+        coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
+        getPath: ((d: { path: number[][] }) => d.path.map((p) => [p[0], p[1], p[2] * vex])) as never,
+        // Authored: all black; faults heavier than contacts, section boundary thin.
+        getColor: [25, 25, 25],
+        getWidth: (d: { kind: string }) => (d.kind === "fault" ? 2.6 : d.kind === "boundary" ? 0.8 : 1.3),
+        // Dashed = "approximately located" (geologic convention); solid = well located.
+        getDashArray: (d: { dashed: boolean }) => (d.dashed ? [5, 3] : [0, 0]),
+        dashJustified: true,
+        extensions: [new PathStyleExtension({ dash: true })],
+        widthUnits: "pixels",
+        widthMinPixels: 1,
+        updateTriggers: { getPath: [vex] },
+      }) as unknown);
+    }
+    return out;
+  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, terrainMesh, vex, hovered, authored, clsColors, parquetFill]);
+
+  if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries…</div>;
+  if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;
+
+  // Frame the full map sheet (so the fence reads as a transect within it), centred on the map — not
+  // the fence — since the fence sits off-centre in the quad.
+  const mb = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
+  const mapCtr: [number, number] = mb && extent
+    ? [((mb[0] + mb[2]) / 2 - extent.center[0]) * extent.scale[0], ((mb[1] + mb[3]) / 2 - extent.center[1]) * extent.scale[1]]
+    : [0, 0];
+  const mapSpan = mb && extent ? Math.max((mb[2] - mb[0]) * extent.scale[0], (mb[3] - mb[1]) * extent.scale[1]) : extent?.spanXY ?? 1;
+  const initialViewState = {
+    target: [mapCtr[0], mapCtr[1], (extent?.zMid ?? 0) * vex] as [number, number, number],
+    rotationX: 25,    // pitch above the horizon
+    rotationOrbit: -25, // azimuth
+    zoom: Math.log2(520 / Math.max(mapSpan, 1)),
+    minZoom: -12, maxZoom: 40,
+  };
+
+  return (
+    <div className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-[640px]">
+      {/* Free 3D orbit scene (deck.gl OrbitView) — Cartesian, flies under the surface. */}
+      <div className="flex-1 relative bg-[#0F172A] h-[400px] md:h-full">
+        <DeckGL
+          views={new OrbitView({ orbitAxis: "Z" })}
+          initialViewState={initialViewState}
+          controller={true}
+          layers={layers as never}
+          getCursor={() => "grab"}
+          style={{ position: "relative", width: "100%", height: "100%" }}
+        />
+        <div className="absolute top-3 left-3 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs pointer-events-none max-w-[230px]">
+          <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
+            Free 3D Orbit
+          </div>
+          <div className="text-muted-foreground leading-snug">
+            Drag to orbit (rotate under the surface)<br />
+            Scroll to zoom · right-drag to pan
+          </div>
+        </div>
+        {terrainPending && (
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-card/90 backdrop-blur-sm border border-border px-3 py-2 rounded-md shadow-sm text-xs text-foreground">
+            <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+            {terrainMesh ? "Refining terrain…" : "Sampling USGS 3DEP terrain…"}
+          </div>
+        )}
+      </div>
+
+      {/* Control sidebar + geologic legend */}
+      <div className="w-full md:w-[320px] bg-background border-t md:border-t-0 md:border-l border-border p-4 flex flex-col gap-4 overflow-y-auto h-[240px] md:h-full">
+        <div className="border-b border-border pb-3">
+          <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Display Settings</h3>
+          <div className="flex flex-col gap-2 text-xs">
+            <label className="flex items-center gap-2 text-foreground cursor-pointer">
+              <input type="checkbox" checked={showUnits} onChange={(e) => setShowUnits(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+              <span>Stratigraphic units (3D)</span>
+            </label>
+            <label className="flex items-center gap-2 text-foreground cursor-pointer">
+              <input type="checkbox" checked={showLines} onChange={(e) => setShowLines(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+              <span>Contacts &amp; faults (3D)</span>
+            </label>
+            {sheetImg && (
+              <label className="flex items-center gap-2 text-foreground cursor-pointer">
+                <input type="checkbox" checked={showSheet} onChange={(e) => setShowSheet(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+                <span>Geologic map sheet (draped)</span>
+              </label>
+            )}
+          </div>
+          <p className="mt-2 text-[10px] text-muted-foreground">{terrainMesh ? "Map sheet drapes the USGS 3DEP terrain (1 m lidar); fence tops meet the ground." : "Sampling USGS 3DEP terrain…"}</p>
+        </div>
+
+        <div className="border-b border-border pb-3">
+          <div className="flex justify-between items-center text-xs mb-1.5">
+            <span className="font-semibold text-foreground uppercase tracking-wider">Vertical Exaggeration</span>
+            <span className="text-muted-foreground font-mono">{vex.toFixed(1)}x</span>
+          </div>
+          <input type="range" min="0.5" max="5.0" step="0.1" value={vex} onChange={(e) => setVex(parseFloat(e.target.value))}
+            className="w-full h-1.5 rounded-lg bg-muted appearance-none cursor-pointer accent-primary" />
+        </div>
+
+        <div className="flex-1 flex flex-col min-h-0">
+          <div className="flex justify-between items-center text-xs mb-2">
+            <h3 className="font-semibold text-foreground uppercase tracking-wider">Geologic Legend</h3>
+            <span className="text-[10px] text-muted-foreground font-mono">{legend.length} units</span>
+          </div>
+          <input type="text" placeholder="Filter units..." value={search} onChange={(e) => setSearch(e.target.value)}
+            className="w-full text-xs border border-border bg-card px-2.5 py-1.5 rounded mb-2.5 focus:outline-none focus:border-primary" />
+          <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 max-h-[220px] md:max-h-none">
+            {legend
+              .filter((l) => !search || l.unit.toLowerCase().includes(search.toLowerCase()) || l.label.toLowerCase().includes(search.toLowerCase()))
+              .map((l) => (
+                <div key={l.unit} onMouseEnter={() => setHovered(l.unit)} onMouseLeave={() => setHovered(null)}
+                  className={`flex items-start gap-2.5 p-1.5 rounded border text-xs cursor-default transition ${hovered === l.unit ? "border-primary bg-primary/5 font-medium" : "border-transparent hover:bg-muted"}`}>
+                  <span className="inline-block w-4 h-4 rounded border border-black/10 shrink-0" style={{ backgroundColor: colorOf(l.unit) }} />
+                  <div className="flex-1 leading-snug">
+                    <span className="font-bold font-mono mr-1.5">{l.label}</span>
+                    <span className="text-foreground">{l.unit}</span>
+                  </div>
+                </div>
+              ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item: StacDoc }) {
   switch (kind) {
     case "cog": return <CogMap href={asset.href} item={item} />;
+    case "threeD": return <ThreeDViewer asset={asset} item={item} />;
     case "parquet": return <DataExplorer href={asset.href} />;
     case "image":
       return (
@@ -1229,10 +1848,12 @@ function AssetViewer({ item }: { item: StacDoc }) {
   );
 }
 
-// Preview: vector serving topics → interactive PMTiles map + linked dataset explorer; everything
-// else (publications) → the tabbed asset viewer so users can peruse every file in-page.
+// Preview: vector serving topics → interactive PMTiles map + linked dataset explorer;
+// geologic map mosaics → interactive raster PMTiles map; everything else (publications) →
+// the tabbed asset viewer so users can peruse every file in-page.
 function Preview({ item }: { item: StacDoc }) {
   if (pmtilesLink(item)) return <VectorPreview item={item} />;
+  if (rasterTilesAsset(item)) return <RasterMosaicPreview item={item} />;
   return <AssetViewer item={item} />;
 }
 
@@ -1445,6 +2066,8 @@ export function Browse(props: {
   breadcrumb: { label: string; onClick?: () => void }[];
   search: string;
   onSearch: (q: string) => void;
+  threeD: boolean;
+  onThreeD: (v: boolean) => void;
   series: string[];
   onSeries: (codes: string[]) => void;
   item?: StacDoc;
@@ -1455,7 +2078,7 @@ export function Browse(props: {
   onBackToItems: () => void;
   onViewMap: () => void;
 }) {
-  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, series, onSeries } = props;
+  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, threeD, onThreeD, series, onSeries } = props;
 
   // item detail
   if (collectionId && itemSelected) {
@@ -1487,11 +2110,15 @@ export function Browse(props: {
         <div className={C.bar}>
           <input className={C.input} placeholder="Search all collections…" value={search}
             onChange={(e) => onSearch(e.target.value)} />
+          {/* Global 3D discovery: loads every collection's items (like a search) + filters to those
+              carrying a 3d-vector asset — works from the bare catalog, no search text needed. */}
+          <span className={toggle(threeD)} title="Show only publications with an interactive 3D viewer"
+            onClick={() => onThreeD(!threeD)}>3D</span>
           {props.itemsLoading && <span className={C.muted}>loading items…</span>}
         </div>
       )}
-      {atRoot && search.trim()
-        ? <ItemList items={props.allItems} showCollection query={search} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
+      {atRoot && (search.trim() || threeD)
+        ? <ItemList items={props.allItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
         : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
     </div>
   );

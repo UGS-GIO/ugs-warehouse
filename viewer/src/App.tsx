@@ -13,6 +13,11 @@ import { useTheme } from "./theme";
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
+// Viewer root URL (the served path, no search params) — used as the logo's <a href> so
+// modifier/middle-click opens the catalog in a new tab. Uses the document's own pathname (…/index.html
+// in prod) to match router.tsx's basepath, so the link points at a real object (no NoSuchKey).
+const ROOT_HREF = location.pathname || "/";
+
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
 type View = "catalog" | "map" | "arch" | "guide" | "search";
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
@@ -135,6 +140,7 @@ export function App() {
   }, []);
 
   const [search, setSearch] = useState("");
+  const [threeD, setThreeD] = useState(false);  // global "3D pubs" discovery filter (loads all items)
 
   const catalog = useStac(CATALOG_URL);
 
@@ -168,7 +174,8 @@ export function App() {
   // Loaded for the open leaf, or every leaf while a global search runs. Graceful fallback:
   // a leaf whose items.json is missing (pre-index catalog) fetches its collection.json for
   // item links, then those items — scoped, never a catalog-wide fan-out.
-  const searching = !collectionId && search.trim().length > 0;
+  // Both search-all and the global 3D filter need every collection's items loaded.
+  const searching = !collectionId && (search.trim().length > 0 || threeD);
   const wantColls = leafColl ? [leafColl] : searching ? leafColls : [];
   const idx = useIndexes(wantColls.map((c) => ({ id: c.id, href: c.href })));
 
@@ -252,7 +259,11 @@ export function App() {
   // Open a collection fresh (series filter is per-collection → cleared). Item open / layer
   // toggle / back-to-items keep the active series filter so it survives drilling in + out.
   const openCollection = (href: string) => go({ view, c: collIdOf(href) });
-  const openItem = (href: string) => go({ view, c: collectionUrl, i: idOf(href), l: layerIds, s: seriesSel });
+  // Derive the collection from the item href (…/<collection>/<id>/<id>.json) rather than the ambient
+  // collectionUrl — search-all results span collections, so the ambient one is wrong (or absent) and
+  // the item detail (gated on a resolved leaf collection) never shows. Mirrors openCover.
+  const openItem = (href: string) =>
+    go({ view, c: href.split("/").slice(-3)[0], i: idOf(href), l: layerIds, s: seriesSel });
   // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
   // collection id from the item href (…/<collection>/<id>/<id>.json) so it resolves + the URL stays tidy.
   const openCover = (href: string) => go({ view, c: href.split("/").slice(-3)[0], i: idOf(href) });
@@ -292,11 +303,18 @@ export function App() {
       ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
       : "min-h-screen overflow-x-hidden bg-background text-sm text-foreground"}>
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
-        <button onClick={() => go({ view: "catalog" })} title="Home — catalog root"
+        {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
+            plain click still does in-app SPA nav. href is the viewer root (no search params). */}
+        <a href={ROOT_HREF} title="Home — catalog root"
+          onClick={(e) => {
+            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+            e.preventDefault();
+            go({ view: "catalog" });
+          }}
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
           <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="h-5 w-5 shrink-0" />
           <strong className="text-[15px]">UGS Warehouse</strong>
-        </button>
+        </a>
         <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">
           STAC catalog ·{" "}
           <a href={CATALOG_URL} target="_blank" rel="noreferrer"
@@ -337,6 +355,8 @@ export function App() {
           breadcrumb={crumbs}
           search={search}
           onSearch={setSearch}
+          threeD={threeD}
+          onThreeD={setThreeD}
           series={seriesSel ?? []}
           onSeries={setSeries}
           item={item.data}

@@ -45,6 +45,14 @@ steps:
           --recursive --delete-unmatched-destination-objects
         gcloud storage objects update gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX}/index.html \
           --cache-control="no-cache"
+        # SPA deep-link fix: the viewer's deep links are /warehouse/viewer/?c=…&i=… — on reload
+        # GCS resolves the object "warehouse/viewer/" (query dropped) and, with no index document,
+        # returns NoSuchKey. Set the bucket main-page suffix so any directory request serves its
+        # index.html. Only affects trailing-slash directory requests — STAC/COG objects are real
+        # keys, unaffected. (No error-page: that would hijack legitimate STAC 404s.) Idempotent;
+        # best-effort — needs storage.buckets.update (objectAdmin lacks it); set once, persists.
+        gcloud storage buckets update gs://${_PUBLIC_BUCKET} --web-main-page-suffix=index.html \
+          || echo "main-page-suffix not set (needs storage.buckets.update on ${_PUBLIC_BUCKET})"
 
 options:
   logging: CLOUD_LOGGING_ONLY

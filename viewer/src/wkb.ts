@@ -1,15 +1,15 @@
 // Minimal WKB → GeoJSON geometry parser. The warehouse writes GeoParquet with standard ISO WKB
-// (EPSG:4326, XY), so the explorer can read a single row's geometry as a BLOB — no spatial
-// extension load (which trips DuckDB-WASM's GeoParquet CRS reader and would pollute the shared
-// instance). Handles Point / LineString / Polygon + their Multi* and GeometryCollection; Z/M
-// ordinates are read past and dropped (map highlight is 2D).
+// (EPSG:4326), so the explorer can read a single row's geometry as a BLOB — no spatial extension
+// load (which trips DuckDB-WASM's GeoParquet CRS reader and would pollute the shared instance).
+// Handles Point / LineString / Polygon + their Multi* and GeometryCollection. By default Z/M are
+// read past and dropped (2D); pass keepZ to retain the Z ordinate (3D fence diagrams need it).
 
-type Pos = [number, number];
+type Pos = number[]; // [x,y] or [x,y,z]
 
 class Reader {
   private dv: DataView;
   private off = 0;
-  constructor(buf: ArrayBuffer) { this.dv = new DataView(buf); }
+  constructor(buf: ArrayBuffer, readonly keepZ: boolean) { this.dv = new DataView(buf); }
   private le = true;
   u8() { const v = this.dv.getUint8(this.off); this.off += 1; return v; }
   u32() { const v = this.dv.getUint32(this.off, this.le); this.off += 4; return v; }
@@ -32,8 +32,9 @@ function decodeType(raw: number): [number, number] {
 
 function readPoint(r: Reader, extra: number): Pos {
   const x = r.f64(); const y = r.f64();
-  for (let i = 0; i < extra; i++) r.f64();   // skip Z / M
-  return [x, y];
+  let z: number | undefined;
+  for (let i = 0; i < extra; i++) { const v = r.f64(); if (i === 0 && r.keepZ) z = v; } // keep first extra (Z)
+  return z === undefined ? [x, y] : [x, y, z];
 }
 const readRing = (r: Reader, extra: number): Pos[] => {
   const n = r.u32(); const ring: Pos[] = [];
@@ -76,13 +77,14 @@ function readGeom(r: Reader): GeoJSON.Geometry {
   }
 }
 
-/** Parse standard WKB bytes to a GeoJSON geometry. Returns null on empty/garbage input. */
-export function wkbToGeoJSON(bytes: Uint8Array): GeoJSON.Geometry | null {
+/** Parse standard WKB bytes to a GeoJSON geometry. `keepZ` retains the Z ordinate (default 2D).
+ *  Returns null on empty/garbage input. */
+export function wkbToGeoJSON(bytes: Uint8Array, keepZ = false): GeoJSON.Geometry | null {
   if (!bytes || bytes.byteLength < 5) return null;
   // Copy to a tight ArrayBuffer (DuckDB buffers may be SharedArrayBuffer-backed / offset).
   const buf = bytes.slice().buffer;
   try {
-    return readGeom(new Reader(buf));
+    return readGeom(new Reader(buf, keepZ));
   } catch {
     return null;
   }

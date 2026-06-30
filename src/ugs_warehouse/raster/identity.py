@@ -46,11 +46,9 @@ class Raster:
 
     @property
     def cog_object_path(self) -> str:
-        """`raster/cogs/1offs/<id>.cog.tif` or `raster/cogs/<layer>/<id>.cog.tif`."""
-        sub = self.layer if self.time_series else "1offs"
-        return f"{COG_PREFIX}/{sub}/{self.item_id}.cog.tif"
+        """`raster/cogs/<layer>/<id>.cog.tif`."""
+        return f"{COG_PREFIX}/{self.layer}/{self.item_id}.cog.tif"
 
     @property
     def thumb_object_path(self) -> str:
-        sub = self.layer if self.time_series else "1offs"
-        return f"{COG_PREFIX}/{sub}/{self.item_id}.thumb.png"
+        return f"{COG_PREFIX}/{self.layer}/{self.item_id}.thumb.png"

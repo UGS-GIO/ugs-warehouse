@@ -42,7 +42,7 @@ if [[ "${1:-}" == "--local" ]]; then
   echo "local-only: skipping upload"; exit 0
 fi
 
-# Upload (needs storage.objectAdmin on the bucket — run on the work box). Immutable + correct types so
+# Upload (needs storage.objectAdmin on the bucket). Immutable + correct types so
 # the CDN caches hard and transformers.js parses the JSON/ONNX without sniff surprises.
 echo "uploading → gs://${BUCKET}/pubs/models/"
 gsutil -m -h "Cache-Control:public, max-age=31536000, immutable" \

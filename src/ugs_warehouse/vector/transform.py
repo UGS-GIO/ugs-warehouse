@@ -48,8 +48,13 @@ def _select(source_rel: str) -> str:
 
     Each row also gets a stable `feature_id` (1..N in hilbert order). Because the GeoParquet and
     the PMTiles sinks both read this one materialized table, the id is identical in both — it's
-    the join key the viewer uses to link a clicked map feature to its table row (and back). It is
-    per-ingest stable (consistent across the two artifacts of one run), not a cross-ingest key.
+    the join key the viewer uses to link a clicked map feature to its table row (and back).
+
+    The hilbert order is tie-broken by `hash(row)` so feature_id is fully deterministic — identical
+    source → identical ids, run to run. Without the tiebreak, co-located rows (same centroid hilbert
+    value) get an arbitrary `row_number()` order that can shuffle between runs; that makes the
+    content fingerprint (skip-unchanged ingest, see fingerprint.py) unstable, so unchanged topics
+    would rebuild every time. The tiebreak is what makes feature_id a cross-ingest-stable key.
 
     target_epsg = 0 (unstamped geometry) errors loudly rather than silently assuming 4326 — an
     unstamped table reaching here means a CRS provenance gap upstream, not a 4326 default.
@@ -70,9 +75,10 @@ def _select(source_rel: str) -> str:
         )
         SELECT *, h3_latlng_to_cell(ST_Y(ST_Centroid(geom)), ST_X(ST_Centroid(geom)),
                                     {H3_RESOLUTION}) AS h3_r9,
-               row_number() OVER (ORDER BY ST_Hilbert(ST_Centroid(geom))) AS feature_id
+               row_number() OVER (ORDER BY ST_Hilbert(ST_Centroid(geom)), hash(hydrated))
+                 AS feature_id
         FROM hydrated
-        ORDER BY ST_Hilbert(ST_Centroid(geom))
+        ORDER BY ST_Hilbert(ST_Centroid(geom)), hash(hydrated)
     """
 
 

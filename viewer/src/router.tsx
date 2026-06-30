@@ -21,7 +21,13 @@ const rootRoute = createRootRoute({
   }),
 });
 
-export const router = createRouter({ routeTree: rootRoute, defaultPreload: false });
+// The viewer is served under a sub-path in prod (`/warehouse/viewer/`) but at `/` in dev, and vite's
+// `base: "./"` keeps it portable to any path. Without a basepath the router defaults to `/` and
+// navigation rewrites the URL to `/?…`, dropping the sub-path (so reloads 404). Derive it at runtime
+// from the document's own directory so it's correct wherever the bundle is deployed.
+const basepath = new URL(".", document.baseURI).pathname.replace(/\/$/, "") || "/";
+
+export const router = createRouter({ routeTree: rootRoute, basepath, defaultPreload: false });
 
 declare module "@tanstack/react-router" {
   interface Register {

@@ -5,6 +5,7 @@ import {
   type SortingState, useReactTable,
 } from "@tanstack/react-table";
 import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
+import { PathStyleExtension } from "@deck.gl/extensions";
 import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
 import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
 import DeckGL from "@deck.gl/react";
@@ -1356,7 +1357,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   // maplibre's 2.5D map camera) so it can orbit freely — including under the surface to look up at
   // the slice, which is the whole point of a fence diagram.
   const [polygons, setPolygons] = useState<{ unit: string; rgb: [number, number, number]; rings: number[][][] }[]>([]);
-  const [lines, setLines] = useState<{ isFault: boolean; path: number[][] }[]>([]);
+  const [lines, setLines] = useState<{ kind: "fault" | "contact" | "boundary"; dashed: boolean; path: number[][] }[]>([]);
   const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
   const [extent, setExtent] = useState<{ spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] } | null>(null);
   const [terrainMesh, setTerrainMesh] = useState<TerrainMesh | null>(null);
@@ -1391,7 +1392,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
         // Pass 1: collect raw [lon,lat,z] + bounds (centre needed before the local-metre projection).
         const rawPolys: { unit: string; rgb: [number, number, number]; rings: number[][][] }[] = [];
-        const rawLines: { isFault: boolean; path: number[][] }[] = [];
+        const rawLines: { kind: "fault" | "contact" | "boundary"; dashed: boolean; path: number[][] }[] = [];
         const legendMap = new Map<string, { label: string; color: string }>();
         let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
         let minZ = Infinity, maxZ = -Infinity, count = 0;
@@ -1416,13 +1417,19 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         }
         for (const feat of lineData?.features ?? []) {
           const p = feat.properties || {};
-          const isFault = (p.Type || "").toLowerCase().includes("fault") || !!p.is_fault;
+          // Authored line cartography from the GeMS Type + Symbol fields: contact / fault / section
+          // boundary, and "approximately located" → dashed (vs "well located" → solid).
+          const type = (p.Type || "").toLowerCase();
+          const sym = (p.Symbol || "").toLowerCase();
+          const kind: "fault" | "contact" | "boundary" =
+            type.includes("fault") ? "fault" : type.includes("boundary") ? "boundary" : "contact";
+          const dashed = sym.includes("approxim"); // note: data has the typo "approximatley"
           const geom = feat.geometry || {};
           const multi: number[][][] = geom.type === "MultiLineString" ? geom.coordinates
             : geom.type === "LineString" ? [geom.coordinates] : [];
           for (const coords of multi) {
             const path = coords.map((pt) => { const c: number[] = [pt[0], pt[1], pt[2] ?? 0]; scan(c[0], c[1], c[2]); return c; });
-            if (path.length) rawLines.push({ isFault, path });
+            if (path.length) rawLines.push({ kind, dashed, path });
           }
         }
         if (!count) throw new Error("No valid coordinates found in the 3D dataset");
@@ -1522,8 +1529,13 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         data: lines,
         coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
         getPath: ((d: { path: number[][] }) => d.path.map((p) => [p[0], p[1], p[2] * vex])) as never,
-        getColor: (d: { isFault: boolean }) => (d.isFault ? [220, 38, 38] : [71, 85, 105]),
-        getWidth: (d: { isFault: boolean }) => (d.isFault ? 3 : 1.5),
+        // Authored: all black; faults heavier than contacts, section boundary thin.
+        getColor: [25, 25, 25],
+        getWidth: (d: { kind: string }) => (d.kind === "fault" ? 2.6 : d.kind === "boundary" ? 0.8 : 1.3),
+        // Dashed = "approximately located" (geologic convention); solid = well located.
+        getDashArray: (d: { dashed: boolean }) => (d.dashed ? [5, 3] : [0, 0]),
+        dashJustified: true,
+        extensions: [new PathStyleExtension({ dash: true })],
         widthUnits: "pixels",
         widthMinPixels: 1,
         updateTriggers: { getPath: [vex] },

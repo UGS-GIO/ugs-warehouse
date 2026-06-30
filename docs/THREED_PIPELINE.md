@@ -55,6 +55,16 @@ explorer), so it can read the fence straight from Parquet.
 6. Triangulate fence panels → glTF/GLB.
 7. Write STAC assets + ISO sidecar.
 
+### Cartography edge cases (both handled in the viewer; the pipeline must too)
+
+- **Surficial units absent from the 3D symbology.** The CSA_3D `.mapx` only styles the bedrock units
+  it cuts (24–42); the thin surface veneer units (e.g. `Qay`, `TRt`) have no 3D color. Recover them by
+  **sampling the rendered COG** at their 2D `MapUnitPolys` (reproject 26912→4326, mercator-fraction →
+  thumbnail pixel, mode color) — which also guarantees they match the draped sheet.
+- **Line cartography** comes from the GeMS `Type` + `Symbol` fields: contact / fault / section-boundary,
+  and `Symbol` carrying "approximately located" (→ **dashed**) vs "well located" (→ solid). All black
+  (heavier for faults). Reverse-fault teeth not yet done.
+
 ## Viewer change
 
 Swap the GeoJSON `fetch` + manual parse → duckdb-wasm read of the GeoParquet; use the `fill_rgb`

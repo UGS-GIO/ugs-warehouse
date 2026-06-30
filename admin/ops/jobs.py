@@ -44,7 +44,7 @@ STAGES = [
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt. "
               "Then render each topic's styled PMTiles → preview thumbnail (content-hash skip; "
               "re-renders only changed styles)."},
-    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest"],
+    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest", "graph"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
               "STAC (3 collections). One-click Full refresh runs thumbnails → rebuild for you, or "
               "step through harvest / thumbnail / rebuild individually."},
@@ -74,6 +74,9 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
         "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "
         "Run a Vector reingest after to bind the new thumbnail assets. 3 shards.", tasks=3),
+    Job("graph", "ugs-pubs-graph", "Build knowledge graph",
+        "Rebuild the publications knowledge graph (nodes/edges Parquet) — citation + co-author + "
+        "semantic edges. Reads pub metadata + embeddings; safe to re-run."),
 ]}
 
 

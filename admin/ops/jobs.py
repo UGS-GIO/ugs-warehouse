@@ -1,7 +1,7 @@
 """Trigger + monitor the warehouse's Cloud Run jobs (google-cloud-run v2).
 
-The console never runs business logic — it only *executes* the existing jobs (the same ones the
-work box runs by hand) and reports their execution status. `JOBS_DRY_RUN` (default in DEBUG) skips
+The console never runs business logic — it only *executes* the existing jobs (the same ones
+run by hand) and reports their execution status. `JOBS_DRY_RUN` (default in DEBUG) skips
 the real API call so the UI is exercisable without GCP creds.
 
 Auth: Application Default Credentials. In prod the Cloud Run service account needs `run.developer`

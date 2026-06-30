@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Build a LOCAL collections-layout STAC catalog under viewer/public/stac/.
 
-The work-box ingest isn't reachable, so we reshape what's already published:
+The deployed ingest isn't reachable locally, so we reshape what's already published:
   - 20 flat vector items  (warehouse-sandbox/stac/*.json)  -> ugs-serving-topics
   - prod publication items (warehouse/stac/ugs-publications/*) -> ugs-publications
 

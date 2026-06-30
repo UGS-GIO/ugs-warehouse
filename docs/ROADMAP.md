@@ -50,7 +50,7 @@ Mobile: ✅ responsive layout (map view stacks, header trims, tables scroll-x).
 - ☐ **Job orchestration** — sequence/schedule the Cloud Run Jobs (nightly reingest → refresh_catalog;
   harvest → promote → STAC; raster on #169). **Cloud Workflows + Cloud Scheduler** (serverless,
   pay-per-run, ephemeral) — NOT Cloud Composer/Airflow (~$300–500/mo always-on, overkill). Authorable
-  as YAML locally, deploy on work box. **Defer until:** #169 raster jobs add dependencies, or
+  as YAML locally, deploy with GCP perms. **Defer until:** #169 raster jobs add dependencies, or
   soil-water time-series needs scheduled daily appends. Today the event path (#418 Pub/Sub) already
   covers recurring per-topic ingest; batch jobs are rare + run by hand.
 

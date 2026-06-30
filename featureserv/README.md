@@ -33,7 +33,7 @@ docker run --rm -p 9000:9000 ugs-featureserv
 
 Validated locally end-to-end: 19 collections, items + bbox queries 200, conformance complete.
 
-## Deploy (work box)
+## Deploy
 
 `cloudbuild.yaml` builds `featureserv/` → `ugs-features` image → Cloud Run `ugs-warehouse-features`,
 `--allow-unauthenticated`, `--port=9000`, scale-to-zero, no Cloud SQL / secrets. Then in **ArcGIS Pro**:

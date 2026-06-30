@@ -31,9 +31,13 @@ Classification extension** (see below), not a per-row column.
 
 ⚠️ **Color source + the built-in mechanism (verified on OFR-778DM):**
 - `DescriptionOfMapUnits.AreaFillRGB` is **empty** — authored colors live in the **ArcGIS symbology**
-  (`.mapx`), as a `CIMUniqueValueRenderer` keyed on the `Symbol` field (`"24_Tk_…"` → MapUnit `Tk`),
-  RGB in a `CIMRGBColor`. DMU supplies `Name` + `HierarchyKey` (label + stratigraphic order).
-- Surficial units absent from the 3D symbology (`Qay`, `TRt`) → recover by sampling the rendered COG.
+  (the `.mapx`), in the **`CSA_3D_MapUnitPolys` layer's `CIMUniqueValueRenderer`**, keyed on the
+  `Symbol` field (`"24_Tk_…"` → MapUnit `Tk`). All 17 fence units are present and authoritative (it's
+  the cross-section's own symbology). DMU supplies `Name` + `HierarchyKey` (label + stratigraphic order).
+- ⚠️ **Colors come in multiple CIM color types** — most are `CIMRGBColor`, but some (e.g. `Qay`, `TRt`)
+  are **`CIMCMYKColor`** (and possibly Gray/HSV). The parser must convert all of them; an RGB-only walk
+  silently drops those units. (Earlier mistake: dropped Qay/TRt, then COG-sampled them — both samples
+  were wrong; the authored Qay is pale yellow, TRt green.) **No COG sampling needed.**
 - **Serve the colors as `classification:classes`** — the warehouse's existing standard (vector topics
   already emit it via `core/styles.classification_classes` + `attach_classification`; the viewer reads
   it via `classificationEntries` / `classificationColors`). The 3D pipeline stamps the same property:
@@ -63,10 +67,11 @@ explorer), so it can read the fence straight from Parquet.
 
 ### Cartography edge cases (both handled in the viewer; the pipeline must too)
 
-- **Surficial units absent from the 3D symbology.** The CSA_3D `.mapx` only styles the bedrock units
-  it cuts (24–42); the thin surface veneer units (e.g. `Qay`, `TRt`) have no 3D color. Recover them by
-  **sampling the rendered COG** at their 2D `MapUnitPolys` (reproject 26912→4326, mercator-fraction →
-  thumbnail pixel, mode color) — which also guarantees they match the draped sheet.
+- **All units are in the cross-section renderer** — including surficial (`Qay`, `TRt`). The trap is the
+  **color encoding** (RGB vs CMYK, see above), not missing units. Parse every CIM color type.
+- **Cross-section colors may differ from the map plate (COG).** The fence is authored with the
+  cross-section's own symbology; that's authoritative for the fence even where it diverges from the
+  plan-view plate. (Don't "fix" the fence to match the COG — they're different authored products.)
 - **Line cartography** comes from the GeMS `Type` + `Symbol` fields: contact / fault / section-boundary,
   and `Symbol` carrying "approximately located" (→ **dashed**) vs "well located" (→ solid). All black
   (heavier for faults). Reverse-fault teeth not yet done.

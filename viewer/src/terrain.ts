@@ -64,7 +64,7 @@ export async function buildMeshFrom3DEP(
   bbox: [number, number, number, number],
   center: [number, number],
   scale: [number, number],
-  grid = 112,
+  grid = 64,
 ): Promise<TerrainMesh | null> {
   const pts: number[][] = [];
   for (let j = 0; j < grid; j++) {
@@ -80,7 +80,7 @@ export async function buildMeshFrom3DEP(
   const results: number[][] = new Array(batches.length);
   let next = 0;
   const worker = async () => { while (next < batches.length) { const m = next++; results[m] = await sample3DEP(batches[m]); } };
-  await Promise.all(Array.from({ length: 6 }, worker));
+  await Promise.all(Array.from({ length: 10 }, worker));
   const z = results.flat();
   if (z.every((v) => !v)) return null; // no coverage / all failed
 

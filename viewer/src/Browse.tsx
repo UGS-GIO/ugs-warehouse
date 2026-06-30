@@ -1349,9 +1349,25 @@ function hexToRgb(hex: string): [number, number, number] {
   return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
 }
 
+// Parsed fence + sampled terrain are expensive (network fetch/parse; ~tens of 3DEP requests) and the
+// viewer re-mounts every time the 3D tab is selected. Cache both per item.id at module scope so a
+// second visit is instant instead of re-doing all the work.
+type FenceData = {
+  polygons: { unit: string; rings: number[][][] }[];
+  lines: { kind: "fault" | "contact" | "boundary"; dashed: boolean; path: number[][] }[];
+  legend: { unit: string; label: string; color: string }[];
+  parquetFill: Record<string, string>;
+  extent: { spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] };
+};
+const fenceCache = new Map<string, FenceData>();
+const terrainCache = new Map<string, TerrainMesh | null>();
+
 function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
-  const [loading, setLoading] = useState(true);
+  const itemId = item.id ?? asset.href;  // stable cache key (item.id is optional on StacDoc)
+  const [loading, setLoading] = useState(() => !fenceCache.has(itemId));
   const [error, setError] = useState<string | null>(null);
+  // Terrain runs after the fence draws; track it so the canvas can show a real progress indicator.
+  const [terrainPending, setTerrainPending] = useState(false);
 
   // Fence parsed to LOCAL metres centred on the dataset. OrbitView is a Cartesian 3D camera (unlike
   // maplibre's 2.5D map camera) so it can orbit freely — including under the surface to look up at
@@ -1383,6 +1399,14 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
   useEffect(() => {
     let active = true;
+    // Cache hit → restore parsed fence synchronously, skip the fetch/parse entirely.
+    const hit = fenceCache.get(itemId);
+    if (hit) {
+      setPolygons(hit.polygons); setLines(hit.lines); setLegend(hit.legend);
+      setParquetFill(hit.parquetFill); setExtent(hit.extent);
+      setError(null); setLoading(false);
+      return () => { active = false; };
+    }
     setLoading(true);
     setError(null);
 
@@ -1473,16 +1497,24 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         const mLon = 111320 * Math.cos((cLat * Math.PI) / 180), mLat = 110574;
         const toLocal = (p: number[]): number[] => [(p[0] - cLon) * mLon, (p[1] - cLat) * mLat, p[2]];
 
-        if (!active) return;
-        setParquetFill(pFill);
-        setPolygons(rawPolys.map((d) => ({ ...d, rings: d.rings.map((r) => r.map(toLocal)) })));
-        setLines(rawLines.map((l) => ({ ...l, path: l.path.map(toLocal) })));
-        setLegend(Array.from(legendMap.entries()).map(([unit, label]) => ({ unit, label, color: "" })).sort((a, b) => a.unit.localeCompare(b.unit)));
         const halfX = ((maxLon - minLon) / 2) * mLon, halfY = ((maxLat - minLat) / 2) * mLat;
-        setExtent({
-          spanXY: Math.max(halfX, halfY) * 2, zTop: maxZ, zMid: (minZ + maxZ) / 2, half: [halfX, halfY],
-          bbox: [minLon, minLat, maxLon, maxLat], center: [cLon, cLat], scale: [mLon, mLat],
-        });
+        const fence: FenceData = {
+          polygons: rawPolys.map((d) => ({ ...d, rings: d.rings.map((r) => r.map(toLocal)) })),
+          lines: rawLines.map((l) => ({ ...l, path: l.path.map(toLocal) })),
+          legend: Array.from(legendMap.entries()).map(([unit, label]) => ({ unit, label, color: "" })).sort((a, b) => a.unit.localeCompare(b.unit)),
+          parquetFill: pFill,
+          extent: {
+            spanXY: Math.max(halfX, halfY) * 2, zTop: maxZ, zMid: (minZ + maxZ) / 2, half: [halfX, halfY],
+            bbox: [minLon, minLat, maxLon, maxLat], center: [cLon, cLat], scale: [mLon, mLat],
+          },
+        };
+        fenceCache.set(itemId, fence);
+        if (!active) return;
+        setParquetFill(fence.parquetFill);
+        setPolygons(fence.polygons);
+        setLines(fence.lines);
+        setLegend(fence.legend);
+        setExtent(fence.extent);
         setLoading(false);
       })
       .catch((err) => { if (active) { setError(err instanceof Error ? err.message : "Failed to load 3D data files"); setLoading(false); } });
@@ -1497,9 +1529,30 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   useEffect(() => {
     if (!extent) { setTerrainMesh(null); return; }
     let active = true;
+    // Cache hit → reuse the sampled mesh, skip the ~tens of 3DEP requests.
+    if (terrainCache.has(itemId)) {
+      setTerrainMesh(terrainCache.get(itemId) ?? null);
+      setTerrainPending(false);
+      return () => { active = false; };
+    }
     const mapBbox = (item.bbox?.slice(0, 4) as [number, number, number, number] | undefined) ?? extent.bbox;
     // Live USGS 3DEP (CORS-open, public domain, 1 m lidar over Utah) — no hosting, any pub's bbox.
-    buildMeshFrom3DEP(mapBbox, extent.center, extent.scale).then((m) => { if (active) setTerrainMesh(m); });
+    // Progressive: a coarse grid lands in ~1–2 s so the surface shows immediately, then a fine grid
+    // samples in the background and swaps in (smooth — no facets, the draped sheet stops looking
+    // tessellated). Cache the fine result so revisits skip both passes.
+    setTerrainPending(true);
+    (async () => {
+      try {
+        const coarse = await buildMeshFrom3DEP(mapBbox, extent.center, extent.scale, 48);
+        if (!active) return;
+        if (coarse) setTerrainMesh(coarse);
+        const fine = await buildMeshFrom3DEP(mapBbox, extent.center, extent.scale, 160);
+        terrainCache.set(itemId, fine ?? coarse);
+        if (!active) return;
+        if (fine ?? coarse) setTerrainMesh(fine ?? coarse);
+      } catch { if (active) setTerrainMesh(null); }
+      finally { if (active) setTerrainPending(false); }
+    })();
     return () => { active = false; };
   }, [extent, item]);
 
@@ -1625,6 +1678,12 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
             Scroll to zoom · right-drag to pan
           </div>
         </div>
+        {terrainPending && (
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 flex items-center gap-2 bg-card/90 backdrop-blur-sm border border-border px-3 py-2 rounded-md shadow-sm text-xs text-foreground">
+            <span className="inline-block w-3.5 h-3.5 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+            {terrainMesh ? "Refining terrain…" : "Sampling USGS 3DEP terrain…"}
+          </div>
+        )}
       </div>
 
       {/* Control sidebar + geologic legend */}

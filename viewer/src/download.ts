@@ -332,6 +332,35 @@ export async function fetchRowById(
   }
 }
 
+/** Read every row of a (small) 3D GeoParquet as {props, geometry} with **Z retained** — for the 3D
+ *  fence viewer, which needs the whole file (not paged) and the elevation ordinate. No spatial
+ *  extension (geometry read as WKB BLOB, parsed in JS). props = all non-geometry columns. */
+export async function readFeatures3D(
+  parquetUrl: string,
+): Promise<Array<{ props: Record<string, unknown>; geometry: GeoJSON.Geometry | null }>> {
+  const db = await getDB();
+  const conn = await db.connect();
+  try {
+    const src = await registerUrl(parquetUrl);
+    const from = `read_parquet('${src}')`;
+    const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
+    const allCols = desc.toArray().map((r) => String(r.column_name));
+    const geomCol = GEOM_NAMES.find((c) => allCols.includes(c));
+    const propCols = allCols.filter((c) => c !== geomCol);
+    const res = await conn.query(`SELECT * FROM ${from};`);
+    const { wkbToGeoJSON } = await import("./wkb");
+    return res.toArray().map((r) => {
+      const o = r.toJSON() as Record<string, unknown>;
+      const props: Record<string, unknown> = {};
+      for (const c of propCols) props[c] = o[c];
+      const blob = geomCol ? (o[geomCol] as Uint8Array | null | undefined) : undefined;
+      return { props, geometry: blob ? wkbToGeoJSON(blob, true) : null };
+    });
+  } finally {
+    await conn.close();
+  }
+}
+
 export async function exportItem(
   parquetUrl: string,
   stem: string,

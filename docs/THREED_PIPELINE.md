@@ -103,7 +103,14 @@ old `build_terrain_rgb.py` (DEM tile hosting) is obsolete and removed.
   dashed-for-approximate).
 - ✅ **duckdb reads Z from the GeoParquet** — duckdb 1.5.3 (the viewer's duckdb-wasm family) hydrates
   it as native `GEOMETRY`; `ST_AsWKB` type code `1006` (ISO WKB-Z), `ST_AsGeoJSON` returns 3-coord
-  vertices. So the viewer can serve straight from GeoParquet — no WKB-decode shim.
+  vertices.
+- ✅ **Viewer reads the GeoParquet in-browser** — `download.readFeatures3D` reads the whole file via
+  duckdb-wasm, geometry as WKB BLOB parsed by `wkb.wkbToGeoJSON(blob, keepZ=true)` (no spatial
+  extension — it trips duckdb-wasm). The 3D viewer is now dual-source: GeoParquet (a `.parquet`
+  3d-vector asset, or same-origin override) → GeoJSON fallback. Colour precedence: parquet `fill`
+  column → `classification:classes` → sidecar → placeholder. Verified end-to-end: fence renders from
+  parquet, Z intact, authored fills, and the legend gains full formation names (the DMU `Name` the
+  conversion joined). `wkbToGeoJSON` gained a `keepZ` flag (was 2D-only).
 
 ## Still to verify
 

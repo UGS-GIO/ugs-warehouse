@@ -1356,7 +1356,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   // Fence parsed to LOCAL metres centred on the dataset. OrbitView is a Cartesian 3D camera (unlike
   // maplibre's 2.5D map camera) so it can orbit freely — including under the surface to look up at
   // the slice, which is the whole point of a fence diagram.
-  const [polygons, setPolygons] = useState<{ unit: string; rgb: [number, number, number]; rings: number[][][] }[]>([]);
+  const [polygons, setPolygons] = useState<{ unit: string; rings: number[][][] }[]>([]);
   const [lines, setLines] = useState<{ kind: "fault" | "contact" | "boundary"; dashed: boolean; path: number[][] }[]>([]);
   const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
   const [extent, setExtent] = useState<{ spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] } | null>(null);
@@ -1364,6 +1364,9 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   // Authored geologic colors (MapUnit → hex) from the publication's ArcGIS symbology — the real
   // cartography. Interim: a baked per-pub sidecar (the 3D pipeline will fold this into the GeoParquet).
   const [authored, setAuthored] = useState<Record<string, string>>({});
+  // Per-unit fill carried in the GeoParquet `fill` column (cloud-native path) — authored, highest
+  // precedence. Empty on the GeoJSON path.
+  const [parquetFill, setParquetFill] = useState<Record<string, string>>({});
 
   const [vex, setVex] = useState(2.5);
   const [showUnits, setShowUnits] = useState(true);
@@ -1383,17 +1386,45 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     setLoading(true);
     setError(null);
 
-    Promise.all([
-      fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
-      fetch(lineUrl).then((r) => r.json()).catch(() => null),
-    ])
-      .then(([polyData, lineData]) => {
-        if (!active) return;
+    // A fence feature, normalised across both sources: GeoJSON geometry (with Z) + flat props.
+    type Feat = { geometry: { type?: string; coordinates?: unknown } | null; props: Record<string, unknown> };
 
+    // Cloud-native first: 3D GeoParquet (duckdb-wasm, WKB-Z) — a `.parquet` 3d-vector asset, or the
+    // same-origin dev override. Falls back to the GeoJSON assets when there's no parquet.
+    async function loadFence(): Promise<{ polyFeats: Feat[]; lineFeats: Feat[]; parquet: boolean }> {
+      const assets = Object.values(item.assets ?? {}) as Asset[];
+      const pq = (re: RegExp) => assets.find((a) => /\.parquet$/i.test(a.href) && re.test(a.href))?.href;
+      // Absolute URLs — duckdb-wasm's HTTP file protocol can't open a relative one.
+      const abs = (u: string) => new URL(u, location.href).href;
+      const base = import.meta.env.BASE_URL;
+      const polyPq = pq(/polygon/i) ?? abs(`${base}3d/${item.id}_3d_polygons.parquet`);
+      const linePq = pq(/line/i) ?? abs(`${base}3d/${item.id}_3d_lines.parquet`);
+      try {
+        const { readFeatures3D } = await import("./download");
+        const [pf, lf] = await Promise.all([readFeatures3D(polyPq), readFeatures3D(linePq).catch(() => [])]);
+        if (pf.length) return { polyFeats: pf as Feat[], lineFeats: lf as Feat[], parquet: true };
+      } catch { /* no parquet → GeoJSON */ }
+      const [pd, ld] = await Promise.all([
+        fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
+        fetch(lineUrl).then((r) => r.json()).catch(() => null),
+      ]);
+      const toFeat = (f: { geometry?: unknown; properties?: unknown }): Feat =>
+        ({ geometry: (f.geometry ?? null) as Feat["geometry"], props: (f.properties ?? {}) as Record<string, unknown> });
+      return {
+        polyFeats: ((pd?.features ?? []) as { geometry?: unknown; properties?: unknown }[]).map(toFeat),
+        lineFeats: ((ld?.features ?? []) as { geometry?: unknown; properties?: unknown }[]).map(toFeat),
+        parquet: false,
+      };
+    }
+
+    loadFence()
+      .then(({ polyFeats, lineFeats }) => {
+        if (!active) return;
         // Pass 1: collect raw [lon,lat,z] + bounds (centre needed before the local-metre projection).
-        const rawPolys: { unit: string; rgb: [number, number, number]; rings: number[][][] }[] = [];
+        const rawPolys: { unit: string; rings: number[][][] }[] = [];
         const rawLines: { kind: "fault" | "contact" | "boundary"; dashed: boolean; path: number[][] }[] = [];
-        const legendMap = new Map<string, { label: string; color: string }>();
+        const legendMap = new Map<string, string>();
+        const pFill: Record<string, string> = {};
         let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
         let minZ = Infinity, maxZ = -Infinity, count = 0;
         const scan = (lon: number, lat: number, z: number) => {
@@ -1401,34 +1432,35 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
           minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
           minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); count++;
         };
+        const xyz = (pt: number[]): number[] => { const c = [pt[0], pt[1], pt[2] ?? 0]; scan(c[0], c[1], c[2]); return c; };
 
-        for (const feat of polyData.features ?? []) {
-          const p = feat.properties || {};
-          const unit = p.MapUnit || p.unit || "Unknown Unit";
-          const label = p.Label || p.label || "Unit";
-          const color = getUnitColor(unit, label);
+        for (const feat of polyFeats) {
+          const p = feat.props;
+          const unit = String(p.MapUnit ?? p.unit ?? "Unknown Unit");
+          const label = String(p.label ?? p.Label ?? unit);
+          if (typeof p.fill === "string") pFill[unit] = p.fill; // authored fill from the parquet
           const geom = feat.geometry || {};
-          const multi: number[][][][] = geom.type === "MultiPolygon" ? geom.coordinates
-            : geom.type === "Polygon" ? [geom.coordinates] : [];
+          const multi: number[][][][] = geom.type === "MultiPolygon" ? geom.coordinates as number[][][][]
+            : geom.type === "Polygon" ? [geom.coordinates as number[][][]] : [];
           for (const rings of multi) {
-            const r3 = rings.map((ring) => ring.map((pt) => { const c: number[] = [pt[0], pt[1], pt[2] ?? 0]; scan(c[0], c[1], c[2]); return c; }));
-            if (r3.length && r3[0].length) { rawPolys.push({ unit, rgb: hexToRgb(color), rings: r3 }); legendMap.set(unit, { label, color }); }
+            const r3 = rings.map((ring) => ring.map(xyz));
+            if (r3.length && r3[0].length) { rawPolys.push({ unit, rings: r3 }); legendMap.set(unit, label); }
           }
         }
-        for (const feat of lineData?.features ?? []) {
-          const p = feat.properties || {};
-          // Authored line cartography from the GeMS Type + Symbol fields: contact / fault / section
-          // boundary, and "approximately located" → dashed (vs "well located" → solid).
-          const type = (p.Type || "").toLowerCase();
-          const sym = (p.Symbol || "").toLowerCase();
-          const kind: "fault" | "contact" | "boundary" =
-            type.includes("fault") ? "fault" : type.includes("boundary") ? "boundary" : "contact";
-          const dashed = sym.includes("approxim"); // note: data has the typo "approximatley"
+        for (const feat of lineFeats) {
+          const p = feat.props;
+          // Authored line cartography from the GeMS Type/Symbol (parquet carries kind/dashed directly).
+          const type = String(p.Type ?? "").toLowerCase();
+          const sym = String(p.Symbol ?? "").toLowerCase();
+          const kind: "fault" | "contact" | "boundary" = p.kind === "fault" || p.kind === "boundary" || p.kind === "contact"
+            ? p.kind as "fault" | "contact" | "boundary"
+            : type.includes("fault") ? "fault" : type.includes("boundary") ? "boundary" : "contact";
+          const dashed = typeof p.dashed === "boolean" ? p.dashed : sym.includes("approxim");
           const geom = feat.geometry || {};
-          const multi: number[][][] = geom.type === "MultiLineString" ? geom.coordinates
-            : geom.type === "LineString" ? [geom.coordinates] : [];
+          const multi: number[][][] = geom.type === "MultiLineString" ? geom.coordinates as number[][][]
+            : geom.type === "LineString" ? [geom.coordinates as number[][]] : [];
           for (const coords of multi) {
-            const path = coords.map((pt) => { const c: number[] = [pt[0], pt[1], pt[2] ?? 0]; scan(c[0], c[1], c[2]); return c; });
+            const path = coords.map(xyz);
             if (path.length) rawLines.push({ kind, dashed, path });
           }
         }
@@ -1440,9 +1472,10 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         const toLocal = (p: number[]): number[] => [(p[0] - cLon) * mLon, (p[1] - cLat) * mLat, p[2]];
 
         if (!active) return;
+        setParquetFill(pFill);
         setPolygons(rawPolys.map((d) => ({ ...d, rings: d.rings.map((r) => r.map(toLocal)) })));
         setLines(rawLines.map((l) => ({ ...l, path: l.path.map(toLocal) })));
-        setLegend(Array.from(legendMap.entries()).map(([unit, v]) => ({ unit, label: v.label, color: v.color })).sort((a, b) => a.unit.localeCompare(b.unit)));
+        setLegend(Array.from(legendMap.entries()).map(([unit, label]) => ({ unit, label, color: "" })).sort((a, b) => a.unit.localeCompare(b.unit)));
         const halfX = ((maxLon - minLon) / 2) * mLon, halfY = ((maxLat - minLat) / 2) * mLat;
         setExtent({
           spanXY: Math.max(halfX, halfY) * 2, zTop: maxZ, zMid: (minZ + maxZ) / 2, half: [halfX, halfY],
@@ -1453,7 +1486,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       .catch((err) => { if (active) { setError(err instanceof Error ? err.message : "Failed to load 3D data files"); setLoading(false); } });
 
     return () => { active = false; };
-  }, [polyUrl, lineUrl]);
+  }, [item.id, polyUrl, lineUrl]);
 
   // Build the DEM terrain mesh once the dataset extent is known (terrarium tiles → heightfield in the
   // fence's local frame). The map sheet textures it, and the fence tops land on the real surface.
@@ -1478,7 +1511,8 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   // Unit colour, standard-first: STAC classification:classes (the warehouse's built-in mechanism, what
   // the 3D pipeline will stamp) → interim per-pub sidecar → derived placeholder.
   const clsColors = useMemo(() => classificationColors(item), [item]);
-  const colorOf = (unit: string) => clsColors[unit] ?? authored[unit] ?? getUnitColor(unit, "");
+  // Precedence: GeoParquet `fill` column → STAC classification:classes → interim sidecar → placeholder.
+  const colorOf = (unit: string) => parquetFill[unit] ?? clsColors[unit] ?? authored[unit] ?? getUnitColor(unit, "");
 
   const layers = useMemo(() => {
     const out: unknown[] = [];
@@ -1522,7 +1556,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         },
         pickable: true,
         onHover: (info: { object?: { unit: string } }) => setHovered(info?.object?.unit ?? null),
-        updateTriggers: { getPolygon: [vex], getFillColor: [hovered, authored, clsColors] },
+        updateTriggers: { getPolygon: [vex], getFillColor: [hovered, authored, clsColors, parquetFill] },
       }) as unknown);
     }
     if (showLines) {
@@ -1544,7 +1578,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       }) as unknown);
     }
     return out;
-  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, terrainMesh, vex, hovered, authored, clsColors]);
+  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, terrainMesh, vex, hovered, authored, clsColors, parquetFill]);
 
   if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries…</div>;
   if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;

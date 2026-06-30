@@ -39,6 +39,7 @@ exclude_docs: |
   ROADMAP.md
   RASTER_SPEC.md
   INTEGRATION_GEOLMAP.md
+  THREED_PIPELINE.md
 
 plugins:
   - search

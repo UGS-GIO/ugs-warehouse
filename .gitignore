@@ -35,3 +35,7 @@ admin/staticfiles/
 
 # vendored search model (regen: scripts/vendor_search_assets.sh --local)
 /search-assets/
+
+# stray playwright screenshots
+3d-viewer.png
+.playwright-mcp/

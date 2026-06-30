@@ -6,6 +6,7 @@ import {
 } from "@tanstack/react-table";
 import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
 import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
+import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
 import DeckGL from "@deck.gl/react";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -13,6 +14,7 @@ import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type Map
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
+import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
 import { type Asset, citeLink, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 
 // A few latest covers for a collection card (thumbnail strip). `date` = the item datetime, used to
@@ -332,7 +334,6 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards" | "thumbs">("table");
   const [mapOnly, setMapOnly] = useState(false);  // hide metadata-only items (no COG / no tiles)
-  const [threeDOnly, setThreeDOnly] = useState(false);  // only items with a 3D fence-diagram asset
   const [yearMin, setYearMin] = useState("");
   const [yearMax, setYearMax] = useState("");
   const [topics, setTopics] = useState<string[]>([]);  // map-pub topic filter (multi-select)
@@ -382,7 +383,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
         if (scaleTier && scaleTierOf(it) !== scaleTier) return false;
         if (csel.size && !csel.has(gCounty(it))) return false;
         if (mapOnly && !hasMapData(it)) return false;
-        if ((threeDOnly || force3D) && !has3D(it)) return false;
+        if (force3D && !has3D(it)) return false;
         if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
           const y = gYear(it);
           if (y == null || (Number.isFinite(ymin) && y < ymin) || (Number.isFinite(ymax) && y > ymax)) return false;
@@ -396,7 +397,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
       }
       return filtered;
     },
-    [items, needle, series, topics, author, scaleTier, counties, mapOnly, threeDOnly, force3D, yearMin, yearMax],
+    [items, needle, series, topics, author, scaleTier, counties, mapOnly, force3D, yearMin, yearMax],
   );
 
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
@@ -452,8 +453,6 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
         </span>
         <span className={toggle(mapOnly)} title="Only items with a COG or vector tiles to display on the map"
           onClick={() => setMapOnly((v) => !v)}>Mappable</span>
-        <span className={toggle(threeDOnly)} title="Only items with an interactive 3D fence-diagram asset"
-          onClick={() => setThreeDOnly((v) => !v)}>3D</span>
         <span className={toggle(mode === "table")} onClick={() => setMode("table")}>Table</span>
         <span className={toggle(mode === "thumbs")} onClick={() => setMode("thumbs")}>Thumbnails</span>
         <span className={toggle(mode === "cards")} onClick={() => setMode("cards")}>Cards</span>
@@ -1359,7 +1358,8 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const [polygons, setPolygons] = useState<{ unit: string; rgb: [number, number, number]; rings: number[][][] }[]>([]);
   const [lines, setLines] = useState<{ isFault: boolean; path: number[][] }[]>([]);
   const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
-  const [extent, setExtent] = useState<{ spanXY: number; zTop: number; zMid: number; half: [number, number] } | null>(null);
+  const [extent, setExtent] = useState<{ spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] } | null>(null);
+  const [terrainMesh, setTerrainMesh] = useState<TerrainMesh | null>(null);
 
   const [vex, setVex] = useState(2.5);
   const [showUnits, setShowUnits] = useState(true);
@@ -1434,7 +1434,10 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         setLines(rawLines.map((l) => ({ ...l, path: l.path.map(toLocal) })));
         setLegend(Array.from(legendMap.entries()).map(([unit, v]) => ({ unit, label: v.label, color: v.color })).sort((a, b) => a.unit.localeCompare(b.unit)));
         const halfX = ((maxLon - minLon) / 2) * mLon, halfY = ((maxLat - minLat) / 2) * mLat;
-        setExtent({ spanXY: Math.max(halfX, halfY) * 2, zTop: maxZ, zMid: (minZ + maxZ) / 2, half: [halfX, halfY] });
+        setExtent({
+          spanXY: Math.max(halfX, halfY) * 2, zTop: maxZ, zMid: (minZ + maxZ) / 2, half: [halfX, halfY],
+          bbox: [minLon, minLat, maxLon, maxLat], center: [cLon, cLat], scale: [mLon, mLat],
+        });
         setLoading(false);
       })
       .catch((err) => { if (active) { setError(err instanceof Error ? err.message : "Failed to load 3D data files"); setLoading(false); } });
@@ -1442,15 +1445,40 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     return () => { active = false; };
   }, [polyUrl, lineUrl]);
 
+  // Build the DEM terrain mesh once the dataset extent is known (terrarium tiles → heightfield in the
+  // fence's local frame). The map sheet textures it, and the fence tops land on the real surface.
+  useEffect(() => {
+    if (!extent) { setTerrainMesh(null); return; }
+    let active = true;
+    // Live USGS 3DEP (CORS-open, public domain, 1 m lidar over Utah) — no hosting, any pub's bbox.
+    buildMeshFrom3DEP(extent.bbox, extent.center, extent.scale).then((m) => { if (active) setTerrainMesh(m); });
+    return () => { active = false; };
+  }, [extent]);
+
   const layers = useMemo(() => {
     const out: unknown[] = [];
-    if (showSheet && sheetImg && extent) {
+    if (showSheet && extent && terrainMesh) {
+      // Terrain surface: DEM mesh, exaggerated via getScale (z only) to match the fence, draped with
+      // the geologic map sheet. getColor white = show the texture as-is.
+      out.push(new SimpleMeshLayer({
+        id: "terrain",
+        data: [{ position: [0, 0, 0] }],
+        coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
+        mesh: terrainMesh as never,
+        texture: sheetImg,
+        getPosition: () => [0, 0, 0],
+        getColor: [255, 255, 255],
+        getScale: [1, 1, vex],
+        material: false,
+        updateTriggers: { getScale: [vex] },
+      }) as unknown);
+    } else if (showSheet && sheetImg && extent) {
+      // Fallback flat plane while the DEM mesh loads (or where there's no terrarium coverage).
       const z = extent.zTop * vex, [hx, hy] = extent.half;
       out.push(new BitmapLayer({
         id: "map-sheet",
         coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
         image: sheetImg,
-        // 4 corners (bottom-left, top-left, top-right, bottom-right) at the surface elevation.
         bounds: [[-hx, -hy, z], [-hx, hy, z], [hx, hy, z], [hx, -hy, z]] as never,
         opacity: 0.9,
       }) as unknown);
@@ -1485,7 +1513,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       }) as unknown);
     }
     return out;
-  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, vex, hovered]);
+  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, terrainMesh, vex, hovered]);
 
   if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries…</div>;
   if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;
@@ -1542,7 +1570,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
               </label>
             )}
           </div>
-          <p className="mt-2 text-[10px] text-muted-foreground">Terrain mesh (lidar DEM) is the next step — the sheet currently drapes a flat surface plane.</p>
+          <p className="mt-2 text-[10px] text-muted-foreground">{terrainMesh ? "Map sheet drapes the USGS 3DEP terrain (1 m lidar); fence tops meet the ground." : "Sampling USGS 3DEP terrain…"}</p>
         </div>
 
         <div className="border-b border-border pb-3">

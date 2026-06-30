@@ -4,11 +4,12 @@ import {
   type ColumnDef, flexRender, getCoreRowModel, getSortedRowModel,
   type SortingState, useReactTable,
 } from "@tanstack/react-table";
-import { MapboxOverlay } from "@deck.gl/mapbox";
-import { PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
+import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
+import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
+import DeckGL from "@deck.gl/react";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source, useControl } from "react-map-gl/maplibre";
+import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
@@ -56,6 +57,17 @@ const gSeries = (it: ItemRef) => String(it.data?.id ?? idFromHref(it.href));
 const gTitle = (it: ItemRef) => String(props(it).title ?? it.data?.id ?? idFromHref(it.href));
 const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(it).datetime as string).slice(0, 10) : "");
 const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).slice(0, 4), 10); return Number.isFinite(y) ? y : null; };
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+// Show the date precision we actually have. UGS pubs carry year-only (stored as a Jan-1 placeholder)
+// or year+month; the day is never real — so don't render a misleading "2026-01-01". Sorting still uses
+// the raw ISO from gDate; this is display-only.
+const fmtDate = (iso: string): string => {
+  if (!iso) return "";
+  const [y, m, d] = iso.split("-");
+  if (m === "01" && d === "01") return y;                  // year-only placeholder → just the year
+  if (d === "01") return `${MONTHS[+m - 1] ?? m} ${y}`;    // month precision → "Sep 2026"
+  return iso;                                              // genuine full date
+};
 const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
 const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
 const gAuthor = (it: ItemRef) => String(props(it)["ugs:author"] ?? "");
@@ -273,7 +285,7 @@ function CardItem({ it, showCollection, onOpen }: { it: ItemRef; showCollection?
       <p className={C.cardTitle}>{gTitle(it)}</p>
       <div>
         {showCollection && <span className={C.badge}>{it.collId}</span>}
-        {gDate(it) && <span className={C.badge}>{gDate(it)}</span>}
+        {gDate(it) && <span className={C.badge}>{fmtDate(gDate(it))}</span>}
         {BADGE_KEYS.filter((k) => props(it)[k]).map((k) => (
           <span key={k} className={C.badge}>{String(props(it)[k])}</span>
         ))}
@@ -397,7 +409,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
     // Volume column only when items carry one (Survey Notes) — consistent with the grouped grid views.
     ...(hasVolumes ? [{ id: "volume", header: "Vol", accessorFn: (it: ItemRef) => gVol(it) ?? "" }] : []),
     { id: "type", header: "Type", accessorFn: gType },
-    { id: "date", header: "Date", accessorFn: gDate },
+    { id: "date", header: "Date", accessorFn: gDate, cell: (i) => fmtDate(String(i.getValue())) },
     { id: "scale", header: "Scale", accessorFn: gScale, enableSorting: false },
     { id: "assets", header: "Assets", enableSorting: false, accessorFn: () => "",
       cell: ({ row }) => row.original.data?.assets ? <AssetChips assets={row.original.data.assets} /> : "" },
@@ -1337,53 +1349,31 @@ function hexToRgb(hex: string): [number, number, number] {
   return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
 }
 
-// deck.gl ⇄ maplibre bridge: a MapboxOverlay added as a react-map-gl control. `interleaved` renders
-// the deck layers inside maplibre's WebGL pass so they share ONE camera (pitch/bearing/zoom) and
-// depth-test against terrain — which is the whole reason the hand-rolled canvas projector is gone.
-function DeckOverlay(props: { layers: unknown[] }) {
-  const overlay = useControl(() => new MapboxOverlay({ interleaved: true, layers: props.layers as never }));
-  overlay.setProps({ layers: props.layers as never });
-  return null;
-}
-
 function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Parsed 3D vectors kept in geographic coords ([lon, lat, z]); deck.gl renders them directly in
-  // the map's LNGLAT space — no local-meter projection, no canvas. z is elevation in metres.
+  // Fence parsed to LOCAL metres centred on the dataset. OrbitView is a Cartesian 3D camera (unlike
+  // maplibre's 2.5D map camera) so it can orbit freely — including under the surface to look up at
+  // the slice, which is the whole point of a fence diagram.
   const [polygons, setPolygons] = useState<{ unit: string; rgb: [number, number, number]; rings: number[][][] }[]>([]);
   const [lines, setLines] = useState<{ isFault: boolean; path: number[][] }[]>([]);
   const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
-  const [bbox, setBbox] = useState<[number, number, number, number] | null>(null);
+  const [extent, setExtent] = useState<{ spanXY: number; zTop: number; zMid: number; half: [number, number] } | null>(null);
 
-  // Display settings — every layer toggles independently (3D units, 3D lines, the DEM the fence
-  // slices through, and the geologic map sheet draped on it).
-  const [vex, setVex] = useState(2.5);                  // vertical exaggeration
-  const [showUnits, setShowUnits] = useState(true);     // 3D stratigraphic panels
-  const [showLines, setShowLines] = useState(true);     // 3D contacts & faults
-  const [showTerrain, setShowTerrain] = useState(true); // DEM the fence slices through
-  const [showSheet, setShowSheet] = useState(true);     // geologic map-sheet COG draped on terrain
-  const [xray, setXray] = useState(false);              // draw the fence THROUGH terrain (see the cutout)
-  // High-res DEM we host ourselves: a per-pub terrain-rgb tileset (mapbox-encoded) produced from UGRC
-  // 1 m lidar (scripts/build_terrain_rgb.py) and attached to the STAC item. When present, the Terrain
-  // toggle uses it instead of the global ~10 m terrarium source — no auth, just our CDN.
-  const lidarTerrain = useMemo(() =>
-    Object.values(item.assets ?? {}).find((a) =>
-      (a as Asset).roles?.includes("terrain-rgb") || /terrainrgb|terrain_rgb|lidar.*terrain/i.test((a as Asset).href ?? "")),
-    [item]) as Asset | undefined;
+  const [vex, setVex] = useState(2.5);
+  const [showUnits, setShowUnits] = useState(true);
+  const [showLines, setShowLines] = useState(true);
+  const [showSheet, setShowSheet] = useState(true);
   const [hovered, setHovered] = useState<string | null>(null);
   const [search, setSearch] = useState("");
-  const [mapReady, setMapReady] = useState(false);
 
   const polyUrl = asset.href;
   const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
   const cog = cogAsset(item);
-  const mapRef = useRef<MapRef>(null);
+  // Drape the geologic map sheet — the COG's PNG overview (browsers can't texture a COG directly).
+  const sheetImg = cog ? cog.href.replace(/\.cog\.tif$/i, ".thumb.png") : undefined;
 
-  useEffect(() => { ensureCogProtocol().then(() => setMapReady(true)); }, []);
-
-  // Fetch + parse both GeoJSONs once. Keep [lon, lat, z]; collect the legend + bbox along the way.
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -1391,196 +1381,143 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
     Promise.all([
       fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
-      fetch(lineUrl).then((r) => r.json()).catch(() => null), // lines optional/best-effort
+      fetch(lineUrl).then((r) => r.json()).catch(() => null),
     ])
       .then(([polyData, lineData]) => {
         if (!active) return;
 
-        const polys: { unit: string; rgb: [number, number, number]; rings: number[][][] }[] = [];
-        const lns: { isFault: boolean; path: number[][] }[] = [];
+        // Pass 1: collect raw [lon,lat,z] + bounds (centre needed before the local-metre projection).
+        const rawPolys: { unit: string; rgb: [number, number, number]; rings: number[][][] }[] = [];
+        const rawLines: { isFault: boolean; path: number[][] }[] = [];
         const legendMap = new Map<string, { label: string; color: string }>();
-        let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity, count = 0;
-        const seen = (lon: number, lat: number) => {
-          if (lon < minLon) minLon = lon;
-          if (lon > maxLon) maxLon = lon;
-          if (lat < minLat) minLat = lat;
-          if (lat > maxLat) maxLat = lat;
-          count++;
+        let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity;
+        let minZ = Infinity, maxZ = -Infinity, count = 0;
+        const scan = (lon: number, lat: number, z: number) => {
+          minLon = Math.min(minLon, lon); maxLon = Math.max(maxLon, lon);
+          minLat = Math.min(minLat, lat); maxLat = Math.max(maxLat, lat);
+          minZ = Math.min(minZ, z); maxZ = Math.max(maxZ, z); count++;
         };
 
         for (const feat of polyData.features ?? []) {
-          const props = feat.properties || {};
-          const unit = props.MapUnit || props.unit || "Unknown Unit";
-          const label = props.Label || props.label || "Unit";
+          const p = feat.properties || {};
+          const unit = p.MapUnit || p.unit || "Unknown Unit";
+          const label = p.Label || p.label || "Unit";
           const color = getUnitColor(unit, label);
-          const rgb = hexToRgb(color);
           const geom = feat.geometry || {};
           const multi: number[][][][] = geom.type === "MultiPolygon" ? geom.coordinates
             : geom.type === "Polygon" ? [geom.coordinates] : [];
           for (const rings of multi) {
-            const r3 = rings.map((ring) => ring.map((pt) => {
-              const lon = pt[0], lat = pt[1], z = pt[2] ?? 0;
-              seen(lon, lat);
-              return [lon, lat, z];
-            }));
-            if (r3.length && r3[0].length) {
-              polys.push({ unit, rgb, rings: r3 });
-              legendMap.set(unit, { label, color });
-            }
+            const r3 = rings.map((ring) => ring.map((pt) => { const c: number[] = [pt[0], pt[1], pt[2] ?? 0]; scan(c[0], c[1], c[2]); return c; }));
+            if (r3.length && r3[0].length) { rawPolys.push({ unit, rgb: hexToRgb(color), rings: r3 }); legendMap.set(unit, { label, color }); }
           }
         }
-
         for (const feat of lineData?.features ?? []) {
-          const props = feat.properties || {};
-          const isFault = (props.Type || "").toLowerCase().includes("fault") || !!props.is_fault;
+          const p = feat.properties || {};
+          const isFault = (p.Type || "").toLowerCase().includes("fault") || !!p.is_fault;
           const geom = feat.geometry || {};
           const multi: number[][][] = geom.type === "MultiLineString" ? geom.coordinates
             : geom.type === "LineString" ? [geom.coordinates] : [];
           for (const coords of multi) {
-            const path = coords.map((pt) => {
-              const lon = pt[0], lat = pt[1], z = pt[2] ?? 0;
-              seen(lon, lat);
-              return [lon, lat, z];
-            });
-            if (path.length) lns.push({ isFault, path });
+            const path = coords.map((pt) => { const c: number[] = [pt[0], pt[1], pt[2] ?? 0]; scan(c[0], c[1], c[2]); return c; });
+            if (path.length) rawLines.push({ isFault, path });
           }
         }
-
         if (!count) throw new Error("No valid coordinates found in the 3D dataset");
-        if (!active) return;
 
-        setPolygons(polys);
-        setLines(lns);
-        setLegend(
-          Array.from(legendMap.entries())
-            .map(([unit, v]) => ({ unit, label: v.label, color: v.color }))
-            .sort((a, b) => a.unit.localeCompare(b.unit)),
-        );
-        setBbox([minLon, minLat, maxLon, maxLat]);
+        // Pass 2: lon/lat → local metres centred on the dataset (z stays absolute-elevation metres).
+        const cLon = (minLon + maxLon) / 2, cLat = (minLat + maxLat) / 2;
+        const mLon = 111320 * Math.cos((cLat * Math.PI) / 180), mLat = 110574;
+        const toLocal = (p: number[]): number[] => [(p[0] - cLon) * mLon, (p[1] - cLat) * mLat, p[2]];
+
+        if (!active) return;
+        setPolygons(rawPolys.map((d) => ({ ...d, rings: d.rings.map((r) => r.map(toLocal)) })));
+        setLines(rawLines.map((l) => ({ ...l, path: l.path.map(toLocal) })));
+        setLegend(Array.from(legendMap.entries()).map(([unit, v]) => ({ unit, label: v.label, color: v.color })).sort((a, b) => a.unit.localeCompare(b.unit)));
+        const halfX = ((maxLon - minLon) / 2) * mLon, halfY = ((maxLat - minLat) / 2) * mLat;
+        setExtent({ spanXY: Math.max(halfX, halfY) * 2, zTop: maxZ, zMid: (minZ + maxZ) / 2, half: [halfX, halfY] });
         setLoading(false);
       })
-      .catch((err) => {
-        if (active) {
-          setError(err instanceof Error ? err.message : "Failed to load 3D data files");
-          setLoading(false);
-        }
-      });
+      .catch((err) => { if (active) { setError(err instanceof Error ? err.message : "Failed to load 3D data files"); setLoading(false); } });
 
     return () => { active = false; };
   }, [polyUrl, lineUrl]);
 
-  // deck.gl layers. z is scaled by the vertical-exaggeration slider; the hovered unit pops while the
-  // rest dim. updateTriggers rebuild geometry/colour when the slider or hover changes.
-  const deckLayers = useMemo(() => {
-    const layers: unknown[] = [];
+  const layers = useMemo(() => {
+    const out: unknown[] = [];
+    if (showSheet && sheetImg && extent) {
+      const z = extent.zTop * vex, [hx, hy] = extent.half;
+      out.push(new BitmapLayer({
+        id: "map-sheet",
+        coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
+        image: sheetImg,
+        // 4 corners (bottom-left, top-left, top-right, bottom-right) at the surface elevation.
+        bounds: [[-hx, -hy, z], [-hx, hy, z], [hx, hy, z], [hx, -hy, z]] as never,
+        opacity: 0.9,
+      }) as unknown);
+    }
     if (showUnits) {
-      layers.push(new SolidPolygonLayer({
+      out.push(new SolidPolygonLayer({
         id: "fence-units",
         data: polygons,
+        coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
         _full3d: true,
-        // deck.gl types getPolygon as an intersection with AccessorFunction; cast past the friction.
-        getPolygon: ((d: { rings: number[][][] }) =>
-          d.rings.map((ring) => ring.map((p) => [p[0], p[1], p[2] * vex]))) as never,
+        getPolygon: ((d: { rings: number[][][] }) => d.rings.map((ring) => ring.map((p) => [p[0], p[1], p[2] * vex]))) as never,
         getFillColor: (d: { unit: string; rgb: [number, number, number] }) => {
-          const a = hovered ? (d.unit === hovered ? 235 : 55) : 190;
+          const a = hovered ? (d.unit === hovered ? 240 : 55) : 200;
           return [d.rgb[0], d.rgb[1], d.rgb[2], a];
         },
         pickable: true,
         onHover: (info: { object?: { unit: string } }) => setHovered(info?.object?.unit ?? null),
-        // X-ray: disable depth-test so the panels draw over terrain — you see the cutout inside the
-        // mountain instead of it being occluded by the opaque DEM.
-        parameters: { depthTest: !xray },
         updateTriggers: { getPolygon: [vex], getFillColor: [hovered] },
       }) as unknown);
     }
     if (showLines) {
-      layers.push(new PathLayer({
+      out.push(new PathLayer({
         id: "fence-lines",
         data: lines,
+        coordinateSystem: COORDINATE_SYSTEM.CARTESIAN,
         getPath: ((d: { path: number[][] }) => d.path.map((p) => [p[0], p[1], p[2] * vex])) as never,
         getColor: (d: { isFault: boolean }) => (d.isFault ? [220, 38, 38] : [71, 85, 105]),
         getWidth: (d: { isFault: boolean }) => (d.isFault ? 3 : 1.5),
         widthUnits: "pixels",
         widthMinPixels: 1,
-        parameters: { depthTest: !xray },
         updateTriggers: { getPath: [vex] },
       }) as unknown);
     }
-    return layers;
-  }, [polygons, lines, showUnits, showLines, vex, hovered, xray]);
-
-  // Frame the dataset on load — pitched in so the fence reads as 3D immediately.
-  const fit = () => {
-    const map = mapRef.current?.getMap();
-    if (bbox && map) {
-      map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
-        { padding: 60, pitch: 60, bearing: 25, duration: 0 });
-    }
-  };
+    return out;
+  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, vex, hovered]);
 
   if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries…</div>;
   if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;
 
-  const center: [number, number] = bbox ? [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2] : [-111.2, 40.5];
+  const initialViewState = {
+    target: [0, 0, (extent?.zMid ?? 0) * vex] as [number, number, number],
+    rotationX: 25,    // pitch above the horizon
+    rotationOrbit: -25, // azimuth
+    zoom: extent ? Math.log2(520 / Math.max(extent.spanXY, 1)) : 0,
+    minZoom: -12, maxZoom: 40,
+  };
 
   return (
     <div className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-[640px]">
-      {/* One unified 3D scene: maplibre terrain + COG with deck.gl fence interleaved (shared camera) */}
-      <div className="flex-1 relative bg-muted h-[400px] md:h-full">
-        {mapReady ? (
-          <MapGL
-            ref={mapRef}
-            mapLib={maplibregl}
-            initialViewState={{ longitude: center[0], latitude: center[1], zoom: 12, pitch: 60, bearing: 25 }}
-            mapStyle={POSITRON}
-            style={{ width: "100%", height: "100%" }}
-            onLoad={fit}
-            maxPitch={85}
-            // Terrain exaggeration tracks the fence's vertical stretch so DEM + cutout stay registered
-            // (both are absolute-elevation metres scaled from sea level by the same factor). Prefer the
-            // self-hosted lidar DEM when the pub carries one.
-            terrain={showTerrain ? { source: lidarTerrain ? "lidar-terrain" : "terrain-rgb-source", exaggeration: vex } : undefined}
-          >
-            <NavigationControl position="top-right" visualizePitch />
-            {/* DEM sources always present so the terrain toggle is instant; the terrain prop picks one.
-                Fallback: global ~10 m terrarium (AWS). Preferred: our self-hosted per-pub lidar. */}
-            <Source
-              id="terrain-rgb-source"
-              type="raster-dem"
-              tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
-              encoding="terrarium"
-              tileSize={256}
-            />
-            {lidarTerrain && (
-              <Source
-                id="lidar-terrain"
-                type="raster-dem"
-                tiles={[lidarTerrain.href]}
-                encoding="mapbox"
-                tileSize={256}
-              />
-            )}
-            {/* The geologic map sheet the fence slices through — drapes on terrain, toggles alone. */}
-            {showSheet && cog && (
-              <Source id="overview-cog" type="raster" url={`cog://${cog.href}`} tileSize={256}>
-                <Layer id="overview-cog-raster" type="raster" paint={{ "raster-opacity": 0.85 }} />
-              </Source>
-            )}
-            <DeckOverlay layers={deckLayers} />
-          </MapGL>
-        ) : (
-          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">loading 3D scene…</div>
-        )}
-
+      {/* Free 3D orbit scene (deck.gl OrbitView) — Cartesian, flies under the surface. */}
+      <div className="flex-1 relative bg-[#0F172A] h-[400px] md:h-full">
+        <DeckGL
+          views={new OrbitView({ orbitAxis: "Z" })}
+          initialViewState={initialViewState}
+          controller={true}
+          layers={layers as never}
+          getCursor={() => "grab"}
+          style={{ position: "relative", width: "100%", height: "100%" }}
+        />
         <div className="absolute top-3 left-3 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs pointer-events-none max-w-[230px]">
           <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
             <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
-            Unified 3D Subsurface
+            Free 3D Orbit
           </div>
           <div className="text-muted-foreground leading-snug">
-            Drag to rotate · right-drag to tilt<br />
-            Scroll to zoom into the terrain<br />
-            Toggle <span className="font-medium text-foreground">Terrain</span> off to see the full slice
+            Drag to orbit (rotate under the surface)<br />
+            Scroll to zoom · right-drag to pan
           </div>
         </div>
       </div>
@@ -1598,23 +1535,14 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
               <input type="checkbox" checked={showLines} onChange={(e) => setShowLines(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
               <span>Contacts &amp; faults (3D)</span>
             </label>
-            <label className="flex items-center gap-2 text-foreground cursor-pointer">
-              <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
-              <span>Terrain · {lidarTerrain ? "lidar 1 m" : "10 m"}</span>
-            </label>
-            {showTerrain && (
-              <label className="flex items-center gap-2 pl-4 text-foreground cursor-pointer">
-                <input type="checkbox" checked={xray} onChange={(e) => setXray(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
-                <span>See cutout through terrain (X-ray)</span>
-              </label>
-            )}
-            {cog && (
+            {sheetImg && (
               <label className="flex items-center gap-2 text-foreground cursor-pointer">
                 <input type="checkbox" checked={showSheet} onChange={(e) => setShowSheet(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
-                <span>Geologic map sheet</span>
+                <span>Geologic map sheet (draped)</span>
               </label>
             )}
           </div>
+          <p className="mt-2 text-[10px] text-muted-foreground">Terrain mesh (lidar DEM) is the next step — the sheet currently drapes a flat surface plane.</p>
         </div>
 
         <div className="border-b border-border pb-3">
@@ -1622,13 +1550,8 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
             <span className="font-semibold text-foreground uppercase tracking-wider">Vertical Exaggeration</span>
             <span className="text-muted-foreground font-mono">{vex.toFixed(1)}x</span>
           </div>
-          <div className="text-[10px] text-muted-foreground mb-1.5">Stretches terrain + fence together.</div>
-          <input
-            type="range" min="0.5" max="5.0" step="0.1"
-            value={vex}
-            onChange={(e) => setVex(parseFloat(e.target.value))}
-            className="w-full h-1.5 rounded-lg bg-muted appearance-none cursor-pointer accent-primary"
-          />
+          <input type="range" min="0.5" max="5.0" step="0.1" value={vex} onChange={(e) => setVex(parseFloat(e.target.value))}
+            className="w-full h-1.5 rounded-lg bg-muted appearance-none cursor-pointer accent-primary" />
         </div>
 
         <div className="flex-1 flex flex-col min-h-0">
@@ -1636,22 +1559,14 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
             <h3 className="font-semibold text-foreground uppercase tracking-wider">Geologic Legend</h3>
             <span className="text-[10px] text-muted-foreground font-mono">{legend.length} units</span>
           </div>
-          <input
-            type="text" placeholder="Filter units..." value={search} onChange={(e) => setSearch(e.target.value)}
-            className="w-full text-xs border border-border bg-card px-2.5 py-1.5 rounded mb-2.5 focus:outline-none focus:border-primary"
-          />
+          <input type="text" placeholder="Filter units..." value={search} onChange={(e) => setSearch(e.target.value)}
+            className="w-full text-xs border border-border bg-card px-2.5 py-1.5 rounded mb-2.5 focus:outline-none focus:border-primary" />
           <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 max-h-[220px] md:max-h-none">
             {legend
               .filter((l) => !search || l.unit.toLowerCase().includes(search.toLowerCase()) || l.label.toLowerCase().includes(search.toLowerCase()))
               .map((l) => (
-                <div
-                  key={l.unit}
-                  onMouseEnter={() => setHovered(l.unit)}
-                  onMouseLeave={() => setHovered(null)}
-                  className={`flex items-start gap-2.5 p-1.5 rounded border text-xs cursor-default transition ${
-                    hovered === l.unit ? "border-primary bg-primary/5 font-medium" : "border-transparent hover:bg-muted"
-                  }`}
-                >
+                <div key={l.unit} onMouseEnter={() => setHovered(l.unit)} onMouseLeave={() => setHovered(null)}
+                  className={`flex items-start gap-2.5 p-1.5 rounded border text-xs cursor-default transition ${hovered === l.unit ? "border-primary bg-primary/5 font-medium" : "border-transparent hover:bg-muted"}`}>
                   <span className="inline-block w-4 h-4 rounded border border-black/10 shrink-0" style={{ backgroundColor: l.color }} />
                   <div className="flex-1 leading-snug">
                     <span className="font-bold font-mono mr-1.5">{l.label}</span>

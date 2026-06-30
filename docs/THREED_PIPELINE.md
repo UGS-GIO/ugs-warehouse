@@ -95,11 +95,19 @@ old `build_terrain_rgb.py` (DEM tile hosting) is obsolete and removed.
 3. **Generalize**: a `ugs-pubs-threed` Cloud Run job + admin-console button; auto-discovers `CSA_3D`
    layers on any pub. (Mirrors the other pubs jobs.)
 
-## To verify empirically when building (test, don't assume)
+## Verified empirically (locally, against the real OFR-778DM GDB)
 
-- Does the viewer's **duckdb-wasm read Z geometry from GeoParquet**? (Is spatial loaded? Does it
-  hydrate WKB-Z?) If not, decode WKB client-side or carry x/y/z columns instead of WKB.
-- glTF triangulation of vertical fence panels — orientation / winding correct.
+- ✅ **`pubs/threed.py` built** — GDB + `.mapx` → 3D GeoParquet (polys 37, lines 48) +
+  `classification:classes`. CRS 4326, **Z preserved** (`has_z`), valid GeoParquet `geo` metadata
+  (cloud-native), **all 17 units coloured** (RGB+CMYK), lines classified (contact/fault/boundary +
+  dashed-for-approximate).
+- ✅ **duckdb reads Z from the GeoParquet** — duckdb 1.5.3 (the viewer's duckdb-wasm family) hydrates
+  it as native `GEOMETRY`; `ST_AsWKB` type code `1006` (ISO WKB-Z), `ST_AsGeoJSON` returns 3-coord
+  vertices. So the viewer can serve straight from GeoParquet — no WKB-decode shim.
+
+## Still to verify
+
+- glTF triangulation of vertical fence panels — orientation / winding correct (phase 2).
 
 ## Work-box image deps to add (Dockerfile)
 

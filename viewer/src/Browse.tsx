@@ -1389,21 +1389,23 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     // A fence feature, normalised across both sources: GeoJSON geometry (with Z) + flat props.
     type Feat = { geometry: { type?: string; coordinates?: unknown } | null; props: Record<string, unknown> };
 
-    // Cloud-native first: 3D GeoParquet (duckdb-wasm, WKB-Z) — a `.parquet` 3d-vector asset, or the
-    // same-origin dev override. Falls back to the GeoJSON assets when there's no parquet.
+    // Cloud-native first: 3D GeoParquet (duckdb-wasm, WKB-Z) — ONLY when the item carries a real
+    // `.parquet` 3d-vector asset (the pipeline output). No same-origin probing: a missing file makes
+    // duckdb throw, which the route error-boundary would catch and reset the URL. Else: GeoJSON.
     async function loadFence(): Promise<{ polyFeats: Feat[]; lineFeats: Feat[]; parquet: boolean }> {
       const assets = Object.values(item.assets ?? {}) as Asset[];
       const pq = (re: RegExp) => assets.find((a) => /\.parquet$/i.test(a.href) && re.test(a.href))?.href;
-      // Absolute URLs — duckdb-wasm's HTTP file protocol can't open a relative one.
-      const abs = (u: string) => new URL(u, location.href).href;
-      const base = import.meta.env.BASE_URL;
-      const polyPq = pq(/polygon/i) ?? abs(`${base}3d/${item.id}_3d_polygons.parquet`);
-      const linePq = pq(/line/i) ?? abs(`${base}3d/${item.id}_3d_lines.parquet`);
-      try {
-        const { readFeatures3D } = await import("./download");
-        const [pf, lf] = await Promise.all([readFeatures3D(polyPq), readFeatures3D(linePq).catch(() => [])]);
-        if (pf.length) return { polyFeats: pf as Feat[], lineFeats: lf as Feat[], parquet: true };
-      } catch { /* no parquet → GeoJSON */ }
+      const polyPq = pq(/polygon/i), linePq = pq(/line/i);
+      if (polyPq) {
+        try {
+          const { readFeatures3D } = await import("./download");
+          const [pf, lf] = await Promise.all([
+            readFeatures3D(polyPq),
+            linePq ? readFeatures3D(linePq).catch(() => []) : Promise.resolve([]),
+          ]);
+          if (pf.length) return { polyFeats: pf as Feat[], lineFeats: lf as Feat[], parquet: true };
+        } catch { /* parquet read failed → GeoJSON */ }
+      }
       const [pd, ld] = await Promise.all([
         fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
         fetch(lineUrl).then((r) => r.json()).catch(() => null),
@@ -1488,15 +1490,18 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     return () => { active = false; };
   }, [item.id, polyUrl, lineUrl]);
 
-  // Build the DEM terrain mesh once the dataset extent is known (terrarium tiles → heightfield in the
-  // fence's local frame). The map sheet textures it, and the fence tops land on the real surface.
+  // Build the DEM terrain mesh once the dataset extent is known. Span the MAP-SHEET bbox (item.bbox),
+  // not the fence bbox — the fence is only a transect (~40% of the quad), so draping the full-quad COG
+  // over the fence extent would mis-size + misregister it. Built in the fence's local frame so the
+  // fence sits as a transect within the full-size map; the COG textures it correctly.
   useEffect(() => {
     if (!extent) { setTerrainMesh(null); return; }
     let active = true;
+    const mapBbox = (item.bbox?.slice(0, 4) as [number, number, number, number] | undefined) ?? extent.bbox;
     // Live USGS 3DEP (CORS-open, public domain, 1 m lidar over Utah) — no hosting, any pub's bbox.
-    buildMeshFrom3DEP(extent.bbox, extent.center, extent.scale).then((m) => { if (active) setTerrainMesh(m); });
+    buildMeshFrom3DEP(mapBbox, extent.center, extent.scale).then((m) => { if (active) setTerrainMesh(m); });
     return () => { active = false; };
-  }, [extent]);
+  }, [extent, item]);
 
   // Authored geologic colors for this pub (interim baked sidecar). Absent → falls back to getUnitColor.
   useEffect(() => {
@@ -1583,11 +1588,18 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries…</div>;
   if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;
 
+  // Frame the full map sheet (so the fence reads as a transect within it), centred on the map — not
+  // the fence — since the fence sits off-centre in the quad.
+  const mb = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
+  const mapCtr: [number, number] = mb && extent
+    ? [((mb[0] + mb[2]) / 2 - extent.center[0]) * extent.scale[0], ((mb[1] + mb[3]) / 2 - extent.center[1]) * extent.scale[1]]
+    : [0, 0];
+  const mapSpan = mb && extent ? Math.max((mb[2] - mb[0]) * extent.scale[0], (mb[3] - mb[1]) * extent.scale[1]) : extent?.spanXY ?? 1;
   const initialViewState = {
-    target: [0, 0, (extent?.zMid ?? 0) * vex] as [number, number, number],
+    target: [mapCtr[0], mapCtr[1], (extent?.zMid ?? 0) * vex] as [number, number, number],
     rotationX: 25,    // pitch above the horizon
     rotationOrbit: -25, // azimuth
-    zoom: extent ? Math.log2(520 / Math.max(extent.spanXY, 1)) : 0,
+    zoom: Math.log2(520 / Math.max(mapSpan, 1)),
     minZoom: -12, maxZoom: 40,
   };
 

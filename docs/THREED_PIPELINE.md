@@ -26,16 +26,22 @@ they're fine as-is. Cloud-native formats are *added derivatives*, served to the 
 | `fence_lines` | 3D GeoParquet | contacts / faults | `data`, `3d-vector` |
 | `fence_mesh` | **glTF / GLB** | download + interop (Blender, ArcGIS Pro, web 3D) | `data`, `visual` |
 
-Each GeoParquet row carries `fill_rgb` (hex), `label`, and `hierarchy_key`. So **cloud-native format
-+ authored cartography + a stratigraphically-ordered legend all fall out of one GDB read.**
+The GeoParquet carries the geometry + `MapUnit` + `label`; **colors ride the standard STAC
+Classification extension** (see below), not a per-row column.
 
-⚠️ **Color source (verified on OFR-778DM):** `DescriptionOfMapUnits.AreaFillRGB` is **empty** — the
-authored colors live in the **ArcGIS symbology** (`.mapx`), as a `CIMUniqueValueRenderer` keyed on the
-`Symbol` field (`"24_Tk_Keetley…"` → MapUnit `Tk`), with the RGB in a `CIMRGBColor`. The DMU table
-still supplies `Name` + `HierarchyKey` (legend label + stratigraphic order). Proven locally: `pyogrio`
-(GDAL-bundled wheel, no system GDAL) reads the GDB; a parser walks the `.mapx` JSON for the colors. An
-interim baked sidecar (`viewer/public/3d-colors/<id>.json`) already wires real colors into the viewer;
-the pipeline folds this into the GeoParquet's `fill_rgb`.
+⚠️ **Color source + the built-in mechanism (verified on OFR-778DM):**
+- `DescriptionOfMapUnits.AreaFillRGB` is **empty** — authored colors live in the **ArcGIS symbology**
+  (`.mapx`), as a `CIMUniqueValueRenderer` keyed on the `Symbol` field (`"24_Tk_…"` → MapUnit `Tk`),
+  RGB in a `CIMRGBColor`. DMU supplies `Name` + `HierarchyKey` (label + stratigraphic order).
+- Surficial units absent from the 3D symbology (`Qay`, `TRt`) → recover by sampling the rendered COG.
+- **Serve the colors as `classification:classes`** — the warehouse's existing standard (vector topics
+  already emit it via `core/styles.classification_classes` + `attach_classification`; the viewer reads
+  it via `classificationEntries` / `classificationColors`). The 3D pipeline stamps the same property:
+  one class per MapUnit `{value, name, title, color_hint}`. **No bespoke sidecar** — the viewer already
+  consumes this. (The current `viewer/public/3d-colors/<id>.json` is interim until a reingest stamps
+  `classification:classes`; the viewer prefers the standard property when present.)
+- Proven locally: `pyogrio` (GDAL-bundled wheel, no system GDAL) reads the GDB; a parser walks the
+  `.mapx` JSON for the colors.
 
 ## Why GeoParquet (not the current GeoJSON)
 

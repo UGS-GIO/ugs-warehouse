@@ -16,7 +16,7 @@ import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
-import { type Asset, citeLink, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 
 // A few latest covers for a collection card (thumbnail strip). `date` = the item datetime, used to
 // merge + re-sort covers across series for a sub-catalog card. Populated by App from the indexes.
@@ -1475,8 +1475,10 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     return () => { active = false; };
   }, [item.id]);
 
-  // Real authored color for a unit when we have it; else the (placeholder) derived color.
-  const colorOf = (unit: string) => authored[unit] ?? getUnitColor(unit, "");
+  // Unit colour, standard-first: STAC classification:classes (the warehouse's built-in mechanism, what
+  // the 3D pipeline will stamp) → interim per-pub sidecar → derived placeholder.
+  const clsColors = useMemo(() => classificationColors(item), [item]);
+  const colorOf = (unit: string) => clsColors[unit] ?? authored[unit] ?? getUnitColor(unit, "");
 
   const layers = useMemo(() => {
     const out: unknown[] = [];
@@ -1520,7 +1522,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         },
         pickable: true,
         onHover: (info: { object?: { unit: string } }) => setHovered(info?.object?.unit ?? null),
-        updateTriggers: { getPolygon: [vex], getFillColor: [hovered, authored] },
+        updateTriggers: { getPolygon: [vex], getFillColor: [hovered, authored, clsColors] },
       }) as unknown);
     }
     if (showLines) {
@@ -1542,7 +1544,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       }) as unknown);
     }
     return out;
-  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, terrainMesh, vex, hovered, authored]);
+  }, [polygons, lines, showUnits, showLines, showSheet, sheetImg, extent, terrainMesh, vex, hovered, authored, clsColors]);
 
   if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries…</div>;
   if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;

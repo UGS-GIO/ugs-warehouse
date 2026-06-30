@@ -140,6 +140,22 @@ export const classificationEntries = (
   });
 };
 
+// classification:classes as a value→hex map (keyed by the class `value`/`name` token, e.g. a MapUnit)
+// — for feature fills, where the standard legend (label→color) isn't enough. The built-in mechanism
+// for per-unit authored colors; the warehouse stamps it (core/styles.classification_classes).
+export const classificationColors = (d: StacDoc | undefined): Record<string, string> => {
+  const cls = (d?.properties as Record<string, unknown> | undefined)?.["classification:classes"];
+  const out: Record<string, string> = {};
+  if (Array.isArray(cls)) {
+    for (const c of cls) {
+      const o = c as { name?: unknown; value?: unknown; color_hint?: unknown };
+      const key = o.value ?? o.name;
+      if (key != null && typeof o.color_hint === "string") out[String(key)] = `#${o.color_hint}`;
+    }
+  }
+  return out;
+};
+
 // One entry of the STAC render extension (a named way to draw the layer).
 export type RenderBlock = {
   title?: string; assets?: string[]; style_url?: string; sprite?: string;

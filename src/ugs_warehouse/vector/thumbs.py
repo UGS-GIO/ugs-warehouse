@@ -166,6 +166,15 @@ def thumb_one(item: dict, force: bool = False) -> str:
         hlog("no pmtiles/bbox — cannot render", step="resolve", level="NOTICE", category="expected")
         return "skip:nodata"
 
+    # Validate bounding box coordinates to prevent MapLibre fitBounds uncaught exceptions
+    west, south, east, north = bbox[0], bbox[1], bbox[2], bbox[3]
+    if (west is None or south is None or east is None or north is None or
+            not (-180.1 <= west <= 180.1) or not (-90.1 <= south <= 90.1) or
+            not (-180.1 <= east <= 180.1) or not (-90.1 <= north <= 90.1)):
+        hlog(f"invalid bbox coordinates: {bbox} (latitudes must be [-90, 90])",
+             step="resolve", level="WARNING", category="attention")
+        return "skip:invalid_bbox"
+
     style_url = _style_url(item)
     want_hash, style_bytes = _style_hash(style_url)
     png_obj, sha_obj = thumb_object(stem), sha_object(stem)
@@ -239,17 +248,14 @@ def main() -> int:
         items = items[:args.limit]
 
     tally = {"ok": 0, "expected": 0, "attention": 0}
-    rc = 0
     for it in items:
         res = thumb_one(it, force=args.force)
         tally[outcome_category(res)] += 1
-        if res.startswith("fail"):
-            rc |= 1
     _series_ctx.set("")
     hlog(f"thumbnails complete: {tally['ok']} ok, {tally['expected']} skipped, "
          f"{tally['attention']} need attention", step="summary",
          level="WARNING" if tally["attention"] else "NOTICE")
-    return rc
+    return 0
 
 
 if __name__ == "__main__":

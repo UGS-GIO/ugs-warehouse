@@ -62,7 +62,7 @@ Run after the `deploy.yml` image build finishes. This single run carries:
 
 ## ⚡ Work-box checklist — 2026-06-19 session (DO THESE)
 
-Perm-gated actions for this session's commits. This box has no GCP perms; run on the work box.
+Perm-gated actions for this session's commits (run with GCP perms).
 Code is committed + pushed on `main`; deploys are automatic — these are the data/infra steps.
 
 0a. **COG preview slow → fix CDN caching.** COGs were uploaded `Cache-Control: public,no-cache`, so the
@@ -138,7 +138,7 @@ Code is committed + pushed on `main`; deploys are automatic — these are the da
 - **Styles v0.1.1 published.** Tag pushed → publish CI rebuilds dist-json + **bakes the wells pie-wedge
   sprite sheet** (`gen:sprites`) + rsyncs to the styles CDN + runs the restyle job → the prod wells STAC
   item gets BOTH renders (`by-purpose` + `by-boxtype`). So the viewer's "Symbolize by" switcher + the
-  box-type pie icons go live with **no work-box action**. (Two fixes rode along: paintless-fill→black
+  box-type pie icons go live with **no extra action**. (Two fixes rode along: paintless-fill→black
   dropped for 4 outline-only styles; `by-boxtype` is the new pie-wedge icon render ported from
   ugs-map-viewer.) Sanity-check after the CI run: `curl …/styles/index.json` should list `by-boxtype`,
   and `…/styles/styles/enmin_ucrc_wells_current/sprite.png` should 200.
@@ -180,8 +180,8 @@ auth story is the same local and on Cloud Run (ADC / Workload Identity).
 
 ## Current state (2026-06-15) — read this first
 
-Two boxes: this **personal box** (no GCP perms) authors + commits; the **work box**
-(Gemini, has perms) runs deploys/grants/ingests. Hand perm-gated steps off via `docs/`.
+Code + commits land here; perm-gated steps (deploys/grants/ingests) run separately with GCP
+perms — handed off via `docs/`.
 
 **Shipped since 2026-06-10** (all committed on `main`):
 - **Pubs producer** (`src/ugs_warehouse/pubs/`) — publications → COG harvest (GDAL
@@ -308,7 +308,7 @@ from the upstream MySQL `pubsdb`.
 1. Edit the row (by `series_id`) in `src/ugs_warehouse/pubs/data/pubsdb.csv`, commit.
 2. Run the rebuild — **no COG re-harvest** happens:
    ```
-   gcloud run jobs execute ugs-pubs-ingest --region=us-central1   # work box, has perms
+   gcloud run jobs execute ugs-pubs-ingest --region=us-central1   # needs GCP perms
    # local equivalent: python -m ugs_warehouse.pubs.ingest
    ```
 
@@ -359,7 +359,7 @@ scoped to `warehouse/...`) · `ut-dnr-ugs-backend-tools` (future Cloud Run + Pub
 ## Architecture
 
 ```
-publish.sh (dataELT) → Pub/Sub {schema, topic}      ← #418 wired; awaits work-box perms
+publish.sh (dataELT) → Pub/Sub {schema, topic}      ← #418 wired; awaits GCP perms
    ↓ push subscription (cloudbuild wire-pubsub)
 Cloud Run service (service/main.py)                 ← acks+skips non-MART_SCHEMAS
    ↓

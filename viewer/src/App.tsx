@@ -252,7 +252,11 @@ export function App() {
   // Open a collection fresh (series filter is per-collection → cleared). Item open / layer
   // toggle / back-to-items keep the active series filter so it survives drilling in + out.
   const openCollection = (href: string) => go({ view, c: collIdOf(href) });
-  const openItem = (href: string) => go({ view, c: collectionUrl, i: idOf(href), l: layerIds, s: seriesSel });
+  // Derive the collection from the item href (…/<collection>/<id>/<id>.json) rather than the ambient
+  // collectionUrl — search-all results span collections, so the ambient one is wrong (or absent) and
+  // the item detail (gated on a resolved leaf collection) never shows. Mirrors openCover.
+  const openItem = (href: string) =>
+    go({ view, c: href.split("/").slice(-3)[0], i: idOf(href), l: layerIds, s: seriesSel });
   // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
   // collection id from the item href (…/<collection>/<id>/<id>.json) so it resolves + the URL stays tidy.
   const openCover = (href: string) => go({ view, c: href.split("/").slice(-3)[0], i: idOf(href) });

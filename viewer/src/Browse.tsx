@@ -4,9 +4,11 @@ import {
   type ColumnDef, flexRender, getCoreRowModel, getSortedRowModel,
   type SortingState, useReactTable,
 } from "@tanstack/react-table";
+import { MapboxOverlay } from "@deck.gl/mapbox";
+import { PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
 import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
+import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source, useControl } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
@@ -72,6 +74,8 @@ const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties 
 // "Mappable" = has something to draw on the map: a COG (raster), vector PMTiles, or a raster PMTiles
 // mosaic. Items with none (metadata-only pubs) do nothing when toggled — the filter hides them.
 const hasMapData = (it: ItemRef) => !!(cogAsset(it.data) || pmtilesLink(it.data) || rasterTilesAsset(it.data));
+// Item carries an interactive 3D fence-diagram asset (role 3d-vector) → eligible for the 3D viewer.
+const has3D = (it: ItemRef) => Object.values(it.data?.assets ?? {}).some((a) => assetKind(a as Asset) === "threeD");
 // Data-series code = the alpha prefix of the publication series id (DS-8 → DS, OFR-647 →
 // OFR). Only items that carry `ugs:series_id` (publications) get a code; everything else
 // (vector serving topics, etc.) returns "" so it never pollutes the series facet. Numeric
@@ -316,6 +320,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards" | "thumbs">("table");
   const [mapOnly, setMapOnly] = useState(false);  // hide metadata-only items (no COG / no tiles)
+  const [threeDOnly, setThreeDOnly] = useState(false);  // only items with a 3D fence-diagram asset
   const [yearMin, setYearMin] = useState("");
   const [yearMax, setYearMax] = useState("");
   const [topics, setTopics] = useState<string[]>([]);  // map-pub topic filter (multi-select)
@@ -365,6 +370,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         if (scaleTier && scaleTierOf(it) !== scaleTier) return false;
         if (csel.size && !csel.has(gCounty(it))) return false;
         if (mapOnly && !hasMapData(it)) return false;
+        if (threeDOnly && !has3D(it)) return false;
         if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
           const y = gYear(it);
           if (y == null || (Number.isFinite(ymin) && y < ymin) || (Number.isFinite(ymax) && y > ymax)) return false;
@@ -378,7 +384,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
       }
       return filtered;
     },
-    [items, needle, series, topics, author, scaleTier, counties, mapOnly, yearMin, yearMax],
+    [items, needle, series, topics, author, scaleTier, counties, mapOnly, threeDOnly, yearMin, yearMax],
   );
 
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
@@ -434,6 +440,8 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         </span>
         <span className={toggle(mapOnly)} title="Only items with a COG or vector tiles to display on the map"
           onClick={() => setMapOnly((v) => !v)}>Mappable</span>
+        <span className={toggle(threeDOnly)} title="Only items with an interactive 3D fence-diagram asset"
+          onClick={() => setThreeDOnly((v) => !v)}>3D</span>
         <span className={toggle(mode === "table")} onClick={() => setMode("table")}>Table</span>
         <span className={toggle(mode === "thumbs")} onClick={() => setMode("thumbs")}>Thumbnails</span>
         <span className={toggle(mode === "cards")} onClick={() => setMode("cards")}>Cards</span>
@@ -1275,30 +1283,7 @@ function TextPreview({ href }: { href: string }) {
   );
 }
 
-// ---- Interactive 3D Fence Diagram Viewer (Pure HTML5 Canvas 2D with 3D projection & sorting) ----
-interface Point3D {
-  x: number;
-  y: number;
-  z: number;
-}
-
-interface Polygon3D {
-  id: string;
-  unit: string;
-  label: string;
-  color: string;
-  rings: Point3D[][]; // outer and inners
-  centroid: Point3D;
-  depth: number;
-}
-
-interface Line3D {
-  unit: string;
-  label: string;
-  isFault: boolean;
-  points: Point3D[];
-}
-
+// ---- Interactive 3D Fence Diagram Viewer (deck.gl SolidPolygon/Path layers over maplibre 3D) ----
 const GEOLOGIC_COLORS: Record<string, string> = {
   "red pine shale": "#556B2F",
   "zur": "#556B2F",
@@ -1318,6 +1303,19 @@ const GEOLOGIC_COLORS: Record<string, string> = {
   "qg": "#DCDCDC",
 };
 
+// HSL → hex so every unit color is a hex string — deck.gl needs RGB tuples (see hexToRgb), and a
+// single format keeps the legend swatch and the 3D fill in sync.
+function hslToHex(h: number, s: number, l: number): string {
+  s /= 100; l /= 100;
+  const k = (n: number) => (n + h / 30) % 12;
+  const a = s * Math.min(l, 1 - l);
+  const f = (n: number) => {
+    const c = l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    return Math.round(255 * c).toString(16).padStart(2, "0");
+  };
+  return `#${f(0)}${f(8)}${f(4)}`;
+}
+
 function getUnitColor(unit: string, label: string): string {
   const u = (unit ?? "").toLowerCase().trim();
   const l = (label ?? "").toLowerCase().trim();
@@ -1329,131 +1327,63 @@ function getUnitColor(unit: string, label: string): string {
   for (let i = 0; i < str.length; i++) {
     hash = str.charCodeAt(i) + ((hash << 5) - hash);
   }
-  const h = Math.abs(hash) % 360;
-  return `hsl(${h}, 65%, 60%)`;
+  return hslToHex(Math.abs(hash) % 360, 65, 60);
+}
+
+// "#rrggbb" → [r,g,b]; deck.gl color accessors want a numeric tuple, not a CSS string.
+function hexToRgb(hex: string): [number, number, number] {
+  const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex.trim());
+  if (!m) return [128, 128, 128];
+  return [parseInt(m[1], 16), parseInt(m[2], 16), parseInt(m[3], 16)];
+}
+
+// deck.gl ⇄ maplibre bridge: a MapboxOverlay added as a react-map-gl control. `interleaved` renders
+// the deck layers inside maplibre's WebGL pass so they share ONE camera (pitch/bearing/zoom) and
+// depth-test against terrain — which is the whole reason the hand-rolled canvas projector is gone.
+function DeckOverlay(props: { layers: unknown[] }) {
+  const overlay = useControl(() => new MapboxOverlay({ interleaved: true, layers: props.layers as never }));
+  overlay.setProps({ layers: props.layers as never });
+  return null;
 }
 
 function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  
-  // 3D vector data state
-  const [polygons, setPolygons] = useState<Polygon3D[]>([]);
-  const [lines, setLines] = useState<Line3D[]>([]);
-  const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
-  const [center, setCenter] = useState<Point3D>({ x: 0, y: 0, z: 0 });
-  const [bounds, setBounds] = useState<{ min: Point3D; max: Point3D }>({
-    min: { x: 0, y: 0, z: 0 },
-    max: { x: 0, y: 0, z: 0 },
-  });
 
-  // Camera, rotation, and render settings
-  const [theta, setTheta] = useState(-Math.PI / 6); // Yaw rotation angle (around Z axis)
-  const [phi, setPhi] = useState(Math.PI / 4);     // Pitch rotation angle (around X axis)
-  const [scale, setScale] = useState(1.0);
-  const [panX, setPanX] = useState(0);
-  const [panY, setPanY] = useState(0);
-  const [verticalExaggeration, setVerticalExaggeration] = useState(2.5);
-  
-  // Layer and rendering toggles
-  const [layout, setLayout] = useState<"split" | "superimposed">("split");
-  const [showMap, setShowMap] = useState(true);
-  const [showDem, setShowDem] = useState(true);
-  const [showPolygons, setShowPolygons] = useState(true);
-  const [showLines, setShowLines] = useState(true);
-  const [showGrid, setShowGrid] = useState(true);
-  const [hoveredUnit, setHoveredUnit] = useState<string | null>(null);
+  // Parsed 3D vectors kept in geographic coords ([lon, lat, z]); deck.gl renders them directly in
+  // the map's LNGLAT space — no local-meter projection, no canvas. z is elevation in metres.
+  const [polygons, setPolygons] = useState<{ unit: string; rgb: [number, number, number]; rings: number[][][] }[]>([]);
+  const [lines, setLines] = useState<{ isFault: boolean; path: number[][] }[]>([]);
+  const [legend, setLegend] = useState<{ unit: string; label: string; color: string }[]>([]);
+  const [bbox, setBbox] = useState<[number, number, number, number] | null>(null);
+
+  // Display settings — every layer toggles independently (3D units, 3D lines, the DEM the fence
+  // slices through, and the geologic map sheet draped on it).
+  const [vex, setVex] = useState(2.5);                  // vertical exaggeration
+  const [showUnits, setShowUnits] = useState(true);     // 3D stratigraphic panels
+  const [showLines, setShowLines] = useState(true);     // 3D contacts & faults
+  const [showTerrain, setShowTerrain] = useState(true); // DEM the fence slices through
+  const [showSheet, setShowSheet] = useState(true);     // geologic map-sheet COG draped on terrain
+  const [xray, setXray] = useState(false);              // draw the fence THROUGH terrain (see the cutout)
+  // High-res DEM we host ourselves: a per-pub terrain-rgb tileset (mapbox-encoded) produced from UGRC
+  // 1 m lidar (scripts/build_terrain_rgb.py) and attached to the STAC item. When present, the Terrain
+  // toggle uses it instead of the global ~10 m terrarium source — no auth, just our CDN.
+  const lidarTerrain = useMemo(() =>
+    Object.values(item.assets ?? {}).find((a) =>
+      (a as Asset).roles?.includes("terrain-rgb") || /terrainrgb|terrain_rgb|lidar.*terrain/i.test((a as Asset).href ?? "")),
+    [item]) as Asset | undefined;
+  const [hovered, setHovered] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [mapReady, setMapReady] = useState(false);
 
   const polyUrl = asset.href;
   const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
+  const cog = cogAsset(item);
+  const mapRef = useRef<MapRef>(null);
 
-  const [mapReady, setMapReady] = useState(false);
-  const [mapOpacity, setMapOpacity] = useState(0.65);
-  const [geoCenter, setGeoCenter] = useState<{ lon: number; lat: number }>({ lon: -111.2, lat: 40.5 });
-  const [mapViewState, setMapViewState] = useState({
-    longitude: -111.2,
-    latitude: 40.5,
-    zoom: 11,
-    bearing: 30,
-    pitch: 45
-  });
-  const overviewMapRef = useRef<MapRef>(null);
+  useEffect(() => { ensureCogProtocol().then(() => setMapReady(true)); }, []);
 
-  const fitOverview = () => {
-    const b = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
-    if (b && overviewMapRef.current) {
-      const map = overviewMapRef.current.getMap();
-      map.fitBounds(
-        [[b[0], b[1]], [b[2], b[3]]],
-        { padding: 24, duration: 0 }
-      );
-      map.setBearing(-theta * (180 / Math.PI));
-      map.setPitch(phi * (180 / Math.PI));
-
-      const center = map.getCenter();
-      const zoom = map.getZoom();
-      const bearing = map.getBearing();
-      const pitch = map.getPitch();
-      setMapViewState({
-        longitude: center.lng,
-        latitude: center.lat,
-        zoom: zoom,
-        bearing: bearing,
-        pitch: pitch
-      });
-    }
-  };
-
-  const toggleDem = (enabled: boolean) => {
-    setShowDem(enabled);
-    if (enabled && overviewMapRef.current) {
-      overviewMapRef.current.getMap().easeTo({
-        pitch: 48,
-        duration: 800
-      });
-      setPhi(48 * (Math.PI / 180));
-    } else if (!enabled && overviewMapRef.current) {
-      overviewMapRef.current.getMap().easeTo({
-        pitch: 0,
-        duration: 800
-      });
-      setPhi(0);
-    }
-  };
-
-  const fillColorExpression = useMemo(() => {
-    if (legend.length === 0) return "#808080";
-    const expr: any[] = ["match", ["coalesce", ["get", "MapUnit"], ["get", "unit"], ""]];
-    legend.forEach((item) => {
-      expr.push(item.unit);
-      expr.push(item.color);
-      expr.push(item.unit.toLowerCase());
-      expr.push(item.color);
-    });
-    expr.push("#808080"); // fallback
-    return expr;
-  }, [legend]);
-
-  const lineStyleExpression = useMemo(() => {
-    return [
-      "case",
-      ["boolean", ["get", "is_fault"], ["get", "isFault"], ["to-boolean", ["match", ["coalesce", ["get", "Type"], ["get", "type"], ""], ["fault", "Fault"], true, false]]],
-      "#dc2626", // faults are crimson red
-      "#475569"  // contacts are slate grey
-    ];
-  }, []);
-
-  useEffect(() => {
-    if (showMap) {
-      ensureCogProtocol().then(() => setMapReady(true));
-    }
-  }, [showMap]);
-
-  // Load and parse the 3D GeoJSON data
+  // Fetch + parse both GeoJSONs once. Keep [lon, lat, z]; collect the legend + bbox along the way.
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -1461,680 +1391,246 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
     Promise.all([
       fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
-      fetch(lineUrl).then((r) => r.json()).catch(() => null) // lines are optional/best-effort
+      fetch(lineUrl).then((r) => r.json()).catch(() => null), // lines optional/best-effort
     ])
-    .then(([polyData, lineData]) => {
-      if (!active) return;
-      
-      const parsedPolys: Polygon3D[] = [];
-      const parsedLines: Line3D[] = [];
-      
-      let sumLon = 0, sumLat = 0, sumZ = 0, countPts = 0;
-      let minLon = Infinity, maxLon = -Infinity;
-      let minLat = Infinity, maxLat = -Infinity;
-      let minZ = Infinity, maxZ = -Infinity;
+      .then(([polyData, lineData]) => {
+        if (!active) return;
 
-      // Helper to capture geographic coordinate statistics
-      const ingestPoint = (lon: number, lat: number, z: number) => {
-        sumLon += lon;
-        sumLat += lat;
-        sumZ += z;
-        countPts++;
-        if (lon < minLon) minLon = lon;
-        if (lon > maxLon) maxLon = lon;
-        if (lat < minLat) minLat = lat;
-        if (lat > maxLat) maxLat = lat;
-        if (z < minZ) minZ = z;
-        if (z > maxZ) maxZ = z;
-      };
+        const polys: { unit: string; rgb: [number, number, number]; rings: number[][][] }[] = [];
+        const lns: { isFault: boolean; path: number[][] }[] = [];
+        const legendMap = new Map<string, { label: string; color: string }>();
+        let minLon = Infinity, minLat = Infinity, maxLon = -Infinity, maxLat = -Infinity, count = 0;
+        const seen = (lon: number, lat: number) => {
+          if (lon < minLon) minLon = lon;
+          if (lon > maxLon) maxLon = lon;
+          if (lat < minLat) minLat = lat;
+          if (lat > maxLat) maxLat = lat;
+          count++;
+        };
 
-      // 1. Parse polygons
-      const features = polyData.features || [];
-      features.forEach((feat: any, idx: number) => {
-        const props = feat.properties || {};
-        const unit = props.MapUnit || props.unit || "Unknown Unit";
-        const label = props.Label || props.label || "Unit";
-        const color = getUnitColor(unit, label);
-        const geom = feat.geometry || {};
-        const type = geom.type;
-        const ringsList: number[][][][] = [];
-
-        if (type === "Polygon") {
-          ringsList.push(geom.coordinates);
-        } else if (type === "MultiPolygon") {
-          geom.coordinates.forEach((c: any) => ringsList.push(c));
+        for (const feat of polyData.features ?? []) {
+          const props = feat.properties || {};
+          const unit = props.MapUnit || props.unit || "Unknown Unit";
+          const label = props.Label || props.label || "Unit";
+          const color = getUnitColor(unit, label);
+          const rgb = hexToRgb(color);
+          const geom = feat.geometry || {};
+          const multi: number[][][][] = geom.type === "MultiPolygon" ? geom.coordinates
+            : geom.type === "Polygon" ? [geom.coordinates] : [];
+          for (const rings of multi) {
+            const r3 = rings.map((ring) => ring.map((pt) => {
+              const lon = pt[0], lat = pt[1], z = pt[2] ?? 0;
+              seen(lon, lat);
+              return [lon, lat, z];
+            }));
+            if (r3.length && r3[0].length) {
+              polys.push({ unit, rgb, rings: r3 });
+              legendMap.set(unit, { label, color });
+            }
+          }
         }
 
-        ringsList.forEach((rings: any) => {
-          const parsedRings: Point3D[][] = rings.map((ring: any) => {
-            return ring.map((pt: any) => {
-              const lon = pt[0], lat = pt[1], z = pt[2] ?? 0;
-              ingestPoint(lon, lat, z);
-              return { x: lon, y: lat, z: z };
-            });
-          });
-          
-          if (parsedRings.length > 0 && parsedRings[0].length > 0) {
-            // Compute centroid
-            let cx = 0, cy = 0, cz = 0;
-            parsedRings[0].forEach((pt) => { cx += pt.x; cy += pt.y; cz += pt.z; });
-            cx /= parsedRings[0].length;
-            cy /= parsedRings[0].length;
-            cz /= parsedRings[0].length;
-
-            parsedPolys.push({
-              id: `${idx}-${parsedPolys.length}`,
-              unit,
-              label,
-              color,
-              rings: parsedRings,
-              centroid: { x: cx, y: cy, z: cz },
-              depth: 0,
-            });
-          }
-        });
-      });
-
-      // 2. Parse lines
-      if (lineData && lineData.features) {
-        lineData.features.forEach((feat: any) => {
+        for (const feat of lineData?.features ?? []) {
           const props = feat.properties || {};
-          const unit = props.MapUnit || props.unit || "";
-          const label = props.Label || props.label || "";
+          const isFault = (props.Type || "").toLowerCase().includes("fault") || !!props.is_fault;
           const geom = feat.geometry || {};
-          const type = geom.type;
-          const isFault = (props.Type || "").toLowerCase().includes("fault") || (feat.properties?.is_fault);
-          
-          const coordsList: number[][][] = [];
-          if (type === "LineString") {
-            coordsList.push(geom.coordinates);
-          } else if (type === "MultiLineString") {
-            geom.coordinates.forEach((c: any) => coordsList.push(c));
-          }
-
-          coordsList.forEach((coords) => {
-            const pts = coords.map((pt: any) => {
+          const multi: number[][][] = geom.type === "MultiLineString" ? geom.coordinates
+            : geom.type === "LineString" ? [geom.coordinates] : [];
+          for (const coords of multi) {
+            const path = coords.map((pt) => {
               const lon = pt[0], lat = pt[1], z = pt[2] ?? 0;
-              ingestPoint(lon, lat, z);
-              return { x: lon, y: lat, z: z };
+              seen(lon, lat);
+              return [lon, lat, z];
             });
-            if (pts.length > 0) {
-              parsedLines.push({ unit, label, isFault: !!isFault, points: pts });
-            }
-          });
-        });
-      }
+            if (path.length) lns.push({ isFault, path });
+          }
+        }
 
-      if (countPts === 0) {
-        throw new Error("No valid coordinates found in the 3D dataset");
-      }
+        if (!count) throw new Error("No valid coordinates found in the 3D dataset");
+        if (!active) return;
 
-      // 3. Compute coordinate system center and convert coordinates to local meters
-      const centerLon = (minLon + maxLon) / 2;
-      const centerLat = (minLat + maxLat) / 2;
-      const centerZ = (minZ + maxZ) / 2;
-      const cosLat = Math.cos((centerLat * Math.PI) / 180);
-
-      const toLocal = (pt: Point3D) => ({
-        x: (pt.x - centerLon) * 111320 * cosLat,
-        y: (pt.y - centerLat) * 110574,
-        z: pt.z,
+        setPolygons(polys);
+        setLines(lns);
+        setLegend(
+          Array.from(legendMap.entries())
+            .map(([unit, v]) => ({ unit, label: v.label, color: v.color }))
+            .sort((a, b) => a.unit.localeCompare(b.unit)),
+        );
+        setBbox([minLon, minLat, maxLon, maxLat]);
+        setLoading(false);
+      })
+      .catch((err) => {
+        if (active) {
+          setError(err instanceof Error ? err.message : "Failed to load 3D data files");
+          setLoading(false);
+        }
       });
-
-      // Convert all polygons
-      const localPolys = parsedPolys.map((p) => ({
-        ...p,
-        centroid: toLocal(p.centroid),
-        rings: p.rings.map((ring) => ring.map(toLocal)),
-      }));
-
-      // Convert all lines
-      const localLines = parsedLines.map((l) => ({
-        ...l,
-        points: l.points.map(toLocal),
-      }));
-
-      // Calculate local dimensions for bounding box
-      const minLocal = toLocal({ x: minLon, y: minLat, z: minZ });
-      const maxLocal = toLocal({ x: maxLon, y: maxLat, z: maxZ });
-
-      // Generate distinct legend items
-      const legendMap = new Map<string, { label: string; color: string }>();
-      localPolys.forEach((p) => legendMap.set(p.unit, { label: p.label, color: p.color }));
-      const legendItems = Array.from(legendMap.entries()).map(([unit, val]) => ({
-        unit,
-        label: val.label,
-        color: val.color,
-      })).sort((a, b) => a.unit.localeCompare(b.unit));
-
-      // Calculate base scale to fit the canvas bounds
-      const spanX = Math.abs(maxLocal.x - minLocal.x);
-      const spanY = Math.abs(maxLocal.y - minLocal.y);
-      const spanZ = Math.abs(maxLocal.z - minLocal.z);
-      const spanMax = Math.max(spanX, spanY, spanZ);
-      const baseScale = spanMax > 0 ? 320 / spanMax : 1.0;
-
-      if (active) {
-        setPolygons(localPolys);
-        setLines(localLines);
-        setLegend(legendItems);
-        setCenter({ x: 0, y: 0, z: centerZ });
-        setGeoCenter({ lon: centerLon, lat: centerLat });
-        setBounds({ min: minLocal, max: maxLocal });
-        setScale(baseScale);
-        setPanX(0);
-        setPanY(0);
-        setLoading(false);
-      }
-    })
-    .catch((err) => {
-      if (active) {
-        setError(err.message || "Failed to load 3D data files");
-        setLoading(false);
-      }
-    });
 
     return () => { active = false; };
-  }, [asset.href]);
+  }, [polyUrl, lineUrl]);
 
-  // Handle Resize and Drawing Loop
-  useEffect(() => {
-    if (loading || error || !canvasRef.current) return;
-    
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    let animId: number;
-
-    const renderFrame = () => {
-      const width = canvas.width = canvas.clientWidth * window.devicePixelRatio;
-      const height = canvas.height = canvas.clientHeight * window.devicePixelRatio;
-      ctx.scale(window.devicePixelRatio, window.devicePixelRatio);
-      
-      const logicWidth = width / window.devicePixelRatio;
-      const logicHeight = height / window.devicePixelRatio;
-
-      // Clear Canvas
-      ctx.clearRect(0, 0, logicWidth, logicHeight);
-      ctx.lineJoin = "round";
-      ctx.lineCap = "round";
-
-      // 3D Projection Math
-      const project = (pt: Point3D): { sx: number; sy: number; sz: number } => {
-        if (layout === "superimposed") {
-          const latRad = mapViewState.latitude * Math.PI / 180;
-          const metersPerPixel = 156543.03392 * Math.cos(latRad) / Math.pow(2, mapViewState.zoom);
-          const currentScale = 1.0 / metersPerPixel;
-
-          const cosLat = Math.cos(latRad);
-          const dx = (geoCenter.lon - mapViewState.longitude) * 111320 * cosLat;
-          const dy = (geoCenter.lat - mapViewState.latitude) * 110574;
-
-          const x_rel = pt.x + dx;
-          const y_rel = pt.y + dy;
-
-          const currentTheta = -mapViewState.bearing * (Math.PI / 180);
-          const currentPhi = mapViewState.pitch * (Math.PI / 180);
-
-          const x1 = x_rel * Math.cos(currentTheta) - y_rel * Math.sin(currentTheta);
-          const y1 = x_rel * Math.sin(currentTheta) + y_rel * Math.cos(currentTheta);
-
-          const adjustedZ = (pt.z - center.z) * verticalExaggeration;
-          const y2 = y1 * Math.sin(currentPhi) + adjustedZ * Math.cos(currentPhi);
-          const z2 = -y1 * Math.cos(currentPhi) + adjustedZ * Math.sin(currentPhi);
-
-          const sx = logicWidth / 2 + x1 * currentScale;
-          const sy = logicHeight / 2 - y2 * currentScale;
-
-          return { sx, sy, sz: z2 };
-        } else {
-          const x1 = pt.x * Math.cos(theta) - pt.y * Math.sin(theta);
-          const y1 = pt.x * Math.sin(theta) + pt.y * Math.cos(theta);
-          
-          const adjustedZ = (pt.z - center.z) * verticalExaggeration;
-          const y2 = y1 * Math.sin(phi) + adjustedZ * Math.cos(phi);
-          const z2 = -y1 * Math.cos(phi) + adjustedZ * Math.sin(phi);
-
-          const sx = logicWidth / 2 + x1 * scale + panX;
-          const sy = logicHeight / 2 - y2 * scale + panY;
-          
-          return { sx, sy, sz: z2 };
-        }
-      };
-
-      // 1. Draw 3D Grid Box
-      if (showGrid) {
-        ctx.strokeStyle = "rgba(156, 163, 175, 0.25)";
-        ctx.lineWidth = 1;
-        ctx.font = "9px sans-serif";
-        ctx.fillStyle = "rgba(107, 114, 128, 0.65)";
-
-        const { min, max } = bounds;
-        const corners = [
-          { x: min.x, y: min.y, z: min.z }, // 0
-          { x: max.x, y: min.y, z: min.z }, // 1
-          { x: max.x, y: max.y, z: min.z }, // 2
-          { x: min.x, y: max.y, z: min.z }, // 3
-          { x: min.x, y: min.y, z: max.z }, // 4
-          { x: max.x, y: min.y, z: max.z }, // 5
-          { x: max.x, y: max.y, z: max.z }, // 6
-          { x: min.x, y: max.y, z: max.z }, // 7
-        ].map(project);
-
-        const edges = [
-          [0, 1], [1, 2], [2, 3], [3, 0], // Bottom ring
-          [4, 5], [5, 6], [6, 7], [7, 4], // Top ring
-          [0, 4], [1, 5], [2, 6], [3, 7], // Columns
-        ];
-
-        edges.forEach(([a, b]) => {
-          ctx.beginPath();
-          ctx.moveTo(corners[a].sx, corners[a].sy);
-          ctx.lineTo(corners[b].sx, corners[b].sy);
-          ctx.stroke();
-        });
-
-        // Draw scale ticks on the Z columns
-        const zLevels = [min.z, (min.z + max.z)/2, max.z];
-        zLevels.forEach((zVal) => {
-          const tickPt = project({ x: min.x, y: min.y, z: zVal });
-          ctx.beginPath();
-          ctx.arc(tickPt.sx, tickPt.sy, 2, 0, Math.PI * 2);
-          ctx.fill();
-          ctx.fillText(`${Math.round(zVal)}m`, tickPt.sx - 38, tickPt.sy + 3);
-        });
-
-        // Draw horizontal scale indicator
-        const scalePt1 = project({ x: min.x, y: min.y, z: min.z });
-        const scalePt2 = project({ x: min.x + 1000, y: min.y, z: min.z }); // 1km line
-        const dx = scalePt2.sx - scalePt1.sx;
-        const dy = scalePt2.sy - scalePt1.sy;
-        const len = Math.sqrt(dx*dx + dy*dy);
-        if (len > 15) {
-          ctx.strokeStyle = "rgba(75, 85, 99, 0.8)";
-          ctx.lineWidth = 1.5;
-          ctx.beginPath();
-          ctx.moveTo(scalePt1.sx, scalePt1.sy + 15);
-          ctx.lineTo(scalePt2.sx, scalePt2.sy + 15);
-          ctx.stroke();
-          ctx.fillText("1 km", (scalePt1.sx + scalePt2.sx)/2 - 10, scalePt1.sy + 28);
-        }
-      }
-
-      // 2. Render Polygons (Sorted back-to-front via Painters Algorithm)
-      if (showPolygons && polygons.length > 0) {
-        // Compute current rotated depth for each polygon
-        const sortedPolys = polygons.map((p) => {
-          const rotatedCentroid = project(p.centroid);
-          return { ...p, depth: rotatedCentroid.sz };
-        }).sort((a, b) => a.depth - b.depth); // back-to-front sorting
-
-        sortedPolys.forEach((p) => {
-          const isHovered = hoveredUnit === p.unit;
-          const matchesSearch = !search || p.unit.toLowerCase().includes(search.toLowerCase()) || p.label.toLowerCase().includes(search.toLowerCase());
-          
-          if (search && !matchesSearch) return;
-
-          ctx.fillStyle = p.color;
-          ctx.strokeStyle = "rgba(0, 0, 0, 0.4)";
-          ctx.lineWidth = isHovered ? 2.5 : 0.5;
-          ctx.globalAlpha = hoveredUnit ? (isHovered ? 0.9 : 0.25) : 0.65;
-
-          p.rings.forEach((ring) => {
-            if (ring.length === 0) return;
-            const projPts = ring.map(project);
-            
-            ctx.beginPath();
-            ctx.moveTo(projPts[0].sx, projPts[0].sy);
-            for (let i = 1; i < projPts.length; i++) {
-              ctx.lineTo(projPts[i].sx, projPts[i].sy);
-            }
-            ctx.closePath();
-            ctx.fill();
-            ctx.stroke();
-          });
-
-          // Draw label in the center of the first outer ring
-          if (isHovered && p.rings[0] && p.rings[0].length > 0) {
-            const centroidProj = project(p.centroid);
-            ctx.globalAlpha = 1.0;
-            ctx.fillStyle = "#000000";
-            ctx.font = "bold 11px sans-serif";
-            ctx.fillText(p.label, centroidProj.sx - 8, centroidProj.sy + 4);
-          }
-        });
-        ctx.globalAlpha = 1.0;
-      }
-
-      // 3. Render 3D Contacts & Faults Lines
-      if (showLines && lines.length > 0) {
-        ctx.globalAlpha = hoveredUnit ? 0.35 : 0.9;
-        lines.forEach((l) => {
-          const isFault = l.isFault;
-          ctx.strokeStyle = isFault ? "rgba(239, 68, 68, 0.95)" : "rgba(17, 24, 39, 0.8)";
-          ctx.lineWidth = isFault ? 2.0 : 1.0;
-          
-          if (showGrid) {
-            ctx.setLineDash(isFault ? [5, 3] : []);
-          }
-
-          ctx.beginPath();
-          const first = project(l.points[0]);
-          ctx.moveTo(first.sx, first.sy);
-          for (let i = 1; i < l.points.length; i++) {
-            const pt = project(l.points[i]);
-            ctx.lineTo(pt.sx, pt.sy);
-          }
-          ctx.stroke();
-        });
-        ctx.setLineDash([]);
-        ctx.globalAlpha = 1.0;
-      }
-    };
-
-    const scheduleFrame = () => {
-      renderFrame();
-      animId = requestAnimationFrame(scheduleFrame);
-    };
-
-    scheduleFrame();
-    return () => cancelAnimationFrame(animId);
-  }, [loading, error, polygons, lines, theta, phi, scale, panX, panY, verticalExaggeration, showPolygons, showLines, showGrid, hoveredUnit, search, layout, mapViewState, geoCenter]);
-
-  // Mouse Interaction Handlers
-  const lastMousePos = useRef<{ x: number; y: number } | null>(null);
-  const mouseButton = useRef<number | null>(null);
-
-  const handleMouseDown = (e: React.MouseEvent) => {
-    lastMousePos.current = { x: e.clientX, y: e.clientY };
-    mouseButton.current = e.button;
-    e.preventDefault();
-  };
-
-  const handleMouseMove = (e: React.MouseEvent) => {
-    if (!lastMousePos.current || mouseButton.current === null) return;
-    
-    const dx = e.clientX - lastMousePos.current.x;
-    const dy = e.clientY - lastMousePos.current.y;
-    
-    if (mouseButton.current === 0 && !e.shiftKey) {
-      // Orbit rotation (Yaw and Pitch)
-      const newTheta = theta + dx * 0.0075;
-      const newPhi = Math.max(-Math.PI / 2 + 0.1, Math.min(Math.PI / 2 - 0.1, phi - dy * 0.0075));
-      setTheta(newTheta);
-      setPhi(newPhi);
-
-      // Sync 3D Canvas camera to the 2D MapLibre map
-      if (overviewMapRef.current) {
-        const map = overviewMapRef.current.getMap();
-        map.setBearing(-newTheta * (180 / Math.PI));
-        map.setPitch(newPhi * (180 / Math.PI));
-      }
-    } else if (mouseButton.current === 2 || (mouseButton.current === 0 && e.shiftKey)) {
-      // Panning
-      setPanX((px) => px + dx);
-      setPanY((py) => py + dy);
+  // deck.gl layers. z is scaled by the vertical-exaggeration slider; the hovered unit pops while the
+  // rest dim. updateTriggers rebuild geometry/colour when the slider or hover changes.
+  const deckLayers = useMemo(() => {
+    const layers: unknown[] = [];
+    if (showUnits) {
+      layers.push(new SolidPolygonLayer({
+        id: "fence-units",
+        data: polygons,
+        _full3d: true,
+        // deck.gl types getPolygon as an intersection with AccessorFunction; cast past the friction.
+        getPolygon: ((d: { rings: number[][][] }) =>
+          d.rings.map((ring) => ring.map((p) => [p[0], p[1], p[2] * vex]))) as never,
+        getFillColor: (d: { unit: string; rgb: [number, number, number] }) => {
+          const a = hovered ? (d.unit === hovered ? 235 : 55) : 190;
+          return [d.rgb[0], d.rgb[1], d.rgb[2], a];
+        },
+        pickable: true,
+        onHover: (info: { object?: { unit: string } }) => setHovered(info?.object?.unit ?? null),
+        // X-ray: disable depth-test so the panels draw over terrain — you see the cutout inside the
+        // mountain instead of it being occluded by the opaque DEM.
+        parameters: { depthTest: !xray },
+        updateTriggers: { getPolygon: [vex], getFillColor: [hovered] },
+      }) as unknown);
     }
+    if (showLines) {
+      layers.push(new PathLayer({
+        id: "fence-lines",
+        data: lines,
+        getPath: ((d: { path: number[][] }) => d.path.map((p) => [p[0], p[1], p[2] * vex])) as never,
+        getColor: (d: { isFault: boolean }) => (d.isFault ? [220, 38, 38] : [71, 85, 105]),
+        getWidth: (d: { isFault: boolean }) => (d.isFault ? 3 : 1.5),
+        widthUnits: "pixels",
+        widthMinPixels: 1,
+        parameters: { depthTest: !xray },
+        updateTriggers: { getPath: [vex] },
+      }) as unknown);
+    }
+    return layers;
+  }, [polygons, lines, showUnits, showLines, vex, hovered, xray]);
 
-    lastMousePos.current = { x: e.clientX, y: e.clientY };
-  };
-
-  const handleMouseUp = () => {
-    lastMousePos.current = null;
-    mouseButton.current = null;
-  };
-
-  const handleWheel = (e: React.WheelEvent) => {
-    const factor = e.deltaY < 0 ? 1.15 : 0.85;
-    setScale((s) => Math.max(0.01, Math.min(50, s * factor)));
-  };
-
-  // View presets
-  const resetView = (yaw: number, pitch: number) => {
-    setTheta(yaw);
-    setPhi(pitch);
-    setPanX(0);
-    setPanY(0);
-    if (overviewMapRef.current) {
-      const map = overviewMapRef.current.getMap();
-      map.easeTo({
-        bearing: -yaw * (180 / Math.PI),
-        pitch: pitch * (180 / Math.PI),
-        duration: 500
-      });
+  // Frame the dataset on load — pitched in so the fence reads as 3D immediately.
+  const fit = () => {
+    const map = mapRef.current?.getMap();
+    if (bbox && map) {
+      map.fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]],
+        { padding: 60, pitch: 60, bearing: 25, duration: 0 });
     }
   };
 
-  if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries...</div>;
+  if (loading) return <div className="mt-2 text-sm text-muted-foreground p-8 text-center bg-muted/20 border border-border rounded-lg">Loading 3D subsurface geometries…</div>;
   if (error) return <div className="mt-2 text-sm text-destructive p-4 bg-destructive/10 border border-destructive/20 rounded-lg">Failed to render 3D Fence Diagram: {error}</div>;
 
+  const center: [number, number] = bbox ? [(bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2] : [-111.2, 40.5];
+
   return (
-    <div ref={containerRef} className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-[640px]">
-      
-      {/* Main interactive area: 3D Canvas + 2D Map */}
-      <div className="flex-1 relative bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden h-[400px] md:h-full flex flex-col lg:flex-row">
-        
-        {/* Map Container */}
-        {showMap && (
-          <div
-            className={
-              layout === "split"
-                ? "w-full lg:w-[320px] xl:w-[420px] h-[200px] lg:h-full border-t lg:border-t-0 lg:border-l border-border order-2 relative bg-muted flex flex-col"
-                : "absolute inset-0 z-0 bg-muted flex flex-col"
-            }
-            style={{ opacity: layout === "superimposed" ? mapOpacity : 1.0 }}
+    <div className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-[640px]">
+      {/* One unified 3D scene: maplibre terrain + COG with deck.gl fence interleaved (shared camera) */}
+      <div className="flex-1 relative bg-muted h-[400px] md:h-full">
+        {mapReady ? (
+          <MapGL
+            ref={mapRef}
+            mapLib={maplibregl}
+            initialViewState={{ longitude: center[0], latitude: center[1], zoom: 12, pitch: 60, bearing: 25 }}
+            mapStyle={POSITRON}
+            style={{ width: "100%", height: "100%" }}
+            onLoad={fit}
+            maxPitch={85}
+            // Terrain exaggeration tracks the fence's vertical stretch so DEM + cutout stay registered
+            // (both are absolute-elevation metres scaled from sea level by the same factor). Prefer the
+            // self-hosted lidar DEM when the pub carries one.
+            terrain={showTerrain ? { source: lidarTerrain ? "lidar-terrain" : "terrain-rgb-source", exaggeration: vex } : undefined}
           >
-            {layout === "split" && (
-              <div className="absolute top-3 left-3 z-10 bg-card/85 backdrop-blur-sm border border-border px-2.5 py-1.5 rounded-md shadow-sm text-xs font-semibold text-foreground">
-                2D Locator & Trace Map
-              </div>
+            <NavigationControl position="top-right" visualizePitch />
+            {/* DEM sources always present so the terrain toggle is instant; the terrain prop picks one.
+                Fallback: global ~10 m terrarium (AWS). Preferred: our self-hosted per-pub lidar. */}
+            <Source
+              id="terrain-rgb-source"
+              type="raster-dem"
+              tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
+              encoding="terrarium"
+              tileSize={256}
+            />
+            {lidarTerrain && (
+              <Source
+                id="lidar-terrain"
+                type="raster-dem"
+                tiles={[lidarTerrain.href]}
+                encoding="mapbox"
+                tileSize={256}
+              />
             )}
-            {mapReady ? (
-              <MapGL
-                ref={overviewMapRef}
-                mapLib={maplibregl}
-                initialViewState={{ longitude: -111.2, latitude: 40.5, zoom: 11 }}
-                mapStyle={POSITRON}
-                style={{ width: "100%", height: "100%" }}
-                onLoad={fitOverview}
-                maxPitch={85}
-                terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
-                onMove={(evt) => {
-                  const { bearing = 0, pitch = 0, longitude, latitude, zoom } = evt.viewState;
-                  setTheta(-bearing * (Math.PI / 180));
-                  setPhi(pitch * (Math.PI / 180));
-                  setMapViewState({ longitude, latitude, zoom, bearing, pitch });
-                }}
-              >
-                <NavigationControl position="top-right" showCompass={false} />
-                
-                {showDem && (
-                  <Source
-                    id="terrain-rgb-source"
-                    type="raster-dem"
-                    tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
-                    encoding="terrarium"
-                    tileSize={256}
-                  />
-                )}
-
-                {/* Geologic Map Sheet COG (if available) */}
-                {cogAsset(item) && (
-                  <Source id="overview-cog" type="raster" url={`cog://${cogAsset(item)!.href}`} tileSize={256}>
-                    <Layer id="overview-cog-raster" type="raster" paint={{ "raster-opacity": 0.55 }} />
-                  </Source>
-                )}
-
-                {/* 3D Polygons flattened onto map */}
-                {showPolygons && (
-                  <Source id="overview-polys" type="geojson" data={polyUrl}>
-                    <Layer
-                      id="overview-polys-layer"
-                      type="fill"
-                      paint={{
-                        "fill-color": fillColorExpression as any,
-                        "fill-opacity": layout === "split" ? 0.35 : 0.22,
-                        "fill-outline-color": "#475569"
-                      }}
-                    />
-                  </Source>
-                )}
-
-                {/* 3D Lines/Contacts flattened onto map */}
-                {showLines && (
-                  <Source id="overview-lines" type="geojson" data={lineUrl}>
-                    <Layer
-                      id="overview-lines-layer"
-                      type="line"
-                      paint={{
-                        "line-color": lineStyleExpression as any,
-                        "line-width": [
-                          "case",
-                          ["boolean", ["get", "is_fault"], ["get", "isFault"], ["to-boolean", ["match", ["coalesce", ["get", "Type"], ["get", "type"], ""], ["fault", "Fault"], true, false]]],
-                          2.5,
-                          1.2
-                        ],
-                        "line-dasharray": [
-                          "case",
-                          ["boolean", ["get", "is_fault"], ["get", "isFault"], ["to-boolean", ["match", ["coalesce", ["get", "Type"], ["get", "type"], ""], ["fault", "Fault"], true, false]]],
-                          ["literal", [2, 2]],
-                          ["literal", [1, 0]]
-                        ]
-                      }}
-                    />
-                  </Source>
-                )}
-              </MapGL>
-            ) : (
-              <div className="flex-1 flex items-center justify-center text-xs text-muted-foreground bg-muted">
-                loading locator map…
-              </div>
+            {/* The geologic map sheet the fence slices through — drapes on terrain, toggles alone. */}
+            {showSheet && cog && (
+              <Source id="overview-cog" type="raster" url={`cog://${cog.href}`} tileSize={256}>
+                <Layer id="overview-cog-raster" type="raster" paint={{ "raster-opacity": 0.85 }} />
+              </Source>
             )}
-          </div>
+            <DeckOverlay layers={deckLayers} />
+          </MapGL>
+        ) : (
+          <div className="flex h-full items-center justify-center text-xs text-muted-foreground">loading 3D scene…</div>
         )}
 
-        {/* 3D Interactive Canvas Container */}
-        <div className={
-          layout === "split"
-            ? `relative flex-1 bg-[#F9FAFB] dark:bg-[#0F172A] overflow-hidden select-none h-full order-1 ${showMap ? "lg:border-r lg:border-border" : ""}`
-            : "absolute inset-0 z-10 bg-transparent pointer-events-none select-none h-full"
-        }>
-          <canvas
-            ref={canvasRef}
-            onMouseDown={handleMouseDown}
-            onMouseMove={handleMouseMove}
-            onMouseUp={handleMouseUp}
-            onMouseLeave={handleMouseUp}
-            onWheel={handleWheel}
-            onContextMenu={(e) => e.preventDefault()}
-            className="w-full h-full cursor-grab active:cursor-grabbing block bg-transparent"
-          />
-          
-          {/* On-screen Camera Overlays */}
-          <div className="absolute top-3 left-3 flex flex-col gap-2 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs pointer-events-auto">
-            <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
-              <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
-              {layout === "split" ? "3D Subsurface" : "Unified Subsurface & Terrain"}
-            </div>
-            <div className="text-muted-foreground leading-snug">
-              Drag to Rotate<br />
-              Shift+Drag to Pan<br />
-              Scroll to Zoom
-            </div>
+        <div className="absolute top-3 left-3 bg-card/85 backdrop-blur-sm border border-border p-2.5 rounded-md shadow-sm text-xs pointer-events-none max-w-[230px]">
+          <div className="font-semibold text-foreground border-b border-border pb-1 mb-1 flex items-center gap-1.5">
+            <span className="inline-block w-2.5 h-2.5 rounded-full bg-primary animate-pulse" />
+            Unified 3D Subsurface
           </div>
-
-          {/* Display Presets */}
-          <div className="absolute bottom-3 left-3 flex gap-1.5 bg-card/85 backdrop-blur-sm border border-border p-1.5 rounded-md shadow-sm pointer-events-auto">
-            <button onClick={() => resetView(-Math.PI/6, Math.PI/4)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Perspective</button>
-            <button onClick={() => resetView(0, Math.PI/2 - 0.01)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">Top</button>
-            <button onClick={() => resetView(0, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">East</button>
-            <button onClick={() => resetView(-Math.PI/2, 0)} className="px-2 py-1 text-[11px] rounded bg-muted hover:bg-border text-foreground transition">North</button>
+          <div className="text-muted-foreground leading-snug">
+            Drag to rotate · right-drag to tilt<br />
+            Scroll to zoom into the terrain<br />
+            Toggle <span className="font-medium text-foreground">Terrain</span> off to see the full slice
           </div>
         </div>
-
       </div>
 
-      {/* Control Sidebar & Geologic Legend */}
+      {/* Control sidebar + geologic legend */}
       <div className="w-full md:w-[320px] bg-background border-t md:border-t-0 md:border-l border-border p-4 flex flex-col gap-4 overflow-y-auto h-[240px] md:h-full">
-        
-        {/* Layout Mode */}
-        <div className="border-b border-border pb-3">
-          <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Layout Mode</h3>
-          <div className="grid grid-cols-2 gap-1.5 p-1 bg-muted rounded-md text-xs">
-            <button
-              onClick={() => setLayout("split")}
-              className={`py-1 rounded text-center transition ${layout === "split" ? "bg-card text-foreground font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              Split View
-            </button>
-            <button
-              onClick={() => setLayout("superimposed")}
-              className={`py-1 rounded text-center transition ${layout === "superimposed" ? "bg-card text-foreground font-medium shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-            >
-              Overlay View
-            </button>
-          </div>
-        </div>
-
-        {/* Layer Controls */}
         <div className="border-b border-border pb-3">
           <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Display Settings</h3>
           <div className="flex flex-col gap-2 text-xs">
             <label className="flex items-center gap-2 text-foreground cursor-pointer">
-              <input type="checkbox" checked={showMap} onChange={(e) => setShowMap(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
-              <span>Show 2D Map Trace</span>
-            </label>
-            {showMap && (
-              <label className="flex items-center gap-2 pl-4 text-foreground cursor-pointer">
-                <input type="checkbox" checked={showDem} onChange={(e) => toggleDem(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
-                <span>Enable 3D Terrain overlay</span>
-              </label>
-            )}
-            {showMap && layout === "superimposed" && (
-              <div className="pl-4 mt-1 mb-2 flex flex-col gap-1.5">
-                <div className="flex justify-between items-center text-[10px] text-muted-foreground uppercase tracking-wider">
-                  <span>Ground/Map Opacity</span>
-                  <span className="font-mono">{Math.round(mapOpacity * 100)}%</span>
-                </div>
-                <input
-                  type="range" min="0.0" max="1.0" step="0.05"
-                  value={mapOpacity}
-                  onChange={(e) => setMapOpacity(parseFloat(e.target.value))}
-                  className="w-full h-1 rounded bg-muted appearance-none cursor-pointer accent-primary"
-                />
-              </div>
-            )}
-            <label className="flex items-center gap-2 text-foreground cursor-pointer">
-              <input type="checkbox" checked={showPolygons} onChange={(e) => setShowPolygons(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
-              <span>Show Stratigraphic Units</span>
+              <input type="checkbox" checked={showUnits} onChange={(e) => setShowUnits(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+              <span>Stratigraphic units (3D)</span>
             </label>
             <label className="flex items-center gap-2 text-foreground cursor-pointer">
               <input type="checkbox" checked={showLines} onChange={(e) => setShowLines(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
-              <span>Show Contacts & Faults</span>
+              <span>Contacts &amp; faults (3D)</span>
             </label>
             <label className="flex items-center gap-2 text-foreground cursor-pointer">
-              <input type="checkbox" checked={showGrid} onChange={(e) => setShowGrid(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
-              <span>Show Bounding Grid</span>
+              <input type="checkbox" checked={showTerrain} onChange={(e) => setShowTerrain(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+              <span>Terrain · {lidarTerrain ? "lidar 1 m" : "10 m"}</span>
             </label>
+            {showTerrain && (
+              <label className="flex items-center gap-2 pl-4 text-foreground cursor-pointer">
+                <input type="checkbox" checked={xray} onChange={(e) => setXray(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+                <span>See cutout through terrain (X-ray)</span>
+              </label>
+            )}
+            {cog && (
+              <label className="flex items-center gap-2 text-foreground cursor-pointer">
+                <input type="checkbox" checked={showSheet} onChange={(e) => setShowSheet(e.target.checked)} className="rounded border-border text-primary focus:ring-primary" />
+                <span>Geologic map sheet</span>
+              </label>
+            )}
           </div>
         </div>
 
-        {/* Vertical Exaggeration Slider */}
         <div className="border-b border-border pb-3">
           <div className="flex justify-between items-center text-xs mb-1.5">
-            <span className="font-semibold text-foreground uppercase tracking-wider">Vertical Stretch</span>
-            <span className="text-muted-foreground font-mono">{verticalExaggeration.toFixed(1)}x</span>
+            <span className="font-semibold text-foreground uppercase tracking-wider">Vertical Exaggeration</span>
+            <span className="text-muted-foreground font-mono">{vex.toFixed(1)}x</span>
           </div>
+          <div className="text-[10px] text-muted-foreground mb-1.5">Stretches terrain + fence together.</div>
           <input
             type="range" min="0.5" max="5.0" step="0.1"
-            value={verticalExaggeration}
-            onChange={(e) => setVerticalExaggeration(parseFloat(e.target.value))}
+            value={vex}
+            onChange={(e) => setVex(parseFloat(e.target.value))}
             className="w-full h-1.5 rounded-lg bg-muted appearance-none cursor-pointer accent-primary"
           />
         </div>
 
-        {/* Geologic Legend Search */}
         <div className="flex-1 flex flex-col min-h-0">
           <div className="flex justify-between items-center text-xs mb-2">
             <h3 className="font-semibold text-foreground uppercase tracking-wider">Geologic Legend</h3>
@@ -2146,22 +1642,20 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
           />
           <div className="flex-1 overflow-y-auto pr-1 flex flex-col gap-1.5 max-h-[220px] md:max-h-none">
             {legend
-              .filter((item) => !search || item.unit.toLowerCase().includes(search.toLowerCase()) || item.label.toLowerCase().includes(search.toLowerCase()))
-              .map((item) => (
+              .filter((l) => !search || l.unit.toLowerCase().includes(search.toLowerCase()) || l.label.toLowerCase().includes(search.toLowerCase()))
+              .map((l) => (
                 <div
-                  key={item.unit}
-                  onMouseEnter={() => setHoveredUnit(item.unit)}
-                  onMouseLeave={() => setHoveredUnit(null)}
+                  key={l.unit}
+                  onMouseEnter={() => setHovered(l.unit)}
+                  onMouseLeave={() => setHovered(null)}
                   className={`flex items-start gap-2.5 p-1.5 rounded border text-xs cursor-default transition ${
-                    hoveredUnit === item.unit
-                      ? "border-primary bg-primary/5 font-medium"
-                      : "border-transparent hover:bg-muted"
+                    hovered === l.unit ? "border-primary bg-primary/5 font-medium" : "border-transparent hover:bg-muted"
                   }`}
                 >
-                  <span className="inline-block w-4 h-4 rounded border border-black/10 shrink-0" style={{ backgroundColor: item.color }} />
+                  <span className="inline-block w-4 h-4 rounded border border-black/10 shrink-0" style={{ backgroundColor: l.color }} />
                   <div className="flex-1 leading-snug">
-                    <span className="font-bold font-mono mr-1.5">{item.label}</span>
-                    <span className="text-foreground">{item.unit}</span>
+                    <span className="font-bold font-mono mr-1.5">{l.label}</span>
+                    <span className="text-foreground">{l.unit}</span>
                   </div>
                 </div>
               ))}

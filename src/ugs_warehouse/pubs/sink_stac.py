@@ -171,6 +171,9 @@ def build_item(p: dict, attachments: list[dict], *,
 
     code = series_code(sid)
     group = collection_group(p)  # top-level: UGS catalog / mining-district files / external
+    # Preserve-on-empty: a resubmit with no citation keeps the published description instead of
+    # blanking it (last-non-empty wins). Hand edits flow through the same metadata, so they stick too.
+    desc = (p.get("full_citation") or "").strip() or (stac.prior_property(f"{group}/{code}", sid, "description") or "")
     return stac.build_item(
         item_id=sid, collection=code,
         collection_path=f"{group}/{code}",
@@ -178,7 +181,7 @@ def build_item(p: dict, attachments: list[dict], *,
         properties={
             "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop
             "title": (p.get("pub_name") or "").strip() or stac.prettify(sid),
-            "description": (p.get("full_citation") or "").strip(),
+            "description": desc,
             "ugs:pub_type": pub_type_of(p),
             "ugs:series": (p.get("series") or "").strip(),
             "ugs:scale": (p.get("pub_scale") or "").strip(),

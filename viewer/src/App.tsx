@@ -135,6 +135,7 @@ export function App() {
   }, []);
 
   const [search, setSearch] = useState("");
+  const [threeD, setThreeD] = useState(false);  // global "3D pubs" discovery filter (loads all items)
 
   const catalog = useStac(CATALOG_URL);
 
@@ -168,7 +169,8 @@ export function App() {
   // Loaded for the open leaf, or every leaf while a global search runs. Graceful fallback:
   // a leaf whose items.json is missing (pre-index catalog) fetches its collection.json for
   // item links, then those items — scoped, never a catalog-wide fan-out.
-  const searching = !collectionId && search.trim().length > 0;
+  // Both search-all and the global 3D filter need every collection's items loaded.
+  const searching = !collectionId && (search.trim().length > 0 || threeD);
   const wantColls = leafColl ? [leafColl] : searching ? leafColls : [];
   const idx = useIndexes(wantColls.map((c) => ({ id: c.id, href: c.href })));
 
@@ -341,6 +343,8 @@ export function App() {
           breadcrumb={crumbs}
           search={search}
           onSearch={setSearch}
+          threeD={threeD}
+          onThreeD={setThreeD}
           series={seriesSel ?? []}
           onSeries={setSeries}
           item={item.data}

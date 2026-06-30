@@ -325,9 +325,9 @@ function VolumeGrouped({ rows, gridClass, render }: {
 }
 
 // ---- item list: filter + sort + table/cards, reused for a collection and global search ----
-function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
+function ItemList({ items, showCollection, query, onOpen, series, onSeries, force3D }: {
   items: ItemRef[]; showCollection?: boolean; query?: string; onOpen: (href: string) => void;
-  series: string[]; onSeries: (codes: string[]) => void;
+  series: string[]; onSeries: (codes: string[]) => void; force3D?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards" | "thumbs">("table");
@@ -382,7 +382,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
         if (scaleTier && scaleTierOf(it) !== scaleTier) return false;
         if (csel.size && !csel.has(gCounty(it))) return false;
         if (mapOnly && !hasMapData(it)) return false;
-        if (threeDOnly && !has3D(it)) return false;
+        if ((threeDOnly || force3D) && !has3D(it)) return false;
         if (Number.isFinite(ymin) || Number.isFinite(ymax)) {
           const y = gYear(it);
           if (y == null || (Number.isFinite(ymin) && y < ymin) || (Number.isFinite(ymax) && y > ymax)) return false;
@@ -396,7 +396,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries }: {
       }
       return filtered;
     },
-    [items, needle, series, topics, author, scaleTier, counties, mapOnly, threeDOnly, yearMin, yearMax],
+    [items, needle, series, topics, author, scaleTier, counties, mapOnly, threeDOnly, force3D, yearMin, yearMax],
   );
 
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
@@ -1902,6 +1902,8 @@ export function Browse(props: {
   breadcrumb: { label: string; onClick?: () => void }[];
   search: string;
   onSearch: (q: string) => void;
+  threeD: boolean;
+  onThreeD: (v: boolean) => void;
   series: string[];
   onSeries: (codes: string[]) => void;
   item?: StacDoc;
@@ -1912,7 +1914,7 @@ export function Browse(props: {
   onBackToItems: () => void;
   onViewMap: () => void;
 }) {
-  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, series, onSeries } = props;
+  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, threeD, onThreeD, series, onSeries } = props;
 
   // item detail
   if (collectionId && itemSelected) {
@@ -1944,11 +1946,15 @@ export function Browse(props: {
         <div className={C.bar}>
           <input className={C.input} placeholder="Search all collections…" value={search}
             onChange={(e) => onSearch(e.target.value)} />
+          {/* Global 3D discovery: loads every collection's items (like a search) + filters to those
+              carrying a 3d-vector asset — works from the bare catalog, no search text needed. */}
+          <span className={toggle(threeD)} title="Show only publications with an interactive 3D viewer"
+            onClick={() => onThreeD(!threeD)}>3D</span>
           {props.itemsLoading && <span className={C.muted}>loading items…</span>}
         </div>
       )}
-      {atRoot && search.trim()
-        ? <ItemList items={props.allItems} showCollection query={search} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
+      {atRoot && (search.trim() || threeD)
+        ? <ItemList items={props.allItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
         : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
     </div>
   );

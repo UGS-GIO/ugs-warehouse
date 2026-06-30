@@ -8,9 +8,9 @@ retire once deployed. Last refreshed **2026-06-23**.
 
 ---
 
-## ⚡ Work-box checklist — 2026-06-23 (DO THESE)
+## ⚡ Perm-gated checklist — 2026-06-23 (DO THESE)
 
-No GCP perms here; code is committed + pushed on `main`, deploys are automatic. Data/infra steps:
+Code is committed + pushed on `main`, deploys are automatic; these data/infra steps need GCP perms:
 
 **A. One vector reingest activates almost everything.** `ugs-warehouse-ingest --all` (default command).
 Run after the `deploy.yml` image build finishes. This single run carries:
@@ -60,7 +60,7 @@ Run after the `deploy.yml` image build finishes. This single run carries:
 
 ---
 
-## ⚡ Work-box checklist — 2026-06-19 session (DO THESE)
+## ⚡ Perm-gated checklist — 2026-06-19 session (DO THESE)
 
 Perm-gated actions for this session's commits (run with GCP perms).
 Code is committed + pushed on `main`; deploys are automatic — these are the data/infra steps.
@@ -225,7 +225,7 @@ perms — handed off via `docs/`.
 - **Raster Integration**: Dual-track design is fully committed on `main` (`docs/RASTER_SPEC.md`). The batch `geolmap-harvest` job is deployed and validated, and the sibling PR #169 in `ugs-ingest` is ready for review. Once they handshake on the DB table, everything is set.
 - **Viewer bare-prefix serving** (one-time, needs `storage.buckets.update`): `…/warehouse/viewer/` returns GCS `NoSuchKey`; set `--web-main-page-suffix=index.html` on `gs://ut-dnr-ugs-maps-prod-public` so the bare prefix + clean deep-links resolve. Exact cmd + caveat (don't set a bucket-wide 404 page) in `DEPLOY.md §5`. Until then, link `…/warehouse/viewer/index.html`.
 
-**Work-box checklist — 2026-06-17 session (in order):**
+**Perm-gated checklist — 2026-06-17 session (in order):**
 1. `git pull` main.
 1b. ⚠ **ONE-TIME (do before step 2, else the deploy's `COPY --from` fails):** build the prebuilt
    tippecanoe base — `gcloud builds submit --config=cloudbuild.tippecanoe.yaml --project=ut-dnr-ugs-backend-tools .`

@@ -13,9 +13,10 @@ import { useTheme } from "./theme";
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
-// Viewer root URL (the bundle's own directory, no search params) — used as the logo's <a href> so
-// modifier/middle-click opens the catalog in a new tab. Matches router.tsx's basepath derivation.
-const ROOT_HREF = new URL(".", document.baseURI).pathname || "/";
+// Viewer root URL (the served path, no search params) — used as the logo's <a href> so
+// modifier/middle-click opens the catalog in a new tab. Uses the document's own pathname (…/index.html
+// in prod) to match router.tsx's basepath, so the link points at a real object (no NoSuchKey).
+const ROOT_HREF = location.pathname || "/";
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
 type View = "catalog" | "map" | "arch" | "guide" | "search";

@@ -26,6 +26,7 @@ substitutions:
   _GRAPH_JOB: ugs-pubs-graph              # Cloud Run job: build the pubs knowledge graph (nodes/edges Parquet) — citation + co-author + semantic edges
   _THREED_JOB: ugs-pubs-threed            # Cloud Run job: 3D GeMS pub (GDB+.mapx) → GeoParquet-3D + glTF + classification:classes; per-pub via --args override
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
+  _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip, chain after ingest + restyle
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
   _SERVICE: ugs-warehouse-service
@@ -129,9 +130,27 @@ steps:
           --cache-from "$$IMG:latest" \
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
+  # Topics-thumbnail renderer: Python orchestrator + Node/puppeteer/Chromium (headless MapLibre).
+  - id: build-topics-thumbs
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-topics-thumbs
+        docker pull "$$IMG:latest" || true
+        DOCKER_BUILDKIT=1 docker build -f Dockerfile.topics-thumbs \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "$$IMG:latest" \
+          -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
+
   - id: push-warehouse
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse']
+
+  - id: push-topics-thumbs
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-topics-thumbs']
 
   - id: push-admin
     name: gcr.io/cloud-builders/docker
@@ -244,6 +263,29 @@ steps:
       # download + poppler render/extract of a giant fits with margin. No spot VM, no GB-RAM bills.
       - --memory=8Gi
       - --tasks=5
+
+  # Styled-preview thumbnails for vector serving-topics — headless MapLibre (Node/puppeteer/Chromium)
+  # renders each topic's styled PMTiles → PNG. Content-hash skip means it's safe to run after every
+  # vector ingest AND every restyle; it only re-renders topics whose style changed. Run a vector
+  # ingest (or restyle) after to bind the new `thumbnail` assets onto the items. Chromium = more RAM.
+  - id: deploy-topics-thumbs-job
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_TOPICTHUMB_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-topics-thumbs:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --command=python
+      - --args=-m,ugs_warehouse.vector.thumbs,--all
+      - --task-timeout=3600
+      - --max-retries=1
+      - --cpu=2
+      - --memory=4Gi
+      - --tasks=3
 
   # One-click "full refresh" orchestrator: loops the thumbs job to completion then runs pubs-ingest
   # (binds covers/contents/volume + builds the search corpus). Triggered from the ops console. Its SA
@@ -519,6 +561,7 @@ images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-topics-thumbs
 
 options:
   logging: CLOUD_LOGGING_ONLY

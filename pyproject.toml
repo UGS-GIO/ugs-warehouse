@@ -32,6 +32,13 @@ pubs = [
   "pymysql>=1.1",        # optional: live pub metadata from MySQL (else vendored CSV snapshot)
   "fastembed>=0.3",      # semantic-search embeddings (bge-small via ONNX, no torch) — pubs/embed.py
 ]
+# topics-thumbnail job — headless MapLibre render of styled PMTiles → PNG (vector/thumbs.py).
+# Installed in Dockerfile.topics-thumbs, which also runs `playwright install --with-deps chromium`.
+# requests: pulled in transitively by pubs.harvest's logging helpers (hlog) that this job reuses.
+thumbs = [
+  "playwright>=1.40",
+  "requests>=2.31",
+]
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -42,6 +49,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 "ugs_warehouse.pubs" = ["data/*.csv"]   # vendored pub metadata snapshot
+"ugs_warehouse.vector" = ["render_assets/*"]   # vendored maplibre-gl + pmtiles browser libs (topics thumbnails)
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

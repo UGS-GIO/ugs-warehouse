@@ -40,8 +40,10 @@ STAGES = [
     {"n": "③", "title": "Warehouse transform", "jobs": ["ingest"],
      "blurb": "Reproject → EPSG:4326 · h3_r9 · hilbert, then fan out to DuckLake · GeoParquet · "
               "PMTiles · STAC. One DuckDB streaming pass."},
-    {"n": "④", "title": "Styling", "jobs": ["restyle"],
-     "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt."},
+    {"n": "④", "title": "Styling", "jobs": ["restyle", "topics-thumbs"],
+     "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt. "
+              "Then render each topic's styled PMTiles → preview thumbnail (content-hash skip; "
+              "re-renders only changed styles)."},
     {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
               "STAC (3 collections). One-click Full refresh runs thumbnails → rebuild for you, or "
@@ -68,6 +70,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         danger=True),
     Job("restyle", "ugs-warehouse-restyle", "Rebind styles",
         "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
+    Job("topics-thumbs", "ugs-topics-thumbs", "Topic thumbnails",
+        "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
+        "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "
+        "Run a Vector reingest after to bind the new thumbnail assets. 3 shards.", tasks=3),
 ]}
 
 

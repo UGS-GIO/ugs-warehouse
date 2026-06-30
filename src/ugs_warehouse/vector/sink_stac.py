@@ -11,7 +11,7 @@ import datetime
 
 import duckdb
 
-from ..core import config, stac
+from ..core import config, gcs, stac
 from . import ducklake
 from .topics import Topic
 
@@ -124,6 +124,13 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }
+    # Rendered preview PNG (styled PMTiles → image), written independently by the ugs-topics-thumbs
+    # job. Presence-driven, exactly like the pubs cover/thumbnail: stamp the asset iff the PNG exists,
+    # so the catalog shows a real styled preview for topics that have one (sand placeholder otherwise).
+    thumb_path = f"{config.THUMBS_PREFIX}/{topic.stem}/{topic.stem}.png"
+    if gcs.exists(thumb_path):
+        assets["thumbnail"] = {"href": config.public_url(thumb_path), "type": "image/png",
+                               "roles": ["thumbnail"], "title": "Styled preview"}
     # Table extension is in play iff any asset describes its columns.
     exts = [stac.WEB_MAP_LINKS_EXT]
     if any("table:columns" in a for a in assets.values()):

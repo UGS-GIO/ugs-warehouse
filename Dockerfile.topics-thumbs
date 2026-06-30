@@ -1,0 +1,23 @@
+# ugs-topics-thumbs job image — all-Python. Reads the serving-topics STAC, GCS IO, content-hash skip,
+# then renders each topic's styled PMTiles → PNG via headless Chromium driven by Playwright (no Node).
+# MapLibre needs WebGL, so the render runs in a real browser (software GL / SwiftShader in Cloud Run);
+# the maplibre-gl + pmtiles browser libs are vendored in the package (vector/render_assets/).
+FROM python:3.12-slim
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
+
+WORKDIR /app
+
+# Python package + the thumbs extra (playwright, requests). Full install — this job carries no
+# DuckDB/GDAL/tippecanoe weight.
+COPY pyproject.toml README.md ./
+COPY src ./src
+RUN pip install --upgrade pip && pip install ".[thumbs]"
+
+# Chromium + its OS deps for Playwright (installs into PLAYWRIGHT_BROWSERS_PATH).
+RUN playwright install --with-deps chromium
+
+ENTRYPOINT ["python", "-m", "ugs_warehouse.vector.thumbs"]
+CMD ["--all"]

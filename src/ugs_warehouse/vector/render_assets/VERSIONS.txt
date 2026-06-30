@@ -1,0 +1,2 @@
+maplibre-gl 4.7.1
+pmtiles 3.2.1

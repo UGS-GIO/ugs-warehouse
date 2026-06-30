@@ -23,7 +23,8 @@ def test_get_harvest_status():
     mock_pubs = [
         {"series_id": "OFR-593", "pub_name": "Rush Valley Geologic Map", "pub_scale": "1:62,500"},
         {"series_id": "M-94", "pub_name": "Geologic map of some place", "pub_scale": "1:24,000"},
-        {"series_id": "SS-42", "pub_name": "Unpublished Placeholder XXXX", "pub_scale": ""},
+        # Placeholder convention is XXXX in the SERIES ID (see harvest.py / vectors.py), not the name.
+        {"series_id": "SS-XXXX", "pub_name": "Unpublished Placeholder", "pub_scale": ""},
     ]
     mock_attachments = [
         {"series_id": "OFR-593", "pub_url": "open_file_reports/ofr-593/ofr-593_plates.zip"},

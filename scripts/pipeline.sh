@@ -3,8 +3,8 @@
 # the whole thing with one button instead of a 3-step dance. Runs as the `ugs-pubs-pipeline` Cloud
 # Run Job (server-side, survives the operator closing the tab).
 #
-#   thumbs (loop until covers/contents/fulltext sidecars stop growing) -> pubs-ingest (bind + corpus)
-#     -> pubs-fts (all-pub BM25 index) -> pubs-embed (semantic VSS index)
+#   thumbs (loop until covers/contents/fulltext sidecars stop growing) -> threed (convert new 3D pubs)
+#     -> pubs-ingest (bind + corpus) -> pubs-fts (all-pub BM25 index) -> pubs-embed (semantic VSS index)
 #
 # Its runtime SA needs roles/run.developer (execute the sub-jobs) + actAs on their runtime SA.
 set -uo pipefail
@@ -12,6 +12,7 @@ set -uo pipefail
 REGION="${REGION:-us-central1}"
 BUCKET="${WAREHOUSE_BUCKET:-ut-dnr-ugs-maps-prod-public}"
 THUMBS_JOB="${THUMBS_JOB:-ugs-pubs-thumbs}"
+THREED_JOB="${THREED_JOB:-ugs-pubs-threed}"
 INGEST_JOB="${INGEST_JOB:-ugs-pubs-ingest}"
 FTS_JOB="${FTS_JOB:-ugs-pubs-fts}"
 EMBED_JOB="${EMBED_JOB:-ugs-pubs-embed}"
@@ -40,7 +41,11 @@ for round in $(seq 1 "$MAX_THUMB_ROUNDS"); do
   prev="$count"
 done
 
-# Bind covers/contents/volume into STAC + aggregate the search corpus + refresh the catalog.
+# Convert any new 3D pubs (gdb + .mapx → GeoParquet-3D + glTF + classes sidecar). skip-existing, so
+# this only does work for newly-added 3D pubs; the ingest below binds the assets presence-driven.
+run_job "$THREED_JOB"
+
+# Bind covers/contents/volume + 3D assets into STAC + aggregate the search corpus + refresh the catalog.
 run_job "$INGEST_JOB"
 
 # Build the all-pub full-text-search DuckDB index from the fulltext sidecars the thumbs pass wrote.

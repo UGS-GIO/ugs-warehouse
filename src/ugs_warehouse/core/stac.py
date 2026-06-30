@@ -123,6 +123,17 @@ def item_object_path(collection_path: str, item_id: str) -> str:
     return f"{config.STAC_PREFIX}/{collection_path}/{item_id}/{item_id}.json"
 
 
+def prior_property(collection_path: str, item_id: str, prop: str):
+    """Value of `prop` in the currently-published item.json, or None if the item doesn't exist yet or
+    can't be read. Lets a reingest PRESERVE a field (e.g. description) when the incoming metadata omits
+    it — last-non-empty wins, so a resubmit with no description keeps the old one instead of blanking it."""
+    try:
+        item = json.loads(gcs.get_bytes(item_object_path(collection_path, item_id)))
+        return (item.get("properties") or {}).get(prop)
+    except Exception:  # noqa: BLE001 — first ingest / missing / unreadable → no prior value
+        return None
+
+
 def attach_iso(item: dict) -> str:
     """Write an ISO 19139 sidecar next to the item + add a `metadata` asset (mutates item).
 

@@ -16,7 +16,7 @@ import json
 import sys
 
 from ..core import config, gcs, stac
-from . import identity, sink_stac, source, topic
+from . import identity, sink_stac, source, threed, topic
 
 
 def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
@@ -44,6 +44,28 @@ def _contents_by_sid() -> dict[str, list[dict]]:
         for sid, toc in ex.map(load, paths):
             if toc:
                 out[sid] = toc
+    return out
+
+
+def _threed_classes_by_sid() -> dict[str, list[dict]]:
+    """{SID: classification:classes} from the 3D classes sidecars the convert step writes next to the
+    GeoParquet (geolmap/3d/{SID}_3d_classes.json). Read here so a pubs rebuild re-stamps the authored
+    fence colors without re-running the .mapx conversion."""
+    suffix = f"_{threed.CLASSES_NAME}"  # "_3d_classes.json"
+    paths = [p for p in gcs.list_paths(identity.THREED_PREFIX) if p.endswith(suffix)]
+
+    def load(path: str) -> tuple[str, list[dict]]:
+        sid = path.rsplit("/", 1)[-1][: -len(suffix)].upper()
+        try:
+            return sid, (json.loads(gcs.get_bytes(path).decode()) or [])
+        except Exception:  # noqa: BLE001
+            return sid, []
+
+    out: dict[str, list[dict]] = {}
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        for sid, classes in ex.map(load, paths):
+            if classes:
+                out[sid] = classes
     return out
 
 
@@ -87,11 +109,13 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     cogs = _ids_with_suffix(identity.COG_PREFIX, ".cog.tif")
     thumbs = _ids_with_suffix(identity.COG_PREFIX, ".thumb.png")
     covers = _ids_with_suffix(identity.PUB_THUMB_PREFIX, ".png")  # PDF first-page covers
+    threed_ids = _ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")  # converted 3D pubs
+    threed_classes = _threed_classes_by_sid()  # authored fence colors (classification:classes)
     toc = _contents_by_sid()  # Survey Notes "In this issue" sidecars
     units = _unit_ids()
     foot = _footprint_geoms()
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
-          f"{len(units)} unit sets, {len(foot)} footprints")
+          f"{len(units)} unit sets, {len(foot)} footprints, {len(threed_ids)} 3D")
 
     def process_pub(p: dict) -> bool:
         sid = (p.get("series_id") or "").strip()
@@ -102,7 +126,8 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         item = sink_stac.build_item(
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
-            has_cover=up in covers, contents=toc.get(up),
+            has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
+            contents=toc.get(up),
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)

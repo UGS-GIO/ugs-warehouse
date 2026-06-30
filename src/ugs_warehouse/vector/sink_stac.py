@@ -90,7 +90,9 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     if content_hash:
         props["ugs:content_hash"] = content_hash
     # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
-    desc = md.get("description") or description
+    # Preserve-on-empty: registry descriptions are often missing, so when this submit has none, keep
+    # whatever the published item already had instead of blanking it (last-non-empty wins).
+    desc = md.get("description") or description or stac.prior_property(COLLECTION, topic.stem, "description")
     if desc:
         props["description"] = desc
     # Curated catalog metadata (raw.schema_registry) — flows into STAC + ISO.

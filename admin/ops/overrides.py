@@ -70,6 +70,23 @@ def search(q: str = "", limit: int = 50) -> list[dict]:
     return rows
 
 
+def _locate(item_id: str) -> str | None:
+    """GCS object path of the published item.json for an id (topic or pub), or None if not published.
+    Topics are flat under the collection; pubs are nested under their top-level group + series."""
+    from ugs_warehouse.core import config, gcs, stac
+    from ugs_warehouse.pubs import sink_stac, source
+
+    topic = f"{config.STAC_PREFIX}/{_TOPICS}/{item_id}/{item_id}.json"
+    if gcs.exists(topic):
+        return topic
+    for p in source.read_pubs():
+        sid = (p.get("series_id") or "").strip()
+        if sid and sid.upper() == item_id.upper():
+            path = stac.item_object_path(f"{sink_stac.collection_group(p)}/{sink_stac.series_code(sid)}", sid)
+            return path if gcs.exists(path) else None
+    return None
+
+
 def load(item_id: str) -> dict:
     """Prefill for the edit form: the current override values (if any) + the source flag."""
     ov = _override(item_id)
@@ -78,8 +95,9 @@ def load(item_id: str) -> dict:
 
 
 def save(item_id: str, description: str = "", title: str = "") -> dict:
-    """Write (or clear) the override sidecar. Empty fields are dropped; if nothing remains the sidecar
-    is deleted so the item falls back to source metadata."""
+    """Write (or clear) the override sidecar AND patch the live item.json in place so the edit shows
+    immediately (no full reingest). The sidecar stays the durable source — a later reingest reapplies
+    it. Clearing deletes the sidecar; the source value is restored on the next reingest."""
     from ugs_warehouse.core import gcs, stac
 
     doc: dict = {"source": "manual"}
@@ -93,4 +111,8 @@ def save(item_id: str, description: str = "", title: str = "") -> dict:
         return {"id": item_id, "cleared": True}
     gcs.put_bytes(json.dumps(doc, indent=2).encode(), obj,
                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-    return {"id": item_id, "fields": [k for k in doc if k != "source"]}
+    # Instant apply: patch the published item now (best-effort; item may not be published yet).
+    updates = {k: v for k, v in doc.items() if k in ("title", "description")}
+    path = _locate(item_id)
+    applied = bool(path) and stac.patch_item_properties(path, updates)
+    return {"id": item_id, "fields": [k for k in doc if k != "source"], "applied": applied}

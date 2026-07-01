@@ -128,6 +128,20 @@ def override_object(item_id: str) -> str:
     return f"{config.OVERRIDES_PREFIX}/{item_id}.json"
 
 
+def patch_item_properties(object_path: str, updates: dict) -> bool:
+    """Merge `updates` into a published item's `properties` in place — an instant edit that shows
+    immediately, without a full reingest (the durable source stays the override sidecar; a later
+    reingest reapplies it). Best-effort: returns False if the item can't be read."""
+    try:
+        item = json.loads(gcs.get_bytes(object_path))
+    except Exception:  # noqa: BLE001 — item not published yet / unreadable
+        return False
+    item.setdefault("properties", {}).update(updates)
+    gcs.put_bytes(json.dumps(item, indent=2).encode(), object_path,
+                  content_type="application/geo+json", cache_control=gcs.CACHE_MUTABLE)
+    return True
+
+
 def manual_override(item_id: str) -> dict:
     """Hand-authored metadata overrides (e.g. {description, title, source:"manual"}) for an item, or
     {} if none. Ingest prefers these over source metadata — an operator sets a value the source can't

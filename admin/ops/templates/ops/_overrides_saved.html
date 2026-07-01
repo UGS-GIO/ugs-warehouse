@@ -1,3 +1,4 @@
 {% if error %}<span class="text-red-600">{{ error }}</span>
-{% elif result.cleared %}<span class="text-green-600">Override cleared ✓ — reingest this item to publish.</span>
-{% else %}<span class="text-green-600">Saved ({{ result.fields|join:", " }}) ✓ — reingest this item to publish.</span>{% endif %}
+{% elif result.cleared %}<span class="text-green-600">Override cleared ✓ — reingest this item to restore the source value.</span>
+{% elif result.applied %}<span class="text-green-600">Saved + applied live ({{ result.fields|join:", " }}) ✓</span>
+{% else %}<span class="text-green-600">Saved ({{ result.fields|join:", " }}) ✓ — not yet published; applies on the next ingest.</span>{% endif %}

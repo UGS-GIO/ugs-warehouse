@@ -47,6 +47,21 @@ def _contents_by_sid() -> dict[str, list[dict]]:
     return out
 
 
+def _overrides_by_sid() -> dict[str, dict]:
+    """{SID: override doc} from the hand-authored metadata overrides (overrides/{ID}.json). Preloaded
+    once (operators backfill only a handful) so build_item doesn't do a GCS read per pub."""
+    out: dict[str, dict] = {}
+    for path in gcs.list_paths(config.OVERRIDES_PREFIX):
+        if not path.endswith(".json"):
+            continue
+        sid = path.rsplit("/", 1)[-1][: -len(".json")].upper()
+        try:
+            out[sid] = json.loads(gcs.get_bytes(path).decode())
+        except Exception:  # noqa: BLE001
+            continue
+    return out
+
+
 def _threed_classes_by_sid() -> dict[str, list[dict]]:
     """{SID: classification:classes} from the 3D classes sidecars the convert step writes next to the
     GeoParquet (geolmap/3d/{SID}_3d_classes.json). Read here so a pubs rebuild re-stamps the authored
@@ -111,6 +126,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     covers = _ids_with_suffix(identity.PUB_THUMB_PREFIX, ".png")  # PDF first-page covers
     threed_ids = _ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")  # converted 3D pubs
     threed_classes = _threed_classes_by_sid()  # authored fence colors (classification:classes)
+    overrides_map = _overrides_by_sid()  # hand-authored description/title overrides
     toc = _contents_by_sid()  # Survey Notes "In this issue" sidecars
     units = _unit_ids()
     foot = _footprint_geoms()
@@ -127,7 +143,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
             has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
-            contents=toc.get(up),
+            override=overrides_map.get(up), contents=toc.get(up),
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)

@@ -32,6 +32,10 @@ PMTILES_PREFIX = os.environ.get("WAREHOUSE_PMTILES_PREFIX", "warehouse/pmtiles")
 # overwritten when its style changes (so CACHE_MUTABLE); a `.sha` sidecar holds the style hash
 # the PNG was rendered from, for content-addressed skip-existing.
 THUMBS_PREFIX = os.environ.get("WAREHOUSE_THUMBS_PREFIX", "warehouse/thumbs")
+# Hand-authored metadata overrides (description/title), one JSON per STAC item id, marked
+# source=manual. Ingest prefers these over source metadata + they survive reingest — for backfilling
+# fields the source doesn't carry reliably. Edited from the ops console.
+OVERRIDES_PREFIX = os.environ.get("WAREHOUSE_OVERRIDES_PREFIX", "warehouse/overrides")
 
 # Canonical media types for the cloud-native artifacts — one source of truth across all producers
 # (was redefined in ~8 sink/harvest modules).

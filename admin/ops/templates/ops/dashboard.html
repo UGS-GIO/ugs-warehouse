@@ -5,8 +5,12 @@
     <h1 class="text-xl font-bold">Operations</h1>
     <p class="text-sm text-slate-500">Drive the warehouse pipeline + watch it work.{% if dry_run %} Dry-run — triggers are simulated.{% endif %}</p>
   </div>
-  <a href="{% url 'ops:publications' %}"
-     class="rounded bg-slate-800 text-white text-sm px-3 py-1.5 hover:bg-slate-700 whitespace-nowrap">Publications Registry →</a>
+  <div class="flex gap-2">
+    <a href="{% url 'ops:overrides' %}"
+       class="rounded border border-slate-300 text-slate-700 text-sm px-3 py-1.5 hover:bg-slate-50 whitespace-nowrap">Metadata overrides →</a>
+    <a href="{% url 'ops:publications' %}"
+       class="rounded bg-slate-800 text-white text-sm px-3 py-1.5 hover:bg-slate-700 whitespace-nowrap">Publications Registry →</a>
+  </div>
 </div>
 
 {# Serving-surface health lights — always visible, self-refreshes. #}

@@ -4,7 +4,7 @@ from django.views.decorators.http import require_POST
 
 from core.iap_auth import admin_required
 
-from . import contents, jobs, stac
+from . import contents, jobs, overrides, stac
 
 
 @admin_required
@@ -228,3 +228,33 @@ def contents_save(request, series_id):
 def contents_row(request):
     """One blank editable row (HTMX 'add row')."""
     return render(request, "ops/_contents_row.html", {"e": {"title": "", "page": ""}})
+
+
+@admin_required
+def overrides_list(request):
+    """Search pubs + serving-topics; pick one to hand-author its description/title override."""
+    search = request.GET.get("q", "")
+    error, rows = "", []
+    try:
+        rows = overrides.search(search)
+    except Exception as e:  # noqa: BLE001
+        error = f"{type(e).__name__}: {e}"
+    return render(request, "ops/overrides_list.html", {"rows": rows, "q": search, "error": error})
+
+
+@admin_required
+def overrides_edit(request, item_id):
+    """Editor for one item — description + title fields, pre-filled from the current override."""
+    return render(request, "ops/_overrides_editor.html", {"o": overrides.load(item_id)})
+
+
+@admin_required
+@require_POST
+def overrides_save(request, item_id):
+    """Persist (or clear) the override sidecar. Lands in STAC on the next ingest for this item."""
+    try:
+        result = overrides.save(item_id, request.POST.get("description", ""), request.POST.get("title", ""))
+        return render(request, "ops/_overrides_saved.html", {"item_id": item_id, "result": result})
+    except Exception as e:  # noqa: BLE001
+        return render(request, "ops/_overrides_saved.html",
+                      {"item_id": item_id, "error": f"{type(e).__name__}: {e}"})

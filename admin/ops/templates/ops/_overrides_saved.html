@@ -1,0 +1,3 @@
+{% if error %}<span class="text-red-600">{{ error }}</span>
+{% elif result.cleared %}<span class="text-green-600">Override cleared ✓ — reingest this item to publish.</span>
+{% else %}<span class="text-green-600">Saved ({{ result.fields|join:", " }}) ✓ — reingest this item to publish.</span>{% endif %}

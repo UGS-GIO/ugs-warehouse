@@ -25,4 +25,7 @@ urlpatterns = [
     path("contents/row", views.contents_row, name="contents_row"),
     path("contents/<path:series_id>/edit", views.contents_edit, name="contents_edit"),
     path("contents/<path:series_id>/save", views.contents_save, name="contents_save"),
+    path("overrides", views.overrides_list, name="overrides"),
+    path("overrides/<path:item_id>/edit", views.overrides_edit, name="overrides_edit"),
+    path("overrides/<path:item_id>/save", views.overrides_save, name="overrides_save"),
 ]

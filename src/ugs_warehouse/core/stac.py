@@ -123,6 +123,21 @@ def item_object_path(collection_path: str, item_id: str) -> str:
     return f"{config.STAC_PREFIX}/{collection_path}/{item_id}/{item_id}.json"
 
 
+def override_object(item_id: str) -> str:
+    """GCS path of an item's hand-authored metadata override (keyed by the exact STAC item id)."""
+    return f"{config.OVERRIDES_PREFIX}/{item_id}.json"
+
+
+def manual_override(item_id: str) -> dict:
+    """Hand-authored metadata overrides (e.g. {description, title, source:"manual"}) for an item, or
+    {} if none. Ingest prefers these over source metadata — an operator sets a value the source can't
+    give, and it wins + survives reingest. Read next to build_item, same as prior_property."""
+    try:
+        return json.loads(gcs.get_bytes(override_object(item_id))) or {}
+    except Exception:  # noqa: BLE001 — no override / unreadable
+        return {}
+
+
 def prior_property(collection_path: str, item_id: str, prop: str):
     """Value of `prop` in the currently-published item.json, or None if the item doesn't exist yet or
     can't be read. Lets a reingest PRESERVE a field (e.g. description) when the incoming metadata omits

@@ -107,6 +107,7 @@ def build_item(p: dict, attachments: list[dict], *,
                has_cog: bool = False, has_units: bool = False,
                has_thumb: bool = False, has_cover: bool = False,
                has_3d: bool = False, classes_3d: list[dict] | None = None,
+               override: dict | None = None,
                contents: list[dict] | None = None) -> dict:
     """Build a pub STAC Item (collection-nested, via core.stac.build_item)."""
     sid = (p.get("series_id") or "").strip()
@@ -171,16 +172,20 @@ def build_item(p: dict, attachments: list[dict], *,
 
     code = series_code(sid)
     group = collection_group(p)  # top-level: UGS catalog / mining-district files / external
-    # Preserve-on-empty: a resubmit with no citation keeps the published description instead of
-    # blanking it (last-non-empty wins). Hand edits flow through the same metadata, so they stick too.
-    desc = (p.get("full_citation") or "").strip() or (stac.prior_property(f"{group}/{code}", sid, "description") or "")
+    # Precedence: hand-authored override (ops console) > source metadata > prior published value
+    # (preserve-on-empty). So an operator's description/title wins + survives reingest, and a resubmit
+    # with no citation keeps the published description instead of blanking it.
+    ov = override or {}
+    desc = ov.get("description") or (p.get("full_citation") or "").strip() \
+        or (stac.prior_property(f"{group}/{code}", sid, "description") or "")
+    title = ov.get("title") or (p.get("pub_name") or "").strip() or stac.prettify(sid)
     return stac.build_item(
         item_id=sid, collection=code,
         collection_path=f"{group}/{code}",
         geometry=geom, bbox=bbox, datetime_iso=dt,
         properties={
             "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop
-            "title": (p.get("pub_name") or "").strip() or stac.prettify(sid),
+            "title": title,
             "description": desc,
             "ugs:pub_type": pub_type_of(p),
             "ugs:series": (p.get("series") or "").strip(),

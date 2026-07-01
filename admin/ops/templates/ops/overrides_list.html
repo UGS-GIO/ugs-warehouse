@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Metadata overrides{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-1">Metadata overrides</h1>
+<p class="text-sm text-slate-500 mb-4">
+  Hand-author a <span class="font-medium">description</span> or <span class="font-medium">title</span> for
+  any publication or serving-topic. Saved as <span class="font-mono">source: manual</span> — it wins over
+  source metadata and survives reingest. Publishes on the next ingest/reingest for that item.
+</p>
+{% if error %}<p class="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded px-3 py-2">{{ error }}</p>{% endif %}
+
+<input type="text" name="q" value="{{ q }}" placeholder="Search id or title…"
+  class="mb-3 w-full sm:w-80 rounded border border-slate-300 px-3 py-1.5 text-sm focus:border-slate-500 focus:outline-none"
+  hx-get="{% url 'ops:overrides' %}" hx-trigger="keyup changed delay:300ms" hx-target="#ov-list"
+  hx-select="#ov-list" hx-swap="outerHTML">
+
+{# Editor loads here, above the list, so Edit shows immediately. #}
+<div id="editor" class="mb-4 empty:hidden"></div>
+
+<div id="ov-list" class="overflow-x-auto">
+  <table class="w-full text-sm border-collapse">
+    <thead><tr class="text-left text-xs text-slate-500">
+      <th class="py-1">Item</th><th>Kind</th><th>Current description</th><th>Override</th><th></th></tr></thead>
+    <tbody>
+      {% for r in rows %}
+      <tr class="border-t border-slate-100">
+        <td class="py-1 pr-3 font-mono whitespace-nowrap">{{ r.id }}</td>
+        <td class="pr-3 text-slate-500 whitespace-nowrap">{{ r.kind }}</td>
+        <td class="pr-3 text-slate-600">{{ r.description|default:"—"|truncatechars:90 }}</td>
+        <td class="pr-3">{% if r.has_override %}<span class="text-green-600" title="has a manual override">✓</span>{% else %}<span class="text-slate-300">—</span>{% endif %}</td>
+        <td><button class="text-xs font-medium text-blue-700 hover:underline"
+              hx-get="{% url 'ops:overrides_edit' r.id %}" hx-target="#editor" hx-swap="innerHTML show:top">Edit ▸</button></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="5" class="py-3 text-slate-400">
+        {% if q %}No publications or serving-topics match “{{ q }}”.{% else %}Type an id or title to search.{% endif %}</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

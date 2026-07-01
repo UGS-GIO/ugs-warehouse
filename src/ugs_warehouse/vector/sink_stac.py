@@ -79,8 +79,11 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     # ducklake stays a gs:// locator — read by DuckDB, not a browser.
     ducklake_uri = f"{ducklake.DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
 
+    # Precedence for title/description: hand-authored override (ops console) > registry metadata >
+    # prior published value. So an operator's edit wins + survives reingest.
+    ov = stac.manual_override(topic.stem)
     props = {
-        "title": md.get("display_name") or title or stac.prettify(topic.stem),
+        "title": ov.get("title") or md.get("display_name") or title or stac.prettify(topic.stem),
         "ugs:dbt_schema": topic.schema,
         "ugs:layer": topic.layer,
         "ugs:row_count": rc,
@@ -92,7 +95,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
     # Preserve-on-empty: registry descriptions are often missing, so when this submit has none, keep
     # whatever the published item already had instead of blanking it (last-non-empty wins).
-    desc = md.get("description") or description or stac.prior_property(COLLECTION, topic.stem, "description")
+    desc = ov.get("description") or md.get("description") or description \
+        or stac.prior_property(COLLECTION, topic.stem, "description")
     if desc:
         props["description"] = desc
     # Curated catalog metadata (raw.schema_registry) — flows into STAC + ISO.

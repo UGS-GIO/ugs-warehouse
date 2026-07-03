@@ -283,7 +283,10 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
         "id": collection,
         "title": title or prettify(collection),
         "description": description or f"UGS warehouse — {title or collection}.",
-        "license": "proprietary",
+        # Utah state geo data is CC-BY-4.0 by UGRC policy (not "proprietary"). SPDX id + a
+        # rel:license link below; providers names UGS as producer/licensor/host.
+        "license": config.DATA_LICENSE,
+        "providers": config.PROVIDERS,
         "extent": extent or {"spatial": {"bbox": [UTAH_BBOX]},
                              "temporal": {"interval": [[None, None]]}},
         # Counts are UGS-prefixed top-level extras, NOT `summaries` — STAC summaries values must be
@@ -298,6 +301,7 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             # Compact items index — one fetch for the whole list (viewers read this instead
             # of N item.json fetches; the per-item docs stay the source of truth for detail).
             {"rel": "items", "href": "./items.json", "type": "application/json", "title": "Items index"},
+            {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
             *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections/{collection}", "type": "application/json", "title": "OGC API Features endpoint"}] if service else []),
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json"}
               for i in sorted(item_ids)],

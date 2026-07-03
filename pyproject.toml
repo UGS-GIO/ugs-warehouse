@@ -16,7 +16,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6", "pre-commit>=3.7"]
+dev = ["pytest>=8", "ruff>=0.6", "pre-commit>=3.7", "pystac[validation]>=1.11"]
 # pubs/COG producer — heavy raster deps; installed in Dockerfile.harvest (needs system
 # GDAL CLI + poppler too). duckdb is in the base deps.
 pubs = [

@@ -127,9 +127,13 @@ def build_item(p: dict, attachments: list[dict], *,
         assets.setdefault(key, {"href": h, "type": media_type(h),
                                 "title": (a.get("extra_data") or "").strip(), "roles": ["data"]})
     if has_cog:
+        # The COG is warped to EPSG:3857 (harvest.py: gdalwarp -t_srs + rio-cogeo web_optimized),
+        # which differs from the item-level proj:code (4326, the footprint/units CRS). The projection
+        # ext allows per-asset overrides, so stamp the COG's real CRS on the asset itself — otherwise
+        # a client reads the item-level 4326 and mis-places the raster.
         assets["cog"] = {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
                          "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
-                         "roles": ["data", "cloud-optimized"]}
+                         "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857"}
     if has_thumb:
         assets["thumbnail"] = {"href": config.public_url(f"{identity.COG_PREFIX}/{sid.upper()}.thumb.png"),
                                "type": "image/png", "title": "Thumbnail", "roles": ["thumbnail"]}
@@ -167,6 +171,8 @@ def build_item(p: dict, attachments: list[dict], *,
     # advertised by its `cog` ASSET (media type `…;profile=cloud-optimized`), which STAC Browser and
     # our viewer both render natively, and which `_is_mappable`/`cogAsset` detect. No link needed.
     extensions: list[str] = []
+    if has_cog:
+        extensions.append(stac.PROJ_EXT)  # asset-level proj:code on the COG (EPSG:3857)
     if has_3d and classes_3d:
         extensions.append(stac.CLASSIFICATION_EXT)  # per-unit authored colors for the 3D fence
 

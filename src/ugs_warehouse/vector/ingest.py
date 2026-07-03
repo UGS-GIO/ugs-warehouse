@@ -2,8 +2,7 @@
 
 For each topic:
   1. Read `{schema}.{topic}_current` from Postgres (`source`)
-  2. Transform in DuckDB: hydrate WKB, confirm/reproject -> 4326, add h3_r9,
-     hilbert-sort (`transform`)
+  2. Transform in DuckDB: hydrate WKB, confirm/reproject -> 4326, hilbert-sort (`transform`)
   3. Write DuckLake table — native geom (`sink_ducklake`)
   4. Emit GeoParquet archive — native geom, citable (`sink_archive`)
   5. Build PMTiles via tippecanoe (`sink_pmtiles`)

@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "DuckLake lakehouse for UGS — forks at _current and emits DuckLake + GeoParquet + PMTiles + STAC"
 requires-python = ">=3.11"
 dependencies = [
-  "duckdb>=1.5.3,<1.5.4",  # capped: h3 community ext has no v1.5.4 build yet (404). Lift cap when published.
+  "duckdb>=1.5.3,<2",  # cap lifted: h3 community ext dropped (was the only thing pinning to <1.5.4).
   "cloud-sql-python-connector>=1.11",
   "obstore>=0.10",       # unified S3/GCS/Azure object client (Rust); GCS sinks
   "fsspec>=2024.6",      # obstore fsspec adapter -> DuckLake GCS IO (no httpfs/HMAC)

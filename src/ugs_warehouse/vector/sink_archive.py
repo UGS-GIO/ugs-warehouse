@@ -31,10 +31,10 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
     without decoding geometry.
 
     NOTE: these are plain columns, NOT the standardized GeoParquet 1.1 `covering` bbox struct.
-    DuckDB 1.5.3 doesn't emit `covering`, and the ingest is deliberately pyarrow-free + memory-
-    bounded (no post-process rewrite). So spec-aware external readers (GDAL/pyarrow) won't auto-
-    detect the bbox column — pushdown still works for our consumers via row-group stats. Revisit
-    once the duckdb version cap lifts (see the h3 pin) and DuckDB emits covering natively.
+    DuckDB doesn't emit `covering` at any version (still unimplemented upstream), and the ingest is
+    deliberately pyarrow-free + memory-bounded (no post-process rewrite). So spec-aware external
+    readers (GDAL/pyarrow) won't auto-detect the bbox column — pushdown still works for our consumers
+    via row-group stats. For strict 1.1 covering, post-process with `gpio convert` (geoparquet-io).
     """
     con.execute(
         f"COPY (SELECT *, "

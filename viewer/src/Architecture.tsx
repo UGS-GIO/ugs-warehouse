@@ -31,7 +31,7 @@ const DIAGRAM = `flowchart TB
   subgraph WH["③ Warehouse — ugs-warehouse"]
     direction TB
     SVC["ugs-warehouse-service<br/>Cloud Run push handler"]:::done
-    TR["DuckDB transform<br/>reproject → EPSG:4326 · h3_r9 · hilbert sort"]:::done
+    TR["DuckDB transform<br/>reproject → EPSG:4326 · hilbert sort"]:::done
     SVC --> TR
     TR --> DL["DuckLake table"]:::done
     TR --> GP["GeoParquet<br/>latest + dated"]:::done
@@ -141,7 +141,7 @@ const LAYERS: Layer[] = [
     lead: "One DuckDB streaming pass turns a Postgres serving table into cloud-native artifacts — no rows ever materialize in Python.",
     points: [
       "Reproject every source CRS → EPSG:4326 (the uniform publish CRS).",
-      "Add an H3 r9 cell per feature; Hilbert-sort rows so Parquet row-groups bbox-prune well.",
+      "Hilbert-sort rows so Parquet row-groups bbox-prune well (locality doubles as the spatial index).",
       "Memory-capped (spills to disk) to survive the free-tier container limit.",
     ],
     note: "Unstamped geometry (SRID 0) now errors loudly instead of silently assuming 4326 — a recent guard (PR ugs-warehouse#2).",

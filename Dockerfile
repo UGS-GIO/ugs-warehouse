@@ -25,12 +25,11 @@ RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
     && pip install --upgrade pip && pip install . \
     && rm -rf src
 
-# Pre-bake the DuckDB extensions (core spatial + community h3) into the image so the runtime
-# LOADs them locally — no fetch from the extension servers on each cold start (removes an
-# external single-point-of-failure + saves download latency). Versions match the pinned duckdb;
-# platform matches this base image. Cached with the deps layer (re-bakes only on a duckdb bump).
-RUN python -c "import duckdb; c = duckdb.connect(); \
-c.execute('INSTALL spatial'); c.execute('INSTALL h3 FROM community')"
+# Pre-bake the DuckDB spatial extension into the image so the runtime LOADs it locally — no fetch
+# from the extension servers on each cold start (removes an external single-point-of-failure + saves
+# download latency). Version matches the pinned duckdb; platform matches this base image. Cached with
+# the deps layer (re-bakes only on a duckdb bump).
+RUN python -c "import duckdb; c = duckdb.connect(); c.execute('INSTALL spatial')"
 
 # App layer — only this rebuilds on a source change (deps already satisfied above).
 COPY src ./src

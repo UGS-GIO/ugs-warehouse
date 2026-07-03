@@ -14,7 +14,7 @@ def _con_with_transformed():
     con = duckdb.connect()
     con.execute("INSTALL spatial; LOAD spatial;")
     con.execute("CREATE TABLE transformed AS "
-                "SELECT ST_Point(-111.0, 39.0) AS geom, 1::UBIGINT AS h3_r9, 'a' AS name")
+                "SELECT ST_Point(-111.0, 39.0) AS geom, 1::BIGINT AS feature_id, 'a' AS name")
     return con
 
 

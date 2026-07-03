@@ -131,9 +131,15 @@ def build_item(p: dict, attachments: list[dict], *,
         # which differs from the item-level proj:code (4326, the footprint/units CRS). The projection
         # ext allows per-asset overrides, so stamp the COG's real CRS on the asset itself — otherwise
         # a client reads the item-level 4326 and mis-places the raster.
+        # harvest produces an RGBA uint8 WebP COG (gdalwarp -dstalpha → rio-cogeo). Bands are the
+        # STAC 1.1 common `bands` construct (NOT deprecated raster:bands); data_type is deduped to
+        # the asset per 1.1 best practice. Alpha carries transparency, so no separate nodata.
         assets["cog"] = {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
                          "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
-                         "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857"}
+                         "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857",
+                         "data_type": "uint8",
+                         "bands": [{"name": "red"}, {"name": "green"},
+                                   {"name": "blue"}, {"name": "alpha"}]}
     if has_thumb:
         assets["thumbnail"] = {"href": config.public_url(f"{identity.COG_PREFIX}/{sid.upper()}.thumb.png"),
                                "type": "image/png", "title": "Thumbnail", "roles": ["thumbnail"]}

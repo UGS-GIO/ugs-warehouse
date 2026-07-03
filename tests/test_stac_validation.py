@@ -35,11 +35,17 @@ def test_pub_item_with_cog_validates():
         assets={
             "cog": {"href": "https://x/OFR-100.cog.tif",
                     "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-                    "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857"},
+                    "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857",
+                    "data_type": "uint8",
+                    "bands": [{"name": "red"}, {"name": "green"},
+                              {"name": "blue"}, {"name": "alpha"}]},
         },
         stac_extensions=[stac.PROJ_EXT], proj_epsg=4326,
     )
-    _validate(_drop_private(item))
+    d = _drop_private(item)
+    assert d["stac_version"] == "1.1.0"
+    assert len(d["assets"]["cog"]["bands"]) == 4  # STAC 1.1 common bands, not raster:bands
+    _validate(d)
 
 
 def test_aspatial_item_omits_bbox_validates():

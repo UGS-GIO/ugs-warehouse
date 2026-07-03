@@ -19,7 +19,7 @@ from . import config, gcs, iso, styles
 
 PGF_BASE_URL = config.PGF_BASE_URL
 
-STAC_VERSION = "1.0.0"
+STAC_VERSION = "1.1.0"  # 1.1 promotes `bands` + data_type/nodata to common metadata (no raster ext)
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 # projection: v2.0.0 → `proj:code` ("EPSG:xxxx"), replacing the deprecated `proj:epsg`.
@@ -137,8 +137,11 @@ def patch_item_properties(object_path: str, updates: dict) -> bool:
     except Exception:  # noqa: BLE001 — item not published yet / unreadable
         return False
     item.setdefault("properties", {}).update(updates)
+    # Same cache policy as write_item so an edited item keeps a consistent header (not flipped to
+    # no-cache until the next reingest). Operator sees the edit at once (bucket read); public via
+    # the CDN within the short max-age.
     gcs.put_bytes(json.dumps(item, indent=2).encode(), object_path,
-                  content_type="application/geo+json", cache_control=gcs.CACHE_MUTABLE)
+                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
     return True
 
 
@@ -222,11 +225,11 @@ def attach_classification(item: dict) -> None:
 
 
 def write_item(item: dict) -> str:
-    """Serialize + upload an item. Mutable (overwritten per ingest) -> no-cache."""
+    """Serialize + upload an item. Overwritten per ingest → short-lived edge cache + SWR."""
     path = item_object_path(_layout_path(item), item["id"])
     item = {k: v for k, v in item.items() if k != "_collection_path"}  # drop private key
     gcs.put_bytes(json.dumps(item, indent=2).encode(), path,
-                  content_type="application/geo+json", cache_control=gcs.CACHE_MUTABLE)
+                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
     return path
 
 
@@ -418,8 +421,9 @@ def _root_doc(children: list[dict]) -> dict:
 
 
 def _write_json(doc: dict, object_path: str) -> None:
+    # catalog.json / collection.json / items.json — short edge cache + SWR (see gcs.CACHE_CATALOG).
     gcs.put_bytes(json.dumps(doc, indent=2).encode(), object_path,
-                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+                  content_type="application/json", cache_control=gcs.CACHE_CATALOG)
 
 
 # Publication-series descriptions, verbatim from geology.utah.gov/map-pub. Set as the series

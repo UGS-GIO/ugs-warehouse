@@ -24,10 +24,17 @@ PARQUET_MIME = config.PARQUET_MIME
 def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
     """COPY the transformed `view` to a GeoParquet file.
 
-    DuckDB's spatial extension auto-writes GeoParquet metadata when a GEOMETRY column is present.
-    bbox covering: per-row extent as four plain numeric columns — combined with the hilbert
-    ordering (transform), their per-row-group min/max stats let any reader (DuckDB, DuckDB-WASM,
-    OGC API) prune row groups on a bbox without decoding geometry.
+    DuckDB's spatial extension auto-writes GeoParquet metadata (version 1.0.0) when a GEOMETRY
+    column is present. For spatial pruning we add the per-row extent as four plain numeric columns
+    (bbox_xmin/ymin/xmax/ymax); combined with the hilbert ordering (transform), their per-row-group
+    min/max stats let our consumers (DuckDB, DuckDB-WASM, OGC API) prune row groups on a bbox
+    without decoding geometry.
+
+    NOTE: these are plain columns, NOT the standardized GeoParquet 1.1 `covering` bbox struct.
+    DuckDB 1.5.3 doesn't emit `covering`, and the ingest is deliberately pyarrow-free + memory-
+    bounded (no post-process rewrite). So spec-aware external readers (GDAL/pyarrow) won't auto-
+    detect the bbox column — pushdown still works for our consumers via row-group stats. Revisit
+    once the duckdb version cap lifts (see the h3 pin) and DuckDB emits covering natively.
     """
     con.execute(
         f"COPY (SELECT *, "

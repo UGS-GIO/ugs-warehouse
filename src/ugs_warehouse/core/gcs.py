@@ -14,8 +14,13 @@ from obstore.store import GCSStore
 from . import config
 
 # Sensible Cache-Control presets — pass explicitly at call sites.
-CACHE_MUTABLE = "no-cache"               # revalidate every time (catalog.json, latest pointers)
+CACHE_MUTABLE = "no-cache"               # revalidate every time ("latest" data pointers)
 CACHE_IMMUTABLE = "public, max-age=31536000, immutable"   # dated/content-addressed artifacts
+# STAC JSON (catalog/collection/items/item): a brief edge cache to spare the CDN a revalidation
+# round-trip on every crawl, with stale-while-revalidate so a stale copy serves instantly while it
+# refreshes in the background. Edits still propagate within ~max-age; operators reading the bucket
+# directly (ops console) see changes immediately regardless.
+CACHE_CATALOG = "public, max-age=60, stale-while-revalidate=600"
 
 
 _cached_store: GCSStore | None = None

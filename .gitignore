@@ -39,3 +39,8 @@ admin/staticfiles/
 # stray playwright screenshots
 3d-viewer.png
 .playwright-mcp/
+
+# OpenCode / Skills
+.agents/
+AGENTS.original.md
+skills-lock.json

@@ -1,17 +1,10 @@
 # AGENTS.md
 
-Single agent-instructions file for this repo (the `AGENTS.md` standard). If a
-tool defaults to a different name (Claude Code → `CLAUDE.md`, Gemini → `GEMINI.md`),
-point it here via that tool's config instead of duplicating this file.
+Single agent-instructions file for this repo (`AGENTS.md` standard). If tool default to other name (Claude Code → `CLAUDE.md`, Gemini → `GEMINI.md`), point here via tool config instead of duplicating.
 
 ## What this is
 
-A DuckLake lakehouse for UGS. It forks at dataELT's published gold contract — the
-Postgres `{schema}.{layer}_current` serving tables — and emits four artifacts per
-topic: a DuckLake table (native geom), a GeoParquet archive, PMTiles, and a STAC
-item. It does **not** re-derive silver/gold; it adds a serving shape on top of an
-existing dbt mart contract owned upstream (marshallrobinson). See `docs/HANDOFF.md`
-for live working state, blockers, and decision history (not committed).
+DuckLake lakehouse for UGS. Fork at dataELT published gold contract — Postgres `{schema}.{layer}_current` serving tables — emit 4 artifacts per topic: DuckLake table (native geom), GeoParquet archive, PMTiles, STAC item. No re-derive silver/gold. Add serving shape on top of existing dbt mart contract owned upstream (marshallrobinson). See `docs/HANDOFF.md` for live working state, blockers, decision history (not committed).
 
 ## Commands
 
@@ -31,35 +24,24 @@ python -m scripts.bootstrap_catalog        # idempotent: ATTACH DuckLake + creat
 uvicorn service.main:app --host 0.0.0.0 --port 8080
 ```
 
-`--dry-run` exercises source + transform only (no GCS / catalog writes) — the safe
-smoke against real `_current` data. It prints row count, 4326 bbox, and a sample row.
-A topic with **0 rows carrying geometry** is reported `SKIP` (rc=1) and never reaches
-the sinks — see the geometry guard below.
+`--dry-run` exercise source + transform only (no GCS/catalog writes). Safe smoke against real `_current` data. Print row count, 4326 bbox, sample row. Topic with **0 rows carrying geometry** report `SKIP` (rc=1), never reach sinks (see geometry guard).
 
-**Tests:** `pytest` over `tests/` — hermetic unit tests (in-memory GCS + fake manifests/DB,
-no network) covering the STAC builders, styles/restyle, related-FK emit, raster + pubs sinks,
-ISO, and topics. Run `python -m pytest tests/ -q`. Plus `ruff` + `--dry-run` for live smoke.
+**Tests:** `pytest` over `tests/` — hermetic unit tests (in-memory GCS + fake manifests/DB, no network) cover STAC builders, styles/restyle, related-FK emit, raster + pubs sinks, ISO, topics. Run `python -m pytest tests/ -q`. Use `ruff` + `--dry-run` for live smoke.
 
 ## Layout
 
-Two **producers** on a **shared core**:
-- `core/` — `config` (one `WAREHOUSE_BUCKET` + CDN `PUBLIC_BASE_URL` + prefixes), `gcs` (obstore
-  upload/list + Cache-Control + CDN URLs), `stac` (item builder, collections hierarchy,
-  derive-from-truth catalog refresh, web-map-links, titles). **Both producers emit through this.**
+Two **producers** on **shared core**:
+- `core/` — `config` (one `WAREHOUSE_BUCKET` + CDN `PUBLIC_BASE_URL` + prefixes), `gcs` (obstore upload/list + Cache-Control + CDN URLs), `stac` (item builder, collections hierarchy, derive-from-truth catalog refresh, web-map-links, titles). **Both producers emit through this.**
 - `vector/` — producer A: Postgres `_current` topics → DuckLake + GeoParquet + PMTiles + STAC.
-- `pubs/` — producer B: publications → COG + footprints + units + cover thumbnails + STAC. See
-  `docs/INTEGRATION_GEOLMAP.md`.
-- `raster/` — standalone COG → STAC (the `ugs-rasters` collection).
-- `restyle.py` — rebind `ugs:renders` from the ugs-styles manifest, no reingest (`docs/STYLING.md`).
+- `pubs/` — producer B: publications → COG + footprints + units + cover thumbnails + STAC. See `docs/INTEGRATION_GEOLMAP.md`.
+- `raster/` — standalone COG → STAC (`ugs-rasters` collection).
+- `restyle.py` — rebind `ugs:renders` from ugs-styles manifest, no reingest (`docs/STYLING.md`).
 
-Plus, outside `src/`: `admin/` (Django + HTMX ops console behind IAP — drive + observe the Cloud
-Run jobs), `service/` (Pub/Sub push handler), `featureserv/` (OGC API Features), `viewer/` (STAC
-viewer). One STAC catalog spans the producers — collections `ugs-serving-topics`,
-`ugs-publications`, `ugs-rasters`.
+Outside `src/`: `admin/` (Django + HTMX ops console behind IAP — drive + observe Cloud Run jobs), `service/` (Pub/Sub push handler), `featureserv/` (OGC API Features), `viewer/` (STAC viewer). One STAC catalog span producers — collections `ugs-serving-topics`, `ugs-publications`, `ugs-rasters`.
 
 ## Architecture (vector producer)
 
-Pipeline is `source → transform → 4 sinks`, orchestrated per topic in `vector/ingest.py`:
+Pipeline: `source → transform → 4 sinks`, orchestrate per topic in `vector/ingest.py`:
 
 ```
 Pub/Sub {schema, topic} → service/main.py → ingest.ingest_topic(Topic)
@@ -68,80 +50,31 @@ Pub/Sub {schema, topic} → service/main.py → ingest.ingest_topic(Topic)
    sink_ducklake / sink_archive / sink_pmtiles / sink_stac  (each reads the view)
 ```
 
-**Data contract between layers — the key invariant.** `source.read()` returns a
-pyarrow Table where the geometry is a `geom_wkb` BLOB (server-side `ST_AsBinary`) and
-each row carries `target_epsg` (the CRS the WKB bytes are in) and `source_epsg`
-(upstream provenance only). `transform.run()` hydrates `geom_wkb` into a DuckDB
-`GEOMETRY`, reprojecting `target_epsg → 4326` only if not already 4326, adds `h3_r9`
-(H3 cell at res 9 from the centroid), and `ORDER BY ST_Hilbert(centroid)` so parquet
-row-groups bbox-prune well. Any new source backend MUST emit this same shape.
+**Data contract between layers — key invariant.** `source.read()` return pyarrow Table where geom is `geom_wkb` BLOB (server-side `ST_AsBinary`), each row carry `target_epsg` (CRS WKB bytes are in) and `source_epsg` (upstream provenance only). `transform.run()` hydrate `geom_wkb` to DuckDB `GEOMETRY`, reproject `target_epsg → 4326` only if not 4326, add `h3_r9` (H3 res 9 cell from centroid), `ORDER BY ST_Hilbert(centroid)` for parquet row-group pruning. New source backend MUST emit same shape.
 
-**Source backend.** `vector/source.py` only — direct libpq via the DuckDB postgres extension
-(a `schema_reader` login on mapping-db). It exposes `read(topic)` + `discover()`; transform +
-sinks are independent of it. (An earlier HTTP-PostgREST `source_postgrest.py` bandaid for running
-without a DB login was removed once direct creds landed — ignore references to `SOURCE_BACKEND`
-in any stale comment.)
+**Source backend.** `vector/source.py` only — direct libpq via DuckDB postgres extension (`schema_reader` login on mapping-db). Expose `read(topic)` + `discover()`; transform + sinks independent. (HTTP-PostgREST `source_postgrest.py` removed — ignore stale comments).
 
-**Geometry guard.** `ingest._ingest()` checks geometry presence right after
-`transform.run()` and **before** any sink: if 0 rows have non-null `geom`, it logs
-`SKIP` and returns rc=1 in both dry-run and real mode. This catches genuinely
-non-spatial mart tables (chemistry, lookups) and backend-hidden geom alike, so the
-sinks never emit empty/broken PMTiles or null-geom parquet.
+**Geometry guard.** `ingest._ingest()` check geometry right after `transform.run()`, before sink. If 0 rows non-null `geom`, log `SKIP`, return rc=1 in dry-run and real mode. Catch non-spatial tables, sinks never emit empty/broken PMTiles or null-geom parquet.
 
-**Topics are not hard-coded.** A `Topic` is just `{schema, layer}` (`topics.py`).
-There is no registry — `discover()` scans `MART_SCHEMAS` at runtime, `Topic.parse()`
-handles the dotted CLI form, and `from_pubsub()` builds one from the trigger payload.
-Adding a new `_current` upstream is zero-config here.
+**Topics not hard-coded.** `Topic` is `{schema, layer}` (`topics.py`). No registry — `discover()` scan `MART_SCHEMAS` at runtime, `Topic.parse()` handle dotted CLI form, `from_pubsub()` build from trigger payload. Upstream `_current` zero-config.
 
-**Sinks are independent and isolated.** `ingest._ingest()` runs each sink in its own
-try/except: one sink failing is logged to stderr and sets `rc=1` but never crashes the
-others. The Cloud Run handler acks the Pub/Sub message even on `rc!=0` (recovery
-happens on the next publish) to avoid retry storms.
+**Sinks independent and isolated.** `ingest._ingest()` run each sink in own try/except. One fail log to stderr, set `rc=1`, never crash others. Cloud Run handler ack Pub/Sub on `rc!=0` to avoid retry storms (recovery next publish).
 
-**STAC catalog auto-refreshes.** A producer's stac sink emits an item via
-`core.stac.write_item()`; then, after the sinks, the orchestrator calls
-`core.stac.refresh_catalog()`, which **lists the item files in GCS and rewrites the root
-`catalog.json` + every `collection.json`** — so the catalog stays current with no manual
-regen (`scripts/refresh_stac.py` for on-demand). Derive-from-truth (lists actual items,
-not a mutated shared file), so concurrent ingests converge (last writer wins, self-heals).
-Logic is pure builders in `core/stac.py` (`build_item`, `_group_items`, `_collection_doc`,
-`_root_doc`) — keep them pure for testing.
+**STAC catalog auto-refreshes.** Producer stac sink emit item via `core.stac.write_item()`. Orchestrator call `core.stac.refresh_catalog()`, list item files in GCS, rewrite root `catalog.json` + every `collection.json` (keep current without manual regen, `scripts/refresh_stac.py` on-demand). Derive-from-truth, concurrent ingests converge (last writer win, self-heal). Pure builders in `core/stac.py` (`build_item`, `_group_items`, `_collection_doc`, `_root_doc`), keep pure for tests.
 
-**Rasters** (`raster/`) — a standalone COG → STAC pipeline (`consume.py` + `sink_stac.py`)
-sharing the STAC catalog + GCS + obstore layers, landing items in the `ugs-rasters` collection.
-See `docs/RASTER.md`.
+**Rasters** (`raster/`) — standalone COG → STAC pipeline (`consume.py` + `sink_stac.py`) share STAC catalog + GCS + obstore, land items in `ugs-rasters` collection. See `docs/RASTER.md`.
 
-**DuckLake catalog** (`vector/ducklake.py`): catalog metadata lives in a DuckLake-managed
-Postgres DB (mapping-db in prod, or a local docker pg for dev); parquet data chunks
-land in GCS under `DUCKLAKE_DATA_PATH`. `attach()` is idempotent, loads the
-`spatial/postgres/ducklake` extensions, and pins DuckLake's metadata tables into the
-`METADATA_SCHEMA` (`DUCKLAKE_METADATA_SCHEMA` env, default `ducklake_catalog`) so they
-never land in the catalog DB's `public` — the catalog DSN user (prod: `schema_owner`)
-only needs CREATE on that one schema. `sink_ducklake` does `CREATE OR REPLACE TABLE`
-per ingest — DuckLake's snapshot model keeps prior versions readable by id.
+**DuckLake catalog** (`vector/ducklake.py`): catalog metadata in DuckLake-managed Postgres DB; parquet chunks in GCS under `DUCKLAKE_DATA_PATH`. `attach()` idempotent, load `spatial/postgres/ducklake` extensions, pin DuckLake metadata to `METADATA_SCHEMA` (`DUCKLAKE_METADATA_SCHEMA` env, default `ducklake_catalog`) so never land in `public`. `sink_ducklake` run `CREATE OR REPLACE TABLE` per ingest — DuckLake snapshot model keep prior versions readable by id.
 
-**GCS IO — do NOT re-add httpfs for GCS.** DuckDB's `httpfs` reaches GCS only via the
-S3-compat API with **HMAC keys**, which org policy blocks. So nothing in this repo
-writes GCS through httpfs:
-- The file sinks (`sink_archive`, `sink_pmtiles`, `sink_stac`) `COPY`/write to a **local
-  temp file**, then upload with **obstore** (`GCSStore` + `obs.put`, ADC auth).
-- `sink_ducklake` can't stage locally (DuckLake writes its own chunks during `CREATE
-  TABLE`), so on a `gs://` DATA_PATH `catalog.attach()` **skips httpfs** and registers
-  **obstore via fsspec** on the connection (`register("gs")` +
-  `con.register_filesystem(filesystem("gs"))`). DuckLake honors that fsspec filesystem
-  for its DATA_PATH writes (duckdb/ducklake#628) — ADC auth, no HMAC.
+**GCS IO — do NOT re-add httpfs for GCS.** DuckDB `httpfs` block S3-compat API with HMAC keys (org policy block). No GCS write through httpfs:
+- File sinks (`sink_archive`, `sink_pmtiles`, `sink_stac`) write to **local temp file**, upload with **obstore** (`GCSStore` + `obs.put`, ADC auth).
+- `sink_ducklake` write chunk directly — on `gs://` DATA_PATH `catalog.attach()` **skip httpfs**, register **obstore via fsspec** (`register("gs")` + `con.register_filesystem(filesystem("gs"))`). DuckLake honor fsspec for DATA_PATH write, ADC auth, no HMAC.
 
-All GCS auth is therefore ADC / Workload Identity, identical local and on Cloud Run —
-**no gcsfuse, no GCS extension, no HMAC.** If you see a GCS 403, the fix is the fsspec
-registration, never re-enabling httpfs.
+GCS auth is ADC / Workload Identity, same local and Cloud Run — **no gcsfuse, no GCS extension, no HMAC.** GCS 403 fix is fsspec registration, never httpfs.
 
-> Note: DuckLake replaced an earlier Iceberg implementation (commit `d62e423`). Some
-> docstrings still say "iceberg" / "sink_iceberg" — those are stale comments, not
-> live code. Native DuckDB geom + timestamps; no WKB-cast or tz-normalize hacks.
+> Note: DuckLake replaced Iceberg (commit `d62e423`). Stale iceberg docstrings ignore. Native DuckDB geom + timestamps; no WKB-cast / tz-normalize hacks.
 
-**PMTiles** (`sink_pmtiles.py`) shells out to the `tippecanoe` binary (built into the
-Docker image; not a Python dep) — DuckDB writes GeoJSONSeq to a temp file, tippecanoe
-produces the `.pmtiles`, then it uploads to GCS via obstore.
+**PMTiles** (`sink_pmtiles.py`) shell out to `tippecanoe` binary (in Docker image). DuckDB write GeoJSONSeq to temp, tippecanoe output `.pmtiles`, upload to GCS via obstore.
 
 ## Environment variables
 
@@ -149,23 +82,19 @@ produces the `.pmtiles`, then it uploads to GCS via obstore.
 |---|---|---|
 | `POSTGRES_DSN` | `vector/source.py` | libpq DSN; local dev via `cloud_sql_proxy` |
 | `DUCKLAKE_CATALOG_DSN` | `vector/ducklake.py` | libpq DSN for catalog Postgres (required) |
-| `DUCKLAKE_DATA_PATH` | `vector/ducklake.py` | data-chunk path; `gs://…` triggers the obstore-fsspec route |
+| `DUCKLAKE_DATA_PATH` | `vector/ducklake.py` | data-chunk path; `gs://…` trigger obstore-fsspec route |
 | `DUCKLAKE_METADATA_SCHEMA` | `vector/ducklake.py` | Postgres schema for DuckLake metadata tables (default `ducklake_catalog`) |
-| `OVERRIDE_DATA_PATH` | `vector/ducklake.py` | `True` adds `OVERRIDE_DATA_PATH TRUE` to ATTACH — use when DATA_PATH differs from what the catalog recorded (e.g. sandbox vs prod) |
-| `WAREHOUSE_BUCKET` | `core/config.py` | one GCS bucket for all artifacts (private; served via CDN) |
+| `OVERRIDE_DATA_PATH` | `vector/ducklake.py` | `True` add `OVERRIDE_DATA_PATH TRUE` to ATTACH — use when DATA_PATH differ from catalog record |
+| `WAREHOUSE_BUCKET` | `core/config.py` | GCS bucket for artifacts (private; served via CDN) |
 | `WAREHOUSE_{ARCHIVE,PMTILES,STAC}_PREFIX` | `core/config.py` | per-artifact object prefixes |
-| `WAREHOUSE_PUBLIC_BASE_URL` | `core/config.py` | https base for asset/CDN hrefs — the maps-assets CDN (path-preserved; bucket is private). Defaults to `https://maps-assets.geology.utah.gov` |
+| `WAREHOUSE_PUBLIC_BASE_URL` | `core/config.py` | https base for asset/CDN hrefs — maps-assets CDN (private bucket, defaults to `https://maps-assets.geology.utah.gov`) |
 | `TIPPECANOE_BIN` / `TIPPECANOE_OPTS` | `vector/sink_pmtiles.py` | binary path + extra flags |
 
-All GCS access (obstore for the file sinks, obstore-fsspec for DuckLake) uses ADC, so
-the runtime needs `gcloud auth application-default login` (local) or a service account /
-Workload Identity (Cloud Run). No HMAC keys, no gcsfuse.
+GCS access (obstore, obstore-fsspec for DuckLake) use ADC. Runtime need `gcloud auth application-default login` (local) or service account / Workload Identity (Cloud Run). No HMAC, no gcsfuse.
 
 ## Conventions
 
-- Python 3.11+, `from __future__ import annotations` at the top of every module.
-- All target geometry is **EPSG:4326**; `transform.TARGET_SRS` / `H3_RESOLUTION` are
-  the single source of truth.
-- dbt convention: geometry column is named `geom`; `_current` is the table suffix.
-- Coordinate any change touching the `_current` contract with marshallrobinson — the
-  neighbor repos (`dataELT`, `ugs-ingest`, `ugs-map-viewer`) are read-only from here.
+- Python 3.11+, `from __future__ import annotations` top of module.
+- Target geometry is **EPSG:4326**; `transform.TARGET_SRS` / `H3_RESOLUTION` single source of truth.
+- dbt convention: geometry column named `geom`; `_current` is table suffix.
+- Coordinate change touching `_current` contract with marshallrobinson — neighbor repos (`dataELT`, `ugs-ingest`, `ugs-map-viewer`) read-only here.

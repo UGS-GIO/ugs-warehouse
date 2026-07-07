@@ -14,6 +14,10 @@ export type ActiveLayer = {
   rasterPmHref?: string;
 };
 
+// A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
+// to open it on click. Aspatial items (no bbox) are filtered out by the caller.
+export type Footprint = { href: string; id: string; title: string; bbox: number[] };
+
 // Distinct colors cycled per active layer.
 export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
 export const colorFor = (i: number) => LAYER_COLORS[i % LAYER_COLORS.length];
@@ -43,7 +47,7 @@ const BASEMAPS: Record<string, string | maplibregl.StyleSpecification> = {
   Streets: ofm("liberty"), Light: ofm("positron"), Satellite: SATELLITE,
 };
 
-type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown> };
+type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown>; href?: string };
 
 // Union of bboxes → [w,s,e,n], or null.
 function unionBbox(bs: number[][]): [number, number, number, number] | null {
@@ -52,11 +56,35 @@ function unionBbox(bs: number[][]): [number, number, number, number] | null {
           Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
 }
 
-export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[] }) {
+// A [w,s,e,n] bbox → a closed rectangle ring (GeoJSON Polygon coordinates).
+const bboxRing = (b: number[]): GeoJSON.Position[][] =>
+  [[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]], [b[0], b[1]]]];
+
+// All footprints → one FeatureCollection of bbox rectangles (properties carry href/title for the
+// click-to-open + hover popup). Built once per footprints set; MapLibre handles thousands of rects.
+function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: fps.map((f) => ({
+      type: "Feature",
+      properties: { href: f.href, title: f.title },
+      geometry: { type: "Polygon", coordinates: bboxRing(f.bbox) },
+    })),
+  };
+}
+
+export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
+  item?: StacDoc; layers: ActiveLayer[];
+  footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
+}) {
   const mapRef = useRef<MapRef>(null);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
   const [basemap, setBasemap] = useState<keyof typeof BASEMAPS>("Streets");
+  // Coverage overlay (all item footprints as clickable rectangles) — on by default so opening the
+  // Map view immediately shows WHAT IS MAPPED WHERE, including items with no COG/PMTiles to draw.
+  const [showCoverage, setShowCoverage] = useState(true);
+  const coverage = showCoverage && footprints.length ? coverageFC(footprints) : null;
   // COG (raster) layers need the cog:// protocol registered before their Source mounts. Register
   // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.
   const [cogReady, setCogReady] = useState(false);
@@ -159,10 +187,19 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
     for (const mid of ids) layerByMapId[mid] = l;
     return ids;
   });
+  // Coverage rectangles are clickable too (identify → open). Listed last so data-layer features
+  // win the topmost-hit when they overlap a footprint.
+  const allInteractiveIds = coverage ? [...interactiveIds, "coverage-fill"] : interactiveIds;
 
   const onClick = (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
     if (!f) return setPopup(null);
+    if (f.layer.id === "coverage-fill") {
+      // A footprint: popup its title + a link to open the item (don't yank the user off the map).
+      setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: String(f.properties?.title ?? ""),
+                 props: {}, href: f.properties?.href ? String(f.properties.href) : undefined });
+      return;
+    }
     const l = layerByMapId[f.layer.id];
     setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: l?.title ?? "", props: f.properties ?? {} });
   };
@@ -174,7 +211,7 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
       mapStyle={BASEMAPS[basemap]}
       style={{ width: "100%", height: "100%" }}
-      interactiveLayerIds={interactiveIds}
+      interactiveLayerIds={allInteractiveIds}
       cursor={cursor}
       onMouseEnter={() => setCursor("pointer")}
       onMouseLeave={() => setCursor("")}
@@ -189,7 +226,22 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
             {name}
           </button>
         ))}
+        {footprints.length > 0 && (
+          <button onClick={() => setShowCoverage((v) => !v)} title="Show every item's footprint (what's mapped where)"
+            className={`rounded px-2 py-0.5 ${showCoverage ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"}`}>
+            Coverage · {footprints.length}
+          </button>
+        )}
       </div>
+
+      {/* Coverage overlay — all item footprints as clickable rectangles, beneath the data layers so
+          those stay on top. Very light fill; the outline is what reads as "here's a mapped area". */}
+      {coverage && (
+        <Source id="coverage" type="geojson" data={coverage}>
+          <Layer id="coverage-fill" type="fill" paint={{ "fill-color": "#2b6cdf", "fill-opacity": 0.05 }} />
+          <Layer id="coverage-line" type="line" paint={{ "line-color": "#2b6cdf", "line-width": 0.7, "line-opacity": 0.55 }} />
+        </Source>
+      )}
 
       {item?.geometry && (
         <Source id="footprint" type="geojson" data={{ type: "Feature", properties: {}, geometry: item.geometry }}>
@@ -252,7 +304,14 @@ export function ItemMap({ item, layers }: { item?: StacDoc; layers: ActiveLayer[
       {popup && (
         <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
           {popup.title && <div className="mb-1 text-[12px] font-semibold text-gray-900">{popup.title}</div>}
-          <FeatureProps props={popup.props} />
+          {popup.href ? (
+            <button onClick={() => { onPickFootprint?.(popup.href!); setPopup(null); }}
+              className="text-[12px] font-medium text-primary underline underline-offset-2 hover:opacity-80">
+              Open item →
+            </button>
+          ) : (
+            <FeatureProps props={popup.props} />
+          )}
         </Popup>
       )}
     </MapGL>

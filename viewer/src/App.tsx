@@ -6,7 +6,7 @@ import { ArticleSearch, type CatalogDoc } from "./search";
 import { Guide } from "./Guide";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
-import { type ActiveLayer, colorFor, ItemMap } from "./Map";
+import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./Map";
 import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 
@@ -294,6 +294,15 @@ export function App() {
   const idsForMap = layerIds?.length ? layerIds : itemUrl ? [idOf(itemUrl)] : [];
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
 
+  // Coverage overlay data: every loaded item that has a bbox → a footprint rectangle. Lets the map
+  // show WHAT IS MAPPED WHERE across the open collection, including items with no COG/PMTiles asset
+  // (most of them) that otherwise draw nothing. Scoped to the loaded collection's index (cheap — the
+  // bboxes are already fetched); a catalog-wide overlay would need loading every collection's index.
+  const footprints: Footprint[] = allItems
+    .map((r) => ({ href: r.href, id: idOf(r.href),
+                   title: String(r.data?.properties?.title ?? idOf(r.href)), bbox: r.data?.bbox }))
+    .filter((f): f is Footprint => Array.isArray(f.bbox) && f.bbox.length >= 4);
+
   // Map view = locked viewport (the map fills the screen, panels scroll internally).
   // Catalog/detail = a document → the page scrolls naturally, header sticks. (No more
   // scroll-box stuck in the middle of an item page.)
@@ -406,7 +415,7 @@ export function App() {
             )}
           </aside>
           <main className="grid h-full min-h-0 grid-rows-[1fr_200px] overflow-hidden md:grid-rows-[1fr_240px]">
-            <div className="min-h-0"><ItemMap item={item.data} layers={activeLayers} /></div>
+            <div className="min-h-0"><ItemMap item={item.data} layers={activeLayers} footprints={footprints} onPickFootprint={openItem} /></div>
             <section className="overflow-auto border-t border-border p-3"><MapDetail item={item.data} loading={item.isLoading} /></section>
           </main>
         </div>

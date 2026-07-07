@@ -8,6 +8,10 @@ import MiniSearch from "minisearch";
 import { type ReactNode, useMemo, useState } from "react";
 
 import { searchPubs } from "./ftsearch";
+import {
+  baseTerms, fieldInput, isEmptyQuery, matchesQuery, parseQuery, type Query,
+  type SearchDoc, serializeQuery, withExcludes, withField, withSinglePhrase, withTerms,
+} from "./query";
 import { semanticSearch } from "./vsearch";
 
 // A small toggle chip for the search filters.
@@ -33,7 +37,7 @@ export type Article = {
 export type CatalogDoc = {
   id: string; collId: string; itemId: string; title: string; keywords?: string; meta?: string;
 };
-type Hit = { id: string; kind: "article" | "item"; title: string; text?: string;
+type Hit = { id: string; kind: "article" | "item"; title: string; text?: string; keywords?: string;
   sid?: string; pdf?: string; page?: number | null; volume?: number | null; issue?: string;
   collId?: string; itemId?: string; topic?: string; score: number };
 
@@ -74,6 +78,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
   catalog?: CatalogDoc[]; onOpen?: (collId: string, itemId: string) => void;
 }) {
   const [q, setQ] = useState("");
+  const [adv, setAdv] = useState(false);  // Advanced panel open/closed
   const [kind, setKind] = useState<"all" | "article" | "item">("all");
   const [colls, setColls] = useState<string[]>([]);
   const [topicSel, setTopicSel] = useState<string | null>(null);  // Survey Notes article topic filter
@@ -104,8 +109,30 @@ export function ArticleSearch({ catalog = [], onOpen }: {
     return m;
   }, [catalog]);
   const openPub = (id: string) => onOpen?.(collOf.get(id.toUpperCase()) ?? seriesCode(id), id);
-  const index = useMemo(() => buildIndex(corpus.data ?? [], catalog), [corpus.data, catalog]);
-  const raw = useMemo(() => (q.trim().length < 2 ? [] : index.search(q) as unknown as Hit[]), [index, q]);
+  const { index, docs: allDocs } = useMemo(() => buildIndex(corpus.data ?? [], catalog), [corpus.data, catalog]);
+  // Smart Advanced-panel options — the real series/collections/topics present in what's loaded,
+  // ranked by frequency (so the common ones surface first in the typeahead).
+  const facetOptions = useMemo<FacetOptions>(() => {
+    const ranked = (arr: string[]) => {
+      const m = new Map<string, number>();
+      for (const s of arr) if (s) m.set(s, (m.get(s) ?? 0) + 1);
+      return [...m.entries()].sort((a, b) => b[1] - a[1]).map(([k]) => k);
+    };
+    return {
+      series: ranked(catalog.map((c) => seriesCode(c.itemId))),
+      colls: ranked(catalog.map((c) => c.collId)),
+      topics: ranked((corpus.data ?? []).map((a) => a.topic ?? "")),
+    };
+  }, [catalog, corpus.data]);
+  // Parse the box into the shared Query; the Advanced panel below is just another editor of it.
+  const query = useMemo(() => parseQuery(q), [q]);
+  const raw = useMemo(() => {
+    if (q.trim().length < 2 && isEmptyQuery(query)) return [];
+    const base = baseTerms(query);
+    // Bare/phrase words → narrow via MiniSearch; a field/exclude-only query → scan the full doc set.
+    const cand = base ? (index.search(base) as unknown as Hit[]) : allDocs;
+    return cand.filter((h) => matchesQuery(query, h as SearchDoc)).slice(0, 300);
+  }, [index, allDocs, q, query]);
 
   // Facets over the current matches: the publication collections present (for the item filter).
   const collFacets = useMemo(() => {
@@ -141,6 +168,20 @@ export function ArticleSearch({ catalog = [], onOpen }: {
       <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
         placeholder="e.g. Moqui marbles, Wasatch fault, gilsonite, geothermal…"
         className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
+
+      <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+        <span>
+          Tips: <code className="rounded bg-muted px-1">"exact phrase"</code> ·{" "}
+          <code className="rounded bg-muted px-1">-exclude</code> ·{" "}
+          <code className="rounded bg-muted px-1">series:GQ</code> ·{" "}
+          <code className="rounded bg-muted px-1">topic:geothermal</code>
+        </span>
+        <button onClick={() => setAdv((v) => !v)} className="text-primary hover:underline">
+          {adv ? "Hide advanced" : "Advanced"}
+        </button>
+      </div>
+
+      {adv && <AdvancedPanel q={q} onChange={setQ} options={facetOptions} />}
 
       <label className="mt-2 flex items-center gap-1.5 text-xs text-muted-foreground">
         <input type="checkbox" checked={fullText} onChange={(e) => setFullText(e.target.checked)} />
@@ -237,19 +278,71 @@ export function ArticleSearch({ catalog = [], onOpen }: {
   );
 }
 
-// Build the combined index (plain function, memoized by the caller).
+// One labelled input in the Advanced panel. With `options`, it's a typeahead combobox (native
+// datalist) over the real values loaded from the catalog — smart, but still free-entry.
+function Row({ label, value, placeholder, onChange, options }: {
+  label: string; value: string; placeholder?: string; onChange: (v: string) => void;
+  options?: string[];
+}) {
+  const listId = options ? `dl-${label.replace(/\s+/g, "-")}` : undefined;
+  return (
+    <label className="flex flex-col gap-0.5">
+      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <input value={value} placeholder={placeholder} list={listId}
+        onChange={(e) => onChange(e.target.value)}
+        className="rounded border border-border bg-background px-2 py-1 text-sm" />
+      {options && <datalist id={listId}>{options.map((o) => <option key={o} value={o} />)}</datalist>}
+    </label>
+  );
+}
+
+// Structured editor over the SAME query string (parse in, serialize out) — two-way synced with the
+// box because the box's text is the single source of truth. Edit here → box updates, and vice versa.
+type FacetOptions = { series: string[]; colls: string[]; topics: string[] };
+
+function AdvancedPanel({ q, onChange, options }: {
+  q: string; onChange: (s: string) => void; options: FacetOptions;
+}) {
+  const query = parseQuery(q);
+  const set = (next: Query) => onChange(serializeQuery(next));
+  return (
+    <div className="mt-2 grid grid-cols-1 gap-2 rounded-md border border-border bg-card/50 p-3 sm:grid-cols-2">
+      <Row label="All of these words" value={query.terms.join(" ")} placeholder="fault geothermal"
+        onChange={(v) => set(withTerms(query, v))} />
+      <Row label="Exact phrase" value={query.phrases[0] ?? ""} placeholder="Wasatch fault"
+        onChange={(v) => set(withSinglePhrase(query, v))} />
+      <Row label="Exclude words" value={query.not.join(" ")} placeholder="uinta"
+        onChange={(v) => set(withExcludes(query, v))} />
+      <Row label="Series" value={fieldInput(query, "series")} placeholder="GQ, M, OFR…"
+        options={options.series} onChange={(v) => set(withField(query, "series", v.toUpperCase()))} />
+      <Row label="Topic" value={fieldInput(query, "topic")} placeholder="geothermal"
+        options={options.topics} onChange={(v) => set(withField(query, "topic", v))} />
+      <Row label="Collection" value={fieldInput(query, "coll")} placeholder="ugs-publications"
+        options={options.colls} onChange={(v) => set(withField(query, "coll", v))} />
+    </div>
+  );
+}
+
+// Build the combined index + a flat doc list (the latter powers field-only queries like `series:GQ`,
+// which have no keyword to hand MiniSearch). Plain function, memoized by the caller.
 function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
+  const docs: Hit[] = [
+    ...articles.map((a) => ({
+      id: a.id, kind: "article" as const, title: a.title, text: a.text, keywords: "",
+      sid: a.sid, pdf: a.pdf, page: a.page, volume: a.volume, issue: a.issue, topic: a.topic, score: 0,
+    })),
+    ...catalog.map((c) => ({
+      id: c.id, kind: "item" as const, title: c.title, text: c.meta ?? "", keywords: c.keywords ?? "",
+      collId: c.collId, itemId: c.itemId, page: null, score: 0,
+    })),
+  ];
   const ms = new MiniSearch({
     fields: ["title", "text", "keywords"],
-    storeFields: ["kind", "title", "text", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic"],
+    storeFields: ["kind", "title", "text", "keywords", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic"],
     searchOptions: { boost: { title: 4 }, prefix: true, fuzzy: 0.2, combineWith: "AND" },
   });
-  ms.addAll(articles.map((a) => ({ ...a, kind: "article", keywords: "" })));
-  ms.addAll(catalog.map((c) => ({
-    id: c.id, kind: "item", title: c.title, text: c.meta ?? "", keywords: c.keywords ?? "",
-    collId: c.collId, itemId: c.itemId, page: null,
-  })));
-  return ms;
+  ms.addAll(docs);
+  return { index: ms, docs };
 }
 
 function ArticleHit({ r, q, openPub }: { r: Hit; q: string; openPub: (id: string) => void }) {

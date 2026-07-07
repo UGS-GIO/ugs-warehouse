@@ -3,6 +3,7 @@
 // **range-reads** the remote file (fetches only the index pages a query touches — spiked + confirmed).
 // The engine is self-hosted (see ./duckdb); the DB is fetched lazily on first use, so it costs nothing
 // until the "full text" toggle is switched on.
+import { bm25Terms, bm25Where, parseQuery } from "./query";
 import { attach, type Conn } from "./duckdb";
 
 export type PubHit = { id: string; title: string; series: string; pdf?: string; score: number };
@@ -16,17 +17,43 @@ export const FTS_DB_URL = new URL(
 let _conn: Promise<Conn> | null = null;
 function conn() { return (_conn ??= attach(FTS_DB_URL, "s", "fts")); }
 
-/** BM25 full-text search over every publication's whole-document text. */
+// The docs table's VARCHAR text columns (title + the full-text body), discovered once. Used for
+// phrase / -exclude LIKE scans — the schema isn't hard-coded so a rename here won't silently break.
+let _textCols: Promise<string[]> | null = null;
+function textCols(c: Conn) {
+  return (_textCols ??= (async () => {
+    try {
+      const rows = (await c.query("DESCRIBE docs")).toArray() as Record<string, unknown>[];
+      const cols = rows
+        .filter((r) => String(r.column_type ?? "").toUpperCase().includes("VARCHAR"))
+        .map((r) => String(r.column_name))
+        .filter((n) => !["id", "pdf", "series"].includes(n.toLowerCase()));
+      return cols.length ? cols : ["title"];
+    } catch { return ["title"]; }
+  })());
+}
+
+/** BM25 full-text search over every publication's whole-document text, with the shared query grammar:
+ *  bare/phrase words rank via match_bm25; phrases, -exclusions, and series/id/title fields become SQL
+ *  predicates. A field/exclude-only query (no words to score) falls back to a flat filtered scan. */
 export async function searchPubs(q: string): Promise<PubHit[]> {
-  // Tokenize to words before handing the query to match_bm25: punctuation/quotes can't form a
-  // degenerate query (and the quote-escape becomes moot), so a real error here means the engine/db
-  // failed — not bad input. A query with no word characters has nothing to match.
-  const terms = (q.toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? []).join(" ");
-  if (!terms) return [];
+  const query = parseQuery(q);
+  const terms = bm25Terms(query);
   const c = await conn();
-  const res = await c.query(
-    `SELECT d.id, d.title, d.series, d.pdf, fts_main_docs.match_bm25(d.id, '${terms}') AS score
-     FROM docs d WHERE score IS NOT NULL ORDER BY score DESC LIMIT 50`);
+  const extra = bm25Where(query, await textCols(c));
+  if (!terms && !extra.length) return [];
+
+  const where: string[] = [];
+  let scoreExpr = "1.0";
+  if (terms) {
+    scoreExpr = `fts_main_docs.match_bm25(d.id, '${terms.replace(/'/g, "''")}')`;
+    where.push(`${scoreExpr} IS NOT NULL`);
+  }
+  where.push(...extra);
+  const sql = `SELECT d.id, d.title, d.series, d.pdf, ${scoreExpr} AS score FROM docs d`
+    + (where.length ? ` WHERE ${where.join(" AND ")}` : "")
+    + ` ORDER BY score DESC LIMIT 50`;
+  const res = await c.query(sql);
   return res.toArray().map((r: Record<string, unknown>) => ({
     id: String(r.id), title: String(r.title ?? r.id), series: String(r.series ?? ""),
     pdf: r.pdf ? String(r.pdf) : undefined, score: Number(r.score),

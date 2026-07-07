@@ -153,7 +153,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._overrides_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._footprint_geoms", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \

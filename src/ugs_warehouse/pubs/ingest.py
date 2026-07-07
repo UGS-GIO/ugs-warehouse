@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 from concurrent.futures import ThreadPoolExecutor
 import json
+import math
 import sys
 
 from ..core import config, gcs, stac
@@ -98,14 +99,39 @@ def _unit_ids() -> set[str]:
     return out
 
 
-def _footprint_geoms() -> dict[str, tuple]:
-    """series_id -> (geometry, bbox, source). Filled by Phase 2 (pubs/footprints.py);
-    until footprints land, items get null geometry."""
-    try:
-        from . import footprints
-        return footprints.geoms()
-    except (ImportError, AttributeError, FileNotFoundError):
-        return {}
+def _cog_footprints(cog_ids: set[str]) -> dict[str, tuple]:
+    """series_id -> (geometry, bbox, "cog"): each harvested COG's own extent, reprojected to EPSG:4326.
+
+    The warehouse derives footprints from ITS OWN output — the COG we produced — with NO external
+    service. Footprint coverage therefore tracks COG coverage: a pub gets a footprint once we've
+    harvested its map. The geometry is the COG's bounding rectangle; the true neatline polygon (from
+    the COG's alpha mask) is a later refinement, best done at harvest.
+
+    Reads only the COG header via GDAL /vsicurl (a small range read), parallelised — no full download.
+    """
+    from rasterio import open as rio_open
+    from rasterio.warp import transform_bounds
+
+    def one(sid: str):
+        url = config.public_url(identity.Pub(sid).cog_object)
+        try:
+            with rio_open(f"/vsicurl/{url}") as ds:
+                # densify so the reprojected 3857→4326 rectangle hugs the curved edges accurately.
+                w, s, e, n = transform_bounds(ds.crs, "EPSG:4326", *ds.bounds, densify_pts=21)
+            if not all(map(math.isfinite, (w, s, e, n))):
+                return None
+            geom = {"type": "Polygon",
+                    "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
+            return sid, (geom, [w, s, e, n], "cog")
+        except Exception:  # noqa: BLE001 — unreadable COG → no footprint (better than a wrong one)
+            return None
+
+    out: dict[str, tuple] = {}
+    with ThreadPoolExecutor(max_workers=32) as ex:
+        for r in ex.map(one, sorted(cog_ids)):
+            if r:
+                out[r[0]] = r[1]
+    return out
 
 
 def build_catalog(limit: int | None = None, series: str | None = None, skip_refresh: bool = False) -> int:
@@ -129,7 +155,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     overrides_map = _overrides_by_sid()  # hand-authored description/title overrides
     toc = _contents_by_sid()  # Survey Notes "In this issue" sidecars
     units = _unit_ids()
-    foot = _footprint_geoms()
+    foot = _cog_footprints(cogs)  # footprints derived from OUR COGs' bounds (no external service)
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
           f"{len(units)} unit sets, {len(foot)} footprints, {len(threed_ids)} 3D")
 

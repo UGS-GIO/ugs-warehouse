@@ -78,8 +78,12 @@ def export(minz: int = 2, maxz: int = 11) -> None:
 
 def geoms() -> dict[str, tuple]:
     """series_id -> (geometry GeoJSON, bbox, source). Reads footprints.parquet from GCS; one
-    dissolved geometry per pub. Raises FileNotFoundError if the parquet hasn't been exported
-    (the pub STAC build then falls back to null geometry)."""
+    dissolved geometry per pub. Raises FileNotFoundError if the parquet hasn't been exported.
+
+    DEPRECATED for the pub STAC footprint path: the ingest now derives item footprints from OUR OWN
+    COGs (pubs/ingest.py `_cog_footprints`) instead of this external ArcGIS FeatureServer export. Kept
+    only for the `footprints.pmtiles` coverage layer that `export()` still builds; do NOT reintroduce
+    it as the item-footprint source (that Esri dependency was the reason all pubs had null geometry)."""
     import geopandas as gpd
 
     data = gcs.get_bytes(PARQUET_OBJECT)  # raises if absent

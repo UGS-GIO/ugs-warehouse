@@ -16,7 +16,7 @@ import os
 
 import duckdb
 
-from .topics import MART_SCHEMAS, Topic
+from .topics import MART_SCHEMAS, TABLE_SUFFIX, Topic
 
 POSTGRES_DSN = os.environ.get(
     "POSTGRES_DSN",
@@ -116,13 +116,17 @@ def read_metadata(topic: Topic) -> dict:
 
 
 def discover() -> list[Topic]:
-    """Enumerate `_current` tables in MART_SCHEMAS via direct Postgres."""
+    """Enumerate serving tables in MART_SCHEMAS via direct Postgres. Suffix is TABLE_SUFFIX
+    (`_current` by default, `_review` for the gated pre-release build)."""
     con = _connect()
     try:
         schema_list = ",".join(f"'{s}'" for s in MART_SCHEMAS)
+        # Escape the suffix's underscores so LIKE treats them literally (TABLE_SUFFIX is validated to
+        # `_[a-z_]+` at import, so inlining it here is safe).
+        like = "%" + TABLE_SUFFIX.replace("_", r"\_")
         pg_sql = (
             "SELECT table_schema, table_name FROM information_schema.tables "
-            r"WHERE table_name LIKE '%\_current' ESCAPE '\' "
+            f"WHERE table_name LIKE '{like}' ESCAPE '\\' "
             f"AND table_schema IN ({schema_list}) "
             "ORDER BY table_schema, table_name"
         )

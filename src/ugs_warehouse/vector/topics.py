@@ -10,6 +10,8 @@ discovery only scans these.
 """
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 
 # The dbt serving schemas discovery scans. Must match the real Postgres schema names
@@ -19,6 +21,14 @@ MART_SCHEMAS: tuple[str, ...] = (
     "hazards", "emp", "gengis", "wetlands", "mapping", "geochron", "boreholes",
 )
 
+# Which serving-table generation to ingest: `_current` (public, default) or `_review` (gated,
+# pre-release). The REVIEW build sets WAREHOUSE_TABLE_SUFFIX=_review AND the review output prefixes
+# (WAREHOUSE_STAC_PREFIX=review/stac, …) so it discovers `_review` tables and writes the whole catalog
+# under review/. Validated to `_<letters/underscores>` so it can be inlined into the discover LIKE.
+TABLE_SUFFIX = os.environ.get("WAREHOUSE_TABLE_SUFFIX", "_current")
+if not re.fullmatch(r"_[a-z_]+", TABLE_SUFFIX):
+    TABLE_SUFFIX = "_current"
+
 
 @dataclass(frozen=True)
 class Topic:
@@ -27,8 +37,9 @@ class Topic:
 
     @property
     def stem(self) -> str:
-        """Bare topic name, `_current` suffix stripped."""
-        return self.layer.removesuffix("_current")
+        """Bare topic name, the serving suffix (`_current`/`_review`) stripped — so a review layer
+        gets the SAME artifact stem as its public counterpart (only the output prefix differs)."""
+        return self.layer.removesuffix(TABLE_SUFFIX)
 
     @property
     def fqn(self) -> str:

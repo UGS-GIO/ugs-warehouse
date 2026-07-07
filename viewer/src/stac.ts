@@ -3,8 +3,12 @@
 // the source of truth (the warehouse writes them via core/stac).
 import { useQueries, useQuery } from "@tanstack/react-query";
 
+// Default catalog is build-time overridable (VITE_CATALOG_URL) so the INTERNAL/review deploy bakes
+// the review catalog (review/stac) as its default while the public deploy keeps warehouse/stac —
+// same codebase, one env var (the two-deploy, topology-enforced design). Runtime ?catalog= still wins.
 export const DEFAULT_CATALOG =
-  "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
+  (import.meta as { env?: Record<string, string> }).env?.VITE_CATALOG_URL
+  || "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 // ?catalog=<url> to point at sandbox / another deployment. Resolved to an absolute
 // URL (a relative ?catalog=/stac/... would otherwise be an invalid base for `abs`).
 export const CATALOG_URL = new URL(

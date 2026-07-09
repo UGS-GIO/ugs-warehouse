@@ -50,3 +50,12 @@ skills-lock.json
 
 # OpenCode config (box-specific abs path + local model; use opencode.json.example)
 opencode.json
+
+# OpenTofu / Terraform — real vars (secrets, project ids) + state + local dirs.
+# Commit *.tf and terraform.tfvars.example; never terraform.tfvars or state.
+infra/terraform.tfvars
+infra/*.tfplan
+infra/.terraform/
+infra/.terraform.lock.hcl
+*.tfstate
+*.tfstate.*

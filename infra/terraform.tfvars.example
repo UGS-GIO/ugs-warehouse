@@ -1,0 +1,26 @@
+# Copy to terraform.tfvars on the work box and fill real values. Do NOT commit terraform.tfvars
+# (it is gitignored) — especially not the OAuth secret; prefer TF_VAR_iap_oauth_client_secret.
+
+project_id = "REPLACE-with-warehouse-project-id"
+region     = "us-central1"
+
+# Existing prod bucket — referenced read-only. Override only if the name differs.
+public_bucket = "ut-dnr-ugs-maps-prod-public"
+
+# New private review bucket (created here).
+review_bucket = "ut-dnr-ugs-maps-prod-review"
+
+# Serving image — same warehouse image the ingest job uses (Artifact Registry).
+serving_image = "us-central1-docker.pkg.dev/REPLACE-project/ugs/ugs-warehouse:latest"
+
+# SA the ugs-warehouse-ingest-review job runs as (needs write on the review bucket).
+ingest_service_account = "REPLACE-ingest-sa@REPLACE-project.iam.gserviceaccount.com"
+
+# IAP
+iap_domain        = "utah.gov"
+iap_support_email = "REPLACE-support@utah.gov"
+internal_host     = "review-maps.geology.utah.gov"
+
+# OAuth client under the project's EXISTING IAP brand (work box creates/reuses).
+iap_oauth_client_id = "REPLACE.apps.googleusercontent.com"
+# iap_oauth_client_secret -> provide via:  export TF_VAR_iap_oauth_client_secret=...

@@ -15,11 +15,17 @@ import os
 
 import duckdb
 
+from ugs_warehouse.core import config
+
 CATALOG_ALIAS = "warehouse"
 CATALOG_DSN = os.environ.get("DUCKLAKE_CATALOG_DSN") or os.environ.get("POSTGRES_DSN") or ""
+# Default derives from the SAME bucket as every other artifact (config.BUCKET), so a
+# review/private deploy that swaps WAREHOUSE_BUCKET moves the DuckLake data files too —
+# no second, drift-prone env var to remember. Restricted artifacts must never default to
+# the public bucket (warehouse#16). Override DUCKLAKE_DATA_PATH only for a bespoke path.
 DATA_PATH = os.environ.get(
     "DUCKLAKE_DATA_PATH",
-    "gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/",
+    f"gs://{config.BUCKET}/warehouse/ducklake/",
 )
 # Postgres schema DuckLake stores its metadata tables in. Must be a schema the
 # catalog DSN user can write to (mapping-db prod: `schema_owner` on

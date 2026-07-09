@@ -19,10 +19,16 @@ Deployed as the `ugs-warehouse-ducklake-maintain` Cloud Run job; run periodicall
 from __future__ import annotations
 
 import argparse
+import os
 
 import duckdb
 
 from . import ducklake
+
+# Retention window (days). Should exceed the data-update interval so at least the previous data
+# version stays rollback-able — updates here are infrequent, so keep this generous. Env lets the
+# deployed job set it without CLI args (the scheduler just triggers the job).
+DEFAULT_KEEP_DAYS = int(os.environ.get("DUCKLAKE_KEEP_DAYS", "7"))
 
 
 def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True) -> int:
@@ -62,8 +68,9 @@ def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True) -
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="DuckLake maintenance (expire + compact + GC).")
-    ap.add_argument("--keep-days", type=int, default=7,
-                    help="retain snapshots newer than N days (default 7)")
+    ap.add_argument("--keep-days", type=int, default=DEFAULT_KEEP_DAYS,
+                    help=f"retain snapshots newer than N days (default {DEFAULT_KEEP_DAYS}, "
+                         "or $DUCKLAKE_KEEP_DAYS)")
     ap.add_argument("--dry-run", action="store_true", help="report only; delete/rewrite nothing")
     ap.add_argument("--no-merge", action="store_true", help="skip the file-compaction step")
     args = ap.parse_args()

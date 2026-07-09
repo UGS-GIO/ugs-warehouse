@@ -239,7 +239,9 @@ steps:
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=DB_PASS=${_SECRET}:latest
-      - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.maintain@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}
+      # DUCKLAKE_KEEP_DAYS=30: data updates are infrequent — keep a month of snapshots so the previous
+      # data version stays rollback-able. Raise it toward your real update interval if that's longer.
+      - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.maintain@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKLAKE_KEEP_DAYS=30
       - --command=scripts/cloudrun_entrypoint.sh
       - --task-timeout=3600
       - --max-retries=1

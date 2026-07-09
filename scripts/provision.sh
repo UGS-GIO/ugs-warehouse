@@ -53,4 +53,29 @@ done
 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" --project="${PROJECT}" \
   --member="serviceAccount:${RUNTIME_SA}" --role=roles/iam.serviceAccountUser --quiet >/dev/null
 
+# Weekly DuckLake maintenance — Cloud Scheduler triggers the maintenance Cloud Run job so the
+# append-only catalog stays bounded/fast without anyone remembering the ops-console button. The
+# scheduler calls the Cloud Run Admin API :run endpoint with an OAuth token minted for RUNTIME_SA
+# (which already actAs itself + holds run.developer below), so the execution runs as RUNTIME_SA.
+MAINTAIN_JOB="${MAINTAIN_JOB:-ugs-warehouse-ducklake-maintain}"
+SCHED_JOB="${SCHED_JOB:-ugs-warehouse-ducklake-maintain-weekly}"
+MAINTAIN_SCHEDULE="${MAINTAIN_SCHEDULE:-0 9 * * 1}"      # Mondays 09:00
+MAINTAIN_TZ="${MAINTAIN_TZ:-America/Denver}"
+RUN_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${MAINTAIN_JOB}:run"
+
+echo "→ run.developer: ${RUNTIME_SA} on ${MAINTAIN_JOB} (scheduler runs it as this SA)"
+gcloud run jobs add-iam-policy-binding "${MAINTAIN_JOB}" --region="${REGION}" --project="${PROJECT}" \
+  --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
+
+echo "→ scheduler ${SCHED_JOB} → ${MAINTAIN_JOB} (${MAINTAIN_SCHEDULE} ${MAINTAIN_TZ})"
+if gcloud scheduler jobs describe "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" >/dev/null 2>&1; then
+  gcloud scheduler jobs update http "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" \
+    --schedule="${MAINTAIN_SCHEDULE}" --time-zone="${MAINTAIN_TZ}" \
+    --uri="${RUN_URI}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
+else
+  gcloud scheduler jobs create http "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" \
+    --schedule="${MAINTAIN_SCHEDULE}" --time-zone="${MAINTAIN_TZ}" \
+    --uri="${RUN_URI}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
+fi
+
 echo "✓ provisioned"

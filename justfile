@@ -36,3 +36,33 @@ proxy:
 # run once after the first deploy, or if the service/topic/sub names change. NOT in the build.
 provision:
     bash scripts/provision.sh
+
+# Build the unified full-text-search DuckDB (pubs + articles + catalog items → BM25 → CDN).
+# In prod this is the `ugs-pubs-fts` Cloud Run job (ops console button); local run needs GCS ADC.
+fts:
+    python -m ugs_warehouse.pubs.fts
+
+# Run the IAP review serving app locally (streams WAREHOUSE_BUCKET read-only). PORT defaults to 8080.
+serve bucket="ut-dnr-ugs-maps-prod-review":
+    WAREHOUSE_BUCKET={{bucket}} python -m ugs_warehouse.serve
+
+# --- infra/ (OpenTofu: review/private serving substrate) -----------------------------------------
+# tf-check runs anywhere (no creds). init/plan/apply need GCP perms → WORK BOX only ([[two-box]]).
+# All recipes run inside infra/. Fill infra/terraform.tfvars first (see terraform.tfvars.example).
+
+# fmt + validate — safe on any box, no GCP creds needed.
+tf-check:
+    cd infra && tofu fmt && tofu init -backend=false >/dev/null && tofu validate
+
+tf-init:
+    cd infra && tofu init
+
+# Plan to a file so apply is exactly what you reviewed. REVIEW THE DIFF: creates only, zero prod destroys.
+tf-plan:
+    cd infra && tofu plan -out plan.tfplan
+
+tf-apply:
+    cd infra && tofu apply plan.tfplan
+
+tf-output:
+    cd infra && tofu output

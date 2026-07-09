@@ -78,8 +78,9 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         danger=True, force_toggle=True),
     Job("restyle", "ugs-warehouse-restyle", "Rebind styles",
         "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
-    Job("fts", "ugs-pubs-fts", "Build full-text search",
-        "Rebuild the all-pub full-text-search DuckDB (BM25 FTS) → CDN. Run after pub text changes."),
+    Job("fts", "ugs-pubs-fts", "Build search index",
+        "Rebuild the unified full-text-search DuckDB (BM25 over pubs + Survey Notes articles + catalog "
+        "items) → CDN. Run after any pub-text, article, or catalog/STAC ingest."),
     Job("embed", "ugs-pubs-embed", "Build semantic search",
         "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
         "classification changes.", danger=True),

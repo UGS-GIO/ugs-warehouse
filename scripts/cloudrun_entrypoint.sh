@@ -20,4 +20,6 @@ export POSTGRES_DSN="host=/cloudsql/${CLOUDSQL_INSTANCE} dbname=${DB_NAME:-seaml
 export DUCKLAKE_CATALOG_DSN="${POSTGRES_DSN}"
 export SOURCE_BACKEND="${SOURCE_BACKEND:-postgres}"
 
-exec python -m ugs_warehouse.vector.ingest "$@"
+# Default job = the vector ingest; other jobs (e.g. ducklake maintenance) reuse this same DSN
+# setup by overriding RUN_MODULE. Backward-compatible: unset → the ingest CLI, unchanged.
+exec python -m "${RUN_MODULE:-ugs_warehouse.vector.ingest}" "$@"

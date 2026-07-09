@@ -37,7 +37,12 @@ proxy:
 provision:
     bash scripts/provision.sh
 
-# Build the unified full-text-search DuckDB (pubs + articles + catalog items → BM25 → CDN).
+# DuckLake maintenance — expire old snapshots + compact small parquet + GC orphaned files. Keeps the
+# append-only catalog bounded/fast. Run ~weekly. In prod = the `ugs-warehouse-ducklake-maintain` job.
+maintain *ARGS:
+    python -m ugs_warehouse.vector.maintain {{ARGS}}
+
+# Build the all-pub full-text-search DuckDB (BM25 over every pub's body → CDN).
 # In prod this is the `ugs-pubs-fts` Cloud Run job (ops console button); local run needs GCS ADC.
 fts:
     python -m ugs_warehouse.pubs.fts

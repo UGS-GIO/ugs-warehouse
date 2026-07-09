@@ -39,9 +39,10 @@ class Job:
 # #418) are automatic — not operator-triggered — so the console starts at ③, the first stage an
 # operator drives, and ends at ⑥ (serving) as read-only status.
 STAGES = [
-    {"n": "③", "title": "Warehouse transform", "jobs": ["ingest"],
+    {"n": "③", "title": "Warehouse transform", "jobs": ["ingest", "ducklake-maintain"],
      "blurb": "Reproject → EPSG:4326 · h3_r9 · hilbert, then fan out to DuckLake · GeoParquet · "
-              "PMTiles · STAC. One DuckDB streaming pass."},
+              "PMTiles · STAC. One DuckDB streaming pass. DuckLake maintenance keeps the append-only "
+              "catalog from bloating (expire snapshots + compact files + GC parquet)."},
     {"n": "④", "title": "Styling", "jobs": ["restyle", "topics-thumbs"],
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt. "
               "Then render each topic's styled PMTiles → preview thumbnail (content-hash skip; "
@@ -78,6 +79,9 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         danger=True, force_toggle=True),
     Job("restyle", "ugs-warehouse-restyle", "Rebind styles",
         "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
+    Job("ducklake-maintain", "ugs-warehouse-ducklake-maintain", "DuckLake maintenance",
+        "Expire snapshots older than 7 days, compact small parquet, and GC orphaned files from GCS. "
+        "Keeps the append-only DuckLake catalog fast + bounded. Safe to re-run; run ~weekly."),
     Job("fts", "ugs-pubs-fts", "Build full-text search",
         "Rebuild the all-pub full-text-search DuckDB (BM25 FTS) → CDN. Run after pub text changes."),
     Job("embed", "ugs-pubs-embed", "Build semantic search",

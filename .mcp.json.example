@@ -1,0 +1,11 @@
+{
+  "//": "DuckDB MCP for querying pub-search .duckdb + corpus.json on the CDN via SQL/BM25.",
+  "//setup": "pip install mcp-server-motherduck into the repo .venv, then: cp .mcp.json.example .mcp.json and set the command to your venv's absolute path (Claude Code may not expand ${workspaceFolder}). Restart Claude Code and approve the trust prompt.",
+  "//bootstrap": "Run scripts/pubs_mcp_bootstrap.sql once per session (in-memory DB resets on restart).",
+  "mcpServers": {
+    "pubs-duckdb": {
+      "command": "${workspaceFolder}/.venv/bin/mcp-server-motherduck",
+      "args": ["--db-path", ":memory:", "--read-write"]
+    }
+  }
+}

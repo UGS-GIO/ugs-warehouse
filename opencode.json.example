@@ -1,0 +1,26 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "//": "OpenCode config for the work box: local Qwen (Ollama) + the pubs-duckdb MCP. Copy to opencode.json and set the absolute venv path. OpenCode does NOT read .mcp.json (that is Claude Code only).",
+
+  "mcp": {
+    "pubs-duckdb": {
+      "type": "local",
+      "command": [
+        "/ABS/PATH/TO/ugs-warehouse/.venv/bin/mcp-server-motherduck",
+        "--db-path", ":memory:", "--read-write"
+      ],
+      "enabled": true
+    }
+  },
+
+  "//provider": "Ollama over its OpenAI-compatible endpoint. ollama pull qwen2.5:32b && ollama serve. 32B 4-bit ~18-20GB, fits the 36GB Mac with context headroom. Swap the model id for whatever is pulled.",
+  "provider": {
+    "ollama": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": { "baseURL": "http://localhost:11434/v1" },
+      "models": { "qwen2.5:32b": {} }
+    }
+  },
+  "model": "ollama/qwen2.5:32b"
+}

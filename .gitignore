@@ -44,3 +44,9 @@ admin/staticfiles/
 .agents/
 AGENTS.original.md
 skills-lock.json
+
+# MCP server config (absolute personal-box path; use .mcp.json.example as template)
+.mcp.json
+
+# OpenCode config (box-specific abs path + local model; use opencode.json.example)
+opencode.json

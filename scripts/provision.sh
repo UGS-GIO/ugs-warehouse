@@ -59,7 +59,7 @@ gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" --project="${
 # (which already actAs itself + holds run.developer below), so the execution runs as RUNTIME_SA.
 MAINTAIN_JOB="${MAINTAIN_JOB:-ugs-warehouse-ducklake-maintain}"
 SCHED_JOB="${SCHED_JOB:-ugs-warehouse-ducklake-maintain-weekly}"
-MAINTAIN_SCHEDULE="${MAINTAIN_SCHEDULE:-0 9 * * 1}"      # Mondays 09:00
+MAINTAIN_SCHEDULE="${MAINTAIN_SCHEDULE:-0 3 * * 0}"      # Sundays 03:00 (weekend, off-hours)
 MAINTAIN_TZ="${MAINTAIN_TZ:-America/Denver}"
 RUN_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${MAINTAIN_JOB}:run"
 

@@ -56,3 +56,13 @@ resource "google_service_account_iam_member" "deploy_can_actas_serving" {
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${var.deploy_service_account}"
 }
+
+# Same actAs need for the BUILD SA: cloudbuild's deploy-review-serving updates the service (which runs
+# as the serving SA), so it needs serviceAccountUser on it too. Folding in per the work-box finding so
+# a fresh `tf-apply` grants everything for the automated deploy — no manual follow-up.
+resource "google_service_account_iam_member" "build_can_actas_serving" {
+  count              = var.build_service_account != "" ? 1 : 0
+  service_account_id = google_service_account.serving.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.build_service_account}"
+}

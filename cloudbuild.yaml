@@ -43,6 +43,10 @@ substitutions:
   _API_SECRET: schema-reader-db-password
   # Static STAC viewer → public bucket → CDN (https://maps-assets.geology.utah.gov/warehouse/viewer/)
   _PUBLIC_BUCKET: ut-dnr-ugs-maps-prod-public
+  # Private review bucket (tofu-created, no CDN) + the IAP-gated *.run.app URL of the review serving
+  # app (tofu `serving_url` output). The review ingest job writes here + tags STAC hrefs at this host.
+  _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
+  _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
   _VIEWER_PREFIX: warehouse/viewer
   # Tag used for images (defaults to SHORT_SHA in automated triggers)
   _TAG: $SHORT_SHA
@@ -215,13 +219,29 @@ steps:
       - --set-secrets=DB_PASS=${_SECRET}:latest
       # Same source config as the public job + the review switch (WAREHOUSE_TABLE_SUFFIX=_review) and
       # review output prefixes (STAC/ARCHIVE/PMTILES/THUMBS + an isolated DuckLake root under review/).
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=gs://${_PUBLIC_BUCKET}/review/ducklake/@DUCKDB_MAX_MEMORY=1.5GB@WAREHOUSE_TABLE_SUFFIX=_review@WAREHOUSE_STAC_PREFIX=review/stac@WAREHOUSE_ARCHIVE_PREFIX=review/geoparquet@WAREHOUSE_PMTILES_PREFIX=review/pmtiles@WAREHOUSE_THUMBS_PREFIX=review/thumbs
+      # #16 cutover: write the review catalog to the PRIVATE bucket (not public review/) + tag STAC
+      # hrefs at the IAP serving host. review/* object prefixes stay (harmless inside a private bucket).
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@WAREHOUSE_BUCKET=${_REVIEW_BUCKET}@WAREHOUSE_PUBLIC_BASE_URL=${_REVIEW_SERVING_URL}@DUCKLAKE_DATA_PATH=gs://${_REVIEW_BUCKET}/review/ducklake/@DUCKDB_MAX_MEMORY=1.5GB@WAREHOUSE_TABLE_SUFFIX=_review@WAREHOUSE_STAC_PREFIX=review/stac@WAREHOUSE_ARCHIVE_PREFIX=review/geoparquet@WAREHOUSE_PMTILES_PREFIX=review/pmtiles@WAREHOUSE_THUMBS_PREFIX=review/thumbs
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600
       - --max-retries=1
       - --cpu=2
       - --memory=2Gi
+
+  # Review serving app (ugs-warehouse#16) — the IAP-gated Cloud Run service that streams the private
+  # review bucket. tofu owns its config + IAP + ingress and IGNORES the image, so cloudbuild just ships
+  # the current image here (same pattern as the other `run services update` steps).
+  - id: deploy-review-serving
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update
+      - ugs-warehouse-review-serving
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
+      - --region=${_REGION}
 
   # DuckLake maintenance — expire old snapshots, compact small parquet, GC orphaned files. Same
   # image + DSN setup as the ingest job (RUN_MODULE swaps the CLI). Run periodically (weekly is plenty):

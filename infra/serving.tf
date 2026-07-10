@@ -1,33 +1,35 @@
 # IAP serving app: a Cloud Run service that streams objects from the PRIVATE review bucket
 # (with HTTP Range support, so PMTiles/COG range reads work) and serves the review STAC.
-# It is reachable only through the IAP-gated LB in iap.tf — ingress is restricted to the LB.
+#
+# Native Cloud Run IAP (no external LB): IAP is enabled ON the service and gates it directly on the
+# built-in *.run.app URL — Google-managed TLS, no cert/DNS/LB to provision. `iap_enabled` is only in
+# the google-beta provider today (Cloud Run IAP is GA as a product; the TF toggle is beta-gated), so
+# this one resource uses google-beta. Access is granted in iap.tf (domain:utah.gov).
 resource "google_cloud_run_v2_service" "review_serving" {
+  provider = google-beta
+
   name     = "ugs-warehouse-review-serving"
   project  = var.project_id
   location = var.region
   labels   = var.labels
 
-  # Only the internal HTTPS LB (below) may reach this service; no direct run.app URL access.
-  ingress = "INGRESS_TRAFFIC_INTERNAL_LOAD_BALANCER"
+  # IAP gates auth at the service; ingress can be open (unauthenticated requests are stopped by IAP).
+  ingress     = "INGRESS_TRAFFIC_ALL"
+  iap_enabled = true
 
   template {
     service_account = google_service_account.serving.email
 
     containers {
       image = var.serving_image
-      # Serve the private bucket read-only. The entrypoint is ugs_warehouse.serve (added in
-      # src/); WAREHOUSE_BUCKET points it at the review bucket, PORT is provided by Cloud Run.
+      # Serve the private bucket read-only. Entrypoint is ugs_warehouse.serve; WAREHOUSE_BUCKET points
+      # it at the review bucket, PORT is provided by Cloud Run. (No PUBLIC_BASE_URL here — serve.py only
+      # streams bytes; the ingest job bakes STAC hrefs against the run.app URL, exposed as an output.)
       command = ["python", "-m", "ugs_warehouse.serve"]
 
       env {
         name  = "WAREHOUSE_BUCKET"
         value = google_storage_bucket.review.name
-      }
-      # STAC hrefs must resolve to THIS internal host (same-origin, one IAP cookie), not the
-      # public CDN. The serving app / ingest use this as PUBLIC_BASE_URL for the review catalog.
-      env {
-        name  = "WAREHOUSE_PUBLIC_BASE_URL"
-        value = "https://${var.internal_host}"
       }
 
       resources {

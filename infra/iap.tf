@@ -1,88 +1,22 @@
-# Dedicated external HTTPS load balancer for the internal review surface, IAP-gated.
+# Native Cloud Run IAP access control (no load balancer).
 #
-# SAFETY: this is a BRAND-NEW, standalone LB (its own IP, cert, url-map, proxy). It does not
-# reference or modify the existing public LB / url-map that serves maps-assets.geology.utah.gov.
-# An apply here cannot regress public routing.
+# IAP is enabled on the service itself (serving.tf, iap_enabled = true). Two bindings make it work:
+#   1. Who may pass IAP  → domain:utah.gov gets roles/iap.httpsResourceAccessor on the service.
+#   2. IAP may invoke it → the IAP service agent gets roles/run.invoker (it calls the service on the
+#      authenticated user's behalf).
+# No LB, IP, url-map, proxy, cert, or NEG — so no custom domain, no DNS record, no cert provisioning.
+# The service is reached on its built-in *.run.app URL (see the serving_url output).
 
-# Serverless NEG -> the review serving Cloud Run service.
-resource "google_compute_region_network_endpoint_group" "review_neg" {
-  name                  = "ugs-warehouse-review-neg"
-  project               = var.project_id
-  region                = var.region
-  network_endpoint_type = "SERVERLESS"
-
-  cloud_run {
-    service = google_cloud_run_v2_service.review_serving.name
-  }
+# 1. Only @utah.gov identities may pass IAP.
+resource "google_iap_web_cloud_run_service_iam_member" "domain_access" {
+  project                = var.project_id
+  location               = var.region
+  cloud_run_service_name = google_cloud_run_v2_service.review_serving.name
+  role                   = "roles/iap.httpsResourceAccessor"
+  member                 = "domain:${var.iap_domain}"
 }
 
-# Backend service with IAP enabled. No Cloud CDN (restricted content must not be edge-cached).
-resource "google_compute_backend_service" "review" {
-  name                  = "ugs-warehouse-review-backend"
-  project               = var.project_id
-  load_balancing_scheme = "EXTERNAL_MANAGED"
-  protocol              = "HTTPS"
-  enable_cdn            = false
-
-  backend {
-    group = google_compute_region_network_endpoint_group.review_neg.id
-  }
-
-  # Google-managed OAuth: omit oauth2_client_id/secret so IAP auto-provisions + manages the OAuth
-  # client. This avoids the deprecated iap.oauth-brands API (hard shutdown 2026-03-19) and the manual
-  # brand/client setup entirely — no brand to create or hunt for across projects, no client secret in
-  # tfvars. (Provider confirmed both fields optional; `enabled` is the only required one.)
-  iap {
-    enabled = true
-  }
-}
-
-# Only @utah.gov identities may pass IAP. This is the actual access gate for the surface.
-resource "google_iap_web_backend_service_iam_member" "domain_access" {
-  project             = var.project_id
-  web_backend_service = google_compute_backend_service.review.name
-  role                = "roles/iap.httpsResourceAccessor"
-  member              = "domain:${var.iap_domain}"
-}
-
-# URL map: everything on this host -> the IAP backend. Dedicated to this LB.
-resource "google_compute_url_map" "review" {
-  name            = "ugs-warehouse-review-urlmap"
-  project         = var.project_id
-  default_service = google_compute_backend_service.review.id
-}
-
-resource "google_compute_managed_ssl_certificate" "review" {
-  name    = "ugs-warehouse-review-cert"
-  project = var.project_id
-  managed {
-    domains = [var.internal_host]
-  }
-}
-
-resource "google_compute_target_https_proxy" "review" {
-  name             = "ugs-warehouse-review-proxy"
-  project          = var.project_id
-  url_map          = google_compute_url_map.review.id
-  ssl_certificates = [google_compute_managed_ssl_certificate.review.id]
-}
-
-resource "google_compute_global_address" "review" {
-  name    = "ugs-warehouse-review-ip"
-  project = var.project_id
-}
-
-resource "google_compute_global_forwarding_rule" "review" {
-  name                  = "ugs-warehouse-review-fr"
-  project               = var.project_id
-  load_balancing_scheme = "EXTERNAL_MANAGED"
-  target                = google_compute_target_https_proxy.review.id
-  ip_address            = google_compute_global_address.review.id
-  port_range            = "443"
-}
-
-# Cloud Run must allow the LB's IAP-authenticated invocations. Grant run.invoker to the IAP
-# service agent (scoped to this one service, not project-wide).
+# 2. Let the IAP service agent invoke the Cloud Run service (scoped to this one service).
 resource "google_cloud_run_v2_service_iam_member" "iap_invoker" {
   name     = google_cloud_run_v2_service.review_serving.name
   project  = var.project_id

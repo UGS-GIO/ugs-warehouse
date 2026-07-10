@@ -43,14 +43,9 @@ variable "iap_domain" {
   default     = "utah.gov"
 }
 
-# (No iap_support_email / iap_oauth_client_* vars: IAP uses Google-managed OAuth — it auto-provisions
-# the client, so there's no brand/consent-screen input tofu needs. The project's OAuth consent-screen
-# support email is a one-time console setting, not a tofu var.)
-
-variable "internal_host" {
-  type        = string
-  description = "Hostname for the internal review surface (managed cert), e.g. review-maps.geology.utah.gov."
-}
+# (No iap_support_email / iap_oauth_client_* / internal_host vars: native Cloud Run IAP uses
+# Google-managed OAuth + the built-in *.run.app URL — no brand, no custom domain, no cert/DNS to
+# configure. The project's OAuth consent-screen support email is a one-time console setting.)
 
 variable "labels" {
   type        = map(string)

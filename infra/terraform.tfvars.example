@@ -28,8 +28,7 @@ serving_image = "us-central1-docker.pkg.dev/ut-dnr-ugs-backend-tools/ugs-warehou
 # the review-bucket IAM binding grants it cross-project — leave as-is.
 ingest_service_account = "warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
 
-# IAP — Google-managed OAuth (no brand/client to create; IAP auto-provisions it). Just the authorized
-# domain + the host. (One-time console setting, not tofu: the project's OAuth consent screen needs a
-# support email set once for IAP to serve.)
-iap_domain    = "utah.gov"
-internal_host = "review-maps.geology.utah.gov"
+# IAP — native Cloud Run IAP (no LB / custom domain / DNS / cert). Just the authorized domain; the
+# service is reached on its *.run.app URL (see `tofu output serving_url`). One-time console setting,
+# not tofu: the project's OAuth consent screen needs a support email set once for IAP to serve.
+iap_domain = "utah.gov"

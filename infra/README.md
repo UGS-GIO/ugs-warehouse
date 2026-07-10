@@ -36,8 +36,9 @@ SA=warehouse-deploy@${PROJECT}.iam.gserviceaccount.com
 gcloud iam service-accounts create warehouse-deploy --project=$PROJECT \
   --display-name="ugs-warehouse tofu deploy"
 
-# Roles this tofu actually needs (scoped to the project) — nothing broader:
-for R in roles/storage.admin roles/compute.admin roles/run.admin \
+# Roles this tofu actually needs (scoped to the project) — nothing broader. No compute.admin:
+# native Cloud Run IAP has no load-balancer/compute resources.
+for R in roles/storage.admin roles/run.admin \
          roles/iap.admin roles/iam.serviceAccountAdmin; do
   gcloud projects add-iam-policy-binding $PROJECT \
     --member="serviceAccount:${SA}" --role=$R --condition=None >/dev/null
@@ -63,9 +64,9 @@ Read before every apply. These are load-bearing, not stylistic:
 2. **The new review bucket is destroy-proof.** `force_destroy = false` (a non-empty bucket
    refuses to delete) **and** `lifecycle { prevent_destroy = true }` (tofu errors rather
    than delete it). To intentionally remove it you must first edit this file.
-3. **Separate load balancer + URL-map.** The internal surface gets its OWN LB/host; the
-   existing public LB/url-map serving `maps-assets.geology.utah.gov` is never referenced
-   or edited here, so prod routing cannot regress from an apply in this dir.
+3. **No load balancer at all.** Native Cloud Run IAP gates the service on its `*.run.app` URL —
+   this config never references or edits the existing public LB/url-map serving
+   `maps-assets.geology.utah.gov`, so prod routing cannot regress from an apply in this dir.
 4. **Read-only serving.** The serving service's SA gets `roles/storage.objectViewer` on the
    review bucket only — no write, no delete, no admin.
 

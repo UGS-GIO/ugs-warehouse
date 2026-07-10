@@ -1,16 +1,11 @@
 output "review_bucket" {
   value       = google_storage_bucket.review.name
-  description = "Private review bucket. Set the ingest-review job's WAREHOUSE_BUCKET to this (and drop the review/ prefixes once assets live here alone)."
+  description = "Private review bucket. Set the ingest-review job's WAREHOUSE_BUCKET to this."
 }
 
-output "review_lb_ip" {
-  value       = google_compute_global_address.review.address
-  description = "Point the internal_host DNS A record at this, then wait for the managed cert to provision."
-}
-
-output "internal_host" {
-  value       = var.internal_host
-  description = "IAP-gated host serving the review catalog. Set the internal viewer's VITE_CATALOG_URL to https://<host>/review/stac/catalog.json."
+output "serving_url" {
+  value       = google_cloud_run_v2_service.review_serving.uri
+  description = "IAP-gated *.run.app URL of the review serving app. Use as the ingest job's WAREHOUSE_PUBLIC_BASE_URL and the internal viewer's VITE_CATALOG_URL base (…/review/stac/catalog.json)."
 }
 
 output "serving_service_account" {

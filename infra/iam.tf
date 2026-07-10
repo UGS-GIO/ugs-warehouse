@@ -22,3 +22,14 @@ resource "google_storage_bucket_iam_member" "ingest_write_review" {
   role   = "roles/storage.objectAdmin"
   member = "serviceAccount:${var.ingest_service_account}"
 }
+
+# Deploy SA must be able to actAs the serving SA — deploying a Cloud Run service that RUNS AS the
+# serving SA requires serviceAccountUser on it (serviceAccountAdmin manages SAs but can't actAs one).
+# Work-box hit this mid-apply; folding it in so a clean re-apply never needs the manual grant. Gated
+# on impersonation being enabled (no deploy SA → applying as the caller, which already has actAs).
+resource "google_service_account_iam_member" "deploy_can_actas_serving" {
+  count              = var.deploy_service_account != "" ? 1 : 0
+  service_account_id = google_service_account.serving.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.deploy_service_account}"
+}

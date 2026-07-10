@@ -23,6 +23,16 @@ resource "google_storage_bucket_iam_member" "ingest_write_review" {
   member = "serviceAccount:${var.ingest_service_account}"
 }
 
+# The Cloud Build SA deploys the internal viewer bundle into the review bucket (cloudbuild's
+# deploy-viewer-review rsync). Bucket-scoped write, gated on the SA being provided (deploy-viewer-review
+# is allowFailure until then, so an empty value just no-ops the viewer publish, not the build).
+resource "google_storage_bucket_iam_member" "build_write_review" {
+  count  = var.build_service_account != "" ? 1 : 0
+  bucket = google_storage_bucket.review.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${var.build_service_account}"
+}
+
 # Deploy SA must be able to actAs the serving SA — deploying a Cloud Run service that RUNS AS the
 # serving SA requires serviceAccountUser on it (serviceAccountAdmin manages SAs but can't actAs one).
 # Work-box hit this mid-apply; folding it in so a clean re-apply never needs the manual grant. Gated

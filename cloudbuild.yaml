@@ -48,6 +48,7 @@ substitutions:
   _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
   _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
   _VIEWER_PREFIX: warehouse/viewer
+  _REVIEW_VIEWER_PREFIX: review/viewer      # internal viewer bundle in the PRIVATE review bucket (served by the IAP app, never the CDN)
   # Tag used for images (defaults to SHORT_SHA in automated triggers)
   _TAG: $SHORT_SHA
 
@@ -626,6 +627,37 @@ steps:
         gcloud storage rsync viewer/dist gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX} \
           --recursive --delete-unmatched-destination-objects
         gcloud storage objects update gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX}/index.html \
+          --cache-control="no-cache"
+
+  # Internal review viewer (ugs-warehouse#16) — same codebase, built against the review catalog +
+  # served THROUGH the IAP app from the private review bucket (same-origin as the STAC/assets, one IAP
+  # session). Separate outDir (dist-review) + Vite base so it neither clobbers the public dist nor
+  # mis-resolves its own asset URLs (they live under /review/viewer/). Runs after build-viewer, so
+  # node_modules is already installed in the shared workspace.
+  - id: build-viewer-review
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
+        export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
+        cd viewer
+        npm run build -- --base=/${_REVIEW_VIEWER_PREFIX}/ --outDir dist-review
+
+  # Publish → PRIVATE review bucket (served by the IAP app, never the CDN). allowFailure until the
+  # build SA has objectAdmin on the review bucket (tofu grants it: build_write_review, gated on
+  # build_service_account being set).
+  - id: deploy-viewer-review
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    allowFailure: true
+    args:
+      - -c
+      - |
+        gcloud storage rsync viewer/dist-review gs://${_REVIEW_BUCKET}/${_REVIEW_VIEWER_PREFIX} \
+          --recursive --delete-unmatched-destination-objects
+        gcloud storage objects update gs://${_REVIEW_BUCKET}/${_REVIEW_VIEWER_PREFIX}/index.html \
           --cache-control="no-cache"
 
 images:

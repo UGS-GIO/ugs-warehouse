@@ -1,18 +1,21 @@
 """IAP review serving app — streams the PRIVATE review bucket read-only.
 
-Deployed as the `ugs-warehouse-review-serving` Cloud Run service (infra/serving.tf), reachable
-ONLY through the IAP-gated load balancer. It serves the `_review` STAC catalog + its assets
-(GeoParquet, PMTiles, COG, thumbs) same-origin, so an authenticated browser's single IAP cookie
-covers every fetch — no per-asset signed URLs.
+Deployed as the `ugs-warehouse-review-serving` Cloud Run service (infra/serving.tf) with native Cloud
+Run IAP, reached on its *.run.app URL. It serves BOTH the `_review` STAC catalog + assets (GeoParquet,
+PMTiles, COG, thumbs) AND the internal viewer SPA — all same-origin, so a signed-in `@utah.gov` user's
+single IAP session cookie covers every fetch (viewer shell + catalog + range reads), no CORS.
 
 Read-only by construction: the only GCS verbs used are head + ranged get. The service account
-(infra/iam.tf) holds `objectViewer` on the review bucket and nothing else, so this app cannot
-write or delete even if asked to.
+(infra/iam.tf) holds `objectViewer` on the review bucket and nothing else.
 
 HTTP Range is honored (206 + Content-Range) so PMTiles/COG range reads work directly.
 
-Run: `python -m ugs_warehouse.serve` (Cloud Run provides $PORT; WAREHOUSE_BUCKET selects the
-bucket — set to the private review bucket in the deploy).
+Routing: real objects stream from the bucket. The viewer is a client-side-routed SPA, so a not-found
+path with NO file extension (an app route like `/map`) falls back to the viewer's index.html; a
+not-found path WITH an extension (a missing `.json`/`.pmtiles`) returns a real 404 so the viewer's own
+error handling still sees data misses.
+
+Run: `python -m ugs_warehouse.serve` (Cloud Run provides $PORT; WAREHOUSE_BUCKET selects the bucket).
 """
 from __future__ import annotations
 
@@ -30,7 +33,13 @@ app = FastAPI(title="ugs-warehouse-review-serving")
 
 _store = GCSStore(bucket=config.BUCKET)
 
-# Content types by extension — keep in sync with core.config canonical MIMEs.
+# The internal viewer's static bundle lives under this prefix in the review bucket (cloudbuild's
+# build-viewer-review deploys it there with a matching Vite base). index.html backs `/` + SPA routes.
+VIEWER_PREFIX = os.environ.get("REVIEW_VIEWER_PREFIX", "review/viewer").strip("/")
+VIEWER_INDEX = f"{VIEWER_PREFIX}/index.html"
+
+# Content types by extension. STAC/asset types + the web-asset types a built Vite bundle serves
+# (without the latter, index.html falls to octet-stream and the browser downloads it).
 _MIME = {
     ".json": "application/json",
     ".geojson": "application/geo+json",
@@ -40,6 +49,17 @@ _MIME = {
     ".tiff": config.COG_MIME,
     ".png": "image/png",
     ".xml": "application/xml",
+    ".html": "text/html; charset=utf-8",
+    ".js": "application/javascript",
+    ".mjs": "application/javascript",
+    ".css": "text/css",
+    ".map": "application/json",
+    ".svg": "image/svg+xml",
+    ".ico": "image/x-icon",
+    ".webmanifest": "application/manifest+json",
+    ".woff": "font/woff",
+    ".woff2": "font/woff2",
+    ".ttf": "font/ttf",
 }
 
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
@@ -50,17 +70,18 @@ def _content_type(path: str) -> str:
     return _MIME.get(f".{ext}" if dot else "", "application/octet-stream")
 
 
+def _has_extension(path: str) -> bool:
+    """A file has an extension if its last segment contains a dot — asset/data vs. an app route."""
+    return "." in path.rsplit("/", 1)[-1]
+
+
 @app.get("/healthz")
 def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
-@app.get("/{object_path:path}")
-def serve(object_path: str, request: Request) -> Response:
-    object_path = object_path.lstrip("/")
-    if not object_path or object_path.endswith("/"):
-        raise HTTPException(status_code=404, detail="not found")
-
+def _serve_object(object_path: str, request: Request) -> Response:
+    """Stream a single bucket object (with Range support). Raises 404 if it doesn't exist."""
     try:
         meta = obs.head(_store, object_path)  # ObjectMeta is a TypedDict
     except FileNotFoundError:
@@ -88,6 +109,24 @@ def serve(object_path: str, request: Request) -> Response:
     resp = obs.get(_store, object_path)
     headers["Content-Length"] = str(size)
     return StreamingResponse(resp.stream(), status_code=200, headers=headers, media_type=ctype)
+
+
+@app.get("/{object_path:path}")
+def serve(object_path: str, request: Request) -> Response:
+    object_path = object_path.lstrip("/")
+
+    # Root / directory-style paths → the viewer shell.
+    if not object_path or object_path.endswith("/") or object_path == VIEWER_PREFIX:
+        return _serve_object(VIEWER_INDEX, request)
+
+    try:
+        return _serve_object(object_path, request)
+    except HTTPException as e:
+        # SPA fallback: an unknown path with no file extension is a client-side route → serve the
+        # viewer shell. Anything with an extension (a missing asset/data object) stays a real 404.
+        if e.status_code == 404 and not _has_extension(object_path):
+            return _serve_object(VIEWER_INDEX, request)
+        raise
 
 
 def main() -> None:

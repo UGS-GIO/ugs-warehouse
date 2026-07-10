@@ -9,6 +9,12 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "build_service_account" {
+  type        = string
+  default     = ""
+  description = "Cloud Build SA that deploys the internal viewer into the review bucket (cloudbuild deploy-viewer-review). Gets objectAdmin on the review bucket. Empty = skip (viewer publish stays allowFailure)."
+}
+
 variable "deploy_service_account" {
   type        = string
   default     = ""

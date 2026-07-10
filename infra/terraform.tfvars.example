@@ -28,6 +28,11 @@ serving_image = "us-central1-docker.pkg.dev/ut-dnr-ugs-backend-tools/ugs-warehou
 # the review-bucket IAM binding grants it cross-project — leave as-is.
 ingest_service_account = "warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
 
+# Cloud Build SA that publishes the internal viewer into the review bucket (deploy-viewer-review step).
+# Gets objectAdmin on the review bucket. Find it from the build trigger; empty = viewer publish no-ops
+# (the step is allowFailure until this is set).
+build_service_account = "REPLACE-cloudbuild-sa@REPLACE-build-project.iam.gserviceaccount.com"
+
 # IAP — native Cloud Run IAP (no LB / custom domain / DNS / cert). Just the authorized domain; the
 # service is reached on its *.run.app URL (see `tofu output serving_url`). One-time console setting,
 # not tofu: the project's OAuth consent screen needs a support email set once for IAP to serve.

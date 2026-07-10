@@ -32,10 +32,9 @@ variable "iap_domain" {
   default     = "utah.gov"
 }
 
-variable "iap_support_email" {
-  type        = string
-  description = "Support email for the IAP-brand OAuth consent screen (a group or admin address)."
-}
+# (No iap_support_email / iap_oauth_client_* vars: IAP uses Google-managed OAuth — it auto-provisions
+# the client, so there's no brand/consent-screen input tofu needs. The project's OAuth consent-screen
+# support email is a one-time console setting, not a tofu var.)
 
 variable "internal_host" {
   type        = string

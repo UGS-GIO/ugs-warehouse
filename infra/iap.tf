@@ -28,10 +28,12 @@ resource "google_compute_backend_service" "review" {
     group = google_compute_region_network_endpoint_group.review_neg.id
   }
 
+  # Google-managed OAuth: omit oauth2_client_id/secret so IAP auto-provisions + manages the OAuth
+  # client. This avoids the deprecated iap.oauth-brands API (hard shutdown 2026-03-19) and the manual
+  # brand/client setup entirely — no brand to create or hunt for across projects, no client secret in
+  # tfvars. (Provider confirmed both fields optional; `enabled` is the only required one.)
   iap {
-    enabled              = true
-    oauth2_client_id     = var.iap_oauth_client_id
-    oauth2_client_secret = var.iap_oauth_client_secret
+    enabled = true
   }
 }
 

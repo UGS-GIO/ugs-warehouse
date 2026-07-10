@@ -19,4 +19,11 @@ terraform {
 provider "google" {
   project = var.project_id
   region  = var.region
+
+  # Least-privilege deploy: impersonate a dedicated SA that holds the apply-time admin roles, so no
+  # human account carries standing prod admin. Empty var → null → no impersonation (caller ADC), so
+  # `tf-check`/local validate still work. NOTE: this impersonates the PROVIDER only; the gcs backend
+  # authenticates separately — either give the SA access to the state bucket, or run with
+  # `export GOOGLE_IMPERSONATE_SERVICE_ACCOUNT=<sa>` so the backend impersonates too.
+  impersonate_service_account = var.deploy_service_account != "" ? var.deploy_service_account : null
 }

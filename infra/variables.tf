@@ -9,6 +9,17 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "deploy_service_account" {
+  type        = string
+  default     = ""
+  description = <<-EOT
+    Optional deploy SA to impersonate at apply time (least-privilege). The human operator holds only
+    roles/iam.serviceAccountTokenCreator on this SA; the SA itself carries the apply-time admin roles
+    (see README "Deploy SA"). Empty = apply directly as the caller's ADC identity (so tf-check / local
+    validate work with no impersonation).
+  EOT
+}
+
 variable "public_bucket" {
   type        = string
   description = "EXISTING prod public bucket — referenced read-only for context; never managed here."

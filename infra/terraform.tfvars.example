@@ -8,6 +8,11 @@
 project_id = "ut-dnr-ugs-maps-prod"
 region     = "us-central1"
 
+# Least-privilege deploy: impersonate a dedicated SA that holds the apply-time admin roles (bootstrap
+# once — see infra/README.md "Deploy SA"). The operator only needs tokenCreator on it. Leave empty to
+# apply directly as your own ADC identity instead.
+deploy_service_account = "warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com"
+
 # Existing prod bucket — referenced read-only. Lives in project_id above.
 public_bucket = "ut-dnr-ugs-maps-prod-public"
 

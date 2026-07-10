@@ -47,6 +47,7 @@ substitutions:
   # app (tofu `serving_url` output). The review ingest job writes here + tags STAC hrefs at this host.
   _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
   _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
+  _REVIEW_PROJECT: ut-dnr-ugs-maps-prod   # the serving Cloud Run service + buckets live HERE, not the build's $PROJECT_ID (backend-tools)
   _VIEWER_PREFIX: warehouse/viewer
   _REVIEW_VIEWER_PREFIX: review/viewer      # internal viewer bundle in the PRIVATE review bucket (served by the IAP app, never the CDN)
   # Tag used for images (defaults to SHORT_SHA in automated triggers)
@@ -232,7 +233,12 @@ steps:
 
   # Review serving app (ugs-warehouse#16) — the IAP-gated Cloud Run service that streams the private
   # review bucket. tofu owns its config + IAP + ingress and IGNORES the image, so cloudbuild just ships
-  # the current image here (same pattern as the other `run services update` steps).
+  # the current image here. CRITICAL: this is the ONE step targeting the OTHER project — the service
+  # lives in ${_REVIEW_PROJECT} (maps-prod), NOT the build's $PROJECT_ID (backend-tools). Without an
+  # explicit --project, `gcloud run services update` defaults to the build project and SILENTLY CREATES
+  # a duplicate service in the wrong project while the real one never gets the image. The image itself
+  # DOES live in $PROJECT_ID's Artifact Registry (cross-project pull). The build SA needs run.admin on
+  # the service — tofu grants it (build_deploy_serving, gated on build_service_account).
   - id: deploy-review-serving
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
@@ -241,6 +247,7 @@ steps:
       - services
       - update
       - ugs-warehouse-review-serving
+      - --project=${_REVIEW_PROJECT}
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
       - --region=${_REGION}
 

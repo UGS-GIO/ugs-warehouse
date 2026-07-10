@@ -33,6 +33,19 @@ resource "google_storage_bucket_iam_member" "build_write_review" {
   member = "serviceAccount:${var.build_service_account}"
 }
 
+# The Cloud Build SA also ships new images to the serving service (cloudbuild's deploy-review-serving,
+# cross-project: build runs in backend-tools, the service lives here). Service-scoped run.admin lets it
+# update THIS service only. If a cross-project service-level grant proves insufficient (403 on update),
+# fall back to impersonating the deploy SA in the cloudbuild step instead.
+resource "google_cloud_run_v2_service_iam_member" "build_deploy_serving" {
+  count    = var.build_service_account != "" ? 1 : 0
+  name     = google_cloud_run_v2_service.review_serving.name
+  project  = var.project_id
+  location = var.region
+  role     = "roles/run.admin"
+  member   = "serviceAccount:${var.build_service_account}"
+}
+
 # Deploy SA must be able to actAs the serving SA — deploying a Cloud Run service that RUNS AS the
 # serving SA requires serviceAccountUser on it (serviceAccountAdmin manages SAs but can't actAs one).
 # Work-box hit this mid-apply; folding it in so a clean re-apply never needs the manual grant. Gated

@@ -80,6 +80,19 @@ def healthz() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/whoami")
+def whoami(request: Request) -> dict[str, str]:
+    """The IAP-authenticated user, for the viewer's logged-in badge. IAP injects
+    `X-Goog-Authenticated-User-Email` as `accounts.google.com:user@domain` on every request that
+    passes it. 404 when absent (e.g. hit outside IAP) so the badge simply hides. Display-only — not
+    used for authorization (IAP already gated the request)."""
+    raw = request.headers.get("x-goog-authenticated-user-email", "")
+    email = raw.split(":", 1)[-1] if raw else ""
+    if not email:
+        raise HTTPException(status_code=404, detail="no IAP identity")
+    return {"email": email, "user": email.split("@")[0]}
+
+
 def _serve_object(object_path: str, request: Request) -> Response:
     """Stream a single bucket object (with Range support). Raises 404 if it doesn't exist."""
     try:

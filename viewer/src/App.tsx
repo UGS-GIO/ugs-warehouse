@@ -9,6 +9,7 @@ import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./B
 import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./Map";
 import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
+import { UserBadge } from "./UserBadge";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
@@ -342,6 +343,7 @@ export function App() {
           <span className={tab(view === "arch")} onClick={() => setView("arch")}>Architecture</span>
           <span className={tab(view === "guide")} onClick={() => setView("guide")}>Guide</span>
           <ThemeToggle />
+          <UserBadge />
         </div>
       </header>
 

@@ -153,34 +153,42 @@ steps:
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
   - id: push-warehouse
+    waitFor: [build-warehouse]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse']
 
   - id: push-topics-thumbs
+    waitFor: [build-topics-thumbs]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-topics-thumbs']
 
   - id: push-admin
+    waitFor: [build-admin]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin']
 
   - id: push-features
+    waitFor: [build-features]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features']
 
   - id: push-api
+    waitFor: [build-api]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api']
 
   - id: push-harvest
+    waitFor: [build-harvest]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest']
 
   - id: push-pipeline
+    waitFor: [build-pipeline]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline']
 
   - id: deploy-job
+    waitFor: [push-warehouse]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -207,6 +215,7 @@ steps:
   # internal/gated catalog; nothing here touches the public warehouse/ artifacts. Run on demand:
   # `gcloud run jobs execute ${_REVIEW_JOB} --region=${_REGION}`. Promote _review→_current to publish.
   - id: deploy-review-ingest-job
+    waitFor: [push-warehouse]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -240,6 +249,7 @@ steps:
   # DOES live in $PROJECT_ID's Artifact Registry (cross-project pull). The build SA needs run.admin on
   # the service — tofu grants it (build_deploy_serving, gated on build_service_account).
   - id: deploy-review-serving
+    waitFor: [push-warehouse]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -255,6 +265,7 @@ steps:
   # image + DSN setup as the ingest job (RUN_MODULE swaps the CLI). Run periodically (weekly is plenty):
   # `gcloud run jobs execute ${_MAINTAIN_JOB} --region=${_REGION}` (or the ops console button).
   - id: deploy-ducklake-maintain-job
+    waitFor: [push-warehouse]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -277,6 +288,7 @@ steps:
       - --memory=2Gi
 
   - id: deploy-harvest-job
+    waitFor: [push-harvest]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -305,6 +317,7 @@ steps:
   # footprints.geoms needs). No Cloud SQL / DB secret — source is the CSV + GCS.
   # Run after a metadata edit: `gcloud run jobs execute ${_PUBS_JOB} --region=${_REGION}`.
   - id: deploy-pubs-ingest-job
+    waitFor: [push-harvest]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -326,6 +339,7 @@ steps:
   # pubs incl. non-spatial (Survey Notes, reports). Sharded + skip-existing like the COG harvest;
   # run a `pubs-ingest` after to bind the new `preview` assets. Harvest image (has poppler); CSV+GCS.
   - id: deploy-pubthumbs-job
+    waitFor: [push-harvest]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -351,6 +365,7 @@ steps:
   # vector ingest AND every restyle; it only re-renders topics whose style changed. Run a vector
   # ingest (or restyle) after to bind the new `thumbnail` assets onto the items. Chromium = more RAM.
   - id: deploy-topics-thumbs-job
+    waitFor: [push-topics-thumbs]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -374,6 +389,7 @@ steps:
   # needs execute rights on ONLY the two sub-jobs (job-level run.developer, least privilege) + actAs
   # on ${_RUNTIME_SA} — both granted by scripts/provision.sh.
   - id: deploy-pipeline-job
+    waitFor: [push-pipeline]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -395,6 +411,7 @@ steps:
   # else its render-block logic (e.g. legend passthrough) goes stale. Uses the warehouse image
   # (core only; no geopandas), no Cloud SQL / DB (reads GCS + the styles manifest, rewrites item.json).
   - id: deploy-restyle-job
+    waitFor: [push-warehouse]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -417,6 +434,7 @@ steps:
   # text corpus + index while building. Run after the thumbs full-text pass; the viewer queries the
   # result client-side via duckdb-wasm range reads.
   - id: deploy-fts-job
+    waitFor: [push-warehouse]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -438,6 +456,7 @@ steps:
   # search. Harvest image (has the [pubs] extra incl. fastembed). CPU-bound (ONNX inference) + holds
   # the corpus + vectors while indexing — hence high cpu/memory + a long timeout. Run after thumbs.
   - id: deploy-embed-job
+    waitFor: [push-harvest]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -461,6 +480,7 @@ steps:
   # Defaults to --scale all; for the big 24k tier, execute with --args override + more memory, e.g.
   #   gcloud run jobs execute ugs-geolmap-mosaics --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,24k
   - id: deploy-mosaics-job
+    waitFor: [push-harvest]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -486,6 +506,7 @@ steps:
   # (presence-driven). Harvest image ([pubs] extra: geopandas/pyogrio/pygltflib/mapbox-earcut).
   # One-off re-convert of a single pub: override --args with --id/--gdb/--mapx/--upload.
   - id: deploy-3d-job
+    waitFor: [push-harvest]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -507,6 +528,7 @@ steps:
   # cites mined from full text + semantic 'similar' from embeddings). Harvest image (pandas/pyarrow/
   # numpy via [pubs]). Reads fulltext + embeddings from GCS; run after the FTS + embed jobs.
   - id: deploy-graph-job
+    waitFor: [push-harvest]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -525,6 +547,7 @@ steps:
       - --memory=8Gi
 
   - id: deploy-service
+    waitFor: [push-warehouse]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -544,6 +567,7 @@ steps:
   # iap.httpsResourceAccessor role on the service out-of-band. The runtime SA (_ADMIN_SA) also needs
   # logging.viewer (live + per-pub logs) and storage.objectViewer on the COG bucket (registry).
   - id: deploy-admin
+    waitFor: [push-admin]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -564,6 +588,7 @@ steps:
   # code, so they no longer re-assert infra (or log "already exists") every push.
 
   - id: deploy-api
+    waitFor: [push-api]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -580,6 +605,7 @@ steps:
 
   # OGC API Features (Arc Pro) — scale-to-zero, no Cloud SQL / secrets (reads public CDN parquet).
   - id: deploy-features
+    waitFor: [push-features]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -599,6 +625,7 @@ steps:
   # VITE_FEATURES_BASE (the "OGC API" link). Runs after deploy-features (serial order); empty
   # file if the service isn't up → the viewer link stays hidden (no dead link).
   - id: resolve-features-url
+    waitFor: [deploy-features]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
@@ -611,6 +638,7 @@ steps:
 
   # Build the static STAC viewer (Vite, base "./" so it works under any CDN subpath).
   - id: build-viewer
+    waitFor: [resolve-features-url]
     name: node:22
     entrypoint: bash
     args:
@@ -625,6 +653,7 @@ steps:
   # (hashed assets are immutable). allowFailure until the build SA has objectAdmin on the
   # bucket (grant in docs/DEPLOY.md §5).
   - id: deploy-viewer
+    waitFor: [build-viewer]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     allowFailure: true
@@ -642,6 +671,7 @@ steps:
   # mis-resolves its own asset URLs (they live under /review/viewer/). Runs after build-viewer, so
   # node_modules is already installed in the shared workspace.
   - id: build-viewer-review
+    waitFor: [build-viewer]
     name: node:22
     entrypoint: bash
     args:
@@ -656,6 +686,7 @@ steps:
   # build SA has objectAdmin on the review bucket (tofu grants it: build_write_review, gated on
   # build_service_account being set).
   - id: deploy-viewer-review
+    waitFor: [build-viewer-review]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     allowFailure: true

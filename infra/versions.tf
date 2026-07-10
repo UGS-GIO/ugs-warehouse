@@ -14,12 +14,12 @@ terraform {
     }
   }
 
-  # Remote state recommended (work box). Left commented so `tofu init` works locally for
-  # validate/plan; the work box uncomments + fills a real bucket before first apply.
-  # backend "gcs" {
-  #   bucket = "ut-dnr-ugs-tf-state"   # a state bucket that is NOT the data buckets
-  #   prefix = "ugs-warehouse/review-serving"
-  # }
+  # Remote state — the work box's real state lives here. `just tf-check` uses `-backend=false`, so
+  # boxes without creds (personal) still fmt/validate fine; only `tofu init`/plan/apply touch the bucket.
+  backend "gcs" {
+    bucket = "ut-dnr-ugs-tf-state" # a state bucket, NOT one of the data buckets
+    prefix = "ugs-warehouse/review-serving"
+  }
 }
 
 provider "google" {

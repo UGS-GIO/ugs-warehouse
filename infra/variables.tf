@@ -9,6 +9,24 @@ variable "region" {
   default     = "us-central1"
 }
 
+variable "sql_instance_connection" {
+  type        = string
+  description = "Cloud SQL connection name (project:region:instance) of mappingdb — hosts review.comments."
+  default     = "ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db"
+}
+
+variable "sql_project" {
+  type        = string
+  description = "Project of the Cloud SQL instance (for the serving SA's cloudsql.client grant — cross-project)."
+  default     = "ut-dnr-ugs-mappingdb-prod"
+}
+
+variable "db_password_secret" {
+  type        = string
+  description = "Secret Manager secret (in project_id) holding the review_writer password."
+  default     = "review-writer-db-password"
+}
+
 variable "build_service_account" {
   type        = string
   default     = ""

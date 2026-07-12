@@ -27,9 +27,22 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from obstore.store import GCSStore
 
+from ugs_warehouse import comments
 from ugs_warehouse.core import config
 
 app = FastAPI(title="ugs-warehouse-review-serving")
+# Register /api/comments BEFORE the catch-all object route below, or it'd be swallowed by /{path}.
+app.include_router(comments.router)
+
+
+@app.on_event("startup")
+async def _init_comments() -> None:
+    """Best-effort: create review.comments if the DB is wired. If not, the app still serves files and
+    the comment routes 503 until CLOUDSQL_INSTANCE/DB_PASS are set."""
+    try:
+        await comments.init_schema()
+    except Exception as e:  # noqa: BLE001
+        print(f"[serve] comments DB not ready ({e}); comment routes will 503 until configured")
 
 _store = GCSStore(bucket=config.BUCKET)
 

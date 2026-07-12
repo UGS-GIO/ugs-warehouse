@@ -20,6 +20,16 @@ resource "google_cloud_run_v2_service" "review_serving" {
   template {
     service_account = google_service_account.serving.email
 
+    # Cloud SQL socket for the review-comments API (serve.py → review.comments as review_writer). The
+    # mounted socket appears at /cloudsql/<instance>. Cross-project: the instance lives in the mappingdb
+    # project; the serving SA gets cloudsql.client there (iam.tf).
+    volumes {
+      name = "cloudsql"
+      cloud_sql_instance {
+        instances = [var.sql_instance_connection]
+      }
+    }
+
     containers {
       image = var.serving_image
       # Serve the private bucket read-only. Entrypoint is ugs_warehouse.serve; WAREHOUSE_BUCKET points
@@ -30,6 +40,33 @@ resource "google_cloud_run_v2_service" "review_serving" {
       env {
         name  = "WAREHOUSE_BUCKET"
         value = google_storage_bucket.review.name
+      }
+      # Review-comments DB (review_writer, least-priv). DB_PASS from Secret Manager.
+      env {
+        name  = "CLOUDSQL_INSTANCE"
+        value = var.sql_instance_connection
+      }
+      env {
+        name  = "DB_NAME"
+        value = "seamlessgeolmap"
+      }
+      env {
+        name  = "DB_USER"
+        value = "review_writer"
+      }
+      env {
+        name = "DB_PASS"
+        value_source {
+          secret_key_ref {
+            secret  = var.db_password_secret
+            version = "latest"
+          }
+        }
+      }
+
+      volume_mounts {
+        name       = "cloudsql"
+        mount_path = "/cloudsql"
       }
 
       resources {

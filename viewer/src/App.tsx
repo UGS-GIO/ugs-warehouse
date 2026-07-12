@@ -10,6 +10,7 @@ import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./Map";
 import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 import { UserBadge } from "./UserBadge";
+import { DiffPanel } from "./DiffPanel";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
@@ -55,6 +56,10 @@ function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
   if (loading) return <em>Loading item…</em>;
   if (!item) return <em className="text-muted-foreground">Pick an item to see detail, footprint, and assets.</em>;
   const p = item.properties ?? {};
+  // Review deploy only: offer a diff of this _review item against its live _current counterpart.
+  const isReview = CATALOG_URL.includes("/review/");
+  const geoparquet = Object.entries(item.assets ?? {})
+    .find(([k, a]) => /parquet/i.test(String(a.type ?? "")) || /parquet|geoparquet/i.test(k))?.[1]?.href;
   return (
     <>
       <h2 className="mb-1.5 text-base font-semibold">{String(p.title ?? item.id ?? "")}</h2>
@@ -63,6 +68,9 @@ function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
           <a key={k} className={asset} href={a.href} target="_blank" rel="noopener">{a.title ?? k}</a>
         ))}
       </div>
+      {isReview && geoparquet && (
+        <DiffPanel stem={String(item.id ?? "")} reviewParquetUrl={geoparquet} />
+      )}
       <table className="mt-2 w-full border-collapse text-sm">
         <tbody>
           {Object.entries(p).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (

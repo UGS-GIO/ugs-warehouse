@@ -16,6 +16,22 @@ resource "google_storage_bucket_iam_member" "serving_read_review" {
   member = "serviceAccount:${google_service_account.serving.email}"
 }
 
+# Serving app: connect to the mappingdb Cloud SQL (review.comments) — cross-project cloudsql.client on
+# the SQL instance's project. (It authenticates further as the least-priv review_writer DB role.)
+resource "google_project_iam_member" "serving_sql_client" {
+  project = var.sql_project
+  role    = "roles/cloudsql.client"
+  member  = "serviceAccount:${google_service_account.serving.email}"
+}
+
+# Serving app: read the review_writer password secret.
+resource "google_secret_manager_secret_iam_member" "serving_db_secret" {
+  project   = var.project_id
+  secret_id = var.db_password_secret
+  role      = "roles/secretmanager.secretAccessor"
+  member    = "serviceAccount:${google_service_account.serving.email}"
+}
+
 # The review ingest job (deployed via cloudbuild) writes the catalog into the review bucket.
 resource "google_storage_bucket_iam_member" "ingest_write_review" {
   bucket = google_storage_bucket.review.name

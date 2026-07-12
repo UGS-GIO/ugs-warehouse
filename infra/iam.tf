@@ -16,13 +16,14 @@ resource "google_storage_bucket_iam_member" "serving_read_review" {
   member = "serviceAccount:${google_service_account.serving.email}"
 }
 
-# Serving app: connect to the mappingdb Cloud SQL (review.comments) — cross-project cloudsql.client on
-# the SQL instance's project. (It authenticates further as the least-priv review_writer DB role.)
-resource "google_project_iam_member" "serving_sql_client" {
-  project = var.sql_project
-  role    = "roles/cloudsql.client"
-  member  = "serviceAccount:${google_service_account.serving.email}"
-}
+# NOTE — NOT managed here: the serving SA also needs roles/cloudsql.client on the mappingdb project
+# (var.sql_project = ut-dnr-ugs-mappingdb-prod) to connect to Cloud SQL. That's a THIRD project (the DB
+# team's) our deploy identity has no IAM-admin on, so it can't be applied from this config — it's a
+# one-time grant the DB owner runs, same boundary as the review schema/role:
+#   gcloud projects add-iam-policy-binding ut-dnr-ugs-mappingdb-prod \
+#     --member="serviceAccount:ugs-warehouse-review-srv@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com" \
+#     --role="roles/cloudsql.client"
+# Until it lands, the app deploys fine but the comments API can't reach the DB (graceful 5xx).
 
 # Serving app: read the review_writer password secret.
 resource "google_secret_manager_secret_iam_member" "serving_db_secret" {

@@ -12,7 +12,6 @@ import {
   baseTerms, fieldInput, isEmptyQuery, matchesQuery, parseQuery, type Query,
   type SearchDoc, serializeQuery, withExcludes, withField, withSinglePhrase, withTerms,
 } from "./query";
-import { semanticSearch } from "./vsearch";
 
 // A small toggle chip for the search filters.
 function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
@@ -91,16 +90,8 @@ export function ArticleSearch({ catalog = [], onOpen }: {
     enabled: fullText && q.trim().length >= 2,
     staleTime: 60_000, retry: false,
   });
-  const [semantic, setSemantic] = useState(false);
-  // Semantic (meaning-based) search — embeds the query in-browser + vector search via duckdb-wasm.
-  const sem = useQuery({
-    queryKey: ["vss", q],
-    queryFn: () => semanticSearch(q),
-    enabled: semantic && q.trim().length >= 2,
-    staleTime: 60_000, retry: false,
-  });
   const corpus = useCorpus(true);
-  // Resolve a pub's real collection from the loaded catalog (itemId → collId). The FTS/VSS dbs only
+  // Resolve a pub's real collection from the loaded catalog (itemId → collId). The FTS db only
   // carry the series code, which is NOT a collection id — opening the catalog page needs the actual
   // collection (ugs-publications / -external / -mining-district-files). seriesCode is a last resort.
   const collOf = useMemo(() => {
@@ -187,10 +178,6 @@ export function ArticleSearch({ catalog = [], onOpen }: {
         <input type="checkbox" checked={fullText} onChange={(e) => setFullText(e.target.checked)} />
         Search the <b>full text of every publication</b> (~7000 docs, BM25 — loads a query engine on first use)
       </label>
-      <label className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-        <input type="checkbox" checked={semantic} onChange={(e) => setSemantic(e.target.checked)} />
-        <b>Semantic</b> — find pubs by meaning, not just words (embeds your query in-browser; first use downloads a small model)
-      </label>
 
       {corpus.isError && <p className="mt-3 text-xs text-muted-foreground">Article full text isn't loaded (built on reingest) — searching catalog metadata only.</p>}
 
@@ -250,30 +237,6 @@ export function ArticleSearch({ catalog = [], onOpen }: {
         </section>
       )}
 
-      {semantic && q.trim().length >= 2 && (
-        <section className="mt-5">
-          <h3 className="text-sm font-semibold">Semantic · publications by meaning</h3>
-          {sem.isLoading && <p className="mt-1 text-xs text-muted-foreground">Embedding the query + searching (first use loads the model)…</p>}
-          {sem.isError && <p className="mt-1 text-xs text-muted-foreground">Semantic index not available yet (built by the embed job on reingest).</p>}
-          {sem.data && <p className="mt-1 text-xs text-muted-foreground">{sem.data.length} related</p>}
-          <ol className="mt-1 divide-y divide-border">
-            {(sem.data ?? []).map((r) => (
-              <li key={r.pubId} className="py-2">
-                <div className="flex flex-wrap items-baseline gap-x-2">
-                  {r.series && <span className="rounded bg-muted px-1.5 text-[10px] uppercase text-muted-foreground">{r.series}</span>}
-                  <span className="font-medium text-foreground">{r.title}</span>
-                  <span className="font-mono text-xs text-muted-foreground">{r.pubId}</span>
-                </div>
-                {r.snippet && <p className="mt-0.5 line-clamp-2 text-xs text-muted-foreground">…{r.snippet}…</p>}
-                <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
-                  {r.pdf && <a href={r.pdf} target="_blank" rel="noopener" className="text-primary hover:underline">Open PDF ↗</a>}
-                  <button className="text-primary hover:underline" onClick={() => openPub(r.pubId)}>Catalog page</button>
-                </div>
-              </li>
-            ))}
-          </ol>
-        </section>
-      )}
     </div>
   );
 }

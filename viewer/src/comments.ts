@@ -6,6 +6,7 @@ export type Comment = {
   target_kind: "item" | "row" | "column";
   feature_ids: number[] | null;  // set when target_kind = row (1..N features)
   column_name: string | null;    // set when target_kind = column
+  parent_id: number | null;      // set on a reply → its thread root; null = top-level
   body: string;
   author: string;      // IAP email
   status: string;      // open | resolved
@@ -58,6 +59,13 @@ export const createComment = (itemIds: string[], body: string, target?: CommentT
   });
 };
 
+// Reply to a comment — inherits the parent's target server-side, so only parent_id + body are sent.
+export const replyToComment = (parentId: number, body: string) =>
+  api<Comment>(`/api/comments`, {
+    method: "POST",
+    body: JSON.stringify({ parent_id: parentId, body }),
+  });
+
 export const setStatus = (id: number, status: string) =>
   api<Comment>(`/api/comments/${id}`, { method: "PATCH", body: JSON.stringify({ status }) });
 
@@ -65,3 +73,12 @@ export const deleteComment = (id: number) =>
   api<{ deleted: number }>(`/api/comments/${id}`, { method: "DELETE" });
 
 export const whoami = () => api<{ email: string; user: string }>(`/whoami`);
+
+// ---- Per-layer review status ----
+export type ItemStatus = { item_id: string; status: string; updated_by: string; updated_at: string };
+// The review lifecycle; `approved` = ready to promote review → current.
+export const ITEM_STATUSES = ["pending", "in_review", "changes_requested", "approved"];
+
+export const listItemStatuses = () => api<ItemStatus[]>(`/api/item-status`);
+export const setItemStatus = (itemId: string, status: string) =>
+  api<ItemStatus>(`/api/item-status/${encodeURIComponent(itemId)}`, { method: "PUT", body: JSON.stringify({ status }) });

@@ -21,10 +21,18 @@ export function ReviewReport({ onClose, onOpen }: { onClose: () => void; onOpen?
   // Group by item id (a comment spanning N items appears under each). Sorted: most comments first.
   const groups = useMemo(() => {
     const m = new Map<string, Comment[]>();
-    for (const c of comments) for (const id of c.item_ids) {
+    // Group thread ROOTS by item; replies render nested under their root, not as separate entries.
+    for (const c of comments) if (c.parent_id == null) for (const id of c.item_ids) {
       (m.get(id) ?? m.set(id, []).get(id)!).push(c);
     }
     return [...m.entries()].sort((a, b) => b[1].length - a[1].length);
+  }, [comments]);
+
+  // Replies keyed by their thread root, for nesting in the report.
+  const repliesByRoot = useMemo(() => {
+    const m = new Map<number, Comment[]>();
+    for (const c of comments) if (c.parent_id != null) (m.get(c.parent_id) ?? m.set(c.parent_id, []).get(c.parent_id)!).push(c);
+    return m;
   }, [comments]);
 
   const open = comments.filter((c) => c.status !== "resolved").length;
@@ -100,6 +108,12 @@ export function ReviewReport({ onClose, onOpen }: { onClose: () => void; onOpen?
                       </span>
                     </div>
                     <p className="mt-0.5 whitespace-pre-wrap">{c.body}</p>
+                    {(repliesByRoot.get(c.id) ?? []).map((r) => (
+                      <div key={r.id} className="mt-1 border-l-2 border-border pl-2">
+                        <span className="text-xs text-muted-foreground">{r.author.split("@")[0]} · {new Date(r.created_at).toLocaleString()}</span>
+                        <p className="whitespace-pre-wrap">{r.body}</p>
+                      </div>
+                    ))}
                   </li>
                 ))}
               </ul>

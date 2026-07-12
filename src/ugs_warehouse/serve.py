@@ -31,8 +31,9 @@ from ugs_warehouse import comments
 from ugs_warehouse.core import config
 
 app = FastAPI(title="ugs-warehouse-review-serving")
-# Register /api/comments BEFORE the catch-all object route below, or it'd be swallowed by /{path}.
+# Register /api routers BEFORE the catch-all object route below, or they'd be swallowed by /{path}.
 app.include_router(comments.router)
+app.include_router(comments.status_router)
 
 
 @app.on_event("startup")

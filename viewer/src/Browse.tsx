@@ -21,6 +21,7 @@ import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
 import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
+import { LayerStatusControl } from "./ReviewStatus";
 import { createComment } from "./comments";
 
 // STAC item id for an ItemRef — the loaded doc's id, else the folder stem from the href
@@ -2221,7 +2222,10 @@ function CatalogReview({ item }: { item: StacDoc }) {
   if (!id) return null;
   return (
     <section className="mt-4 max-w-[760px] rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
-      <h3 className="text-sm font-semibold">Review</h3>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold">Review</h3>
+        <LayerStatusControl itemId={id} />
+      </div>
       {geoparquet && <DiffPanel stem={id} reviewParquetUrl={geoparquet} />}
       <CommentsPanel itemId={id} />
       {cols && cols.length > 0 && (

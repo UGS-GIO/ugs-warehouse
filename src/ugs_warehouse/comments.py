@@ -40,34 +40,43 @@ def _conn_kwargs() -> dict:
     }
 
 
+_DDL = """
+    CREATE TABLE IF NOT EXISTS review.comments (
+      id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      item_ids   TEXT[]      NOT NULL,
+      body       TEXT        NOT NULL,
+      author     TEXT        NOT NULL,
+      status     TEXT        NOT NULL DEFAULT 'open',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS comments_items_gin ON review.comments USING GIN (item_ids);
+"""
+
+
 async def _get_pool():
+    """Lazily create the asyncpg pool AND ensure the table exists (review_writer owns the `review`
+    schema, so it can DDL). Self-healing: the Cloud SQL socket isn't up at container boot (Cloud Run
+    sidecar race), so we DON'T rely on a one-shot startup call — the table gets created on the first
+    successful pool connect. On any failure nothing is cached, so the next request retries fully."""
     global _pool
     if _pool is None:
         import asyncpg  # lazy — the driver isn't needed unless comments are used
-        _pool = await asyncpg.create_pool(**_conn_kwargs(), min_size=1, max_size=4)
+        pool = await asyncpg.create_pool(**_conn_kwargs(), min_size=1, max_size=4)
+        try:
+            async with pool.acquire() as c:
+                await c.execute(_DDL)
+        except Exception:
+            await pool.close()  # don't cache a pool whose schema didn't land — retry next request
+            raise
+        _pool = pool
+        log.info("review.comments pool + schema ready")
     return _pool
 
 
 async def init_schema() -> None:
-    """Create the comments table if absent (review_writer owns the `review` schema, so it can DDL there).
-    Best-effort — called on startup; a failure just leaves the routes to 503 until the DB is wired."""
-    pool = await _get_pool()
-    async with pool.acquire() as c:
-        await c.execute(
-            """
-            CREATE TABLE IF NOT EXISTS review.comments (
-              id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-              item_ids   TEXT[]      NOT NULL,
-              body       TEXT        NOT NULL,
-              author     TEXT        NOT NULL,
-              status     TEXT        NOT NULL DEFAULT 'open',
-              created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-              updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
-            );
-            CREATE INDEX IF NOT EXISTS comments_items_gin ON review.comments USING GIN (item_ids);
-            """
-        )
-    log.info("review.comments ready")
+    """Startup warm-up — best-effort; if the socket isn't ready yet, the first request self-heals."""
+    await _get_pool()
 
 
 def _author(request: Request) -> str:

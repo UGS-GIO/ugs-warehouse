@@ -120,17 +120,18 @@ def _author(request: Request) -> str:
     return email
 
 
+# Bounds keep a (trusted, IAP-gated) reviewer from storing a multi-MB body or a pathological array.
 class NewComment(BaseModel):
-    item_ids: list[str] = Field(default_factory=list)  # 1..N STAC item ids (required for a top-level comment)
-    body: str
+    item_ids: list[str] = Field(default_factory=list, max_length=200)  # 1..N STAC item ids (required for a top-level comment)
+    body: str = Field(max_length=20_000)
     target_kind: str = "item"                  # item | row | column
-    feature_ids: list[int] | None = None       # 1..N feature ids when target_kind = row
-    column_name: str | None = None             # set when target_kind = column
+    feature_ids: list[int] | None = Field(default=None, max_length=10_000)  # 1..N feature ids when target_kind = row
+    column_name: str | None = Field(default=None, max_length=200)  # set when target_kind = column
     parent_id: int | None = None               # set on a reply; the reply inherits the parent's target
 
 
 class PatchComment(BaseModel):
-    body: str | None = None
+    body: str | None = Field(default=None, max_length=20_000)
     status: str | None = None  # open | resolved
 
 
@@ -192,7 +193,7 @@ async def list_comments(
         args.append(column)
         where.append(f"column_name = ${len(args)}")
     rows = await pool.fetch(
-        f"SELECT * FROM review.comments WHERE {' AND '.join(where)} ORDER BY created_at DESC", *args
+        f"SELECT * FROM review.comments WHERE {' AND '.join(where)} ORDER BY created_at DESC LIMIT 5000", *args
     )
     return [dict(r) for r in rows]
 
@@ -211,6 +212,8 @@ async def patch_comment(cid: int, patch: PatchComment, request: Request) -> dict
         args.append(patch.body.strip())
         sets.append(f"body = ${len(args)}")
     if patch.status is not None:  # resolving is open to any reviewer
+        if patch.status not in ("open", "resolved"):
+            raise HTTPException(status_code=400, detail="status must be open|resolved")
         args.append(patch.status)
         sets.append(f"status = ${len(args)}")
     if not sets:
@@ -254,7 +257,7 @@ async def list_item_status(request: Request, item_id: str | None = None) -> list
     if item_id:
         rows = await pool.fetch("SELECT * FROM review.item_status WHERE item_id = $1", item_id)
     else:
-        rows = await pool.fetch("SELECT * FROM review.item_status ORDER BY updated_at DESC")
+        rows = await pool.fetch("SELECT * FROM review.item_status ORDER BY updated_at DESC LIMIT 5000")
     return [dict(r) for r in rows]
 
 

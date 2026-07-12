@@ -1,6 +1,6 @@
 import maplibregl from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
-import { Layer, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { type StacDoc } from "./stac";
 
@@ -285,7 +285,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
                     id: `pm-${s}-${li}`,
                     source: `pm-${s}`,
                     "source-layer": pmLayer,
-                  } as any)}
+                  } as LayerProps)}
                 />
               ))
             ) : (

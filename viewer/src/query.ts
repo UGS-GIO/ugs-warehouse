@@ -33,7 +33,7 @@ function tokenize(input: string): Token[] {
     let field: string | undefined;
     const fm = /^([A-Za-z]+):/.exec(input.slice(i));  // letters + ':' — so `1:24000` / `http://` don't match
     if (fm) { field = fm[1].toLowerCase(); i += fm[0].length; }
-    let value = "";
+    let value: string;   // assigned in both branches below
     let quoted = false;
     if (input[i] === '"') {
       quoted = true; i++;

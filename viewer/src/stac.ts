@@ -16,6 +16,14 @@ export const CATALOG_URL = new URL(
   location.href,
 ).href;
 
+// Review deploy = catalog points at review/stac. Gates the review-only UI (diff, comments, dashboard).
+// NOT a security boundary — real protection is server-side: the /api/comments route and review data only
+// exist behind IAP on the review deploy. This flag just hides dead UI on the public build.
+// `?review=1` forces it on for LOCAL DEV preview ONLY (gated to dev builds so prod can't toggle it).
+const DEV = Boolean((import.meta as { env?: Record<string, unknown> }).env?.DEV);
+export const IS_REVIEW = CATALOG_URL.includes("/review/") ||
+  (DEV && new URLSearchParams(location.search).get("review") === "1");
+
 export type Link = {
   rel: string;
   href: string;

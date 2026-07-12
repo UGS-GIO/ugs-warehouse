@@ -1,4 +1,4 @@
-import { loadHeader, setUtahHeaderSettings } from "@utahdts/utah-design-system-header";
+import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput } from "@utahdts/utah-design-system-header";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { Architecture } from "./Architecture";
@@ -7,9 +7,8 @@ import { Guide } from "./Guide";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
 import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./Map";
-import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
+import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
-import { UserBadge } from "./UserBadge";
 import { DiffPanel } from "./DiffPanel";
 import { CommentsPanel } from "./CommentsPanel";
 import { ReviewDashboard } from "./ReviewDashboard";
@@ -24,8 +23,6 @@ const ROOT_HREF = location.pathname || "/";
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
 type View = "catalog" | "map" | "arch" | "guide" | "search" | "review";
-// Review deploy = catalog points at review/stac. Gates the review-only UI (diff, comments, dashboard).
-const IS_REVIEW = CATALOG_URL.includes("/review/");
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
 // An ItemRef → map ActiveLayer. Prefer PMTiles (vector); else fall back to a COG (raster) so
@@ -61,7 +58,7 @@ function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
   if (!item) return <em className="text-muted-foreground">Pick an item to see detail, footprint, and assets.</em>;
   const p = item.properties ?? {};
   // Review deploy only: offer a diff of this _review item against its live _current counterpart.
-  const isReview = CATALOG_URL.includes("/review/");
+  const isReview = IS_REVIEW;
   const geoparquet = Object.entries(item.assets ?? {})
     .find(([k, a]) => /parquet/i.test(String(a.type ?? "")) || /parquet|geoparquet/i.test(k))?.[1]?.href;
   return (
@@ -88,6 +85,23 @@ function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
       </table>
     </>
   );
+}
+
+// The IAP user as a Utah-header action item (top-right of the official banner). Display-only — IAP
+// already gated access; the username shows, the full email is the tooltip. Clicking signs out via
+// IAP's clear-login-cookie flow.
+function userActionItem(email: string): ActionItem {
+  const icon = document.createElement("span");
+  icon.textContent = "👤";
+  icon.title = `Signed in as ${email}`;
+  return {
+    title: email.split("@")[0],
+    showTitle: true,
+    icon,
+    className: "ugs-user-badge",
+    // click → IAP sign-out (clears the login cookie, forces re-auth).
+    actionFunction: () => { window.location.href = "/?gcp-iap-mode=CLEAR_LOGIN_COOKIE"; },
+  };
 }
 
 function ThemeToggle() {
@@ -141,16 +155,32 @@ export function App() {
       : { view: v });
 
   // Official State of Utah header — injects the state identity bar + maintained logo above the
-  // app (Utah Design System standard). Configured once on mount.
+  // app (Utah Design System standard). On the review deploy the IAP user shows as a top-right
+  // action item (same level as the UGS title/logo), fetched from /whoami. Configured on mount.
   useEffect(() => {
-    setUtahHeaderSettings({
-      title: "Utah Geological Survey",
-      showTitle: true,
-      titleUrl: "https://geology.utah.gov",
-      logo: { imageUrl: utahLogo },   // generic State of Utah emblem (until UGS has its own brand)
-      mainMenu: false,
-    });
-    loadHeader();
+    let cancelled = false;
+    (async () => {
+      const base: SettingsInput = {
+        title: "Utah Geological Survey",
+        showTitle: true,
+        titleUrl: "https://geology.utah.gov",
+        logo: { imageUrl: utahLogo },   // generic State of Utah emblem (until UGS has its own brand)
+        mainMenu: false,
+      };
+      let email = "";
+      if (IS_REVIEW) {
+        try {
+          const r = await fetch("/whoami", { headers: { accept: "application/json" } });
+          if (r.ok) email = (await r.json())?.email ?? "";
+        } catch { /* public deploy / local: no /whoami */ }
+        // Local dev preview: no IAP here, so surface a placeholder to see the badge.
+        if (!email && import.meta.env.DEV) email = "dev.user@utah.gov";
+      }
+      if (cancelled) return;
+      setUtahHeaderSettings(email ? { ...base, actionItems: [userActionItem(email)] } : base);
+      loadHeader();
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   const [search, setSearch] = useState("");
@@ -284,7 +314,7 @@ export function App() {
   const setSeries = (codes: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: layerIds, s: codes });
   const toggleLayer = (id: string) => {
     const set = new Set(layerIds ?? []);
-    set.has(id) ? set.delete(id) : set.add(id);
+    if (set.has(id)) set.delete(id); else set.add(id);
     go({ view, c: collectionUrl, i: itemUrl, l: [...set], s: seriesSel });
   };
 
@@ -357,7 +387,6 @@ export function App() {
           <span className={tab(view === "guide")} onClick={() => setView("guide")}>Guide</span>
           {IS_REVIEW && <span className={tab(view === "review")} onClick={() => setView("review")}>Review</span>}
           <ThemeToggle />
-          <UserBadge />
         </div>
       </header>
 

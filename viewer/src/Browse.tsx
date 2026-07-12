@@ -4,6 +4,8 @@ import {
   type ColumnDef, flexRender, getCoreRowModel, getSortedRowModel,
   type SortingState, useReactTable,
 } from "@tanstack/react-table";
+import { useVirtualizer } from "@tanstack/react-virtual";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
@@ -16,7 +18,15 @@ import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
 import { Legend } from "./legend";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
-import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { CommentsPanel } from "./CommentsPanel";
+import { DiffPanel } from "./DiffPanel";
+import { createComment } from "./comments";
+
+// STAC item id for an ItemRef — the loaded doc's id, else the folder stem from the href
+// (…/<collection>/<id>/<id>.json). Matches ItemDetail's item.id + the warehouse item id.
+const itemIdOf = (it: ItemRef): string =>
+  String(it.data?.id ?? it.href.replace(/\/[^/]+\.json.*$/, "").split("/").pop() ?? it.href);
 
 // A few latest covers for a collection card (thumbnail strip). `date` = the item datetime, used to
 // merge + re-sort covers across series for a sub-catalog card. Populated by App from the indexes.
@@ -327,6 +337,31 @@ function VolumeGrouped({ rows, gridClass, render }: {
   );
 }
 
+// One review comment applied to N selected items at once (item_ids array). Review deploy only.
+function BulkItemComposer({ itemIds, onDone }: { itemIds: string[]; onDone: () => void }) {
+  const qc = useQueryClient();
+  const [body, setBody] = useState("");
+  const add = useMutation({
+    mutationFn: () => createComment(itemIds, body, { kind: "item" }),
+    onSuccess: () => { setBody(""); qc.invalidateQueries({ queryKey: ["comments-all"] }); itemIds.forEach((id) => qc.invalidateQueries({ queryKey: ["comments", id] })); onDone(); },
+  });
+  return (
+    <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-2 text-xs">
+      <div className="mb-1 font-medium">New comment on {itemIds.length} item{itemIds.length === 1 ? "" : "s"}</div>
+      <div className="flex gap-1.5">
+        <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2}
+          placeholder="Add a review note for the selected items…"
+          className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs" />
+        <button disabled={!body.trim() || add.isPending} onClick={() => add.mutate()}
+          className="self-end rounded border border-border bg-primary px-2 py-1 text-primary-foreground hover:opacity-90 disabled:opacity-60">
+          {add.isPending ? "…" : "Add"}
+        </button>
+      </div>
+      {add.error && <p className="mt-1 text-destructive">Failed: {String(add.error)}</p>}
+    </div>
+  );
+}
+
 // ---- item list: filter + sort + table/cards, reused for a collection and global search ----
 function ItemList({ items, showCollection, query, onOpen, series, onSeries, force3D }: {
   items: ItemRef[]; showCollection?: boolean; query?: string; onOpen: (href: string) => void;
@@ -334,6 +369,14 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 }) {
   const [q, setQ] = useState("");
   const [mode, setMode] = useState<"table" | "cards" | "thumbs">("table");
+  // Review deploy: bulk-select items → one comment on all of them (backend item_ids is an array).
+  const [selItems, setSelItems] = useState<Set<string>>(new Set());
+  const [itemComposeOpen, setItemComposeOpen] = useState(false);
+  const toggleItem = (id: string) => setSelItems((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
   const [mapOnly, setMapOnly] = useState(false);  // hide metadata-only items (no COG / no tiles)
   const [yearMin, setYearMin] = useState("");
   const [yearMax, setYearMax] = useState("");
@@ -402,7 +445,17 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
   );
 
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
+  // Review deploy: a leading checkbox column to bulk-select items for one shared comment.
+  const selectColumn: ColumnDef<ItemRef, unknown> = {
+    id: "sel", header: () => "", enableSorting: false, accessorFn: () => "",
+    cell: ({ row }) => {
+      const id = itemIdOf(row.original);
+      return <input type="checkbox" aria-label={`Select ${id}`} checked={selItems.has(id)}
+        onClick={(e) => e.stopPropagation()} onChange={() => toggleItem(id)} />;
+    },
+  };
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
+    ...(IS_REVIEW ? [selectColumn] : []),
     { id: "id", header: "ID", accessorFn: gSeries, sortingFn: "alphanumeric",
       cell: (i) => <span className="whitespace-nowrap font-mono text-[13px] font-semibold text-foreground">{String(i.getValue())}</span> },
     { id: "title", header: "Title", accessorFn: gTitle,
@@ -415,7 +468,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
     { id: "scale", header: "Scale", accessorFn: gScale, enableSorting: false },
     { id: "assets", header: "Assets", enableSorting: false, accessorFn: () => "",
       cell: ({ row }) => row.original.data?.assets ? <AssetChips assets={row.original.data.assets} /> : "" },
-  ], [showCollection, hasVolumes]);
+  ], [showCollection, hasVolumes, selItems]);
 
   // Default sort: publications (which carry a real publication year) lead newest→oldest; vector
   // serving topics (ingest-time datetime only — not meaningful) stay alphabetical by id.
@@ -512,10 +565,23 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
       {rows.length === 0 ? (
         <p className={`${C.muted} mt-3`}>{needle ? "No items match." : "No items."}</p>
       ) : mode === "table" ? (
-        <div className="overflow-x-auto">
-          <DataTable columns={columns} data={rows} onRowClick={(it) => onOpen(it.href)}
-            initialSorting={defaultSorting} />
-        </div>
+        <>
+          {IS_REVIEW && selItems.size > 0 && (
+            <div className="mb-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
+              <span className="font-medium text-amber-700 dark:text-amber-400">{selItems.size} item{selItems.size === 1 ? "" : "s"} selected</span>
+              <button className="rounded border border-amber-500/50 bg-amber-500/15 px-2 py-0.5 font-medium text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
+                onClick={() => setItemComposeOpen(true)}>💬 Comment on {selItems.size === 1 ? "item" : `${selItems.size} items`}</button>
+              <button className="text-muted-foreground hover:underline" onClick={() => { setSelItems(new Set()); setItemComposeOpen(false); }}>clear</button>
+            </div>
+          )}
+          {IS_REVIEW && itemComposeOpen && selItems.size > 0 && (
+            <BulkItemComposer itemIds={[...selItems]} onDone={() => setItemComposeOpen(false)} />
+          )}
+          <div className="overflow-x-auto">
+            <DataTable columns={columns} data={rows} onRowClick={(it) => onOpen(it.href)}
+              initialSorting={defaultSorting} />
+          </div>
+        </>
       ) : mode === "thumbs" ? (
         <VolumeGrouped rows={rows} gridClass={THUMB_GRID}
           render={(it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />} />
@@ -690,9 +756,11 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
   const [showDem, setShowDem] = useState(false);
   const [styleLayers, setStyleLayers] = useState<Record<string, unknown>[] | null>(null);
   const [spriteReady, setSpriteReady] = useState(false);
-  const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown> } | null>(null);
+  const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(null);
+  // Review deploy: the feature a reviewer chose to comment on (row-targeted comments panel below the map).
+  const [reviewFeature, setReviewFeature] = useState<{ fid: number; props: Record<string, unknown> } | null>(null);
   // Close the popup when the item changes (a stale popup over a different layer would mislead).
-  useEffect(() => { setPopup(null); }, [item.id]);
+  useEffect(() => { setPopup(null); setReviewFeature(null); }, [item.id]);
 
   useEffect(() => {
     setStyleLayers(null);  // clear immediately so the prior render's layers don't linger on switch
@@ -751,8 +819,9 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
     const f = e.features?.[0];
     if (!f) { setPopup(null); return; }
     const props = (f.properties ?? {}) as Record<string, unknown>;
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, props });
-    if (f.id != null) onFeatureClick?.(Number(f.id), props);
+    const fid = f.id != null ? Number(f.id) : null;
+    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, props, fid });
+    if (fid != null) onFeatureClick?.(fid, props);
   };
   return (
     <>
@@ -847,11 +916,28 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
                     ))}
                   </tbody>
                 </table>
+                {IS_REVIEW && popup.fid != null && (
+                  <button
+                    className="mt-1.5 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20"
+                    onClick={() => { setReviewFeature({ fid: popup.fid!, props: popup.props }); setPopup(null); }}>
+                    💬 Comment on this feature
+                  </button>
+                )}
               </div>
             </Popup>
           )}
         </MapGL>
       </div>
+      {IS_REVIEW && reviewFeature && (
+        <div className="mt-2 max-w-[760px] rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">Feature review</h3>
+            <button className="text-xs text-muted-foreground hover:underline" onClick={() => setReviewFeature(null)}>close</button>
+          </div>
+          <CommentsPanel itemId={String(item.id ?? "")} target={{ kind: "row", featureId: reviewFeature.fid }}
+            label={`Comments on feature #${reviewFeature.fid}`} />
+        </div>
+      )}
       {/* Legend follows the active render: explicit entries for icon renders (box-type pie wedges),
           else derived from the style's paint. */}
       {/* Legend source order: explicit render legend (icon renders) → STAC classification:classes
@@ -963,7 +1049,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
     <>
       <PmtilesMap item={item} focus={focus} onFeatureClick={pq ? onFeatureClick : undefined} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} />}
+      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")} />}
     </>
   );
 }
@@ -1018,12 +1104,32 @@ function DataTable<T>({ columns, data, onRowClick, initialSorting }: {
 // the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 7000-row tables.
 // Geometry is excluded (use Download / OGC API / the map for geometry).
 const PAGE_SIZE = 25;
-function DataExplorer({ href, onPick, mapPick }: {
+const PAGE_SIZES = [25, 50, 100, 250];
+// "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
+// so only the visible window renders. Capped so a pathological table can't OOM the tab.
+const ALL_CAP = 100_000;
+function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
+  reviewItemId?: string;  // review deploy: enables per-row + multi-select feature comments
 }) {
+  const review = Boolean(IS_REVIEW && reviewItemId);
+  // Feature comments: selected feature_ids (tracked by id, not TanStack row-selection, because the
+  // table is server-paged — row ids reset each page, feature_ids are stable across pages).
+  const [selFids, setSelFids] = useState<Set<number>>(new Set());
+  const [composeOpen, setComposeOpen] = useState(false);
+  const [collapsed, setCollapsed] = useState(false);
+  useEffect(() => { setSelFids(new Set()); setComposeOpen(false); }, [href]);
+  const toggleFid = (fid: number) => setSelFids((prev) => {
+    const next = new Set(prev);
+    if (next.has(fid)) next.delete(fid); else next.add(fid);
+    return next;
+  });
   const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [showAll, setShowAll] = useState(false);  // "All" rows in one virtualized page
   const [sorting, setSorting] = useState<SortingState>([]);
+  const scrollRef = useRef<HTMLDivElement>(null);  // virtualizer scroll viewport (the resizable box)
   const [search, setSearch] = useState("");
   // feature_id of the row picked from the map (or a table click) — highlighted in the table.
   const [highlightId, setHighlightId] = useState<number | null>(null);
@@ -1069,14 +1175,14 @@ function DataExplorer({ href, onPick, mapPick }: {
     let live = true;
     setLoading(true);
     import("./download").then(({ queryParquet }) => queryParquet(href, {
-      limit: PAGE_SIZE, offset: pageIndex * PAGE_SIZE,
+      limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
       orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
     }))
       .then((d) => { if (live) { setPage(d); setErr(undefined); } })
       .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); })
       .finally(() => { if (live) setLoading(false); });
     return () => { live = false; };
-  }, [href, pageIndex, sort?.id, sort?.desc, applied.search, filterKey]);
+  }, [href, pageIndex, pageSize, showAll, sort?.id, sort?.desc, applied.search, filterKey]);
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
     () => (page?.columns ?? []).map((c) => ({
@@ -1099,18 +1205,38 @@ function DataExplorer({ href, onPick, mapPick }: {
   });
 
   const total = page?.total ?? 0;
-  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pageCount = showAll ? 1 : Math.max(1, Math.ceil(total / pageSize));
+
+  // Virtualize the rows so "All" (up to ~7k) renders only the visible window. Works for paged views
+  // too (small counts → negligible overhead). Scroll viewport = the resizable box (scrollRef).
+  const rowModel = table.getRowModel().rows;
+  const rowVirt = useVirtualizer({
+    count: rowModel.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => 29,   // single-line truncated rows; uniform enough to skip per-row measure
+    overscan: 16,
+  });
+  const vItems = rowVirt.getVirtualItems();
+  const padTop = vItems.length ? vItems[0].start : 0;
+  const padBottom = vItems.length ? rowVirt.getTotalSize() - vItems[vItems.length - 1].end : 0;
+  const colCount = (page?.columns?.length ?? 1) + (review ? 1 : 0);
   const btn = "rounded border border-border bg-card px-2 py-0.5 text-xs text-foreground hover:border-primary disabled:opacity-40";
   const fIn = "w-full min-w-[64px] rounded border border-input bg-card px-1 py-0.5 text-[11px] font-normal normal-case text-foreground";
   const hasFilters = Boolean(search) || applied.filters.length > 0
     || Object.values(draft).some((d) => d.min || d.max || d.text);
   const clearAll = () => { setSearch(""); setDraft({}); };
 
+  // Feature-comment selection helpers (review deploy). feature_ids are the stable per-row handle.
+  const pageFids = (page?.rows ?? []).map((r) => Number(r.feature_id)).filter((n) => Number.isFinite(n));
+  const pageAllSelected = pageFids.length > 0 && pageFids.every((f) => selFids.has(f));
+  const pageSomeSelected = pageFids.some((f) => selFids.has(f));
+  const selArr = [...selFids];
+
   // Row click → zoom + highlight. Fire the bbox immediately (instant feedback), then fetch the
   // real geometry (same filter+sort, offset = page start + row index) and upgrade the highlight.
   const pick = (i: number, bbox: [number, number, number, number]) => {
     if (!onPick) return;
-    const offset = pageIndex * PAGE_SIZE + i;
+    const offset = pageIndex * pageSize + i;
     const key = `row:${offset}`;          // same key for both onPick calls → one fly per click
     onPick({ bbox, key });
     import("./download").then(({ fetchGeometry }) => fetchGeometry(href,
@@ -1136,7 +1262,7 @@ function DataExplorer({ href, onPick, mapPick }: {
       const pos = await ordinalByFeatureId(href, mapPick.id, {
         orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
       });
-      if (live && pos != null) setPageIndex(Math.floor(pos / PAGE_SIZE));
+      if (live && pos != null) setPageIndex(Math.floor(pos / pageSize));
     })();
     return () => { live = false; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1145,6 +1271,9 @@ function DataExplorer({ href, onPick, mapPick }: {
   return (
     <div className="mt-2">
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
+        <button className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:border-primary"
+          title={collapsed ? "Expand table" : "Collapse table"} aria-expanded={!collapsed}
+          onClick={() => setCollapsed((v) => !v)}>{collapsed ? "▸" : "▾"}</button>
         <input className={C.input} placeholder="Search all columns…" value={search}
           onChange={(e) => setSearch(e.target.value)} />
         <span className={C.muted}>
@@ -1154,11 +1283,32 @@ function DataExplorer({ href, onPick, mapPick }: {
         {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
       </div>
       {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
-      <div className="max-w-full overflow-x-auto rounded-md border border-border text-[12px]">
+      {review && selFids.size > 0 && (
+        <div className="mb-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
+          <span className="font-medium text-amber-700 dark:text-amber-400">{selFids.size} feature{selFids.size === 1 ? "" : "s"} selected</span>
+          <button className="rounded border border-amber-500/50 bg-amber-500/15 px-2 py-0.5 font-medium text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
+            onClick={() => setComposeOpen(true)}>💬 Comment on {selFids.size === 1 ? "feature" : `${selFids.size} features`}</button>
+          <button className="text-muted-foreground hover:underline" onClick={() => { setSelFids(new Set()); setComposeOpen(false); }}>clear</button>
+        </div>
+      )}
+      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-[12px] ${collapsed ? "hidden" : "h-[28rem] min-h-[10rem]"}`}>
         <table className="w-full border-collapse">
-          <thead>
+          <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
+                {review && (
+                  <th className={`${C.th} w-8 text-center`} title="Select features to comment on">
+                    <input type="checkbox" aria-label="Select all rows on this page"
+                      checked={pageAllSelected}
+                      ref={(el) => { if (el) el.indeterminate = pageSomeSelected && !pageAllSelected; }}
+                      onChange={() => setSelFids((prev) => {
+                        const next = new Set(prev);
+                        if (pageAllSelected) pageFids.forEach((f) => next.delete(f));
+                        else pageFids.forEach((f) => next.add(f));
+                        return next;
+                      })} />
+                  </th>
+                )}
                 {hg.headers.map((h) => {
                   const s = h.column.getIsSorted();
                   return (
@@ -1172,6 +1322,7 @@ function DataExplorer({ href, onPick, mapPick }: {
             ))}
             {/* Per-column filter row: numeric → min/max range, text → substring. */}
             <tr>
+              {review && <th className="border-b border-border" />}
               {(page?.columns ?? []).map((col) => {
                 const kind = page?.types[col] ?? "text";
                 const d = draft[col] ?? {};
@@ -1196,35 +1347,97 @@ function DataExplorer({ href, onPick, mapPick }: {
             </tr>
           </thead>
           <tbody>
-            {table.getRowModel().rows.map((r) => {
+            {/* Virtualized window: only the visible rows are in the DOM; spacer rows hold the scroll
+                height above/below so "All" (up to ~7k rows) stays smooth. */}
+            {padTop > 0 && <tr aria-hidden style={{ height: padTop }}><td colSpan={colCount} /></tr>}
+            {vItems.map((vi) => {
+              const r = rowModel[vi.index];
               const bbox = page?.bboxes[r.index] ?? null;
               const clickable = Boolean(onPick && bbox);
               const fid = r.original.feature_id;
-              const hl = fid != null && Number(fid) === highlightId;
+              const nfid = fid != null ? Number(fid) : null;
+              const hl = nfid != null && nfid === highlightId;
               return (
-                <tr key={r.id}
+                <tr key={r.id} data-index={vi.index} ref={rowVirt.measureElement}
                   className={`${hl ? "bg-amber-100 dark:bg-amber-900/40" : ""} ${clickable ? "cursor-pointer hover:bg-muted" : ""}`.trim() || undefined}
                   title={clickable ? "Zoom to feature on map" : undefined}
-                  onClick={clickable ? () => { pick(r.index, bbox!); if (fid != null) setHighlightId(Number(fid)); } : undefined}>
+                  onClick={clickable ? () => { pick(r.index, bbox!); if (nfid != null) setHighlightId(nfid); } : undefined}>
+                  {review && (
+                    <td className="w-8 px-1 text-center align-middle" onClick={(e) => e.stopPropagation()}>
+                      {nfid != null ? (
+                        <div className="flex items-center gap-1">
+                          <input type="checkbox" aria-label={`Select feature ${nfid}`}
+                            checked={selFids.has(nfid)} onChange={() => toggleFid(nfid)} />
+                          <button title="Comment on this feature" className="text-xs hover:opacity-70"
+                            onClick={() => { setSelFids(new Set([nfid])); setComposeOpen(true); }}>💬</button>
+                        </div>
+                      ) : null}
+                    </td>
+                  )}
                   {r.getVisibleCells().map((c) => (
                     <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>
                   ))}
                 </tr>
               );
             })}
+            {padBottom > 0 && <tr aria-hidden style={{ height: padBottom }}><td colSpan={colCount} /></tr>}
             {!loading && total === 0 && (
-              <tr><td className="px-2.5 py-2 text-muted-foreground" colSpan={Math.max(1, columns.length)}>No rows match.</td></tr>
+              <tr><td className="px-2.5 py-2 text-muted-foreground" colSpan={colCount}>No rows match.</td></tr>
             )}
           </tbody>
         </table>
       </div>
-      <div className="mt-1.5 flex items-center gap-1.5 text-xs">
+      <div className={`mt-1.5 flex flex-wrap items-center gap-1.5 text-xs ${collapsed ? "hidden" : ""}`}>
         <button className={btn} disabled={pageIndex === 0} onClick={() => setPageIndex(0)}>«</button>
         <button className={btn} disabled={pageIndex === 0} onClick={() => setPageIndex((i) => i - 1)}>‹ Prev</button>
         <span className="px-1 text-muted-foreground">Page {pageIndex + 1} of {pageCount}</span>
         <button className={btn} disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex((i) => i + 1)}>Next ›</button>
         <button className={btn} disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex(pageCount - 1)}>»</button>
+        <label className="ml-1 flex items-center gap-1 text-muted-foreground">
+          Rows
+          <select className="rounded border border-border bg-card px-1 py-0.5 text-foreground"
+            value={showAll ? "all" : pageSize}
+            onChange={(e) => {
+              setPageIndex(0);
+              if (e.target.value === "all") { setShowAll(true); }
+              else { setShowAll(false); setPageSize(Number(e.target.value)); }
+            }}>
+            {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+            <option value="all">All</option>
+          </select>
+        </label>
+        <label className="flex items-center gap-1 text-muted-foreground">
+          Go to
+          <input type="number" min={1} max={pageCount}
+            className="w-16 rounded border border-border bg-card px-1 py-0.5 text-foreground"
+            value={pageIndex + 1}
+            onChange={(e) => {
+              const n = Number(e.target.value);
+              if (Number.isFinite(n)) setPageIndex(Math.min(pageCount, Math.max(1, n)) - 1);
+            }} />
+        </label>
+        {total > 0 && (
+          <span className="ml-auto text-muted-foreground">
+            {showAll
+              ? `1–${rowModel.length.toLocaleString()}${rowModel.length < total ? ` (capped at ${ALL_CAP.toLocaleString()})` : ""}`
+              : `${(pageIndex * pageSize + 1).toLocaleString()}–${Math.min((pageIndex + 1) * pageSize, total).toLocaleString()}`}
+            {" "}of {total.toLocaleString()}
+          </span>
+        )}
       </div>
+      {review && composeOpen && selFids.size > 0 && (
+        <div className="mt-2 max-w-[760px] rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-semibold">
+              {selArr.length > 1 ? `Comment on ${selArr.length} features` : `Feature #${selArr[0]}`}
+            </h3>
+            <button className="text-xs text-muted-foreground hover:underline" onClick={() => setComposeOpen(false)}>close</button>
+          </div>
+          <CommentsPanel itemId={reviewItemId!}
+            target={{ kind: "row", featureIds: selArr, featureId: selArr.length === 1 ? selArr[0] : undefined }}
+            label={selArr.length > 1 ? `New note on ${selArr.length} features` : `Comments on feature #${selArr[0]}`} />
+        </div>
+      )}
     </div>
   );
 }
@@ -1997,6 +2210,49 @@ function IssueContents({ item }: { item: StacDoc }) {
   );
 }
 
+// Review deploy only: reviews baked into the catalog detail — a diff vs the live version, an
+// item-level comment thread, and a per-column comment button (flag a wrong name/unit/type).
+function CatalogReview({ item }: { item: StacDoc }) {
+  const id = String(item.id ?? "");
+  const geoparquet = Object.entries(item.assets ?? {})
+    .find(([k, a]) => /parquet/i.test(String(a.type ?? "")) || /parquet|geoparquet/i.test(k))?.[1]?.href;
+  const cols = tableColumns(item);
+  const [openCol, setOpenCol] = useState<string | null>(null);
+  if (!id) return null;
+  return (
+    <section className="mt-4 max-w-[760px] rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+      <h3 className="text-sm font-semibold">Review</h3>
+      {geoparquet && <DiffPanel stem={id} reviewParquetUrl={geoparquet} />}
+      <CommentsPanel itemId={id} />
+      {cols && cols.length > 0 && (
+        <div className="mt-3">
+          <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Columns</div>
+          <ul className="divide-y divide-border rounded border border-border text-xs">
+            {cols.map((c) => (
+              <li key={c.name} className="px-2 py-1">
+                <div className="flex items-center gap-2">
+                  <code className="font-medium text-foreground">{c.name}</code>
+                  {c.type && <span className="text-muted-foreground">{c.type}</span>}
+                  {c.description && <span className="truncate text-muted-foreground">— {c.description}</span>}
+                  <button
+                    className="ml-auto shrink-0 text-primary hover:underline"
+                    onClick={() => setOpenCol(openCol === c.name ? null : c.name)}>
+                    {openCol === c.name ? "close" : "comment"}
+                  </button>
+                </div>
+                {openCol === c.name && (
+                  <CommentsPanel itemId={id} target={{ kind: "column", column: c.name }}
+                    label={`Comments on “${c.name}”`} />
+                )}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function ItemDetail({ collectionId, item, onBack, onMap }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
 }) {
@@ -2040,6 +2296,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
       <ExportPanel item={item} />
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />
+      {IS_REVIEW && <CatalogReview item={item} />}
       <table className="mt-3 w-full max-w-[760px] table-fixed border-collapse text-sm">
         <tbody>
           {Object.entries(p)

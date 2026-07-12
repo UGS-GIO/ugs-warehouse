@@ -31,9 +31,9 @@ async function newDb(duckdb: typeof import("@duckdb/duckdb-wasm")) {
 }
 
 /** ATTACH a remote DuckDB over HTTP (range-read), load its extension, and switch into it so the
- * extension's macros (fts_main_*, vss) resolve. Returns a ready connection. The engine JS loads
- * lazily here (dynamic import) — nothing downloads until the first search. */
-export async function attach(dbUrl: string, alias: string, ext: "fts" | "vss"): Promise<Conn> {
+ * extension's macros (fts_main_*) resolve. Returns a ready connection. The engine JS loads lazily
+ * here (dynamic import) — nothing downloads until the first search. */
+export async function attach(dbUrl: string, alias: string, ext: "fts"): Promise<Conn> {
   const duckdb = await import("@duckdb/duckdb-wasm");
   const db = await newDb(duckdb);
   const conn = await db.connect();
@@ -47,13 +47,23 @@ export async function attach(dbUrl: string, alias: string, ext: "fts" | "vss"): 
 
 /** Open a connection with remote parquet files registered for HTTP range-reads. Query them by their
  * registered name, e.g. `read_parquet('review.parquet')`. Used by the _review↔_current diff — no
- * extension needed (GeoParquet `geom` reads as raw WKB BLOB, so `md5(geom)` hashes geometry directly). */
-export async function openParquet(files: Record<string, string>): Promise<Conn> {
+ * extension needed (GeoParquet `geom` reads as raw WKB BLOB, so `md5(geom)` hashes geometry directly).
+ *
+ * Returns a `close()` that MUST be called when done: this spins up a dedicated engine + worker, so
+ * without teardown every call leaks the worker thread + its WASM heap (tens of MB each). */
+export async function openParquet(
+  files: Record<string, string>,
+): Promise<{ conn: Conn; close: () => Promise<void> }> {
   const duckdb = await import("@duckdb/duckdb-wasm");
   const db = await newDb(duckdb);
   const conn = await db.connect();
   for (const [name, url] of Object.entries(files)) {
     await db.registerFileURL(name, url, duckdb.DuckDBDataProtocol.HTTP, false);
   }
-  return conn;
+  // terminate() tears down the worker thread + frees the WASM heap; close the connection first.
+  const close = async () => {
+    try { await conn.close(); }
+    finally { await db.terminate(); }
+  };
+  return { conn, close };
 }

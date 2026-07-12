@@ -40,17 +40,33 @@ def _conn_kwargs() -> dict:
     }
 
 
+# A comment targets 1..N items, and optionally 1..N features (rows) or a column of those items.
+# target_kind = item | row | column. Both item_ids and feature_ids are arrays so one comment can span
+# several items/features (the multi-select "comment on N features" flow). ALTERs migrate the
+# already-created table (Gemini's hotfix, which had a scalar feature_id) in place.
 _DDL = """
     CREATE TABLE IF NOT EXISTS review.comments (
-      id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-      item_ids   TEXT[]      NOT NULL,
-      body       TEXT        NOT NULL,
-      author     TEXT        NOT NULL,
-      status     TEXT        NOT NULL DEFAULT 'open',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      item_ids    TEXT[]      NOT NULL,
+      target_kind TEXT        NOT NULL DEFAULT 'item',
+      feature_ids BIGINT[],
+      column_name TEXT,
+      body        TEXT        NOT NULL,
+      author      TEXT        NOT NULL,
+      status      TEXT        NOT NULL DEFAULT 'open',
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS target_kind TEXT NOT NULL DEFAULT 'item';
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS feature_ids BIGINT[];
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS column_name TEXT;
+    -- Migrate the earlier scalar feature_id (if that column exists) into the array, then drop it.
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS feature_id BIGINT;
+    UPDATE review.comments SET feature_ids = ARRAY[feature_id]
+      WHERE feature_id IS NOT NULL AND feature_ids IS NULL;
+    ALTER TABLE review.comments DROP COLUMN IF EXISTS feature_id;
     CREATE INDEX IF NOT EXISTS comments_items_gin ON review.comments USING GIN (item_ids);
+    CREATE INDEX IF NOT EXISTS comments_features_gin ON review.comments USING GIN (feature_ids);
 """
 
 
@@ -91,6 +107,9 @@ def _author(request: Request) -> str:
 class NewComment(BaseModel):
     item_ids: list[str] = Field(min_length=1)  # 1..N STAC item ids the comment applies to
     body: str
+    target_kind: str = "item"                  # item | row | column
+    feature_ids: list[int] | None = None       # 1..N feature ids when target_kind = row
+    column_name: str | None = None             # set when target_kind = column
 
 
 class PatchComment(BaseModel):
@@ -102,17 +121,26 @@ class PatchComment(BaseModel):
 async def create_comment(c: NewComment, request: Request) -> dict:
     if not c.body.strip():
         raise HTTPException(status_code=400, detail="body required")
+    if c.target_kind not in ("item", "row", "column"):
+        raise HTTPException(status_code=400, detail="target_kind must be item|row|column")
     author = _author(request)
     pool = await _get_pool()
     row = await pool.fetchrow(
-        "INSERT INTO review.comments (item_ids, body, author) VALUES ($1, $2, $3) RETURNING *",
-        c.item_ids, c.body.strip(), author,
+        "INSERT INTO review.comments (item_ids, body, author, target_kind, feature_ids, column_name) "
+        "VALUES ($1, $2, $3, $4, $5, $6) RETURNING *",
+        c.item_ids, c.body.strip(), author, c.target_kind, c.feature_ids, c.column_name,
     )
     return dict(row)
 
 
 @router.get("")
-async def list_comments(request: Request, item_id: str | None = None, status: str | None = None) -> list[dict]:
+async def list_comments(
+    request: Request,
+    item_id: str | None = None,
+    status: str | None = None,
+    feature_id: int | None = None,
+    column: str | None = None,
+) -> list[dict]:
     _author(request)  # require an authenticated session
     pool = await _get_pool()
     where, args = ["TRUE"], []
@@ -122,6 +150,12 @@ async def list_comments(request: Request, item_id: str | None = None, status: st
     if status:
         args.append(status)
         where.append(f"status = ${len(args)}")
+    if feature_id is not None:
+        args.append(feature_id)
+        where.append(f"${len(args)} = ANY(feature_ids)")
+    if column is not None:
+        args.append(column)
+        where.append(f"column_name = ${len(args)}")
     rows = await pool.fetch(
         f"SELECT * FROM review.comments WHERE {' AND '.join(where)} ORDER BY created_at DESC", *args
     )

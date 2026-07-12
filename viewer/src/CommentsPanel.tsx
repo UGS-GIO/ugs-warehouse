@@ -1,30 +1,43 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
-import { type Comment, createComment, deleteComment, listComments, setStatus, whoami } from "./comments";
+import { type Comment, type CommentTarget, createComment, deleteComment, listComments, setStatus, whoami } from "./comments";
 
-// Per-item review comments — list + add + resolve/delete. Rendered on the review deploy only (App.tsx
-// gates it), same-origin behind IAP so the author is the signed-in reviewer.
-export function CommentsPanel({ itemId }: { itemId: string }) {
+// Review comments for a target (whole item, a feature/row, or a column) — list + add + resolve/delete.
+// Review deploy only (callers gate on IS_REVIEW), same-origin behind IAP so the author is the reviewer.
+export function CommentsPanel({ itemId, target, label = "Review comments" }: {
+  itemId: string; target?: CommentTarget; label?: string;
+}) {
   const qc = useQueryClient();
-  const key = ["comments", itemId];
-  const invalidate = () => qc.invalidateQueries({ queryKey: key });
+  // Multi-select (comment on N features at once) has no single thread to show — compose only.
+  const composeOnly = (target?.featureIds?.length ?? 0) > 1;
+  const key = ["comments", itemId, target?.kind ?? "item", target?.featureId ?? null, target?.column ?? null];
+  const invalidate = () => {
+    qc.invalidateQueries({ queryKey: key });
+    qc.invalidateQueries({ queryKey: ["comments-all"] });  // keep the Review dashboard fresh
+  };
 
   const { data: comments = [], isLoading, error } = useQuery({
-    queryKey: key, queryFn: () => listComments(itemId), retry: false,
+    queryKey: key,
+    queryFn: () => listComments(itemId, { featureId: target?.featureId, column: target?.column }),
+    retry: false,
+    enabled: !composeOnly,
   });
   const me = useQuery({ queryKey: ["whoami"], queryFn: whoami, retry: false, staleTime: Infinity });
   const myEmail = me.data?.email;
 
   const [body, setBody] = useState("");
-  const add = useMutation({ mutationFn: () => createComment([itemId], body), onSuccess: () => { setBody(""); invalidate(); } });
+  const add = useMutation({ mutationFn: () => createComment([itemId], body, target), onSuccess: () => { setBody(""); invalidate(); } });
   const toggle = useMutation({ mutationFn: (c: Comment) => setStatus(c.id, c.status === "resolved" ? "open" : "resolved"), onSuccess: invalidate });
   const remove = useMutation({ mutationFn: (id: number) => deleteComment(id), onSuccess: invalidate });
 
-  const notConfigured = error && /\b503\b/.test(String(error));
+  // 503 = DB not wired on the deploy; the HTML/JSON-parse errors = no API behind this origin (local dev,
+  // or the public build where /api/comments doesn't exist). Both → "backend not available", not a scary error.
+  const notConfigured = error &&
+    /\b503\b|Unexpected token|not valid JSON|<!doctype/i.test(String(error));
 
   return (
     <div className="mt-3 rounded-md border border-border bg-card/50 p-2 text-xs">
-      <div className="mb-1.5 font-medium">Review comments{comments.length ? ` (${comments.length})` : ""}</div>
+      <div className="mb-1.5 font-medium">{label}{comments.length ? ` (${comments.length})` : ""}</div>
 
       {isLoading && <p className="text-muted-foreground">Loading…</p>}
       {error && (
@@ -32,7 +45,7 @@ export function CommentsPanel({ itemId }: { itemId: string }) {
           {notConfigured ? "Comments backend not configured yet." : `Couldn't load comments (${String(error)}).`}
         </p>
       )}
-      {!isLoading && !error && comments.length === 0 && (
+      {!composeOnly && !isLoading && !error && comments.length === 0 && (
         <p className="text-muted-foreground">No comments yet.</p>
       )}
 

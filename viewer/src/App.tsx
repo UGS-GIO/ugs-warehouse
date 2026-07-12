@@ -11,6 +11,7 @@ import { CATALOG_URL, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesA
 import { useTheme } from "./theme";
 import { UserBadge } from "./UserBadge";
 import { DiffPanel } from "./DiffPanel";
+import { CommentsPanel } from "./CommentsPanel";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
@@ -71,6 +72,7 @@ function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
       {isReview && geoparquet && (
         <DiffPanel stem={String(item.id ?? "")} reviewParquetUrl={geoparquet} />
       )}
+      {isReview && item.id && <CommentsPanel itemId={String(item.id)} />}
       <table className="mt-2 w-full border-collapse text-sm">
         <tbody>
           {Object.entries(p).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (

@@ -23,6 +23,10 @@ async function api<T>(url: string, opts?: RequestInit): Promise<T> {
 export const listComments = (itemId: string) =>
   api<Comment[]>(`/api/comments?item_id=${encodeURIComponent(itemId)}`);
 
+// All comments across the catalog (Review dashboard), optionally filtered by status.
+export const listAllComments = (status?: string) =>
+  api<Comment[]>(`/api/comments${status ? `?status=${encodeURIComponent(status)}` : ""}`);
+
 export const createComment = (itemIds: string[], body: string) =>
   api<Comment>(`/api/comments`, { method: "POST", body: JSON.stringify({ item_ids: itemIds, body }) });
 

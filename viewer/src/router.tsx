@@ -6,7 +6,7 @@ import { createBrowserHistory, createRootRoute, createRouter } from "@tanstack/r
 
 import { App } from "./App";
 
-const NAV_VIEWS = ["map", "search", "arch", "guide"] as const;  // "catalog" is the param-less default
+const NAV_VIEWS = ["map", "search", "arch", "guide", "review"] as const;  // "catalog" is the param-less default
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);
 
 // Nav state lives in the URL search. view/c/i/l/s are typed; any OTHER param (catalog, m, ftsdb,

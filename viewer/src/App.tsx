@@ -12,6 +12,7 @@ import { useTheme } from "./theme";
 import { UserBadge } from "./UserBadge";
 import { DiffPanel } from "./DiffPanel";
 import { CommentsPanel } from "./CommentsPanel";
+import { ReviewDashboard } from "./ReviewDashboard";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
@@ -22,7 +23,9 @@ const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its fo
 const ROOT_HREF = location.pathname || "/";
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-type View = "catalog" | "map" | "arch" | "guide" | "search";
+type View = "catalog" | "map" | "arch" | "guide" | "search" | "review";
+// Review deploy = catalog points at review/stac. Gates the review-only UI (diff, comments, dashboard).
+const IS_REVIEW = CATALOG_URL.includes("/review/");
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
 // An ItemRef → map ActiveLayer. Prefer PMTiles (vector); else fall back to a COG (raster) so
@@ -352,6 +355,7 @@ export function App() {
           <span className={tab(view === "search")} onClick={() => setView("search")}>Search</span>
           <span className={tab(view === "arch")} onClick={() => setView("arch")}>Architecture</span>
           <span className={tab(view === "guide")} onClick={() => setView("guide")}>Guide</span>
+          {IS_REVIEW && <span className={tab(view === "review")} onClick={() => setView("review")}>Review</span>}
           <ThemeToggle />
           <UserBadge />
         </div>
@@ -359,7 +363,10 @@ export function App() {
 
       {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
 
-      {view === "guide" ? (
+      {view === "review" ? (
+        // Review data are vector serving-topics → the ugs-serving-topics collection. Open the item there.
+        <ReviewDashboard onOpen={(itemId) => go({ view: "catalog", c: "ugs-serving-topics", i: itemId })} />
+      ) : view === "guide" ? (
         <Guide />
       ) : view === "arch" ? (
         <Architecture />

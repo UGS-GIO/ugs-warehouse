@@ -1,12 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { type Comment, deleteComment, listAllComments, setStatus, whoami } from "./comments";
+import { ReviewReport } from "./ReviewReport";
 
 // Review dashboard — every comment across the catalog, filterable by status, resolve/reopen/delete inline.
 // A "Review" tab (App.tsx) renders this on the review deploy only. onOpen jumps to the item's catalog page.
 export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }) {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<"open" | "all" | "resolved">("open");
+  const [report, setReport] = useState(false);
   const invalidate = () => qc.invalidateQueries({ queryKey: ["comments-all"] });
 
   const { data: comments = [], isLoading, error } = useQuery({
@@ -33,7 +35,13 @@ export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }
               : "border-border bg-card text-foreground hover:bg-accent"}`}>{f}</button>
         ))}
         {!isLoading && !error && <span className="self-center text-muted-foreground">· {comments.length} shown</span>}
+        <button onClick={() => setReport(true)}
+          className="ml-auto rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
+          Report / export ↧
+        </button>
       </div>
+
+      {report && <ReviewReport onClose={() => setReport(false)} onOpen={(id) => { setReport(false); onOpen(id); }} />}
 
       {isLoading && <p className="mt-3 text-sm text-muted-foreground">Loading…</p>}
       {error && (

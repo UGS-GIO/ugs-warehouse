@@ -38,6 +38,7 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
   const reviewers = useQuery({ queryKey: ["reviewers"], queryFn: listReviewers, retry: false, staleTime: 5 * 60_000 });
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [mentions, setMentions] = useState<string[]>([]);  // current dropdown matches (empty = hidden)
+  const [mentionIdx, setMentionIdx] = useState(0);         // keyboard-highlighted row in the dropdown
 
   const onBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value;
@@ -46,6 +47,17 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
     if (!tok || !reviewers.data?.length) return setMentions([]);
     const q = tok.query.toLowerCase();
     setMentions(reviewers.data.filter((r) => r.toLowerCase().includes(q)).slice(0, 6));
+    setMentionIdx(0);  // reset the highlight to the top match whenever the list changes
+  };
+
+  // Keyboard-drive the dropdown: ↑/↓ move the highlight, Enter/Tab pick it, Esc dismisses. Only
+  // when the dropdown is open, so a normal textarea (newline on Enter, etc.) is untouched otherwise.
+  const onBodyKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mentions.length === 0) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setMentionIdx((i) => (i + 1) % mentions.length); }
+    else if (e.key === "ArrowUp") { e.preventDefault(); setMentionIdx((i) => (i - 1 + mentions.length) % mentions.length); }
+    else if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); pickMention(mentions[mentionIdx]); }
+    else if (e.key === "Escape") { e.preventDefault(); setMentions([]); }
   };
 
   const pickMention = (email: string) => {
@@ -120,10 +132,11 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
         <div className="relative mt-2 flex gap-1.5">
           {mentions.length > 0 && (
             <ul className="absolute bottom-full left-0 z-10 mb-1 max-h-40 w-56 overflow-auto rounded border border-border bg-card shadow">
-              {mentions.map((email) => (
+              {mentions.map((email, i) => (
                 <li key={email}>
                   <button type="button" onMouseDown={(e) => { e.preventDefault(); pickMention(email); }}
-                    className="block w-full px-2 py-1 text-left hover:bg-muted">
+                    onMouseEnter={() => setMentionIdx(i)}
+                    className={`block w-full px-2 py-1 text-left ${i === mentionIdx ? "bg-muted" : ""}`}>
                     <span className="font-medium text-foreground">@{email.split("@")[0]}</span>
                     <span className="ml-1 text-[10px] text-muted-foreground">{email}</span>
                   </button>
@@ -131,7 +144,7 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
               ))}
             </ul>
           )}
-          <textarea ref={taRef} value={body} onChange={onBodyChange} rows={2}
+          <textarea ref={taRef} value={body} onChange={onBodyChange} onKeyDown={onBodyKeyDown} rows={2}
             onBlur={() => setMentions([])}
             placeholder="Add a review note… (@ to mention)"
             className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs" />

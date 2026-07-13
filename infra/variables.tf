@@ -61,10 +61,10 @@ variable "serving_image" {
   description = "Full image ref for the IAP serving app (Artifact Registry), e.g. REGION-docker.pkg.dev/PROJECT/ugs/ugs-warehouse:TAG."
 }
 
-variable "iap_domain" {
+variable "iap_group" {
   type        = string
-  description = "Google Workspace domain authorized via IAP for the internal surface."
-  default     = "utah.gov"
+  description = "Google Workspace group whose members may pass IAP to the review app — the reviewer set. Members are managed in the Workspace group (not GCP IAM); the app auto-provisions each into review.reviewers on first visit."
+  default     = "nrugsall@utah.gov"
 }
 
 # (No iap_support_email / iap_oauth_client_* / internal_host vars: native Cloud Run IAP uses

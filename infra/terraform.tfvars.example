@@ -33,7 +33,8 @@ ingest_service_account = "warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceacc
 # (the step is allowFailure until this is set).
 build_service_account = "REPLACE-cloudbuild-sa@REPLACE-build-project.iam.gserviceaccount.com"
 
-# IAP — native Cloud Run IAP (no LB / custom domain / DNS / cert). Just the authorized domain; the
-# service is reached on its *.run.app URL (see `tofu output serving_url`). One-time console setting,
-# not tofu: the project's OAuth consent screen needs a support email set once for IAP to serve.
-iap_domain = "utah.gov"
+# IAP — native Cloud Run IAP (no LB / custom domain / DNS / cert). The review group whose members may
+# pass IAP (the reviewer set — manage membership in Workspace, not here). The service is reached on its
+# *.run.app URL (see `tofu output serving_url`). One-time console setting, not tofu: the project's
+# OAuth consent screen needs a support email set once for IAP to serve.
+iap_group = "nrugsall@utah.gov"

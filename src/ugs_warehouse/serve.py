@@ -33,13 +33,18 @@ from ugs_warehouse.core import config
 app = FastAPI(title="ugs-warehouse-review-serving")
 
 # Cross-origin access for the ugs-map-viewer /hazards-review app (Firebase-token auth, no cookies).
-# OFF by default (the IAP service is same-origin); the non-IAP twin sets REVIEW_CORS_ORIGINS to the
-# viewer origins (comma-separated). allow_credentials stays False — auth rides in the Bearer header.
+# OFF by default (the IAP service is same-origin); the non-IAP twin sets these. Token auth is
+# origin-agnostic (verifies the token's project audience, not the Origin), so it already works on
+# Firebase Hosting PREVIEW channels — but CORS must allow their dynamic origins, hence the regex:
+#   REVIEW_CORS_ORIGINS      comma-separated fixed origins (prod/dev/localhost)
+#   REVIEW_CORS_ORIGIN_REGEX regex for preview channels, e.g. https://ut-dnr-ugs-maps-(prod|dev)--.*\.web\.app
+# allow_credentials stays False — auth rides in the Bearer header, not a cookie.
 _cors_origins = [o.strip() for o in os.environ.get("REVIEW_CORS_ORIGINS", "").split(",") if o.strip()]
-if _cors_origins:
+_cors_regex = os.environ.get("REVIEW_CORS_ORIGIN_REGEX", "").strip() or None
+if _cors_origins or _cors_regex:
     from fastapi.middleware.cors import CORSMiddleware
     app.add_middleware(
-        CORSMiddleware, allow_origins=_cors_origins, allow_credentials=False,
+        CORSMiddleware, allow_origins=_cors_origins, allow_origin_regex=_cors_regex, allow_credentials=False,
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"],
     )
 
@@ -58,6 +63,11 @@ async def _init_comments() -> None:
         await comments.init_schema()
     except Exception as e:  # noqa: BLE001
         print(f"[serve] comments DB not ready ({e}); comment routes will 503 until configured")
+
+# API-only mode for the non-IAP twin service: serve ONLY the /api/* review routes, NOT the private
+# review bucket. Without this, a publicly-reachable (Firebase-token-auth) service would stream the
+# private review STAC/assets to anyone — the bucket catch-all has no per-request auth of its own.
+API_ONLY = os.environ.get("REVIEW_API_ONLY", "").lower() in ("1", "true", "yes")
 
 _store = GCSStore(bucket=config.BUCKET)
 
@@ -154,6 +164,11 @@ def _serve_object(object_path: str, request: Request) -> Response:
 
 @app.get("/{object_path:path}")
 def serve(object_path: str, request: Request) -> Response:
+    # The non-IAP twin (public, Firebase-token-auth) must NOT stream the private review bucket — it
+    # exists only for the /api/* review routes. Everything else 404s there.
+    if API_ONLY:
+        raise HTTPException(status_code=404, detail="not found")
+
     object_path = object_path.lstrip("/")
 
     # Root / directory-style paths → the viewer shell.

@@ -105,14 +105,25 @@ resource "google_cloud_run_v2_service" "review_api" {
   }
 }
 
-# Public reachability: the app authenticates each request itself (Firebase token → comments.py
-# _author), so allow unauthenticated *invoke* — requests without a valid token get a 401 from the app.
-resource "google_cloud_run_v2_service_iam_member" "review_api_public" {
+# Reachability: the org's Domain-Restricted-Sharing policy (iam.allowedPolicyMemberDomains) forbids
+# `allUsers`, so this service can NOT be made publicly invokable. Instead it's reached via a Firebase
+# Hosting rewrite (`/hazards-review/api/** → run: ugs-warehouse-review-api`), which invokes it as the
+# Firebase Hosting service agent — a permitted member. Grant that agent run.invoker (var left blank
+# until the Hosting rewrite lands; the agent is
+# service-<PROJECT_NUMBER>@gcp-sa-firebasehosting.iam.gserviceaccount.com). Same-origin, so no CORS.
+variable "hosting_invoker_member" {
+  type        = string
+  description = "IAM member allowed to invoke the review API (the Firebase Hosting service agent). Blank = none yet."
+  default     = ""
+}
+
+resource "google_cloud_run_v2_service_iam_member" "review_api_invoker" {
+  count    = var.hosting_invoker_member != "" ? 1 : 0
   name     = google_cloud_run_v2_service.review_api.name
   project  = var.project_id
   location = var.region
   role     = "roles/run.invoker"
-  member   = "allUsers"
+  member   = var.hosting_invoker_member
 }
 
 output "review_api_url" {

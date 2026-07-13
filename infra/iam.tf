@@ -63,6 +63,18 @@ resource "google_cloud_run_v2_service_iam_member" "build_deploy_serving" {
   member   = "serviceAccount:${var.build_service_account}"
 }
 
+# Same for the non-IAP twin (cloudbuild's deploy-review-api). Without this the build SA 403s on
+# `run services update ugs-warehouse-review-api` and — until deploy-review-api was made allowFailure —
+# that failed the whole deploy. Same serving SA runs it, so the actAs grant above already covers it.
+resource "google_cloud_run_v2_service_iam_member" "build_deploy_review_api" {
+  count    = var.build_service_account != "" ? 1 : 0
+  name     = google_cloud_run_v2_service.review_api.name
+  project  = var.project_id
+  location = var.region
+  role     = "roles/run.admin"
+  member   = "serviceAccount:${var.build_service_account}"
+}
+
 # Deploy SA must be able to actAs the serving SA — deploying a Cloud Run service that RUNS AS the
 # serving SA requires serviceAccountUser on it (serviceAccountAdmin manages SAs but can't actAs one).
 # Work-box hit this mid-apply; folding it in so a clean re-apply never needs the manual grant. Gated

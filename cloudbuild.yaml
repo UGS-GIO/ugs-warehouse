@@ -262,9 +262,12 @@ steps:
       - --region=${_REGION}
 
   # Non-IAP twin (tofu-created; serves the hazards-review app). Same image; only the image is updated
-  # here — env/CloudSQL/no-IAP config is owned by infra/serving-review-api.tf.
+  # here — env/CloudSQL/no-IAP config is owned by infra/serving-review-api.tf. allowFailure so a
+  # missing service / not-yet-granted build SA can't block the whole deploy (needs the service to exist
+  # + build_deploy_review_api in iam.tf; until tf-apply lands both, this step no-ops).
   - id: deploy-review-api
     waitFor: [push-warehouse]
+    allowFailure: true
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:

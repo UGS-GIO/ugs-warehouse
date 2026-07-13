@@ -4,7 +4,7 @@ from django.views.decorators.http import require_POST
 
 from core.iap_auth import admin_required
 
-from . import contents, jobs, overrides, services, stac
+from . import builds, contents, jobs, overrides, services, stac
 
 
 @admin_required
@@ -120,6 +120,18 @@ def service_logs(request, key):
         "key": key, "svc": services.SERVICES.get(key),
         "log": services.logs(key), "console_url": services.console_logs_url(key),
     })
+
+
+@admin_required
+def builds_view(request):
+    """Cloud Build page — a live-polling list of recent deploy builds."""
+    return render(request, "ops/builds.html", {})
+
+
+@admin_required
+def builds_list(request):
+    """The build list partial — self-refreshes (fast while a build is active)."""
+    return render(request, "ops/_builds.html", {"b": builds.recent()})
 
 
 @admin_required

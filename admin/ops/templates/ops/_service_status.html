@@ -9,7 +9,8 @@
     <span class="h-2 w-2 rounded-full {% if status.ready %}bg-green-500{% else %}bg-red-500{% endif %}"></span>
     {% if status.ready %}Ready{% else %}Not ready{% endif %}
   </span>
-  {% if status.revision %}<span class="font-mono text-slate-500">{{ status.revision }}</span>{% endif %}
+  {% if status.sha %}<span class="rounded bg-slate-100 px-1.5 font-mono text-slate-600" title="deployed image tag = git short SHA">{{ status.sha }}</span>{% endif %}
+  {% if status.revision %}<span class="font-mono text-slate-400">{{ status.revision }}</span>{% endif %}
   {% if status.url %}<a href="{{ status.url }}" target="_blank" class="text-blue-600 hover:underline truncate max-w-xs">{{ status.url }}</a>{% endif %}
   {% if status.updated %}<time data-ts="{{ status.updated }}" class="text-slate-400"></time>{% endif %}
 </div>

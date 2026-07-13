@@ -57,11 +57,14 @@ def status(key: str) -> dict:
         s = run_v2.ServicesClient().get_service(name=_service_path(svc))
         cond = s.terminal_condition
         ready = bool(cond and cond.state == run_v2.Condition.State.CONDITION_SUCCEEDED)
+        # Deployed image tag = the git short SHA (cloudbuild deploys :$_TAG) — "what's actually live".
+        image = s.template.containers[0].image if s.template and s.template.containers else ""
         return {
             "ok": True,
             "ready": ready,
             "url": s.uri,
             "revision": (s.latest_ready_revision or "").split("/")[-1],
+            "sha": image.rsplit(":", 1)[-1] if ":" in image else "",
             "condition": (cond.message or ("Ready" if ready else cond.reason)) if cond else "",
             "updated": s.update_time.isoformat() if s.update_time else "",
         }

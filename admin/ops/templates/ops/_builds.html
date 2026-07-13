@@ -1,0 +1,39 @@
+{% comment %}Build list — refetched into #builds every 8s (live while something's WORKING).{% endcomment %}
+{% if b.dry_run %}
+  <div class="text-xs text-amber-600">{{ b.message }}</div>
+{% elif not b.ok %}
+  <div class="text-xs text-red-600">⚠ {{ b.message }}</div>
+{% elif not b.builds %}
+  <div class="text-xs text-slate-400">No recent builds.</div>
+{% else %}
+<div class="overflow-hidden rounded-lg border border-slate-200">
+  <table class="w-full text-xs">
+    <thead class="bg-slate-50 text-slate-500">
+      <tr>
+        <th class="px-3 py-1.5 text-left font-medium">Status</th>
+        <th class="px-3 py-1.5 text-left font-medium">Commit</th>
+        <th class="px-3 py-1.5 text-left font-medium">Started</th>
+        <th class="px-3 py-1.5 text-left font-medium">Duration</th>
+        <th class="px-3 py-1.5 text-left font-medium"></th>
+      </tr>
+    </thead>
+    <tbody class="divide-y divide-slate-100">
+      {% for row in b.builds %}
+      <tr>
+        <td class="px-3 py-1.5">
+          <span class="inline-flex items-center gap-1.5 {{ row.color }}">
+            {% if not row.terminal %}<span class="h-2 w-2 rounded-full bg-blue-500 animate-pulse"></span>{% endif %}
+            {{ row.status }}
+          </span>
+          {% if row.failed_step %}<div class="text-[10px] text-red-500">✗ {{ row.failed_step }}</div>{% endif %}
+        </td>
+        <td class="px-3 py-1.5 font-mono text-slate-600">{{ row.tag|default:"—" }}</td>
+        <td class="px-3 py-1.5"><time data-ts="{{ row.created }}" class="text-slate-500"></time></td>
+        <td class="px-3 py-1.5 text-slate-500">{{ row.duration|default:"—" }}</td>
+        <td class="px-3 py-1.5"><a href="{{ row.console_url }}" target="_blank" class="text-blue-600 hover:underline">logs ↗</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}

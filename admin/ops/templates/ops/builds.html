@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Builds · Warehouse Ops{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-4xl">
+  <h1 class="text-xl font-semibold">Cloud Build</h1>
+  <p class="mt-0.5 text-sm text-slate-500">Recent deploy builds — live status, auto-refreshes every 8s. Read-only (watch a push build + deploy here instead of the console).</p>
+  <div id="builds" class="mt-4" hx-get="{% url 'ops:builds_list' %}" hx-trigger="load, every 8s" hx-swap="innerHTML"></div>
+</div>
+{% endblock %}

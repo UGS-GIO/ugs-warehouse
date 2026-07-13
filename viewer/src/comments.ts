@@ -74,6 +74,37 @@ export const deleteComment = (id: number) =>
 
 export const whoami = () => api<{ email: string; user: string }>(`/whoami`);
 
+// Emails of the review Google Group's members — the set that can be @-mentioned in a comment.
+export const listReviewers = () => api<string[]>(`/api/reviewers`);
+
+// ---- In-app notifications ----
+// One notification for the signed-in reviewer: someone @mentioned them, or replied in their thread.
+// Joined to the triggering comment so the UI can label + link it. `seen_at` null = unread.
+export type Notification = {
+  id: number;
+  actor: string;                 // who triggered it
+  kind: "mention" | "reply";
+  seen_at: string | null;
+  created_at: string;
+  comment_id: number;
+  body: string;                  // the comment's text (for a preview snippet)
+  item_ids: string[];
+  target_kind: string;           // item | row | column
+  feature_ids: number[] | null;
+  column_name: string | null;
+  parent_id: number | null;
+};
+
+export const listNotifications = (unseen = false) =>
+  api<Notification[]>(`/api/notifications${unseen ? "?unseen=true" : ""}`);
+
+// Mark mine read: pass ids to mark those, or omit to mark all of mine.
+export const markNotificationsSeen = (ids?: number[]) =>
+  api<{ ok: boolean }>(`/api/notifications/seen`, {
+    method: "POST",
+    body: JSON.stringify({ ids: ids ?? null }),
+  });
+
 // ---- Per-layer review status ----
 export type ItemStatus = { item_id: string; status: string; updated_by: string; updated_at: string };
 // The review lifecycle; `approved` = ready to promote review → current.

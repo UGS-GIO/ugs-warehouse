@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -80,6 +81,30 @@ _DDL = """
       updated_by TEXT        NOT NULL,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+
+    -- In-app notifications: a new comment fans out to the people it @mentions and (for a reply) the
+    -- other participants in the thread. Fully internal — no email/chat. Cascades with the comment.
+    CREATE TABLE IF NOT EXISTS review.notifications (
+      id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      recipient   TEXT        NOT NULL,   -- IAP email being notified
+      actor       TEXT        NOT NULL,   -- who triggered it (the comment author)
+      comment_id  BIGINT      NOT NULL REFERENCES review.comments(id) ON DELETE CASCADE,
+      kind        TEXT        NOT NULL,   -- mention | reply
+      seen_at     TIMESTAMPTZ,
+      created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+    CREATE INDEX IF NOT EXISTS notifications_recipient ON review.notifications (recipient, created_at DESC);
+    CREATE INDEX IF NOT EXISTS notifications_comment ON review.notifications (comment_id);
+
+    -- Reviewer directory: every IAP identity that touches the review app, auto-provisioned on each
+    -- authed request (the UCRC pattern — IAP gates the whole utah.gov domain, so the actual reviewer
+    -- roster is "whoever has used the app"). This is the @-mention autocomplete list + the
+    -- notification-recipient source: no Cloud Identity group (org-policy-blocked) and no env list.
+    CREATE TABLE IF NOT EXISTS review.reviewers (
+      email      TEXT PRIMARY KEY,
+      first_seen TIMESTAMPTZ NOT NULL DEFAULT now(),
+      last_seen  TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
 """
 
 # The layer review lifecycle. `approved` = ready to promote (ingest#190 R→Y).
@@ -135,12 +160,80 @@ class PatchComment(BaseModel):
     status: str | None = None  # open | resolved
 
 
+# @token = the "@name" the composer inserts (localpart). Only matched at a word boundary, so the
+# domain of a literal email in the body ("foo@bar.com") is NOT treated as a mention.
+_MENTION_RE = re.compile(r"(?<!\S)@([A-Za-z0-9][A-Za-z0-9._%+-]*)")
+
+
+def _mention_tokens(body: str) -> set[str]:
+    """Lowercased @tokens in a comment body (e.g. {'alice', 'bob.smith'})."""
+    return {m.group(1).lower() for m in _MENTION_RE.finditer(body or "")}
+
+
+async def _touch_reviewer(pool, email: str) -> None:
+    """Auto-provision the caller into the reviewer directory (UCRC pattern) — upsert on each authed
+    request so the @-mention roster is 'everyone who has used the review app'. Best-effort: directory
+    upkeep must never fail the actual request."""
+    try:
+        await pool.execute(
+            "INSERT INTO review.reviewers (email) VALUES ($1) "
+            "ON CONFLICT (email) DO UPDATE SET last_seen = now()", email)
+    except Exception:  # noqa: BLE001
+        log.exception("reviewer directory upsert failed for %s", email)
+
+
+def _match_roster(emails: list[str], tokens: set[str]) -> set[str]:
+    """Reviewer emails whose localpart (or full email), lowercased, is one of `tokens`."""
+    return {e for e in emails
+            if e.split("@", 1)[0].lower() in tokens or e.lower() in tokens}
+
+
+async def _resolve_mentions(pool, tokens: set[str]) -> set[str]:
+    """Resolve @tokens to reviewer emails via the auto-provisioned directory."""
+    if not tokens:
+        return set()
+    rows = await pool.fetch("SELECT email FROM review.reviewers")
+    return _match_roster([r["email"] for r in rows], tokens)
+
+
+async def _emit_notifications(pool, comment: dict, author: str) -> None:
+    """Fan a new comment out to in-app notifications: the reviewers it @mentions, plus (for a reply)
+    the other participants already in the thread. Best-effort — a failure here must never fail the
+    comment write. THIS is the single seam where a future Google Chat webhook would also fire.
+
+    Both mention and reply recipients resolve from our own tables (the reviewer directory + the
+    comments table), so notifications work immediately — no external roster dependency."""
+    recipients: dict[str, str] = {}  # email -> kind; 'mention' outranks 'reply'
+
+    # Reply: notify everyone already in the thread (root author + repliers), except the actor.
+    if comment.get("parent_id"):
+        root = comment["parent_id"]
+        rows = await pool.fetch(
+            "SELECT DISTINCT author FROM review.comments WHERE id = $1 OR parent_id = $1", root)
+        for r in rows:
+            if r["author"] != author:
+                recipients[r["author"]] = "reply"
+
+    # Mentions: resolve @tokens against the reviewer directory.
+    for email in await _resolve_mentions(pool, _mention_tokens(comment["body"])):
+        if email != author:
+            recipients[email] = "mention"
+
+    if not recipients:
+        return
+    await pool.executemany(
+        "INSERT INTO review.notifications (recipient, actor, comment_id, kind) VALUES ($1, $2, $3, $4)",
+        [(email, author, comment["id"], kind) for email, kind in recipients.items()],
+    )
+
+
 @router.post("")
 async def create_comment(c: NewComment, request: Request) -> dict:
     if not c.body.strip():
         raise HTTPException(status_code=400, detail="body required")
     author = _author(request)
     pool = await _get_pool()
+    await _touch_reviewer(pool, author)  # keep the @-mention roster current
 
     if c.parent_id is not None:
         # A reply inherits the parent's target (item_ids/kind/feature_ids/column) server-side, so it
@@ -166,7 +259,12 @@ async def create_comment(c: NewComment, request: Request) -> dict:
         "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
         item_ids, c.body.strip(), author, target_kind, feature_ids, column_name, thread_root,
     )
-    return dict(row)
+    comment = dict(row)
+    try:
+        await _emit_notifications(pool, comment, author)
+    except Exception:  # noqa: BLE001 — notifications are best-effort, never fail the comment write
+        log.exception("notification emit failed for comment %s", comment.get("id"))
+    return comment
 
 
 @router.get("")
@@ -177,8 +275,9 @@ async def list_comments(
     feature_id: int | None = None,
     column: str | None = None,
 ) -> list[dict]:
-    _author(request)  # require an authenticated session
+    me = _author(request)  # require an authenticated session
     pool = await _get_pool()
+    await _touch_reviewer(pool, me)  # opening any comment thread registers you in the roster
     where, args = ["TRUE"], []
     if item_id:
         args.append(item_id)
@@ -275,3 +374,63 @@ async def set_item_status(item_id: str, s: SetStatus, request: Request) -> dict:
         item_id, s.status, author,
     )
     return dict(row)
+
+
+# ---- In-app notifications (mentions + thread replies) ----
+notif_router = APIRouter(prefix="/api/notifications", tags=["notifications"])
+
+
+class SeenReq(BaseModel):
+    ids: list[int] | None = Field(default=None, max_length=5000)  # None = mark ALL of mine seen
+
+
+@notif_router.get("")
+async def list_notifications(request: Request, unseen: bool = False) -> list[dict]:
+    """My notifications (newest first), each joined to its comment so the client can label + link it.
+    `unseen=true` returns only the unread ones (used for the header badge count)."""
+    me = _author(request)
+    pool = await _get_pool()
+    await _touch_reviewer(pool, me)  # the bell polls on every app load → registers each active reviewer
+    where = "n.recipient = $1" + (" AND n.seen_at IS NULL" if unseen else "")
+    rows = await pool.fetch(
+        "SELECT n.id, n.actor, n.kind, n.seen_at, n.created_at, n.comment_id, "
+        "       c.body, c.item_ids, c.target_kind, c.feature_ids, c.column_name, c.parent_id "
+        "FROM review.notifications n JOIN review.comments c ON c.id = n.comment_id "
+        f"WHERE {where} ORDER BY n.created_at DESC LIMIT 500",
+        me,
+    )
+    return [dict(r) for r in rows]
+
+
+@notif_router.post("/seen")
+async def mark_seen(req: SeenReq, request: Request) -> dict:
+    """Mark my notifications read. Body `{ids:[…]}` marks those; empty body marks all of mine."""
+    me = _author(request)
+    pool = await _get_pool()
+    if req.ids:
+        await pool.execute(
+            "UPDATE review.notifications SET seen_at = now() "
+            "WHERE recipient = $1 AND id = ANY($2) AND seen_at IS NULL",
+            me, req.ids,
+        )
+    else:
+        await pool.execute(
+            "UPDATE review.notifications SET seen_at = now() WHERE recipient = $1 AND seen_at IS NULL",
+            me,
+        )
+    return {"ok": True}
+
+
+# ---- Reviewer directory (the @-mention roster) ----
+reviewers_router = APIRouter(prefix="/api/reviewers", tags=["reviewers"])
+
+
+@reviewers_router.get("")
+async def list_reviewers(request: Request) -> list[str]:
+    """Emails in the reviewer directory — everyone who has used the review app — for @-mention
+    autocomplete. Auto-provisioned on each authed request (UCRC pattern); no external roster."""
+    me = _author(request)
+    pool = await _get_pool()
+    await _touch_reviewer(pool, me)
+    rows = await pool.fetch("SELECT email FROM review.reviewers ORDER BY email")
+    return [r["email"] for r in rows]

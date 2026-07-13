@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { type Comment, deleteComment, ITEM_STATUSES, listAllComments, setStatus, whoami } from "./comments";
+import { NotificationsInbox } from "./NotificationsInbox";
 import { ReviewReport } from "./ReviewReport";
 import { statusClass, statusLabel, useItemStatuses } from "./ReviewStatus";
 
@@ -34,6 +35,8 @@ export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }
     <div className="mx-auto max-w-3xl p-4">
       <h2 className="text-lg font-semibold">Review dashboard</h2>
       <p className="mt-0.5 text-sm text-muted-foreground">Every review comment across the catalog.</p>
+
+      <NotificationsInbox onOpen={onOpen} />
 
       <div className="mt-3 flex gap-1.5 text-xs">
         {(["open", "all", "resolved"] as const).map((f) => (

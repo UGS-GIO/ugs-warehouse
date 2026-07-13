@@ -34,6 +34,8 @@ app = FastAPI(title="ugs-warehouse-review-serving")
 # Register /api routers BEFORE the catch-all object route below, or they'd be swallowed by /{path}.
 app.include_router(comments.router)
 app.include_router(comments.status_router)
+app.include_router(comments.notif_router)
+app.include_router(comments.reviewers_router)
 
 
 @app.on_event("startup")

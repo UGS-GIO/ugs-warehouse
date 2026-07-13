@@ -11,6 +11,7 @@ import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, r
 import { useTheme } from "./theme";
 import { DiffPanel } from "./DiffPanel";
 import { CommentsPanel } from "./CommentsPanel";
+import { NotifBell } from "./NotificationsInbox";
 import { ReviewDashboard } from "./ReviewDashboard";
 
 const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
@@ -386,6 +387,7 @@ export function App() {
           <span className={tab(view === "arch")} onClick={() => setView("arch")}>Architecture</span>
           <span className={tab(view === "guide")} onClick={() => setView("guide")}>Guide</span>
           {IS_REVIEW && <span className={tab(view === "review")} onClick={() => setView("review")}>Review</span>}
+          {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}
           <ThemeToggle />
         </div>
       </header>

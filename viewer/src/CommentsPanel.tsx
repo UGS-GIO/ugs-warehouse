@@ -1,6 +1,14 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
-import { type Comment, type CommentTarget, createComment, deleteComment, listComments, replyToComment, setStatus, whoami } from "./comments";
+import { useRef, useState } from "react";
+import { type Comment, type CommentTarget, createComment, deleteComment, listComments, listReviewers, replyToComment, setStatus, whoami } from "./comments";
+
+// The active "@token" immediately left of the caret (the fragment being typed), or null if none.
+// `at` is the index of the '@'; `query` is what follows it — what we filter the roster by.
+function mentionAt(text: string, caret: number): { at: number; query: string } | null {
+  const m = /(?:^|\s)@(\S*)$/.exec(text.slice(0, caret));
+  if (!m) return null;
+  return { at: caret - m[1].length - 1, query: m[1] };
+}
 
 // Review comments for a target (whole item, a feature/row, or a column) — list + add + resolve/delete.
 // Review deploy only (callers gate on IS_REVIEW), same-origin behind IAP so the author is the reviewer.
@@ -26,6 +34,33 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
   const myEmail = me.data?.email;
 
   const [body, setBody] = useState("");
+  // @-mention autocomplete: roster = review group members (fetched once, filtered client-side).
+  const reviewers = useQuery({ queryKey: ["reviewers"], queryFn: listReviewers, retry: false, staleTime: 5 * 60_000 });
+  const taRef = useRef<HTMLTextAreaElement>(null);
+  const [mentions, setMentions] = useState<string[]>([]);  // current dropdown matches (empty = hidden)
+
+  const onBodyChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const v = e.target.value;
+    setBody(v);
+    const tok = mentionAt(v, e.target.selectionStart ?? v.length);
+    if (!tok || !reviewers.data?.length) return setMentions([]);
+    const q = tok.query.toLowerCase();
+    setMentions(reviewers.data.filter((r) => r.toLowerCase().includes(q)).slice(0, 6));
+  };
+
+  const pickMention = (email: string) => {
+    const ta = taRef.current;
+    const caret = ta?.selectionStart ?? body.length;
+    const tok = mentionAt(body, caret);
+    if (!tok) return;
+    const local = email.split("@")[0];  // display as @local — one group, one domain, so it's unambiguous
+    const next = `${body.slice(0, tok.at)}@${local} ${body.slice(caret)}`;
+    setBody(next);
+    setMentions([]);
+    const pos = tok.at + local.length + 2;  // just past the inserted "@local "
+    requestAnimationFrame(() => { ta?.focus(); ta?.setSelectionRange(pos, pos); });
+  };
+
   const add = useMutation({
     mutationFn: () => createComment([itemId], body, target),
     onSuccess: (created) => {
@@ -82,9 +117,23 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
       </ul>
 
       {!notConfigured && (
-        <div className="mt-2 flex gap-1.5">
-          <textarea value={body} onChange={(e) => setBody(e.target.value)} rows={2}
-            placeholder="Add a review note…"
+        <div className="relative mt-2 flex gap-1.5">
+          {mentions.length > 0 && (
+            <ul className="absolute bottom-full left-0 z-10 mb-1 max-h-40 w-56 overflow-auto rounded border border-border bg-card shadow">
+              {mentions.map((email) => (
+                <li key={email}>
+                  <button type="button" onMouseDown={(e) => { e.preventDefault(); pickMention(email); }}
+                    className="block w-full px-2 py-1 text-left hover:bg-muted">
+                    <span className="font-medium text-foreground">@{email.split("@")[0]}</span>
+                    <span className="ml-1 text-[10px] text-muted-foreground">{email}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <textarea ref={taRef} value={body} onChange={onBodyChange} rows={2}
+            onBlur={() => setMentions([])}
+            placeholder="Add a review note… (@ to mention)"
             className="flex-1 rounded border border-border bg-background px-2 py-1 text-xs" />
           <button disabled={!body.trim() || add.isPending} onClick={() => add.mutate()}
             className="self-end rounded border border-border bg-primary px-2 py-1 text-primary-foreground hover:opacity-90 disabled:opacity-60">
@@ -102,6 +151,16 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
   );
 }
 
+// Render a comment body with @mentions styled (UCRC-style). Split on the @token so the rest stays
+// plain text — we emit React spans, never HTML, so there's no injection surface.
+function renderBody(body: string) {
+  return body.split(/(?<!\S)(@[A-Za-z0-9][A-Za-z0-9._%+-]*)/g).map((part, i) =>
+    /^@[A-Za-z0-9]/.test(part)
+      ? <span key={i} className="rounded bg-primary/10 px-0.5 font-medium text-primary">{part}</span>
+      : part,
+  );
+}
+
 // One comment (a thread root or a reply). Resolve is root-only (no onToggle for replies).
 function CommentRow({ c, myEmail, onToggle, toggling, onDelete, deleting }: {
   c: Comment; myEmail?: string;
@@ -116,7 +175,7 @@ function CommentRow({ c, myEmail, onToggle, toggling, onDelete, deleting }: {
           <span className="rounded-full border border-green-500/40 bg-green-500/10 px-1.5 text-[10px] text-green-600 dark:text-green-400">resolved</span>
         )}
       </div>
-      <p className="mt-0.5 whitespace-pre-wrap text-foreground">{c.body}</p>
+      <p className="mt-0.5 whitespace-pre-wrap text-foreground">{renderBody(c.body)}</p>
       <div className="mt-1 flex gap-3 text-[11px]">
         {onToggle && (
           <button className="text-primary hover:underline" disabled={toggling}

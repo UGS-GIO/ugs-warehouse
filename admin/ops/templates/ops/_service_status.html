@@ -1,0 +1,17 @@
+{% comment %}Service status — refetched into #svc-status-<key> every 30s.{% endcomment %}
+{% if status.dry_run %}
+  <span class="text-xs text-amber-600">DRY-RUN — status shows against a real deploy.</span>
+{% elif not status.ok %}
+  <div class="text-xs text-red-600">⚠ {{ status.message }}</div>
+{% else %}
+<div class="flex flex-wrap items-center gap-3 text-xs">
+  <span class="inline-flex items-center gap-1.5">
+    <span class="h-2 w-2 rounded-full {% if status.ready %}bg-green-500{% else %}bg-red-500{% endif %}"></span>
+    {% if status.ready %}Ready{% else %}Not ready{% endif %}
+  </span>
+  {% if status.revision %}<span class="font-mono text-slate-500">{{ status.revision }}</span>{% endif %}
+  {% if status.url %}<a href="{{ status.url }}" target="_blank" class="text-blue-600 hover:underline truncate max-w-xs">{{ status.url }}</a>{% endif %}
+  {% if status.updated %}<time data-ts="{{ status.updated }}" class="text-slate-400"></time>{% endif %}
+</div>
+{% if not status.ready and status.condition %}<div class="mt-1 text-xs text-red-600">{{ status.condition }}</div>{% endif %}
+{% endif %}

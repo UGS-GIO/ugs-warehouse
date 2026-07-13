@@ -25,6 +25,10 @@ DEV_IAP_EMAIL = env("DEV_IAP_EMAIL", default="")
 # GCP — the project/region the warehouse Cloud Run jobs live in, and the STAC catalog base.
 GCP_PROJECT = env("GCP_PROJECT", default="ut-dnr-ugs-backend-tools")
 GCP_REGION = env("GCP_REGION", default="us-central1")
+# The Cloud Run SERVICES (review-serving / review-api) live in a DIFFERENT project than the jobs.
+# The runtime SA needs roles/run.viewer + roles/logging.viewer there.
+SERVICES_PROJECT = env("SERVICES_PROJECT", default="ut-dnr-ugs-maps-prod")
+SERVICES_REGION = env("SERVICES_REGION", default=GCP_REGION)
 STAC_BASE = env("STAC_BASE", default="https://maps-assets.geology.utah.gov/warehouse/stac").rstrip("/")
 # Viewer deep-link base — pub item opens at {VIEWER_BASE}?c={series_code}&i={series_id}. Must point
 # at index.html: the CDN does NOT serve it for the bare `/viewer/` path (that 404s), only explicitly.

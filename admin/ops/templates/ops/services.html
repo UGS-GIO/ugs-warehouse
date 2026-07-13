@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}Services · Warehouse Ops{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-4xl">
+  <h1 class="text-xl font-semibold">Cloud Run services</h1>
+  <p class="mt-0.5 text-sm text-slate-500">Status + live logs for the review serving services (read-only — deploys are cloudbuild-on-push + tofu).</p>
+
+  <div class="mt-4 space-y-3">
+    {% for svc in services %}
+    <div class="rounded-lg border border-slate-200 p-3">
+      <div class="flex items-center justify-between gap-2">
+        <div class="font-medium text-sm">{{ svc.label }}</div>
+        <span class="text-xs font-mono text-slate-400 truncate">{{ svc.name }}</span>
+      </div>
+      <p class="mt-1 text-xs text-slate-500">{{ svc.description }}</p>
+
+      {# Status loads on open + self-refreshes every 30s (services don't "finish", so slow poll). #}
+      <div id="svc-status-{{ svc.key }}" class="mt-2"
+           hx-get="{% url 'ops:service_status' svc.key %}" hx-trigger="load, every 30s" hx-swap="innerHTML"></div>
+
+      <div class="mt-2">
+        <button class="rounded border border-slate-300 text-slate-700 text-sm px-3 py-1 hover:bg-slate-50"
+          onclick="toggleAccordion('svc-logs-{{ svc.key }}', '{% url 'ops:service_logs' svc.key %}')">Live logs ▾</button>
+      </div>
+      <div id="svc-logs-{{ svc.key }}" class="hidden mt-2"></div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}

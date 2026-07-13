@@ -4,7 +4,7 @@ from django.views.decorators.http import require_POST
 
 from core.iap_auth import admin_required
 
-from . import contents, jobs, overrides, stac
+from . import contents, jobs, overrides, services, stac
 
 
 @admin_required
@@ -99,6 +99,26 @@ def job_logs(request, key):
     return render(request, "ops/_job_logs.html", {
         "key": key, "job": jobs.JOBS.get(key),
         "log": jobs.logs(key), "console_url": jobs.console_logs_url(key),
+    })
+
+
+@admin_required
+def services_view(request):
+    """Cloud Run services page — status + a live-logs accordion per service (read-only)."""
+    return render(request, "ops/services.html", {"services": services.all_status()})
+
+
+@admin_required
+def service_status(request, key):
+    return render(request, "ops/_service_status.html", {"key": key, "status": services.status(key)})
+
+
+@admin_required
+def service_logs(request, key):
+    """Near-live tail of a service's logs."""
+    return render(request, "ops/_service_logs.html", {
+        "key": key, "svc": services.SERVICES.get(key),
+        "log": services.logs(key), "console_url": services.console_logs_url(key),
     })
 
 

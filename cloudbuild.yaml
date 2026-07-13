@@ -261,6 +261,21 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
       - --region=${_REGION}
 
+  # Non-IAP twin (tofu-created; serves the hazards-review app). Same image; only the image is updated
+  # here — env/CloudSQL/no-IAP config is owned by infra/serving-review-api.tf.
+  - id: deploy-review-api
+    waitFor: [push-warehouse]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update
+      - ugs-warehouse-review-api
+      - --project=${_REVIEW_PROJECT}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
+      - --region=${_REGION}
+
   # DuckLake maintenance — expire old snapshots, compact small parquet, GC orphaned files. Same
   # image + DSN setup as the ingest job (RUN_MODULE swaps the CLI). Run periodically (weekly is plenty):
   # `gcloud run jobs execute ${_MAINTAIN_JOB} --region=${_REGION}` (or the ops console button).

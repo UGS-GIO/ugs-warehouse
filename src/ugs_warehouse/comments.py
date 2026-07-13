@@ -136,13 +136,51 @@ async def init_schema() -> None:
     await _get_pool()
 
 
+# Firebase project that issues the hazards-review app's ID tokens (same GCP project as this service).
+FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "ut-dnr-ugs-maps-prod")
+_fb_app = None  # lazily initialized firebase_admin app
+
+
+def _bearer_token(request: Request) -> str | None:
+    """The token from an `Authorization: Bearer <token>` header, or None."""
+    auth = request.headers.get("authorization", "")
+    return auth[7:].strip() if auth[:7].lower() == "bearer " else None
+
+
+def _verify_firebase_email(token: str) -> str | None:
+    """Verify a Firebase ID token (from the ugs-map-viewer /hazards-review app) and return the reviewer's
+    email. Firebase re-issues its own signed JWT after the Entra OIDC exchange, so one verifier covers
+    whichever upstream IdP the user came through. Returns None on any failure (never raises) — so a bad
+    token just falls through to a 401, not a 500. Needs ADC (present on Cloud Run in the same project)."""
+    global _fb_app
+    try:
+        import firebase_admin
+        from firebase_admin import auth as fb_auth
+        if _fb_app is None:
+            _fb_app = firebase_admin.initialize_app(options={"projectId": FIREBASE_PROJECT_ID})
+        claims = fb_auth.verify_id_token(token)
+        # Prefer `email`; fall back to the Entra UPN claims if the email scope wasn't surfaced.
+        email = claims.get("email") or claims.get("upn") or claims.get("preferred_username")
+        return email if email else None
+    except Exception:  # noqa: BLE001 — invalid/expired token, or firebase-admin not initializable
+        log.warning("firebase token verification failed", exc_info=True)
+        return None
+
+
 def _author(request: Request) -> str:
-    """The IAP-authenticated email — the comment's author. 401 if absent (shouldn't happen behind IAP)."""
+    """The authenticated reviewer's email, from either trusted source (IAP first):
+    1. IAP header `X-Goog-Authenticated-User-Email` — the internal review viewer (Google IAP).
+    2. `Authorization: Bearer <firebase idToken>` — the hazards-review app in ugs-map-viewer (Firebase
+       Auth / Entra OIDC). Emails match across both IdPs (confirmed), so the same person's rows line up.
+    401 if neither is present/valid."""
     raw = request.headers.get("x-goog-authenticated-user-email", "")
     email = raw.split(":", 1)[-1] if raw else ""
-    if not email:
-        raise HTTPException(status_code=401, detail="no IAP identity")
-    return email
+    if email:
+        return email
+    token = _bearer_token(request)
+    if token and (email := _verify_firebase_email(token)):
+        return email
+    raise HTTPException(status_code=401, detail="no IAP identity or valid bearer token")
 
 
 # Bounds keep a (trusted, IAP-gated) reviewer from storing a multi-MB body or a pathological array.

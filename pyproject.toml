@@ -11,6 +11,7 @@ dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "asyncpg>=0.29",       # review-comments CRUD (serve.py) → review.comments in mapping-db (review_writer)
+  "firebase-admin>=6.5",  # verify Firebase/Entra ID tokens from the hazards-review app (non-IAP review path)
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
   # NB: no pyarrow / shapely — the vector ingest streams Postgres→DuckDB→CDN entirely in DuckDB
   # (no Python materialization). They live in the [pubs] extra (geopandas/pyogrio need them).

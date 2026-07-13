@@ -31,6 +31,18 @@ from ugs_warehouse import comments
 from ugs_warehouse.core import config
 
 app = FastAPI(title="ugs-warehouse-review-serving")
+
+# Cross-origin access for the ugs-map-viewer /hazards-review app (Firebase-token auth, no cookies).
+# OFF by default (the IAP service is same-origin); the non-IAP twin sets REVIEW_CORS_ORIGINS to the
+# viewer origins (comma-separated). allow_credentials stays False — auth rides in the Bearer header.
+_cors_origins = [o.strip() for o in os.environ.get("REVIEW_CORS_ORIGINS", "").split(",") if o.strip()]
+if _cors_origins:
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware, allow_origins=_cors_origins, allow_credentials=False,
+        allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"],
+    )
+
 # Register /api routers BEFORE the catch-all object route below, or they'd be swallowed by /{path}.
 app.include_router(comments.router)
 app.include_router(comments.status_router)

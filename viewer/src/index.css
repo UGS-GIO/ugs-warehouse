@@ -68,6 +68,13 @@ body {
   color: hsl(var(--foreground));
 }
 
+/* "Saved ✓" cue: hold briefly, then fade + collapse. Re-keyed per submit, so no JS timer. */
+@keyframes save-cue {
+  0%, 70% { opacity: 1; }
+  100% { opacity: 0; height: 0; margin: 0; overflow: hidden; }
+}
+.save-cue { animation: save-cue 2.5s ease-out forwards; }
+
 /* Review report: when printing, hide the whole app and show only the report overlay (Export-PDF via
    the browser's print dialog → "Save as PDF"). `.no-print` hides controls within the report. */
 @media print {

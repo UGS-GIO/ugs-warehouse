@@ -26,7 +26,16 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
   const myEmail = me.data?.email;
 
   const [body, setBody] = useState("");
-  const add = useMutation({ mutationFn: () => createComment([itemId], body, target), onSuccess: () => { setBody(""); invalidate(); } });
+  const add = useMutation({
+    mutationFn: () => createComment([itemId], body, target),
+    onSuccess: (created) => {
+      setBody("");
+      // Optimistically show it now — refetch alone leaves no cue, and compose-only (multi-select)
+      // has the list query disabled so invalidate would never surface it.
+      if (!composeOnly) qc.setQueryData<Comment[]>(key, (old = []) => [created, ...old]);
+      invalidate();
+    },
+  });
   const toggle = useMutation({ mutationFn: (c: Comment) => setStatus(c.id, c.status === "resolved" ? "open" : "resolved"), onSuccess: invalidate });
   const remove = useMutation({ mutationFn: (id: number) => deleteComment(id), onSuccess: invalidate });
   const reply = useMutation({ mutationFn: (v: { parentId: number; body: string }) => replyToComment(v.parentId, v.body), onSuccess: invalidate });
@@ -84,6 +93,11 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
         </div>
       )}
       {add.error && <p className="mt-1 text-destructive">Failed to add: {String(add.error)}</p>}
+      {add.isSuccess && !add.isPending && (
+        <p key={add.submittedAt} className="save-cue mt-1 text-green-600 dark:text-green-400">
+          Saved ✓{composeOnly && target?.featureIds?.length ? ` — added to ${target.featureIds.length} features` : ""}
+        </p>
+      )}
     </div>
   );
 }

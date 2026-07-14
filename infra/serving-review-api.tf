@@ -23,12 +23,11 @@ resource "google_cloud_run_v2_service" "review_api" {
   labels   = var.labels
 
   ingress = "INGRESS_TRAFFIC_ALL"
-
-  # Reachable WITHOUT an allUsers IAM binding — Google's documented Domain-Restricted-Sharing workaround
-  # (`gcloud run … --no-invoker-iam-check`). DRS checks IAM *members*; we never grant allUsers, so it's
-  # satisfied. The request reaches the app, which verifies the Firebase/Entra token itself (401 without
-  # one). Lets the Firebase Hosting `/api/**` rewrite hit it same-origin — no IAP, no CORS, no DTS ask.
-  invoker_iam_disabled = true
+  # NOTE: this org enforces BOTH `iam.allowedPolicyMemberDomains` (no allUsers) AND
+  # `run.managed.requireInvokerIam` (can't disable the invoker check). So the service is private and can
+  # only be invoked by a permitted principal with run.invoker. The browser (Firebase/Entra) reaches it
+  # through an API Gateway that validates the Firebase JWT and invokes this service as the gateway SA
+  # (see review-api-gateway.tf). No allUsers, no invoker_iam_disabled — both org-blocked.
 
   template {
     service_account = google_service_account.serving.email

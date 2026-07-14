@@ -24,6 +24,12 @@ resource "google_cloud_run_v2_service" "review_api" {
 
   ingress = "INGRESS_TRAFFIC_ALL"
 
+  # Reachable WITHOUT an allUsers IAM binding — Google's documented Domain-Restricted-Sharing workaround
+  # (`gcloud run … --no-invoker-iam-check`). DRS checks IAM *members*; we never grant allUsers, so it's
+  # satisfied. The request reaches the app, which verifies the Firebase/Entra token itself (401 without
+  # one). Lets the Firebase Hosting `/api/**` rewrite hit it same-origin — no IAP, no CORS, no DTS ask.
+  invoker_iam_disabled = true
+
   template {
     service_account = google_service_account.serving.email
 
@@ -105,26 +111,9 @@ resource "google_cloud_run_v2_service" "review_api" {
   }
 }
 
-# Reachability: the org's Domain-Restricted-Sharing policy (iam.allowedPolicyMemberDomains) forbids
-# `allUsers`, so this service can NOT be made publicly invokable. Instead it's reached via a Firebase
-# Hosting rewrite (`/hazards-review/api/** → run: ugs-warehouse-review-api`), which invokes it as the
-# Firebase Hosting service agent — a permitted member. Grant that agent run.invoker (var left blank
-# until the Hosting rewrite lands; the agent is
-# service-<PROJECT_NUMBER>@gcp-sa-firebasehosting.iam.gserviceaccount.com). Same-origin, so no CORS.
-variable "hosting_invoker_member" {
-  type        = string
-  description = "IAM member allowed to invoke the review API (the Firebase Hosting service agent). Blank = none yet."
-  default     = ""
-}
-
-resource "google_cloud_run_v2_service_iam_member" "review_api_invoker" {
-  count    = var.hosting_invoker_member != "" ? 1 : 0
-  name     = google_cloud_run_v2_service.review_api.name
-  project  = var.project_id
-  location = var.region
-  role     = "roles/run.invoker"
-  member   = var.hosting_invoker_member
-}
+# No invoker IAM binding at all — reachability is `invoker_iam_disabled = true` above (the DRS-safe
+# workaround), so there's no allUsers grant and no Firebase Hosting service agent to grant. The Firebase
+# Hosting `/api/**` rewrite reaches it directly; the app verifies the Firebase/Entra token.
 
 output "review_api_url" {
   description = "Public (Firebase-token-auth) review API base URL for the hazards-review app."

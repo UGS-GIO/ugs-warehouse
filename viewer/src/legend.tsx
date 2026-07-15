@@ -4,7 +4,9 @@
 //      ugs-styles shape, e.g. ccus geochemistry / pipelines). Each filtered layer → one entry.
 // Falls out of the style for free, so the legend can never drift from the render.
 
-type Entry = { label: string; color: string };
+// `values` (optional): the specific category values a grouped legend entry rolls up
+// (e.g. box-type Core → BUTTS, SLABS, WHOLE CORE, …). Shown under the group label.
+type Entry = { label: string; color: string; values?: readonly string[] };
 
 // Pull the styled field name out of an input expression: ["get","x"] or ["coalesce",["get","x"],""].
 const fieldOf = (input: unknown): string | undefined => {
@@ -122,17 +124,36 @@ export function Legend({ layers, entries, title, name }: {
   const uniform = !entries && derived?.uniform;
   const items = uniform ? [{ label: name ?? "All features", color: base[0].color }] : base;
   const heading = title ?? derived?.field ?? "Legend";
+  // Grouped legend (entries carry `values`): stack each group's colour + label, with the
+  // specific values it rolls up spelled out beneath. Otherwise the flat inline-wrap layout.
+  const grouped = items.some((e) => e.values && e.values.length > 0);
   return (
     <div className="mt-2 rounded-md border border-border bg-card p-2.5 text-xs">
       <div className="mb-1.5 font-semibold text-muted-foreground">{heading}</div>
-      <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-        {items.map((e, i) => (
-          <span key={i} className="inline-flex items-center gap-1.5 text-foreground">
-            <span className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border" style={{ background: e.color }} />
-            {e.label}
-          </span>
-        ))}
-      </div>
+      {grouped ? (
+        <div className="flex flex-col gap-1.5">
+          {items.map((e, i) => (
+            <div key={i} className="flex flex-col gap-0.5">
+              <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
+                <span className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border" style={{ background: e.color }} />
+                {e.label}
+              </span>
+              {e.values && e.values.length > 0 && (
+                <span className="pl-[1.375rem] text-muted-foreground">{e.values.join(", ")}</span>
+              )}
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
+          {items.map((e, i) => (
+            <span key={i} className="inline-flex items-center gap-1.5 text-foreground">
+              <span className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border" style={{ background: e.color }} />
+              {e.label}
+            </span>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

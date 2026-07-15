@@ -84,6 +84,10 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
             # Explicit legend (icon renders have no derivable paint color) — pass through verbatim.
             if entry.get("legend"):
                 block["legend"] = entry["legend"]
+            # The attribute this render symbolizes — lets the viewer wire the legend/filter to a
+            # field without re-parsing the GL expression. Pass through verbatim when declared.
+            if entry.get("field"):
+                block["field"] = entry["field"]
             if render == "default" and style_asset is None:
                 style_asset = {
                     "href": url, "type": "application/json", "roles": ["style"],

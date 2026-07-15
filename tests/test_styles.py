@@ -5,7 +5,8 @@ from ugs_warehouse.core import stac, styles
 
 MANIFEST = (
     {"itemId": "hazards_qfaults", "render": "default", "kind": "vector",
-     "assets": ["pmtiles"], "path": "styles/hazards_qfaults/default.json"},
+     "assets": ["pmtiles"], "path": "styles/hazards_qfaults/default.json",
+     "field": "fault_class", "legend": [{"label": "Core", "color": "#5E3C99", "values": ["A", "B"]}]},
     {"itemId": "enmin_gravity", "render": "default", "kind": "raster",
      "assets": ["cog"], "colormap_name": "viridis", "rescale": [0, 100],
      "path": "styles/enmin_gravity/default.json"},
@@ -24,6 +25,12 @@ def test_vector_render_has_style_url_and_asset():
     assert renders["default"]["assets"] == ["pmtiles"]
     assert renders["default"]["style_url"].endswith("/styles/hazards_qfaults/default.json")
     assert asset and asset["roles"] == ["style"]
+
+
+def test_vector_render_passes_field_and_legend_verbatim():
+    renders, _ = styles.renders_for("hazards_qfaults", {"pmtiles"})
+    assert renders["default"]["field"] == "fault_class"
+    assert renders["default"]["legend"] == [{"label": "Core", "color": "#5E3C99", "values": ["A", "B"]}]
 
 
 def test_raster_render_carries_colormap_not_style_url():

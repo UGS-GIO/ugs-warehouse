@@ -1,18 +1,11 @@
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { fullUrl, thumbUrl } from "./ucrc-photos";
 
-// Thumbnail gallery + lightbox for a UCRC core-photo related table (enmin_ucrc_photos). Photos live on
-// the UCRC assets CDN; the parquet's `storage_path` (photos/<uwi>/box_N/<file>.jpg) resolves to the full
-// image, and photos/_thumbs/200/… to a 200px thumbnail (same scheme as ugs-map-viewer's box-photos popup).
-// The lightbox is hand-rolled (no shadcn Dialog / embla Carousel deps) — grid → click → full view + ‹/›.
-const UCRC_CDN = "https://ucrc-assets.geology.utah.gov";
+// Thumbnail gallery + lightbox for a UCRC core-photo related table (enmin_ucrc_photos). URL helpers
+// live in ./ucrc-photos (pure, unit-tested). The lightbox is hand-rolled (no shadcn Dialog / embla
+// Carousel deps) — grid → click → full view + ‹/›.
 const PAGE = 48;
-
-const encodePath = (p: string) => p.split("/").map(encodeURIComponent).join("/");
-const thumbPath = (sp: string) =>
-  sp.startsWith("photos/") ? `photos/_thumbs/200/${sp.slice("photos/".length)}` : `_thumbs/200/${sp}`;
-const fullUrl = (sp: string) => `${UCRC_CDN}/${encodePath(sp)}`;
-const thumbUrl = (sp: string) => `${UCRC_CDN}/${encodePath(thumbPath(sp))}`;
 
 type Row = Record<string, unknown>;
 const captionOf = (r: Row) =>

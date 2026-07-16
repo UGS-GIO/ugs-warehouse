@@ -21,6 +21,7 @@ import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
 import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
+import { PhotoGallery } from "./PhotoGallery";
 import { LayerStatusControl } from "./ReviewStatus";
 import { createComment } from "./comments";
 
@@ -2140,16 +2141,22 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const links = relatedLinks(item);
   const tables = relatedAssets(item);
   const fks = ownForeignKeys(item);
-  // Any number of related tables can be expanded inline at once (not one-or-the-other).
+  // Any number of related tables can be expanded inline at once (not one-or-the-other). Photo tables
+  // additionally offer a thumbnail Gallery. Both use a Set so multiple stay open.
   const [openTables, setOpenTables] = useState<Set<string>>(new Set());
-  const toggleTable = (key: string) => setOpenTables((prev) => {
-    const next = new Set(prev);
-    if (next.has(key)) next.delete(key); else next.add(key);
-    return next;
-  });
+  const [openGalleries, setOpenGalleries] = useState<Set<string>>(new Set());
+  const toggleIn = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (key: string) =>
+    set((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  const toggleTable = toggleIn(setOpenTables);
+  const toggleGallery = toggleIn(setOpenGalleries);
+  const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
   if (!links.length && !tables.length && !fks.length) return null;
   return (
-    <section className={`mt-4 rounded-md border border-border p-3 ${openTables.size ? "max-w-none" : "max-w-3xl"}`}>
+    <section className={`mt-4 rounded-md border border-border p-3 ${openTables.size || openGalleries.size ? "max-w-none" : "max-w-3xl"}`}>
       <h3 className="text-sm font-semibold">Related</h3>
       {links.length > 0 && (
         <div className="mt-1.5">
@@ -2183,6 +2190,11 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                     onClick={() => toggleTable(key)}>
                     {openTables.has(key) ? "Hide" : "View"}
                   </button>
+                  {isPhotos(key, asset) && (
+                    <button className="text-primary hover:underline" onClick={() => toggleGallery(key)}>
+                      {openGalleries.has(key) ? "Hide gallery" : "Gallery"}
+                    </button>
+                  )}
                   <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
                   {asset["ugs:foreign_keys"]?.map((fk, i) => (
                     <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)</span>
@@ -2191,6 +2203,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                 {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
                     range-read (never downloads the whole file). No geometry → a plain data table. */}
                 {openTables.has(key) && <DataExplorer href={asset.href} />}
+                {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
               </li>
             ))}
           </ul>

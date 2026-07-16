@@ -15,7 +15,7 @@ import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
-import { type ColFilter, exportItem, type ExportFormat, FORMATS } from "./download";
+import { type ColFilter, exportItem, type ExportFormat, FORMATS, type ShapefileWarnings, shapefileWarnings } from "./download";
 import { Legend } from "./legend";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
 import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
@@ -160,10 +160,10 @@ function ExportPanel({ item }: { item: StacDoc }) {
   const [err, setErr] = useState<string>();
   const [clipOn, setClipOn] = useState(false);
   const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
+  const [warn, setWarn] = useState<ShapefileWarnings | null>(null);  // shapefile pre-flight issues
   if (!parquet) return null;
 
-  const run = async (fmt: ExportFormat) => {
-    setErr(undefined);
+  const doExport = async (fmt: ExportFormat) => {
     setBusy(fmt);
     try {
       await exportItem(parquet.href, String(item.id ?? "export"), fmt, clipOn ? bbox : undefined);
@@ -172,6 +172,20 @@ function ExportPanel({ item }: { item: StacDoc }) {
     } finally {
       setBusy(null);
     }
+  };
+
+  const run = async (fmt: ExportFormat) => {
+    setErr(undefined);
+    setWarn(null);
+    // Shapefile pre-flight: warn before handing over a silently-mangled file.
+    if (fmt === "shp") {
+      setBusy(fmt);
+      try {
+        const w = await shapefileWarnings(parquet.href, clipOn ? bbox : undefined);
+        if (w.any) { setWarn(w); setBusy(null); return; }
+      } catch { /* check failed → just proceed to the export */ }
+    }
+    await doExport(fmt);
   };
 
   const labels = ["W", "S", "E", "N"];
@@ -209,6 +223,36 @@ function ExportPanel({ item }: { item: StacDoc }) {
         </div>
       )}
       {err && <div className="mt-1.5 text-xs text-destructive">Export failed: {err}</div>}
+
+      {warn && (
+        <div className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-xs">
+          <div className="font-semibold text-amber-700 dark:text-amber-400">Shapefile will mangle this data</div>
+          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
+            {warn.mixedGeometry.length > 0 && (
+              <li><b>Mixed geometry</b> ({warn.mixedGeometry.join(", ").toLowerCase()}) — a shapefile holds one geometry type; the others get dropped. Use GeoPackage.</li>
+            )}
+            {warn.longNames.length > 0 && (
+              <li><b>{warn.longNames.length} field name{warn.longNames.length === 1 ? "" : "s"} over 10 chars</b> get truncated (e.g. <code>{warn.longNames[0]}</code> → <code>{warn.longNames[0].slice(0, 10)}</code>).</li>
+            )}
+            {warn.collisions.length > 0 && (
+              <li><b>Field-name collisions</b> after truncation — <code>{warn.collisions[0][0]}</code> &amp; <code>{warn.collisions[0][1]}</code> collapse to the same name (data loss).</li>
+            )}
+            {warn.tooManyFields && <li><b>{warn.fieldCount} fields</b> exceeds the 255-field shapefile limit.</li>}
+            {warn.over2gb && <li><b>~{(warn.estBytes / 1024 ** 3).toFixed(1)} GB estimated</b> — over the 2 GB shapefile limit (estimate; export may fail).</li>}
+          </ul>
+          <div className="mt-2 flex flex-wrap gap-2">
+            <button onClick={() => { setWarn(null); doExport("gpkg"); }}
+              className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
+              Use GeoPackage instead
+            </button>
+            <button onClick={() => { setWarn(null); doExport("shp"); }}
+              className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
+              Download shapefile anyway
+            </button>
+            <button onClick={() => setWarn(null)} className="text-muted-foreground hover:underline">Cancel</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

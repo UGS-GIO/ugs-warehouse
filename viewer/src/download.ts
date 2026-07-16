@@ -64,11 +64,28 @@ function triggerDownload(bytes: Uint8Array, filename: string, mime: string): voi
 
 // Arrow rows carry BigInt (int64 cols) + Dates; make them JSON-safe.
 const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
-const sanitize = (v: unknown): unknown => {
+export const sanitize = (v: unknown): unknown => {
   // BigInt within JS's safe range → Number; beyond it → string, so huge ids keep exact precision.
   if (typeof v === "bigint") return v <= MAX_SAFE && v >= -MAX_SAFE ? Number(v) : v.toString();
   return v instanceof Date ? v.toISOString() : v;
 };
+
+// Deterministic shapefile field-name limits (pure — no data read). Field names > 10 chars get
+// truncated; two that collapse to the same 10-char name collide (silent data loss); >255 fields
+// is a hard cap.
+export function shapefileFieldChecks(cols: string[]): {
+  longNames: string[]; collisions: [string, string][]; fieldCount: number; tooManyFields: boolean;
+} {
+  const longNames = cols.filter((c) => c.length > 10);
+  const seen = new Map<string, string>();
+  const collisions: [string, string][] = [];
+  for (const c of cols) {
+    const key = c.slice(0, 10).toLowerCase();
+    if (seen.has(key)) collisions.push([seen.get(key)!, c]);
+    else seen.set(key, c);
+  }
+  return { longNames, collisions, fieldCount: cols.length, tooManyFields: cols.length > 255 };
+}
 
 let seq = 0;
 
@@ -481,15 +498,8 @@ export async function shapefileWarnings(
     const desc = (await conn.query("DESCRIBE chk;")).toArray();
     const cols = desc.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
 
-    // Field-name limits (10 chars) + post-truncation collisions.
-    const longNames = cols.filter((c) => c.length > 10);
-    const seen = new Map<string, string>();
-    const collisions: [string, string][] = [];
-    for (const c of cols) {
-      const t = c.slice(0, 10).toLowerCase();
-      if (seen.has(t)) collisions.push([seen.get(t)!, c]);
-      else seen.set(t, c);
-    }
+    // Field-name limits (10 chars) + post-truncation collisions (pure, unit-tested).
+    const { longNames, collisions } = shapefileFieldChecks(cols);
 
     const fullRows = Number((await conn.query("SELECT count(*) n FROM chk;")).toArray()[0].n);
     let rowCount = fullRows;

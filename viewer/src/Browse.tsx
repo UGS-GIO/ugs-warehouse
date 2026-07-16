@@ -227,7 +227,7 @@ function ExportPanel({ item }: { item: StacDoc }) {
               className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
           </label>
         )}
-        <span>— applies to Shapefile/GeoPackage/FileGDB/FlatGeobuf; GeoJSON &amp; CSV are always WGS 84.</span>
+        <span>— applies to Shapefile/GeoPackage/FileGDB/FlatGeobuf and CSV; GeoJSON is always WGS 84 (spec).</span>
       </div>
       {fullBbox && (
         <div className="mt-2 text-xs">

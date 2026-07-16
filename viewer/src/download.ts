@@ -63,8 +63,12 @@ function triggerDownload(bytes: Uint8Array, filename: string, mime: string): voi
 }
 
 // Arrow rows carry BigInt (int64 cols) + Dates; make them JSON-safe.
-const sanitize = (v: unknown): unknown =>
-  typeof v === "bigint" ? Number(v) : v instanceof Date ? v.toISOString() : v;
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const sanitize = (v: unknown): unknown => {
+  // BigInt within JS's safe range → Number; beyond it → string, so huge ids keep exact precision.
+  if (typeof v === "bigint") return v <= MAX_SAFE && v >= -MAX_SAFE ? Number(v) : v.toString();
+  return v instanceof Date ? v.toISOString() : v;
+};
 
 let seq = 0;
 
@@ -397,7 +401,12 @@ export async function exportItem(
 
     if (fmt === "csv") {
       csvOut = `o${id}.csv`;
-      await conn.query(`COPY (SELECT * REPLACE (ST_AsText(${geom}) AS ${GEOM}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
+      // WKT geometry in the chosen output CRS (source is always 4326); attributes unchanged.
+      // always_xy: geom is stored lon/lat, but EPSG:4326's authority axis order is lat/lon — without
+      // this the transform reads longitude as latitude and returns inf.
+      const wkt = epsg === 4326 ? `ST_AsText(${geom})`
+        : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${epsg}', always_xy := true))`;
+      await conn.query(`COPY (SELECT * REPLACE (${wkt} AS ${GEOM}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
       triggerDownload(await db.copyFileToBuffer(csvOut), `${stem}.csv`, "text/csv");
       return;
     }

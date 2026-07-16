@@ -930,7 +930,7 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
         </MapGL>
       </div>
       {IS_REVIEW && reviewFeature && (
-        <div className="mt-2 max-w-[760px] rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+        <div className="mt-2 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">Feature review</h3>
             <button className="text-xs text-muted-foreground hover:underline" onClick={() => setReviewFeature(null)}>close</button>
@@ -1427,7 +1427,7 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
         )}
       </div>
       {review && composeOpen && selFids.size > 0 && (
-        <div className="mt-2 max-w-[760px] rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+        <div className="mt-2 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">
               {selArr.length > 1 ? `Comment on ${selArr.length} features` : `Feature #${selArr[0]}`}
@@ -2140,9 +2140,16 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const links = relatedLinks(item);
   const tables = relatedAssets(item);
   const fks = ownForeignKeys(item);
+  // Any number of related tables can be expanded inline at once (not one-or-the-other).
+  const [openTables, setOpenTables] = useState<Set<string>>(new Set());
+  const toggleTable = (key: string) => setOpenTables((prev) => {
+    const next = new Set(prev);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    return next;
+  });
   if (!links.length && !tables.length && !fks.length) return null;
   return (
-    <section className="mt-4 max-w-[760px] rounded-md border border-border p-3">
+    <section className={`mt-4 rounded-md border border-border p-3 ${openTables.size ? "max-w-none" : "max-w-3xl"}`}>
       <h3 className="text-sm font-semibold">Related</h3>
       {links.length > 0 && (
         <div className="mt-1.5">
@@ -2169,12 +2176,21 @@ function RelatedPanel({ item }: { item: StacDoc }) {
           <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Related tables</div>
           <ul className="mt-1 space-y-1 text-xs">
             {tables.map(({ key, asset }) => (
-              <li key={key} className="flex flex-wrap items-center gap-2">
-                <span className="font-medium">{asset.title ?? key}</span>
-                <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
-                {asset["ugs:foreign_keys"]?.map((fk, i) => (
-                  <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)</span>
-                ))}
+              <li key={key}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-medium">{asset.title ?? key}</span>
+                  <button className="text-primary hover:underline"
+                    onClick={() => toggleTable(key)}>
+                    {openTables.has(key) ? "Hide" : "View"}
+                  </button>
+                  <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
+                  {asset["ugs:foreign_keys"]?.map((fk, i) => (
+                    <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)</span>
+                  ))}
+                </div>
+                {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
+                    range-read (never downloads the whole file). No geometry → a plain data table. */}
+                {openTables.has(key) && <DataExplorer href={asset.href} />}
               </li>
             ))}
           </ul>
@@ -2221,7 +2237,7 @@ function CatalogReview({ item }: { item: StacDoc }) {
   const [openCol, setOpenCol] = useState<string | null>(null);
   if (!id) return null;
   return (
-    <section className="mt-4 max-w-[760px] rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+    <section className="mt-4 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">Review</h3>
         <LayerStatusControl itemId={id} />
@@ -2273,7 +2289,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
       </div>
       <div className="font-mono text-sm font-semibold text-primary">{item.id}</div>
       <h2 className="mb-1 text-xl font-semibold">{String(p.title ?? item.id ?? "")}</h2>
-      {typeof p.description === "string" && <p className="max-w-[760px] text-muted-foreground">{p.description}</p>}
+      {typeof p.description === "string" && <p className="max-w-3xl text-muted-foreground">{p.description}</p>}
       <Preview item={item} />
       {item.assets && <div className="my-2"><AssetChips assets={item.assets} /></div>}
       <div className="mt-1.5 flex flex-wrap gap-2">
@@ -2301,7 +2317,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />
       {IS_REVIEW && <CatalogReview item={item} />}
-      <table className="mt-3 w-full max-w-[760px] table-fixed border-collapse text-sm">
+      <table className="mt-3 w-full max-w-3xl table-fixed border-collapse text-sm">
         <tbody>
           {Object.entries(p)
             .filter(([k, v]) => v !== null && v !== "" && k !== "ugs:renders" && k !== "ugs:contents")

@@ -143,7 +143,7 @@ function Detail({ kind, busy, rows, total, cols }: {
               {rows.map((r, i) => (
                 <tr key={i}>
                   {cols.map((c) => <td key={c} className="border-b border-border px-1.5 py-0.5" title={fmt(r.values[c])}>
-                    <span className="block max-w-[200px] truncate">{fmt(r.values[c])}</span>
+                    <span className="block max-w-48 truncate">{fmt(r.values[c])}</span>
                   </td>)}
                 </tr>
               ))}

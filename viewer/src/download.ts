@@ -63,8 +63,12 @@ function triggerDownload(bytes: Uint8Array, filename: string, mime: string): voi
 }
 
 // Arrow rows carry BigInt (int64 cols) + Dates; make them JSON-safe.
-const sanitize = (v: unknown): unknown =>
-  typeof v === "bigint" ? Number(v) : v instanceof Date ? v.toISOString() : v;
+const MAX_SAFE = BigInt(Number.MAX_SAFE_INTEGER);
+const sanitize = (v: unknown): unknown => {
+  // BigInt within JS's safe range → Number; beyond it → string, so huge ids keep exact precision.
+  if (typeof v === "bigint") return v <= MAX_SAFE && v >= -MAX_SAFE ? Number(v) : v.toString();
+  return v instanceof Date ? v.toISOString() : v;
+};
 
 let seq = 0;
 
@@ -366,6 +370,7 @@ export async function exportItem(
   stem: string,
   fmt: ExportFormat,
   clip?: [number, number, number, number], // [w,s,e,n] in 4326 — clip to this AOI
+  epsg = 4326,                              // output CRS for the gdal formats (shp/gpkg/gdb/fgb)
 ): Promise<void> {
   const duckdb = await import("@duckdb/duckdb-wasm");
   const db = await getDB();
@@ -396,7 +401,12 @@ export async function exportItem(
 
     if (fmt === "csv") {
       csvOut = `o${id}.csv`;
-      await conn.query(`COPY (SELECT * REPLACE (ST_AsText(${geom}) AS ${GEOM}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
+      // WKT geometry in the chosen output CRS (source is always 4326); attributes unchanged.
+      // always_xy: geom is stored lon/lat, but EPSG:4326's authority axis order is lat/lon — without
+      // this the transform reads longitude as latitude and returns inf.
+      const wkt = epsg === 4326 ? `ST_AsText(${geom})`
+        : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${epsg}', always_xy := true))`;
+      await conn.query(`COPY (SELECT * REPLACE (${wkt} AS ${GEOM}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
       triggerDownload(await db.copyFileToBuffer(csvOut), `${stem}.csv`, "text/csv");
       return;
     }
@@ -421,14 +431,104 @@ export async function exportItem(
       return;
     }
 
-    // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only)
+    // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only). Pass the source column
+    // types so GDAL keeps DOUBLE columns as real (it otherwise downcasts whole-valued ones to Integer).
+    const descRows = desc.toArray();
+    const cols = descRows.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
+    const floatCols = descRows
+      .filter((r) => /DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC/.test(String(r.column_type).toUpperCase()))
+      .map((r) => String(r.column_name))
+      .filter((c) => !GEOM_NAMES.includes(c));
     const { convertGeoJSON, GDAL_TARGETS } = await import("./gdal");
-    const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt]);
+    const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt], epsg, cols, floatCols);
     triggerDownload(bytes, filename, mime);
   } finally {
     await conn.query("DROP TABLE IF EXISTS raw; DROP TABLE IF EXISTS clipped;").catch(() => {});
     await conn.close();
     await db.dropFile(src).catch(() => {});
     if (csvOut) await db.dropFile(csvOut).catch(() => {});
+  }
+}
+
+// ---- Shapefile pre-flight ----
+// The Esri Shapefile format silently mangles data past its limits; check before exporting so the user
+// isn't handed a broken file. Deterministic checks (field names/count/geometry) are read from the data;
+// size is an estimate (parquet is compressed ~4× vs the uncompressed .shp/.dbf).
+export interface ShapefileWarnings {
+  longNames: string[];                 // > 10 chars → truncated by the driver
+  collisions: [string, string][];      // fields that collapse to the same 10-char name → data loss
+  fieldCount: number;                  // shapefile hard cap is 255
+  tooManyFields: boolean;
+  mixedGeometry: string[];             // >1 base geometry type → shapefile can't hold them together
+  rowCount: number;
+  estBytes: number;                    // rough uncompressed-size estimate
+  over2gb: boolean;
+  any: boolean;                        // true if anything worth warning about
+}
+
+export async function shapefileWarnings(
+  parquetUrl: string,
+  clip?: [number, number, number, number],
+): Promise<ShapefileWarnings> {
+  const duckdb = await import("@duckdb/duckdb-wasm");
+  const db = await getDB();
+  const conn = await db.connect();
+  const id = ++seq;
+  const src = `chk${id}.parquet`;
+  try {
+    await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+    await conn.query(`CREATE TABLE chk AS SELECT * FROM read_parquet('${src}');`);
+    const desc = (await conn.query("DESCRIBE chk;")).toArray();
+    const cols = desc.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
+
+    // Field-name limits (10 chars) + post-truncation collisions.
+    const longNames = cols.filter((c) => c.length > 10);
+    const seen = new Map<string, string>();
+    const collisions: [string, string][] = [];
+    for (const c of cols) {
+      const t = c.slice(0, 10).toLowerCase();
+      if (seen.has(t)) collisions.push([seen.get(t)!, c]);
+      else seen.set(t, c);
+    }
+
+    const fullRows = Number((await conn.query("SELECT count(*) n FROM chk;")).toArray()[0].n);
+    let rowCount = fullRows;
+
+    // Geometry: distinct BASE types (strip MULTI / Z / M). >1 base = can't share a shapefile.
+    await conn.query("INSTALL spatial; LOAD spatial;");
+    const gd = (await conn.query("DESCRIBE chk;")).toArray();
+    const geomType = String(gd.find((r) => String(r.column_name) === GEOM)?.column_type ?? "").toUpperCase();
+    const geomExpr = geomType.includes("BLOB") ? `ST_GeomFromWKB(${GEOM})` : GEOM;
+    let where = "";
+    if (clip) {
+      const [w, s, e, n] = clip;
+      where = ` WHERE ST_Intersects(${geomExpr}, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}))`;
+      rowCount = Number((await conn.query(`SELECT count(*) n FROM chk${where};`)).toArray()[0].n);
+    }
+    const gtypes = (await conn.query(
+      `SELECT DISTINCT ST_GeometryType(${geomExpr}) g FROM chk${where} WHERE ${geomExpr} IS NOT NULL;`,
+    )).toArray().map((r) => String(r.g).toUpperCase());
+    const baseTypes = [...new Set(gtypes.map((g) => g.replace(/^ST_/, "").replace(/^MULTI/, "").replace(/[ZM]+$/, "")))];
+
+    // Size estimate: parquet Content-Length × ~4 (shp/.dbf are uncompressed), scaled by the clip ratio.
+    let estBytes = 0;
+    try {
+      const head = await fetch(parquetUrl, { method: "HEAD" });
+      const pq = Number(head.headers.get("content-length")) || 0;
+      if (pq && fullRows) estBytes = Math.round(pq * 4 * (rowCount / fullRows));
+    } catch { /* HEAD blocked → skip the size estimate */ }
+    const over2gb = estBytes > 2 * 1024 ** 3;
+
+    const tooManyFields = cols.length > 255;
+    const mixedGeometry = baseTypes.length > 1 ? baseTypes : [];
+    return {
+      longNames, collisions, fieldCount: cols.length, tooManyFields,
+      mixedGeometry, rowCount, estBytes, over2gb,
+      any: longNames.length > 0 || collisions.length > 0 || tooManyFields || mixedGeometry.length > 0 || over2gb,
+    };
+  } finally {
+    await conn.query("DROP TABLE IF EXISTS chk;").catch(() => {});
+    await conn.close();
+    await db.dropFile(src).catch(() => {});
   }
 }

@@ -34,11 +34,17 @@ function getGdal(): Promise<Gdal> {
 
 const basename = (p: string) => p.split("/").pop() ?? p;
 
-/** Convert a GeoJSON string to `target` and return downloadable bytes + filename. */
+/** Convert a GeoJSON string (WGS84) to `target`, reprojecting to `epsg` (default 4326).
+ * `cols` (all attribute columns) + `floatCols` (the ones that are DOUBLE/REAL in the source) let us
+ * force real typing: GDAL's GeoJSON reader otherwise infers Integer for a float column whose values
+ * happen to be whole, silently downcasting depth/elevation fields. An OGR-SQL CAST fixes it. */
 export async function convertGeoJSON(
   geojson: string,
   stem: string,
   t: GdalTarget,
+  epsg = 4326,
+  cols: string[] = [],
+  floatCols: string[] = [],
 ): Promise<{ bytes: Uint8Array; filename: string; mime: string }> {
   const gdal = await getGdal();
   const input = new File([geojson], "in.geojson", { type: "application/geo+json" });
@@ -48,7 +54,16 @@ export async function convertGeoJSON(
   // would double to `stem.shp.shp`). Other drivers want the full filename.
   const outName = t.ext === "shp" ? stem : `${stem}.${t.ext}`;
   // -nln names the output layer after the topic (else it inherits "in" from in.geojson).
-  const result = await gdal.ogr2ogr(ds, ["-f", t.driver, "-t_srs", "EPSG:4326", "-nln", stem], outName);
+  // -t_srs reprojects from the GeoJSON's WGS84 to the user's chosen output CRS (e.g. 26912 UTM 12N).
+  const args = ["-f", t.driver, "-t_srs", `EPSG:${epsg}`, "-nln", stem];
+  if (floatCols.length && cols.length) {
+    const fset = new Set(floatCols);
+    const q = (c: string) => `"${c.replace(/"/g, '""')}"`;
+    // Geometry passes through OGR SQL implicitly; CAST only the whole-valued float columns to real.
+    const sel = cols.map((c) => (fset.has(c) ? `CAST(${q(c)} AS float(24,10)) AS ${q(c)}` : q(c))).join(", ");
+    args.push("-sql", `SELECT ${sel} FROM "in"`);
+  }
+  const result = await gdal.ogr2ogr(ds, args, outName);
 
   if (!t.multi) {
     const bytes = await gdal.getFileBytes(result);

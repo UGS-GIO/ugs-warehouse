@@ -422,9 +422,16 @@ export async function exportItem(
       return;
     }
 
-    // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only)
+    // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only). Pass the source column
+    // types so GDAL keeps DOUBLE columns as real (it otherwise downcasts whole-valued ones to Integer).
+    const descRows = desc.toArray();
+    const cols = descRows.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
+    const floatCols = descRows
+      .filter((r) => /DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC/.test(String(r.column_type).toUpperCase()))
+      .map((r) => String(r.column_name))
+      .filter((c) => !GEOM_NAMES.includes(c));
     const { convertGeoJSON, GDAL_TARGETS } = await import("./gdal");
-    const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt], epsg);
+    const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt], epsg, cols, floatCols);
     triggerDownload(bytes, filename, mime);
   } finally {
     await conn.query("DROP TABLE IF EXISTS raw; DROP TABLE IF EXISTS clipped;").catch(() => {});

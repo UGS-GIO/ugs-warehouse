@@ -366,6 +366,7 @@ export async function exportItem(
   stem: string,
   fmt: ExportFormat,
   clip?: [number, number, number, number], // [w,s,e,n] in 4326 — clip to this AOI
+  epsg = 4326,                              // output CRS for the gdal formats (shp/gpkg/gdb/fgb)
 ): Promise<void> {
   const duckdb = await import("@duckdb/duckdb-wasm");
   const db = await getDB();
@@ -423,7 +424,7 @@ export async function exportItem(
 
     // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only)
     const { convertGeoJSON, GDAL_TARGETS } = await import("./gdal");
-    const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt]);
+    const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt], epsg);
     triggerDownload(bytes, filename, mime);
   } finally {
     await conn.query("DROP TABLE IF EXISTS raw; DROP TABLE IF EXISTS clipped;").catch(() => {});

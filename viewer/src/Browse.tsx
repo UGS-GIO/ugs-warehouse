@@ -161,12 +161,14 @@ function ExportPanel({ item }: { item: StacDoc }) {
   const [clipOn, setClipOn] = useState(false);
   const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
   const [warn, setWarn] = useState<ShapefileWarnings | null>(null);  // shapefile pre-flight issues
+  const [epsg, setEpsg] = useState(4326);                            // output CRS for the gdal formats
+  const [customEpsg, setCustomEpsg] = useState(false);               // typed any-EPSG vs the common list
   if (!parquet) return null;
 
   const doExport = async (fmt: ExportFormat) => {
     setBusy(fmt);
     try {
-      await exportItem(parquet.href, String(item.id ?? "export"), fmt, clipOn ? bbox : undefined);
+      await exportItem(parquet.href, String(item.id ?? "export"), fmt, clipOn ? bbox : undefined, epsg);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -200,6 +202,32 @@ function ExportPanel({ item }: { item: StacDoc }) {
           </button>
         ))}
         {busy && <span className={C.muted}>running in your browser · first export loads DuckDB (~a few MB)</span>}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+        <label className="flex items-center gap-1">
+          Output CRS
+          <select value={customEpsg ? "other" : epsg}
+            onChange={(e) => {
+              if (e.target.value === "other") { setCustomEpsg(true); }
+              else { setCustomEpsg(false); setEpsg(Number(e.target.value)); }
+            }}
+            className="rounded border border-input bg-card px-1.5 py-0.5 text-foreground">
+            <option value={4326}>WGS 84 (EPSG:4326)</option>
+            <option value={26912}>NAD83 / UTM 12N (EPSG:26912)</option>
+            <option value={32612}>WGS84 / UTM 12N (EPSG:32612)</option>
+            <option value={3857}>Web Mercator (EPSG:3857)</option>
+            <option value="other">Other (any EPSG)…</option>
+          </select>
+        </label>
+        {customEpsg && (
+          <label className="flex items-center gap-1">
+            EPSG:
+            <input type="number" min={1024} max={999999} value={epsg} autoFocus
+              onChange={(e) => setEpsg(Number(e.target.value))}
+              className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+          </label>
+        )}
+        <span>— applies to Shapefile/GeoPackage/FileGDB/FlatGeobuf; GeoJSON &amp; CSV are always WGS 84.</span>
       </div>
       {fullBbox && (
         <div className="mt-2 text-xs">

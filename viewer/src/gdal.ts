@@ -34,11 +34,12 @@ function getGdal(): Promise<Gdal> {
 
 const basename = (p: string) => p.split("/").pop() ?? p;
 
-/** Convert a GeoJSON string to `target` and return downloadable bytes + filename. */
+/** Convert a GeoJSON string (WGS84) to `target`, reprojecting to `epsg` (default 4326). */
 export async function convertGeoJSON(
   geojson: string,
   stem: string,
   t: GdalTarget,
+  epsg = 4326,
 ): Promise<{ bytes: Uint8Array; filename: string; mime: string }> {
   const gdal = await getGdal();
   const input = new File([geojson], "in.geojson", { type: "application/geo+json" });
@@ -48,7 +49,8 @@ export async function convertGeoJSON(
   // would double to `stem.shp.shp`). Other drivers want the full filename.
   const outName = t.ext === "shp" ? stem : `${stem}.${t.ext}`;
   // -nln names the output layer after the topic (else it inherits "in" from in.geojson).
-  const result = await gdal.ogr2ogr(ds, ["-f", t.driver, "-t_srs", "EPSG:4326", "-nln", stem], outName);
+  // -t_srs reprojects from the GeoJSON's WGS84 to the user's chosen output CRS (e.g. 26912 UTM 12N).
+  const result = await gdal.ogr2ogr(ds, ["-f", t.driver, "-t_srs", `EPSG:${epsg}`, "-nln", stem], outName);
 
   if (!t.multi) {
     const bytes = await gdal.getFileBytes(result);

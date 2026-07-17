@@ -95,3 +95,14 @@ resource "google_service_account_iam_member" "build_can_actas_serving" {
   role               = "roles/iam.serviceAccountUser"
   member             = "serviceAccount:${var.build_service_account}"
 }
+
+# SELF-signBlob: review-api mints V4 signed GCS URLs for the private review assets via obstore, which
+# calls iamcredentials `signBlob` on its OWN identity (the serving SA). On Cloud Run the ambient identity
+# IS this SA, so the signBlob target = its own email — it just needs serviceAccountTokenCreator on itself.
+# No exported key, nothing in Secret Manager. (Confirmed empirically: obstore's GCS signer hits
+# iamcredentials.googleapis.com/.../<sa>:signBlob, so the ADC/metadata path works given this binding.)
+resource "google_service_account_iam_member" "serving_sign_blob" {
+  service_account_id = google_service_account.serving.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.serving.email}"
+}

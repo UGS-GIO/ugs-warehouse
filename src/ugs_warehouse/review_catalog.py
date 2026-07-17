@@ -8,10 +8,11 @@ reads fetch cross-origin and can't cleanly attach an auth header. A signed URL i
 private object storage with Range reads. Signing uses the runtime SA's own credentials via obstore
 (IAM signBlob on Cloud Run metadata creds — no key stored; the SA needs `iam.serviceAccounts.signBlob`).
 
-Auth: the same reviewer identity as the comments API (`_author` — IAP header or Firebase/Entra bearer),
-PLUS an allow-list gate. `_author` only proves *a* valid identity, not review-group membership (Cloud
-Identity groups are org-blocked), and signed URLs hand out private pre-publication data — so restrict to
-trusted domains/emails before minting.
+Auth (READ): any authenticated hazards-review user may VIEW review data — same policy as viewing review
+comments. `_author` (IAP header OR Firebase/Entra bearer) is the only gate; there is deliberately NO
+group/domain allow-list on reads. Review data is pre-publication, not confidential (ingest#195), and the
+product intent is that everyone who can reach the hazards-review route can see it. WRITE authorization
+(who may create/edit comments) is separate and lives in `comments._require_editor`.
 """
 from __future__ import annotations
 
@@ -21,7 +22,7 @@ import posixpath
 from datetime import timedelta
 
 import obstore as obs
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from obstore.store import GCSStore
 
 from ugs_warehouse.comments import _author
@@ -34,31 +35,10 @@ router = APIRouter(prefix="/api/review-catalog", tags=["review-catalog"])
 _TTL_MIN = int(os.environ.get("REVIEW_SIGNED_URL_TTL_MIN", "60"))
 _TTL = timedelta(minutes=_TTL_MIN)
 
-# Allow-list gate (see module docstring). Default: any @utah.gov identity. Tighten with an explicit
-# email list when the review group is known. Domains OR emails — either match authorizes.
-_ALLOWED_DOMAINS = {d.strip().lower() for d in os.environ.get("REVIEW_ALLOWED_DOMAINS", "utah.gov").split(",") if d.strip()}
-_ALLOWED_EMAILS = {e.strip().lower() for e in os.environ.get("REVIEW_ALLOWED_EMAILS", "").split(",") if e.strip()}
-
 # Bound the catalog crawl so a malformed/cyclic catalog can't fan out unboundedly.
 _MAX_DOCS = int(os.environ.get("REVIEW_CATALOG_MAX_DOCS", "1000"))
 
 _store = GCSStore(bucket=config.BUCKET)
-
-
-def _domain_ok(domain: str) -> bool:
-    """True if `domain` equals or is a subdomain of an allowed domain (dot-boundary match, so
-    `dnr.utah.gov` passes for `utah.gov` but `notutah.gov` does not)."""
-    return any(domain == d or domain.endswith("." + d) for d in _ALLOWED_DOMAINS)
-
-
-def _require_reviewer(request: Request) -> str:
-    """The caller's email if they pass auth AND the allow-list; 401/403 otherwise."""
-    email = _author(request)  # 401 if no IAP identity / valid bearer
-    lower = email.lower()
-    domain = lower.rsplit("@", 1)[-1] if "@" in lower else ""
-    if lower in _ALLOWED_EMAILS or _domain_ok(domain):
-        return email
-    raise HTTPException(status_code=403, detail="not authorized for review data")
 
 
 def _read_json(object_path: str) -> dict | None:
@@ -182,8 +162,9 @@ def list_review_catalog(request: Request) -> dict:
     """The review STAC catalog's items, returned VERBATIM except that every private-bucket asset href is
     replaced with a short-lived signed GCS URL. The map viewer feeds these straight into its existing
     STAC layer pipeline. The caller refetches before `ttl_seconds` elapses to refresh the URLs.
+    Any authenticated user may read (no allow-list) — viewing review data is open to all app users.
     """
-    _require_reviewer(request)
+    _author(request)  # 401 if unauthenticated; write authz (comments) is gated separately
 
     collected = _collect_items()
 

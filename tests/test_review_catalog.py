@@ -1,35 +1,13 @@
-"""Review-catalog API — pure logic: the allow-list gate, href→object-path resolution, catalog crawl,
-and asset-path extraction. Signing (obstore→IAM signBlob) and real bucket reads run on the deploy."""
+"""Review-catalog API — pure logic: href→object-path resolution, catalog crawl, and asset-path
+extraction. Reads are open to any authenticated user (no allow-list); signing (obstore→IAM signBlob)
+and real bucket reads run on the deploy."""
 import json
-
-import pytest
-from fastapi import HTTPException
 
 from ugs_warehouse import review_catalog as rc
 from ugs_warehouse.core import config
 
 BASE = config.PUBLIC_BASE_URL.rstrip("/")
 PREFIX = config.STAC_PREFIX
-
-
-class _Req:
-    def __init__(self, email):
-        self.headers = {"x-goog-authenticated-user-email": f"accounts.google.com:{email}"}
-
-
-def test_domain_gate_allows_domain_and_subdomains_only():
-    assert rc._domain_ok("utah.gov")
-    assert rc._domain_ok("dnr.utah.gov")       # subdomain
-    assert rc._domain_ok("geology.utah.gov")
-    assert not rc._domain_ok("notutah.gov")     # dot-boundary: NOT a subdomain
-    assert not rc._domain_ok("gmail.com")
-
-
-def test_require_reviewer_gates_by_domain():
-    assert rc._require_reviewer(_Req("alice@utah.gov")) == "alice@utah.gov"
-    with pytest.raises(HTTPException) as e:
-        rc._require_reviewer(_Req("z@gmail.com"))
-    assert e.value.status_code == 403
 
 
 def test_object_path_absolute_relative_and_external():

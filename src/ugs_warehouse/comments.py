@@ -185,6 +185,31 @@ def _author(request: Request) -> str:
     raise HTTPException(status_code=401, detail="no IAP identity or valid bearer token")
 
 
+# WRITE authorization. READS (list comments/notifications, view catalog) are open to any authenticated
+# user — everyone who can reach the hazards-review route may SEE review comments + data. WRITES
+# (create/edit/delete a comment, set item status) are limited to authorized principals:
+#   • an IAP-gated request is already restricted to the review group (the internal viewer) → trusted.
+#   • a bearer request (public hazards-review app) must be in the editor allow-list below.
+# Fail-CLOSED: if neither env is set, only IAP writers are allowed (bearer writes 403) — keep the list
+# in sync with the review IAP/IAM principals. Cloud Identity group lookup is org-blocked, hence an
+# explicit allow-list rather than a live membership check.
+_EDITOR_EMAILS = {e.strip().lower() for e in os.environ.get("REVIEW_EDITOR_EMAILS", "").split(",") if e.strip()}
+_EDITOR_DOMAINS = {d.strip().lower() for d in os.environ.get("REVIEW_EDITOR_DOMAINS", "").split(",") if d.strip()}
+
+
+def _require_editor(request: Request) -> str:
+    """The author email, but only if authorized to WRITE (see policy above). 401 if unauthenticated,
+    403 if authenticated-but-not-an-editor."""
+    email = _author(request)  # 401 if neither IAP identity nor a valid bearer
+    if request.headers.get("x-goog-authenticated-user-email"):  # IAP-gated → already the review group
+        return email
+    lower = email.lower()
+    domain = lower.rsplit("@", 1)[-1] if "@" in lower else ""
+    if lower in _EDITOR_EMAILS or any(domain == d or domain.endswith("." + d) for d in _EDITOR_DOMAINS):
+        return email
+    raise HTTPException(status_code=403, detail="not authorized to edit review comments")
+
+
 # Bounds keep a (trusted, IAP-gated) reviewer from storing a multi-MB body or a pathological array.
 class NewComment(BaseModel):
     item_ids: list[str] = Field(default_factory=list, max_length=200)  # 1..N STAC item ids (required for a top-level comment)
@@ -272,7 +297,7 @@ async def _emit_notifications(pool, comment: dict, author: str) -> None:
 async def create_comment(c: NewComment, request: Request) -> dict:
     if not c.body.strip():
         raise HTTPException(status_code=400, detail="body required")
-    author = _author(request)
+    author = _require_editor(request)  # write → authorized principals only
     pool = await _get_pool()
     await _touch_reviewer(pool, author)  # keep the @-mention roster current
 
@@ -342,7 +367,7 @@ async def list_comments(
 
 @router.patch("/{cid}")
 async def patch_comment(cid: int, patch: PatchComment, request: Request) -> dict:
-    author = _author(request)
+    author = _require_editor(request)  # write → authorized principals only
     pool = await _get_pool()
     cur = await pool.fetchrow("SELECT author FROM review.comments WHERE id = $1", cid)
     if not cur:
@@ -370,7 +395,7 @@ async def patch_comment(cid: int, patch: PatchComment, request: Request) -> dict
 
 @router.delete("/{cid}")
 async def delete_comment(cid: int, request: Request) -> dict:
-    author = _author(request)
+    author = _require_editor(request)  # write → authorized principals only
     pool = await _get_pool()
     cur = await pool.fetchrow("SELECT author FROM review.comments WHERE id = $1", cid)
     if not cur:
@@ -407,7 +432,7 @@ async def list_item_status(request: Request, item_id: str | None = None) -> list
 async def set_item_status(item_id: str, s: SetStatus, request: Request) -> dict:
     if s.status not in ITEM_STATUSES:
         raise HTTPException(status_code=400, detail=f"status must be one of {ITEM_STATUSES}")
-    author = _author(request)
+    author = _require_editor(request)  # write → authorized principals only
     pool = await _get_pool()
     row = await pool.fetchrow(
         "INSERT INTO review.item_status (item_id, status, updated_by, updated_at) "

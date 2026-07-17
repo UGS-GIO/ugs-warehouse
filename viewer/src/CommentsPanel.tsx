@@ -16,9 +16,9 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
   itemId: string; target?: CommentTarget; label?: string;
 }) {
   const qc = useQueryClient();
-  // Multi-select (comment on N features at once) has no single thread to show — compose only.
-  const composeOnly = (target?.featureIds?.length ?? 0) > 1;
-  const key = ["comments", itemId, target?.kind ?? "item", target?.featureId ?? null, target?.column ?? null];
+  // Multi-select (comment on N rows at once) has no single thread to show — compose only.
+  const composeOnly = (target?.rowVals?.length ?? 0) > 1;
+  const key = ["comments", itemId, target?.kind ?? "item", target?.rowVal ?? null, target?.column ?? null];
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: key });
     qc.invalidateQueries({ queryKey: ["comments-all"] });  // keep the Review dashboard fresh
@@ -26,7 +26,7 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
 
   const { data: comments = [], isLoading, error } = useQuery({
     queryKey: key,
-    queryFn: () => listComments(itemId, { featureId: target?.featureId, column: target?.column }),
+    queryFn: () => listComments(itemId, { rowVal: target?.rowVal, column: target?.column }),
     retry: false,
     enabled: !composeOnly,
   });
@@ -157,7 +157,7 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
       {add.error && <p className="mt-1 text-destructive">Failed to add: {String(add.error)}</p>}
       {add.isSuccess && !add.isPending && (
         <p key={add.submittedAt} className="save-cue mt-1 text-green-600 dark:text-green-400">
-          Saved ✓{composeOnly && target?.featureIds?.length ? ` — added to ${target.featureIds.length} features` : ""}
+          Saved ✓{composeOnly && target?.rowVals?.length ? ` — added to ${target.rowVals.length} rows` : ""}
         </p>
       )}
     </div>

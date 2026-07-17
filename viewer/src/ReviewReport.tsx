@@ -6,9 +6,9 @@ import { type Comment, listAllComments } from "./comments";
 // dialog (Save as PDF); "Email draft" = a mailto: with a text summary. Review deploy only.
 // A server-rendered PDF + real email-with-attachment is the v2 (ugs-ingest#190).
 
-// Human label for what a comment targets: whole item, feature row(s), or a column.
+// Human label for what a comment targets: whole item, row(s), or a column.
 function targetLabel(c: Comment): string {
-  if (c.target_kind === "row") return `feature ${(c.feature_ids ?? []).join(", ") || "?"}`;
+  if (c.target_kind === "row") return `${c.row_key ?? "row"} ${(c.row_key_vals ?? []).join(", ") || "?"}`;
   if (c.target_kind === "column") return `column “${c.column_name ?? "?"}”`;
   return "item";
 }

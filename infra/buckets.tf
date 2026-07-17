@@ -31,10 +31,11 @@ resource "google_storage_bucket" "review" {
   # verb ever hits GCS directly. Response headers cover Range reads specifically (PMTiles/GeoParquet
   # depend on Content-Range/Accept-Ranges to do partial fetches).
   #
-  # Mirrors the exact origins already live on review-api's REVIEW_CORS_ORIGINS
-  # (infra/serving-review-api.tf) — same app, same trust boundary, kept in sync deliberately.
+  # Reuses var.review_cors_origins — the SAME variable review-api's REVIEW_CORS_ORIGINS env is built
+  # from (infra/serving-review-api.tf) — one source of truth instead of a second hardcoded copy that
+  # can drift out of sync with the app's own CORS list.
   #
-  # GAP: review-api's CORS also allows REVIEW_CORS_ORIGIN_REGEX (Firebase preview-channel URLs,
+  # GAP: review-api's CORS also allows REVIEW_CORS_ORIGIN_REGEX (Firebase preview-channel origins,
   # `ut-dnr-ugs-maps-(prod|dev)--*.web.app`) via FastAPI's regex support. GCS bucket `cors{}` has
   # no regex/wildcard-subdomain matching (origin must be a literal string or bare "*") — a preview
   # channel's XHR to /api/* will work, but its browser fetch of a signed PMTiles/parquet URL will
@@ -43,7 +44,7 @@ resource "google_storage_bucket" "review" {
   # real smoke test and steady-state use; revisit if preview-channel review-catalog rendering is
   # actually needed.
   cors {
-    origin          = ["https://maps.geology.utah.gov", "https://ut-dnr-ugs-maps-prod.web.app", "https://ut-dnr-ugs-maps-prod.firebaseapp.com", "https://ut-dnr-ugs-maps-dev.web.app", "https://ut-dnr-ugs-maps-dev.firebaseapp.com", "http://localhost:5173"]
+    origin          = split(",", var.review_cors_origins)
     method          = ["GET", "HEAD"]
     response_header = ["Content-Type", "Range", "Content-Range", "Accept-Ranges", "Content-Length"]
     max_age_seconds = 3600

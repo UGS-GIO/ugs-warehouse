@@ -27,7 +27,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from obstore.store import GCSStore
 
-from ugs_warehouse import comments
+from ugs_warehouse import comments, review_catalog
 from ugs_warehouse.core import config
 
 app = FastAPI(title="ugs-warehouse-review-serving")
@@ -53,6 +53,7 @@ app.include_router(comments.router)
 app.include_router(comments.status_router)
 app.include_router(comments.notif_router)
 app.include_router(comments.reviewers_router)
+app.include_router(review_catalog.router)
 
 
 @app.on_event("startup")

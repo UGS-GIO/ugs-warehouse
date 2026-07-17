@@ -86,7 +86,21 @@ resource "google_cloud_run_v2_service" "review_serving" {
 
   # cloudbuild owns image rollouts (deploys :$SHORT_SHA on every push). Ignore the image here
   # so `tofu apply` doesn't revert the running revision back to var.serving_image.
+  #
+  # client / client_version / scaling are stamped by whichever tool last touched the service
+  # (someone ran a manual `gcloud run services update` for the scaling knob) — tofu doesn't set
+  # any of these in config, so an un-targeted apply would otherwise "correct" them back to
+  # null/0 and silently revert live scaling. Ignore them here so drift on this service can't ride
+  # along on an unrelated apply (e.g. review-api's WAREHOUSE_PUBLIC_BASE_URL depends on
+  # review_serving.uri, which pulls this resource into any apply that touches review-api).
   lifecycle {
-    ignore_changes = [template[0].containers[0].image]
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+      scaling, # whole block: not declared in config at all, so ignoring sub-fields doesn't stop
+      # tofu wanting to drop it entirely (list len 1 -> 0). Someone set it via `gcloud run
+      # services update --scaling ...`; ignore it here rather than codifying it half-guessed.
+    ]
   }
 }

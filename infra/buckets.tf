@@ -24,6 +24,32 @@ resource "google_storage_bucket" "review" {
     enabled = true
   }
 
+  # Signed URLs from /api/review-catalog (review_catalog.py) point straight at
+  # storage.googleapis.com — maplibre's PMTiles range-reads and duckdb-wasm's GeoParquet reads
+  # fetch them cross-origin from the hazards-review app, so the bucket (not just review-api) needs
+  # CORS. GET/HEAD only — signed URLs are already scoped read-only and short-TTL; no state-changing
+  # verb ever hits GCS directly. Response headers cover Range reads specifically (PMTiles/GeoParquet
+  # depend on Content-Range/Accept-Ranges to do partial fetches).
+  #
+  # Reuses var.review_cors_origins — the SAME variable review-api's REVIEW_CORS_ORIGINS env is built
+  # from (infra/serving-review-api.tf) — one source of truth instead of a second hardcoded copy that
+  # can drift out of sync with the app's own CORS list.
+  #
+  # GAP: review-api's CORS also allows REVIEW_CORS_ORIGIN_REGEX (Firebase preview-channel origins,
+  # `ut-dnr-ugs-maps-(prod|dev)--*.web.app`) via FastAPI's regex support. GCS bucket `cors{}` has
+  # no regex/wildcard-subdomain matching (origin must be a literal string or bare "*") — a preview
+  # channel's XHR to /api/* will work, but its browser fetch of a signed PMTiles/parquet URL will
+  # fail CORS. No fix here short of "*" (too broad for a private bucket) or listing exact preview
+  # URLs (they're dynamic, generated per-PR). Acceptable for now: prod + dev + localhost cover the
+  # real smoke test and steady-state use; revisit if preview-channel review-catalog rendering is
+  # actually needed.
+  cors {
+    origin          = split(",", var.review_cors_origins)
+    method          = ["GET", "HEAD"]
+    response_header = ["Content-Type", "Range", "Content-Range", "Accept-Ranges", "Content-Length"]
+    max_age_seconds = 3600
+  }
+
   lifecycle {
     prevent_destroy = true
   }

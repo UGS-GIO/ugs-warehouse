@@ -16,6 +16,22 @@ variable "review_cors_origin_regex" {
   default     = "https://ut-dnr-ugs-maps-(prod|dev)--[a-z0-9-]+\\.web\\.app"
 }
 
+# WRITE authorization for the public hazards-review app (comments._require_editor). Reads are open to
+# any authenticated user; writes need to be in one of these two allow-lists OR come in over IAP (the
+# internal viewer, already trusted). Empty (the default) is FAIL-CLOSED — bearer writes 403 until one
+# of these is set, so this can't accidentally open writes by omission.
+variable "review_editor_emails" {
+  type        = string
+  description = "Comma-separated exact emails allowed to write review comments over a bearer token."
+  default     = ""
+}
+
+variable "review_editor_domains" {
+  type        = string
+  description = "Comma-separated email domains (e.g. utah.gov) allowed to write review comments over a bearer token."
+  default     = ""
+}
+
 resource "google_cloud_run_v2_service" "review_api" {
   name     = "ugs-warehouse-review-api"
   project  = var.project_id
@@ -91,6 +107,14 @@ resource "google_cloud_run_v2_service" "review_api" {
         value = var.review_cors_origin_regex
       }
       env {
+        name  = "REVIEW_EDITOR_EMAILS"
+        value = var.review_editor_emails
+      }
+      env {
+        name  = "REVIEW_EDITOR_DOMAINS"
+        value = var.review_editor_domains
+      }
+      env {
         name = "DB_PASS"
         value_source {
           secret_key_ref {
@@ -120,8 +144,15 @@ resource "google_cloud_run_v2_service" "review_api" {
   }
 
   # cloudbuild owns image rollouts (same image as review_serving); ignore here so apply won't revert.
+  # client/client_version: same drift as review_serving (#26) — a manual `gcloud run deploy` (used to
+  # fix the stale-image race, see review-catalog tracker) stamps these; ignore so this apply doesn't
+  # fight them.
   lifecycle {
-    ignore_changes = [template[0].containers[0].image]
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+    ]
   }
 }
 

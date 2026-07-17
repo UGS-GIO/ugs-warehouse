@@ -135,6 +135,12 @@ export const tableColumns = (d: StacDoc | undefined): TableColumn[] | undefined 
   return Array.isArray(cols) && cols.length ? cols : undefined;
 };
 
+// The stable domain-key column used to anchor row-level review comments (default 'pk'). A layer can
+// override via ugs:primary_key so a row comment resolves to the same feature across the viewer, the
+// hazards-review map viewer, and PostGIS — unlike the ephemeral feature_id.
+export const primaryKeyOf = (d: StacDoc | undefined): string =>
+  String((d?.properties as Record<string, unknown> | undefined)?.["ugs:primary_key"] ?? "pk");
+
 // STAC Classification extension: categorical value/name/color from properties.classification:classes
 // → legend entries. Undefined pre-reingest → the legend falls back to deriving from the GL style.
 export const classificationEntries = (

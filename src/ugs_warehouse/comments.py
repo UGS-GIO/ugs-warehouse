@@ -41,36 +41,38 @@ def _conn_kwargs() -> dict:
     }
 
 
-# A comment targets 1..N items, and optionally 1..N features (rows) or a column of those items.
-# target_kind = item | row | column. Both item_ids and feature_ids are arrays so one comment can span
-# several items/features (the multi-select "comment on N features" flow). ALTERs migrate the
-# already-created table (Gemini's hotfix, which had a scalar feature_id) in place.
+# A comment targets 1..N items, and optionally 1..N rows or a column of those items.
+# target_kind = item | row | column. A ROW comment is keyed on a STABLE domain key — `row_key` is the
+# column name (e.g. 'pk'), `row_key_vals` the values — NOT the ephemeral feature_id (a Hilbert
+# row-number that reshuffles on re-ingest and differs between the internal viewer and the map viewer).
+# The stable key is identical across the parquet, PMTiles, and PostGIS, so a comment made in either app
+# resolves to the same row in the other. The old feature_ids column is retired (dropped below).
 _DDL = """
     CREATE TABLE IF NOT EXISTS review.comments (
-      id          BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-      item_ids    TEXT[]      NOT NULL,
-      target_kind TEXT        NOT NULL DEFAULT 'item',
-      feature_ids BIGINT[],
-      column_name TEXT,
-      parent_id   BIGINT,
-      body        TEXT        NOT NULL,
-      author      TEXT        NOT NULL,
-      status      TEXT        NOT NULL DEFAULT 'open',
-      created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
-      updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+      id           BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+      item_ids     TEXT[]      NOT NULL,
+      target_kind  TEXT        NOT NULL DEFAULT 'item',
+      row_key      TEXT,                 -- the stable-key COLUMN name for a row comment (e.g. 'pk')
+      row_key_vals TEXT[],               -- 1..N stable key values (target_kind = row)
+      column_name  TEXT,
+      parent_id    BIGINT,
+      body         TEXT        NOT NULL,
+      author       TEXT        NOT NULL,
+      status       TEXT        NOT NULL DEFAULT 'open',
+      created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
     );
-    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS target_kind TEXT NOT NULL DEFAULT 'item';
-    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS feature_ids BIGINT[];
-    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS column_name TEXT;
-    -- Threading: a reply points at its parent comment (one level of nesting). NULL = top-level.
-    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS parent_id BIGINT;
-    -- Migrate the earlier scalar feature_id (if that column exists) into the array, then drop it.
-    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS feature_id BIGINT;
-    UPDATE review.comments SET feature_ids = ARRAY[feature_id]
-      WHERE feature_id IS NOT NULL AND feature_ids IS NULL;
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS target_kind  TEXT NOT NULL DEFAULT 'item';
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS column_name  TEXT;
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS parent_id    BIGINT;
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS row_key      TEXT;
+    ALTER TABLE review.comments ADD COLUMN IF NOT EXISTS row_key_vals TEXT[];
+    -- Retire the ephemeral feature id(s) in favour of the stable domain key (warehouse not prod;
+    -- existing row targets are dropped — item/column comments are untouched).
+    ALTER TABLE review.comments DROP COLUMN IF EXISTS feature_ids;
     ALTER TABLE review.comments DROP COLUMN IF EXISTS feature_id;
     CREATE INDEX IF NOT EXISTS comments_items_gin ON review.comments USING GIN (item_ids);
-    CREATE INDEX IF NOT EXISTS comments_features_gin ON review.comments USING GIN (feature_ids);
+    CREATE INDEX IF NOT EXISTS comments_rowvals_gin ON review.comments USING GIN (row_key_vals);
     CREATE INDEX IF NOT EXISTS comments_parent ON review.comments (parent_id);
 
     -- Per-layer review status — tracks completion of a layer's review, independent of whether every
@@ -188,7 +190,8 @@ class NewComment(BaseModel):
     item_ids: list[str] = Field(default_factory=list, max_length=200)  # 1..N STAC item ids (required for a top-level comment)
     body: str = Field(max_length=20_000)
     target_kind: str = "item"                  # item | row | column
-    feature_ids: list[int] | None = Field(default=None, max_length=10_000)  # 1..N feature ids when target_kind = row
+    row_key: str | None = Field(default=None, max_length=128)  # stable-key column name (e.g. 'pk') for a row comment
+    row_key_vals: list[str] | None = Field(default=None, max_length=10_000)  # 1..N stable key values
     column_name: str | None = Field(default=None, max_length=200)  # set when target_kind = column
     parent_id: int | None = None               # set on a reply; the reply inherits the parent's target
 
@@ -274,28 +277,30 @@ async def create_comment(c: NewComment, request: Request) -> dict:
     await _touch_reviewer(pool, author)  # keep the @-mention roster current
 
     if c.parent_id is not None:
-        # A reply inherits the parent's target (item_ids/kind/feature_ids/column) server-side, so it
-        # can't be spoofed onto a different target and it matches every existing list filter. One level
-        # of nesting only — replying to a reply attaches to the same top-level thread.
+        # A reply inherits the parent's target (item_ids/kind/row_key/column) server-side, so it can't
+        # be spoofed onto a different target and it matches every existing list filter. One level of
+        # nesting only — replying to a reply attaches to the same top-level thread.
         parent = await pool.fetchrow("SELECT * FROM review.comments WHERE id = $1", c.parent_id)
         if not parent:
             raise HTTPException(status_code=404, detail="parent comment not found")
         thread_root = parent["parent_id"] or parent["id"]
         item_ids, target_kind = parent["item_ids"], parent["target_kind"]
-        feature_ids, column_name = parent["feature_ids"], parent["column_name"]
+        row_key, row_key_vals, column_name = parent["row_key"], parent["row_key_vals"], parent["column_name"]
     else:
         if not c.item_ids:
             raise HTTPException(status_code=400, detail="item_ids required")
         if c.target_kind not in ("item", "row", "column"):
             raise HTTPException(status_code=400, detail="target_kind must be item|row|column")
+        if c.target_kind == "row" and not (c.row_key and c.row_key_vals):
+            raise HTTPException(status_code=400, detail="row comment needs row_key + row_key_vals")
         thread_root = None
         item_ids, target_kind = c.item_ids, c.target_kind
-        feature_ids, column_name = c.feature_ids, c.column_name
+        row_key, row_key_vals, column_name = c.row_key, c.row_key_vals, c.column_name
 
     row = await pool.fetchrow(
-        "INSERT INTO review.comments (item_ids, body, author, target_kind, feature_ids, column_name, parent_id) "
-        "VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *",
-        item_ids, c.body.strip(), author, target_kind, feature_ids, column_name, thread_root,
+        "INSERT INTO review.comments (item_ids, body, author, target_kind, row_key, row_key_vals, column_name, parent_id) "
+        "VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *",
+        item_ids, c.body.strip(), author, target_kind, row_key, row_key_vals, column_name, thread_root,
     )
     comment = dict(row)
     try:
@@ -310,7 +315,7 @@ async def list_comments(
     request: Request,
     item_id: str | None = None,
     status: str | None = None,
-    feature_id: int | None = None,
+    row_val: str | None = None,   # a stable row-key value → this row's comments (from either app)
     column: str | None = None,
 ) -> list[dict]:
     me = _author(request)  # require an authenticated session
@@ -323,9 +328,9 @@ async def list_comments(
     if status:
         args.append(status)
         where.append(f"status = ${len(args)}")
-    if feature_id is not None:
-        args.append(feature_id)
-        where.append(f"${len(args)} = ANY(feature_ids)")
+    if row_val is not None:
+        args.append(row_val)
+        where.append(f"${len(args)} = ANY(row_key_vals)")
     if column is not None:
         args.append(column)
         where.append(f"column_name = ${len(args)}")
@@ -432,7 +437,7 @@ async def list_notifications(request: Request, unseen: bool = False) -> list[dic
     where = "n.recipient = $1" + (" AND n.seen_at IS NULL" if unseen else "")
     rows = await pool.fetch(
         "SELECT n.id, n.actor, n.kind, n.seen_at, n.created_at, n.comment_id, "
-        "       c.body, c.item_ids, c.target_kind, c.feature_ids, c.column_name, c.parent_id "
+        "       c.body, c.item_ids, c.target_kind, c.row_key, c.row_key_vals, c.column_name, c.parent_id "
         "FROM review.notifications n JOIN review.comments c ON c.id = n.comment_id "
         f"WHERE {where} ORDER BY n.created_at DESC LIMIT 500",
         me,

@@ -18,7 +18,7 @@ import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS, type ShapefileWarnings, shapefileWarnings } from "./download";
 import { Legend } from "./legend";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
-import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
 import { PhotoGallery } from "./PhotoGallery";
@@ -832,7 +832,10 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
   const [spriteReady, setSpriteReady] = useState(false);
   const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(null);
   // Review deploy: the feature a reviewer chose to comment on (row-targeted comments panel below the map).
-  const [reviewFeature, setReviewFeature] = useState<{ fid: number; props: Record<string, unknown> } | null>(null);
+  // Row-comment target = the feature's STABLE key value (pk), read from its attributes — not the tile
+  // feature id — so the comment resolves to the same row in the hazards-review map viewer.
+  const pkCol = primaryKeyOf(item);
+  const [reviewFeature, setReviewFeature] = useState<{ pkVal: string; props: Record<string, unknown> } | null>(null);
   // Close the popup when the item changes (a stale popup over a different layer would mislead).
   useEffect(() => { setPopup(null); setReviewFeature(null); }, [item.id]);
 
@@ -990,10 +993,10 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
                     ))}
                   </tbody>
                 </table>
-                {IS_REVIEW && popup.fid != null && (
+                {IS_REVIEW && popup.props[pkCol] != null && (
                   <button
                     className="mt-1.5 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20"
-                    onClick={() => { setReviewFeature({ fid: popup.fid!, props: popup.props }); setPopup(null); }}>
+                    onClick={() => { setReviewFeature({ pkVal: String(popup.props[pkCol]), props: popup.props }); setPopup(null); }}>
                     💬 Comment on this feature
                   </button>
                 )}
@@ -1008,8 +1011,8 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
             <h3 className="text-sm font-semibold">Feature review</h3>
             <button className="text-xs text-muted-foreground hover:underline" onClick={() => setReviewFeature(null)}>close</button>
           </div>
-          <CommentsPanel itemId={String(item.id ?? "")} target={{ kind: "row", featureId: reviewFeature.fid }}
-            label={`Comments on feature #${reviewFeature.fid}`} />
+          <CommentsPanel itemId={String(item.id ?? "")} target={{ kind: "row", rowKey: pkCol, rowVal: reviewFeature.pkVal }}
+            label={`Comments on ${pkCol} ${reviewFeature.pkVal}`} />
         </div>
       )}
       {/* Legend follows the active render: explicit entries for icon renders (box-type pie wedges),
@@ -1123,7 +1126,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
     <>
       <PmtilesMap item={item} focus={focus} onFeatureClick={pq ? onFeatureClick : undefined} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")} />}
+      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")} rowKey={primaryKeyOf(item)} />}
     </>
   );
 }
@@ -1182,21 +1185,23 @@ const PAGE_SIZES = [25, 50, 100, 250];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
-function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
+function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
-  reviewItemId?: string;  // review deploy: enables per-row + multi-select feature comments
+  reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
+  rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
-  // Feature comments: selected feature_ids (tracked by id, not TanStack row-selection, because the
-  // table is server-paged — row ids reset each page, feature_ids are stable across pages).
-  const [selFids, setSelFids] = useState<Set<number>>(new Set());
+  // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
+  // TanStack row-selection (server-paged, row ids reset each page) and not feature_id (ephemeral,
+  // differs from the map viewer). A pk resolves to the same row across apps.
+  const [selPks, setSelPks] = useState<Set<string>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => { setSelFids(new Set()); setComposeOpen(false); }, [href]);
-  const toggleFid = (fid: number) => setSelFids((prev) => {
+  useEffect(() => { setSelPks(new Set()); setComposeOpen(false); }, [href]);
+  const togglePk = (pk: string) => setSelPks((prev) => {
     const next = new Set(prev);
-    if (next.has(fid)) next.delete(fid); else next.add(fid);
+    if (next.has(pk)) next.delete(pk); else next.add(pk);
     return next;
   });
   const [pageIndex, setPageIndex] = useState(0);
@@ -1300,11 +1305,11 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
     || Object.values(draft).some((d) => d.min || d.max || d.text);
   const clearAll = () => { setSearch(""); setDraft({}); };
 
-  // Feature-comment selection helpers (review deploy). feature_ids are the stable per-row handle.
-  const pageFids = (page?.rows ?? []).map((r) => Number(r.feature_id)).filter((n) => Number.isFinite(n));
-  const pageAllSelected = pageFids.length > 0 && pageFids.every((f) => selFids.has(f));
-  const pageSomeSelected = pageFids.some((f) => selFids.has(f));
-  const selArr = [...selFids];
+  // Row-comment selection helpers (review deploy). The pk column is the stable per-row handle.
+  const pagePks = (page?.rows ?? []).map((r) => r[rowKey]).filter((v) => v != null).map(String);
+  const pageAllSelected = pagePks.length > 0 && pagePks.every((p) => selPks.has(p));
+  const pageSomeSelected = pagePks.some((p) => selPks.has(p));
+  const selArr = [...selPks];
 
   // Row click → zoom + highlight. Fire the bbox immediately (instant feedback), then fetch the
   // real geometry (same filter+sort, offset = page start + row index) and upgrade the highlight.
@@ -1357,12 +1362,12 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
         {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
       </div>
       {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
-      {review && selFids.size > 0 && (
+      {review && selPks.size > 0 && (
         <div className="mb-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
-          <span className="font-medium text-amber-700 dark:text-amber-400">{selFids.size} feature{selFids.size === 1 ? "" : "s"} selected</span>
+          <span className="font-medium text-amber-700 dark:text-amber-400">{selPks.size} row{selPks.size === 1 ? "" : "s"} selected</span>
           <button className="rounded border border-amber-500/50 bg-amber-500/15 px-2 py-0.5 font-medium text-amber-700 hover:bg-amber-500/25 dark:text-amber-300"
-            onClick={() => setComposeOpen(true)}>💬 Comment on {selFids.size === 1 ? "feature" : `${selFids.size} features`}</button>
-          <button className="text-muted-foreground hover:underline" onClick={() => { setSelFids(new Set()); setComposeOpen(false); }}>clear</button>
+            onClick={() => setComposeOpen(true)}>💬 Comment on {selPks.size === 1 ? "row" : `${selPks.size} rows`}</button>
+          <button className="text-muted-foreground hover:underline" onClick={() => { setSelPks(new Set()); setComposeOpen(false); }}>clear</button>
         </div>
       )}
       <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-[12px] ${collapsed ? "hidden" : "h-[28rem] min-h-[10rem]"}`}>
@@ -1371,14 +1376,14 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
                 {review && (
-                  <th className={`${C.th} w-8 text-center`} title="Select features to comment on">
+                  <th className={`${C.th} w-8 text-center`} title="Select rows to comment on">
                     <input type="checkbox" aria-label="Select all rows on this page"
                       checked={pageAllSelected}
                       ref={(el) => { if (el) el.indeterminate = pageSomeSelected && !pageAllSelected; }}
-                      onChange={() => setSelFids((prev) => {
+                      onChange={() => setSelPks((prev) => {
                         const next = new Set(prev);
-                        if (pageAllSelected) pageFids.forEach((f) => next.delete(f));
-                        else pageFids.forEach((f) => next.add(f));
+                        if (pageAllSelected) pagePks.forEach((p) => next.delete(p));
+                        else pagePks.forEach((p) => next.add(p));
                         return next;
                       })} />
                   </th>
@@ -1430,6 +1435,8 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
               const clickable = Boolean(onPick && bbox);
               const fid = r.original.feature_id;
               const nfid = fid != null ? Number(fid) : null;
+              const pkRaw = r.original[rowKey];
+              const pkStr = pkRaw != null ? String(pkRaw) : null;
               const hl = nfid != null && nfid === highlightId;
               return (
                 <tr key={r.id} data-index={vi.index} ref={rowVirt.measureElement}
@@ -1438,12 +1445,12 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
                   onClick={clickable ? () => { pick(r.index, bbox!); if (nfid != null) setHighlightId(nfid); } : undefined}>
                   {review && (
                     <td className="w-8 px-1 text-center align-middle" onClick={(e) => e.stopPropagation()}>
-                      {nfid != null ? (
+                      {pkStr != null ? (
                         <div className="flex items-center gap-1">
-                          <input type="checkbox" aria-label={`Select feature ${nfid}`}
-                            checked={selFids.has(nfid)} onChange={() => toggleFid(nfid)} />
-                          <button title="Comment on this feature" className="text-xs hover:opacity-70"
-                            onClick={() => { setSelFids(new Set([nfid])); setComposeOpen(true); }}>💬</button>
+                          <input type="checkbox" aria-label={`Select ${rowKey} ${pkStr}`}
+                            checked={selPks.has(pkStr)} onChange={() => togglePk(pkStr)} />
+                          <button title="Comment on this row" className="text-xs hover:opacity-70"
+                            onClick={() => { setSelPks(new Set([pkStr])); setComposeOpen(true); }}>💬</button>
                         </div>
                       ) : null}
                     </td>
@@ -1499,17 +1506,17 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId }: {
           </span>
         )}
       </div>
-      {review && composeOpen && selFids.size > 0 && (
+      {review && composeOpen && selPks.size > 0 && (
         <div className="mt-2 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">
-              {selArr.length > 1 ? `Comment on ${selArr.length} features` : `Feature #${selArr[0]}`}
+              {selArr.length > 1 ? `Comment on ${selArr.length} rows` : `${rowKey} ${selArr[0]}`}
             </h3>
             <button className="text-xs text-muted-foreground hover:underline" onClick={() => setComposeOpen(false)}>close</button>
           </div>
           <CommentsPanel itemId={reviewItemId!}
-            target={{ kind: "row", featureIds: selArr, featureId: selArr.length === 1 ? selArr[0] : undefined }}
-            label={selArr.length > 1 ? `New note on ${selArr.length} features` : `Comments on feature #${selArr[0]}`} />
+            target={{ kind: "row", rowKey, rowVals: selArr, rowVal: selArr.length === 1 ? selArr[0] : undefined }}
+            label={selArr.length > 1 ? `New note on ${selArr.length} rows` : `Comments on ${rowKey} ${selArr[0]}`} />
         </div>
       )}
     </div>

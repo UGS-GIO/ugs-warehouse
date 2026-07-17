@@ -144,14 +144,16 @@ resource "google_cloud_run_v2_service" "review_api" {
   }
 
   # cloudbuild owns image rollouts (same image as review_serving); ignore here so apply won't revert.
-  # client/client_version: same drift as review_serving (#26) — a manual `gcloud run deploy` (used to
-  # fix the stale-image race, see review-catalog tracker) stamps these; ignore so this apply doesn't
-  # fight them.
+  # client/client_version/scaling: same drift as review_serving (#26) — a manual `gcloud run deploy`
+  # (used to fix the stale-image race, see review-catalog tracker) stamped these; ignore so apply
+  # doesn't fight them. scaling is the whole block (not sub-fields) for the same reason as #26: no
+  # scaling{} is declared in config, so ignoring sub-fields can't stop tofu wanting to drop the block.
   lifecycle {
     ignore_changes = [
       template[0].containers[0].image,
       client,
       client_version,
+      scaling,
     ]
   }
 }

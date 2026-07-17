@@ -39,10 +39,6 @@ _TTL = timedelta(minutes=_TTL_MIN)
 _ALLOWED_DOMAINS = {d.strip().lower() for d in os.environ.get("REVIEW_ALLOWED_DOMAINS", "utah.gov").split(",") if d.strip()}
 _ALLOWED_EMAILS = {e.strip().lower() for e in os.environ.get("REVIEW_ALLOWED_EMAILS", "").split(",") if e.strip()}
 
-# Asset keys worth surfacing to the map viewer, in preference order for the "primary" data asset.
-# Values in the review bucket are private → signed; anything off our base (CDN styles) is left as-is.
-_ASSET_KEYS = ("pmtiles", "geoparquet", "data", "cog", "thumbnail")
-
 # Bound the catalog crawl so a malformed/cyclic catalog can't fan out unboundedly.
 _MAX_DOCS = int(os.environ.get("REVIEW_CATALOG_MAX_DOCS", "1000"))
 
@@ -153,11 +149,12 @@ def _collect_items() -> list[tuple[dict, str]]:
 
 
 def _asset_paths(item: dict, item_path: str) -> dict[str, str]:
-    """{asset_key: bucket_object_path} for the private assets we surface on this item."""
+    """{asset_key: bucket_object_path} for EVERY asset whose href resolves to a review-bucket object.
+    Signs all private data assets (pmtiles/geoparquet/thumbnail/cog/related-tables/…); assets whose href
+    points off our base (e.g. CDN style_url, sprites) resolve to None and are left untouched."""
     assets = item.get("assets") or {}
     paths: dict[str, str] = {}
-    for key in _ASSET_KEYS:
-        a = assets.get(key)
+    for key, a in assets.items():
         href = a.get("href") if isinstance(a, dict) else None
         if href:
             op = _object_path(href, item_path)
@@ -166,35 +163,36 @@ def _asset_paths(item: dict, item_path: str) -> dict[str, str]:
     return paths
 
 
+def _sign_item_assets(item: dict, item_path: str, signed: dict[str, str]) -> dict:
+    """A shallow copy of the STAC item with each private asset's `href` swapped for its signed URL.
+    The full item is preserved otherwise, so the map viewer's existing STAC→PMTiles resolver
+    (`resolveStacPMTilesLayer`) consumes it unchanged."""
+    ap = _asset_paths(item, item_path)
+    if not ap:
+        return item
+    assets = dict(item.get("assets") or {})
+    for key, objpath in ap.items():
+        if objpath in signed and isinstance(assets.get(key), dict):
+            assets[key] = {**assets[key], "href": signed[objpath]}
+    return {**item, "assets": assets}
+
+
 @router.get("")
 def list_review_catalog(request: Request) -> dict:
-    """Reviewable items from the review STAC catalog, each with signed URLs for its private assets.
-
-    Response: {ttl_seconds, items: [{id, collection, title, primary_key, bbox, assets:{key: url}}]}.
-    Assets are short-lived signed GCS URLs — the caller refetches before `ttl_seconds` elapses.
+    """The review STAC catalog's items, returned VERBATIM except that every private-bucket asset href is
+    replaced with a short-lived signed GCS URL. The map viewer feeds these straight into its existing
+    STAC layer pipeline. The caller refetches before `ttl_seconds` elapses to refresh the URLs.
     """
     _require_reviewer(request)
 
     collected = _collect_items()
 
-    # Batch-sign every unique asset path in one call (fewer signBlob round-trips), then assemble.
+    # Batch-sign every unique private asset path in one call (fewer signBlob round-trips).
     uniq = sorted({p for item, item_path in collected for p in _asset_paths(item, item_path).values()})
     signed: dict[str, str] = {}
     if uniq:
         urls = obs.sign(_store, "GET", uniq, _TTL)
         signed = dict(zip(uniq, urls if isinstance(urls, list) else [urls]))
 
-    items = []
-    for item, item_path in collected:
-        props = item.get("properties") or {}
-        assets = {key: signed[p] for key, p in _asset_paths(item, item_path).items() if p in signed}
-        items.append({
-            "id": item.get("id"),
-            "collection": item.get("collection"),
-            "title": props.get("title") or item.get("id"),
-            "primary_key": props.get("ugs:primary_key", "pk"),
-            "bbox": item.get("bbox"),
-            "assets": assets,
-        })
-
+    items = [_sign_item_assets(item, item_path, signed) for item, item_path in collected]
     return {"ttl_seconds": _TTL_MIN * 60, "items": items}

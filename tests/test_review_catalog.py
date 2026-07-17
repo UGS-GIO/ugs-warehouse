@@ -43,16 +43,31 @@ def test_object_path_absolute_relative_and_external():
     assert rc._object_path("https://cdn.example.org/styles/x.json", parent) is None
 
 
-def test_asset_paths_only_surfaces_known_private_keys():
+def test_asset_paths_signs_every_on_bucket_asset_excludes_cdn():
     item = {"assets": {
         "pmtiles": {"href": f"{BASE}/review/pmtiles/x.pmtiles"},
         "geoparquet": {"href": f"{BASE}/review/geoparquet/x.parquet"},
-        "style": {"href": "https://cdn.example.org/styles/x.json"},  # CDN → excluded
-        "bogus": {"href": f"{BASE}/review/other/x.bin"},                          # unknown key → excluded
+        "ucrc_boxes": {"href": f"{BASE}/review/geoparquet/x_boxes.parquet"},  # related table → also signed
+        "style": {"href": "https://cdn.example.org/styles/x.json"},          # CDN → left alone
     }}
     paths = rc._asset_paths(item, f"{PREFIX}/hazards/x/x.json")
-    assert set(paths) == {"pmtiles", "geoparquet"}
+    assert set(paths) == {"pmtiles", "geoparquet", "ucrc_boxes"}  # every on-bucket asset
+    assert "style" not in paths                                   # off-base CDN href untouched
     assert paths["pmtiles"] == "review/pmtiles/x.pmtiles"
+
+
+def test_sign_item_assets_rewrites_only_private_hrefs_and_preserves_item():
+    item = {"type": "Feature", "id": "x", "properties": {"ugs:primary_key": "pk", "ugs:renders": {"a": {}}},
+            "assets": {
+                "pmtiles": {"href": f"{BASE}/review/pmtiles/x.pmtiles", "type": "application/vnd.pmtiles"},
+                "style": {"href": "https://cdn.example.org/styles/x.json"}}}
+    signed = {"review/pmtiles/x.pmtiles": "https://storage.googleapis.com/b/review/pmtiles/x.pmtiles?sig=1"}
+    out = rc._sign_item_assets(item, f"{PREFIX}/hazards/x/x.json", signed)
+    assert out["assets"]["pmtiles"]["href"] == signed["review/pmtiles/x.pmtiles"]
+    assert out["assets"]["pmtiles"]["type"] == "application/vnd.pmtiles"     # other asset fields kept
+    assert out["assets"]["style"]["href"] == "https://cdn.example.org/styles/x.json"  # CDN untouched
+    assert out["properties"]["ugs:renders"] == {"a": {}}                     # full item preserved
+    assert item["assets"]["pmtiles"]["href"].startswith(BASE)               # original not mutated
 
 
 def test_collect_items_uses_items_index_and_dedupes(monkeypatch):

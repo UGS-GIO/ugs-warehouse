@@ -16,6 +16,23 @@ variable "review_cors_origin_regex" {
   default     = "https://ut-dnr-ugs-maps-(prod|dev)--[a-z0-9-]+\\.web\\.app"
 }
 
+# WRITE authorization for review comments from the PUBLIC app (bearer path). Reads are open to any
+# authenticated user; writes go through comments._require_editor. IAP requests (internal viewer) are
+# always trusted; a bearer request must match one of these. BOTH EMPTY = fail-closed → only IAP can
+# write. Set review_editor_emails to the named reviewer principals, or review_editor_domains = "utah.gov"
+# for any signed-in state user.
+variable "review_editor_emails" {
+  type        = string
+  description = "Comma-separated emails allowed to WRITE review comments from the public app. Empty = fail-closed (IAP-only)."
+  default     = ""
+}
+
+variable "review_editor_domains" {
+  type        = string
+  description = "Comma-separated email domains (subdomains ok) allowed to WRITE review comments. Empty = fail-closed."
+  default     = ""
+}
+
 resource "google_cloud_run_v2_service" "review_api" {
   name     = "ugs-warehouse-review-api"
   project  = var.project_id
@@ -89,6 +106,15 @@ resource "google_cloud_run_v2_service" "review_api" {
       env {
         name  = "REVIEW_CORS_ORIGIN_REGEX"
         value = var.review_cors_origin_regex
+      }
+      # Write-authz allow-list (see the vars above). Empty = fail-closed → only IAP writes.
+      env {
+        name  = "REVIEW_EDITOR_EMAILS"
+        value = var.review_editor_emails
+      }
+      env {
+        name  = "REVIEW_EDITOR_DOMAINS"
+        value = var.review_editor_domains
       }
       env {
         name = "DB_PASS"

@@ -24,6 +24,20 @@ resource "google_storage_bucket" "review" {
     enabled = true
   }
 
+  # The browser fetches the SIGNED review-asset URLs (pmtiles/geoparquet) DIRECTLY from
+  # storage.googleapis.com, cross-origin and with Range — a request that never reaches review-api, so
+  # the app's own CORS middleware does NOT cover it; the BUCKET must allow these origins itself. Same
+  # fixed origins as var.review_cors_origins (GCS CORS can't express the regex preview channels, so only
+  # the literal list). `Range` must be in response_header so the preflight echoes it in
+  # Access-Control-Allow-Headers (Range makes the GET non-simple → preflighted) and the 206 headers are
+  # exposed to JS.
+  cors {
+    origin          = split(",", var.review_cors_origins)
+    method          = ["GET", "HEAD"]
+    response_header = ["Content-Type", "Range", "Content-Range", "Accept-Ranges", "Content-Length"]
+    max_age_seconds = 3600
+  }
+
   lifecycle {
     prevent_destroy = true
   }

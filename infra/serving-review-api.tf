@@ -51,6 +51,21 @@ resource "google_cloud_run_v2_service" "review_api" {
         name  = "WAREHOUSE_BUCKET"
         value = google_storage_bucket.review.name
       }
+      # The review catalog lives under the `review/stac` prefix (the ingest job's WAREHOUSE_STAC_PREFIX),
+      # NOT the default `warehouse/stac`. The /api/review-catalog crawler (serve.py review_catalog) reads
+      # from here; without this it starts at the wrong prefix and returns an empty item list.
+      env {
+        name  = "WAREHOUSE_STAC_PREFIX"
+        value = "review/stac"
+      }
+      # STAC item asset hrefs were written rooted at review-serving's URL (the ingest job's
+      # WAREHOUSE_PUBLIC_BASE_URL). The crawler strips this base to recover each object's bucket path
+      # before signing it; without a match every asset looks "external" and is left UNSIGNED (the browser
+      # would get an IAP-gated URL it can't authenticate to). Must equal what ingest wrote.
+      env {
+        name  = "WAREHOUSE_PUBLIC_BASE_URL"
+        value = google_cloud_run_v2_service.review_serving.uri
+      }
       env {
         name  = "CLOUDSQL_INSTANCE"
         value = var.sql_instance_connection

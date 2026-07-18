@@ -77,6 +77,34 @@ _store = GCSStore(bucket=config.BUCKET)
 VIEWER_PREFIX = os.environ.get("REVIEW_VIEWER_PREFIX", "review/viewer").strip("/")
 VIEWER_INDEX = f"{VIEWER_PREFIX}/index.html"
 
+# A second SPA — the hazards-review app (ugs-map-viewer build) — lives under this prefix in the same
+# review bucket, served behind the same IAP. Each SPA needs its own index for client-side-route fallback,
+# so an unknown route under /review/app/ serves the app shell, not the internal viewer's.
+APP_PREFIX = os.environ.get("REVIEW_APP_PREFIX", "review/app").strip("/")
+# Per-PR previews of the review app live under <APP_PREFIX>/pr-<n>/ (CI uploads a full build there on
+# each PR). Each preview is its own SPA and must fall back to ITS OWN index.html, not the live app's.
+_PR_PREVIEW_RE = re.compile(rf"^({re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+)(?:/|$)")
+# (prefix, index) longest-prefix-first so a nested prefix wins over a shorter one.
+_SPA_INDEXES = sorted(
+    [(APP_PREFIX, f"{APP_PREFIX}/index.html"), (VIEWER_PREFIX, VIEWER_INDEX)],
+    key=lambda kv: len(kv[0]),
+    reverse=True,
+)
+_SPA_PREFIXES = {APP_PREFIX, VIEWER_PREFIX}
+
+
+def _spa_index_for(path: str) -> str:
+    """The SPA index.html for a client-side route path — the app shell whose prefix owns it. A per-PR
+    preview subtree (<APP_PREFIX>/pr-<n>/…) serves its own shell; otherwise the live app or the internal
+    viewer (the default for root/unprefixed paths)."""
+    m = _PR_PREVIEW_RE.match(path)
+    if m:
+        return f"{m.group(1)}/index.html"
+    for prefix, index in _SPA_INDEXES:
+        if path == prefix or path.startswith(prefix + "/"):
+            return index
+    return VIEWER_INDEX
+
 # Content types by extension. STAC/asset types + the web-asset types a built Vite bundle serves
 # (without the latter, index.html falls to octet-stream and the browser downloads it).
 _MIME = {
@@ -172,17 +200,17 @@ def serve(object_path: str, request: Request) -> Response:
 
     object_path = object_path.lstrip("/")
 
-    # Root / directory-style paths → the viewer shell.
-    if not object_path or object_path.endswith("/") or object_path == VIEWER_PREFIX:
-        return _serve_object(VIEWER_INDEX, request)
+    # Root / directory-style paths → the matching SPA shell (internal viewer or the hazards-review app).
+    if not object_path or object_path.endswith("/") or object_path in _SPA_PREFIXES:
+        return _serve_object(_spa_index_for(object_path.rstrip("/")), request)
 
     try:
         return _serve_object(object_path, request)
     except HTTPException as e:
-        # SPA fallback: an unknown path with no file extension is a client-side route → serve the
-        # viewer shell. Anything with an extension (a missing asset/data object) stays a real 404.
+        # SPA fallback: an unknown path with no file extension is a client-side route → serve the shell
+        # of whichever app owns the prefix. Anything with an extension (a missing asset) stays a 404.
         if e.status_code == 404 and not _has_extension(object_path):
-            return _serve_object(VIEWER_INDEX, request)
+            return _serve_object(_spa_index_for(object_path), request)
         raise
 
 

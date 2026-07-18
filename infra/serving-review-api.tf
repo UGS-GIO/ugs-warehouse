@@ -1,17 +1,13 @@
-# API-only twin of the review serving app. Same image + Cloud SQL + review_writer as review_serving,
-# but serves ONLY /api/* (REVIEW_API_ONLY) and never streams the private review bucket. This is what
-# the public ugs-map-viewer /hazards-review app calls cross-origin.
-#
-# Auth: native Cloud Run IAP (iap_enabled below), reached PROGRAMMATICALLY — the browser signs in with
-# Google (GIS) and sends a Google id_token whose aud is the review OAuth client, allow-listed in this
-# service's IAP programmaticClients (see iap.tf). IAP validates it, invokes the service, and injects the
-# X-Goog-Authenticated-User-Email header, which comments.py `_author` trusts (no bearer-verify needed).
-# Both services share review.* on mapping-db, so comments/notifications sync.
+# API-only twin of the review serving app (REVIEW_API_ONLY: serves /api/* only, never streams the bucket).
+# It was the cross-origin door for the public app; that approach is RETIRED. The review UI is now the
+# same-origin /review-stac app served BY review_serving behind IAP, so review_api is UNUSED — kept
+# dormant (non-IAP, private) rather than deleted. iap_enabled=false: its programmatic-IAP config was
+# reverted (Option B rides on review_serving). Both services still share review.* on mapping-db.
 
 variable "review_cors_origins" {
   type        = string
-  description = "Comma-separated allowed origins for the review API (the hazards-review app)."
-  default     = "https://maps.geology.utah.gov,https://ut-dnr-ugs-maps-prod.web.app,https://ut-dnr-ugs-maps-prod.firebaseapp.com,https://ut-dnr-ugs-maps-dev.web.app,https://ut-dnr-ugs-maps-dev.firebaseapp.com,http://localhost:5173"
+  description = "Allowed browser origin(s) for review-data reads (review bucket CORS). Only the review-serving IAP host: the /review-stac app is served there and fetches signed GCS asset URLs (pmtiles/parquet) cross-origin. Firebase/localhost origins dropped as vestigial (no public app reads the review bucket). CORS is not the access gate (private bucket + IAP + short-lived signed URLs are)."
+  default     = "https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app"
 }
 
 variable "review_cors_origin_regex" {
@@ -36,19 +32,8 @@ variable "review_editor_domains" {
   default     = ""
 }
 
-# Self-owned OAuth 2.0 Web client used by the hazards-review app's Google Sign-In. Its id_token (aud =
-# this client) is what reviewers present to IAP; the client id is allow-listed in review-api's IAP
-# programmaticClients (iap.tf). The client's Authorized JavaScript origins (app / preview / localhost)
-# are a Console setting on the client itself — not manageable here. Proven working in the 2026-07-14 spike.
-variable "review_iap_programmatic_client" {
-  type        = string
-  description = "OAuth client id allow-listed for programmatic IAP access to review-api (Google id_token aud)."
-  default     = "328621131372-ro6m25s394ep7il7l31gtcii51fk3vc5.apps.googleusercontent.com"
-}
-
 resource "google_cloud_run_v2_service" "review_api" {
-  # google-beta only for the iap_enabled toggle (beta-gated in the provider; Cloud Run IAP is GA),
-  # mirroring review_serving in serving.tf.
+  # google-beta only so iap_enabled (beta-gated field) can be expressed to keep IAP OFF.
   provider = google-beta
 
   name     = "ugs-warehouse-review-api"
@@ -56,15 +41,11 @@ resource "google_cloud_run_v2_service" "review_api" {
   location = var.region
   labels   = var.labels
 
-  # IAP gates auth at the service; ingress can be open (unauthenticated requests are stopped by IAP).
   ingress     = "INGRESS_TRAFFIC_ALL"
-  iap_enabled = true
-  # This org enforces `run.managed.requireInvokerIam` (can't disable the invoker check) AND
-  # `iam.allowedPolicyMemberDomains` (no allUsers), so the service is private. Reviewers reach /api/*
-  # via native Cloud Run IAP: a Google id_token (aud = the review OAuth client, allow-listed in IAP
-  # programmaticClients — iap.tf) passes IAP, which invokes the service and injects the authed-email
-  # header. The old API-Gateway bridge (apigateway API org-blocked, never deployable) has been removed;
-  # invoker_iam_disabled and allUsers are also org-blocked. See DEAD ENDS in the review handoff.
+  iap_enabled = false
+  # RETIRED programmatic IAP: review_api is no longer the review UI's door. The review app is served
+  # same-origin by review_serving behind IAP (see serving.tf / iap.tf). This service stays private and
+  # unused (org blocks allUsers + requireInvokerIam), so nothing external can reach it — that's fine.
 
   template {
     service_account = google_service_account.serving.email
@@ -183,6 +164,6 @@ resource "google_cloud_run_v2_service" "review_api" {
 # the programmatic-client + CORS-preflight settings) lives in iap.tf, mirroring review_serving.
 
 output "review_api_url" {
-  description = "IAP-gated review API base URL the hazards-review app calls (Google id_token via IAP)."
+  description = "review-api base URL (private, non-IAP, currently unused — the review UI is same-origin on review-serving)."
   value       = google_cloud_run_v2_service.review_api.uri
 }

@@ -6,8 +6,8 @@
 
 variable "review_cors_origins" {
   type        = string
-  description = "Comma-separated allowed origins for the review API (the hazards-review app)."
-  default     = "https://maps.geology.utah.gov,https://ut-dnr-ugs-maps-prod.web.app,https://ut-dnr-ugs-maps-prod.firebaseapp.com,https://ut-dnr-ugs-maps-dev.web.app,https://ut-dnr-ugs-maps-dev.firebaseapp.com,http://localhost:5173"
+  description = "Comma-separated allowed origins for the review data (bucket CORS + review-api). Includes the review-serving IAP host: the /review-stac app is served there and fetches signed GCS asset URLs (pmtiles/parquet) cross-origin, so the review bucket must allow that origin."
+  default     = "https://maps.geology.utah.gov,https://ut-dnr-ugs-maps-prod.web.app,https://ut-dnr-ugs-maps-prod.firebaseapp.com,https://ut-dnr-ugs-maps-dev.web.app,https://ut-dnr-ugs-maps-dev.firebaseapp.com,http://localhost:5173,https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app"
 }
 
 variable "review_cors_origin_regex" {

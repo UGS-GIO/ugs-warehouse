@@ -1,8 +1,12 @@
-# Non-IAP twin of the review serving app. Same image + Cloud SQL + review_writer as review_serving,
-# but auth is the app's own Firebase/Entra bearer-token verification (comments.py `_author`) instead of
-# Google IAP — this is what the ugs-map-viewer /hazards-review app (Firebase Auth, same GCP project)
-# calls cross-origin. Runs in REVIEW_API_ONLY mode so it serves ONLY /api/* and never streams the
-# private review bucket. Both services share review.* on mapping-db, so comments/notifications sync.
+# API-only twin of the review serving app. Same image + Cloud SQL + review_writer as review_serving,
+# but serves ONLY /api/* (REVIEW_API_ONLY) and never streams the private review bucket. This is what
+# the public ugs-map-viewer /hazards-review app calls cross-origin.
+#
+# Auth: native Cloud Run IAP (iap_enabled below), reached PROGRAMMATICALLY — the browser signs in with
+# Google (GIS) and sends a Google id_token whose aud is the review OAuth client, allow-listed in this
+# service's IAP programmaticClients (see iap.tf). IAP validates it, invokes the service, and injects the
+# X-Goog-Authenticated-User-Email header, which comments.py `_author` trusts (no bearer-verify needed).
+# Both services share review.* on mapping-db, so comments/notifications sync.
 
 variable "review_cors_origins" {
   type        = string
@@ -32,18 +36,35 @@ variable "review_editor_domains" {
   default     = ""
 }
 
+# Self-owned OAuth 2.0 Web client used by the hazards-review app's Google Sign-In. Its id_token (aud =
+# this client) is what reviewers present to IAP; the client id is allow-listed in review-api's IAP
+# programmaticClients (iap.tf). The client's Authorized JavaScript origins (app / preview / localhost)
+# are a Console setting on the client itself — not manageable here. Proven working in the 2026-07-14 spike.
+variable "review_iap_programmatic_client" {
+  type        = string
+  description = "OAuth client id allow-listed for programmatic IAP access to review-api (Google id_token aud)."
+  default     = "328621131372-ro6m25s394ep7il7l31gtcii51fk3vc5.apps.googleusercontent.com"
+}
+
 resource "google_cloud_run_v2_service" "review_api" {
+  # google-beta only for the iap_enabled toggle (beta-gated in the provider; Cloud Run IAP is GA),
+  # mirroring review_serving in serving.tf.
+  provider = google-beta
+
   name     = "ugs-warehouse-review-api"
   project  = var.project_id
   location = var.region
   labels   = var.labels
 
-  ingress = "INGRESS_TRAFFIC_ALL"
-  # NOTE: this org enforces BOTH `iam.allowedPolicyMemberDomains` (no allUsers) AND
-  # `run.managed.requireInvokerIam` (can't disable the invoker check). So the service is private and can
-  # only be invoked by a permitted principal with run.invoker. The browser (Firebase/Entra) reaches it
-  # through an API Gateway that validates the Firebase JWT and invokes this service as the gateway SA
-  # (see review-api-gateway.tf). No allUsers, no invoker_iam_disabled — both org-blocked.
+  # IAP gates auth at the service; ingress can be open (unauthenticated requests are stopped by IAP).
+  ingress     = "INGRESS_TRAFFIC_ALL"
+  iap_enabled = true
+  # This org enforces `run.managed.requireInvokerIam` (can't disable the invoker check) AND
+  # `iam.allowedPolicyMemberDomains` (no allUsers), so the service is private. Reviewers reach /api/*
+  # via native Cloud Run IAP: a Google id_token (aud = the review OAuth client, allow-listed in IAP
+  # programmaticClients — iap.tf) passes IAP, which invokes the service and injects the authed-email
+  # header. The old API-Gateway bridge (apigateway API org-blocked, never deployable) has been removed;
+  # invoker_iam_disabled and allUsers are also org-blocked. See DEAD ENDS in the review handoff.
 
   template {
     service_account = google_service_account.serving.email
@@ -158,11 +179,10 @@ resource "google_cloud_run_v2_service" "review_api" {
   }
 }
 
-# No invoker IAM binding at all — reachability is `invoker_iam_disabled = true` above (the DRS-safe
-# workaround), so there's no allUsers grant and no Firebase Hosting service agent to grant. The Firebase
-# Hosting `/api/**` rewrite reaches it directly; the app verifies the Firebase/Entra token.
+# IAP wiring (invoker binding for the IAP service agent, httpsResourceAccessor for the review group, and
+# the programmatic-client + CORS-preflight settings) lives in iap.tf, mirroring review_serving.
 
 output "review_api_url" {
-  description = "Public (Firebase-token-auth) review API base URL for the hazards-review app."
+  description = "IAP-gated review API base URL the hazards-review app calls (Google id_token via IAP)."
   value       = google_cloud_run_v2_service.review_api.uri
 }

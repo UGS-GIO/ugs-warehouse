@@ -41,6 +41,20 @@ resource "google_cloud_run_v2_service" "review_serving" {
         name  = "WAREHOUSE_BUCKET"
         value = google_storage_bucket.review.name
       }
+      # review_serving also serves /api/review-catalog to the same-origin review app (served under
+      # /review/app behind this service's IAP). The crawler reads the review STAC under this prefix
+      # (matches the ingest job's WAREHOUSE_STAC_PREFIX); without it it starts at the default
+      # warehouse/stac and returns nothing. WAREHOUSE_PUBLIC_BASE_URL must equal the host the ingest
+      # job baked asset hrefs against (this service's own URL) so the crawler recognises + signs them
+      # — a literal (not the resource's own .uri, which would be a self-reference cycle).
+      env {
+        name  = "WAREHOUSE_STAC_PREFIX"
+        value = "review/stac"
+      }
+      env {
+        name  = "WAREHOUSE_PUBLIC_BASE_URL"
+        value = "https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app"
+      }
       # Review-comments DB (review_writer, least-priv). DB_PASS from Secret Manager.
       env {
         name  = "CLOUDSQL_INSTANCE"

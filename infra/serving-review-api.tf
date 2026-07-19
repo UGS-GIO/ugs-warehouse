@@ -1,13 +1,13 @@
-# Non-IAP twin of the review serving app. Same image + Cloud SQL + review_writer as review_serving,
-# but auth is the app's own Firebase/Entra bearer-token verification (comments.py `_author`) instead of
-# Google IAP — this is what the ugs-map-viewer /hazards-review app (Firebase Auth, same GCP project)
-# calls cross-origin. Runs in REVIEW_API_ONLY mode so it serves ONLY /api/* and never streams the
-# private review bucket. Both services share review.* on mapping-db, so comments/notifications sync.
+# API-only twin of the review serving app (REVIEW_API_ONLY: serves /api/* only, never streams the bucket).
+# It was the cross-origin door for the public app; that approach is RETIRED. The review UI is now the
+# same-origin /review-stac app served BY review_serving behind IAP, so review_api is UNUSED — kept
+# dormant (non-IAP, private) rather than deleted. iap_enabled=false: its programmatic-IAP config was
+# reverted (Option B rides on review_serving). Both services still share review.* on mapping-db.
 
 variable "review_cors_origins" {
   type        = string
-  description = "Comma-separated allowed origins for the review API (the hazards-review app)."
-  default     = "https://maps.geology.utah.gov,https://ut-dnr-ugs-maps-prod.web.app,https://ut-dnr-ugs-maps-prod.firebaseapp.com,https://ut-dnr-ugs-maps-dev.web.app,https://ut-dnr-ugs-maps-dev.firebaseapp.com,http://localhost:5173"
+  description = "Allowed browser origin(s) for review-data reads (review bucket CORS). Only the review-serving IAP host: the /review-stac app is served there and fetches signed GCS asset URLs (pmtiles/parquet) cross-origin. Firebase/localhost origins dropped as vestigial (no public app reads the review bucket). CORS is not the access gate (private bucket + IAP + short-lived signed URLs are)."
+  default     = "https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app"
 }
 
 variable "review_cors_origin_regex" {
@@ -33,17 +33,19 @@ variable "review_editor_domains" {
 }
 
 resource "google_cloud_run_v2_service" "review_api" {
+  # google-beta only so iap_enabled (beta-gated field) can be expressed to keep IAP OFF.
+  provider = google-beta
+
   name     = "ugs-warehouse-review-api"
   project  = var.project_id
   location = var.region
   labels   = var.labels
 
-  ingress = "INGRESS_TRAFFIC_ALL"
-  # NOTE: this org enforces BOTH `iam.allowedPolicyMemberDomains` (no allUsers) AND
-  # `run.managed.requireInvokerIam` (can't disable the invoker check). So the service is private and can
-  # only be invoked by a permitted principal with run.invoker. The browser (Firebase/Entra) reaches it
-  # through an API Gateway that validates the Firebase JWT and invokes this service as the gateway SA
-  # (see review-api-gateway.tf). No allUsers, no invoker_iam_disabled — both org-blocked.
+  ingress     = "INGRESS_TRAFFIC_ALL"
+  iap_enabled = false
+  # RETIRED programmatic IAP: review_api is no longer the review UI's door. The review app is served
+  # same-origin by review_serving behind IAP (see serving.tf / iap.tf). This service stays private and
+  # unused (org blocks allUsers + requireInvokerIam), so nothing external can reach it — that's fine.
 
   template {
     service_account = google_service_account.serving.email
@@ -158,11 +160,10 @@ resource "google_cloud_run_v2_service" "review_api" {
   }
 }
 
-# No invoker IAM binding at all — reachability is `invoker_iam_disabled = true` above (the DRS-safe
-# workaround), so there's no allUsers grant and no Firebase Hosting service agent to grant. The Firebase
-# Hosting `/api/**` rewrite reaches it directly; the app verifies the Firebase/Entra token.
+# IAP wiring (invoker binding for the IAP service agent, httpsResourceAccessor for the review group, and
+# the programmatic-client + CORS-preflight settings) lives in iap.tf, mirroring review_serving.
 
 output "review_api_url" {
-  description = "Public (Firebase-token-auth) review API base URL for the hazards-review app."
+  description = "review-api base URL (private, non-IAP, currently unused — the review UI is same-origin on review-serving)."
   value       = google_cloud_run_v2_service.review_api.uri
 }

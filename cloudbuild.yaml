@@ -236,7 +236,9 @@ steps:
       # {WAREHOUSE_PUBLIC_BASE_URL}/styles = the IAP review-serving host, which has no /styles folder, so
       # the styles manifest 404s and review items get NO ugs:renders (unsymbolized). ugs-styles publishes
       # CDN-only; styles aren't secret, so the review app fetching them from the public CDN is fine.
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@WAREHOUSE_BUCKET=${_REVIEW_BUCKET}@WAREHOUSE_PUBLIC_BASE_URL=${_REVIEW_SERVING_URL}@STYLES_CDN_BASE=https://maps-assets.geology.utah.gov/styles@DUCKLAKE_DATA_PATH=gs://${_REVIEW_BUCKET}/review/ducklake/@DUCKDB_MAX_MEMORY=1.5GB@WAREHOUSE_TABLE_SUFFIX=_review@WAREHOUSE_STAC_PREFIX=review/stac@WAREHOUSE_ARCHIVE_PREFIX=review/geoparquet@WAREHOUSE_PMTILES_PREFIX=review/pmtiles@WAREHOUSE_THUMBS_PREFIX=review/thumbs
+      # Review needs its OWN DuckLake metadata schema: a catalog binds one DATA_PATH, so sharing the
+      # public catalog while writing to the review bucket fails to attach.
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@WAREHOUSE_BUCKET=${_REVIEW_BUCKET}@WAREHOUSE_PUBLIC_BASE_URL=${_REVIEW_SERVING_URL}@STYLES_CDN_BASE=https://maps-assets.geology.utah.gov/styles@DUCKLAKE_DATA_PATH=gs://${_REVIEW_BUCKET}/review/ducklake/@DUCKLAKE_METADATA_SCHEMA=ducklake_catalog_review@DUCKDB_MAX_MEMORY=1.5GB@WAREHOUSE_TABLE_SUFFIX=_review@WAREHOUSE_STAC_PREFIX=review/stac@WAREHOUSE_ARCHIVE_PREFIX=review/geoparquet@WAREHOUSE_PMTILES_PREFIX=review/pmtiles@WAREHOUSE_THUMBS_PREFIX=review/thumbs
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600

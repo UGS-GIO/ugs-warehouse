@@ -1,3 +1,9 @@
+variable "review_bucket_cors_origins" {
+  type        = list(string)
+  description = "Origins allowed to fetch signed review artifacts (PMTiles/GeoParquet) straight from the bucket. Only the review app's own origin — NOT review-api's caller list."
+  default     = ["https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app"]
+}
+
 # The NEW private review bucket. This is the ONLY bucket this config creates.
 #
 # Restricted-serving requirements (warehouse#16):
@@ -24,6 +30,27 @@ resource "google_storage_bucket" "review" {
     enabled = true
   }
 
+  # PR preview bundles expire after a week. Prefix is `review/app/pr-`, NOT `review/app/` — the live
+  # review app bundle sits at that root and must never match. A redeploy rewrites the objects, so age
+  # resets and only genuinely stale previews expire; rebuilding one is a single CI run.
+  lifecycle_rule {
+    action { type = "Delete" }
+    condition {
+      age            = 7
+      matches_prefix = ["review/app/pr-"]
+    }
+  }
+
+  # Versioning is on, so the rule above only archives objects — noncurrent versions keep billing until
+  # they're deleted too. Every preview redeploy also leaves one behind.
+  lifecycle_rule {
+    action { type = "Delete" }
+    condition {
+      days_since_noncurrent_time = 1
+      matches_prefix             = ["review/app/pr-"]
+    }
+  }
+
   # Signed URLs from /api/review-catalog (review_catalog.py) point straight at
   # storage.googleapis.com — maplibre's PMTiles range-reads and duckdb-wasm's GeoParquet reads
   # fetch them cross-origin from the hazards-review app, so the bucket (not just review-api) needs
@@ -31,20 +58,13 @@ resource "google_storage_bucket" "review" {
   # verb ever hits GCS directly. Response headers cover Range reads specifically (PMTiles/GeoParquet
   # depend on Content-Range/Accept-Ranges to do partial fetches).
   #
-  # Reuses var.review_cors_origins — the SAME variable review-api's REVIEW_CORS_ORIGINS env is built
-  # from (infra/serving-review-api.tf) — one source of truth instead of a second hardcoded copy that
-  # can drift out of sync with the app's own CORS list.
-  #
-  # GAP: review-api's CORS also allows REVIEW_CORS_ORIGIN_REGEX (Firebase preview-channel origins,
-  # `ut-dnr-ugs-maps-(prod|dev)--*.web.app`) via FastAPI's regex support. GCS bucket `cors{}` has
-  # no regex/wildcard-subdomain matching (origin must be a literal string or bare "*") — a preview
-  # channel's XHR to /api/* will work, but its browser fetch of a signed PMTiles/parquet URL will
-  # fail CORS. No fix here short of "*" (too broad for a private bucket) or listing exact preview
-  # URLs (they're dynamic, generated per-PR). Acceptable for now: prod + dev + localhost cover the
-  # real smoke test and steady-state use; revisit if preview-channel review-catalog rendering is
-  # actually needed.
+  # Deliberately NOT var.review_cors_origins (review-api's list). The signed PMTiles/GeoParquet URLs
+  # are fetched only by the review app served from review-serving, so the bucket allows that one
+  # origin. review-api is a different surface with different callers (the public Firebase-hosted
+  # hazards-review app), so sharing one variable forced the bucket to trust Firebase/localhost
+  # origins it never serves — the reason a prior tightening showed up as drift instead of config.
   cors {
-    origin          = split(",", var.review_cors_origins)
+    origin          = var.review_bucket_cors_origins
     method          = ["GET", "HEAD"]
     response_header = ["Content-Type", "Range", "Content-Range", "Accept-Ranges", "Content-Length"]
     max_age_seconds = 3600

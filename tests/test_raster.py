@@ -8,7 +8,7 @@ def test_oneoff_identity():
     assert not r.time_series
     assert r.collection == RASTERS_COLLECTION
     assert r.item_id == "slope"
-    assert r.cog_object_path == "raster/cogs/slope/slope.cog.tif"
+    assert r.cog_object_path == "cog/slope/slope.cog.tif"
 
 
 def test_timeseries_identity():
@@ -16,7 +16,7 @@ def test_timeseries_identity():
     assert r.time_series
     assert r.collection == "ugs-raster-soil_water"
     assert r.item_id == "soil_water_20260601T000000"
-    assert r.cog_object_path == "raster/cogs/soil_water/soil_water_20260601T000000.cog.tif"
+    assert r.cog_object_path == "cog/soil_water/soil_water_20260601T000000.cog.tif"
 
 
 def test_build_item_cog_asset_no_webmap_link():

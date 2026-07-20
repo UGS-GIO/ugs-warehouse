@@ -12,7 +12,9 @@ import re
 from dataclasses import dataclass
 
 # Raster *data* artifacts (the STAC catalog itself lives under core.config.STAC_PREFIX).
-COG_PREFIX = os.environ.get("WAREHOUSE_RASTER_COG_PREFIX", "raster/cogs")
+# `cog/` matches the other artifact-type sinks (pmtiles/, geoparquet/, thumbs/, stac/) and the path
+# ugs-ingest #169 writes for Track A rasters. Layout is unchanged: <prefix>/<layer>/<item_id>.*
+COG_PREFIX = os.environ.get("WAREHOUSE_RASTER_COG_PREFIX", "cog")
 
 # Shared collection for one-off snapshots; time-series get a per-model collection.
 RASTERS_COLLECTION = "ugs-rasters"
@@ -46,7 +48,7 @@ class Raster:
 
     @property
     def cog_object_path(self) -> str:
-        """`raster/cogs/<layer>/<id>.cog.tif`."""
+        """`cog/<layer>/<id>.cog.tif`."""
         return f"{COG_PREFIX}/{self.layer}/{self.item_id}.cog.tif"
 
     @property

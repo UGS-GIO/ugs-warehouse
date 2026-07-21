@@ -60,6 +60,11 @@ const toggle = (on: boolean) =>
 
 const BADGE_KEYS = ["ugs:series", "ugs:pub_type", "ugs:topic", "ugs:scale", "ugs:author"];
 
+// Map-layer collections, as opposed to publications: vector serving topics, the seamless geologic-map
+// mosaics, and 1-off rasters. Their item datetime is INGEST time, not a publication date, so they're
+// excluded from the newest-first catalog-wide list — see `globalItems` in Browse.
+const LAYER_COLLECTIONS = new Set(["ugs-serving-topics", "ugs-geologic-maps", "ugs-rasters"]);
+
 const idFromHref = (href: string) => href.split("/").slice(-2)[0];
 const props = (it: ItemRef) => it.data?.properties ?? {};
 // Survey Notes volume (warehouse ugs:volume, from SNT-{vol}-{issue}) → group issues under it.
@@ -2437,6 +2442,8 @@ export function Browse(props: {
   onSearch: (q: string) => void;
   threeD: boolean;
   onThreeD: (v: boolean) => void;
+  browseAll: boolean;
+  onBrowseAll: (v: boolean) => void;
   series: string[];
   onSeries: (codes: string[]) => void;
   item?: StacDoc;
@@ -2447,7 +2454,8 @@ export function Browse(props: {
   onBackToItems: () => void;
   onViewMap: () => void;
 }) {
-  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, threeD, onThreeD, series, onSeries } = props;
+  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, threeD, onThreeD,
+          browseAll, onBrowseAll, series, onSeries } = props;
 
   // item detail
   if (collectionId && itemSelected) {
@@ -2471,6 +2479,13 @@ export function Browse(props: {
     );
   }
 
+  // The catalog-wide list drops the map-layer collections: their `datetime` is ingest time, not a
+  // publication date, so they'd sort to the top of a newest-first list and mean nothing there. They
+  // stay reachable via their own collection and via search (which the user typed deliberately).
+  const globalItems = browseAll && !search.trim() && !threeD
+    ? props.allItems.filter((it) => !LAYER_COLLECTIONS.has(it.collId))
+    : props.allItems;
+
   // browse level: root catalog (with search-all) OR a sub-catalog's series chooser
   return (
     <div className={C.wrap}>
@@ -2483,11 +2498,15 @@ export function Browse(props: {
               carrying a 3d-vector asset — works from the bare catalog, no search text needed. */}
           <span className={toggle(threeD)} title="Show only publications with an interactive 3D viewer"
             onClick={() => onThreeD(!threeD)}>3D</span>
+          {/* Flat catalog-wide list, newest first — answers "what's newest?" without drilling into
+              every series. Same loads-all-items path as search; the list defaults to date-desc. */}
+          <span className={toggle(browseAll)} title="One list of every publication across all series, newest first"
+            onClick={() => onBrowseAll(!browseAll)}>All items</span>
           {props.itemsLoading && <span className={C.muted}>loading items…</span>}
         </div>
       )}
-      {atRoot && (search.trim() || threeD)
-        ? <ItemList items={props.allItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
+      {atRoot && (search.trim() || threeD || browseAll)
+        ? <ItemList items={globalItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
         : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
     </div>
   );

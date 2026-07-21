@@ -186,6 +186,9 @@ export function App() {
 
   const [search, setSearch] = useState("");
   const [threeD, setThreeD] = useState(false);  // global "3D pubs" discovery filter (loads all items)
+  // "everything, newest first" — a flat catalog-wide item list with no search text, so you can answer
+  // "what's newest?" without drilling into each series. Loads all items like a search does.
+  const [browseAll, setBrowseAll] = useState(false);
 
   const catalog = useStac(CATALOG_URL);
 
@@ -220,7 +223,7 @@ export function App() {
   // a leaf whose items.json is missing (pre-index catalog) fetches its collection.json for
   // item links, then those items — scoped, never a catalog-wide fan-out.
   // Both search-all and the global 3D filter need every collection's items loaded.
-  const searching = !collectionId && (search.trim().length > 0 || threeD);
+  const searching = !collectionId && (search.trim().length > 0 || threeD || browseAll);
   const wantColls = leafColl ? [leafColl] : searching ? leafColls : [];
   const idx = useIndexes(wantColls.map((c) => ({ id: c.id, href: c.href })));
 
@@ -416,6 +419,8 @@ export function App() {
           onSearch={setSearch}
           threeD={threeD}
           onThreeD={setThreeD}
+          browseAll={browseAll}
+          onBrowseAll={setBrowseAll}
           series={seriesSel ?? []}
           onSeries={setSeries}
           item={item.data}

@@ -8,6 +8,7 @@ import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
 import { layerCollectionIds } from "./catalog";
 import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./Map";
+import { PreviewMapProvider } from "./PreviewMap";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 import { DiffPanel } from "./DiffPanel";
@@ -366,6 +367,9 @@ export function App() {
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
   return (
+    // One persistent preview map lives in this provider (mounted once, above the view/list/item
+    // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
+    <PreviewMapProvider>
     <div className={mapView
       ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
       : "min-h-screen overflow-x-hidden bg-background text-sm text-foreground"}>
@@ -487,5 +491,6 @@ export function App() {
         </div>
       )}
     </div>
+    </PreviewMapProvider>
   );
 }

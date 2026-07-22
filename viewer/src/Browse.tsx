@@ -11,15 +11,13 @@ import { PathStyleExtension } from "@deck.gl/extensions";
 import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
 import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
 import DeckGL from "@deck.gl/react";
-import maplibregl from "maplibre-gl";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
-import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS, type ShapefileWarnings, shapefileWarnings } from "./download";
-import { Legend } from "./legend";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
 import { lruSet } from "./lru";
-import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, useStyleLayers, viaLink } from "./stac";
+import { PreviewMapSlot, type PreviewSpec, usePreviewMap, footprintSpecOf } from "./PreviewMap";
+import type { FocusSel } from "./map-model";
+import { type Asset, citeLink, classificationColors, cogAsset, contentsOf, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
 import { PhotoGallery } from "./PhotoGallery";
@@ -671,360 +669,6 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
   );
 }
 
-const POSITRON = "https://tiles.openfreemap.org/styles/positron";
-
-const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
-  const [w, s, e, n] = b;
-  return { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] };
-};
-
-const asBounds = (item: StacDoc): [[number, number], [number, number]] | undefined => {
-  const b = item.bbox?.slice(0, 4);
-  return b && b.length === 4 ? [[b[0], b[1]], [b[2], b[3]]] : undefined;
-};
-
-// Interactive COG explorer — the actual georeferenced raster (real cartography), range-read
-// + decoded client-side. No server, no invented styling. Pannable/zoomable.
-function CogMap({ href, item }: { href: string; item: StacDoc }) {
-  const [ready, setReady] = useState(false);
-  const [showDem, setShowDem] = useState(false);
-  const mapRef = useRef<MapRef>(null);
-  const cogBbox = useRef<[number, number, number, number] | undefined>(undefined);
-
-  // Fit to the COG's own extent (most items here have no STAC footprint, so the COG metadata
-  // bbox is the only reliable extent); fall back to the STAC bbox.
-  const fit = () => {
-    const b = cogBbox.current ?? (item.bbox?.slice(0, 4) as [number, number, number, number] | undefined);
-    if (b && mapRef.current) mapRef.current.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 16, duration: 0 });
-  };
-
-  useEffect(() => {
-    let live = true;
-    (async () => {
-      await ensureCogProtocol();
-      if (!live) return;
-      setReady(true);
-      try {
-        const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
-        const meta = await getCogMetadata(href);
-        if (live && meta?.bbox) { cogBbox.current = meta.bbox; fit(); }
-      } catch { /* keep STAC bbox / default view */ }
-    })();
-    return () => { live = false; };
-  }, [href]);
-
-  return (
-    <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
-      {ready
-        ? (
-          <MapGL
-            ref={mapRef}
-            mapLib={maplibregl}
-            initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
-            mapStyle={POSITRON}
-            style={{ width: "100%", height: "100%" }}
-            onLoad={fit}
-            maxPitch={85}
-            terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
-          >
-            <NavigationControl position="top-right" showCompass={false} />
-            
-            {/* Floating 3D Terrain Toggle */}
-            <div className="absolute top-2.5 right-12 z-10">
-              <button
-                onClick={() => {
-                  const next = !showDem;
-                  setShowDem(next);
-                  if (mapRef.current) {
-                    mapRef.current.getMap().easeTo({
-                      pitch: next ? 48 : 0,
-                      duration: 500
-                    });
-                  }
-                }}
-                className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
-                  showDem
-                    ? "bg-primary text-primary-foreground border-primary"
-                    : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
-                }`}
-                title="Toggle 3D Topography"
-              >
-                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-                </svg>
-                <span>3D Terrain</span>
-              </button>
-            </div>
-
-            {showDem && (
-              <Source
-                id="terrain-rgb-source"
-                type="raster-dem"
-                tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
-                encoding="terrarium"
-                tileSize={256}
-              />
-            )}
-
-            <Source id="cog" type="raster" url={`cog://${href}`} tileSize={256}>
-              <Layer id="cog-raster" type="raster" />
-            </Source>
-          </MapGL>
-        )
-        : <div className="flex h-full items-center justify-center text-xs text-muted-foreground">loading COG…</div>}
-    </div>
-  );
-}
-
-// Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders
-// (not faux cartography): light fill, clear outline, points. fill/line/circle all added so any
-// geometry type shows.
-const NEUTRAL_LAYERS = [
-  { type: "fill", filter: ["==", ["geometry-type"], "Polygon"],
-    paint: { "fill-color": "#6b7280", "fill-opacity": 0.15, "fill-outline-color": "#374151" } },
-  { type: "line", filter: ["match", ["geometry-type"], ["LineString", "Polygon"], true, false],
-    paint: { "line-color": "#374151", "line-width": 1.1 } },
-  // circles only on actual point features — else maplibre dots every polygon/line vertex.
-  { type: "circle", filter: ["==", ["geometry-type"], "Point"],
-    paint: { "circle-color": "#374151", "circle-radius": 3.5, "circle-opacity": 0.85 } },
-];
-
-// Interactive vector preview — the item's actual PMTiles features. Uses the bound ugs-styles
-// GL style (via the render extension) when present; else a neutral geometry render (no
-// invented cartography — real styling arrives through `renders`).
-// `key` identifies the SELECTION (row offset / feature id), so the map re-flies on every distinct
-// pick — even two features at the same lat/lon (identical bbox). The bbox/geometry upgrade within
-// one pick reuses the same key, so it doesn't double-fly.
-type FocusSel = { bbox?: [number, number, number, number]; geometry?: GeoJSON.Geometry | null; key?: string | number };
-
-// Load a baked sprite sheet (pie-wedge icons for box-type) into the map via addImage, slicing each
-// frame from the PNG so icon-image names match the style as authored (no sprite-id namespacing).
-// Picks @2x on retina. Idempotent (skips images already added).
-async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void> {
-  const hi = (window.devicePixelRatio || 1) >= 1.5 ? "@2x" : "";
-  const [index, blob] = await Promise.all([
-    fetch(`${base}${hi}.json`).then((r) => r.json()),
-    fetch(`${base}${hi}.png`).then((r) => r.blob()),
-  ]);
-  const sheet = await createImageBitmap(blob);
-  try {
-    for (const [name, f] of Object.entries(index as Record<string, { x: number; y: number; width: number; height: number; pixelRatio: number }>)) {
-      if (map.hasImage(name)) continue;
-      const img = await createImageBitmap(sheet, f.x, f.y, f.width, f.height);
-      map.addImage(name, img, { pixelRatio: f.pixelRatio });
-      img.close();  // addImage copies into its texture → free the decoded pixels now, not at GC
-    }
-  } finally {
-    sheet.close();
-  }
-}
-
-function PmtilesMap({ item, focus, onFeatureClick }: {
-  item: StacDoc; focus?: FocusSel | null;
-  onFeatureClick?: (featureId: number, props: Record<string, unknown>) => void;
-}) {
-  const pm = pmtilesLink(item);
-  const renders = useMemo(() => rendersOf(item), [item]);
-  const renderKeys = Object.keys(renders);
-  // Selected render: prefer `default`, else the first; lets a multi-render layer (wells:
-  // by-purpose / by-boxtype) switch symbology.
-  const [sel, setSel] = useState<string>(() => (renders.default ? "default" : renderKeys[0] ?? ""));
-  useEffect(() => { setSel(renders.default ? "default" : Object.keys(renders)[0] ?? ""); }, [item.id]);
-  const active = renders[sel];
-  const styleUrl = active?.style_url ?? defaultStyleUrl(item);
-  const sprite = active?.sprite;
-
-  const mapRef = useRef<MapRef>(null);
-  const [mapLoaded, setMapLoaded] = useState(false);
-  const [showDem, setShowDem] = useState(false);
-  const styleLayers = useStyleLayers(styleUrl);  // null while loading/error → NEUTRAL_LAYERS
-  const [spriteReady, setSpriteReady] = useState(false);
-  const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(null);
-  // Review deploy: the feature a reviewer chose to comment on (row-targeted comments panel below the map).
-  // Row-comment target = the feature's STABLE key value (pk), read from its attributes — not the tile
-  // feature id — so the comment resolves to the same row in the hazards-review map viewer.
-  const pkCol = primaryKeyOf(item);
-  const [reviewFeature, setReviewFeature] = useState<{ pkVal: string; props: Record<string, unknown> } | null>(null);
-  // Close the popup when the item changes (a stale popup over a different layer would mislead).
-  useEffect(() => { setPopup(null); setReviewFeature(null); }, [item.id]);
-
-  // Preload the render's sprite (icon renders only) before its symbol layers mount, so icons
-  // resolve instead of flashing missing. Non-sprite renders are "ready" immediately.
-  useEffect(() => {
-    if (!sprite) { setSpriteReady(true); return; }
-    setSpriteReady(false);
-    const map = mapRef.current?.getMap();
-    if (!map || !mapLoaded) return;
-    let live = true;
-    loadSpriteImages(map, sprite)
-      .then(() => { if (live) setSpriteReady(true); })
-      .catch(() => { if (live) setSpriteReady(true); });
-    return () => { live = false; };
-  }, [sprite, mapLoaded]);
-
-  // Fly to the picked feature (bbox from the parquet covering columns). maxZoom keeps a point
-  // (degenerate bbox) from zooming to street level. Keyed on the selection `key` (not bbox values)
-  // so picking a DIFFERENT feature at the same lat/lon still re-flies; the geometry upgrade within
-  // one pick keeps the same key, so it doesn't double-fly.
-  const fb = focus?.bbox;
-  const focusKey = focus?.key;
-  useEffect(() => {
-    if (!fb || !mapRef.current) return;
-    mapRef.current.fitBounds([[fb[0], fb[1]], [fb[2], fb[3]]], { padding: 60, maxZoom: 14, duration: 800 });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [focusKey]);
-
-  if (!pm) return null;
-  const sourceLayer = pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "");
-  const bounds = asBounds(item);
-  // Highlight the REAL feature geometry once fetched; until then (or if unavailable) fall back to
-  // the bbox outline so the click gives instant feedback. One source, three layers — line/fill for
-  // polygons & lines, circle for points (a layer whose type doesn't match the geom renders nothing).
-  const hlGeom: GeoJSON.Geometry | null = focus?.geometry ?? (fb ? bboxPolygon(fb) : null);
-  // While an icon render's sprite is still loading, render no style layers (avoids a missing-icon
-  // flash + an id-reuse "layer type changed" swap). Layer ids include `sel` so switching renders
-  // remounts cleanly (different type on the same id otherwise throws in maplibre).
-  const layers = sprite && !spriteReady ? [] : (styleLayers ?? NEUTRAL_LAYERS);
-  // Stable ids for the rendered style layers (also the click targets). Computed once so the
-  // <Layer> loop and interactiveLayerIds agree exactly.
-  const layerIds = layers.map((l, i) => `pm-${sel}-${(l as { id?: string }).id ?? i}`);
-  // Click a feature → popup with its attributes + bubble its feature_id up so the table can page
-  // to + highlight the matching row. `f.id` is the native MVT feature id (= the transform's
-  // feature_id, via tippecanoe --use-attribute-for-id); undefined on pre-reingest tiles → no-op.
-  const onMapClick = (e: MapLayerMouseEvent) => {
-    const f = e.features?.[0];
-    if (!f) { setPopup(null); return; }
-    const props = (f.properties ?? {}) as Record<string, unknown>;
-    const fid = f.id != null ? Number(f.id) : null;
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, props, fid });
-    if (fid != null) onFeatureClick?.(fid, props);
-  };
-  return (
-    <>
-      {renderKeys.length > 1 && (
-        <div className="mb-1.5 flex items-center gap-2 text-xs">
-          <span className="text-muted-foreground">Symbolize by</span>
-          <select value={sel} onChange={(e) => setSel(e.target.value)}
-            className="rounded border border-input bg-card px-2 py-1 text-foreground">
-            {renderKeys.map((k) => <option key={k} value={k}>{renders[k].title ?? k}</option>)}
-          </select>
-        </div>
-      )}
-      <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
-        <MapGL
-          ref={mapRef}
-          mapLib={maplibregl}
-          onLoad={() => setMapLoaded(true)}
-          initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
-          mapStyle={POSITRON}
-          interactiveLayerIds={onFeatureClick ? layerIds : undefined}
-          onClick={onFeatureClick ? onMapClick : undefined}
-          style={{ width: "100%", height: "100%" }}
-          maxPitch={85}
-          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
-        >
-          <NavigationControl position="top-right" showCompass={false} />
-
-          {/* Floating 3D Terrain Toggle */}
-          <div className="absolute top-2.5 right-12 z-10">
-            <button
-              onClick={() => {
-                const next = !showDem;
-                setShowDem(next);
-                if (mapRef.current) {
-                  mapRef.current.getMap().easeTo({
-                    pitch: next ? 48 : 0,
-                    duration: 500
-                  });
-                }
-              }}
-              className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
-                showDem
-                  ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
-              }`}
-              title="Toggle 3D Topography"
-            >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-              </svg>
-              <span>3D Terrain</span>
-            </button>
-          </div>
-
-          {showDem && (
-            <Source
-              id="terrain-rgb-source"
-              type="raster-dem"
-              tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
-              encoding="terrarium"
-              tileSize={256}
-            />
-          )}
-
-          <Source id="pm-prev" type="vector" url={`pmtiles://${pm.href}`} />
-          {layers.map((l, i) => {
-            // id from the fragment's OWN layer id (e.g. …-circle vs …-boxtype) so switching renders
-            // never reuses an id with a different `type` (maplibre throws "layer type changed" and
-            // the swap silently fails). `sel` prefix keeps renders fully disjoint. explicit
-            // `source`/`source-layer` — react-map-gl won't inject them into an array.
-            const lid = layerIds[i];
-            return <Layer key={lid} {...({ ...l, id: lid, source: "pm-prev", "source-layer": sourceLayer } as unknown as LayerProps)} />;
-          })}
-          {/* Picked-row highlight — the real feature geometry (line/fill/circle by geom type). */}
-          {hlGeom && (
-            <Source id="pm-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
-              <Layer id="pm-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
-              <Layer id="pm-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
-              <Layer id="pm-hl-pt" type="circle" paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
-            </Source>
-          )}
-          {popup && (
-            <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
-              <div className="max-h-56 overflow-auto">
-                <table className="border-collapse text-[11px]">
-                  <tbody>
-                    {Object.entries(popup.props).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
-                      <tr key={k}>
-                        <td className="whitespace-nowrap py-0.5 pr-2 align-top text-gray-500">{k}</td>
-                        <td className="py-0.5 text-gray-900">{String(v)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {IS_REVIEW && popup.props[pkCol] != null && (
-                  <button
-                    className="mt-1.5 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20"
-                    onClick={() => { setReviewFeature({ pkVal: String(popup.props[pkCol]), props: popup.props }); setPopup(null); }}>
-                    💬 Comment on this feature
-                  </button>
-                )}
-              </div>
-            </Popup>
-          )}
-        </MapGL>
-      </div>
-      {IS_REVIEW && reviewFeature && (
-        <div className="mt-2 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Feature review</h3>
-            <button className="text-xs text-muted-foreground hover:underline" onClick={() => setReviewFeature(null)}>close</button>
-          </div>
-          <CommentsPanel itemId={String(item.id ?? "")} target={{ kind: "row", rowKey: pkCol, rowVal: reviewFeature.pkVal }}
-            label={`Comments on ${pkCol} ${reviewFeature.pkVal}`} />
-        </div>
-      )}
-      {/* Legend follows the active render: explicit entries for icon renders (box-type pie wedges),
-          else derived from the style's paint. */}
-      {/* Legend source order: explicit render legend (icon renders) → STAC classification:classes
-          (post-reingest) → derived from the GL style's paint (the pre-reingest fallback). */}
-      <Legend layers={styleLayers ?? undefined} entries={active?.legend ?? classificationEntries(item)}
-        title={active?.legend ? "box type" : undefined}
-        name={String(item.properties?.title ?? item.id)} />
-    </>
-  );
-}
-
 // Schema panel from the STAC Table extension (`table:columns`). The dataset's fields + types
 // straight from the catalog — no parquet read. Hidden pre-reingest (extension not emitted yet).
 function FieldsPanel({ item }: { item: StacDoc }) {
@@ -1047,83 +691,26 @@ function FieldsPanel({ item }: { item: StacDoc }) {
   );
 }
 
-// Vector asset preview: PMTiles map + full dataset explorer, linked — click a table row and the
-// map flies to that feature (when the parquet carries bbox covering columns).
+// Raster mosaic (per-scale geologic-map tiles) preview — publishes a spec to the shared persistent map.
 function RasterMosaicPreview({ item }: { item: StacDoc }) {
   const asset = rasterTilesAsset(item);
-  const mapRef = useRef<MapRef>(null);
-  const [showDem, setShowDem] = useState(false);
-  if (!asset) return null;
-  const bounds = asBounds(item);
-
-  return (
-    <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
-      <MapGL
-        ref={mapRef}
-        mapLib={maplibregl}
-        initialViewState={bounds ? { bounds, fitBoundsOptions: { padding: 16 } } : { longitude: -111.7, latitude: 39.3, zoom: 6 }}
-        mapStyle={POSITRON}
-        style={{ width: "100%", height: "100%" }}
-        maxPitch={85}
-        terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
-      >
-        <NavigationControl position="top-right" showCompass={false} />
-
-        {/* Floating 3D Terrain Toggle */}
-        <div className="absolute top-2.5 right-12 z-10">
-          <button
-            onClick={() => {
-              const next = !showDem;
-              setShowDem(next);
-              if (mapRef.current) {
-                mapRef.current.getMap().easeTo({
-                  pitch: next ? 48 : 0,
-                  duration: 500
-                });
-              }
-            }}
-            className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
-              showDem
-                ? "bg-primary text-primary-foreground border-primary"
-                : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"
-            }`}
-            title="Toggle 3D Topography"
-          >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7" />
-            </svg>
-            <span>3D Terrain</span>
-          </button>
-        </div>
-
-        {showDem && (
-          <Source
-            id="terrain-rgb-source"
-            type="raster-dem"
-            tiles={["https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"]}
-            encoding="terrarium"
-            tileSize={256}
-          />
-        )}
-
-        <Source id="raster-mosaic" type="raster" url={`pmtiles://${asset.href}`} tileSize={256}>
-          <Layer id="raster-mosaic-layer" type="raster" paint={{ "raster-opacity": 1 }} />
-        </Source>
-      </MapGL>
-    </div>
-  );
+  return <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href } : null} />;
 }
 
+// Vector asset preview: the item's PMTiles on the shared persistent map + full dataset explorer,
+// linked — click a table row → map flies to that feature; click a map feature → table pages to it.
+// The map instance lives in PreviewMapProvider (mounted once); this publishes the vector spec and
+// wires the table↔map state (focus/pick) through the provider.
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
-  const [focus, setFocus] = useState<FocusSel | null>(null);
-  // A map-feature click → {id, nonce}. The nonce makes re-clicking the SAME feature re-fire the
-  // explorer effect (a bare id wouldn't change). The explorer pages to + highlights that row.
-  const [pick, setPick] = useState<{ id: number; nonce: number } | null>(null);
-  const onFeatureClick = (id: number) => setPick((p) => ({ id, nonce: (p?.nonce ?? 0) + 1 }));
+  const pm = pmtilesLink(item);
+  const { setFocus, pick } = usePreviewMap();
+  const spec: PreviewSpec = pm
+    ? { kind: "vector", item, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "") }
+    : null;
   return (
     <>
-      <PmtilesMap item={item} focus={focus} onFeatureClick={pq ? onFeatureClick : undefined} />
+      <PreviewMapSlot spec={spec} />
       <FieldsPanel item={item} />
       {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")} rowKey={primaryKeyOf(item)} />}
     </>
@@ -1518,32 +1105,6 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
             label={selArr.length > 1 ? `New note on ${selArr.length} rows` : `Comments on ${rowKey} ${selArr[0]}`} />
         </div>
       )}
-    </div>
-  );
-}
-
-// Non-interactive footprint locator — the item's geometry/bbox over a basemap. Fallback preview
-// for items with no previewable file (or as a standalone where a map adds context).
-function FootprintMini({ item }: { item: StacDoc }) {
-  const bbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
-  const geom = item.geometry ?? (bbox ? bboxPolygon(bbox) : null);
-  if (!geom) return null;
-  return (
-    <div className="mt-2 h-72 w-full max-w-[1100px] overflow-hidden rounded-md border border-border">
-      <MapGL
-        mapLib={maplibregl}
-        initialViewState={bbox
-          ? { bounds: [[bbox[0], bbox[1]], [bbox[2], bbox[3]]], fitBoundsOptions: { padding: 24 } }
-          : { longitude: -111.7, latitude: 39.3, zoom: 5 }}
-        mapStyle={POSITRON}
-        interactive={false}
-        attributionControl={false}
-        style={{ width: "100%", height: "100%" }}
-      >
-        <Source id="fp-mini" type="geojson" data={{ type: "Feature", properties: {}, geometry: geom }}>
-          <Layer id="fp-mini-line" type="line" paint={{ "line-color": "#888", "line-width": 1.5 }} />
-        </Source>
-      </MapGL>
     </div>
   );
 }
@@ -2042,7 +1603,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
 function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item: StacDoc }) {
   switch (kind) {
-    case "cog": return <CogMap href={asset.href} item={item} />;
+    case "cog": return <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />;
     case "threeD": return <ThreeDViewer asset={asset} item={item} />;
     case "parquet": return <DataExplorer href={asset.href} />;
     case "image":
@@ -2114,7 +1675,7 @@ function AssetViewer({ item }: { item: StacDoc }) {
     // Nothing previewable — show the footprint (if any) + download links for the raw files.
     return (
       <>
-        <FootprintMini item={item} />
+        <PreviewMapSlot spec={footprintSpecOf(item)} />
         {others.length > 0 && <div className="mt-2"><AssetChips assets={Object.fromEntries(others.map((e) => [e.key, e.asset]))} /></div>}
       </>
     );

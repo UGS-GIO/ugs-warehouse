@@ -4,6 +4,7 @@ import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { CappedMap } from "./lru";
 import { router } from "./router";
 import { applyTheme, initialTheme } from "./theme";
 import "@utahdts/utah-design-system-header/css";
@@ -17,14 +18,6 @@ applyTheme(initialTheme());
 // The Protocol caches one PMTiles per archive URL in a plain `tiles` Map for the tab's life; cap it
 // (well above the real layer count, so normal browsing never evicts) so a runaway can't grow unbounded.
 const PMTILES_ARCHIVE_CAP = 32;
-class CappedMap<K, V> extends Map<K, V> {
-  constructor(private readonly cap: number) { super(); }
-  set(key: K, value: V): this {
-    super.set(key, value);
-    while (this.size > this.cap) super.delete(this.keys().next().value as K);
-    return this;
-  }
-}
 const protocol = new Protocol();
 protocol.tiles = new CappedMap(PMTILES_ARCHIVE_CAP);
 maplibregl.addProtocol("pmtiles", protocol.tile);

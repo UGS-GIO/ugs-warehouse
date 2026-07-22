@@ -6,6 +6,7 @@ import { ArticleSearch, type CatalogDoc } from "./search";
 import { Guide } from "./Guide";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
+import { layerCollectionIds } from "./catalog";
 import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./Map";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
@@ -209,9 +210,7 @@ export function App() {
       count: l["ugs:item_count"], mappable: l["ugs:mappable_count"], kind: "collection", parentId: sc.id,
     })));
   const leafColls = [...rootChildren.filter((c) => c.kind === "collection"), ...seriesChildren];
-  // Map-layer collections = the ROOT leaf collections (serving topics, mosaics, future rasters), vs
-  // publications under sub-catalogs. The "All items" by-date list excludes these (ingest-dated).
-  const layerCollectionIds = rootChildren.filter((c) => c.kind === "collection").map((c) => c.id);
+  const layerCollIds = layerCollectionIds(rootChildren);
 
   const collectionId = collIdOf(collectionUrl);
   const subCat = subCats.find((c) => c.id === collectionId);
@@ -422,7 +421,7 @@ export function App() {
           onThreeD={setThreeD}
           browseAll={browseAll}
           onBrowseAll={setBrowseAll}
-          layerCollectionIds={layerCollectionIds}
+          layerCollectionIds={layerCollIds}
           series={seriesSel ?? []}
           onSeries={setSeries}
           item={item.data}

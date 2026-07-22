@@ -18,6 +18,7 @@ import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS, type ShapefileWarnings, shapefileWarnings } from "./download";
 import { Legend } from "./legend";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
+import { lruSet } from "./lru";
 import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, useStyleLayers, viaLink } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
@@ -1646,15 +1647,10 @@ type FenceData = {
   parquetFill: Record<string, string>;
   extent: { spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] };
 };
-// 3D fence + terrain meshes are multi-MB each; LRU-cap so orbiting through many 3D pubs can't grow
-// the heap unbounded. `lruSet` evicts the oldest when over cap.
+// 3D fence + terrain meshes are multi-MB each; LRU-cap (see ./lru) so orbiting many 3D pubs can't
+// grow the heap unbounded.
 const FENCE_CACHE_CAP = 3;
 const TERRAIN_CACHE_CAP = 3;
-function lruSet<V>(cache: Map<string, V>, key: string, value: V, cap: number): void {
-  cache.delete(key);  // re-insert → most-recently-used (Maps iterate in insertion order)
-  cache.set(key, value);
-  while (cache.size > cap) cache.delete(cache.keys().next().value as string);
-}
 const fenceCache = new Map<string, FenceData>();
 const terrainCache = new Map<string, TerrainMesh | null>();
 

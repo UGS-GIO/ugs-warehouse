@@ -108,6 +108,15 @@ const inUse = new Map<string, number>();
 const borrow = (src: string) => inUse.set(src, (inUse.get(src) ?? 0) + 1);
 const release = (src: string) => { const n = (inUse.get(src) ?? 0) - 1; if (n > 0) inUse.set(src, n); else inUse.delete(src); };
 
+/** Oldest (LRU) registered entry whose handle is NOT currently in use, or undefined if all are.
+ *  Pure so the eviction policy is unit-tested — see download.test.ts. */
+export function evictionVictim(
+  registered: Map<string, string>, borrowed: Map<string, number>,
+): [string, string] | undefined {
+  for (const entry of registered) if (!borrowed.has(entry[1])) return entry;
+  return undefined;
+}
+
 async function registerUrl(parquetUrl: string): Promise<string> {
   const hit = registered.get(parquetUrl);
   if (hit) { registered.delete(parquetUrl); registered.set(parquetUrl, hit); borrow(hit); return hit; }  // touch → MRU
@@ -115,8 +124,7 @@ async function registerUrl(parquetUrl: string): Promise<string> {
   const db = await getDB();
   // Evict the LRU, skipping in-use handles; if all are borrowed, run temporarily over cap.
   while (registered.size >= REGISTERED_CAP) {
-    let victim: [string, string] | undefined;
-    for (const entry of registered) { if (!inUse.has(entry[1])) { victim = entry; break; } }
+    const victim = evictionVictim(registered, inUse);
     if (!victim) break;
     registered.delete(victim[0]);
     try { await db.dropFile(victim[1]); } catch { /* already gone — best-effort */ }

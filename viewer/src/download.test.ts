@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { sanitize, shapefileFieldChecks } from "./download";
+import { evictionVictim, sanitize, shapefileFieldChecks } from "./download";
 
 describe("sanitize", () => {
   it("keeps safe bigints as numbers", () => {
@@ -37,5 +37,19 @@ describe("shapefileFieldChecks", () => {
     expect(shapefileFieldChecks(many).tooManyFields).toBe(true);
     expect(shapefileFieldChecks(many).fieldCount).toBe(256);
     expect(shapefileFieldChecks(["a", "b"]).tooManyFields).toBe(false);
+  });
+});
+
+describe("evictionVictim", () => {
+  const reg = () => new Map([["urlA", "q1"], ["urlB", "q2"], ["urlC", "q3"]]); // insertion = LRU order
+  it("returns the oldest (LRU) entry when nothing is in use", () => {
+    expect(evictionVictim(reg(), new Map())).toEqual(["urlA", "q1"]);
+  });
+  it("skips in-use handles and returns the oldest free one", () => {
+    expect(evictionVictim(reg(), new Map([["q1", 1]]))).toEqual(["urlB", "q2"]);
+    expect(evictionVictim(reg(), new Map([["q1", 1], ["q2", 2]]))).toEqual(["urlC", "q3"]);
+  });
+  it("returns undefined when every handle is in use (caller runs over cap)", () => {
+    expect(evictionVictim(reg(), new Map([["q1", 1], ["q2", 1], ["q3", 1]]))).toBeUndefined();
   });
 });

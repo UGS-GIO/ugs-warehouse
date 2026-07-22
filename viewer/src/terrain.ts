@@ -31,7 +31,7 @@ const SAMPLES_URL = "https://elevation.nationalmap.gov/arcgis/rest/services/3DEP
 
 // Sample elevations for a batch of [lon,lat] points via 3DEP getSamples. Form-urlencoded POST is a
 // CORS "simple request" (no preflight). Returns metres per input point (0 on miss/error).
-async function sample3DEP(points: number[][]): Promise<number[]> {
+async function sample3DEP(points: number[][], signal?: AbortSignal): Promise<number[]> {
   const out = new Array(points.length).fill(0);
   const body = new URLSearchParams({
     geometry: JSON.stringify({ points, spatialReference: { wkid: 4326 } }),
@@ -45,6 +45,7 @@ async function sample3DEP(points: number[][]): Promise<number[]> {
       method: "POST",
       headers: { "content-type": "application/x-www-form-urlencoded" },
       body,
+      signal,
     });
     const j = await r.json();
     for (const s of j.samples ?? []) {
@@ -65,6 +66,7 @@ export async function buildMeshFrom3DEP(
   center: [number, number],
   scale: [number, number],
   grid = 64,
+  signal?: AbortSignal,
 ): Promise<TerrainMesh | null> {
   const pts: number[][] = [];
   for (let j = 0; j < grid; j++) {
@@ -79,9 +81,13 @@ export async function buildMeshFrom3DEP(
   for (let k = 0; k < pts.length; k += B) batches.push(pts.slice(k, k + B));
   const results: number[][] = new Array(batches.length);
   let next = 0;
-  const worker = async () => { while (next < batches.length) { const m = next++; results[m] = await sample3DEP(batches[m]); } };
+  // Stop pulling batches once aborted (nav-away) — otherwise ~50 orphaned POSTs keep firing for a
+  // fence viewer that's already unmounted.
+  const worker = async () => { while (next < batches.length && !signal?.aborted) { const m = next++; results[m] = await sample3DEP(batches[m], signal); } };
   await Promise.all(Array.from({ length: 10 }, worker));
+  if (signal?.aborted) return null;
   const z = results.flat();
+  if (z.length !== grid * grid) return null;  // aborted mid-sample → holes; don't build a misaligned mesh
   if (z.every((v) => !v)) return null; // no coverage / all failed
 
   return meshFromGrid(bbox, grid, grid, z, center, scale);

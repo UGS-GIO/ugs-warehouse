@@ -5,7 +5,7 @@ import {
   type SortingState, useReactTable,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
@@ -18,7 +18,8 @@ import { ensureCogProtocol } from "./cog";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS, type ShapefileWarnings, shapefileWarnings } from "./download";
 import { Legend } from "./legend";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
-import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { lruSet } from "./lru";
+import { type Asset, citeLink, classificationColors, classificationEntries, cogAsset, contentsOf, defaultStyleUrl, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, useStyleLayers, viaLink } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
 import { PhotoGallery } from "./PhotoGallery";
@@ -60,6 +61,7 @@ const toggle = (on: boolean) =>
 
 const BADGE_KEYS = ["ugs:series", "ugs:pub_type", "ugs:topic", "ugs:scale", "ugs:author"];
 
+
 const idFromHref = (href: string) => href.split("/").slice(-2)[0];
 const props = (it: ItemRef) => it.data?.properties ?? {};
 // Survey Notes volume (warehouse ugs:volume, from SNT-{vol}-{issue}) → group issues under it.
@@ -69,6 +71,8 @@ const gVol = (it: ItemRef): number | null => {
 };
 // The STAC item id IS the publication series id (DS-8, OFR-647, …) / the layer stem.
 const gSeries = (it: ItemRef) => String(it.data?.id ?? idFromHref(it.href));
+// collId is the unique collection key (e.g. `ugs-publications/B`); show just the leaf folder as label.
+const gColl = (it: ItemRef) => it.collId.split("/").pop() ?? it.collId;
 const gTitle = (it: ItemRef) => String(props(it).title ?? it.data?.id ?? idFromHref(it.href));
 const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(it).datetime as string).slice(0, 10) : "");
 const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).slice(0, 4), 10); return Number.isFinite(y) ? y : null; };
@@ -371,7 +375,7 @@ function CardItem({ it, showCollection, onOpen }: { it: ItemRef; showCollection?
       <div className="font-mono text-[12px] font-semibold text-foreground">{gSeries(it)}</div>
       <p className={C.cardTitle}>{gTitle(it)}</p>
       <div>
-        {showCollection && <span className={C.badge}>{it.collId}</span>}
+        {showCollection && <span className={C.badge}>{gColl(it)}</span>}
         {gDate(it) && <span className={C.badge}>{fmtDate(gDate(it))}</span>}
         {BADGE_KEYS.filter((k) => props(it)[k]).map((k) => (
           <span key={k} className={C.badge}>{String(props(it)[k])}</span>
@@ -534,7 +538,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
       cell: (i) => <span className="whitespace-nowrap font-mono text-[13px] font-semibold text-foreground">{String(i.getValue())}</span> },
     { id: "title", header: "Title", accessorFn: gTitle,
       cell: (i) => <span className="text-primary">{String(i.getValue())}</span> },
-    ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: (it: ItemRef) => it.collId }] : []),
+    ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: gColl }] : []),
     // Volume column only when items carry one (Survey Notes) — consistent with the grouped grid views.
     ...(hasVolumes ? [{ id: "volume", header: "Vol", accessorFn: (it: ItemRef) => gVol(it) ?? "" }] : []),
     { id: "type", header: "Type", accessorFn: gType },
@@ -803,10 +807,15 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
     fetch(`${base}${hi}.png`).then((r) => r.blob()),
   ]);
   const sheet = await createImageBitmap(blob);
-  for (const [name, f] of Object.entries(index as Record<string, { x: number; y: number; width: number; height: number; pixelRatio: number }>)) {
-    if (map.hasImage(name)) continue;
-    const img = await createImageBitmap(sheet, f.x, f.y, f.width, f.height);
-    map.addImage(name, img, { pixelRatio: f.pixelRatio });
+  try {
+    for (const [name, f] of Object.entries(index as Record<string, { x: number; y: number; width: number; height: number; pixelRatio: number }>)) {
+      if (map.hasImage(name)) continue;
+      const img = await createImageBitmap(sheet, f.x, f.y, f.width, f.height);
+      map.addImage(name, img, { pixelRatio: f.pixelRatio });
+      img.close();  // addImage copies into its texture → free the decoded pixels now, not at GC
+    }
+  } finally {
+    sheet.close();
   }
 }
 
@@ -828,7 +837,7 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
   const mapRef = useRef<MapRef>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [showDem, setShowDem] = useState(false);
-  const [styleLayers, setStyleLayers] = useState<Record<string, unknown>[] | null>(null);
+  const styleLayers = useStyleLayers(styleUrl);  // null while loading/error → NEUTRAL_LAYERS
   const [spriteReady, setSpriteReady] = useState(false);
   const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(null);
   // Review deploy: the feature a reviewer chose to comment on (row-targeted comments panel below the map).
@@ -838,16 +847,6 @@ function PmtilesMap({ item, focus, onFeatureClick }: {
   const [reviewFeature, setReviewFeature] = useState<{ pkVal: string; props: Record<string, unknown> } | null>(null);
   // Close the popup when the item changes (a stale popup over a different layer would mislead).
   useEffect(() => { setPopup(null); setReviewFeature(null); }, [item.id]);
-
-  useEffect(() => {
-    setStyleLayers(null);  // clear immediately so the prior render's layers don't linger on switch
-    if (!styleUrl) return;
-    let live = true;
-    fetch(styleUrl).then((r) => r.json())
-      .then((d) => { if (live) setStyleLayers(Array.isArray(d?.layers) ? d.layers : null); })
-      .catch(() => { if (live) setStyleLayers(null); });
-    return () => { live = false; };
-  }, [styleUrl]);
 
   // Preload the render's sprite (icon renders only) before its symbol layers mount, so icons
   // resolve instead of flashing missing. Non-sprite renders are "ready" immediately.
@@ -1571,16 +1570,13 @@ function assetKind(a: Asset): AssetKind {
 
 // Small text/CSV peek — fetch the head of the file and show it; no parsing, just a glance.
 function TextPreview({ href }: { href: string }) {
-  const [txt, setTxt] = useState<string>();
-  const [err, setErr] = useState<string>();
-  useEffect(() => {
-    let live = true;
-    fetch(href).then((r) => r.text())
-      .then((t) => { if (live) setTxt(t.slice(0, 20000)); })
-      .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); });
-    return () => { live = false; };
-  }, [href]);
-  if (err) return <div className="mt-2 text-xs text-destructive">preview failed: {err}</div>;
+  // Slice to 20k in the queryFn so only the preview is retained, not the whole (possibly large) file.
+  const { data: txt, error } = useQuery({
+    queryKey: ["text-preview", href],
+    queryFn: async ({ signal }) => (await (await fetch(href, { signal })).text()).slice(0, 20000),
+    staleTime: 5 * 60_000,
+  });
+  if (error) return <div className="mt-2 text-xs text-destructive">preview failed: {error instanceof Error ? error.message : String(error)}</div>;
   if (txt === undefined) return <div className="mt-2 text-xs text-muted-foreground">loading…</div>;
   return (
     <pre className="mt-2 max-h-[600px] max-w-full overflow-auto rounded-md border border-border bg-muted p-3 text-[12px] leading-snug">
@@ -1653,6 +1649,10 @@ type FenceData = {
   parquetFill: Record<string, string>;
   extent: { spanXY: number; zTop: number; zMid: number; half: [number, number]; bbox: [number, number, number, number]; center: [number, number]; scale: [number, number] };
 };
+// 3D fence + terrain meshes are multi-MB each; LRU-cap (see ./lru) so orbiting many 3D pubs can't
+// grow the heap unbounded.
+const FENCE_CACHE_CAP = 3;
+const TERRAIN_CACHE_CAP = 3;
 const fenceCache = new Map<string, FenceData>();
 const terrainCache = new Map<string, TerrainMesh | null>();
 
@@ -1673,7 +1673,15 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const [terrainMesh, setTerrainMesh] = useState<TerrainMesh | null>(null);
   // Authored geologic colors (MapUnit → hex) from the publication's ArcGIS symbology — the real
   // cartography. Interim: a baked per-pub sidecar (the 3D pipeline will fold this into the GeoParquet).
-  const [authored, setAuthored] = useState<Record<string, string>>({});
+  // Authored geologic colors for this pub (interim baked sidecar). Absent → getUnitColor fallback.
+  const { data: authored = {} } = useQuery<Record<string, string>>({
+    queryKey: ["3d-colors", item.id],
+    queryFn: async ({ signal }) => {
+      const r = await fetch(`${import.meta.env.BASE_URL}3d-colors/${item.id}.json`, { signal });
+      return r.ok ? r.json() : {};
+    },
+    staleTime: 5 * 60_000,
+  });
   // Per-unit fill carried in the GeoParquet `fill` column (cloud-native path) — authored, highest
   // precedence. Empty on the GeoJSON path.
   const [parquetFill, setParquetFill] = useState<Record<string, string>>({});
@@ -1693,6 +1701,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
   useEffect(() => {
     let active = true;
+    const ac = new AbortController();
     // Cache hit → restore parsed fence synchronously, skip the fetch/parse entirely.
     const hit = fenceCache.get(itemId);
     if (hit) {
@@ -1718,15 +1727,15 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         try {
           const { readFeatures3D } = await import("./download");
           const [pf, lf] = await Promise.all([
-            readFeatures3D(polyPq),
-            linePq ? readFeatures3D(linePq).catch(() => []) : Promise.resolve([]),
+            readFeatures3D(polyPq, ac.signal),
+            linePq ? readFeatures3D(linePq, ac.signal).catch(() => []) : Promise.resolve([]),
           ]);
           if (pf.length) return { polyFeats: pf as Feat[], lineFeats: lf as Feat[], parquet: true };
         } catch { /* parquet read failed → GeoJSON */ }
       }
       const [pd, ld] = await Promise.all([
-        fetch(polyUrl).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
-        fetch(lineUrl).then((r) => r.json()).catch(() => null),
+        fetch(polyUrl, { signal: ac.signal }).then((r) => { if (!r.ok) throw new Error("Polygons failed to load"); return r.json(); }),
+        fetch(lineUrl, { signal: ac.signal }).then((r) => r.json()).catch(() => null),
       ]);
       const toFeat = (f: { geometry?: unknown; properties?: unknown }): Feat =>
         ({ geometry: (f.geometry ?? null) as Feat["geometry"], props: (f.properties ?? {}) as Record<string, unknown> });
@@ -1802,7 +1811,7 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
             bbox: [minLon, minLat, maxLon, maxLat], center: [cLon, cLat], scale: [mLon, mLat],
           },
         };
-        fenceCache.set(itemId, fence);
+        lruSet(fenceCache, String(itemId), fence, FENCE_CACHE_CAP);
         if (!active) return;
         setParquetFill(fence.parquetFill);
         setPolygons(fence.polygons);
@@ -1811,9 +1820,9 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         setExtent(fence.extent);
         setLoading(false);
       })
-      .catch((err) => { if (active) { setError(err instanceof Error ? err.message : "Failed to load 3D data files"); setLoading(false); } });
+      .catch((err) => { if (active && !ac.signal.aborted) { setError(err instanceof Error ? err.message : "Failed to load 3D data files"); setLoading(false); } });
 
-    return () => { active = false; };
+    return () => { active = false; ac.abort(); };
   }, [item.id, polyUrl, lineUrl]);
 
   // Build the DEM terrain mesh once the dataset extent is known. Span the MAP-SHEET bbox (item.bbox),
@@ -1835,30 +1844,22 @@ function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
     // samples in the background and swaps in (smooth — no facets, the draped sheet stops looking
     // tessellated). Cache the fine result so revisits skip both passes.
     setTerrainPending(true);
+    const ac = new AbortController();
     (async () => {
       try {
-        const coarse = await buildMeshFrom3DEP(mapBbox, extent.center, extent.scale, 48);
+        const coarse = await buildMeshFrom3DEP(mapBbox, extent.center, extent.scale, 48, ac.signal);
         if (!active) return;
         if (coarse) setTerrainMesh(coarse);
-        const fine = await buildMeshFrom3DEP(mapBbox, extent.center, extent.scale, 160);
-        terrainCache.set(itemId, fine ?? coarse);
+        const fine = await buildMeshFrom3DEP(mapBbox, extent.center, extent.scale, 160, ac.signal);
+        if (ac.signal.aborted) return;  // don't cache a half-sampled (aborted) mesh
+        lruSet(terrainCache, String(itemId), fine ?? coarse, TERRAIN_CACHE_CAP);
         if (!active) return;
         if (fine ?? coarse) setTerrainMesh(fine ?? coarse);
       } catch { if (active) setTerrainMesh(null); }
       finally { if (active) setTerrainPending(false); }
     })();
-    return () => { active = false; };
+    return () => { active = false; ac.abort(); };
   }, [extent, item]);
-
-  // Authored geologic colors for this pub (interim baked sidecar). Absent → falls back to getUnitColor.
-  useEffect(() => {
-    let active = true;
-    fetch(`${import.meta.env.BASE_URL}3d-colors/${item.id}.json`)
-      .then((r) => (r.ok ? r.json() : {}))
-      .then((c) => { if (active) setAuthored(c); })
-      .catch(() => { /* no sidecar → keep fallback */ });
-    return () => { active = false; };
-  }, [item.id]);
 
   // Unit colour, standard-first: STAC classification:classes (the warehouse's built-in mechanism, what
   // the 3D pipeline will stamp) → interim per-pub sidecar → derived placeholder.
@@ -2160,9 +2161,16 @@ const fmtVal = (v: unknown): string =>
 // ---- API & data endpoints ----
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
+  useEffect(() => () => clearTimeout(timer.current), []);  // clear a pending reset on unmount
   return (
     <button
-      onClick={() => { navigator.clipboard?.writeText(text); setDone(true); setTimeout(() => setDone(false), 1200); }}
+      onClick={() => {
+        navigator.clipboard?.writeText(text);
+        setDone(true);
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => setDone(false), 1200);
+      }}
       className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground hover:border-primary">
       {done ? "copied" : "copy"}
     </button>
@@ -2437,6 +2445,9 @@ export function Browse(props: {
   onSearch: (q: string) => void;
   threeD: boolean;
   onThreeD: (v: boolean) => void;
+  browseAll: boolean;
+  onBrowseAll: (v: boolean) => void;
+  layerCollectionIds: string[];
   series: string[];
   onSeries: (codes: string[]) => void;
   item?: StacDoc;
@@ -2447,7 +2458,8 @@ export function Browse(props: {
   onBackToItems: () => void;
   onViewMap: () => void;
 }) {
-  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, threeD, onThreeD, series, onSeries } = props;
+  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, threeD, onThreeD,
+          browseAll, onBrowseAll, series, onSeries } = props;
 
   // item detail
   if (collectionId && itemSelected) {
@@ -2471,6 +2483,13 @@ export function Browse(props: {
     );
   }
 
+  // Drop map-layer collections from the by-date list: their datetime is ingest time, not a pub date.
+  // App derives the set from catalog structure, so future layer collections are excluded automatically.
+  const layerColls = new Set(props.layerCollectionIds);
+  const globalItems = browseAll && !search.trim() && !threeD
+    ? props.allItems.filter((it) => !layerColls.has(it.collId))
+    : props.allItems;
+
   // browse level: root catalog (with search-all) OR a sub-catalog's series chooser
   return (
     <div className={C.wrap}>
@@ -2483,11 +2502,15 @@ export function Browse(props: {
               carrying a 3d-vector asset — works from the bare catalog, no search text needed. */}
           <span className={toggle(threeD)} title="Show only publications with an interactive 3D viewer"
             onClick={() => onThreeD(!threeD)}>3D</span>
+          {/* Flat catalog-wide list, newest first — answers "what's newest?" without drilling into
+              every series. Same loads-all-items path as search; the list defaults to date-desc. */}
+          <span className={toggle(browseAll)} title="One list of every publication across all series, newest first"
+            onClick={() => onBrowseAll(!browseAll)}>All items</span>
           {props.itemsLoading && <span className={C.muted}>loading items…</span>}
         </div>
       )}
-      {atRoot && (search.trim() || threeD)
-        ? <ItemList items={props.allItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
+      {atRoot && (search.trim() || threeD || browseAll)
+        ? <ItemList items={globalItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
         : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
     </div>
   );

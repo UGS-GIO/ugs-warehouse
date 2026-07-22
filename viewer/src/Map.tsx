@@ -2,7 +2,7 @@ import maplibregl from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
-import { type StacDoc } from "./stac";
+import { type StacDoc, useCogBoxes, useStyleLayersFor } from "./stac";
 
 // A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
 // layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
@@ -96,27 +96,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
     return () => { live = false; };
   }, [hasCog, cogReady]);
 
-  // Pub/raster STAC items often have NO bbox, so the camera can't fit to a toggled COG (you'd see
-  // nothing without knowing where to pan). Read each COG's own extent from its GeoTIFF metadata
-  // (keyed by href, fetched once) and feed it into the fit below.
-  const [cogBoxes, setCogBoxes] = useState<Record<string, [number, number, number, number]>>({});
-  useEffect(() => {
-    const need = layers.filter((l) => l.cogHref && !cogBoxes[l.cogHref]);
-    if (!need.length) return;
-    let live = true;
-    (async () => {
-      await ensureCogProtocol();
-      const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
-      for (const l of need) {
-        try {
-          const meta = await getCogMetadata(l.cogHref!);
-          const bb = meta?.bbox ? (meta.bbox as number[]).slice(0, 4) as [number, number, number, number] : null;
-          if (live && bb) setCogBoxes((p) => ({ ...p, [l.cogHref!]: bb }));
-        } catch { /* keep whatever bbox we have */ }
-      }
-    })();
-    return () => { live = false; };
-  }, [layers]);
+  // COG extents for camera fit (many pub/raster items have no STAC bbox), one cached query per href.
+  const cogBoxes = useCogBoxes(layers.map((l) => l.cogHref));
 
   // A layer's effective bbox: its STAC bbox, else (for a COG) its fetched GeoTIFF extent.
   const effBox = (l: ActiveLayer): [number, number, number, number] | undefined => {
@@ -143,35 +124,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
     mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
   }, [fitKey]);
 
-  const [styleCache, setStyleCache] = useState<Record<string, Record<string, unknown>[]>>({});
-
-  useEffect(() => {
-    let live = true;
-    const pending = layers.filter((l) => l.styleUrl && !styleCache[l.id]);
-    if (!pending.length) return;
-
-    Promise.all(
-      pending.map((l) =>
-        fetch(l.styleUrl!)
-          .then((r) => r.json())
-          .then((d) => ({ id: l.id, layers: Array.isArray(d?.layers) ? d.layers : null }))
-          .catch(() => ({ id: l.id, layers: null }))
-      )
-    ).then((results) => {
-      if (!live) return;
-      setStyleCache((prev) => {
-        const next = { ...prev };
-        for (const res of results) {
-          if (res.layers) {
-            next[res.id] = res.layers;
-          }
-        }
-        return next;
-      });
-    });
-
-    return () => { live = false; };
-  }, [layers]);
+  // Bound GL style `layers` per overlay (id→layers for those that resolved), via TanStack Query.
+  const styleCache = useStyleLayersFor(layers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
 
   // Source/layer ids are keyed by a STABLE slug of the layer id — NOT the array index. Index-based
   // ids change when a layer is unchecked (the array shifts), and react-map-gl throws "source id

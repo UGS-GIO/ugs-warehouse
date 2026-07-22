@@ -65,20 +65,25 @@ export async function convertGeoJSON(
   }
   const result = await gdal.ogr2ogr(ds, args, outName);
 
-  if (!t.multi) {
-    const bytes = await gdal.getFileBytes(result);
-    return { bytes, filename: `${stem}.${t.ext}`, mime: "application/octet-stream" };
-  }
+  // try/finally so the single-file early return still closes the dataset (else gpkg/fgb exports leak
+  // the handle + MEMFS buffers into the GDAL runtime heap).
+  try {
+    if (!t.multi) {
+      const bytes = await gdal.getFileBytes(result);
+      return { bytes, filename: `${stem}.${t.ext}`, mime: "application/octet-stream" };
+    }
 
-  // Multi-file: collect the format's output files and zip. For a .gdb directory keep
-  // the files nested under `<stem>.gdb/`; shapefile sidecars sit at the zip root.
-  const outputs = await gdal.getOutputFiles();
-  const entries: Record<string, Uint8Array> = {};
-  for (const f of outputs) {
-    const name = basename(f.path);
-    if (t.ext === "gdb" && f.path.includes(`${stem}.gdb`)) entries[`${stem}.gdb/${name}`] = await gdal.getFileBytes(f.path);
-    else if (t.ext === "shp" && name.startsWith(`${stem}.`)) entries[name] = await gdal.getFileBytes(f.path);
+    // Multi-file: collect the format's output files and zip. For a .gdb directory keep
+    // the files nested under `<stem>.gdb/`; shapefile sidecars sit at the zip root.
+    const outputs = await gdal.getOutputFiles();
+    const entries: Record<string, Uint8Array> = {};
+    for (const f of outputs) {
+      const name = basename(f.path);
+      if (t.ext === "gdb" && f.path.includes(`${stem}.gdb`)) entries[`${stem}.gdb/${name}`] = await gdal.getFileBytes(f.path);
+      else if (t.ext === "shp" && name.startsWith(`${stem}.`)) entries[name] = await gdal.getFileBytes(f.path);
+    }
+    return { bytes: zipSync(entries), filename: `${stem}.${t.ext}.zip`, mime: "application/zip" };
+  } finally {
+    try { await gdal.close(ds); } catch { /* best-effort */ }
   }
-  await gdal.close(ds);
-  return { bytes: zipSync(entries), filename: `${stem}.${t.ext}.zip`, mime: "application/zip" };
 }

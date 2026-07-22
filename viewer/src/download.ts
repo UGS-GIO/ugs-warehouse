@@ -97,15 +97,34 @@ const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
 // pulls only the footer + needed row-groups per query over HTTP range reads, so paging a 7000-row
 // table never downloads the whole file. Cache keyed by URL so the explorer's page/sort/search
 // re-queries hit the same registered handle.
+// LRU of registered parquet handles; each pins DuckDB's in-WASM HTTP buffer, so cap + dropFile the
+// LRU so browsing many tables can't grow the heap unbounded. Re-insert on hit = MRU (insertion order).
+const REGISTERED_CAP = 12;
 const registered = new Map<string, string>();
+
+// Ref-count in-use handles so eviction never dropFiles one a live query is mid-read on. Callers
+// borrow via registerUrl and release() in finally.
+const inUse = new Map<string, number>();
+const borrow = (src: string) => inUse.set(src, (inUse.get(src) ?? 0) + 1);
+const release = (src: string) => { const n = (inUse.get(src) ?? 0) - 1; if (n > 0) inUse.set(src, n); else inUse.delete(src); };
+
 async function registerUrl(parquetUrl: string): Promise<string> {
   const hit = registered.get(parquetUrl);
-  if (hit) return hit;
+  if (hit) { registered.delete(parquetUrl); registered.set(parquetUrl, hit); borrow(hit); return hit; }  // touch → MRU
   const duckdb = await import("@duckdb/duckdb-wasm");
   const db = await getDB();
+  // Evict the LRU, skipping in-use handles; if all are borrowed, run temporarily over cap.
+  while (registered.size >= REGISTERED_CAP) {
+    let victim: [string, string] | undefined;
+    for (const entry of registered) { if (!inUse.has(entry[1])) { victim = entry; break; } }
+    if (!victim) break;
+    registered.delete(victim[0]);
+    try { await db.dropFile(victim[1]); } catch { /* already gone — best-effort */ }
+  }
   const src = `q${++seq}.parquet`;
   await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
   registered.set(parquetUrl, src);
+  borrow(src);  // returned handle is borrowed; caller MUST release() in finally
   return src;
 }
 
@@ -198,8 +217,9 @@ function filterClause(f: ColFilter): string {
 export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<Page> {
   const db = await getDB();
   const conn = await db.connect();
+  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
   try {
-    const src = await registerUrl(parquetUrl);
+    const src = borrowed = await registerUrl(parquetUrl);
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const descRows = desc.toArray();
@@ -242,6 +262,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     });
     return { columns, types, rows, total, bboxes };
   } finally {
+    if (borrowed !== undefined) release(borrowed);
     await conn.close();
   }
 }
@@ -254,8 +275,9 @@ export async function fetchGeometry(
 ): Promise<GeoJSON.Geometry | null> {
   const db = await getDB();
   const conn = await db.connect();
+  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
   try {
-    const src = await registerUrl(parquetUrl);
+    const src = borrowed = await registerUrl(parquetUrl);
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const allCols = desc.toArray().map((r) => String(r.column_name));
@@ -274,6 +296,7 @@ export async function fetchGeometry(
     const { wkbToGeoJSON } = await import("./wkb");
     return wkbToGeoJSON(blob);
   } finally {
+    if (borrowed !== undefined) release(borrowed);
     await conn.close();
   }
 }
@@ -288,8 +311,9 @@ export async function ordinalByFeatureId(
 ): Promise<number | null> {
   const db = await getDB();
   const conn = await db.connect();
+  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
   try {
-    const src = await registerUrl(parquetUrl);
+    const src = borrowed = await registerUrl(parquetUrl);
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const allCols = desc.toArray().map((r) => String(r.column_name));
@@ -309,6 +333,7 @@ export async function ordinalByFeatureId(
     const pos = res.toArray()[0]?.pos;
     return pos == null ? null : Number(pos);
   } finally {
+    if (borrowed !== undefined) release(borrowed);
     await conn.close();
   }
 }
@@ -322,8 +347,9 @@ export async function fetchRowById(
 ): Promise<{ bbox?: [number, number, number, number]; geometry: GeoJSON.Geometry | null } | null> {
   const db = await getDB();
   const conn = await db.connect();
+  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
   try {
-    const src = await registerUrl(parquetUrl);
+    const src = borrowed = await registerUrl(parquetUrl);
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const allCols = desc.toArray().map((r) => String(r.column_name));
@@ -349,6 +375,7 @@ export async function fetchRowById(
     }
     return { bbox, geometry };
   } finally {
+    if (borrowed !== undefined) release(borrowed);
     await conn.close();
   }
 }
@@ -358,16 +385,21 @@ export async function fetchRowById(
  *  extension (geometry read as WKB BLOB, parsed in JS). props = all non-geometry columns. */
 export async function readFeatures3D(
   parquetUrl: string,
+  signal?: AbortSignal,
 ): Promise<Array<{ props: Record<string, unknown>; geometry: GeoJSON.Geometry | null }>> {
   const db = await getDB();
   const conn = await db.connect();
+  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
   try {
-    const src = await registerUrl(parquetUrl);
+    const src = borrowed = await registerUrl(parquetUrl);
     const from = `read_parquet('${src}')`;
     const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
     const allCols = desc.toArray().map((r) => String(r.column_name));
     const geomCol = GEOM_NAMES.find((c) => allCols.includes(c));
     const propCols = allCols.filter((c) => c !== geomCol);
+    // DuckDB range reads aren't AbortSignal-cancelable, but if the fence viewer already unmounted we
+    // can skip the whole-file SELECT + WKB parse (the expensive part) rather than do it for nothing.
+    if (signal?.aborted) return [];
     const res = await conn.query(`SELECT * FROM ${from};`);
     const { wkbToGeoJSON } = await import("./wkb");
     return res.toArray().map((r) => {
@@ -378,6 +410,7 @@ export async function readFeatures3D(
       return { props, geometry: blob ? wkbToGeoJSON(blob, true) : null };
     });
   } finally {
+    if (borrowed !== undefined) release(borrowed);
     await conn.close();
   }
 }

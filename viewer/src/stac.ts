@@ -226,6 +226,63 @@ export function useDocs(urls: string[]) {
   };
 }
 
+// ---- MapLibre GL style layers (the `layers` array of a bound style_url) ----
+// Via TanStack Query so it aborts on unmount, dedupes, and caches. null = loading/error (→ neutral).
+async function fetchStyleLayers(url: string, signal?: AbortSignal): Promise<Record<string, unknown>[] | null> {
+  const r = await fetch(url, { signal });
+  const d = await r.json();
+  return Array.isArray(d?.layers) ? (d.layers as Record<string, unknown>[]) : null;
+}
+export function useStyleLayers(styleUrl?: string): Record<string, unknown>[] | null {
+  const { data } = useQuery({
+    queryKey: ["gl-style-layers", styleUrl],
+    queryFn: ({ signal }) => fetchStyleLayers(styleUrl as string, signal),
+    enabled: Boolean(styleUrl),
+    staleTime: 5 * 60_000,
+  });
+  return styleUrl ? (data ?? null) : null;
+}
+/** Same, for a set of layers at once (Map view overlays). Returns id→layers for those that resolved. */
+export function useStyleLayersFor(layers: { id: string; styleUrl?: string }[]): Record<string, Record<string, unknown>[]> {
+  const withStyle = layers.filter((l) => l.styleUrl);
+  const results = useQueries({
+    queries: withStyle.map((l) => ({
+      queryKey: ["gl-style-layers", l.styleUrl],
+      queryFn: ({ signal }: { signal?: AbortSignal }) => fetchStyleLayers(l.styleUrl as string, signal),
+      staleTime: 5 * 60_000,
+    })),
+  });
+  const out: Record<string, Record<string, unknown>[]> = {};
+  withStyle.forEach((l, i) => { const d = results[i].data; if (d) out[l.id] = d; });
+  return out;
+}
+
+// ---- COG (GeoTIFF) extents, read from the cog:// metadata, keyed + cached by href ----
+// staleTime:Infinity (a COG's extent is immutable); retry:1 so a transient blip on a bbox-less COG
+// isn't cached as a permanent failure. Returns href→bbox for those that resolved.
+async function fetchCogBox(cogHref: string): Promise<[number, number, number, number] | null> {
+  const { ensureCogProtocol } = await import("./cog");
+  await ensureCogProtocol();
+  const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
+  const meta = await getCogMetadata(cogHref);
+  const bb = meta?.bbox ? (meta.bbox as number[]).slice(0, 4) : null;
+  return (bb && bb.length >= 4 ? bb : null) as [number, number, number, number] | null;
+}
+export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [number, number, number, number]> {
+  const urls = [...new Set(hrefs.filter((h): h is string => Boolean(h)))];
+  const results = useQueries({
+    queries: urls.map((href) => ({
+      queryKey: ["cog-bbox", href],
+      queryFn: () => fetchCogBox(href),
+      staleTime: Infinity,
+      retry: 1,
+    })),
+  });
+  const out: Record<string, [number, number, number, number]> = {};
+  urls.forEach((href, i) => { const bb = results[i].data; if (bb) out[href] = bb; });
+  return out;
+}
+
 // ---- compact items index (items.json, one fetch per collection) ----
 // Each entry is a mini StacDoc (id, bbox, a props subset, asset + web-map-link summaries)
 // — enough to render the list table, facets, and map overlays without N item.json fetches.

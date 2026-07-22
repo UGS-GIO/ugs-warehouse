@@ -186,9 +186,7 @@ export function App() {
 
   const [search, setSearch] = useState("");
   const [threeD, setThreeD] = useState(false);  // global "3D pubs" discovery filter (loads all items)
-  // "everything, newest first" — a flat catalog-wide item list with no search text, so you can answer
-  // "what's newest?" without drilling into each series. Loads all items like a search does.
-  const [browseAll, setBrowseAll] = useState(false);
+  const [browseAll, setBrowseAll] = useState(false);  // flat catalog-wide list, newest-first (loads all items)
 
   const catalog = useStac(CATALOG_URL);
 
@@ -211,6 +209,9 @@ export function App() {
       count: l["ugs:item_count"], mappable: l["ugs:mappable_count"], kind: "collection", parentId: sc.id,
     })));
   const leafColls = [...rootChildren.filter((c) => c.kind === "collection"), ...seriesChildren];
+  // Map-layer collections = the ROOT leaf collections (serving topics, mosaics, future rasters), vs
+  // publications under sub-catalogs. The "All items" by-date list excludes these (ingest-dated).
+  const layerCollectionIds = rootChildren.filter((c) => c.kind === "collection").map((c) => c.id);
 
   const collectionId = collIdOf(collectionUrl);
   const subCat = subCats.find((c) => c.id === collectionId);
@@ -421,6 +422,7 @@ export function App() {
           onThreeD={setThreeD}
           browseAll={browseAll}
           onBrowseAll={setBrowseAll}
+          layerCollectionIds={layerCollectionIds}
           series={seriesSel ?? []}
           onSeries={setSeries}
           item={item.data}

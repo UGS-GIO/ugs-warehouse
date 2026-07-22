@@ -71,6 +71,8 @@ const gVol = (it: ItemRef): number | null => {
 };
 // The STAC item id IS the publication series id (DS-8, OFR-647, …) / the layer stem.
 const gSeries = (it: ItemRef) => String(it.data?.id ?? idFromHref(it.href));
+// collId is the unique collection key (e.g. `ugs-publications/B`); show just the leaf folder as label.
+const gColl = (it: ItemRef) => it.collId.split("/").pop() ?? it.collId;
 const gTitle = (it: ItemRef) => String(props(it).title ?? it.data?.id ?? idFromHref(it.href));
 const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(it).datetime as string).slice(0, 10) : "");
 const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).slice(0, 4), 10); return Number.isFinite(y) ? y : null; };
@@ -373,7 +375,7 @@ function CardItem({ it, showCollection, onOpen }: { it: ItemRef; showCollection?
       <div className="font-mono text-[12px] font-semibold text-foreground">{gSeries(it)}</div>
       <p className={C.cardTitle}>{gTitle(it)}</p>
       <div>
-        {showCollection && <span className={C.badge}>{it.collId}</span>}
+        {showCollection && <span className={C.badge}>{gColl(it)}</span>}
         {gDate(it) && <span className={C.badge}>{fmtDate(gDate(it))}</span>}
         {BADGE_KEYS.filter((k) => props(it)[k]).map((k) => (
           <span key={k} className={C.badge}>{String(props(it)[k])}</span>
@@ -536,7 +538,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
       cell: (i) => <span className="whitespace-nowrap font-mono text-[13px] font-semibold text-foreground">{String(i.getValue())}</span> },
     { id: "title", header: "Title", accessorFn: gTitle,
       cell: (i) => <span className="text-primary">{String(i.getValue())}</span> },
-    ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: (it: ItemRef) => it.collId }] : []),
+    ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: gColl }] : []),
     // Volume column only when items carry one (Survey Notes) — consistent with the grouped grid views.
     ...(hasVolumes ? [{ id: "volume", header: "Vol", accessorFn: (it: ItemRef) => gVol(it) ?? "" }] : []),
     { id: "type", header: "Type", accessorFn: gType },

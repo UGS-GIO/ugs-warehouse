@@ -15,7 +15,18 @@ import { CommentsPanel } from "./CommentsPanel";
 import { NotifBell } from "./NotificationsInbox";
 import { ReviewDashboard } from "./ReviewDashboard";
 
-const collIdOf = (url?: string) => url?.split("/").slice(-2)[0];
+// Unique collection key = the path from the catalog root to the collection folder, so a folder name
+// that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
+// distinct: `ugs-external/B` vs `ugs-publications/B`. Derivable from any href — a collection.json,
+// a catalog.json (sub-catalog), or an item's .json — without needing the loaded tree.
+const collKeyOf = (href?: string): string | undefined => {
+  if (!href) return undefined;
+  const base = CATALOG_URL.replace(/[^/]*$/, "");       // …/stac/
+  const s = (href.startsWith(base) ? href.slice(base.length) : href)
+    .replace(/\/?(collection|catalog)\.json$/, "")      // a collection/sub-catalog url → its folder path
+    .replace(/\/[^/]+\/[^/]+\.json$/, "");              // an item url → drop /<id>/<id>.json
+  return s || undefined;
+};
 const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
 // Viewer root URL (the served path, no search params) — used as the logo's <a href> so
@@ -198,7 +209,7 @@ export function App() {
   // rest are leaf collections. (A pre-nesting flat catalog has only leaf collections — this
   // still works: ugs-publications is then just a leaf you open into items.)
   const rootChildren: CollectionSummary[] = childLinks(catalog.data, CATALOG_URL).map((l) => ({
-    id: collIdOf(l.href) ?? l.href, href: l.href, title: l.title, count: l["ugs:item_count"],
+    id: collKeyOf(l.href) ?? l.href, href: l.href, title: l.title, count: l["ugs:item_count"],
     mappable: l["ugs:mappable_count"],
     kind: l.href.endsWith("/catalog.json") ? "catalog" : "collection",
   }));
@@ -206,13 +217,13 @@ export function App() {
   const subDocs = useDocs(subCats.map((c) => c.href));
   const seriesChildren: CollectionSummary[] = subCats.flatMap((sc, i) =>
     childLinks(subDocs.docs[i]?.data, sc.href).map((l) => ({
-      id: collIdOf(l.href) ?? l.href, href: l.href, title: l.title,
+      id: collKeyOf(l.href) ?? l.href, href: l.href, title: l.title,
       count: l["ugs:item_count"], mappable: l["ugs:mappable_count"], kind: "collection", parentId: sc.id,
     })));
   const leafColls = [...rootChildren.filter((c) => c.kind === "collection"), ...seriesChildren];
   const layerCollIds = layerCollectionIds(rootChildren);
 
-  const collectionId = collIdOf(collectionUrl);
+  const collectionId = collKeyOf(collectionUrl);  // idempotent on a bare key; also handles legacy full-url `c`
   const subCat = subCats.find((c) => c.id === collectionId);
   const leafColl = leafColls.find((c) => c.id === collectionId);
   // Cards for the current browse level: none at a leaf (items show); a sub-catalog's series; else root.
@@ -306,15 +317,14 @@ export function App() {
 
   // Open a collection fresh (series filter is per-collection → cleared). Item open / layer
   // toggle / back-to-items keep the active series filter so it survives drilling in + out.
-  const openCollection = (href: string) => go({ view, c: collIdOf(href) });
-  // Derive the collection from the item href (…/<collection>/<id>/<id>.json) rather than the ambient
-  // collectionUrl — search-all results span collections, so the ambient one is wrong (or absent) and
-  // the item detail (gated on a resolved leaf collection) never shows. Mirrors openCover.
+  const openCollection = (href: string) => go({ view, c: collKeyOf(href) });
+  // Derive the collection from the item href rather than the ambient collectionUrl — search-all results
+  // span collections, so the ambient one is wrong (or absent). Mirrors openCover.
   const openItem = (href: string) =>
-    go({ view, c: href.split("/").slice(-3)[0], i: idOf(href), l: layerIds, s: seriesSel });
+    go({ view, c: collKeyOf(href), i: idOf(href), l: layerIds, s: seriesSel });
   // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
-  // collection id from the item href (…/<collection>/<id>/<id>.json) so it resolves + the URL stays tidy.
-  const openCover = (href: string) => go({ view, c: href.split("/").slice(-3)[0], i: idOf(href) });
+  // collection key from the item href so it resolves + the URL stays tidy.
+  const openCover = (href: string) => go({ view, c: collKeyOf(href), i: idOf(href) });
   const setSeries = (codes: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: layerIds, s: codes });
   const toggleLayer = (id: string) => {
     const set = new Set(layerIds ?? []);

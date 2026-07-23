@@ -18,6 +18,7 @@ def _record(**kw):
         "title": "Slope of the Wasatch", "description": "Percent-slope raster",
         "data_type": "float32", "units": "percent",
         "ugs_author": "J. Geologist", "ugs_pub_type": "OFR",
+        "pub_id": "OFR-123", "is_mosaic": False,
         "staged_cog_uri": "gs://stagedrasters/slope/slope_OFR123_20260601.cog.tif",
     }
     return {**base, **kw}
@@ -55,6 +56,8 @@ def test_stac_item_from_record_binds_columns():
     # snake_case columns map into the ugs: namespace.
     assert item["properties"]["ugs:author"] == "J. Geologist"
     assert item["properties"]["ugs:pub_type"] == "OFR"
+    assert item["properties"]["ugs:pub_id"] == "OFR-123"
+    assert item["properties"]["ugs:is_mosaic"] is False  # kept even when False
     assert "data_type" not in item["properties"]
 
 

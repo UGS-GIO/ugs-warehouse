@@ -25,6 +25,8 @@ _PROP_MAP = {
     "units": "units",              # nullable — pixel-value unit; null for scanned maps
     "ugs_author": "ugs:author",
     "ugs_pub_type": "ugs:pub_type",
+    "pub_id": "ugs:pub_id",        # source publication (OFR-123 …) — provenance + discovery
+    "is_mosaic": "ugs:is_mosaic",  # topic type: seamless mosaic vs single COG
 }
 
 

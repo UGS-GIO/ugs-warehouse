@@ -1,9 +1,8 @@
 import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput } from "@utahdts/utah-design-system-header";
+import { useIsFetching } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
-import { Architecture } from "./Architecture";
-import { ArticleSearch, type CatalogDoc } from "./search";
-import { Guide } from "./Guide";
+import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
+import { type CatalogDoc } from "./search";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
 import { layerCollectionIds } from "./catalog";
@@ -14,7 +13,13 @@ import { useTheme } from "./theme";
 import { DiffPanel } from "./DiffPanel";
 import { CommentsPanel } from "./CommentsPanel";
 import { NotifBell } from "./NotificationsInbox";
-import { ReviewDashboard } from "./ReviewDashboard";
+
+// Heavy content views, code-split out of the main bundle (mermaid/cytoscape/katex, MiniSearch, the
+// markdown renderer) — they load on first open with a Suspense fallback instead of bloating startup.
+const Architecture = lazy(() => import("./Architecture").then((m) => ({ default: m.Architecture })));
+const ArticleSearch = lazy(() => import("./search").then((m) => ({ default: m.ArticleSearch })));
+const Guide = lazy(() => import("./Guide").then((m) => ({ default: m.Guide })));
+const ReviewDashboard = lazy(() => import("./ReviewDashboard").then((m) => ({ default: m.ReviewDashboard })));
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name
 // that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
@@ -118,6 +123,17 @@ function userActionItem(email: string): ActionItem {
   };
 }
 
+// Thin top progress bar — visible while any TanStack Query fetch is in flight OR a view switch is
+// pending (useTransition). A global "working" signal so a slow load never reads as a frozen app.
+function FetchBar({ pending }: { pending?: boolean }) {
+  const busy = useIsFetching() > 0 || pending;
+  return (
+    <div className="pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden">
+      {busy && <div className="fetch-bar h-full w-full bg-primary" />}
+    </div>
+  );
+}
+
 function ThemeToggle() {
   const [theme, toggle] = useTheme();
   return (
@@ -163,10 +179,12 @@ export function App() {
   };
   // Tabs: catalog + map share the selection (c/i/l/s); the content views (search/arch/guide) reset
   // it, so the URL stays clean and returning to the catalog doesn't dump you back on an old item.
+  // In a transition so switching to a heavy view keeps the current one interactive + flags `pending`.
+  const [pending, startTransition] = useTransition();
   const setView = (v: View) =>
-    go(v === "catalog" || v === "map"
+    startTransition(() => go(v === "catalog" || v === "map"
       ? { view: v, c: collectionUrl, i: itemUrl, l: layerIds, s: seriesSel }
-      : { view: v });
+      : { view: v }));
 
   // Official State of Utah header — injects the state identity bar + maintained logo above the
   // app (Utah Design System standard). On the review deploy the IAP user shows as a top-right
@@ -373,6 +391,7 @@ export function App() {
     <div className={mapView
       ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
       : "min-h-screen overflow-x-hidden bg-background text-sm text-foreground"}>
+      <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
         {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
             plain click still does in-app SPA nav. href is the viewer root (no search params). */}
@@ -411,6 +430,7 @@ export function App() {
 
       {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
 
+      <Suspense fallback={<div className="flex items-center justify-center p-16 text-sm text-muted-foreground">Loading…</div>}>
       {view === "review" ? (
         // Review data are vector serving-topics → the ugs-serving-topics collection. Open the item there.
         <ReviewDashboard onOpen={(itemId) => go({ view: "catalog", c: "ugs-serving-topics", i: itemId })} />
@@ -490,6 +510,7 @@ export function App() {
           </main>
         </div>
       )}
+      </Suspense>
     </div>
     </PreviewMapProvider>
   );

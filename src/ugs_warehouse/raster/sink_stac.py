@@ -28,7 +28,8 @@ def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None,
 
     return stac.build_item(
         item_id=raster.item_id,
-        collection=raster.collection,
+        collection=raster.collection_id,          # STAC id = layer (last path segment)
+        collection_path=raster.collection,         # nested layout path, e.g. ugs-rasters/slope
         geometry=geometry if geometry else (stac.bbox_polygon(bbox) if bbox else None),
         bbox=bbox,
         datetime_iso=raster.datetime_iso,

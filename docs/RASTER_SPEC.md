@@ -103,25 +103,36 @@ To let users download data in their preferred legacy formats (e.g., Esri Grid, G
 
 ---
 
-## 5. Time-Series STAC Schema
+## 5. Per-Layer Edition STAC Schema
 
-To organize time-series raster datasets natively in our STAC catalog, we structure them as a **Collection of time-slice Items**:
+Per the ugs-ingest #169 contract (2026-07-23), **every** raster layer is a versioned
+**Collection of dated Items** — the standard cloud-native-geospatial time-series shape, applied
+uniformly (no separate shared "1-off" collection). Each edition is an append-only row in
+`raw.raster_catalog` with `is_current` marking the live one; nothing overwrites. "Latest" falls
+out of `datetime` ordering; the STAC Versioning extension is added only when an edition is
+superseded/corrected (same date republished).
 
 ```
 ugs-warehouse-stac/
 ├── catalog.json                                # Main Warehouse Catalog
-└── ugs-raster-soil-water/                      # Collection for Soil-Water model
-    ├── collection.json                         # Declares time range + spatial extent + Zarr datacube link
-    ├── soil_water_20260601T000000/             # Daily Item: June 1st
-    │   └── soil_water_20260601T000000.json     # Points to June 1st COG file
-    ├── soil_water_20260602T000000/             # Daily Item: June 2nd
-    │   └── soil_water_20260602T000000.json     # Points to June 2nd COG file
-    └── soil_water_20260603T000000/             # Daily Item: June 3rd
-        └── soil_water_20260603T000000.json     # Points to June 3rd COG file
+└── ugs-raster-soil-water/                      # Collection for the Soil-Water layer
+    ├── collection.json                         # Declares extent (+ Zarr datacube link for time-series)
+    ├── soil_water_20260601T000000/             # Edition: June 1st  (is_current=false once superseded)
+    │   └── soil_water_20260601T000000.json     # Points to that edition's COG
+    └── soil_water_20260602T000000/             # Edition: June 2nd  (is_current=true)
+        └── soil_water_20260602T000000.json
 ```
 
+- `item_id` and `collection` are ingest-authored (`{piece}_{pubid}_{pubdate}`, piece==layer for
+  single-COG topics); the warehouse owns only the COG path convention (`cog/<layer>/<item_id>.*`).
+- `datetime` = `publication_date` and is **never null**.
+- Collections are **nested** under a `ugs-rasters/` sub-catalog: ingest emits
+  `collection = "ugs-rasters/<layer>"` (the layout path); the STAC collection id is the last
+  segment (`<layer>`), mirroring `ugs-publications/<series>`. Keeps the catalog root clean and
+  lets the viewer's newest-first list include them as dated publications.
+
 ### Double-Integration:
-- **File Downloaders (STAC Item Seekers)**: Can search the collection by datetime, discover the specific daily STAC item, and retrieve the single-date COG asset.
+- **File Downloaders (STAC Item Seekers)**: Can search the collection by datetime, discover the specific dated STAC item, and retrieve that edition's COG asset.
 - **Datacube Analysts (Python / Xarray Seekers)**: Can open the Zarr datacube asset listed in the root `collection.json` to stream multi-dimensional slices over space/time in parallel.
 
 ---
@@ -140,20 +151,18 @@ gs://ut-dnr-ugs-maps-prod-public/
 │           ├── collection.json
 │           └── soil_water_{datetime}/...
 │
-└── raster/                                     # Raw/derived raster artifacts
-    ├── cogs/
-    │   ├── 1offs/                              # Single snapshots (e.g. slope.cog.tif)
-    │   └── soil_water/                         # Daily COG files
-    │       ├── soil_water_20260601T000000.cog.tif
-    │       └── soil_water_20260601T000000.thumb.png
-    │
-    └── datacubes/                              # Multi-dimensional arrays
-        └── soil_water.zarr/                    # Zarr store / Icechunk chunks
-            ├── .zgroup
-            ├── .zmetadata
-            ├── time/
-            ├── lat/
-            └── value/
+├── cog/                                       # COG editions, per artifact-type sibling of pmtiles/ etc.
+│   └── <layer>/                               # one dir per layer (e.g. slope/, soil_water/)
+│       ├── <item_id>.cog.tif                  # e.g. slope_OFR123_20260601.cog.tif
+│       └── <item_id>.thumb.png
+│
+└── datacubes/                                 # Multi-dimensional arrays (time-series layers)
+    └── soil_water.zarr/                       # Zarr store / Icechunk chunks
+        ├── .zgroup
+        ├── .zmetadata
+        ├── time/
+        ├── lat/
+        └── value/
 ```
 
 ---

@@ -557,6 +557,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
 
 def main() -> int:
     import argparse
+
     from . import source
 
     ap = argparse.ArgumentParser(description="Harvest UGS geologic-map publications -> COG")

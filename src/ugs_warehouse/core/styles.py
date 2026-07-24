@@ -26,6 +26,7 @@ from functools import lru_cache
 
 from . import config
 
+
 @lru_cache(maxsize=1)
 def _manifest() -> tuple[dict, ...]:
     """Fetch + cache the ugs-styles manifest. Returns () on any failure (graceful)."""

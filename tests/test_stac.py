@@ -143,6 +143,7 @@ def test_group_items_keeps_only_nested_item_paths():
 
 def test_build_catalog_series_filter():
     from unittest.mock import patch
+
     from ugs_warehouse.pubs.ingest import build_catalog
 
     with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
@@ -176,6 +177,7 @@ def test_build_catalog_series_filter():
 
 def test_list_series(capsys):
     from unittest.mock import patch
+
     from ugs_warehouse.pubs.ingest import list_series
 
     with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read:

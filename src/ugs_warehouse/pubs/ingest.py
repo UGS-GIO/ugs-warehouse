@@ -11,10 +11,10 @@ in the SAME catalog as the vector serving topics.
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import json
 import math
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs, stac
 from . import identity, sink_stac, source, threed, topic

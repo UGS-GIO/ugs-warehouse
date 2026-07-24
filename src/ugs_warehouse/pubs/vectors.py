@@ -19,7 +19,7 @@ import tempfile
 import zipfile
 
 from ..core import config, gcs
-from . import identity, source, harvest
+from . import harvest, identity, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME

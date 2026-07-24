@@ -1,0 +1,41 @@
+# PR validation on Cloud Build (not GitHub Actions) — mirrors the ucrc pattern of running CI on
+# Cloud Build so it's independent of GHA runners/billing. Backend (ruff + pytest) and viewer
+# (tsc + eslint + vitest) run in parallel; any failure fails the build → the PR check goes red.
+#
+# Wire via a native Cloud Build trigger (see docs/CLOUD_BUILD_CI.md): PR trigger runs this config;
+# it posts status back to the PR through the Cloud Build GitHub app. No push/deploy here — this is
+# test-only (deploy stays in cloudbuild.yaml / cloudbuild-viewer.yaml).
+#
+# Manual run:  gcloud builds submit --config cloudbuild-ci.yaml .
+
+options:
+  logging: CLOUD_LOGGING_ONLY
+
+steps:
+  # ---- backend: ruff + pytest (no DB — the suite runs without one) ----
+  - id: backend
+    name: python:3.11
+    waitFor: ["-"]           # start immediately, in parallel with the viewer step
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        pip install -e ".[dev]"
+        ruff check .
+        pytest -q
+
+  # ---- viewer: typecheck + lint + unit tests ----
+  - id: viewer
+    name: node:20
+    waitFor: ["-"]
+    dir: viewer
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        npm ci
+        npx tsc --noEmit
+        npx eslint .
+        npx vitest run

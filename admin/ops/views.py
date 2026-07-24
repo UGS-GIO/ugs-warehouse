@@ -1,8 +1,7 @@
+from core.iap_auth import admin_required
 from django.conf import settings
 from django.shortcuts import render
 from django.views.decorators.http import require_POST
-
-from core.iap_auth import admin_required
 
 from . import builds, contents, jobs, overrides, services, stac
 

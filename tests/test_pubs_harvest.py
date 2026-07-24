@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import unittest
 from unittest.mock import MagicMock, patch
+
 import pytest
 
-from ugs_warehouse.pubs.harvest import ZipTooLargeError, download, _harvest_attempt, identity
+from ugs_warehouse.pubs.harvest import ZipTooLargeError, _harvest_attempt, download, identity
 
 try:
     import rasterio  # noqa: F401
@@ -86,7 +87,7 @@ def test_prepare_plates_virtual_vfs():
 
 
 def test_get_attached_zips():
-    from ugs_warehouse.pubs.harvest import _get_attached_zips, _attachments_cache
+    from ugs_warehouse.pubs.harvest import _attachments_cache, _get_attached_zips
 
     # Clear the global cache to force reading from mock
     _attachments_cache.clear()

@@ -19,12 +19,11 @@ index's asset summaries exact (the `style` asset chip).
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 
-from .core import config, gcs, stac
-from .core import styles
+from .core import config, gcs, stac, styles
 
 
 def _clear_renders(item: dict) -> bool:

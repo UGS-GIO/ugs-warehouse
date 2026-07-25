@@ -13,6 +13,7 @@ Env:
 from __future__ import annotations
 
 import os
+import sys
 
 import duckdb
 
@@ -94,19 +95,25 @@ def read_metadata(topic: Topic) -> dict:
     """Per-topic descriptive metadata from `raw.schema_registry` (keyed by domain_topic,
     which equals the topic stem). Graceful: returns {} if the columns/table/grant aren't
     there yet (pre-#171, or no SELECT on raw) — the warehouse then falls back to defaults.
+
+    `domain_topic` is the primary key, so this matches at most one row and needs no ordering.
     """
     stem = topic.stem.replace("'", "''")
     pg_sql = (
         "SELECT " + ", ".join(_META_COLS)
         + f" FROM raw.schema_registry WHERE domain_topic = '{stem}'"
-        + " ORDER BY (status = 'active') DESC LIMIT 1"
     )
     con = _connect()
     try:
         row = con.execute(
             "SELECT * FROM postgres_query(?, ?)", [PG_ALIAS, pg_sql]
         ).fetchone()
-    except Exception:  # noqa: BLE001 — missing columns/table/grant → fall back to defaults
+    except Exception as e:  # noqa: BLE001 — missing columns/table/grant → fall back to defaults
+        # Say so. An uncurated topic and a broken query both produce {} here, and staying
+        # silent about the second is what let a bad ORDER BY suppress this read for six weeks
+        # while looking exactly like "nobody has curated anything yet".
+        print(f"[{topic.fqn}] catalog metadata read FAILED, falling back to defaults: {e}",
+              file=sys.stderr)
         return {}
     finally:
         con.close()

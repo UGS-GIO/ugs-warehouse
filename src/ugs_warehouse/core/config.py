@@ -22,6 +22,22 @@ PUBLIC_BASE_URL = os.environ.get(
 # `<STAC_PREFIX>/<collection>/<id>/<id>.json`, with `<STAC_PREFIX>/catalog.json` the root.
 STAC_PREFIX = os.environ.get("WAREHOUSE_STAC_PREFIX", "warehouse/stac")
 
+# True when this deploy writes the gated review catalog (the review build sets
+# WAREHOUSE_STAC_PREFIX=review/stac, …), not the public one. Internal-only assets — e.g. the
+# DuckLake locator, which no public consumer can read (gs:// + private bucket IAM, and a DuckLake
+# table needs the private catalog DSN to resolve) — are stamped ONLY here. The public catalog must
+# never advertise access the public can't have; the review app reads private assets via signed URLs.
+IS_REVIEW_CATALOG = STAC_PREFIX.split("/", 1)[0] == "review"
+
+# The public production catalog root. The review catalog links to this (rel=child) so the review
+# app browses prod + review together WITHOUT duplicating prod artifacts — prod stays single-sourced
+# on the public CDN. Fixed to that CDN + the default STAC prefix, so it holds even in a review deploy
+# that swaps this process's PUBLIC_BASE_URL / STAC_PREFIX. Override only if the public catalog moves.
+PUBLIC_CATALOG_URL = os.environ.get(
+    "WAREHOUSE_PUBLIC_CATALOG_URL",
+    "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json",
+)
+
 CATALOG_ID = os.environ.get("WAREHOUSE_CATALOG_ID", "ugs-warehouse")
 
 # Per-artifact data prefixes (overridable). Vector producer defaults below; the pubs

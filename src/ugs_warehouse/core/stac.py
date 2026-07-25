@@ -404,19 +404,27 @@ def _index_doc(collection: str, items: list[dict]) -> dict:
 
 def _root_doc(children: list[dict]) -> dict:
     """Root catalog. `children` = [{href, title, count}, …] — each top-level child is a flat
-    collection's `collection.json` or a nesting sub-catalog's `catalog.json`."""
+    collection's `collection.json` or a nesting sub-catalog's `catalog.json`.
+
+    Review catalog only: also links (rel=child) to the published production catalog, so the review
+    app browses prod + review together. Prod is referenced, never copied — it stays single-sourced on
+    the public CDN, and its assets are public URLs (no signing), unlike the review bucket's."""
+    links = [
+        {"rel": "root", "href": "./catalog.json", "type": "application/json"},
+        {"rel": "self", "href": "./catalog.json", "type": "application/json"},
+        *[_child_link(c["href"], c.get("title"), c.get("count"), c.get("mappable"))
+          for c in sorted(children, key=lambda c: c["href"])],
+    ]
+    if config.IS_REVIEW_CATALOG:
+        links.append(_child_link(config.PUBLIC_CATALOG_URL,
+                                 "UGS warehouse — published (production) catalog", None))
     return {
         "type": "Catalog",
         "stac_version": STAC_VERSION,
         "id": config.CATALOG_ID,
         "description": "UGS warehouse — cloud-native serving catalog across all producers "
                        "(vector serving topics, publications/COGs).",
-        "links": [
-            {"rel": "root", "href": "./catalog.json", "type": "application/json"},
-            {"rel": "self", "href": "./catalog.json", "type": "application/json"},
-            *[_child_link(c["href"], c.get("title"), c.get("count"), c.get("mappable"))
-              for c in sorted(children, key=lambda c: c["href"])],
-        ],
+        "links": links,
     }
 
 

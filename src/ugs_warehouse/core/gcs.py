@@ -58,6 +58,24 @@ def get_bytes(object_path: str) -> bytes:
     return bytes(obs.get(_store(), object_path).bytes())
 
 
+def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,
+                  cache_control: str | None = None) -> None:
+    """Copy an object from another bucket (`gs://<bucket>/<key>`) into
+    `gs://{BUCKET}/{dest_path}`. Used to promote a staged COG from the ingest bucket
+    (`gs://stagedrasters/...`) to the public bucket. Needs read on the source bucket.
+
+    Buffers the object in memory — fine for one-off geologic-map COGs (10s–100s MB) on a
+    job sized for raster work; switch to a chunked stream if very large COGs appear.
+    """
+    if not src_uri.startswith("gs://"):
+        raise ValueError(f"expected a gs:// URI, got {src_uri!r}")
+    bucket, _, key = src_uri[len("gs://"):].partition("/")
+    if not bucket or not key:
+        raise ValueError(f"malformed gs:// URI: {src_uri!r}")
+    data = bytes(obs.get(GCSStore(bucket=bucket), key).bytes())
+    put_bytes(data, dest_path, content_type=content_type, cache_control=cache_control)
+
+
 def exists(object_path: str) -> bool:
     """True if the object exists (HEAD). Used for skip-if-already-harvested."""
     try:

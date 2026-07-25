@@ -116,9 +116,31 @@ def test_sink_stac_wires_related(monkeypatch):
                     None, "v", related=related_info)
 
     assets = captured["assets"]
-    assert {"data", "pmtiles", "ducklake", "boxes"} <= set(assets)
+    assert {"data", "pmtiles", "boxes"} <= set(assets)
+    assert "ducklake" not in assets  # public catalog: DuckLake locator withheld (unreadable to public)
     assert assets["data"]["ugs:foreign_keys"] == related_info["foreign_keys"]  # FK on the data asset
     assert "related" in assets["boxes"]["roles"]
     # related link appended to the item's links; Table ext declared (boxes has table:columns).
     assert any(lk.get("rel") == "related" for lk in captured["extra_links"])
     assert sink_stac.stac.TABLE_EXT in captured["stac_extensions"]
+
+
+def test_sink_stac_ducklake_review_only(monkeypatch):
+    """The DuckLake locator is stamped only for the review catalog, never the public one."""
+    captured: dict = {}
+    monkeypatch.setattr(sink_stac, "_bbox", lambda c, v: [0, 1, 2, 3])
+    monkeypatch.setattr(sink_stac, "_row_count", lambda c, v: 5)
+    monkeypatch.setattr(sink_stac, "_table_columns", lambda c, v: [{"name": "uwi", "type": "string"}])
+    monkeypatch.setattr(sink_stac.stac, "build_item",
+                        lambda **k: captured.update(k) or {"assets": k["assets"]})
+    monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "attach_iso", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
+    monkeypatch.setattr(sink_stac.config, "IS_REVIEW_CATALOG", True)
+
+    sink_stac.write(Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current"), None, "v")
+
+    dl = captured["assets"]["ducklake"]
+    assert dl["type"] == "application/x-ducklake-table"
+    assert dl["href"].startswith("gs://") and dl["href"].endswith("energy_mineral/enmin_ucrc_wells")

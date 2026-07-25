@@ -86,6 +86,23 @@ def test_root_doc_sorts_child_hrefs():
     assert kids == [("./a/collection.json", "A", 1), ("./b/collection.json", "B", 2)]
 
 
+def test_root_doc_federates_prod_only_in_review(monkeypatch):
+    kids = [{"href": "./a/collection.json", "title": "A", "count": 1}]
+
+    # Public catalog: no external federation link.
+    monkeypatch.setattr(stac.config, "IS_REVIEW_CATALOG", False)
+    hrefs = [lnk["href"] for lnk in stac._root_doc(kids)["links"] if lnk["rel"] == "child"]
+    assert not any(h.startswith("http") for h in hrefs)
+
+    # Review catalog: adds a rel=child link to the public prod catalog (federated, not duplicated).
+    monkeypatch.setattr(stac.config, "IS_REVIEW_CATALOG", True)
+    monkeypatch.setattr(stac.config, "PUBLIC_CATALOG_URL", "https://cdn.example/warehouse/stac/catalog.json")
+    links = stac._root_doc(kids)["links"]
+    prod = [lnk for lnk in links if lnk["rel"] == "child" and lnk["href"].startswith("http")]
+    assert len(prod) == 1
+    assert prod[0]["href"] == "https://cdn.example/warehouse/stac/catalog.json"
+
+
 def test_collection_doc_sorts_items_and_has_service_link():
     doc = stac._collection_doc("ugs-serving-topics", "ugs-serving-topics", ["i2", "i1"])
     assert doc["type"] == "Collection"

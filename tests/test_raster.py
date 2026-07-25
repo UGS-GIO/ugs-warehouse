@@ -1,5 +1,7 @@
 """Raster identity + STAC mapping (warehouse consumer, docs/RASTER_SPEC.md + ugs-ingest #169)."""
-from ugs_warehouse.raster import consume, sink_stac
+import pytest
+
+from ugs_warehouse.raster import consume, sink_stac, source
 from ugs_warehouse.raster.identity import Raster
 
 
@@ -89,3 +91,53 @@ def test_promote_skips_thumb_when_absent(monkeypatch):
     monkeypatch.setattr(consume.sink_stac, "write", lambda r, **kw: "ok")
     consume.promote(_record(has_thumbnail=False))
     assert copies == ["cog/slope/slope_OFR123_20260601.cog.tif"]  # no thumb copy
+
+
+# ---- fetch/alias layer: raw.raster_catalog row -> contract record (pure; DB fetch runs on deploy) ----
+
+def _raw_row(**kw):
+    """A raw SELECT row as source.fetch_record sees it — columns already aliased/cast by the SQL
+    (publication_date->datetime, bbox_4326::text->bbox_json, ST_AsGeoJSON->geometry_json)."""
+    base = {
+        "layer": "slope", "item_id": "slope_ofr123_20260601", "collection": "ugs-rasters/slope",
+        "datetime": "2026-06-01T00:00:00Z", "bbox_json": "[-114, 37, -109, 42]",
+        "geometry_json": '{"type":"Polygon","coordinates":[[[-114,37],[-109,37],[-109,42],[-114,37]]]}',
+        "native_crs": "EPSG:26912", "staged_cog_uri": "gs://stagedrasters/slope/slope_ofr123_20260601.cog.tif",
+        "title": "Slope", "description": "d", "data_type": "float32", "units": "percent",
+        "ugs_author": "J. Geologist", "ugs_pub_type": "OFR", "pub_id": "OFR-123",
+        "is_mosaic": False, "has_thumbnail": True,
+    }
+    return {**base, **kw}
+
+
+def test_record_from_row_transforms_types():
+    rec = source._record_from_row(_raw_row())
+    assert rec["bbox"] == [-114, 37, -109, 42]          # jsonb text -> list
+    assert rec["geometry"]["type"] == "Polygon"          # ST_AsGeoJSON text -> dict
+    assert rec["epsg"] == 26912                          # "EPSG:26912" text -> int
+    assert rec["datetime"] == "2026-06-01T00:00:00Z"
+    assert rec["pub_id"] == "OFR-123" and rec["is_mosaic"] is False
+    # The record feeds consume unchanged — the STAC item binds every mapped property.
+    item = consume.stac_item_from_record(rec)
+    assert item["properties"]["proj:code"] == "EPSG:26912"
+    assert item["properties"]["ugs:pub_id"] == "OFR-123"
+
+
+def test_record_from_row_null_footprint_and_crs():
+    rec = source._record_from_row(_raw_row(geometry_json=None, native_crs=None))
+    assert rec["geometry"] is None                       # null footprint -> null geometry (bbox fallback)
+    assert rec["epsg"] is None                           # unparseable/absent CRS -> no projection ext
+
+
+def test_epsg_from_crs_parsing():
+    assert source._epsg_from_crs("EPSG:26912") == 26912
+    assert source._epsg_from_crs("26912") == 26912
+    assert source._epsg_from_crs(None) is None
+    assert source._epsg_from_crs("") is None
+
+
+def test_fetch_record_rejects_malformed_item_id():
+    # Guards the (non-parameterizable) postgres_query SQL against injection.
+    for bad in ("", "a'; DROP TABLE x;--", "UPPER", "has space", "semi;colon"):
+        with pytest.raises(ValueError):
+            source.fetch_record(bad)

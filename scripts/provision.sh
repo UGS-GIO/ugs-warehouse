@@ -20,6 +20,8 @@ SERVICE="${SERVICE:-ugs-warehouse-service}"
 RUNTIME_SA="${RUNTIME_SA:-warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com}"
 TOPIC="${TOPIC:-ugs-warehouse-ingest}"      # dataELT publish.sh targets this name — the contract, do not rename
 SUB="${SUB:-ugs-warehouse-ingest-push}"     # push subscription → the service '/' endpoint
+RASTER_TOPIC="${RASTER_TOPIC:-ugs-warehouse-raster-promote}"  # ugs-ingest #183 raster promote publishes here
+RASTER_SUB="${RASTER_SUB:-ugs-warehouse-raster-push}"        # push subscription → the service '/raster' endpoint
 
 echo "→ topic ${TOPIC}"
 gcloud pubsub topics describe "${TOPIC}" --project="${PROJECT}" >/dev/null 2>&1 \
@@ -37,6 +39,22 @@ if gcloud pubsub subscriptions describe "${SUB}" --project="${PROJECT}" >/dev/nu
 else
   gcloud pubsub subscriptions create "${SUB}" --topic="${TOPIC}" \
     --push-endpoint="${URL}/" --push-auth-service-account="${RUNTIME_SA}" \
+    --ack-deadline=600 --message-retention-duration=1d
+fi
+
+# Raster promote path — a SEPARATE topic/subscription pushing to the service's '/raster' endpoint
+# (ugs-ingest #183 publishes `{item_id}` here after it stages + versions a COG edition).
+echo "→ raster topic ${RASTER_TOPIC}"
+gcloud pubsub topics describe "${RASTER_TOPIC}" --project="${PROJECT}" >/dev/null 2>&1 \
+  || gcloud pubsub topics create "${RASTER_TOPIC}" --project="${PROJECT}"
+
+echo "→ raster push subscription ${RASTER_SUB} → ${URL}/raster"
+if gcloud pubsub subscriptions describe "${RASTER_SUB}" --project="${PROJECT}" >/dev/null 2>&1; then
+  gcloud pubsub subscriptions update "${RASTER_SUB}" \
+    --push-endpoint="${URL}/raster" --push-auth-service-account="${RUNTIME_SA}"
+else
+  gcloud pubsub subscriptions create "${RASTER_SUB}" --topic="${RASTER_TOPIC}" \
+    --push-endpoint="${URL}/raster" --push-auth-service-account="${RUNTIME_SA}" \
     --ack-deadline=600 --message-retention-duration=1d
 fi
 

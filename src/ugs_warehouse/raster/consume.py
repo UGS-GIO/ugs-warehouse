@@ -5,12 +5,16 @@ one row per edition, `is_current` marks the live one); dataELT flips them dev->p
 warehouse then (1) promotes the staged COG to the public bucket and (2) emits a STAC item into
 the unified catalog.
 
-These functions take a `record` dict in the CONTRACT shape below — NOT the raw `raw.raster_catalog`
-row. A caller must SELECT the row (by `item_id`) and ALIAS/transform ingest's stored columns into
-these keys. That fetch layer + the promote Pub/Sub trigger are NOT built yet (message shape is still
-open — #169 spec §8.3), so `promote()` currently has no production caller; it runs only from tests.
+Wiring (end-to-end): ugs-ingest's promote (#183) publishes `{item_id}` → the `POST /raster` push
+handler (`service/main.py`) → `consume(item_id)` → `source.fetch_record` SELECTs + aliases the row →
+`promote()` copies the COG + emits STAC → `core.stac.refresh_catalog()`. DEPLOY FOLLOW-UP: provision
+the raster promote topic + a push subscription to `<service>/raster` (mirror `scripts/provision.sh`),
+and grant the runtime SA read on the staged bucket (`gs://stagedrasters`).
 
-Contract key  ← ingest column (transform the fetch layer must apply)
+`promote()`/`stac_item_from_record()` take a `record` dict in the CONTRACT shape below — the raw
+`raw.raster_catalog` row aliased/transformed by `source.py` (never the raw row directly).
+
+Contract key  ← ingest column (transform source.py applies)
   layer         ← layer (= domain_topic)                     [verbatim]
   item_id       ← item_id  (`{piece}_{pubid}_{pubdate}`)     [verbatim]
   collection    ← collection (`ugs-rasters/<layer>`)          [verbatim — the migration's
@@ -26,8 +30,8 @@ state, not the item body.
 """
 from __future__ import annotations
 
-from ..core import config, gcs
-from . import sink_stac
+from ..core import config, gcs, stac
+from . import sink_stac, source
 from .identity import Raster
 
 # raw.raster_catalog column -> STAC property key. snake_case columns map to the ugs: namespace.
@@ -97,3 +101,16 @@ def promote(record: dict) -> str:
         properties=_properties(record), has_thumbnail=bool(record.get("has_thumbnail")),
         proj_epsg=record.get("epsg"),
     )
+
+
+def consume(item_id: str) -> str | None:
+    """Trigger entry point (Pub/Sub promote → this): fetch the edition from raw.raster_catalog,
+    promote its COG + emit the STAC item, then refresh the catalog. Returns the item path, or None if
+    no such `item_id` (e.g. the edition isn't promoted to prod yet) so the caller can ack + skip.
+    Raises ValueError on a malformed item_id."""
+    record = source.fetch_record(item_id)
+    if record is None:
+        return None
+    path = promote(record)
+    stac.refresh_catalog()  # rebuild collection.json/catalog.json to include the new item
+    return path

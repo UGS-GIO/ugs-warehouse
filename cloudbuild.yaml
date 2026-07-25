@@ -335,10 +335,10 @@ steps:
       - --tasks=5
 
   # Pubs metadata → STAC rebuild. Decoupled from the COG harvest above: this only re-reads
-  # pub metadata (vendored CSV snapshot today; PUBS_DB_URL later) + lists GCS for harvested
+  # pub metadata (live from the publications app feed via PUBS_DB_URL) + lists GCS for harvested
   # artifacts, then rewrites the ugs-publications items + refresh_catalog. NO GDAL, NO COG
   # re-harvest. Uses the harvest image (it carries the `pubs` extra / geopandas that
-  # footprints.geoms needs). No Cloud SQL / DB secret — source is the CSV + GCS.
+  # footprints.geoms needs). Reads the app feed over Cloud SQL (schema_reader); artifacts from GCS.
   # Run after a metadata edit: `gcloud run jobs execute ${_PUBS_JOB} --region=${_REGION}`.
   - id: deploy-pubs-ingest-job
     waitFor: [push-harvest]
@@ -352,6 +352,9 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       - --args=-m,ugs_warehouse.pubs.ingest
       - --task-timeout=1800
@@ -374,6 +377,9 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       - --args=-m,ugs_warehouse.pubs.thumbs,--all
       - --task-timeout=3600
@@ -469,6 +475,9 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       - --args=-m,ugs_warehouse.pubs.fts
       - --task-timeout=3600
@@ -491,6 +500,9 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       - --args=-m,ugs_warehouse.pubs.embed
       - --task-timeout=7200
@@ -515,6 +527,9 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,all
       # Zoom is now capped per tier (TIER_MAXZOOM), so the build is bounded; 4h is generous headroom
@@ -541,6 +556,9 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       - --args=-m,ugs_warehouse.pubs.threed,--all
       - --task-timeout=3600
@@ -563,6 +581,9 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       - --args=-m,ugs_warehouse.pubs.graph
       - --task-timeout=3600

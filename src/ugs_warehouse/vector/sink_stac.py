@@ -1,9 +1,12 @@
 """Vector-topic STAC item — emitted through the shared core into the
 `ugs-serving-topics` collection of the one catalog.
 
-Assets: GeoParquet archive (`data`), PMTiles (`pmtiles`), DuckLake table (`ducklake`,
-a gs:// locator read by DuckDB, not a browser). A web-map-links `pmtiles` link makes
-STAC Browser v4+ render the actual layer. bbox/row_count come from the transformed view.
+Assets: GeoParquet archive (`data`), PMTiles (`pmtiles`), and — only in the review catalog —
+a DuckLake table (`ducklake`, a gs:// locator read by DuckDB, not a browser). The DuckLake asset
+is withheld from the PUBLIC catalog: no public consumer can read it (gs:// + private bucket IAM,
+and resolving a DuckLake table needs the private catalog DSN), so advertising it there is a
+dead link. A web-map-links `pmtiles` link makes STAC Browser v4+ render the actual layer.
+bbox/row_count come from the transformed view.
 """
 from __future__ import annotations
 
@@ -76,8 +79,6 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     archive_path = f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}.parquet"
     pmtiles_path = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     pmtiles_url = config.public_url(pmtiles_path)
-    # ducklake stays a gs:// locator — read by DuckDB, not a browser.
-    ducklake_uri = f"{ducklake.DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
 
     # Precedence for title/description: hand-authored override (ops console) > registry metadata >
     # prior published value. So an operator's edit wins + survives reingest.
@@ -123,13 +124,20 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         "data": data_asset,
         "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
                     "roles": ["visual"], "title": "PMTiles vector tiles"},
-        "ducklake": {"href": ducklake_uri, "type": "application/x-ducklake-table",
-                     "roles": ["data"], "title": "DuckLake table (native geometry)"},
         # Aspatial related tables (e.g. UCRC boxes/photos/attachments) materialised as Parquet,
         # each carrying its own `ugs:foreign_keys` (child → this topic) + `table:columns`.
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
         **rel_assets,
     }
+    # DuckLake table locator — REVIEW CATALOG ONLY. It's a gs:// table id, not a fetchable object:
+    # a browser can't open gs://, the bucket is private (IAM-gated), and even with the parquet
+    # chunks a consumer can't materialise the table without the private DuckLake catalog DSN. So the
+    # public catalog would only advertise a dead link. The review app can reach private assets (via
+    # signed URLs), so it's meaningful there.
+    if config.IS_REVIEW_CATALOG:
+        ducklake_uri = f"{ducklake.DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
+        assets["ducklake"] = {"href": ducklake_uri, "type": "application/x-ducklake-table",
+                              "roles": ["data"], "title": "DuckLake table (native geometry)"}
     # Rendered preview PNG (styled PMTiles → image), written independently by the ugs-topics-thumbs
     # job. Presence-driven, exactly like the pubs cover/thumbnail: stamp the asset iff the PNG exists,
     # so the catalog shows a real styled preview for topics that have one (sand placeholder otherwise).

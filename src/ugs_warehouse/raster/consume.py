@@ -5,11 +5,24 @@ one row per edition, `is_current` marks the live one); dataELT flips them dev->p
 warehouse then (1) promotes the staged COG to the public bucket and (2) emits a STAC item into
 the unified catalog.
 
-Columns bound per the #169 contract (2026-07-23): identity — `layer`, `item_id`, `collection`,
-`datetime` (publication_date, never null), `staged_cog_uri`; spatial — `bbox`, `geometry`
-(footprint GeoJSON), `epsg` (native CRS); properties — `title`, `description`, `data_type`,
-`units` (nullable), `ugs_author`, `ugs_pub_type`, `has_thumbnail`. Grouping/versioning columns
-(`piece_id`, `pub_id`, `is_mosaic`, `is_current`) govern DB/promote state, not the item body.
+These functions take a `record` dict in the CONTRACT shape below — NOT the raw `raw.raster_catalog`
+row. A caller must SELECT the row (by `item_id`) and ALIAS/transform ingest's stored columns into
+these keys. That fetch layer + the promote Pub/Sub trigger are NOT built yet (message shape is still
+open — #169 spec §8.3), so `promote()` currently has no production caller; it runs only from tests.
+
+Contract key  ← ingest column (transform the fetch layer must apply)
+  layer         ← layer (= domain_topic)                     [verbatim]
+  item_id       ← item_id  (`{piece}_{pubid}_{pubdate}`)     [verbatim]
+  collection    ← collection (`ugs-rasters/<layer>`)          [verbatim — the migration's
+                    `ugs-raster-<layer>` COMMENT is stale; ingest identity.py writes the slash form]
+  datetime      ← publication_date (date, never null)         [→ ISO 8601 string]
+  bbox          ← bbox_4326 (`[w,s,e,n]`)                     [verbatim]
+  geometry      ← footprint_geom (PostGIS)                    [→ GeoJSON dict, e.g. ST_AsGeoJSON]
+  epsg          ← native_crs (TEXT, e.g. "EPSG:26912")        [→ int 26912; NOT already an int]
+  staged_cog_uri← staged_cog_uri (canonical native COG)       [verbatim]
+  title, description, data_type, units, ugs_author, ugs_pub_type, has_thumbnail  [verbatim]
+Grouping/versioning columns (`piece_id`, `pub_id`, `is_mosaic`, `is_current`) govern DB/promote
+state, not the item body.
 """
 from __future__ import annotations
 

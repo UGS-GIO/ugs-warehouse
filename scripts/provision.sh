@@ -22,6 +22,8 @@ TOPIC="${TOPIC:-ugs-warehouse-ingest}"      # dataELT publish.sh targets this na
 SUB="${SUB:-ugs-warehouse-ingest-push}"     # push subscription → the service '/' endpoint
 RASTER_TOPIC="${RASTER_TOPIC:-ugs-warehouse-raster-promote}"  # ugs-ingest #183 raster promote publishes here
 RASTER_SUB="${RASTER_SUB:-ugs-warehouse-raster-push}"        # push subscription → the service '/raster' endpoint
+# dataELT's raster promote workflow (dataELT #498) authenticates as this SA to publish the promote message
+RASTER_PUBLISHER="${RASTER_PUBLISHER:-github-actions-dbt@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com}"
 
 echo "→ topic ${TOPIC}"
 gcloud pubsub topics describe "${TOPIC}" --project="${PROJECT}" >/dev/null 2>&1 \
@@ -47,6 +49,11 @@ fi
 echo "→ raster topic ${RASTER_TOPIC}"
 gcloud pubsub topics describe "${RASTER_TOPIC}" --project="${PROJECT}" >/dev/null 2>&1 \
   || gcloud pubsub topics create "${RASTER_TOPIC}" --project="${PROJECT}"
+
+# Topic-level publisher grant, NOT project-wide — the emitter can publish here and nowhere else.
+echo "→ pubsub.publisher: ${RASTER_PUBLISHER} on ${RASTER_TOPIC}"
+gcloud pubsub topics add-iam-policy-binding "${RASTER_TOPIC}" --project="${PROJECT}" \
+  --member="serviceAccount:${RASTER_PUBLISHER}" --role=roles/pubsub.publisher --quiet >/dev/null
 
 echo "→ raster push subscription ${RASTER_SUB} → ${URL}/raster"
 if gcloud pubsub subscriptions describe "${RASTER_SUB}" --project="${PROJECT}" >/dev/null 2>&1; then

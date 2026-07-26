@@ -22,6 +22,7 @@ import { type Asset, citeLink, classificationColors, cogAsset, contentsOf, featu
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
 import { PhotoGallery } from "./PhotoGallery";
+import { PropertyTable } from "./PropertyTable";
 import { LayerStatusControl } from "./ReviewStatus";
 import { createComment } from "./comments";
 
@@ -1783,12 +1784,6 @@ function Preview({ item }: { item: StacDoc }) {
   return <AssetViewer item={item} />;
 }
 
-// Property key/value formatting for the detail table — drop the `ugs:` prefix, underscores →
-// spaces; join arrays, stringify objects, so nothing renders as `[object Object]` or overflows.
-const prettyKey = (k: string) => k.replace(/^ugs:/, "").replace(/_/g, " ");
-const fmtVal = (v: unknown): string =>
-  Array.isArray(v) ? v.join(", ") : v && typeof v === "object" ? JSON.stringify(v) : String(v);
-
 // ---- API & data endpoints ----
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -2048,18 +2043,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />
       {IS_REVIEW && <CatalogReview item={item} />}
-      <table className="mt-3 w-full max-w-3xl table-fixed border-collapse text-sm">
-        <tbody>
-          {Object.entries(p)
-            .filter(([k, v]) => v !== null && v !== "" && k !== "ugs:renders" && k !== "ugs:contents")
-            .map(([k, v]) => (
-              <tr key={k}>
-                <td className="w-44 break-words border-b border-border px-2.5 py-1 align-top text-muted-foreground">{prettyKey(k)}</td>
-                <td className="break-words border-b border-border px-2.5 py-1 align-top">{fmtVal(v)}</td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
+      <PropertyTable properties={p} />
     </>
   );
 }

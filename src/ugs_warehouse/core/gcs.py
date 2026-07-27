@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import obstore as obs
+from google.cloud import storage as gcloud_storage
 from obstore.store import GCSStore
 
 from . import config
@@ -24,6 +25,7 @@ CACHE_CATALOG = "public, max-age=60, stale-while-revalidate=600"
 
 
 _cached_store: GCSStore | None = None
+_cached_gcs_client: gcloud_storage.Client | None = None
 
 
 def _store() -> GCSStore:
@@ -31,6 +33,16 @@ def _store() -> GCSStore:
     if _cached_store is None:
         _cached_store = GCSStore(bucket=config.BUCKET)
     return _cached_store
+
+
+def _gcs_client() -> gcloud_storage.Client:
+    # Only used by copy_from_uri's server-side rewrite — obstore has no cross-bucket copy
+    # primitive (its copy() takes a single store, i.e. one bucket). google-cloud-storage is
+    # already an installed dependency (transitive via firebase-admin), ADC auth, no new footprint.
+    global _cached_gcs_client
+    if _cached_gcs_client is None:
+        _cached_gcs_client = gcloud_storage.Client()
+    return _cached_gcs_client
 
 
 def _attrs(content_type: str, cache_control: str | None) -> dict[str, str]:
@@ -64,16 +76,40 @@ def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,
     `gs://{BUCKET}/{dest_path}`. Used to promote a staged COG from the ingest bucket
     (`gs://stagedrasters/...`) to the public bucket. Needs read on the source bucket.
 
-    Buffers the object in memory — fine for one-off geologic-map COGs (10s–100s MB) on a
-    job sized for raster work; switch to a chunked stream if very large COGs appear.
+    Server-side GCS rewrite — no bytes pass through this process, so COG size doesn't touch
+    the container's memory budget. `Blob.rewrite()` (not the simpler `copy_blob`) because it
+    loops on a continuation token, which is what makes a single large/cross-location object
+    copy reliably instead of risking a timeout on one big call.
+
+    CHANGED 2026-07-27: previously buffered the whole object in memory (obstore get + put).
+    That OOM-killed ugs-warehouse-service on its first live raster promote, taking down
+    co-tenant tabular-ingest traffic on the same instance with it — see ugs-ingest#183.
     """
     if not src_uri.startswith("gs://"):
         raise ValueError(f"expected a gs:// URI, got {src_uri!r}")
-    bucket, _, key = src_uri[len("gs://"):].partition("/")
-    if not bucket or not key:
+    src_bucket_name, _, key = src_uri[len("gs://"):].partition("/")
+    if not src_bucket_name or not key:
         raise ValueError(f"malformed gs:// URI: {src_uri!r}")
-    data = bytes(obs.get(GCSStore(bucket=bucket), key).bytes())
-    put_bytes(data, dest_path, content_type=content_type, cache_control=cache_control)
+
+    client = _gcs_client()
+    src_blob = client.bucket(src_bucket_name).blob(key)
+    dest_blob = client.bucket(config.BUCKET).blob(dest_path)
+    dest_blob.content_type = content_type
+    if cache_control:
+        dest_blob.cache_control = cache_control
+
+    # Check the byte counts rather than trusting the loop exit. A truncated destination is the
+    # worst failure available here — `promote()` would report success and the STAC item would
+    # point at a COG that is short. Logging the size also means the next incident starts with
+    # the number this one did not have.
+    token, done, total = None, 0, 0
+    while True:
+        token, done, total = dest_blob.rewrite(src_blob, token=token)
+        if token is None:
+            break
+    if total and done != total:
+        raise OSError(f"incomplete rewrite {src_uri} -> {dest_path}: {done}/{total} bytes")
+    print(f"[gcs] rewrote {src_uri} -> gs://{config.BUCKET}/{dest_path} ({total} bytes)")
 
 
 def exists(object_path: str) -> bool:

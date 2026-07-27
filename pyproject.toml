@@ -7,6 +7,10 @@ dependencies = [
   "duckdb>=1.5.3,<2",  # cap lifted: h3 community ext dropped (was the only thing pinning to <1.5.4).
   "cloud-sql-python-connector>=1.11",
   "obstore>=0.10",       # unified S3/GCS/Azure object client (Rust); GCS sinks
+  "google-cloud-storage>=2.18",  # core/gcs.py copy_from_uri only — server-side rewrite for
+                                 # cross-bucket copies (obstore's copy() is single-store only).
+                                 # Already transitive via firebase-admin; declared explicitly
+                                 # since it's now a direct import, not just incidentally installed.
   "fsspec>=2024.6",      # obstore fsspec adapter -> DuckLake GCS IO (no httpfs/HMAC)
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",

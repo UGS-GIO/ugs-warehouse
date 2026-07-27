@@ -204,6 +204,11 @@ def build_item(p: dict, attachments: list[dict], *,
             "ugs:scale": (p.get("pub_scale") or "").strip(),
             "ugs:author": (p.get("pub_author") or "").strip(),
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
+            # ISO topic category. AUTHORED, not defaulted: a UGS publication is our own product, so
+            # asserting the category is a statement about our own work — unlike a serving topic,
+            # where an uncurated value would be a guess about someone else's data and is omitted
+            # instead (#53). Pubs have no schema_registry row, so this is the only place to say it.
+            "ugs:topic_category": "geoscientificInformation",
             "ugs:footprint_source": fp_source,
             "keywords": (p.get("keywords") or "").strip(),
             # County derived from the pub's lat/lon via the vendored SGID boundaries (point-in-polygon).

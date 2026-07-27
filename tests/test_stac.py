@@ -1,7 +1,25 @@
 """Shared STAC builders — the collections-layout catalog (derive-from-truth refresh)."""
-from ugs_warehouse.core import config, stac
+from unittest.mock import patch
+
+from ugs_warehouse.core import config, iso, stac
 from ugs_warehouse.pubs import identity
+from ugs_warehouse.pubs import sink_stac as pubs_sink
 from ugs_warehouse.pubs.sink_stac import collection_group
+
+
+def test_pub_items_author_an_iso_topic_category():
+    """Pubs share core/iso.py with the vector path, which omits topicCategory when uncurated (#53).
+
+    Pubs have no schema_registry row, so without an authored value every publication's ISO record
+    would silently lose a mandatory element. A UGS publication is our own product — asserting the
+    category is a statement about our own work, not a guess about someone else's data.
+    """
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS"}, [])
+
+    assert item["properties"]["ugs:topic_category"] == "geoscientificInformation"
+    assert "<gmd:topicCategory>" in iso.stac_to_iso19139(item)
 
 
 def test_collection_group_routes_md_external_and_ugs():

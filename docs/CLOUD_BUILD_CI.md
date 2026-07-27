@@ -7,7 +7,7 @@ Cloud Build, no GHA workflows).
 
 ## What runs
 
-[`cloudbuild-ci.yaml`](../cloudbuild-ci.yaml) — PR validation, test-only (no push/deploy):
+[`cloudbuild-ci.yaml`](https://github.com/UGS-GIO/ugs-warehouse/blob/main/cloudbuild-ci.yaml) — PR validation, test-only (no push/deploy):
 
 - **backend** (`python:3.11`): `pip install -e ".[dev]"` → `ruff check .` → `pytest -q`
 - **viewer** (`node:20`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run`

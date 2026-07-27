@@ -50,14 +50,14 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build �
    the project's default Compute SA regardless of which identity authenticated the API call). Matching
    the trigger's SA to that existing grant was the fix — no Terraform/IAM change needed.
 
-3. First PR check came back `action_required`: the default `COMMENTS_ENABLED` comment-control gate
-   wants a collaborator to comment `/gcbrun` on the PR before an untrusted-looking push actually
-   builds. Expected, not a failure — comment `/gcbrun` and it runs.
+3. First PR check came back `action_required`: `gcloud builds triggers create github` defaults to
+   `--comment-control=COMMENTS_ENABLED`, which holds *every* PR build until a collaborator comments
+   `/gcbrun`. The trigger was recreated with `COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY` (the
+   `update` subcommand 400s on 2nd-gen triggers — delete + recreate), so org-member PRs now build
+   automatically and only outside contributors are gated.
 
-4. `ugs-warehouse-pr-ci` proved green end-to-end on a real PR (#49). **Not yet done:** making it a
-   required status check in branch protection for `main`, and dropping the GHA `test` / `Viewer CI`
-   checks from required — planned after the deploy triggers below are proven too, so `main` doesn't
-   go through a window of reduced coverage twice.
+4. `ugs-warehouse-pr-ci` proved green end-to-end on a real PR, and all three triggers were proven on
+   real pushes before the GHA workflows were deleted in #49.
 
 ## Deploy + docs triggers
 
@@ -65,8 +65,27 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build �
 `cloudbuild-docs.yaml`, scoped to `docs/**`, `mkdocs.yml`, `docs-requirements.txt`) exist alongside
 `ugs-warehouse-pr-ci`. No separate `ugs-warehouse-viewer` trigger — `cloudbuild.yaml` already builds
 + deploys both the public and review viewer, so a fourth trigger scoped to `viewer/**` would deploy
-the public viewer twice per push; `cloudbuild-viewer.yaml` is unreferenced by any trigger as a
-result and is a cleanup candidate if it stays that way.
+the public viewer twice per push.
 
-GHA's `deploy.yml` / `viewer.yml` still run in parallel with these for now — deliberate overlap
-while #60 proves the Cloud Build path out, removed when the GHA workflows are deleted (#49).
+`cloudbuild-viewer.yaml` is therefore unreferenced by any trigger. Do NOT read that as dead config:
+it was the viewer *fast path* (Vite build + rsync, no image builds), so with only `cloudbuild.yaml`
+firing, a one-line viewer change now rebuilds every service image. That is a real cost, and the
+choice is to either restore a `viewer/**`-scoped trigger with the viewer steps removed from
+`cloudbuild.yaml`, or accept slower viewer deploys and delete the file. Undecided.
+
+GHA is gone — #49 deleted all five workflows and `.github/` with them. Cloud Build is the only thing
+building or deploying this repo.
+
+## Checks are advisory, not blocking
+
+There is **no branch protection on `main`, and none can be added**: classic protection and rulesets
+both require a paid plan for private repos, and `UGS-GIO` is on GitHub's free tier (both API
+endpoints return 403). A red `ugs-warehouse-pr-ci` is visible and does not prevent a merge.
+
+This is not a Cloud Build limitation and was equally true of the GHA checks that preceded it —
+nothing has ever gated a merge in this repo. It resolves for free if the repo goes public.
+
+If protection does become available, the required check must be named **exactly**
+`ugs-warehouse-pr-ci (ut-dnr-ugs-backend-tools)`, parenthetical included. A bare `ugs-warehouse-pr-ci`
+matches no check run, and a required check that never appears blocks every PR permanently while
+looking like a broken trigger.

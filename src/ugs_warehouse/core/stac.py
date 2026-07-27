@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import re
+import sys
 
 from . import config, gcs, iso, styles
 
@@ -173,6 +174,12 @@ def attach_iso(item: dict) -> str:
     before `write_item` so the written item references the sidecar; generated from the item
     as-is so the metadata asset is not yet present (no self-reference).
     """
+    # An uncurated topic emits an ISO record with no <gmd:topicCategory> — mandatory for datasets,
+    # so the record is knowingly invalid rather than confidently wrong (#53). Say which ones, or the
+    # gap is invisible until a harvester rejects it.
+    if not item.get("properties", {}).get("ugs:topic_category"):
+        print(f"[{item['id']}] ISO: no iso_topic_category curated — omitting <gmd:topicCategory> "
+              "(record will not validate; curate raw.schema_registry to fix)", file=sys.stderr)
     path = f"{config.STAC_PREFIX}/{_layout_path(item)}/{item['id']}/{item['id']}.iso.xml"
     gcs.put_bytes(iso.stac_to_iso19139(item).encode(), path,
                   content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)

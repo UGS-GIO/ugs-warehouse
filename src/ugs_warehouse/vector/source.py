@@ -12,6 +12,7 @@ Env:
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -90,6 +91,17 @@ def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
 _META_COLS = ("display_name", "description", "keywords", "iso_topic_category",
               "use_constraints", "lineage", "point_of_contact")
 
+# Columns that are jsonb in Postgres. They are SELECTed with an explicit ::text cast and parsed
+# on the way out, so callers always receive a real Python value — same approach related.py takes
+# with `relationships::text`. Without the cast the driver hands back the raw JSON *string*, and
+# anything treating it as a sequence (e.g. `list(...)`) silently splits it into characters.
+_JSON_COLS = frozenset({"keywords"})
+
+
+def _select_expr(col: str) -> str:
+    """Column reference for the metadata SELECT — jsonb columns cast to text for parsing."""
+    return f"{col}::text" if col in _JSON_COLS else col
+
 
 def read_metadata(topic: Topic) -> dict:
     """Per-topic descriptive metadata from `raw.schema_registry` (keyed by domain_topic,
@@ -97,10 +109,13 @@ def read_metadata(topic: Topic) -> dict:
     there yet (pre-#171, or no SELECT on raw) — the warehouse then falls back to defaults.
 
     `domain_topic` is the primary key, so this matches at most one row and needs no ordering.
+
+    jsonb columns come back parsed (see `_JSON_COLS`); a malformed value raises rather than
+    degrading, since that is a registry problem worth seeing rather than silently dropping.
     """
     stem = topic.stem.replace("'", "''")
     pg_sql = (
-        "SELECT " + ", ".join(_META_COLS)
+        "SELECT " + ", ".join(_select_expr(c) for c in _META_COLS)
         + f" FROM raw.schema_registry WHERE domain_topic = '{stem}'"
     )
     con = _connect()
@@ -119,7 +134,14 @@ def read_metadata(topic: Topic) -> dict:
         con.close()
     if not row:
         return {}
-    return {k: v for k, v in zip(_META_COLS, row, strict=False) if v not in (None, "", [])}
+    meta = dict(zip(_META_COLS, row, strict=False))
+    # Parse before the empty-filter below, so an empty jsonb array is dropped as `[]` rather
+    # than kept as the truthy string "[]". Not guarded: a value that will not parse is a
+    # malformed registry row, and swallowing it here is how the previous bug stayed invisible.
+    for col in _JSON_COLS:
+        if meta.get(col) is not None:
+            meta[col] = json.loads(meta[col])
+    return {k: v for k, v in meta.items() if v not in (None, "", [])}
 
 
 def discover() -> list[Topic]:

@@ -128,8 +128,28 @@ def _flat_color(paint: dict) -> str | None:
     return None
 
 
+# Comparison filters — the shape ugs-styles' `graduated` archetype emits for a *continuous* field,
+# where each class is a half-open bin (`>=` lower, `<` upper) rather than an exact value. Symbols
+# match the `step` labels above so both routes to a graduated legend read alike.
+_CMP_SYMBOL = {">=": "≥", ">": ">", "<=": "≤", "<": "<"}
+_CMP_MIRROR = {">=": "<=", ">": "<", "<=": ">=", "<": ">"}
+
+
+def _comparison(f) -> tuple[str, object] | None:
+    """(op, literal) for `['>=', ['get', 'p'], 0.2]`, normalized so the literal is the right-hand
+    side (`['<', 0.2, ['get', 'p']]` mirrors to `('>', 0.2)`). None if not a comparison."""
+    if not (isinstance(f, list) and len(f) >= 3 and f[0] in _CMP_SYMBOL):
+        return None
+    a, b = f[1], f[2]
+    if isinstance(a, list) and not isinstance(b, list):
+        return f[0], b
+    if isinstance(b, list) and not isinstance(a, list):
+        return _CMP_MIRROR[f[0]], a
+    return None
+
+
 def _label_from_filter(f) -> str | None:
-    """Category label from a layer filter: ==, in, match, any/all (recurses)."""
+    """Category label from a layer filter: ==, in, match, comparisons, any/all (recurses)."""
     if not isinstance(f, list) or not f:
         return None
     op = f[0]
@@ -146,11 +166,26 @@ def _label_from_filter(f) -> str | None:
     if op == "match" and len(f) >= 3:
         vals = f[2]
         return ", ".join(map(str, vals)) if isinstance(vals, list) else str(vals)
+    if op in _CMP_SYMBOL:
+        cmp = _comparison(f)
+        return None if cmp is None else f"{_CMP_SYMBOL[cmp[0]]} {cmp[1]}"
     if op in ("all", "any"):
+        # Equality-shaped subfilters win, so an enumerated class keeps its plain value label.
         for sub in f[1:]:
-            r = _label_from_filter(sub)
-            if r:
-                return r
+            if isinstance(sub, list) and sub and sub[0] not in _CMP_SYMBOL:
+                r = _label_from_filter(sub)
+                if r:
+                    return r
+        # Otherwise fold the comparisons: a lower+upper pair is one bin ("0.2 – 0.4"), a lone
+        # bound is the open-ended first/last class.
+        bounds = [c for c in (_comparison(sub) for sub in f[1:]) if c]
+        lo = next((v for o, v in bounds if o in (">=", ">")), None)
+        hi = next((v for o, v in bounds if o in ("<", "<=")), None)
+        if lo is not None and hi is not None:
+            return f"{lo} – {hi}"
+        if bounds:
+            o, v = bounds[0]
+            return f"{_CMP_SYMBOL[o]} {v}"
     return None
 
 

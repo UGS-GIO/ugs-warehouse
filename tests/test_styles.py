@@ -69,3 +69,47 @@ def test_attach_renders_noop_without_match():
     item = {"id": "nope", "properties": {}, "assets": {}}
     stac.attach_renders(item)
     assert "ugs:renders" not in item["properties"]
+
+
+# ---------------------------------------------------------------- classification from filters
+# ugs-styles' `graduated` archetype emits one filtered layer per class. Enumerated fields get `==`
+# (exact value); continuous fields get half-open `>=`/`<` bins. Both must yield legend labels.
+
+def _classes(layers, monkeypatch):
+    monkeypatch.setattr(styles, "_fetch_layers", lambda _url: tuple(layers))
+    return styles.classification_classes("https://example.invalid/s.json")
+
+
+def _fill(filt, color):
+    return {"type": "fill", "filter": filt, "paint": {"fill-color": color}}
+
+
+def test_enumerated_classes_label_by_value(monkeypatch):
+    # `graduated` with `values` — e.g. debris-flow runout dfsi_thr 0.0 / 0.3 / 0.6.
+    layers = [
+        _fill(["all", ["has", "dfsi_thr"], ["==", ["get", "dfsi_thr"], 0.0]], "#9e9ac8"),
+        _fill(["all", ["has", "dfsi_thr"], ["==", ["get", "dfsi_thr"], 0.6]], "#3f007d"),
+    ]
+    out = _classes(layers, monkeypatch)
+    assert [c["title"] for c in out] == ["0.0", "0.6"]
+    assert [c.get("color_hint") for c in out] == ["9E9AC8", "3F007D"]
+
+
+def test_binned_classes_label_as_ranges(monkeypatch):
+    # `graduated` with `breaks` — a lower+upper pair reads as one bin; the last class is open.
+    layers = [
+        _fill(["all", ["has", "P_20"], [">=", ["get", "P_20"], 0.2], ["<", ["get", "P_20"], 0.4]], "#fed572"),
+        _fill(["all", ["has", "P_20"], [">=", ["get", "P_20"], 0.8]], "#8d0026"),
+    ]
+    out = _classes(layers, monkeypatch)
+    assert [c["title"] for c in out] == ["0.2 – 0.4", "≥ 0.8"]
+
+
+def test_mirrored_comparison_operands(monkeypatch):
+    # `['<', 0.4, ['get', f]]` means the field is *greater* than 0.4 — don't read it backwards.
+    out = _classes([_fill(["<", 0.4, ["get", "P_20"]], "#fd8d3c")], monkeypatch)
+    assert [c["title"] for c in out] == ["> 0.4"]
+
+
+def test_uniform_style_is_not_a_classification(monkeypatch):
+    assert _classes([{"type": "fill", "paint": {"fill-color": "#888888"}}], monkeypatch) == []

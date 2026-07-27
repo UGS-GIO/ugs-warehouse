@@ -2,9 +2,14 @@
 
 A stable, order-independent hash of a topic's transformed view folded with the tiling inputs,
 stored on the published STAC item as `ugs:content_hash`. On a later ingest, if the freshly-computed
-fingerprint matches the published item AND the PMTiles output still exists, the topic's sinks
-(tippecanoe / GeoParquet / DuckLake / STAC) are skipped — nothing downstream would change, so the
-expensive tile rebuild is wasted work.
+fingerprint matches the published item AND the PMTiles output still exists, the topic's DATA sinks
+(tippecanoe / GeoParquet / DuckLake) are skipped — the rebuild would be byte-identical, so the
+expensive tile run is wasted work.
+
+The STAC sink is deliberately NOT gated on this (#54). Since `cff10c9` the item also carries
+curated `raw.schema_registry` metadata, which changes without any row changing — a fingerprint
+match no longer means "nothing downstream would change". The hash covers the DATA, so it gates
+the data sinks and nothing else.
 
 Cost: one extra scan of the already-materialized view (cheap) vs a full tippecanoe run (not).
 """

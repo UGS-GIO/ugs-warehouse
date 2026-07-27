@@ -58,3 +58,57 @@ def test_streaming_dry_run_skips_sinks():
     assert rc == 0
     archive.assert_not_called()
     refresh.assert_not_called()
+
+
+# --- #54: the fingerprint gates the DATA sinks, never the STAC sink ------------------------
+
+def _run_unchanged(**kwargs):
+    """Ingest a topic whose fingerprint matches the published item."""
+    topic = Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current")
+    backend = MagicMock()
+    backend.stream_transformed.return_value = (_con_with_transformed(), "transformed")
+    backend.read_metadata.return_value = {"keywords": ["wells"], "display_name": "Curated Title"}
+
+    with patch("ugs_warehouse.vector.ingest._backend", return_value=backend), \
+         patch("ugs_warehouse.vector.fingerprint.is_unchanged", return_value=True), \
+         patch("ugs_warehouse.vector.sink_ducklake.write") as ducklake, \
+         patch("ugs_warehouse.vector.sink_archive.write") as archive, \
+         patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
+         patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
+         patch("ugs_warehouse.vector.related.resolve", return_value={}), \
+         patch("ugs_warehouse.core.stac.refresh_catalog") as refresh:
+
+        rc = _ingest(topic, dry_run=False, skip_refresh=False, **kwargs)
+
+    return rc, ducklake, archive, pmtiles, stac_write, refresh, backend
+
+
+def test_unchanged_topic_still_republishes_stac():
+    """A curator edits raw.schema_registry; no row changes. The edit must still reach the catalog.
+
+    Before #54 the fingerprint match skipped every sink including STAC, so curated titles,
+    descriptions and keywords never left the registry unless the data happened to change or
+    someone passed --force.
+    """
+    rc, ducklake, archive, pmtiles, stac_write, refresh, backend = _run_unchanged()
+
+    assert rc == 0
+    ducklake.assert_not_called()          # expensive sinks stay skipped — that is the point of it
+    archive.assert_not_called()
+    pmtiles.assert_not_called()
+    stac_write.assert_called_once()       # ...but the item is rewritten
+    refresh.assert_called_once()
+    # The curated metadata is read and handed to the STAC sink, not stale-cached.
+    backend.read_metadata.assert_called_once()
+    assert stac_write.call_args.kwargs["metadata"]["display_name"] == "Curated Title"
+
+
+def test_force_runs_every_sink_even_when_unchanged():
+    rc, ducklake, archive, pmtiles, stac_write, _refresh, _backend = _run_unchanged(
+        skip_unchanged=False)
+
+    assert rc == 0
+    ducklake.assert_called_once()
+    archive.assert_called_once()
+    pmtiles.assert_called_once()
+    stac_write.assert_called_once()

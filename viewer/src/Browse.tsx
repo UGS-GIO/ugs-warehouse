@@ -1,8 +1,8 @@
 // Catalog-centric browser: metadata over map. Collection cards (with counts) +
 // search-all → sortable item table / cards → item detail. The map is one link out.
 import {
-  type ColumnDef, flexRender, getCoreRowModel, getSortedRowModel,
-  type SortingState, useReactTable,
+  type ColumnDef, flexRender, getCoreRowModel, getPaginationRowModel, getSortedRowModel,
+  type SortingState, type Table, useReactTable,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -15,12 +15,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { type ColFilter, exportItem, type ExportFormat, FORMATS, type ShapefileWarnings, shapefileWarnings } from "./download";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
 import { lruSet } from "./lru";
+import { ALL_PAGES, DEFAULT_PAGE_SIZE, pageLabel, PAGE_SIZES, type PageSize } from "./paging";
 import { PreviewMapSlot, type PreviewSpec, usePreviewMap, footprintSpecOf } from "./PreviewMap";
 import type { FocusSel } from "./map-model";
 import { type Asset, citeLink, classificationColors, cogAsset, contentsOf, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
 import { PhotoGallery } from "./PhotoGallery";
+import { PropertyTable } from "./PropertyTable";
 import { LayerStatusControl } from "./ReviewStatus";
 import { createComment } from "./comments";
 
@@ -56,6 +58,48 @@ const C = {
 };
 const toggle = (on: boolean) =>
   `cursor-pointer border border-border px-2.5 py-1 text-xs text-foreground ${on ? "bg-accent" : "bg-card"}`;
+
+const pageBtn = (disabled: boolean) =>
+  `border border-border px-2 py-1 text-xs ${disabled
+    ? "cursor-default bg-card text-muted-foreground/40"
+    : "cursor-pointer bg-card text-foreground hover:bg-accent"}`;
+
+/** Page-size chooser + first/prev/next/last, driven by the table's own pagination state. */
+function Pager<T>({ table, size, onSize }: {
+  table: Table<T>; size: PageSize; onSize: (s: PageSize) => void;
+}) {
+  const index = table.getState().pagination.pageIndex;
+  const pages = table.getPageCount();
+  const back = !table.getCanPreviousPage();
+  const fwd = !table.getCanNextPage();
+  return (
+    <div className="my-2 flex flex-wrap items-center gap-2.5">
+      <span className={C.muted}>{pageLabel(index, table.getRowCount(), size)}</span>
+      <span className="flex items-center gap-1">
+        <button className={pageBtn(back)} disabled={back} title="First page"
+          onClick={() => table.firstPage()}>«</button>
+        <button className={pageBtn(back)} disabled={back} title="Previous page"
+          onClick={() => table.previousPage()}>‹</button>
+        <span className="px-1 text-xs text-muted-foreground">
+          {size === ALL_PAGES ? "All items" : `Page ${index + 1} of ${pages}`}
+        </span>
+        <button className={pageBtn(fwd)} disabled={fwd} title="Next page"
+          onClick={() => table.nextPage()}>›</button>
+        <button className={pageBtn(fwd)} disabled={fwd} title="Last page"
+          onClick={() => table.lastPage()}>»</button>
+      </span>
+      <label className="flex items-center gap-1 text-xs text-muted-foreground">
+        <span>Per page</span>
+        <select className="rounded border border-border bg-background px-1 py-0.5 text-xs text-foreground"
+          value={String(size)}
+          onChange={(e) => onSize(e.target.value === ALL_PAGES ? ALL_PAGES : Number(e.target.value))}>
+          {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
+          <option value={ALL_PAGES}>All</option>
+        </select>
+      </label>
+    </div>
+  );
+}
 
 const BADGE_KEYS = ["ugs:series", "ugs:pub_type", "ugs:topic", "ugs:scale", "ugs:author"];
 
@@ -454,6 +498,8 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
     return next;
   });
   const [mapOnly, setMapOnly] = useState(false);  // hide metadata-only items (no COG / no tiles)
+  // "All items" is ~7.5k rows; pages by default, "All" still offered for ctrl-F.
+  const [pageSize, setPageSize] = useState<PageSize>(DEFAULT_PAGE_SIZE);
   const [yearMin, setYearMin] = useState("");
   const [yearMax, setYearMax] = useState("");
   const [topics, setTopics] = useState<string[]>([]);  // map-pub topic filter (multi-select)
@@ -554,6 +600,24 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
       : [{ id: "id", desc: false }]),
     [items],
   );
+  const [sorting, setSorting] = useState<SortingState>(defaultSorting);
+  const [pageIndex, setPageIndex] = useState(0);
+  // "All" tracks the row count so clearing a filter widens the page with it.
+  const perPage = pageSize === ALL_PAGES ? Math.max(rows.length, 1) : pageSize;
+
+  // One instance for all three view modes: it sorts, then pages, and `autoResetPageIndex`
+  // returns you to page 1 whenever a filter or the sort changes the row set.
+  const table = useReactTable({
+    data: rows, columns,
+    state: { sorting, pagination: { pageIndex, pageSize: perPage } },
+    onSortingChange: setSorting,
+    onPaginationChange: (u) => setPageIndex((prev) =>
+      (typeof u === "function" ? u({ pageIndex: prev, pageSize: perPage }) : u).pageIndex),
+    getCoreRowModel: getCoreRowModel(),
+    getSortedRowModel: getSortedRowModel(),
+    getPaginationRowModel: getPaginationRowModel(),
+  });
+  const pageRows = table.getRowModel().rows.map((r) => r.original);
 
   return (
     <>
@@ -638,6 +702,13 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
         </div>
       )}
 
+      {/* Top and bottom: bottom is where you land after scrolling, top is how you change size
+          without scrolling back down. */}
+      {rows.length > PAGE_SIZES[0] && (
+        <Pager table={table} size={pageSize}
+          onSize={(s) => { setPageSize(s); setPageIndex(0); }} />
+      )}
+
       {rows.length === 0 ? (
         <p className={`${C.muted} mt-3`}>{needle ? "No items match." : "No items."}</p>
       ) : mode === "table" ? (
@@ -654,16 +725,20 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
             <BulkItemComposer itemIds={[...selItems]} onDone={() => setItemComposeOpen(false)} />
           )}
           <div className="overflow-x-auto">
-            <DataTable columns={columns} data={rows} onRowClick={(it) => onOpen(it.href)}
-              initialSorting={defaultSorting} />
+            <DataTable table={table} onRowClick={(it) => onOpen(it.href)} />
           </div>
         </>
       ) : mode === "thumbs" ? (
-        <VolumeGrouped rows={rows} gridClass={THUMB_GRID}
+        <VolumeGrouped rows={pageRows} gridClass={THUMB_GRID}
           render={(it) => <ThumbCard key={it.href} it={it} onOpen={onOpen} />} />
       ) : (
-        <VolumeGrouped rows={rows} gridClass={C.grid}
+        <VolumeGrouped rows={pageRows} gridClass={C.grid}
           render={(it) => <CardItem key={it.href} it={it} showCollection={showCollection} onOpen={onOpen} />} />
+      )}
+
+      {rows.length > PAGE_SIZES[0] && (
+        <Pager table={table} size={pageSize}
+          onSize={(s) => { setPageSize(s); setPageIndex(0); }} />
       )}
     </>
   );
@@ -719,17 +794,12 @@ function VectorPreview({ item }: { item: StacDoc }) {
 
 // Canonical datalake glance — first rows of the GeoParquet via DuckDB-WASM (geometry dropped).
 // Reusable sortable table (TanStack Table). Headers toggle sort; pass `onRowClick` for clickable rows.
-function DataTable<T>({ columns, data, onRowClick, initialSorting }: {
-  columns: ColumnDef<T, unknown>[];
-  data: T[];
+// Renders a table instance the caller owns — the same instance backs the card and thumbnail
+// modes and the pager, so sort and page stay in step across all three.
+function DataTable<T>({ table, onRowClick }: {
+  table: Table<T>;
   onRowClick?: (row: T) => void;
-  initialSorting?: SortingState;
 }) {
-  const [sorting, setSorting] = useState<SortingState>(initialSorting ?? []);
-  const table = useReactTable({
-    data, columns, state: { sorting }, onSortingChange: setSorting,
-    getCoreRowModel: getCoreRowModel(), getSortedRowModel: getSortedRowModel(),
-  });
   return (
     <table className="w-full border-collapse">
       <thead>
@@ -766,8 +836,9 @@ function DataTable<T>({ columns, data, onRowClick, initialSorting }: {
 // DuckDB-WASM (HTTP range reads; never downloads the whole file). Server-style manual paging:
 // the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 7000-row tables.
 // Geometry is excluded (use Download / OGC API / the map for geometry).
-const PAGE_SIZE = 25;
-const PAGE_SIZES = [25, 50, 100, 250];
+// Page sizes come from ./paging, shared with the catalog item lists so both pagers offer the
+// same choices. This one opens at the smallest: a row here is a full data record, not a title.
+const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
@@ -791,7 +862,7 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
     return next;
   });
   const [pageIndex, setPageIndex] = useState(0);
-  const [pageSize, setPageSize] = useState(PAGE_SIZE);
+  const [pageSize, setPageSize] = useState<number>(PAGE_SIZE);
   const [showAll, setShowAll] = useState(false);  // "All" rows in one virtualized page
   const [sorting, setSorting] = useState<SortingState>([]);
   const scrollRef = useRef<HTMLDivElement>(null);  // virtualizer scroll viewport (the resizable box)
@@ -1713,12 +1784,6 @@ function Preview({ item }: { item: StacDoc }) {
   return <AssetViewer item={item} />;
 }
 
-// Property key/value formatting for the detail table — drop the `ugs:` prefix, underscores →
-// spaces; join arrays, stringify objects, so nothing renders as `[object Object]` or overflows.
-const prettyKey = (k: string) => k.replace(/^ugs:/, "").replace(/_/g, " ");
-const fmtVal = (v: unknown): string =>
-  Array.isArray(v) ? v.join(", ") : v && typeof v === "object" ? JSON.stringify(v) : String(v);
-
 // ---- API & data endpoints ----
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -1978,18 +2043,7 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />
       {IS_REVIEW && <CatalogReview item={item} />}
-      <table className="mt-3 w-full max-w-3xl table-fixed border-collapse text-sm">
-        <tbody>
-          {Object.entries(p)
-            .filter(([k, v]) => v !== null && v !== "" && k !== "ugs:renders" && k !== "ugs:contents")
-            .map(([k, v]) => (
-              <tr key={k}>
-                <td className="w-44 break-words border-b border-border px-2.5 py-1 align-top text-muted-foreground">{prettyKey(k)}</td>
-                <td className="break-words border-b border-border px-2.5 py-1 align-top">{fmtVal(v)}</td>
-              </tr>
-            ))}
-        </tbody>
-      </table>
+      <PropertyTable properties={p} />
     </>
   );
 }

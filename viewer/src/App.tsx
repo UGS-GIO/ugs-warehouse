@@ -8,6 +8,7 @@ import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./B
 import { layerCollectionIds } from "./catalog";
 import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./Map";
 import { PreviewMapProvider } from "./PreviewMap";
+import { PropertyTable } from "./PropertyTable";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 import { DiffPanel } from "./DiffPanel";
@@ -92,16 +93,7 @@ function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
         <DiffPanel stem={String(item.id ?? "")} reviewParquetUrl={geoparquet} />
       )}
       {isReview && item.id && <CommentsPanel itemId={String(item.id)} />}
-      <table className="mt-2 w-full border-collapse text-sm">
-        <tbody>
-          {Object.entries(p).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
-            <tr key={k}>
-              <td className="whitespace-nowrap px-2 py-0.5 align-top text-muted-foreground">{k}</td>
-              <td className="border-b border-border px-2 py-0.5">{String(v)}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <PropertyTable properties={p} className="mt-2" />
     </>
   );
 }

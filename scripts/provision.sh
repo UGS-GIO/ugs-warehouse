@@ -35,9 +35,15 @@ gcloud run services add-iam-policy-binding "${SERVICE}" --region="${REGION}" --p
 
 URL="$(gcloud run services describe "${SERVICE}" --region="${REGION}" --project="${PROJECT}" --format='value(status.url)')"
 echo "→ push subscription ${SUB} → ${URL}/"
+# `--ack-deadline` / `--message-retention-duration` are asserted on BOTH branches on purpose. When
+# they lived only on `create`, a subscription made by hand (or by an older version of this script)
+# kept the 10s default forever and re-running never converged it — the script read as idempotent
+# and wasn't. A 10s deadline redelivers a slow or crashing handler into itself every 10s, which is
+# how one bad message becomes a retry storm (see the OOM in ugs-ingest#183, and #43).
 if gcloud pubsub subscriptions describe "${SUB}" --project="${PROJECT}" >/dev/null 2>&1; then
   gcloud pubsub subscriptions update "${SUB}" \
-    --push-endpoint="${URL}/" --push-auth-service-account="${RUNTIME_SA}"
+    --push-endpoint="${URL}/" --push-auth-service-account="${RUNTIME_SA}" \
+    --ack-deadline=600 --message-retention-duration=1d
 else
   gcloud pubsub subscriptions create "${SUB}" --topic="${TOPIC}" \
     --push-endpoint="${URL}/" --push-auth-service-account="${RUNTIME_SA}" \
@@ -58,7 +64,8 @@ gcloud pubsub topics add-iam-policy-binding "${RASTER_TOPIC}" --project="${PROJE
 echo "→ raster push subscription ${RASTER_SUB} → ${URL}/raster"
 if gcloud pubsub subscriptions describe "${RASTER_SUB}" --project="${PROJECT}" >/dev/null 2>&1; then
   gcloud pubsub subscriptions update "${RASTER_SUB}" \
-    --push-endpoint="${URL}/raster" --push-auth-service-account="${RUNTIME_SA}"
+    --push-endpoint="${URL}/raster" --push-auth-service-account="${RUNTIME_SA}" \
+    --ack-deadline=600 --message-retention-duration=1d
 else
   gcloud pubsub subscriptions create "${RASTER_SUB}" --topic="${RASTER_TOPIC}" \
     --push-endpoint="${URL}/raster" --push-auth-service-account="${RUNTIME_SA}" \

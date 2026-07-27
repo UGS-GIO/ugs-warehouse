@@ -28,24 +28,30 @@ class _FakeBlob:
 
 
 class _FakeBucket:
-    def __init__(self, name: str, blobs: dict[str, _FakeBlob]):
+    def __init__(self, name: str, blobs: dict[tuple[str, str], _FakeBlob]):
         self.name = name
         self._blobs = blobs
 
     def blob(self, key: str) -> _FakeBlob:
-        b = self._blobs.get(key)
+        # Keyed on (bucket, key), NOT key alone: source and destination are different buckets, and
+        # a shared key-only namespace would alias them the moment a src key equals a dest path —
+        # silently turning a cross-bucket assertion into a self-comparison that always passes.
+        b = self._blobs.get((self.name, key))
         if b is None:
             b = _FakeBlob(self.name, key)
-            self._blobs[key] = b
+            self._blobs[(self.name, key)] = b
         return b
 
 
 class _FakeClient:
     def __init__(self):
-        self._blobs: dict[str, _FakeBlob] = {}
+        self._blobs: dict[tuple[str, str], _FakeBlob] = {}
 
     def bucket(self, name: str) -> _FakeBucket:
         return _FakeBucket(name, self._blobs)
+
+    def blob(self, bucket: str, key: str) -> _FakeBlob:
+        return self._blobs[(bucket, key)]
 
 
 @pytest.fixture(autouse=True)
@@ -60,9 +66,9 @@ def test_copy_from_uri_parses_bucket_and_key(monkeypatch):
     gcs.copy_from_uri("gs://stagedrasters/slope/foo.cog.tif", "cog/slope/foo.cog.tif",
                        content_type="image/tiff")
 
-    dest = fake._blobs["cog/slope/foo.cog.tif"]
+    dest = fake.blob(gcs.config.BUCKET, "cog/slope/foo.cog.tif")
     assert dest.bucket_name == gcs.config.BUCKET
-    src = fake._blobs["slope/foo.cog.tif"]
+    src = fake.blob("stagedrasters", "slope/foo.cog.tif")
     assert src.bucket_name == "stagedrasters"
 
 
@@ -73,7 +79,7 @@ def test_copy_from_uri_sets_metadata_before_rewrite(monkeypatch):
     gcs.copy_from_uri("gs://stagedrasters/x.tif", "cog/x.tif",
                        content_type="image/tiff", cache_control=gcs.CACHE_IMMUTABLE)
 
-    dest = fake._blobs["cog/x.tif"]
+    dest = fake.blob(gcs.config.BUCKET, "cog/x.tif")
     assert dest.content_type == "image/tiff"
     assert dest.cache_control == gcs.CACHE_IMMUTABLE
 
@@ -84,7 +90,7 @@ def test_copy_from_uri_loops_until_token_none(monkeypatch):
 
     gcs.copy_from_uri("gs://stagedrasters/x.tif", "cog/x.tif", content_type="image/tiff")
 
-    dest = fake._blobs["cog/x.tif"]
+    dest = fake.blob(gcs.config.BUCKET, "cog/x.tif")
     # First call token=None (start), second call token="next-token" (continuation), then stop.
     assert dest.rewrite_calls == [None, "next-token"]
 
@@ -95,7 +101,7 @@ def test_copy_from_uri_no_cache_control_leaves_default(monkeypatch):
 
     gcs.copy_from_uri("gs://stagedrasters/x.tif", "cog/x.tif", content_type="image/tiff")
 
-    dest = fake._blobs["cog/x.tif"]
+    dest = fake.blob(gcs.config.BUCKET, "cog/x.tif")
     assert dest.cache_control is None
 
 
@@ -103,3 +109,39 @@ def test_copy_from_uri_no_cache_control_leaves_default(monkeypatch):
 def test_copy_from_uri_rejects_malformed_uri(bad_uri):
     with pytest.raises(ValueError):
         gcs.copy_from_uri(bad_uri, "dest.tif", content_type="image/tiff")
+
+
+def test_copy_from_uri_raises_when_the_rewrite_stops_short(monkeypatch):
+    """A short copy must fail loudly, not leave a truncated COG a STAC item points at.
+
+    This is the worst failure available here: `promote()` reports success, the item publishes,
+    and the object is silently incomplete.
+    """
+    fake = _FakeClient()
+    monkeypatch.setattr(gcs, "_gcs_client", lambda: fake)
+    dest = fake.bucket(gcs.config.BUCKET).blob("cog/x.tif")
+    # GCS says "done" (token=None) having moved only part of the object.
+    dest.rewrite = lambda source, token=None: (None, 120, 300)
+
+    with pytest.raises(OSError, match="incomplete rewrite"):
+        gcs.copy_from_uri("gs://stagedrasters/x.tif", "cog/x.tif", content_type="image/tiff")
+
+
+def test_copy_from_uri_propagates_a_mid_loop_failure(monkeypatch):
+    """An error partway through the continuation loop must surface, not be swallowed."""
+    fake = _FakeClient()
+    monkeypatch.setattr(gcs, "_gcs_client", lambda: fake)
+    dest = fake.bucket(gcs.config.BUCKET).blob("cog/x.tif")
+    calls: list[str | None] = []
+
+    def flaky(source, token=None):
+        calls.append(token)
+        if token is None:
+            return "next-token", 100, 300
+        raise ConnectionError("GCS went away mid-rewrite")
+
+    dest.rewrite = flaky
+
+    with pytest.raises(ConnectionError):
+        gcs.copy_from_uri("gs://stagedrasters/x.tif", "cog/x.tif", content_type="image/tiff")
+    assert calls == [None, "next-token"]  # it did resume before failing

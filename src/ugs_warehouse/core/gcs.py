@@ -98,11 +98,18 @@ def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,
     if cache_control:
         dest_blob.cache_control = cache_control
 
-    token = None
+    # Check the byte counts rather than trusting the loop exit. A truncated destination is the
+    # worst failure available here — `promote()` would report success and the STAC item would
+    # point at a COG that is short. Logging the size also means the next incident starts with
+    # the number this one did not have.
+    token, done, total = None, 0, 0
     while True:
-        token, _, _ = dest_blob.rewrite(src_blob, token=token)
+        token, done, total = dest_blob.rewrite(src_blob, token=token)
         if token is None:
             break
+    if total and done != total:
+        raise OSError(f"incomplete rewrite {src_uri} -> {dest_path}: {done}/{total} bytes")
+    print(f"[gcs] rewrote {src_uri} -> gs://{config.BUCKET}/{dest_path} ({total} bytes)")
 
 
 def exists(object_path: str) -> bool:

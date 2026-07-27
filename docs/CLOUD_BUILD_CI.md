@@ -26,7 +26,7 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build â†
 
    ```bash
    REPO=projects/ut-dnr-ugs-backend-tools/locations/us-central1/connections/ugs-warehouse-github/repositories/ugs-warehouse
-   SA=projects/ut-dnr-ugs-backend-tools/serviceAccounts/warehouse-deployer@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com
+   SA=projects/ut-dnr-ugs-backend-tools/serviceAccounts/534590904912-compute@developer.gserviceaccount.com
 
    gcloud builds triggers create github \
      --name=ugs-warehouse-pr-ci --region=us-central1 --repository="$REPO" \
@@ -36,8 +36,19 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build â†
 
    `--service-account` is **mandatory** here, not optional â€” org policy blocks the legacy Cloud
    Build SA, so a bare trigger-create (no `--service-account`) 400s with an unhelpful
-   `INVALID_ARGUMENT` and no other detail. All three triggers run as `warehouse-deployer@`, the
-   existing CI/CD identity.
+   `INVALID_ARGUMENT` and no other detail.
+
+   All three triggers run as the **default Compute SA** (`534590904912-compute@developer...`), not
+   `warehouse-deployer@`, even though `warehouse-deployer@` is the CI/CD identity everywhere else in
+   this repo (WIF auth for GHA, the `deploy_service_account` / `ingest_service_account` Terraform
+   vars). First attempt used `warehouse-deployer@` and `ugs-warehouse-deploy` failed cross-project
+   (`PERMISSION_DENIED` on `ugs-warehouse-review-serving` in `ut-dnr-ugs-maps-prod`) â€” `infra/iam.tf`
+   already grants `run.admin` + `serviceAccountUser` there, but only to whatever
+   `var.build_service_account` in `infra/terraform.tfvars` names, and that's the default Compute SA
+   (a prior, already-documented finding from 2026-07-10: `gcloud builds submit` with no
+   `--service-account`, which is what GHA's `deploy.yml`/`viewer.yml` do, runs the build's *steps* as
+   the project's default Compute SA regardless of which identity authenticated the API call). Matching
+   the trigger's SA to that existing grant was the fix â€” no Terraform/IAM change needed.
 
 3. First PR check came back `action_required`: the default `COMMENTS_ENABLED` comment-control gate
    wants a collaborator to comment `/gcbrun` on the PR before an untrusted-looking push actually

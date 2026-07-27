@@ -58,7 +58,10 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
 
     `skip_unchanged` (default on; `--force` turns it off) compares a content fingerprint of the
     transformed view to the published STAC item; an exact match (with the PMTiles still present)
-    skips all sinks — the expensive tippecanoe rebuild would produce byte-identical output."""
+    skips the DATA sinks — the expensive tippecanoe rebuild would produce byte-identical output.
+    The STAC sink still runs, since curated registry metadata changes without the data changing
+    (#54); rewriting an item + ISO sidecar is two small object writes, never what the skip
+    protected."""
     count = con.execute(f"SELECT count(*) FROM {view}").fetchone()[0]
     non_null = con.execute(f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL").fetchone()[0]
     if non_null == 0:
@@ -84,18 +87,26 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     # Content fingerprint — always computed (so every run records a fresh `ugs:content_hash`, even a
     # forced one, keeping future skips correct). Only acted on when --skip-unchanged is set.
     fp = fingerprint.compute(con, view)
-    if skip_unchanged and fingerprint.is_unchanged(topic, fp):
+    unchanged = skip_unchanged and fingerprint.is_unchanged(topic, fp)
+    if unchanged:
         print(f"[{topic.fqn}] UNCHANGED: content + tiling identical to the published item — "
-              f"skipping sinks (no tile rebuild)")
-        return 0
+              f"skipping the data sinks (no tile rebuild), rewriting STAC + ISO")
 
     meta = backend.read_metadata(topic)
     related_info = _related(topic)
     rc = 0
-    for name, fn in [
+    # The data sinks are what the fingerprint gates. The STAC sink always runs: its inputs include
+    # curated registry metadata, which an editor changes without touching a single row (#54). It
+    # reads the view and derives its asset hrefs from config, so it does not depend on the skipped
+    # sinks having run — on an unchanged topic those artifacts are already published, which is
+    # exactly what `is_unchanged` (which also verifies the PMTiles) established.
+    data_sinks = [] if unchanged else [
         ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
         ("archive",  lambda: sink_archive.write(topic, con, view)),
         ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
+    ]
+    for name, fn in [
+        *data_sinks,
         ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related=related_info,
                                              content_hash=fp)),
     ]:

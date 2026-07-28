@@ -4,9 +4,14 @@
 //      ugs-styles shape, e.g. ccus geochemistry / pipelines). Each filtered layer → one entry.
 // Falls out of the style for free, so the legend can never drift from the render.
 
-// `values` (optional): the specific category values a grouped legend entry rolls up, each with its
-// own shade of the group colour (e.g. box-type Core → BUTTS, SLABS, …). Shown under the group label.
-type Entry = { label: string; color: string; values?: readonly { value: string; color: string }[] };
+// `values` (optional): the specific category values a grouped legend entry rolls up (e.g. box-type
+// Core → BUTTS, SLABS, …), shown under the group label. Each value carries its own colour — which
+// for a per-group palette is simply the group's. `label` is the display string when the raw value
+// is a shouty managed code ('CORE CHIPS' → 'Core Chips'); the raw value is the fallback.
+type Entry = {
+  label: string; color: string;
+  values?: readonly { value: string; color: string; label?: string }[];
+};
 
 // Pull the styled field name out of an input expression: ["get","x"] or ["coalesce",["get","x"],""].
 const fieldOf = (input: unknown): string | undefined => {
@@ -143,7 +148,7 @@ export function Legend({ layers, entries, title, name }: {
                   {e.values.map((v) => (
                     <span key={v.value} className="inline-flex items-center gap-1">
                       <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm border border-border" style={{ background: v.color }} />
-                      {v.value}
+                      {v.label ?? v.value}
                     </span>
                   ))}
                 </div>

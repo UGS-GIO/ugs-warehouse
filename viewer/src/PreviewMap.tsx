@@ -13,7 +13,7 @@ import { ensureCogProtocol } from "./cog";
 import { Legend } from "./legend";
 import { CommentsPanel } from "./CommentsPanel";
 import { boundsOf, type FocusSel, type MapPick, nextPick, validBbox } from "./map-model";
-import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, rendersOf, type StacDoc, useStyleLayers } from "./stac";
+import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, rendersOf, type StacDoc, useLiveLegend, useStyleLayers } from "./stac";
 
 const POSITRON = "https://tiles.openfreemap.org/styles/positron";
 
@@ -146,6 +146,10 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick }: {
   const styleUrl = isVector && item ? (active?.style_url ?? defaultStyleUrl(item)) : undefined;
   const sprite = active?.sprite;
   const styleLayers = useStyleLayers(styleUrl);  // null while loading/error → NEUTRAL_LAYERS
+  // Icon renders bake their colours into the sprite, so the legend can't be derived from the paint.
+  // Read it live from the ugs-styles manifest; the item's own `legend` is a bind-time snapshot that
+  // goes stale as soon as a style publishes, so it's only the fallback.
+  const liveLegend = useLiveLegend(styleUrl, item ? String(item.id ?? "") : undefined, sel);
   const [spriteReady, setSpriteReady] = useState(false);
   const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(null);
   const [reviewFeature, setReviewFeature] = useState<{ pkVal: string; props: Record<string, unknown> } | null>(null);
@@ -355,8 +359,9 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick }: {
       )}
 
       {isVector && item && (
-        <Legend layers={styleLayers ?? undefined} entries={active?.legend ?? classificationEntries(item)}
-          title={active?.legend ? "box type" : undefined}
+        <Legend layers={styleLayers ?? undefined}
+          entries={liveLegend?.entries ?? active?.legend ?? classificationEntries(item)}
+          title={liveLegend?.field ?? (active?.legend ? "box type" : undefined)}
           name={String(item.properties?.title ?? item.id)} />
       )}
     </>

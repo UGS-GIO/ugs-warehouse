@@ -21,21 +21,62 @@ from __future__ import annotations
 
 import json
 import re
+import threading
+import time
 import urllib.request
 from functools import lru_cache
 
-from . import config
+from . import config, gcs
+
+# How long a fetched manifest may be reused. The cache exists so a 64-thread ingest fetches once,
+# not 64 times — it is NOT meant to pin a snapshot for the life of a long run. Without a bound, an
+# ingest that starts before a style publish keeps re-attaching the pre-publish legend for hours,
+# overwriting whatever the rebind just wrote.
+_TTL_SECONDS = 60.0
+_lock = threading.Lock()
+_cache: tuple[float, tuple[dict, ...]] | None = None
 
 
-@lru_cache(maxsize=1)
-def _manifest() -> tuple[dict, ...]:
-    """Fetch + cache the ugs-styles manifest. Returns () on any failure (graceful)."""
+def _parse(raw: bytes) -> tuple[dict, ...]:
+    data = json.loads(raw.decode())
+    return tuple(e for e in data if isinstance(e, dict)) if isinstance(data, list) else ()
+
+
+def _fetch() -> tuple[dict, ...]:
+    """Read the manifest, preferring the GCS object over its cached CDN view.
+
+    The object is authoritative and has no edge in front of it, so a rebind triggered seconds after
+    a publish still sees the new manifest. HTTPS stays as the fallback for anything running without
+    bucket credentials (local tooling, tests).
+    """
+    try:
+        return _parse(gcs.get_bytes(config.STYLES_INDEX_OBJECT))
+    except Exception:  # noqa: BLE001 — no creds / object missing: fall back to the public CDN copy
+        pass
     try:
         with urllib.request.urlopen(config.STYLES_INDEX_URL, timeout=10) as resp:  # noqa: S310 (https CDN)
-            data = json.loads(resp.read().decode())
-        return tuple(e for e in data if isinstance(e, dict)) if isinstance(data, list) else ()
+            return _parse(resp.read())
     except Exception:  # noqa: BLE001 — styling is best-effort; never sink an ingest
         return ()
+
+
+def _manifest() -> tuple[dict, ...]:
+    """The ugs-styles manifest, cached for `_TTL_SECONDS`. Returns () on any failure (graceful)."""
+    global _cache
+    with _lock:
+        if _cache and (time.monotonic() - _cache[0]) < _TTL_SECONDS:
+            return _cache[1]
+        entries = _fetch()
+        _cache = (time.monotonic(), entries)
+        return entries
+
+
+def refresh() -> int:
+    """Drop the cached manifest and re-read it. Returns entry count."""
+    global _cache
+    with _lock:
+        _cache = None
+    return len(_manifest())
 
 
 def warm() -> int:

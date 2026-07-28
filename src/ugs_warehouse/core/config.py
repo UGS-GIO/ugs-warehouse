@@ -86,9 +86,15 @@ def public_url(object_path: str) -> str:
 
 
 # Styling source — the neighbor repo `ugs-styles` builds MapLibre GL JSON + an `index.json`
-# manifest, published CDN-only. The warehouse reads the manifest at STAC emit and attaches a
-# `renders` block by item id (docs/STYLING.md). Graceful: unreachable manifest -> no renders.
+# manifest, published to OUR bucket and served through the CDN. The warehouse reads the manifest at
+# STAC emit and attaches a `renders` block by item id (docs/STYLING.md). Graceful: unreachable
+# manifest -> no renders.
 STYLES_CDN_BASE = os.environ.get(
     "STYLES_CDN_BASE", f"{PUBLIC_BASE_URL}/styles",
 ).rstrip("/")
 STYLES_INDEX_URL = os.environ.get("STYLES_INDEX_URL", f"{STYLES_CDN_BASE}/index.json")
+# The manifest as a GCS object — the authoritative copy, of which STYLES_INDEX_URL is a CACHED view.
+# ugs-styles' publish rsyncs here and then immediately triggers our rebind, so the CDN edge can
+# still be serving the pre-publish manifest when we read it; binding that copy writes a stale legend
+# onto every item we touch, and the job reports success while doing it. Read the object instead.
+STYLES_INDEX_OBJECT = os.environ.get("STYLES_INDEX_OBJECT", "styles/index.json")

@@ -162,3 +162,42 @@ def test_report_flags_asset_miss_and_orphans(monkeypatch):
     # one asset-miss + one orphan
     assert rc == 2
     assert store == before  # report writes nothing
+
+
+# ---- post-write verification ------------------------------------------------------------
+# A rebind that binds a stale manifest used to write it to every item and still exit 0, so the
+# publish workflow went green while the catalog served old colors. _verify re-reads what was
+# written and diffs it against the manifest, turning that silent failure into a loud one.
+
+def _wells_item(store, legend):
+    stac.write_item(stac.build_item(
+        item_id="enmin_ucrc_wells", collection="ugs-serving-topics", geometry=None,
+        bbox=[0, 1, 2, 3], datetime_iso=None, properties={"title": "wells"},
+        assets={"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}}))
+    return [{"itemId": "enmin_ucrc_wells", "render": "by-boxtype", "kind": "vector",
+             "assets": ["pmtiles"], "path": "styles/x/by-boxtype.json", "legend": legend}]
+
+
+def test_restyle_verify_passes_when_the_written_legend_matches(monkeypatch):
+    store = _mem_gcs(monkeypatch)
+    legend = [{"label": "Core", "color": "#5E3C99"}]
+    _fake_manifest(monkeypatch, _wells_item(store, legend))
+    assert R.restyle() == 1
+    assert R._verify(R._scoped_groups("ugs-serving-topics")) == []
+
+
+def test_restyle_verify_reports_drift_when_the_item_holds_an_older_legend(monkeypatch):
+    """Simulates the real failure: the item on disk carries a legend the manifest no longer has."""
+    import json
+
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, _wells_item(store, [{"label": "Core", "color": "#5E3C99"}]))
+    R.restyle()
+
+    # Rewrite the item with the pre-publish (shaded) legend, as a stale bind would have.
+    obj = stac.item_object_path("ugs-serving-topics", "enmin_ucrc_wells")
+    item = json.loads(store[obj].decode())
+    item["properties"]["ugs:renders"]["by-boxtype"]["legend"] = [{"label": "Core", "color": "#2C1C48"}]
+    store[obj] = json.dumps(item).encode()
+
+    assert R._verify(R._scoped_groups("ugs-serving-topics")) == ["ugs-serving-topics/enmin_ucrc_wells"]

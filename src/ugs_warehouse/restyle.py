@@ -69,7 +69,7 @@ def report(*, collection: str = "ugs-serving-topics") -> int:
     manifest styles that matched no item in scope. Read-only — writes nothing. Use this when
     'some styles refresh but not all': it shows exactly which item ids or asset keys don't line up.
     """
-    styles.warm()
+    styles.refresh()  # authoritative re-read; a cached manifest would report stale bindings
     manifest = styles._manifest()
     man_ids = {styles._entry_key(e) for e in manifest}
     man_assets: dict[str, set[str]] = {}
@@ -116,7 +116,9 @@ def report(*, collection: str = "ugs-serving-topics") -> int:
 def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
             dry_run: bool = False, workers: int = 32) -> int:
     groups = _scoped_groups(collection)
-    n_entries = styles.warm()
+    # refresh, not warm: this job is triggered seconds after a style publish, so it must re-read
+    # the manifest rather than trust anything already cached in-process.
+    n_entries = styles.refresh()
     print(f"[restyle] styles manifest: {n_entries} entries")
 
     tasks = []
@@ -153,7 +155,37 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
         stac.refresh_catalog()
     print(f"[restyle] {'would rebind' if dry_run else 'rebound'} {changed} item(s)"
           + ("" if refresh or dry_run else " (run --refresh to refresh items.json asset summaries)"))
+    if not dry_run and _verify(groups):
+        return 1  # a run that wrote stale renders must not exit 0 — see _verify
     return changed
+
+
+def _verify(groups: dict[str, list[str]]) -> list[str]:
+    """Re-read what we just wrote and diff each item's legend against the manifest.
+
+    The original failure mode was silent: the job bound a stale manifest, wrote it onto every item,
+    and exited 0 — so the publish workflow went green while the catalog served old colors. Reading
+    the items back turns that into a visible failure instead of a quiet one.
+    """
+    manifest = {styles._entry_key(e): e for e in styles._manifest()}
+    drifted: list[str] = []
+    for coll_path, item_ids in groups.items():
+        for iid in sorted(item_ids):
+            want = manifest.get(iid)
+            if not want or not want.get("legend"):
+                continue
+            try:
+                item = json.loads(gcs.get_bytes(stac.item_object_path(coll_path, iid)).decode())
+            except Exception:  # noqa: BLE001 — an unreadable item isn't a drift signal
+                continue
+            got = ((item.get("properties") or {}).get("ugs:renders") or {}).get(str(want.get("render") or ""))
+            if got and got.get("legend") != want.get("legend"):
+                drifted.append(f"{coll_path}/{iid}")
+    if drifted:
+        print(f"[restyle] DRIFT — {len(drifted)} item(s) don't match the manifest after writing:")
+        for d in drifted:
+            print(f"    {d}")
+    return drifted
 
 
 def main() -> int:

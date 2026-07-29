@@ -663,7 +663,13 @@ steps:
       - --allow-unauthenticated
       - --port=9000
       - --cpu=1
-      - --memory=512Mi
+      # 2Gi, not 512Mi: featureserv buffers the whole FeatureCollection before writing it, so peak
+      # memory tracks the largest response rather than the dataset. At 512Mi a client paging a large
+      # collection OOM-killed the container (Cloud Run "terminated on signal 9") and got a 503
+      # mid-walk -- measured reproducibly on enmin_plss_sections, and it takes concurrent requests
+      # down with it. 1Gi survives paging; 2Gi also covers a single full-layer response (84,756
+      # features / 122MB). Scale-to-zero means this is only billed while serving. ALL-5410.
+      - --memory=2Gi
       - --timeout=120
 
   # Resolve the deployed OGC API Features URL → file, so the viewer can bake it as

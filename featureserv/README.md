@@ -28,9 +28,19 @@ viewer use PMTiles/static and don't touch this.
 - `Dockerfile` (multi-stage): stage 1 bakes the cold-floor db (`--strict`, so a broken catalog reddens
   the build); stage 2 lifts the featureserv binary + its Go templates onto a Python base. The upstream
   image is distroless, so it can't run `gen_db` at start — see the tradeoff note below.
+- `duckdb_featureserv.toml` is baked in at `/config/`. It overrides only the upstream defaults that
+  are wrong for us — the 1000-feature response cap, the 10-feature page size, the generic service
+  title, and the `transform=` whitelist (empty by default, so the parameter is off). Everything else
+  keeps upstream's value.
 
 Endpoints (Features Core): `/`, `/conformance`, `/collections`, `/collections/{id}`,
 `/collections/{id}/items?bbox=&limit=`. Conformance: core + oas3 + geojson + html.
+
+Query parameters that work today and are worth knowing about: `filter=` (CQL — comparison,
+`BETWEEN`, `IN`, `IS NULL`, boolean, and spatial `INTERSECTS`/`ENVELOPE`, all pushed down to
+DuckDB), `?<column>=<value>` attribute shorthand, `properties=` column projection, `sortby=`
+(`-col` for descending), `bbox=`, `limit=`/`offset=`, and `transform=`. Not wired up: `orderby=`
+and `crs=` are accepted and silently ignored, `precision=` and `groupby=` 500 — all upstream.
 
 ## Local
 
@@ -71,5 +81,16 @@ docker run --rm ugs-featureserv python3 /app/gen_db.py --out /data/database.duck
 - `MODE=table` (env) materializes layers into the db instead of views — a full snapshot (bigger image,
   and it duplicates the data), fallback if a future featureserv drops view support. Incremental
   rebinding is skipped in this mode: an unchanged URL doesn't mean the materialized rows are current.
+- **Paging is a floor, not a fix.** `LimitMax = 100000` clears every topic we serve today
+  (`enmin_plss_sections` is the largest at 84,756), but featureserv emits no `numberMatched` and no
+  `rel="next"` link — neither exists anywhere in its source — so truncation stays *undetectable*. A
+  layer that grows past the cap fails the same silent way. The real fix is an upstream patch that
+  sets `NumberMatched` and emits next links (ALL-5402).
+- Other upstream gaps worth knowing before wiring a client: GeoJSON features carry no `id` member
+  and `/collections/{id}/items/{fid}` always 500s (`sqlTables` hardcodes `'' AS id_column`, so
+  the single-feature query renders `WHERE "" = $1`); `/collections` reports `bbox [0,0,0,0]` for
+  every collection while `/collections/{id}` has the real extent; `geometrytype` is always the
+  literal `GEOMETRY`. The missing feature `id` is what blocks ArcGIS **Online** specifically —
+  its `OGCFeatureLayer` needs one to derive `OBJECTID`.
 - Pin `tobilg/duckdb_featureserv:latest` to a version tag once a known-good one is chosen.
 - Replaces the earlier bespoke FastAPI (`ogcapi/`, removed) — off-the-shelf, less to maintain.

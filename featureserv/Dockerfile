@@ -39,6 +39,10 @@ RUN pip install --no-cache-dir duckdb==1.5.3 \
 COPY gen_db.py entrypoint.sh /app/
 RUN chmod +x /app/entrypoint.sh
 COPY --from=build --chown=nonroot:nonroot /build/database.duckdb /data/database.duckdb
+# Server config. Without it featureserv runs on upstream's viper defaults, which cap every /items
+# response at 1000 features with no numberMatched and no next link to say so (see the file for the
+# per-topic numbers). Root-owned 0644 — nonroot only needs to read it.
+COPY duckdb_featureserv.toml /config/duckdb_featureserv.toml
 
 # Match the upstream image: nonroot, and the Go binary reads the system CA bundle from here.
 USER nonroot

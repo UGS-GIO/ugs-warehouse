@@ -1,0 +1,67 @@
+# Server config for duckdb_featureserv. Baked into the image at /config/ (upstream searches
+# ./config, /config, /etc). Without this file the server runs on upstream's built-in viper
+# defaults, and two of those are wrong for us.
+#
+# Only the keys we deliberately override live here — viper merges over its defaults, so every
+# key left out keeps upstream's value (assets path, timeouts, CORS "*", etc.).
+
+[Server]
+# Upstream default is 30s, and it is a hard cut: the server abandons the response mid-write and the
+# client gets a 200 with a truncated (often empty) body, no error. The first /collections on a cold
+# container measures ~20s -- it resolves an extent per collection against remote parquet, and that
+# is the one request that can approach the limit. 120s matches Cloud Run's own --timeout on this
+# service, so the platform stays the real bound rather than the server silently cutting first.
+# Extents are cached for the process life after that call (~0.03s), so this affects one request
+# per container. Precomputing extents in gen_db is the way to remove the cost rather than raise
+# the ceiling.
+WriteTimeoutSec = 120
+
+# Whitelist for the `transform=` query parameter. Upstream populates this list ONLY from config,
+# so with no file every transform value 400s — the feature is off by default rather than open by
+# default. Server-side geometry reduction matters here because collections are views over remote
+# GeoParquet: `transform=ST_Simplify,0.001` on an 85k-polygon layer is the difference between a
+# usable Arc Pro / QGIS connection and a 65MB download.
+#
+# ST_Simplify and ST_Buffer take a required argument (`transform=ST_Simplify,0.001`). Calling
+# either bare returns a 500, not a 400 — an upstream wart, not something this file can fix.
+TransformFunctions = [
+    "ST_Centroid",
+    "ST_Envelope",
+    "ST_PointOnSurface",
+    "ST_Boundary",
+    "ST_ConvexHull",
+    "ST_Simplify",
+    "ST_Buffer",
+]
+
+[Paging]
+# Upstream defaults are LimitDefault=10 / LimitMax=1000. LimitMax is the one that hurts: it
+# truncates every response at 1000 features and the client cannot tell. featureserv emits no
+# `numberMatched` and no rel="next" link (neither exists anywhere in its source), so a client
+# asking for a whole layer gets 1000 rows back and no signal that there were more.
+#
+# 10 of 27 serving topics are over 1000 today; enmin_plss_sections is 84,756, so the live service
+# has been silently dropping 98.8% of it. 100000 clears the largest with headroom.
+#
+# This is a floor, not a fix — it removes the truncation for every topic we currently serve, but
+# it does not make truncation *detectable*. A layer that grows past 100000 fails the same silent
+# way. The real fix is numberMatched + next links, which needs an upstream patch (ALL-5402).
+#
+# The cap was never a performance guard: a full 84,756-feature pull measures 1.65s / 65MB against
+# the CDN parquet, well inside the 30s WriteTimeoutSec default.
+#
+# LimitDefault is the one judgement call here. 1000 matches the old effective ceiling, so nothing
+# that worked before returns less. The cost is that a bare /items with no params on the largest
+# layer is now 1.45MB / 2.5s instead of 10 features — real clients (Arc Pro, QGIS) always send an
+# explicit limit, and the HTML UI is unaffected (it pages its own view), so this lands on naive
+# curl/browser hits only. Drop to 100 if that tradeoff reads wrong.
+LimitDefault = 1000
+LimitMax = 100000
+
+[Metadata]
+# Surfaced as the service title/description on `/` and in the generated OpenAPI at `/api` — this
+# is a public endpoint that federation catalogs and Arc Pro's server browser read by name.
+# Upstream's defaults are the generic "duckdb_featureserv" / "DuckDB Feature Server with Spatial
+# Extension", which say nothing about whose data this is.
+Title = "Utah Geological Survey — OGC API Features"
+Description = "OGC API - Features over the UGS geospatial warehouse. Collections are served live from GeoParquet on the public CDN. For standards clients (ArcGIS Pro, QGIS, federation); UGS web maps use PMTiles."

@@ -30,7 +30,7 @@ PMTILES_MIME = config.PMTILES_MIME
 
 # Bump when the tiling logic below changes in a way that should force a rebuild of unchanged
 # topics (new flag, different feature-id handling, etc.). Folded into the content fingerprint.
-PMTILES_BUILD_VERSION = 1
+PMTILES_BUILD_VERSION = 2
 
 # Fixed tippecanoe flags (everything but -o/-l/the input). Hoisted so the build command and the
 # tiling fingerprint share ONE source of truth — see _tile_and_upload + tiling_signature.
@@ -38,11 +38,14 @@ TILE_OPTS = [
     "--force",
     # -r1: keep EVERY point at every zoom. Tippecanoe's default drop-rate (2.5) thins dense
     # points at low/mid zoom — point layers (mt stations, wells) rendered ~1 dot until z12+.
-    # Lines/polys don't rate-drop, so they looked fine. --drop-densest stays a size-only
-    # safety valve (with -r1 it rarely trips at UGS scale).
     "-r1",
-    "--drop-densest-as-needed",
-    "--extend-zooms-if-still-dropping",
+    # UGS hazard/geologic layers need every feature present at every zoom — a missing fault
+    # segment or unit polygon is a wrong map, not a rendering nicety. Explicitly lift both of
+    # tippecanoe's automatic thinning triggers instead of relying on --drop-densest-as-needed
+    # "rarely tripping" — it does trip on larger line/poly topics (e.g. debris-flow segments)
+    # and silently drops features to fit the 500KB/tile, 200k-feature/tile defaults.
+    "--no-tile-size-limit",
+    "--no-feature-limit",
     # Promote the transform's `feature_id` to the native MVT feature id, so the viewer can join a
     # clicked map feature to its GeoParquet table row (both carry the same id). MapLibre then
     # exposes it as `feature.id` (enables setFeatureState highlight) — no promoteId needed.
@@ -79,7 +82,17 @@ def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
         *EXTRA_OPTS,
         geojsonl,
     ]
-    subprocess.run(cmd, check=True)
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        # tippecanoe's stderr has the actual reason (bad geometry, id collisions, etc).
+        # check=True alone only gives a bare "exit status N" — fold the real message in so
+        # ingest.py's per-sink FAILED log (which prints str(e)) shows root cause, not just rc.
+        detail = (e.stderr or e.stdout or "").strip()
+        raise RuntimeError(
+            f"tippecanoe exited {e.returncode} for {topic.fqn}"
+            + (f":\n{detail}" if detail else "")
+        ) from e
     gcs_object = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     # pmtiles is a "latest" pointer, overwritten each ingest -> revalidate via CDN.
     gcs.upload(pmtiles, gcs_object, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)

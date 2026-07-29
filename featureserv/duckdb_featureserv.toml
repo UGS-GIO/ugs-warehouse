@@ -6,6 +6,16 @@
 # key left out keeps upstream's value (assets path, timeouts, CORS "*", etc.).
 
 [Server]
+# Upstream default is 30s, and it is a hard cut: the server abandons the response mid-write and the
+# client gets a 200 with a truncated (often empty) body, no error. The first /collections on a cold
+# container measures ~20s -- it resolves an extent per collection against remote parquet, and that
+# is the one request that can approach the limit. 120s matches Cloud Run's own --timeout on this
+# service, so the platform stays the real bound rather than the server silently cutting first.
+# Extents are cached for the process life after that call (~0.03s), so this affects one request
+# per container. Precomputing extents in gen_db is the way to remove the cost rather than raise
+# the ceiling.
+WriteTimeoutSec = 120
+
 # Whitelist for the `transform=` query parameter. Upstream populates this list ONLY from config,
 # so with no file every transform value 400s — the feature is off by default rather than open by
 # default. Server-side geometry reduction matters here because collections are views over remote

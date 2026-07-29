@@ -91,16 +91,21 @@ def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
 _META_COLS = ("display_name", "description", "keywords", "iso_topic_category",
               "use_constraints", "lineage", "point_of_contact")
 
-# Columns that are jsonb in Postgres. They are SELECTed with an explicit ::text cast and parsed
-# on the way out, so callers always receive a real Python value — same approach related.py takes
-# with `relationships::text`. Without the cast the driver hands back the raw JSON *string*, and
-# anything treating it as a sequence (e.g. `list(...)`) silently splits it into characters.
-_JSON_COLS = frozenset({"keywords"})
 
+def _row_as_json_sql(where: str) -> str:
+    """The metadata SELECT, wrapped so Postgres serializes the whole row to JSON.
 
-def _select_expr(col: str) -> str:
-    """Column reference for the metadata SELECT — jsonb columns cast to text for parsing."""
-    return f"{col}::text" if col in _JSON_COLS else col
+    A jsonb column read straight through the scanner arrives as the raw JSON *string*, and
+    anything treating that as a sequence (e.g. `list(...)`) splits it into characters — #64, which
+    published per-character keywords on all 27 items. Casting the known-jsonb columns one by one
+    fixes the instance but leaves a list of column types maintained here, in a different system
+    from the DDL that defines them; the columns nobody has curated yet are the ones it silently
+    gets wrong. `to_jsonb` moves that knowledge back to Postgres: every column comes back with its
+    own type (jsonb → list/dict, text → str, and a *text* column whose contents merely look like
+    JSON stays a str), so adding a jsonb column to the registry needs no change here.
+    """
+    inner = "SELECT " + ", ".join(_META_COLS) + f" FROM raw.schema_registry WHERE {where}"
+    return f"SELECT to_jsonb(m)::text FROM ({inner}) m"
 
 
 def read_metadata(topic: Topic) -> dict:
@@ -110,14 +115,11 @@ def read_metadata(topic: Topic) -> dict:
 
     `domain_topic` is the primary key, so this matches at most one row and needs no ordering.
 
-    jsonb columns come back parsed (see `_JSON_COLS`); a malformed value raises rather than
-    degrading, since that is a registry problem worth seeing rather than silently dropping.
+    Values come back typed by Postgres (see `_row_as_json_sql`); a malformed value raises rather
+    than degrading, since that is a registry problem worth seeing rather than silently dropping.
     """
     stem = topic.stem.replace("'", "''")
-    pg_sql = (
-        "SELECT " + ", ".join(_select_expr(c) for c in _META_COLS)
-        + f" FROM raw.schema_registry WHERE domain_topic = '{stem}'"
-    )
+    pg_sql = _row_as_json_sql(f"domain_topic = '{stem}'")
     con = _connect()
     try:
         row = con.execute(
@@ -132,16 +134,13 @@ def read_metadata(topic: Topic) -> dict:
         return {}
     finally:
         con.close()
-    if not row:
+    if not row or row[0] is None:
         return {}
-    meta = dict(zip(_META_COLS, row, strict=False))
-    # Parse before the empty-filter below, so an empty jsonb array is dropped as `[]` rather
-    # than kept as the truthy string "[]". Not guarded: a value that will not parse is a
-    # malformed registry row, and swallowing it here is how the previous bug stayed invisible.
-    for col in _JSON_COLS:
-        if meta.get(col) is not None:
-            meta[col] = json.loads(meta[col])
-    return {k: v for k, v in meta.items() if v not in (None, "", [])}
+    # Parse before the empty-filter, so an empty jsonb array reaches it as `[]` rather than as the
+    # truthy string "[]". Not guarded: a row that will not parse is a malformed registry row, and
+    # swallowing it here is how the previous bug stayed invisible. Keyed by column name, so this
+    # no longer depends on the SELECT order lining up with _META_COLS.
+    return {k: v for k, v in json.loads(row[0]).items() if v not in (None, "", [], {})}
 
 
 def discover() -> list[Topic]:

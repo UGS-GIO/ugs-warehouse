@@ -8,7 +8,11 @@
 # returns, so the scan runs against Cloud Run's container startup budget (240s default probe).
 set -u
 
+# gen_db soft-fails by design (exits 0 and leaves the baked db in place), and reports its own
+# failure on stderr -- so this branch only fires on a hard crash where that handler never ran
+# (traceback, OOM, signal). stderr either way: Cloud Run maps it to ERROR severity, so running
+# degraded is alertable instead of looking identical to a healthy boot.
 python3 /app/gen_db.py --out "${DUCKDBFS_DATABASE_PATH}" \
-  || echo "[entrypoint] gen_db failed — serving the image-baked snapshot"
+  || echo "[entrypoint] gen_db failed — serving the image-baked snapshot (collection list is stale)" >&2
 
 exec /duckdb_featureserv "$@"

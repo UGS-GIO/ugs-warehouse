@@ -32,6 +32,41 @@ viewer use PMTiles/static and don't touch this.
   are wrong for us — the 1000-feature response cap, the 10-feature page size, the generic service
   title, and the `transform=` whitelist (empty by default, so the parameter is off). Everything else
   keeps upstream's value.
+- The server binary is **built from pinned upstream source with `patches/` applied**, not lifted
+  from the published image. See "The patch" below for why.
+
+## The patch
+
+Four OGC API - Features gaps are compiled into upstream, not configurable. Each one is a few lines
+of `patches/0001-ogc-conformance.patch`, written against upstream `7609f02` and pinned by SHA in
+the Dockerfile — `git apply` fails the build if upstream drifts, which is the signal to re-base.
+
+| Gap | Upstream | Effect |
+|---|---|---|
+| No feature `id` | `sqlTables` hardcodes `'' AS id_column` | GeoJSON features carry no `id`, and `/collections/{id}/items/{fid}` renders `WHERE "" = $1` → **500 for every id** |
+| No `numberMatched` | hardcoded `0` behind `json:",omitempty"` | never serialized, so a truncated response is indistinguishable from a complete one |
+| No `next` link | no `next` rel anywhere in the source | a client cannot page past the first response |
+| `/collections` extents | `Tables()` never calls `TableReload` | every collection reports `bbox [0,0,0,0]`; layer pickers and zoom-to-layer get null island |
+
+The id column is resolved by convention — first match of `feature_id`, `fid`, `ogc_fid`, `objectid`,
+`gid`, `id`. DuckDB views have no primary key, so there is nothing authoritative to read; every
+warehouse topic carries `feature_id` (minted in `vector/transform.py`, stable across ingests and
+already the MVT feature id in PMTiles), so the OGC `id` and the PMTiles `id` are the same value.
+
+**Known cost:** the first `/collections` on a cold container resolves an extent per collection
+against remote parquet — ~18s, then cached for the life of the process (~0.03s). Collections are
+fixed once `gen_db` swaps the database in, so the cache cannot go stale.
+
+The extent query reads the GeoParquet `bbox_xmin/ymin/xmax/ymax` covering columns (GeoParquet 1.1
+calls these "covering" columns; every warehouse topic has them, written by `vector/sink_archive.py`)
+rather than aggregating geometry. Aggregating was measured at over 30s, which **exceeded upstream's
+default `Server.WriteTimeoutSec` and returned a 200 with an empty body** — the server abandons the
+response mid-write and says nothing. Hence both the cheaper query here and `WriteTimeoutSec = 120`
+in the config. If a table lacks the covering columns the query errors and upstream's existing
+fallback recomputes it from geometry, so this is an optimisation, not a requirement.
+
+Precomputing extents in `gen_db` is the way to remove that first-call cost rather than raise the
+ceiling again.
 
 Endpoints (Features Core): `/`, `/conformance`, `/collections`, `/collections/{id}`,
 `/collections/{id}/items?bbox=&limit=`. Conformance: core + oas3 + geojson + html.
@@ -86,11 +121,15 @@ docker run --rm ugs-featureserv python3 /app/gen_db.py --out /data/database.duck
   `rel="next"` link — neither exists anywhere in its source — so truncation stays *undetectable*. A
   layer that grows past the cap fails the same silent way. The real fix is an upstream patch that
   sets `NumberMatched` and emits next links (ALL-5402).
-- Other upstream gaps worth knowing before wiring a client: GeoJSON features carry no `id` member
-  and `/collections/{id}/items/{fid}` always 500s (`sqlTables` hardcodes `'' AS id_column`, so
-  the single-feature query renders `WHERE "" = $1`); `/collections` reports `bbox [0,0,0,0]` for
-  every collection while `/collections/{id}` has the real extent; `geometrytype` is always the
-  literal `GEOMETRY`. The missing feature `id` is what blocks ArcGIS **Online** specifically —
-  its `OGCFeatureLayer` needs one to derive `OBJECTID`.
+- Still upstream, still unfixed: `geometrytype` is always the literal `GEOMETRY` and `srid` the
+  literal `4326` (harmless for us — every topic is 4326 and homogeneous, verified across all 27);
+  `orderby=` and `crs=` are accepted and silently ignored; `precision=` and `groupby=` 500;
+  `/functions/{id}/items` 500s. None of these block a standards client.
+- **ArcGIS Online**: every documented blocker is now cleared — feature `id`, `numberMatched`, `next`
+  links, working `/items/{fid}`, real collection extents, GeoJSON conformance, CORS. That is a
+  requirements check against Esri's `OGCFeatureLayer` docs, **not** a confirmed AGOL connection;
+  nobody has added the layer in AGOL yet. When someone does, give it the **service root** URL and
+  pick the collection as a sublayer — a `/collections/{id}` URL is not what it expects. Treat AGOL
+  as unverified until that acceptance test is run, the same way Arc Pro is the one for this service.
 - Pin `tobilg/duckdb_featureserv:latest` to a version tag once a known-good one is chosen.
 - Replaces the earlier bespoke FastAPI (`ogcapi/`, removed) — off-the-shelf, less to maintain.

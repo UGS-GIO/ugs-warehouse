@@ -35,41 +35,34 @@ TransformFunctions = [
 ]
 
 [Paging]
-# Upstream defaults are LimitDefault=10 / LimitMax=1000. LimitMax is the one that hurts: it
-# truncates every response at 1000 features and the client cannot tell. featureserv emits no
-# `numberMatched` and no rel="next" link (neither exists anywhere in its source), so a client
-# asking for a whole layer gets 1000 rows back and no signal that there were more.
+# Upstream defaults are LimitDefault=10 / LimitMax=1000, and LimitMax was the damaging one: it
+# truncated every response at 1000 features with no way for the client to notice. 10 of 27 serving
+# topics are over 1000; enmin_plss_sections is 84,756, so 98.8% of it was being dropped silently.
+# Truncation is now at least *visible* — numberMatched and rel="next" ship with the patched server.
 #
-# 10 of 27 serving topics are over 1000; enmin_plss_sections is 84,756, so the live service had been
-# silently dropping 98.8% of it.
+# The ceiling on LimitMax is memory, not policy: featureserv buffers the whole FeatureCollection
+# before writing it, so peak memory tracks the largest single response. Keep this value and the
+# service's --memory in cloudbuild.yaml in step; they are one decision recorded in two files.
 #
-# 20000 rather than "big enough for the largest layer", because the ceiling is memory, not policy.
-# featureserv buffers the whole FeatureCollection before writing it. Measured against the deployed
-# image: a full 84,756-feature pull is a 122MB response and needs ~2Gi; at the 512Mi this service
-# runs with, Cloud Run SIGKILLs the container and returns 503 (`Container terminated on signal 9`).
-# On prod, limit=20000 succeeds (28.9MB, 6.7s) and limit=50000 does not. A cap the service cannot
-# honour is worse than a low one: the request dies *and* takes the container with it, so concurrent
-# requests fail too.
+# Measured against the deployed image, full 84,756-feature pull (122MB response):
+#   512Mi  OOM — and this was the deployed size, so a client paging a large collection got a 503
+#                mid-walk and killed the container, taking concurrent requests with it (ALL-5410)
+#   1Gi    OOM on a single full pull; survives paged 20k requests
+#   2Gi    survives repeated full pulls (11.5s cold, ~3s warm), no OOM
 #
-# This costs nothing in capability now that paging works — numberMatched reports the true total and
-# a next link walks the rest, which is how OGC clients consume large collections anyway. Raising
-# --memory to 2Gi would allow a bigger cap; that is a cost and abuse-surface decision on a public
-# unauthenticated endpoint, not a config one, so it is deliberately not taken here.
+# 2Gi is deployed, so 100000 is honest again — it clears the largest topic with room.
 #
-# This is a floor, not a fix — it removes the truncation for every topic we currently serve, but
-# it does not make truncation *detectable*. A layer that grows past 100000 fails the same silent
-# way. The real fix is numberMatched + next links, which needs an upstream patch (ALL-5402).
+# Exposure, accepted deliberately: this service is --allow-unauthenticated with maxScale=100, so one
+# caller can request a 122MB response repeatedly. A higher cap makes each such request costlier; it
+# does not change the shape of the exposure, which is unbounded either way absent auth or rate
+# limiting. The real fix is streaming the response rather than buffering it — memory would become
+# roughly constant and this whole coupling would go away. That is an upstream change.
 #
-# The cap was never a performance guard: a full 84,756-feature pull measures 1.65s / 65MB against
-# the CDN parquet, well inside the 30s WriteTimeoutSec default.
-#
-# LimitDefault is the one judgement call here. 1000 matches the old effective ceiling, so nothing
-# that worked before returns less. The cost is that a bare /items with no params on the largest
-# layer is now 1.45MB / 2.5s instead of 10 features — real clients (Arc Pro, QGIS) always send an
-# explicit limit, and the HTML UI is unaffected (it pages its own view), so this lands on naive
-# curl/browser hits only. Drop to 100 if that tradeoff reads wrong.
+# LimitDefault=1000 is a separate judgement call: a bare /items with no params on the largest layer
+# costs ~1.45MB instead of 10 features. Real clients (Arc Pro, QGIS) always send an explicit limit
+# and the HTML UI pages its own view, so this lands on naive curl/browser hits only.
 LimitDefault = 1000
-LimitMax = 20000
+LimitMax = 100000
 
 [Metadata]
 # Surfaced as the service title/description on `/` and in the generated OpenAPI at `/api` — this
@@ -78,3 +71,17 @@ LimitMax = 20000
 # Extension", which say nothing about whose data this is.
 Title = "Utah Geological Survey — OGC API Features"
 Description = "OGC API - Features over the UGS geospatial warehouse. Collections are served live from GeoParquet on the public CDN. For standards clients (ArcGIS Pro, QGIS, federation); UGS web maps use PMTiles."
+
+[Website]
+# The HTML map's basemap tiles. Upstream's default is an empty string, and empty is not "no
+# basemap" -- the template feeds it straight into `new ol.source.OSM({url: BASEMAP_URL})`, which
+# breaks OpenLayers' render loop. That matters beyond cosmetics: the vector layer uses the default
+# `all` loading strategy, whose loader is driven by that render loop, so with no basemap the
+# features are never fetched at all. `getExtent()` then returns nulls, the `rendercomplete`
+# auto-zoom fits nothing, and the view sits at its initial center [0,0] -- a blank white page and
+# "Feature count: -" on a collection that serves fine over JSON.
+#
+# Verified on prod: swapping this one URL in at runtime took enmin_plss_sections from 0 features
+# rendered to 1000, and the auto-zoom snapped to Utah. OSM's tile server sends CORS headers, which
+# is why upstream's own example config recommends it.
+BasemapUrl = "https://tile.openstreetmap.org/{z}/{x}/{y}.png"

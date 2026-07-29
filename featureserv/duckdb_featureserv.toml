@@ -40,8 +40,21 @@ TransformFunctions = [
 # `numberMatched` and no rel="next" link (neither exists anywhere in its source), so a client
 # asking for a whole layer gets 1000 rows back and no signal that there were more.
 #
-# 10 of 27 serving topics are over 1000 today; enmin_plss_sections is 84,756, so the live service
-# has been silently dropping 98.8% of it. 100000 clears the largest with headroom.
+# 10 of 27 serving topics are over 1000; enmin_plss_sections is 84,756, so the live service had been
+# silently dropping 98.8% of it.
+#
+# 20000 rather than "big enough for the largest layer", because the ceiling is memory, not policy.
+# featureserv buffers the whole FeatureCollection before writing it. Measured against the deployed
+# image: a full 84,756-feature pull is a 122MB response and needs ~2Gi; at the 512Mi this service
+# runs with, Cloud Run SIGKILLs the container and returns 503 (`Container terminated on signal 9`).
+# On prod, limit=20000 succeeds (28.9MB, 6.7s) and limit=50000 does not. A cap the service cannot
+# honour is worse than a low one: the request dies *and* takes the container with it, so concurrent
+# requests fail too.
+#
+# This costs nothing in capability now that paging works — numberMatched reports the true total and
+# a next link walks the rest, which is how OGC clients consume large collections anyway. Raising
+# --memory to 2Gi would allow a bigger cap; that is a cost and abuse-surface decision on a public
+# unauthenticated endpoint, not a config one, so it is deliberately not taken here.
 #
 # This is a floor, not a fix — it removes the truncation for every topic we currently serve, but
 # it does not make truncation *detectable*. A layer that grows past 100000 fails the same silent
@@ -56,7 +69,7 @@ TransformFunctions = [
 # explicit limit, and the HTML UI is unaffected (it pages its own view), so this lands on naive
 # curl/browser hits only. Drop to 100 if that tradeoff reads wrong.
 LimitDefault = 1000
-LimitMax = 100000
+LimitMax = 20000
 
 [Metadata]
 # Surfaced as the service title/description on `/` and in the generated OpenAPI at `/api` — this

@@ -12,6 +12,7 @@ Env:
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 
@@ -91,18 +92,34 @@ _META_COLS = ("display_name", "description", "keywords", "iso_topic_category",
               "use_constraints", "lineage", "point_of_contact")
 
 
+def _row_as_json_sql(where: str) -> str:
+    """The metadata SELECT, wrapped so Postgres serializes the whole row to JSON.
+
+    A jsonb column read straight through the scanner arrives as the raw JSON *string*, and
+    anything treating that as a sequence (e.g. `list(...)`) splits it into characters — #64, which
+    published per-character keywords on all 27 items. Casting the known-jsonb columns one by one
+    fixes the instance but leaves a list of column types maintained here, in a different system
+    from the DDL that defines them; the columns nobody has curated yet are the ones it silently
+    gets wrong. `to_jsonb` moves that knowledge back to Postgres: every column comes back with its
+    own type (jsonb → list/dict, text → str, and a *text* column whose contents merely look like
+    JSON stays a str), so adding a jsonb column to the registry needs no change here.
+    """
+    inner = "SELECT " + ", ".join(_META_COLS) + f" FROM raw.schema_registry WHERE {where}"
+    return f"SELECT to_jsonb(m)::text FROM ({inner}) m"
+
+
 def read_metadata(topic: Topic) -> dict:
     """Per-topic descriptive metadata from `raw.schema_registry` (keyed by domain_topic,
     which equals the topic stem). Graceful: returns {} if the columns/table/grant aren't
     there yet (pre-#171, or no SELECT on raw) — the warehouse then falls back to defaults.
 
     `domain_topic` is the primary key, so this matches at most one row and needs no ordering.
+
+    Values come back typed by Postgres (see `_row_as_json_sql`); a malformed value raises rather
+    than degrading, since that is a registry problem worth seeing rather than silently dropping.
     """
     stem = topic.stem.replace("'", "''")
-    pg_sql = (
-        "SELECT " + ", ".join(_META_COLS)
-        + f" FROM raw.schema_registry WHERE domain_topic = '{stem}'"
-    )
+    pg_sql = _row_as_json_sql(f"domain_topic = '{stem}'")
     con = _connect()
     try:
         row = con.execute(
@@ -117,9 +134,13 @@ def read_metadata(topic: Topic) -> dict:
         return {}
     finally:
         con.close()
-    if not row:
+    if not row or row[0] is None:
         return {}
-    return {k: v for k, v in zip(_META_COLS, row, strict=False) if v not in (None, "", [])}
+    # Parse before the empty-filter, so an empty jsonb array reaches it as `[]` rather than as the
+    # truthy string "[]". Not guarded: a row that will not parse is a malformed registry row, and
+    # swallowing it here is how the previous bug stayed invisible. Keyed by column name, so this
+    # no longer depends on the SELECT order lining up with _META_COLS.
+    return {k: v for k, v in json.loads(row[0]).items() if v not in (None, "", [], {})}
 
 
 def discover() -> list[Topic]:

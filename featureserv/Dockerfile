@@ -22,14 +22,33 @@ ARG STAC_CATALOG=https://maps-assets.geology.utah.gov/warehouse/stac/catalog.jso
 ENV STAC_CATALOG=${STAC_CATALOG} MODE=view
 RUN python gen_db.py --out /build/database.duckdb --strict && chmod 0666 /build/database.duckdb
 
-# Stage 2 — the off-the-shelf server binary. Its own image is distroless (no shell, no Python), so
-# it can't run gen_db at start; lift the binary + its Go templates onto a Python base instead. It's
-# dynamically linked against stock glibc/libstdc++, so it runs unchanged here.
-FROM tobilg/duckdb_featureserv:latest AS server
+# Stage 2 — the server binary, built from pinned upstream source with our patch applied.
+#
+# We build rather than lift the published image because the gaps that made this service unusable
+# for standards clients are compiled in, not configurable: upstream's catalog query hardcodes
+# `'' AS id_column`, which drops the GeoJSON `id` from every feature and renders the single-feature
+# query as `WHERE "" = $1`; `NumberMatched` is hardcoded to 0 behind `omitempty`; there is no `next`
+# rel anywhere in the source; and `/collections` never loads extents. See patches/ for the diff and
+# README for what each one broke.
+#
+# Pinned by SHA, not a tag — `latest` is a moving target and this patch is written against one tree.
+# `git apply` fails the build if upstream drifts, which is the intended signal to re-base the patch.
+FROM golang:1.24.6-bookworm AS server
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential pkg-config git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+# Upstream main as of 2025-12-10; unchanged since.
+ARG FEATURESERV_REF=7609f027b5f0a062e5f05b96b74fba477e224421
+WORKDIR /src
+RUN git clone --quiet https://github.com/tobilg/duckdb_featureserv.git . \
+    && git checkout --quiet ${FEATURESERV_REF}
+COPY patches/ /patches/
+RUN git apply --verbose /patches/*.patch
+RUN CGO_ENABLED=1 go build -ldflags "-s -w" -o /duckdb_featureserv .
 
 FROM python:3.12-slim
 COPY --from=server /duckdb_featureserv /duckdb_featureserv
-COPY --from=server /assets /assets
+COPY --from=server /src/assets /assets
 # featureserv loads spatial + httpfs at query time (verified) so the views resolve against the
 # remote parquet; it resolves ./assets from the working dir.
 WORKDIR /

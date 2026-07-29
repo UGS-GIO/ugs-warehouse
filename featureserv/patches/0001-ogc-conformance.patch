@@ -1,0 +1,296 @@
+diff --git a/internal/api/api.go b/internal/api/api.go
+index e764be2..f6fa289 100644
+--- a/internal/api/api.go
++++ b/internal/api/api.go
+@@ -58,6 +58,8 @@ const (
+ 	RelData        = "data"
+ 	RelFunctions   = "functions"
+ 	RelItems       = "items"
++	RelNext        = "next"
++	RelPrev        = "prev"
+ 
+ 	TitleFeatuuresGeoJSON = "Features as GeoJSON"
+ 	TitleDataJSON         = "Data as JSON"
+@@ -543,12 +545,12 @@ func TableProperties(tbl *data.Table) []*Property {
+ 	return props
+ }
+ 
+-func NewFeatureCollectionInfo(featureJSON []string) *FeatureCollectionRaw {
++func NewFeatureCollectionInfo(featureJSON []string, numberMatched uint) *FeatureCollectionRaw {
+ 	ts := time.Now().Format(time.RFC3339)
+ 	doc := FeatureCollectionRaw{
+ 		Type:           GeoJSONFeatureCollection,
+ 		Features:       toRaw(featureJSON),
+-		NumberMatched:  0,
++		NumberMatched:  numberMatched,
+ 		NumberReturned: uint(len(featureJSON)),
+ 		TimeStamp:      ts,
+ 	}
+diff --git a/internal/data/catalog.go b/internal/data/catalog.go
+index b38e4d8..b40cee4 100644
+--- a/internal/data/catalog.go
++++ b/internal/data/catalog.go
+@@ -39,6 +39,9 @@ type Catalog interface {
+ 	// TableReload reloads volatile table data
+ 	TableReload(name string)
+ 
++	// TableFeatureCount is how many features TableFeatures would match ignoring limit/offset.
++	TableFeatureCount(ctx context.Context, name string, param *QueryParam) (uint, error)
++
+ 	// TableFeatures returns an array of the JSON for the features in a table
+ 	// It returns nil if the table does not exist
+ 	TableFeatures(ctx context.Context, name string, param *QueryParam) ([]string, error)
+diff --git a/internal/data/catalog_db.go b/internal/data/catalog_db.go
+index 8487bba..51dc975 100644
+--- a/internal/data/catalog_db.go
++++ b/internal/data/catalog_db.go
+@@ -166,6 +166,15 @@ func (cat *catalogDB) Close() {
+ 
+ func (cat *catalogDB) Tables() ([]*Table, error) {
+ 	cat.refreshTables(true)
++	// refreshTables rebuilds the table list from scratch, and loadTables does not read extents --
++	// so without this every collection in the list response carries the zero-value bbox [0,0,0,0],
++	// while the single-collection route (which calls TableReload) reports the real one. Clients
++	// that zoom to a layer read the list.
++	for _, tbl := range cat.tables {
++		if tbl.Extent == (Extent{}) {
++			cat.TableReload(tbl.ID)
++		}
++	}
+ 	return cat.tables, nil
+ }
+ 
+@@ -217,6 +226,20 @@ func (cat *catalogDB) TableByName(name string) (*Table, error) {
+ 	return tbl, nil
+ }
+ 
++func (cat *catalogDB) TableFeatureCount(ctx context.Context, name string, param *QueryParam) (uint, error) {
++	tbl, err := cat.TableByName(name)
++	if err != nil || tbl == nil {
++		return 0, err
++	}
++	sql, argValues := sqlFeatureCount(tbl, param)
++	log.Debug("Feature count query: " + sql)
++	var n uint
++	if err := cat.dbconn.QueryRowContext(ctx, sql, argValues...).Scan(&n); err != nil {
++		return 0, err
++	}
++	return n, nil
++}
++
+ func (cat *catalogDB) TableFeatures(ctx context.Context, name string, param *QueryParam) ([]string, error) {
+ 	tbl, err := cat.TableByName(name)
+ 	if err != nil || tbl == nil {
+@@ -261,7 +284,17 @@ func (cat *catalogDB) refreshTables(force bool) {
+ }
+ 
+ func (cat *catalogDB) loadTables() {
++	prior := cat.tableMap
+ 	cat.tableMap = cat.readTables(cat.dbconn)
++	// readTables returns zero-value extents, and computing one is a full ST_Envelope_Agg over the
++	// (possibly remote) data -- so carry forward what we already measured. Safe because the
++	// collection set is fixed for the life of the process: gen_db swaps the database file before
++	// the server binds its port, never underneath it.
++	for id, tbl := range cat.tableMap {
++		if old, ok := prior[id]; ok && old.Extent != (Extent{}) {
++			tbl.Extent = old.Extent
++		}
++	}
+ 	cat.tables = tablesSorted(cat.tableMap)
+ }
+ 
+diff --git a/internal/data/catalog_mock.go b/internal/data/catalog_mock.go
+index 1c3f317..50ec0fd 100644
+--- a/internal/data/catalog_mock.go
++++ b/internal/data/catalog_mock.go
+@@ -187,6 +187,14 @@ func (cat *CatalogMock) Tables() ([]*Table, error) {
+ 	return cat.TableDefs, nil
+ }
+ 
++func (cat *CatalogMock) TableFeatureCount(ctx context.Context, name string, param *QueryParam) (uint, error) {
++	tbl, err := cat.TableByName(name)
++	if err != nil || tbl == nil {
++		return 0, err
++	}
++	return uint(len(cat.tableData[name])), nil
++}
++
+ func (cat *CatalogMock) TableReload(name string) {
+ 	// no-op for mock data
+ }
+diff --git a/internal/data/db_sql.go b/internal/data/db_sql.go
+index 79da489..5938aaa 100644
+--- a/internal/data/db_sql.go
++++ b/internal/data/db_sql.go
+@@ -23,21 +23,35 @@ import (
+ 
+ const forceTextTSVECTOR = "tsvector"
+ 
+-const sqlTables = `
+-SELECT 
+-    table_name AS id,
++// idColumnCandidates are the column names treated as a feature identifier, best first. DuckDB
++// views carry no primary key, so unlike pg_featureserv there is nothing authoritative to read --
++// this convention is the substitute. Without it IDColumn stays "", which drops the GeoJSON "id"
++// member (clients that derive an object id from it cannot load the layer) and renders the
++// single-feature query as WHERE "" = $1, so /items/{fid} always errors.
++const idColumnCandidates = "['feature_id','fid','ogc_fid','objectid','gid','id']"
++
++var sqlTables = fmt.Sprintf(`
++SELECT
++    g.table_name AS id,
+     'main' AS schema,
+-    table_name AS table,
++    g.table_name AS table,
+     '' AS description,
+-    column_name AS geometry_column,
++    g.column_name AS geometry_column,
+     4326 AS srid,
+     'GEOMETRY' AS geometry_type,
+-    '' AS id_column,
++    COALESCE((
++        SELECT c.column_name
++        FROM information_schema.columns c
++        WHERE c.table_name = g.table_name
++          AND list_position(%[1]s, lower(c.column_name)) IS NOT NULL
++        ORDER BY list_position(%[1]s, lower(c.column_name))
++        LIMIT 1
++    ), '') AS id_column,
+     '[]' AS props
+-FROM information_schema.columns 
+-WHERE data_type = 'GEOMETRY'
+-ORDER BY table_name
+-`
++FROM information_schema.columns g
++WHERE g.data_type = 'GEOMETRY'
++ORDER BY g.table_name
++`, idColumnCandidates)
+ 
+ const sqlFunctionsTemplate = `
+ SELECT 
+@@ -142,6 +156,18 @@ func sqlColExpr(name string, dbtype string) string {
+ 	return name
+ }
+ 
++const sqlFmtFeatureCount = "SELECT count(*) FROM \"%s\" %v"
++
++// sqlFeatureCount is sqlFeatures' row count -- same filters, no geometry, no paging. Feeds
++// numberMatched, which the spec wants so a client can tell a full response from a truncated one.
++func sqlFeatureCount(tbl *Table, param *QueryParam) (string, []interface{}) {
++	bboxFilter := sqlBBoxFilter(tbl.GeometryColumn, param.Bbox, param.BboxCrs)
++	attrFilter, attrVals := sqlAttrFilter(param.Filter)
++	cqlFilter := sqlCqlFilter(param.FilterSql)
++	sqlWhere := sqlWhere(bboxFilter, attrFilter, cqlFilter)
++	return fmt.Sprintf(sqlFmtFeatureCount, tbl.Table, sqlWhere), attrVals
++}
++
+ const sqlFmtFeature = "SELECT %v %v FROM \"%s\" WHERE \"%v\" = $1 LIMIT 1"
+ 
+ func sqlFeature(tbl *Table, param *QueryParam) string {
+diff --git a/internal/service/handler.go b/internal/service/handler.go
+index 0fe95ab..d3d2913 100644
+--- a/internal/service/handler.go
++++ b/internal/service/handler.go
+@@ -302,6 +302,9 @@ func handleCollectionItems(w http.ResponseWriter, r *http.Request) *appError {
+ 	if err != nil {
+ 		return appErrorBadRequest(err, err.Error())
+ 	}
++	// The GeoJSON "id" is read out of the selected columns, so a properties= projection that
++	// omits the id column would silently drop it from every feature. Keep it selected.
++	param.Columns = withIDColumn(param.Columns, tbl.IDColumn)
+ 	param.Filter = parseFilter(reqParam.Values, tbl.DbTypes)
+ 
+ 	ctx := r.Context()
+@@ -343,23 +346,66 @@ func writeItemsJSON(ctx context.Context, w http.ResponseWriter, name string, par
+ 		return appErrorNotFoundFmt(err, api.ErrMsgCollectionNotFound, name)
+ 	}
+ 
++	//--- total matching the filter, so the client can tell a full response from a truncated one
++	numberMatched, errCount := catalogInstance.TableFeatureCount(ctx, name, param)
++	if errCount != nil {
++		return appErrorInternalFmt(errCount, api.ErrMsgDataReadError, name)
++	}
++
+ 	//--- assemble resonse
+-	content := api.NewFeatureCollectionInfo(features)
+-	content.Links = linksItems(name, urlBase)
++	content := api.NewFeatureCollectionInfo(features, numberMatched)
++	content.Links = linksItems(name, urlBase, param, uint(len(features)), numberMatched)
+ 
+ 	return writeJSON(w, api.ContentTypeGeoJSON, content)
+ }
+ 
+-func linksItems(name string, urlBase string) []*api.Link {
++// withIDColumn appends idCol to cols if it is set and not already present.
++func withIDColumn(cols []string, idCol string) []string {
++	if idCol == "" {
++		return cols
++	}
++	for _, c := range cols {
++		if c == idCol {
++			return cols
++		}
++	}
++	return append(cols, idCol)
++}
++
++func linksItems(name string, urlBase string, param *data.QueryParam, returned uint, matched uint) []*api.Link {
+ 	path := api.PathCollectionItems(name)
+ 
+ 	var links []*api.Link
+ 	links = append(links, linkSelf(urlBase, path, api.TitleDocument))
+ 	links = append(links, linkAlt(urlBase, path, api.TitleDocument))
+ 
++	// Paging links. Without a next link a client has no way to walk past the first page, and no
++	// way to distinguish "this is the whole layer" from "this is as much as the server would give
++	// you" -- which is the same silent truncation numberMatched exists to expose.
++	if param != nil && param.Limit > 0 {
++		if uint(param.Offset)+returned < matched {
++			links = append(links, linkPage(urlBase, path, api.RelNext, param.Limit, param.Offset+param.Limit))
++		}
++		if param.Offset > 0 {
++			prev := param.Offset - param.Limit
++			if prev < 0 {
++				prev = 0
++			}
++			links = append(links, linkPage(urlBase, path, api.RelPrev, param.Limit, prev))
++		}
++	}
++
+ 	return links
+ }
+ 
++func linkPage(urlBase string, path string, rel string, limit int, offset int) *api.Link {
++	return &api.Link{
++		Href:  fmt.Sprintf("%s?limit=%d&offset=%d", urlPath(urlBase, path), limit, offset),
++		Rel:   rel,
++		Type:  api.ContentTypeGeoJSON,
++		Title: api.TitleDocument + api.TitleAsJSON}
++}
++
+ func handleItem(w http.ResponseWriter, r *http.Request) *appError {
+ 	// TODO: determine content from request header?
+ 	format := api.RequestedFormat(r)
+@@ -388,6 +434,9 @@ func handleItem(w http.ResponseWriter, r *http.Request) *appError {
+ 		return appErrorNotFoundFmt(err1, api.ErrMsgCollectionNotFound, name)
+ 	}
+ 	param, errQuery := createQueryParams(&reqParam, tbl.Columns, tbl.Srid)
++	if errQuery == nil {
++		param.Columns = withIDColumn(param.Columns, tbl.IDColumn)
++	}
+ 
+ 	if errQuery == nil {
+ 		ctx := r.Context()
+@@ -713,8 +762,10 @@ func writeFunItemsGeoJSON(ctx context.Context, w http.ResponseWriter, name strin
+ 	}
+ 
+ 	//--- assemble resonse
+-	content := api.NewFeatureCollectionInfo(features)
+-	content.Links = linksItems(name, urlBase)
++	// Functions are a stub upstream (/functions/{id}/items errors); no separate count query for
++	// them -- report what we returned rather than inventing a total.
++	content := api.NewFeatureCollectionInfo(features, uint(len(features)))
++	content.Links = linksItems(name, urlBase, nil, uint(len(features)), uint(len(features)))
+ 
+ 	return writeJSON(w, api.ContentTypeGeoJSON, content)
+ }

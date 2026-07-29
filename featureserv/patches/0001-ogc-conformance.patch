@@ -1,3 +1,28 @@
+diff --git a/assets/map_script.gohtml b/assets/map_script.gohtml
+index 23e2f10..6571610 100644
+--- a/assets/map_script.gohtml
++++ b/assets/map_script.gohtml
+@@ -141,10 +141,19 @@ var map = new ol.Map({
+ });
+ map.addLayer(vectorLayer);
+ 
+-map.once('rendercomplete', function(event) {
++// Zoom to the data and report the count once the features are actually in -- not on the first
++// completed frame. 'rendercomplete' fires as soon as a frame renders, which for any non-trivial
++// collection beats the asynchronous GeoJSON fetch: zoomLayer() then fit a source whose getExtent()
++// was still [null,null,null,null], leaving the view at its initial center [0,0], and onMapLoad()
++// reported a count of zero. The data had loaded fine seconds later -- just off-screen, on a page
++// that looked empty. 'featuresloadend' is the event that actually means "the features are here".
++vectorLayer.getSource().once('featuresloadend', function(event) {
+ 	zoomLayer(vectorLayer);
+ 	onMapLoad();
+ });
++vectorLayer.getSource().once('featuresloaderror', function(event) {
++	console.error('featureserv: failed to load features from ' + DATA_URL);
++});
+ map.on('pointermove', (evt) => {
+         let ptGeo = ol.proj.transform(evt.coordinate, 'EPSG:3857', 'EPSG:4326');
+         let pFormat = ol.coordinate.toStringXY(ptGeo, 4);
 diff --git a/internal/api/api.go b/internal/api/api.go
 index e764be2..f6fa289 100644
 --- a/internal/api/api.go

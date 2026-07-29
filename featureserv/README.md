@@ -53,10 +53,20 @@ The id column is resolved by convention — first match of `feature_id`, `fid`, 
 warehouse topic carries `feature_id` (minted in `vector/transform.py`, stable across ingests and
 already the MVT feature id in PMTiles), so the OGC `id` and the PMTiles `id` are the same value.
 
-**Known cost:** the first `/collections` on a cold container computes 27 extents (`ST_Envelope_Agg`
-over remote parquet) and takes ~12s; it is cached for the life of the process after that (~0.03s).
-Collections are fixed once `gen_db` swaps the database in, so the cache cannot go stale. If that
-first hit becomes a problem, the fix is to precompute extents in `gen_db` rather than to drop them.
+**Known cost:** the first `/collections` on a cold container resolves an extent per collection
+against remote parquet — ~18s, then cached for the life of the process (~0.03s). Collections are
+fixed once `gen_db` swaps the database in, so the cache cannot go stale.
+
+The extent query reads the GeoParquet `bbox_xmin/ymin/xmax/ymax` covering columns (GeoParquet 1.1
+calls these "covering" columns; every warehouse topic has them, written by `vector/sink_archive.py`)
+rather than aggregating geometry. Aggregating was measured at over 30s, which **exceeded upstream's
+default `Server.WriteTimeoutSec` and returned a 200 with an empty body** — the server abandons the
+response mid-write and says nothing. Hence both the cheaper query here and `WriteTimeoutSec = 120`
+in the config. If a table lacks the covering columns the query errors and upstream's existing
+fallback recomputes it from geometry, so this is an optimisation, not a requirement.
+
+Precomputing extents in `gen_db` is the way to remove that first-call cost rather than raise the
+ceiling again.
 
 Endpoints (Features Core): `/`, `/conformance`, `/collections`, `/collections/{id}`,
 `/collections/{id}/items?bbox=&limit=`. Conformance: core + oas3 + geojson + html.

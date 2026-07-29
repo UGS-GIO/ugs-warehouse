@@ -119,7 +119,7 @@ index 1c3f317..50ec0fd 100644
  	// no-op for mock data
  }
 diff --git a/internal/data/db_sql.go b/internal/data/db_sql.go
-index 79da489..5938aaa 100644
+index 79da489..eb35f63 100644
 --- a/internal/data/db_sql.go
 +++ b/internal/data/db_sql.go
 @@ -23,21 +23,35 @@ import (
@@ -168,7 +168,30 @@ index 79da489..5938aaa 100644
  
  const sqlFunctionsTemplate = `
  SELECT 
-@@ -142,6 +156,18 @@ func sqlColExpr(name string, dbtype string) string {
+@@ -72,11 +86,19 @@ func quotedList(names []string) string {
+ 	return "'" + itemsJoin + "'"
+ }
+ 
+-const sqlFmtExtentEst = `SELECT ST_XMin(ext.geom) AS xmin, ST_YMin(ext.geom) AS ymin, ST_XMax(ext.geom) AS xmax, ST_YMax(ext.geom) AS ymax
+-FROM ( SELECT ST_Envelope_Agg("%s") AS geom FROM "%s" ) AS ext;`
++// sqlFmtExtentEst reads a precomputed per-row bounding box instead of aggregating geometry.
++// GeoParquet 1.1 calls these "covering" columns and writers emit them precisely so an extent does
++// not require decoding every geometry; four plain doubles also let the reader prune on parquet
++// column statistics. If the table has no such columns this query errors, loadExtent returns false,
++// and TableReload falls through to sqlExtentExact — the two-tier structure that was already here.
++//
++// This is not a micro-optimisation. Aggregating geometry across a catalog of remote parquet blew
++// the 30s Server.WriteTimeoutSec on the first /collections call and returned an empty 200 body.
++const sqlFmtExtentEst = `SELECT min(bbox_xmin) AS xmin, min(bbox_ymin) AS ymin, max(bbox_xmax) AS xmax, max(bbox_ymax) AS ymax
++FROM "%s";`
+ 
+ func sqlExtentEstimated(tbl *Table) string {
+-	return fmt.Sprintf(sqlFmtExtentEst, tbl.GeometryColumn, tbl.Table)
++	return fmt.Sprintf(sqlFmtExtentEst, tbl.Table)
+ }
+ 
+ const sqlFmtExtentExact = `SELECT ST_XMin(ext.geom) AS xmin, ST_YMin(ext.geom) AS ymin, ST_XMax(ext.geom) AS xmax, ST_YMax(ext.geom) AS ymax
+@@ -142,6 +164,18 @@ func sqlColExpr(name string, dbtype string) string {
  	return name
  }
  

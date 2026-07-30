@@ -14,6 +14,7 @@ import { Legend } from "./legend";
 import { CommentsPanel } from "./CommentsPanel";
 import { boundsOf, type FocusSel, type MapPick, nextPick, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, rendersOf, type StacDoc, useLiveLegend, useStyleLayers } from "./stac";
+import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 
 const POSITRON = "https://tiles.openfreemap.org/styles/positron";
 
@@ -221,6 +222,11 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick }: {
   // ---- derived vector render data ----
   const layers = isVector ? (sprite && !spriteReady ? [] : (styleLayers ?? NEUTRAL_LAYERS)) : [];
   const layerIds = layers.map((l, i) => `pm-${sel}-${(l as { id?: string }).id ?? i}`);
+  // The camera fits the item's bbox with no maxZoom, so a statewide topic lands near z6 — below the
+  // scale gate a render may carry (PLSS sections: z≥11.13). Read the gate off the layers actually
+  // mounted, so NEUTRAL_LAYERS (ungated) can't make a loading style look hidden.
+  const gate = gateOf(layers);
+  const gateDirection = useGateDir(mapRef, gate, mapLoaded);
   const hlGeom: GeoJSON.Geometry | null = isVector ? (focus?.geometry ?? (fb ? bboxPolygon(fb) : null)) : null;
 
   const onMapClick = (e: MapLayerMouseEvent) => {
@@ -277,6 +283,11 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick }: {
               <span>3D Terrain</span>
             </button>
           </div>
+
+          {gate && gateDirection && (
+            <ZoomGateNotice gate={gate} dir={gateDirection}
+              onZoom={() => mapRef.current?.getMap().easeTo({ zoom: gateZoom(gate, gateDirection), duration: 600 })} />
+          )}
 
           {showDem && (
             <Source id="terrain-rgb-source" type="raster-dem"

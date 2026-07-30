@@ -22,6 +22,16 @@ ARG STAC_CATALOG=https://maps-assets.geology.utah.gov/warehouse/stac/catalog.jso
 ENV STAC_CATALOG=${STAC_CATALOG} MODE=view
 RUN python gen_db.py --out /build/database.duckdb --strict && chmod 0666 /build/database.duckdb
 
+# Refuse to build a response cap the container cannot serve. LimitMax lives in the toml and
+# --memory in cloudbuild.yaml; MEMORY_LIMIT is passed from the same substitution the deploy uses, so
+# the two cannot drift silently. An unfitting pair does not degrade gracefully -- it OOM-kills the
+# container mid-response and 503s (ALL-5410). Also reports the largest collection's feature count,
+# which is the number that moves as the catalog grows.
+ARG MEMORY_LIMIT=2Gi
+COPY check_limits.py duckdb_featureserv.toml ./
+RUN python check_limits.py --memory "${MEMORY_LIMIT}" \
+      --config duckdb_featureserv.toml --db /build/database.duckdb
+
 # Stage 2 — the server binary, built from pinned upstream source with our patch applied.
 #
 # We build rather than lift the published image because the gaps that made this service unusable

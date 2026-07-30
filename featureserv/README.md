@@ -100,6 +100,88 @@ docker run --rm ugs-featureserv python3 /app/gen_db.py --out /data/database.duck
 `--allow-unauthenticated`, `--port=9000`, scale-to-zero, no Cloud SQL / secrets. Then in **ArcGIS Pro**:
 *Insert → Connections → Server → New OGC API Server* → the service URL. That's the acceptance test.
 
+`_FEATURES_MEMORY` in `cloudbuild.yaml` sets the deploy's `--memory` **and** is passed into the image
+build, where `check_limits.py` refuses to build if it isn't a measured pairing with `Paging.LimitMax`.
+See "Response cap and memory" below.
+
+## Connecting clients
+
+Always give a client the **service root**, never a `/collections/{id}` URL:
+
+```
+https://ugs-warehouse-features-xedvkyurga-uc.a.run.app
+```
+
+Esri resolves `/conformance` relative to whatever URL you hand it, so a collection URL fails with
+`ogc-feature-layer:missing-conformance-page` ("Missing conformance url"). Its client takes the root
+plus a `collectionId` as separate values.
+
+**ArcGIS Pro** — *Insert → Connections → Server → New OGC API Server* → the root URL.
+
+**ArcGIS Online** works too, but the Map Viewer flow has two steps that look like failure. Both were
+hit on the first real attempt, so they are worth writing down:
+
+1. *Add → Add layer from URL*, paste the root URL, then **set Type manually to "OGC feature layer."**
+   Autodetect does not pick it, and the option is labelled *"OGC feature layer"* — not "OGC API -
+   Features" as Esri's own docs describe it — and sits below KML in a list you have to scroll.
+2. *Next* shows **"This data set has more than 1000 layers. Enter a search term to find a specific
+   layer"** over an **empty list**. That message is AGOL's own heuristic, not something this service
+   reports: `/collections` returns exactly 28 entries with no pagination and no `numberMatched`.
+   Click into the search box and the list populates. (The box does not really filter — interacting
+   with it is what loads the list.)
+
+Then pick a collection → *Add to map*. Start with a small one — `enmin_ut_counties` (29 features) or
+`enmin_ccus_cbcounty` (29) — so a mistake shows up in seconds; `enmin_plss_sections` (84,756) is the
+stress case, not the smoke test.
+
+A loaded layer should show `objectIdField: OBJECTID`, derived from `feature_id`. That is the same
+identifier the feature carries in PMTiles (`vector/transform.py` mints it, `sink_pmtiles.py`
+promotes it), so a feature clicked in the viewer and the same feature fetched over OGC agree.
+
+To check conformance without an Esri client at all, load Esri's SDK and construct the layer directly:
+
+```js
+require(['esri/layers/OGCFeatureLayer'], async (OGC) => {
+  const l = new OGC({ url: 'https://ugs-warehouse-features-xedvkyurga-uc.a.run.app',
+                      collectionId: 'enmin_ut_counties' });
+  await l.load();
+  console.log(l.geometryType, l.objectIdField, l.fields.length);   // polygon OBJECTID 25
+});
+```
+
+## Response cap and memory
+
+featureserv buffers the entire FeatureCollection before writing it, so the largest response a client
+can request has to fit in the container. That makes `Paging.LimitMax` (in `duckdb_featureserv.toml`)
+and `--memory` (in `cloudbuild.yaml`) **one decision recorded in two files**, and an unfitting pair
+does not degrade gracefully — Cloud Run SIGKILLs the container mid-response and returns 503, taking
+any concurrent request on that instance with it.
+
+`check_limits.py` runs at image build and refuses an unmeasured pairing. `_FEATURES_MEMORY` feeds
+both the build arg and the deploy flag, so the two cannot drift apart silently.
+
+Measured against the deployed image, full 84,756-feature pull of `enmin_plss_sections` (122MB
+response) and unpaced 5×20k paging over the same layer:
+
+| memory | full pull | unpaced paging |
+|---|---|---|
+| 512Mi | OOM | OOM on page 2–4 |
+| 1Gi | OOM | survives |
+| 2Gi | survives, repeated | survives |
+
+It deliberately does not *model* memory from feature counts. Those numbers do not fit one
+multiplier: paged 29MB requests kill 512Mi while a single 122MB request is fine on 2Gi, because
+consecutive requests outrun GC. A model fitted to that would be wrong in one direction, and a wrong
+model in a build gate is worse than no gate. So the rule is measure-and-record, with monotonicity the
+only inference (more memory at the same cap is safe; a smaller cap at the same memory is safe).
+
+To change either value: build, run the two probes at the new memory limit, confirm
+`docker inspect <c> --format '{{.State.OOMKilled}}'` stays `false`, then add the pair to `VALIDATED`
+in `check_limits.py`. The failure message spells out the commands.
+
+Streaming the response instead of buffering would make memory roughly constant and retire this whole
+coupling. That is an upstream change.
+
 ## Notes / upgrade path
 
 - **The db is a mirror of the catalog, not a live query against it.** Boot regen shrinks the staleness

@@ -30,6 +30,7 @@ import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 
 from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi.middleware.cors import CORSMiddleware
 
 UPSTREAM = os.environ.get("TILES_UPSTREAM", "http://127.0.0.1:8081")
 PMTILES_BUCKET = os.environ.get("PMTILES_BUCKET", "")
@@ -130,6 +131,11 @@ async def _lifespan(_app):
 
 
 app = FastAPI(title="ugs-warehouse-tiles", lifespan=_lifespan)
+# Every route here is cross-origin by design — the viewer, the ArcGIS JS SDK, Pro/AGOL and arbitrary
+# MapLibre clients all fetch from another origin. Setting the header per-response meant each new
+# route was a fresh chance to forget it, which is exactly how the empty-tile 204s shipped without
+# one (#109). Middleware covers /healthz, /, /tilejson and anything added later by construction.
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["GET"], allow_credentials=False)
 
 
 def _get(url: str) -> bytes:
@@ -344,8 +350,7 @@ def style(topic: str, request: Request, render: str | None = None) -> Response:
                                    for lyr in doc["layers"]):
         doc["glyphs"] = GLYPHS_URL
     return Response(json.dumps(doc), media_type="application/json",
-                    headers={"Cache-Control": "public, max-age=300",
-                             "Access-Control-Allow-Origin": "*"})
+                    headers={"Cache-Control": "public, max-age=300"})
 
 
 def _proxy_tile(topic: str, z: int, x: int, y: int, cache: str) -> Response:
@@ -355,12 +360,10 @@ def _proxy_tile(topic: str, z: int, x: int, y: int, cache: str) -> Response:
     ctype = hdrs.get("Content-Type", "")
     encoding = hdrs.get("Content-Encoding")
     if status == 204 or not body:
-        # empty tile: absent, not an error. Still needs the CORS header — a browser enforces
-        # Access-Control-Allow-Origin on every response including 204s, and most of a sparse
-        # point layer's low-zoom grid is empty tiles, so omitting it here reads as a CORS failure
-        # for nearly every request instead of the harmless no-op it actually is.
-        return Response(status_code=204, headers={"Access-Control-Allow-Origin": "*"})
-    headers = {"Cache-Control": cache, "Access-Control-Allow-Origin": "*"}
+        # A browser enforces CORS on 204s too, and most of a sparse point layer's low-zoom grid
+        # is empty tiles — so this response needs the header as much as any other (#109).
+        return Response(status_code=204)  # empty tile: absent, not an error
+    headers = {"Cache-Control": cache}
     if encoding:
         headers["Content-Encoding"] = encoding  # pass gzip through; do not re-compress
     return Response(body, media_type=ctype or "application/x-protobuf", headers=headers)
@@ -464,8 +467,7 @@ def _esri_descriptor(topic: str, request: Request, render: str | None) -> Respon
         },
     }
     return Response(json.dumps(doc), media_type="application/json",
-                    headers={"Access-Control-Allow-Origin": "*",
-                             "Cache-Control": "public, max-age=300"})
+                    headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/esri/{topic}/VectorTileServer")
@@ -494,8 +496,7 @@ def _esri_style_doc(topic: str, request: Request, render: str | None, base_path:
     for src in doc.get("sources", {}).values():
         src["tiles"] = [f"{_base_url(request)}{base_path}/tile/{{z}}/{{y}}/{{x}}.pbf"]
     return Response(json.dumps(doc), media_type="application/json",
-                    headers={"Access-Control-Allow-Origin": "*",
-                             "Cache-Control": "public, max-age=300"})
+                    headers={"Cache-Control": "public, max-age=300"})
 
 
 @app.get("/esri/{topic}/VectorTileServer/resources/styles/root.json")

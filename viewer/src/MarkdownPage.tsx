@@ -6,7 +6,7 @@ import rehypeSlug from "rehype-slug";
 import remarkGfm from "remark-gfm";
 
 const PROSE = [
-  "w-full px-4 py-6 mx-auto max-w-[920px] sm:px-6 text-foreground",
+  "w-full px-4 py-6 mx-auto max-w-[75ch] sm:px-6 text-foreground",
   // scroll-mt-28: anchor jumps (#section) land BELOW the sticky header instead of under it.
   "[&_h1]:text-2xl [&_h1]:font-bold [&_h1]:mt-2 [&_h1]:mb-3 [&_h1]:scroll-mt-28",
   "[&_h2]:text-xl [&_h2]:font-semibold [&_h2]:mt-8 [&_h2]:mb-2 [&_h2]:border-b [&_h2]:border-border [&_h2]:pb-1 [&_h2]:scroll-mt-28",

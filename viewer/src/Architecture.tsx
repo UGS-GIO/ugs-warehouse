@@ -196,13 +196,13 @@ const ROADMAP: { status: Status; text: string }[] = [
   { status: "planned", text: "Publish allowlist — explicit per-layer control over what the warehouse exposes (parked)." },
 ];
 
-const C = { wrap: "w-full px-4 py-5 mx-auto max-w-[1700px] sm:px-6 lg:px-10" };
+const C = { wrap: "w-full px-4 py-6 sm:px-6 lg:px-10" };
 
 export function Architecture() {
   return (
     <div className={C.wrap}>
       <h1 className="text-2xl font-bold">Platform Architecture</h1>
-      <p className="mt-2 max-w-3xl text-muted-foreground">
+      <p className="mt-2 max-w-[75ch] text-muted-foreground">
         How geology data flows from the source databases, through the warehouse, to the maps and
         services people use. The warehouse forks dataELT's published gold tables and produces
         cloud-native artifacts — GeoParquet, PMTiles, DuckLake, COGs — tied together by a STAC catalog.

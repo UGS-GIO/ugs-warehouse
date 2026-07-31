@@ -92,3 +92,25 @@ body {
   .review-report .no-print { display: none !important; }
   @page { margin: 1.5cm; }
 }
+
+/* Utah Design System header — dark mode.
+ *
+ * UDS 5.1 ships no dark theme: `utds-header` hardcodes a white background and navy title, and the
+ * package exposes only size variants (small/medium/large), no colour/theme setting. So in dark mode
+ * the state identity bar stayed white above a #1f1f1f app — the one element that ignored the toggle.
+ *
+ * Scoped to `.dark` and to the app's own tokens, so light mode keeps the official appearance
+ * untouched. These class names are third-party: if UDS renames them this silently stops applying
+ * (the header reverts to white), which is the safe direction to fail.
+ */
+.dark header.utds-header {
+  background-color: hsl(var(--card));
+  /* UDS declares `border-bottom: 1px solid #d7d7d7 !important`, so this needs !important purely to
+     reach it — not to win against anything of ours. */
+  border-bottom-color: hsl(var(--border)) !important;
+}
+.dark .utds-title-wrapper,
+.dark .utds-title-wrapper__logo,
+.dark .utds-title-wrapper__title {
+  color: hsl(var(--foreground));
+}

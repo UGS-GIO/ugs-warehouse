@@ -5,7 +5,7 @@ import {
   type SortingState, type Table, useReactTable,
 } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
@@ -18,6 +18,7 @@ import { lruSet } from "./lru";
 import { ALL_PAGES, DEFAULT_PAGE_SIZE, pageLabel, PAGE_SIZES, type PageSize } from "./paging";
 import { PreviewMapSlot, type PreviewSpec, usePreviewMap, footprintSpecOf } from "./PreviewMap";
 import type { FocusSel } from "./map-model";
+import { CARD_GRID, T } from "./Page";
 import { type Asset, citeLink, classificationColors, cogAsset, contentsOf, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
@@ -42,11 +43,11 @@ export type CollectionSummary = {
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
 
 const C = {
-  wrap: "w-full px-3 py-4 mx-auto max-w-[1400px] sm:px-5",
+  wrap: "w-full px-4 py-6 sm:px-6 lg:px-10",
   crumb: "text-primary cursor-pointer",
   muted: "text-xs text-muted-foreground",
-  grid: "mt-3.5 grid gap-3 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3",
-  card: "rounded-lg border border-border bg-card px-3.5 py-3 cursor-pointer hover:border-primary hover:shadow-sm transition",
+  grid: `mt-3.5 ${CARD_GRID}`,
+  card: "flex flex-col rounded-lg border border-border bg-card px-4 py-3.5 cursor-pointer hover:border-primary hover:shadow-sm transition",
   cardTitle: "mb-1.5 text-sm font-semibold leading-tight",
   badge: "mr-1.5 mt-1 inline-block rounded border border-border bg-muted px-1.5 py-px text-[11px] text-muted-foreground",
   chip: "mr-1.5 mt-1.5 inline-block rounded bg-primary px-2 py-0.5 text-[11px] text-primary-foreground no-underline hover:opacity-90",
@@ -344,31 +345,39 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
   if (!collections.length) return <p className={`${C.muted} mt-4`}>Nothing here yet.</p>;
   return (
     <>
-      <h2 className="mb-1 mt-1 text-lg font-semibold">{heading}</h2>
+      <h2 className={`mb-2 mt-1 ${T.section}`}>{heading}</h2>
       <div className={C.grid}>
         {collections.map((c) => {
           const desc = meaningfulDesc(c.description);
           return (
             <div key={c.href} className={C.card} onClick={() => onOpen(c.href)}>
-              <p className="text-base font-semibold leading-tight">{c.title ?? humanize(c.id)}</p>
+              <div className="flex items-baseline justify-between gap-3">
+                <p className={T.cardTitle}>{c.title ?? humanize(c.id)}</p>
+                {c.count != null && (
+                  <span className="shrink-0 text-sm font-medium tabular-nums text-muted-foreground">
+                    {c.count.toLocaleString()}
+                  </span>
+                )}
+              </div>
               <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{c.id}</div>
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
               {c.covers && c.covers.length > 0 && (
-                <div className="mt-2 flex gap-1 overflow-hidden" title="Latest covers — click to open">
-                  {c.covers.map((cv) => (
+                <div className="mt-2.5 grid grid-cols-4 gap-1.5" title="Latest covers — click to open">
+                  {c.covers.slice(0, 4).map((cv) => (
                     <img key={cv.href} src={cv.thumb} alt={cv.title ?? ""} loading="lazy" title={cv.title ?? ""}
                       onClick={(e) => { e.stopPropagation(); onOpenItem(cv.href); }}
-                      className="h-16 w-12 shrink-0 cursor-pointer rounded-sm border border-border bg-muted object-cover hover:border-primary" />
+                      className="aspect-[3/4] w-full cursor-pointer rounded-sm border border-border bg-muted object-cover hover:border-primary" />
                   ))}
                 </div>
               )}
-              {c.count != null && <span className={`${C.badge} mt-2`}>{c.count} item{c.count === 1 ? "" : "s"}</span>}
-              {c.kind === "catalog" && <span className={`${C.badge} mt-2`}>by series</span>}
-              {c.mappable === 0
-                ? <span className="mt-2 ml-1 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">no map data</span>
-                : c.mappable != null && c.count != null && c.mappable < c.count
-                  ? <span className="mt-2 ml-1 rounded bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">{c.mappable} on map</span>
-                  : null}
+              <div className="mt-auto pt-2.5">
+                {c.kind === "catalog" && <span className={C.badge}>by series</span>}
+                {c.mappable === 0
+                  ? <span className={C.badge}>no map data</span>
+                  : c.mappable != null && c.count != null && c.mappable < c.count
+                    ? <span className={C.badge}>{c.mappable.toLocaleString()} on map</span>
+                    : null}
+              </div>
             </div>
           );
         })}
@@ -750,11 +759,11 @@ function FieldsPanel({ item }: { item: StacDoc }) {
   const cols = tableColumns(item);
   if (!cols) return null;
   return (
-    <details className="mt-2 max-w-[1100px] rounded-md border border-border bg-card text-[12px]">
-      <summary className="cursor-pointer px-3 py-2 font-semibold text-muted-foreground">
-        Fields <span className="font-normal text-muted-foreground">· {cols.length}</span>
+    <details className="mt-3 text-[12px]">
+      <summary className="inline-flex cursor-pointer items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+        Fields <span className="font-normal">· {cols.length}</span>
       </summary>
-      <div className="flex flex-wrap gap-x-5 gap-y-1.5 px-3 pb-3">
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 rounded-md border border-border bg-card px-3 py-2.5">
         {cols.map((c) => (
           <span key={c.name} className="inline-flex items-baseline gap-1.5">
             <span className="font-mono text-foreground">{c.name}</span>
@@ -872,13 +881,27 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
   // Raw per-column filter inputs (strings, as typed) → debounced into `applied` (SQL-ready).
   const [draft, setDraft] = useState<Record<string, { min?: string; max?: string; text?: string }>>({});
   const [applied, setApplied] = useState<{ search: string; filters: ColFilter[] }>({ search: "", filters: [] });
-  const [page, setPage] = useState<{
-    columns: string[]; types: Record<string, "number" | "text">;
-    rows: Record<string, unknown>[]; total: number;
-    bboxes: ([number, number, number, number] | null)[];
-  } | null>(null);
-  const [err, setErr] = useState<string>();
-  const [loading, setLoading] = useState(true);
+  const [colFilters, setColFilters] = useState(false);
+
+  const sort = sorting[0];
+  const filterKey = JSON.stringify(applied.filters);
+  // The query key IS the dependency list, so a stale response can no longer land after a newer one
+  // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
+  // screen while the next one loads, so paging does not blank the table between fetches.
+  const { data: page, error, isFetching: loading } = useQuery({
+    queryKey: ["parquet-page", href, pageIndex, pageSize, showAll,
+               sort?.id, sort?.desc, applied.search, filterKey],
+    queryFn: async () => {
+      const { queryParquet } = await import("./download");
+      return queryParquet(href, {
+        limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
+        orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
+      });
+    },
+    placeholderData: keepPreviousData,
+    staleTime: 30_000,   // paging back is served from cache; the parquet is immutable per ingest
+  });
+  const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
 
   // Debounce search + per-column filters into the applied query; a filter/search change resets to
   // page 1. Numeric columns → range (min/max), others → substring (kind from the loaded types).
@@ -905,20 +928,6 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
     return () => clearTimeout(t);
   }, [search, draft]);
 
-  const sort = sorting[0];
-  const filterKey = JSON.stringify(applied.filters);
-  useEffect(() => {
-    let live = true;
-    setLoading(true);
-    import("./download").then(({ queryParquet }) => queryParquet(href, {
-      limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
-      orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
-    }))
-      .then((d) => { if (live) { setPage(d); setErr(undefined); } })
-      .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); })
-      .finally(() => { if (live) setLoading(false); });
-    return () => { live = false; };
-  }, [href, pageIndex, pageSize, showAll, sort?.id, sort?.desc, applied.search, filterKey]);
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
     () => (page?.columns ?? []).map((c) => ({
@@ -960,6 +969,10 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
   const fIn = "w-full min-w-[64px] rounded border border-input bg-card px-1 py-0.5 text-[11px] font-normal normal-case text-foreground";
   const hasFilters = Boolean(search) || applied.filters.length > 0
     || Object.values(draft).some((d) => d.min || d.max || d.text);
+  // Per-column filters are off by default: one input under every one of 29 columns dominated the
+  // page visually while being used rarely. Stays open once opened, and forced open while a filter
+  // is active so you can always see (and clear) what is narrowing the rows.
+  const showColFilters = colFilters || applied.filters.length > 0;
   const clearAll = () => { setSearch(""); setDraft({}); };
 
   // Row-comment selection helpers (review deploy). The pk column is the stable per-row handle.
@@ -1016,6 +1029,10 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
           {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
           {onPick && page?.bboxes.some(Boolean) ? " · click a row to zoom" : ""}
         </span>
+        <button className="ml-auto rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary"
+          aria-pressed={showColFilters} onClick={() => setColFilters((v) => !v)}>
+          {showColFilters ? "Hide column filters" : "Filter columns"}
+        </button>
         {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
       </div>
       {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
@@ -1028,7 +1045,7 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
         </div>
       )}
       <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-[12px] ${collapsed ? "hidden" : "h-[28rem] min-h-[10rem]"}`}>
-        <table className="w-full border-collapse">
+        <table className="w-auto min-w-full border-collapse">
           <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((hg) => (
               <tr key={hg.id}>
@@ -1057,7 +1074,7 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
               </tr>
             ))}
             {/* Per-column filter row: numeric → min/max range, text → substring. */}
-            <tr>
+            <tr className={showColFilters ? "" : "hidden"}>
               {review && <th className="border-b border-border" />}
               {(page?.columns ?? []).map((col) => {
                 const kind = page?.types[col] ?? "text";
@@ -1164,7 +1181,7 @@ function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
         )}
       </div>
       {review && composeOpen && selPks.size > 0 && (
-        <div className="mt-2 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+        <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">
               {selArr.length > 1 ? `Comment on ${selArr.length} rows` : `${rowKey} ${selArr[0]}`}
@@ -1702,7 +1719,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
   if (show) {
     return (
       <object data={asset.href} type="application/pdf"
-        className="mt-2 h-[400px] w-full max-w-[1100px] rounded-md border border-border sm:h-[640px]">
+        className="mt-2 h-[400px] w-full rounded-md border border-border sm:h-[640px]">
         <div className="p-3 text-xs text-muted-foreground">
           Can’t embed this PDF — <a href={asset.href} target="_blank" rel="noopener" className="text-primary">open it ↗</a>
         </div>
@@ -1710,7 +1727,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
     );
   }
   return (
-    <div className="mt-2 max-w-[1100px]">
+    <div className="mt-2">
       <button onClick={() => setShow(true)} title="Load the full PDF preview"
         className="group relative block w-full overflow-hidden rounded-md border border-border bg-muted">
         {poster
@@ -1869,7 +1886,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
   if (!links.length && !tables.length && !fks.length) return null;
   return (
-    <section className={`mt-4 rounded-md border border-border p-3 ${openTables.size || openGalleries.size ? "max-w-none" : "max-w-3xl"}`}>
+    <section className="mt-4 rounded-md border border-border p-3">
       <h3 className="text-sm font-semibold">Related</h3>
       {links.length > 0 && (
         <div className="mt-1.5">
@@ -1963,7 +1980,7 @@ function CatalogReview({ item }: { item: StacDoc }) {
   const [openCol, setOpenCol] = useState<string | null>(null);
   if (!id) return null;
   return (
-    <section className="mt-4 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+    <section className="mt-4 rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h3 className="text-sm font-semibold">Review</h3>
         <LayerStatusControl itemId={id} />
@@ -2009,14 +2026,22 @@ function ItemDetail({ collectionId, item, onBack, onMap }: {
   const cite = citeLink(item);
   return (
     <>
-      <div className="mb-2.5">
-        <span className={C.crumb} onClick={onBack}>{collectionId}</span>
-        <span className={C.muted}> / {item.id}</span>
+      <div className="mb-4 border-b border-border pb-3">
+        <div className="mb-1.5 text-xs">
+          <span className={C.crumb} onClick={onBack}>{collectionId}</span>
+          <span className={C.muted}> / {item.id}</span>
+        </div>
+        {/* Title leads. The machine id is the subtitle — it was set in blue mono ABOVE the human
+            name, so the thing nobody reads outranked the thing everybody does. */}
+        <h2 className={T.pageTitle}>{String(p.title ?? item.id ?? "")}</h2>
+        <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
       </div>
-      <div className="font-mono text-sm font-semibold text-primary">{item.id}</div>
-      <h2 className="mb-1 text-xl font-semibold">{String(p.title ?? item.id ?? "")}</h2>
-      {typeof p.description === "string" && <p className="max-w-3xl text-muted-foreground">{p.description}</p>}
       <Preview item={item} />
+      {/* Below the map/table, not above it: the description is context for what you are looking at,
+          and putting prose between the title and the data pushed the data down the page. */}
+      {typeof p.description === "string" && (
+        <p className="mt-3 max-w-[75ch] text-muted-foreground">{p.description}</p>
+      )}
       {item.assets && <div className="my-2"><AssetChips assets={item.assets} /></div>}
       <div className="mt-1.5 flex flex-wrap gap-2">
         {hasGeom && (

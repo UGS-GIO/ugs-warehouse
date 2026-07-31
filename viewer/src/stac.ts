@@ -374,3 +374,29 @@ export function useIndexes(collections: { id: string; href: string }[]) {
     missing: Boolean(results[i].error),
   }));
 }
+
+export const parquetAsset = (item: StacDoc): Asset | undefined =>
+  Object.values(item.assets ?? {}).find(
+    (a) => a.type?.includes("parquet") || a.href.endsWith(".parquet"),
+  );
+
+export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
+  Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"
+    || a.roles?.includes("ducklake") || a.href.includes("ducklake"))?.[1];
+
+const extOf = (href: string) => (href.split("?")[0].split(".").pop() ?? "").toLowerCase();
+
+export type AssetKind = "cog" | "threeD" | "pdf" | "image" | "parquet" | "text" | "other";
+export const KIND_RANK: Record<AssetKind, number> = { cog: 0, threeD: 1, pdf: 2, parquet: 3, image: 4, text: 5, other: 9 };
+
+export function assetKind(a: Asset): AssetKind {
+  const t = (a.type ?? "").toLowerCase();
+  const ext = extOf(a.href);
+  if (a.roles?.includes("3d-vector") || ext.includes("3d") || a.href.includes("3d_polygons")) return "threeD";
+  if (t.includes("profile=cloud-optimized") || a.roles?.includes("cloud-optimized") || a.href.endsWith(".cog.tif")) return "cog";
+  if (t === "application/pdf" || ext === "pdf") return "pdf";
+  if (t.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";
+  if (t.includes("parquet") || ext === "parquet") return "parquet";
+  if (t.startsWith("text/") || ["csv", "txt", "tsv"].includes(ext)) return "text";
+  return "other";
+}

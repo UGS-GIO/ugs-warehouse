@@ -4,23 +4,23 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
 import { type CatalogDoc } from "./search";
 import utahLogo from "./assets/utah-logo.png";
-import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./Browse";
+import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
 import { layerCollectionIds } from "./catalog";
-import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./Map";
-import { PreviewMapProvider } from "./PreviewMap";
-import { PropertyTable } from "./PropertyTable";
+import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./map";
+import { PreviewMapProvider } from "./preview-map";
+import { PropertyTable } from "./property-table";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
-import { DiffPanel } from "./DiffPanel";
-import { CommentsPanel } from "./CommentsPanel";
-import { NotifBell } from "./NotificationsInbox";
+import { DiffPanel } from "./diff-panel";
+import { CommentsPanel } from "./comments-panel";
+import { NotifBell } from "./notifications-inbox";
 
 // Heavy content views, code-split out of the main bundle (mermaid/cytoscape/katex, MiniSearch, the
 // markdown renderer) — they load on first open with a Suspense fallback instead of bloating startup.
-const Architecture = lazy(() => import("./Architecture").then((m) => ({ default: m.Architecture })));
+const Architecture = lazy(() => import("./architecture").then((m) => ({ default: m.Architecture })));
 const ArticleSearch = lazy(() => import("./search").then((m) => ({ default: m.ArticleSearch })));
-const Guide = lazy(() => import("./Guide").then((m) => ({ default: m.Guide })));
-const ReviewDashboard = lazy(() => import("./ReviewDashboard").then((m) => ({ default: m.ReviewDashboard })));
+const Guide = lazy(() => import("./guide").then((m) => ({ default: m.Guide })));
+const ReviewDashboard = lazy(() => import("./review-dashboard").then((m) => ({ default: m.ReviewDashboard })));
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name
 // that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays

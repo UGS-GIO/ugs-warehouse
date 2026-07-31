@@ -2,7 +2,7 @@
 // base is substituted live from the same VITE_FEATURES_BASE the rest of the viewer uses, so the
 // guide's OGC examples show the real URL when one is configured (else the {OGC_API_BASE} placeholder).
 import guideMd from "../../docs/USER_GUIDE.md?raw";
-import { MarkdownPage } from "./MarkdownPage";
+import { MarkdownPage } from "./markdown-page";
 import { FEATURES_BASE } from "./stac";
 
 export function Guide() {

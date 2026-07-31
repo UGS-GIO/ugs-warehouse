@@ -1,9 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { type Comment, deleteComment, ITEM_STATUSES, listAllComments, setStatus, whoami } from "./comments";
-import { NotificationsInbox } from "./NotificationsInbox";
-import { ReviewReport } from "./ReviewReport";
-import { statusClass, statusLabel, useItemStatuses } from "./ReviewStatus";
+import { NotificationsInbox } from "./notifications-inbox";
+import { ReviewReport } from "./review-report";
+import { statusClass, statusLabel, useItemStatuses } from "./review-status";
 
 // Review dashboard — every comment across the catalog, filterable by status, resolve/reopen/delete inline.
 // A "Review" tab (App.tsx) renders this on the review deploy only. onOpen jumps to the item's catalog page.

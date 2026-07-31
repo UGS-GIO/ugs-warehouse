@@ -1,8 +1,8 @@
 diff --git a/assets/map_script.gohtml b/assets/map_script.gohtml
-index 23e2f10..6571610 100644
+index 23e2f10..e2cade0 100644
 --- a/assets/map_script.gohtml
 +++ b/assets/map_script.gohtml
-@@ -141,10 +141,19 @@ var map = new ol.Map({
+@@ -141,10 +141,35 @@ var map = new ol.Map({
  });
  map.addLayer(vectorLayer);
  
@@ -20,9 +20,46 @@ index 23e2f10..6571610 100644
 +vectorLayer.getSource().once('featuresloaderror', function(event) {
 +	console.error('featureserv: failed to load features from ' + DATA_URL);
 +});
++
++// Kick the feature load explicitly rather than waiting for the render loop to trigger it.
++// ol.source.Vector's default 'all' loading strategy is lazy: its loader only runs when the layer is
++// first rendered. That couples the data to the basemap -- if the tile source stalls or is
++// misconfigured, the vector layer is never rendered, so the features are never even requested and
++// the page sits empty indefinitely. That is exactly how a missing BasemapUrl produced a blank map
++// on a collection that served fine over JSON.
++//
++// The features are the point of this page; the basemap is decoration. Load them unconditionally.
++// The 'all' strategy makes this idempotent -- an already-loaded extent is not re-fetched, so this
++// does not double up with a render-triggered load.
++vectorLayer.getSource().loadFeatures(
++	[-Infinity, -Infinity, Infinity, Infinity],
++	map.getView().getResolution(),
++	map.getView().getProjection()
++);
  map.on('pointermove', (evt) => {
          let ptGeo = ol.proj.transform(evt.coordinate, 'EPSG:3857', 'EPSG:4326');
          let pFormat = ol.coordinate.toStringXY(ptGeo, 4);
+@@ -166,9 +191,19 @@ function zoomLayer(lyr) {
+ 	zoomExtent( lyr.getSource().getExtent() );
+ }
+ function zoomExtent(extent) {
++	// Nothing to fit -- an empty extent means the source has no features yet, and fitting it would
++	// throw the view somewhere arbitrary. Leave the current view alone.
++	if (!extent || ol.extent.isEmpty(extent)) return;
+ 	let sz = Math.max( ol.extent.getWidth(extent), ol.extent.getHeight(extent) );
++	// A single point, or several features at one coordinate, gives a zero-size extent. Buffering by
++	// 0.2 * 0 leaves it zero-size, and fit() answers that with its maximum zoom -- the map lands
++	// arbitrarily deep on one feature. Give a degenerate extent a real footprint (~1km) instead.
++	if (sz <= 0) sz = 1000;
+ 	let zoomext = ol.extent.buffer( extent,  0.2 * sz);
+-    map.getView().fit(zoomext, map.getSize());
++	// `size` has to be a property of the options object; passing map.getSize() positionally (as this
++	// did) is silently ignored, so the fit was relying on OpenLayers' default. maxZoom caps how far
++	// the auto-zoom can go for a very small extent -- framing a feature, not diving into it.
++	map.getView().fit(zoomext, { size: map.getSize(), maxZoom: 16 });
+ }
+ function extentGeo() {
+ 	var extent = map.getView().calculateExtent(map.getSize());
 diff --git a/internal/api/api.go b/internal/api/api.go
 index e764be2..f6fa289 100644
 --- a/internal/api/api.go

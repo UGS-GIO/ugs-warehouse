@@ -32,6 +32,10 @@ substitutions:
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
   _TILES_SERVICE: ugs-warehouse-tiles         # XYZ vector tiles + ready-to-use MapLibre styles (go-pmtiles over the CDN PMTiles, scale-to-zero)
+  # featureserv buffers whole responses, so this and Paging.LimitMax in
+  # featureserv/duckdb_featureserv.toml are one decision. Passed to the image build as well as the
+  # deploy so check_limits.py can refuse an unmeasured pairing rather than let it OOM in prod.
+  _FEATURES_MEMORY: 2Gi
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
@@ -123,6 +127,8 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:${_TAG}
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:latest
+      - --build-arg
+      - MEMORY_LIMIT=${_FEATURES_MEMORY}
       - featureserv/
 
   # XYZ vector tiles for clients that cannot read PMTiles directly. No data copy: go-pmtiles
@@ -682,13 +688,11 @@ steps:
       - --allow-unauthenticated
       - --port=9000
       - --cpu=1
-      # 2Gi, not 512Mi: featureserv buffers the whole FeatureCollection before writing it, so peak
-      # memory tracks the largest response rather than the dataset. At 512Mi a client paging a large
-      # collection OOM-killed the container (Cloud Run "terminated on signal 9") and got a 503
-      # mid-walk -- measured reproducibly on enmin_plss_sections, and it takes concurrent requests
-      # down with it. 1Gi survives paging; 2Gi also covers a single full-layer response (84,756
-      # features / 122MB). Scale-to-zero means this is only billed while serving. ALL-5410.
-      - --memory=2Gi
+      # Set via _FEATURES_MEMORY so the image build sees the same number and check_limits.py can
+      # gate the (memory, LimitMax) pairing. 512Mi OOM-killed the container mid-response for a client
+      # paging a large collection; 1Gi survives paging but not a single full pull; 2Gi covers both
+      # (84,756 features / 122MB). Scale-to-zero means it is only billed while serving. ALL-5410.
+      - --memory=${_FEATURES_MEMORY}
       - --timeout=120
 
   # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).

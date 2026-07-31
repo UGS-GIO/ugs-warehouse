@@ -355,7 +355,11 @@ def _proxy_tile(topic: str, z: int, x: int, y: int, cache: str) -> Response:
     ctype = hdrs.get("Content-Type", "")
     encoding = hdrs.get("Content-Encoding")
     if status == 204 or not body:
-        return Response(status_code=204)  # empty tile: absent, not an error
+        # empty tile: absent, not an error. Still needs the CORS header — a browser enforces
+        # Access-Control-Allow-Origin on every response including 204s, and most of a sparse
+        # point layer's low-zoom grid is empty tiles, so omitting it here reads as a CORS failure
+        # for nearly every request instead of the harmless no-op it actually is.
+        return Response(status_code=204, headers={"Access-Control-Allow-Origin": "*"})
     headers = {"Cache-Control": cache, "Access-Control-Allow-Origin": "*"}
     if encoding:
         headers["Content-Encoding"] = encoding  # pass gzip through; do not re-compress

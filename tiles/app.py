@@ -42,6 +42,10 @@ COLLECTION_URL = os.environ.get(
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 CACHE_TTL = float(os.environ.get("CACHE_TTL", "300"))
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "10"))
+# Fonts for label layers. ugs-styles publishes sprites but not glyphs, and this is the source
+# vector/thumbs.py already uses. Override once ugs-styles hosts its own.
+GLYPHS_URL = os.environ.get(
+    "GLYPHS_URL", "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf")
 
 _cache: dict[str, tuple[float, object]] = {}
 _served: dict[str, str] = {}          # topic -> the version this process has served tiles for
@@ -267,7 +271,8 @@ def index(request: Request) -> dict:
              "tilejson": f"{base}/tilejson/{t}.json",
              # One style per published render. A topic with no render serves tiles but has no
              # style to offer — say so with an empty list rather than a link that 404s.
-             "styles": {r: f"{base}/styles/{t}.json?render={r}" for r in sorted(_renders(t))}}
+             "styles": {r: f"{base}/styles/{t}.json?render={r}" for r in sorted(_renders(t))},
+             "arcgis": f"{base}/esri/{t}/VectorTileServer"}
             for t in sorted(_topics())
         ],
     }
@@ -326,11 +331,17 @@ def style(topic: str, request: Request, render: str | None = None) -> Response:
         "layers": [{"source": topic, "source-layer": source_layer, **lyr}
                    for lyr in fragment.get("layers", [])],
     }
-    # Icon renders point at a sprite sheet published alongside the fragment, and text layers need
-    # glyphs; without these MapLibre draws the geometry and silently omits every icon and label.
+    # Icon renders point at a sprite sheet published alongside the fragment; without it MapLibre
+    # draws the geometry and silently omits every icon.
     for key in ("sprite", "glyphs"):
         if value := (fragment.get(key) or chosen.get(key)):
             doc[key] = value
+    # A style with text layers and no `glyphs` renders no labels at all — 7 of the published styles
+    # have them. ugs-styles does not host fonts, so this points at the same public glyph source
+    # `vector/thumbs.py` already falls back to rather than inventing a second convention.
+    if "glyphs" not in doc and any("text-field" in (lyr.get("layout") or {})
+                                   for lyr in doc["layers"]):
+        doc["glyphs"] = GLYPHS_URL
     return Response(json.dumps(doc), media_type="application/json",
                     headers={"Cache-Control": "public, max-age=300",
                              "Access-Control-Allow-Origin": "*"})
@@ -381,9 +392,19 @@ _ESRI_R0, _ESRI_S0 = 78271.516964, 295828763.7957775
 _WEB_MERCATOR_ORIGIN = 20037508.342787
 
 
-def _esri_lods(maxzoom: int) -> list[dict]:
+_ESRI_MAX_LEVEL = 22  # the standard scheme's depth, independent of how deep our tiles go
+
+
+def _esri_lods() -> list[dict]:
+    """The full LOD scheme, NOT one truncated at our data's maxzoom.
+
+    Esri's own services list every level and separately report `maxLOD` as the deepest cached one
+    (OpenStreetMap_v2: 23 lods, maxLOD 16, maxzoom 22). Clients overzoom past maxLOD by scaling the
+    last cached level. Truncating the list instead pins the client at our maxzoom, which on a
+    statewide layer means it simply refuses to zoom in past z14.
+    """
     return [{"level": z, "resolution": _ESRI_R0 / (2 ** z), "scale": _ESRI_S0 / (2 ** z)}
-            for z in range(maxzoom + 1)]
+            for z in range(_ESRI_MAX_LEVEL + 1)]
 
 
 def _to_3857(lon: float, lat: float) -> tuple[float, float]:
@@ -424,16 +445,16 @@ def esri_service(topic: str, request: Request) -> Response:
         "fullExtent": extent,
         "minScale": 0,
         "maxScale": 0,
-        "maxzoom": maxzoom,
+        "maxzoom": _ESRI_MAX_LEVEL,   # how far a client may zoom; past maxLOD it overzooms
         "minLOD": int(layer.get("minzoom", 0)),
-        "maxLOD": maxzoom,
+        "maxLOD": maxzoom,            # deepest level we actually have tiles for
         "resourceInfo": {"styleVersion": 8, "tileCompression": "gzip",
                          "cacheInfo": {"storageInfo": {"packetSize": 128, "storageFormat": "compactV2"}}},
         "tileInfo": {
             "rows": 512, "cols": 512, "dpi": 96, "format": "pbf",
             "origin": {"x": -_WEB_MERCATOR_ORIGIN, "y": _WEB_MERCATOR_ORIGIN},
             "spatialReference": {"wkid": 102100, "latestWkid": 3857},
-            "lods": _esri_lods(maxzoom),
+            "lods": _esri_lods(),
         },
     }
     return Response(json.dumps(doc), media_type="application/json",

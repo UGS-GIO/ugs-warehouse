@@ -1834,7 +1834,12 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
   const pm = pmtilesLink(item);
   const ducklake = ducklakeAsset(item);
   const esriRenders = Object.keys(rendersOf(item)).sort();
-  const rows: { label: string; desc: string; url: string }[] = [];
+  // Follow the map's "Symbolize by" picker, so the URL you copy is the symbology on screen.
+  const { render: shown } = usePreviewMap();
+  const [pickedRender, setPickedRender] = useState<string>();
+  // Explicit choice wins; otherwise track the map so the two never disagree silently.
+  const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
+  const rows: { label: string; desc: string; url: string; pick?: React.ReactNode }[] = [];
   if (coll) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
@@ -1846,7 +1851,7 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
   if (pm) {
     const xyz = xyzTilesUrl(id);
     if (xyz) rows.push({ label: "XYZ vector tiles", desc: "/{z}/{x}/{y}.mvt — Leaflet, OpenLayers, QGIS", url: xyz });
-    const style = tilesStyleUrl(id);
+    const style = tilesStyleUrl(id, chosen);
     if (style) rows.push({ label: "MapLibre style", desc: "Complete GL style — renders as published", url: style });
     // Pro reads the style from the service path, so each symbology is its own service. Only the
     // first is a row — babylon basins publishes eight `likelihood-*`, and eight near-identical URLs
@@ -1855,12 +1860,22 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
     // Offered only when a render exists: an Esri vector tile layer REQUIRES a style, and a topic
     // with none fails to load outright in the ArcGIS SDK rather than drawing unstyled. A link that
     // cannot work is worse than no link.
-    const esri = esriRenders.length ? esriVectorTileUrl(id, esriRenders[0]) : undefined;
+    const esri = esriRenders.length ? esriVectorTileUrl(id, chosen) : undefined;
     if (esri) {
+      // One service per symbology, so the URL has to name one. The picker sits on the row rather
+      // than making you scroll back to the map to change what you are about to copy. It starts on
+      // whatever the map is showing.
       rows.push({
-        label: esriRenders[0] ? `ArcGIS · ${esriRenders[0]}` : "ArcGIS vector tiles",
+        label: "ArcGIS vector tiles",
         desc: "Add in ArcGIS Pro / AGOL — symbology included",
         url: esri,
+        pick: esriRenders.length > 1 ? (
+          <select value={chosen} onChange={(e) => setPickedRender(e.target.value)}
+            title="Which published symbology this service serves"
+            className="max-w-[11rem] shrink-0 rounded border border-input bg-card px-1 py-0.5 text-[11px] text-foreground">
+            {esriRenders.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        ) : undefined,
       });
     }
   }
@@ -1873,31 +1888,13 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
         {rows.map((r) => (
           <div key={r.label} className="flex flex-wrap items-center gap-2 text-xs">
             <span className="w-36 shrink-0 font-semibold text-foreground" title={r.desc}>{r.label}</span>
+            {r.pick}
             <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={r.url}>{r.url}</code>
             <CopyBtn text={r.url} />
             <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
           </div>
         ))}
       </div>
-      {pm && esriRenders.length > 1 && (
-        <details className="mt-2 text-xs">
-          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
-            {esriRenders.length - 1} more ArcGIS symbolog{esriRenders.length === 2 ? "y" : "ies"}
-          </summary>
-          <div className="mt-1.5 flex flex-col gap-1">
-            {esriRenders.slice(1).map((r) => {
-              const u = esriVectorTileUrl(id, r);
-              return u ? (
-                <div key={r} className="flex flex-wrap items-center gap-2">
-                  <span className="w-36 shrink-0 text-foreground">{r}</span>
-                  <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={u}>{u}</code>
-                  <CopyBtn text={u} />
-                </div>
-              ) : null;
-            })}
-          </div>
-        </details>
-      )}
     </div>
   );
 }

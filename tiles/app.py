@@ -278,11 +278,7 @@ def index(request: Request) -> dict:
              # One style per published render. A topic with no render serves tiles but has no
              # style to offer — say so with an empty list rather than a link that 404s.
              "styles": {r: f"{base}/styles/{t}.json?render={r}" for r in sorted(_renders(t))},
-             # Empty when nothing is published to style it. An Esri vector tile layer REQUIRES a
-             # style: a service with none fails to load outright rather than drawing unstyled, so
-             # the bare fallback URL this used to emit was a link that could never work. Verified
-             # by sweeping all 47 services through the ArcGIS JS SDK — the only 5 failures were
-             # exactly these render-less topics.
+             # Empty when nothing styles it — Esri can't add a layer with no style.
              "arcgis": {r: f"{base}/esri/{t}/{r}/VectorTileServer" for r in sorted(_renders(t))}}
             for t in sorted(_topics())
         ],

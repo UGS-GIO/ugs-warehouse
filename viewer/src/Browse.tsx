@@ -1839,7 +1839,7 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
   const [pickedRender, setPickedRender] = useState<string>();
   // Explicit choice wins; otherwise track the map so the two never disagree silently.
   const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
-  const rows: { label: string; desc: string; url: string; pick?: React.ReactNode }[] = [];
+  const rows: { label: string; desc: string; url: string; pick?: React.ReactNode; unavailable?: string }[] = [];
   if (coll) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
@@ -1862,6 +1862,14 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
     // Offered only when a render exists: an Esri vector tile layer REQUIRES a style, and a topic
     // with none fails to load outright in the ArcGIS SDK rather than drawing unstyled. A link that
     // cannot work is worse than no link.
+    if (!esriRenders.length) {
+      rows.push({
+        label: "ArcGIS vector tiles",
+        desc: "ArcGIS Pro / AGOL",
+        url: "",
+        unavailable: "needs a published style — ArcGIS cannot add a layer without one",
+      });
+    }
     const esri = esriRenders.length ? esriVectorTileUrl(id, chosen) : undefined;
     if (esri) {
       // One service per symbology, so the URL has to name one. The picker sits on the row rather
@@ -1888,12 +1896,18 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
       <div className="mb-1.5 text-xs font-semibold text-muted-foreground">API &amp; data endpoints</div>
       <div className="flex flex-col gap-1.5">
         {rows.map((r) => (
-          <div key={r.label} className="flex flex-wrap items-center gap-2 text-xs">
-            <span className="w-36 shrink-0 font-semibold text-foreground" title={r.desc}>{r.label}</span>
+          <div key={r.label} className={`flex flex-wrap items-center gap-2 text-xs ${r.unavailable ? "opacity-55" : ""}`}>
+            <span className={`w-36 shrink-0 font-semibold ${r.unavailable ? "text-muted-foreground" : "text-foreground"}`} title={r.desc}>{r.label}</span>
             {r.pick}
-            <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={r.url}>{r.url}</code>
-            <CopyBtn text={r.url} />
-            <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
+            {r.unavailable ? (
+              <span className="min-w-0 flex-1 text-[11px] text-muted-foreground italic">{r.unavailable}</span>
+            ) : (
+              <>
+                <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={r.url}>{r.url}</code>
+                <CopyBtn text={r.url} />
+                <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
+              </>
+            )}
           </div>
         ))}
       </div>

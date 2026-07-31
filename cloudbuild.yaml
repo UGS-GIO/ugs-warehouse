@@ -31,6 +31,7 @@ substitutions:
   _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip, chain after ingest + restyle
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
+  _TILES_SERVICE: ugs-warehouse-tiles         # XYZ vector tiles + ready-to-use MapLibre styles (go-pmtiles over the CDN PMTiles, scale-to-zero)
   # featureserv buffers whole responses, so this and Paging.LimitMax in
   # featureserv/duckdb_featureserv.toml are one decision. Passed to the image build as well as the
   # deploy so check_limits.py can refuse an unmeasured pairing rather than let it OOM in prod.
@@ -130,6 +131,19 @@ steps:
       - MEMORY_LIMIT=${_FEATURES_MEMORY}
       - featureserv/
 
+  # XYZ vector tiles for clients that cannot read PMTiles directly. No data copy: go-pmtiles
+  # range-reads the same PMTiles the viewer uses, and the app binds the ugs-styles fragment to
+  # those tiles so a consumer gets one URL that renders (tiles/README.md).
+  - id: build-tiles
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:latest
+      - tiles/
+
   # Ops console (Django + HTMX). Build context is the repo root (Dockerfile.admin COPYs admin/).
   - id: build-admin
     name: gcr.io/cloud-builders/docker
@@ -177,6 +191,11 @@ steps:
     waitFor: [build-features]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features']
+
+  - id: push-tiles
+    waitFor: [build-tiles]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles']
 
   - id: push-api
     waitFor: [build-api]
@@ -676,6 +695,26 @@ steps:
       - --memory=${_FEATURES_MEMORY}
       - --timeout=120
 
+  # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).
+  # Memory is small: it holds PMTiles directories, never tile data. Behind the CDN this only
+  # ever sees cache misses, so concurrency matters more than instance count.
+  - id: deploy-tiles
+    waitFor: [push-tiles]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_TILES_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --allow-unauthenticated
+      - --port=8080
+      - --cpu=1
+      - --memory=512Mi
+      - --timeout=60
+
   # Resolve the deployed OGC API Features URL → file, so the viewer can bake it as
   # VITE_FEATURES_BASE (the "OGC API" link). Runs after deploy-features (serial order); empty
   # file if the service isn't up → the viewer link stays hidden (no dead link).
@@ -754,6 +793,7 @@ steps:
           --cache-control="no-cache"
 
 images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api

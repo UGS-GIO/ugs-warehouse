@@ -1,0 +1,204 @@
+// Per-asset preview: picks a viewer by asset kind (map, 3D, PDF, table, image, text).
+import { useQuery } from "@tanstack/react-query";
+import { useEffect, useMemo, useState } from "react";
+
+import { DataExplorer } from "./data-explorer";
+import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "./preview-map";
+import { type Asset, type AssetKind, assetKind, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
+  tableColumns, thumbnailAsset } from "./stac";
+import { ThreeDViewer } from "./three-d-viewer";
+import { C, toggle } from "./ui";
+
+export function AssetChips({ assets }: { assets: Record<string, Asset> }) {
+  return (
+    <>
+      {Object.entries(assets).map(([k, a]) => (
+        <a key={k} className={C.chip} href={a.href} target="_blank" rel="noopener"
+          onClick={(e) => e.stopPropagation()}>{a.title ?? k}</a>
+      ))}
+    </>
+  );
+}
+
+function FieldsPanel({ item }: { item: StacDoc }) {
+  const cols = tableColumns(item);
+  if (!cols) return null;
+  return (
+    <details className="mt-3 text-[12px]">
+      <summary className="inline-flex cursor-pointer items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+        Fields <span className="font-normal">· {cols.length}</span>
+      </summary>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 rounded-md border border-border bg-card px-3 py-2.5">
+        {cols.map((c) => (
+          <span key={c.name} className="inline-flex items-baseline gap-1.5">
+            <span className="font-mono text-foreground">{c.name}</span>
+            {c.type && <span className="text-[11px] text-muted-foreground">{c.type}</span>}
+          </span>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+// Raster mosaic (per-scale geologic-map tiles) preview — publishes a spec to the shared persistent map.
+function RasterMosaicPreview({ item }: { item: StacDoc }) {
+  const asset = rasterTilesAsset(item);
+  return <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href } : null} />;
+}
+
+// Vector asset preview: the item's PMTiles on the shared persistent map + full dataset explorer,
+// linked — click a table row → map flies to that feature; click a map feature → table pages to it.
+// The map instance lives in PreviewMapProvider (mounted once); this publishes the vector spec and
+// wires the table↔map state (focus/pick) through the provider.
+function VectorPreview({ item }: { item: StacDoc }) {
+  const pq = parquetAsset(item);
+  const pm = pmtilesLink(item);
+  const { setFocus, pick } = usePreviewMap();
+  const spec: PreviewSpec = pm
+    ? { kind: "vector", item, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "") }
+    : null;
+  return (
+    <>
+      <PreviewMapSlot spec={spec} />
+      <FieldsPanel item={item} />
+      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")} rowKey={primaryKeyOf(item)} />}
+    </>
+  );
+}
+
+const KIND_LABEL: Record<AssetKind, string> = {
+  cog: "Map", threeD: "3D", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
+};
+
+
+// Small text/CSV peek — fetch the head of the file and show it; no parsing, just a glance.
+function TextPreview({ href }: { href: string }) {
+  // Slice to 20k in the queryFn so only the preview is retained, not the whole (possibly large) file.
+  const { data: txt, error } = useQuery({
+    queryKey: ["text-preview", href],
+    queryFn: async ({ signal }) => (await (await fetch(href, { signal })).text()).slice(0, 20000),
+    staleTime: 5 * 60_000,
+  });
+  if (error) return <div className="mt-2 text-xs text-destructive">preview failed: {error instanceof Error ? error.message : String(error)}</div>;
+  if (txt === undefined) return <div className="mt-2 text-xs text-muted-foreground">loading…</div>;
+  return (
+    <pre className="mt-2 max-h-[600px] max-w-full overflow-auto rounded-md border border-border bg-muted p-3 text-[12px] leading-snug">
+      {txt}{txt.length >= 20000 ? "\n… (truncated — open or download for the full file)" : ""}
+    </pre>
+  );
+}
+
+// ---- Interactive 3D Fence Diagram Viewer (deck.gl SolidPolygon/Path layers over maplibre 3D) ----
+function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item: StacDoc }) {
+  switch (kind) {
+    case "cog": return <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />;
+    case "threeD": return <ThreeDViewer asset={asset} item={item} />;
+    case "parquet": return <DataExplorer href={asset.href} />;
+    case "image":
+      return (
+        <img src={asset.href} alt={asset.title ?? "image"} loading="lazy"
+          className="mt-2 max-h-[600px] w-auto max-w-full rounded-md border border-border bg-muted object-contain" />
+      );
+    case "pdf": return <PdfPreview asset={asset} item={item} />;
+    case "text": return <TextPreview href={asset.href} />;
+    default:
+      return (
+        <div className="mt-2 rounded-md border border-border bg-muted p-3 text-xs text-muted-foreground">
+          No in-page preview for this file type. <a href={asset.href} target="_blank" rel="noopener" className="text-primary">Download / open ↗</a>
+        </div>
+      );
+  }
+}
+
+// PDF preview is click-to-load: the cover thumbnail shows instantly as a poster, and the (often
+// 50–70MB, cross-origin) PDF only embeds when asked. Avoids a heavy auto-download + a blank box
+// while a big file streams in. The cover + open-in-tab link always work regardless.
+function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
+  const [show, setShow] = useState(false);
+  const poster = thumbnailAsset(item)?.href;
+  if (show) {
+    return (
+      <object data={asset.href} type="application/pdf"
+        className="mt-2 h-[400px] w-full rounded-md border border-border sm:h-[640px]">
+        <div className="p-3 text-xs text-muted-foreground">
+          Can’t embed this PDF — <a href={asset.href} target="_blank" rel="noopener" className="text-primary">open it ↗</a>
+        </div>
+      </object>
+    );
+  }
+  return (
+    <div className="mt-2">
+      <button onClick={() => setShow(true)} title="Load the full PDF preview"
+        className="group relative block w-full overflow-hidden rounded-md border border-border bg-muted">
+        {poster
+          ? <img src={poster} alt={asset.title ?? "PDF cover"} className="max-h-[640px] w-full object-contain" />
+          : <div className="flex h-64 items-center justify-center text-xs text-muted-foreground">PDF</div>}
+        <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/20">
+          <span className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground shadow">View PDF ▸</span>
+        </span>
+      </button>
+      <p className="mt-1 text-xs text-muted-foreground">
+        Large file — loads on click. Or <a href={asset.href} target="_blank" rel="noopener" className="text-primary hover:underline">open in a new tab ↗</a>.
+      </p>
+    </div>
+  );
+}
+
+// Tabbed viewer over every asset on an item: previewable files (PDF, image, COG, parquet, text)
+// get a tab + inline pane; the rest are listed as download links. The default tab is the
+// highest-priority file (map > pdf > data > image > text).
+function AssetViewer({ item }: { item: StacDoc }) {
+  const entries = useMemo(() => Object.entries(item.assets ?? {})
+    // thumbnails are redundant with the real image/cog; skip as their own tab
+    .filter(([, a]) => !a.roles?.includes("thumbnail"))
+    .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
+    .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
+      || KIND_RANK[x.kind] - KIND_RANK[y.kind]), [item.assets]);
+  const tabs = entries.filter((e) => e.kind !== "other");
+  const others = entries.filter((e) => e.kind === "other");
+  const [activeKey, setActiveKey] = useState<string | undefined>(tabs[0]?.key);
+  useEffect(() => { setActiveKey(tabs[0]?.key); }, [item.id]);   // reset on item change
+
+  if (!tabs.length) {
+    // Nothing previewable — show the footprint (if any) + download links for the raw files.
+    return (
+      <>
+        <PreviewMapSlot spec={footprintSpecOf(item)} />
+        {others.length > 0 && <div className="mt-2"><AssetChips assets={Object.fromEntries(others.map((e) => [e.key, e.asset]))} /></div>}
+      </>
+    );
+  }
+  const active = tabs.find((e) => e.key === activeKey) ?? tabs[0];
+  return (
+    <div className="mt-2">
+      {tabs.length > 1 && (
+        <div className="mb-1.5 flex flex-wrap gap-1.5">
+          {tabs.map((e) => (
+            <button key={e.key} onClick={() => setActiveKey(e.key)}
+              className={toggle(e.key === active.key) + " rounded"}>
+              <span className="mr-1 text-muted-foreground">{KIND_LABEL[e.kind]}</span>
+              {e.asset.title ?? e.key}
+            </button>
+          ))}
+        </div>
+      )}
+      <AssetPane kind={active.kind} asset={active.asset} item={item} />
+      {others.length > 0 && (
+        <div className="mt-2 text-xs text-muted-foreground">
+          Other files: <AssetChips assets={Object.fromEntries(others.map((e) => [e.key, e.asset]))} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Preview: vector serving topics → interactive PMTiles map + linked dataset explorer;
+// geologic map mosaics → interactive raster PMTiles map; everything else (publications) →
+// the tabbed asset viewer so users can peruse every file in-page.
+export function Preview({ item }: { item: StacDoc }) {
+  if (pmtilesLink(item)) return <VectorPreview item={item} />;
+  if (rasterTilesAsset(item)) return <RasterMosaicPreview item={item} />;
+  return <AssetViewer item={item} />;
+}
+
+// ---- API & data endpoints ----

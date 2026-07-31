@@ -11,7 +11,7 @@ import maplibregl from "maplibre-gl";
 import { Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { Legend } from "./legend";
-import { CommentsPanel } from "./CommentsPanel";
+import { CommentsPanel } from "./comments-panel";
 import { boundsOf, type FocusSel, type MapPick, nextPick, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, rendersOf, type StacDoc, useLiveLegend, useStyleLayers } from "./stac";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";

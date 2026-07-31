@@ -4,7 +4,7 @@
 // link), while the router gives us typed search, history, and clean per-view navigation.
 import { createBrowserHistory, createRootRoute, createRouter } from "@tanstack/react-router";
 
-import { App } from "./App";
+import { App } from "./app";
 
 const NAV_VIEWS = ["map", "search", "arch", "guide", "review"] as const;  // "catalog" is the param-less default
 const str = (v: unknown) => (typeof v === "string" && v ? v : undefined);

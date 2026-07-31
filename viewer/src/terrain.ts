@@ -93,11 +93,6 @@ export async function buildMeshFrom3DEP(
   return meshFromGrid(bbox, grid, grid, z, center, scale);
 }
 
-// Build a TerrainMesh from a precomputed elevation grid (hosted override path).
-export function meshFromHeightfield(hf: Heightfield, center: [number, number], scale: [number, number]): TerrainMesh {
-  return meshFromGrid(hf.bbox, hf.nx, hf.ny, hf.z, center, scale);
-}
-
 // Elevation grid (row-major N→S, W→E) → deck mesh. POSITION in the fence's local metre frame; z stays
 // absolute elevation (getScale exaggerates). TEXCOORD_0 in mercator fraction so the (mercator) COG
 // sheet registers with the surface.

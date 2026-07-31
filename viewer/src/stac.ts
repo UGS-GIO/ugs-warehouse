@@ -109,6 +109,25 @@ export const FEATURES_BASE = (
 export const featuresCollectionUrl = (id: string): string | undefined =>
   FEATURES_BASE ? `${FEATURES_BASE}/collections/${id}` : undefined;
 
+// XYZ vector tiles + Esri VectorTileServer (the `tiles/` service). Same shape as FEATURES_BASE:
+// baked at build time, overridable per session, and empty hides the links rather than printing
+// dead ones. The service serves every topic that has PMTiles, keyed by STAC item id.
+export const TILES_BASE = (
+  new URLSearchParams(location.search).get("tiles")
+  || ((import.meta as { env?: Record<string, string> }).env?.VITE_TILES_BASE)
+  || ""
+).replace(/\/+$/, "");
+export const xyzTilesUrl = (id: string): string | undefined =>
+  TILES_BASE ? `${TILES_BASE}/tiles/${id}/{z}/{x}/{y}.mvt` : undefined;
+export const tilesStyleUrl = (id: string, render?: string): string | undefined =>
+  TILES_BASE ? `${TILES_BASE}/styles/${id}.json${render ? `?render=${encodeURIComponent(render)}` : ""}` : undefined;
+// ArcGIS Pro / AGOL. One service per render, because Pro fetches the style with no query string
+// and so cannot reach `?render=` — see tiles/README.md.
+export const esriVectorTileUrl = (id: string, render?: string): string | undefined =>
+  TILES_BASE
+    ? `${TILES_BASE}/esri/${id}${render ? `/${encodeURIComponent(render)}` : ""}/VectorTileServer`
+    : undefined;
+
 // The Cloud-Optimized GeoTIFF asset (range-readable, rendered client-side via cog://).
 export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
   Object.values(d?.assets ?? {}).find(

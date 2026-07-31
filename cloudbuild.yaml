@@ -730,15 +730,30 @@ steps:
           || printf '' > /workspace/features_url
         echo "VITE_FEATURES_BASE=$$(cat /workspace/features_url)"
 
+  # Same for the tiles service, so the item page can offer XYZ / MapLibre style / ArcGIS
+  # VectorTileServer links. Empty on failure → the viewer hides them rather than printing dead URLs.
+  - id: resolve-tiles-url
+    waitFor: [deploy-tiles]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run services describe ${_TILES_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' > /workspace/tiles_url 2>/dev/null \
+          || printf '' > /workspace/tiles_url
+        echo "VITE_TILES_BASE=$$(cat /workspace/tiles_url)"
+
   # Build the static STAC viewer (Vite, base "./" so it works under any CDN subpath).
   - id: build-viewer
-    waitFor: [resolve-features-url]
+    waitFor: [resolve-features-url, resolve-tiles-url]
     name: node:22
     entrypoint: bash
     args:
       - -c
       - |
         export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
+        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
         cd viewer
         npm ci
         npm run build
@@ -772,6 +787,7 @@ steps:
       - -c
       - |
         export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
+        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
         export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
         cd viewer
         npm run build -- --base=/${_REVIEW_VIEWER_PREFIX}/ --outDir dist-review

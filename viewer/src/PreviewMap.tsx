@@ -80,6 +80,10 @@ type Ctx = {
   setFocus: (f: FocusSel | null) => void;
   pick: MapPick | null;
   onFeatureClick: (id: number) => void;
+  // Which `ugs:renders` entry the "Symbolize by" picker is on. Published so the endpoints panel can
+  // hand out the style/ArcGIS URL for the symbology you are actually looking at, rather than always
+  // the first one alphabetically.
+  render: string;
 };
 const PreviewMapCtx = createContext<Ctx | null>(null);
 
@@ -94,6 +98,9 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const [slotEl, setSlotEl] = useState<HTMLElement | null>(null);
   const [focus, setFocus] = useState<FocusSel | null>(null);
   const [pick, setPick] = useState<MapPick | null>(null);
+  // Mirrors the map's "Symbolize by" picker. Owned here, set by the map, so consumers outside the
+  // map subtree (the endpoints panel) can see which symbology is on screen.
+  const [render, setRender] = useState("");
 
   // Reset the cross-boundary wires when the shown item changes (a stale fly/highlight would mislead).
   const itemId = specItemId(spec);
@@ -103,22 +110,24 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const onFeatureClick = useCallback((id: number) => setPick((p) => nextPick(p, id)), []);
 
   const ctx = useMemo<Ctx>(
-    () => ({ setSpec, registerSlot, focus, setFocus, pick, onFeatureClick }),
-    [focus, pick, registerSlot, onFeatureClick],
+    () => ({ setSpec, registerSlot, focus, setFocus, pick, onFeatureClick, render }),
+    [focus, pick, registerSlot, onFeatureClick, render],
   );
 
   return (
     <PreviewMapCtx.Provider value={ctx}>
       {children}
-      <PreviewMap spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick} />
+      <PreviewMap spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick}
+        onRenderChange={setRender} />
     </PreviewMapCtx.Provider>
   );
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-function PreviewMap({ spec, slotEl, focus, onFeatureClick }: {
+function PreviewMap({ spec, slotEl, focus, onFeatureClick, onRenderChange }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number) => void;
+  onRenderChange: (r: string) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
@@ -142,6 +151,7 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick }: {
   const renderKeys = Object.keys(renders);
   const [sel, setSel] = useState<string>("");
   useEffect(() => { setSel(renders.default ? "default" : Object.keys(renders)[0] ?? ""); }, [itemId]);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { onRenderChange(sel); }, [sel, onRenderChange]);
   const active = renders[sel];
   const styleUrl = isVector && item ? (active?.style_url ?? defaultStyleUrl(item)) : undefined;
   const sprite = active?.sprite;

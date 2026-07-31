@@ -19,7 +19,7 @@ import { ALL_PAGES, DEFAULT_PAGE_SIZE, pageLabel, PAGE_SIZES, type PageSize } fr
 import { PreviewMapSlot, type PreviewSpec, usePreviewMap, footprintSpecOf } from "./PreviewMap";
 import type { FocusSel } from "./map-model";
 import { CARD_GRID, T } from "./Page";
-import { type Asset, citeLink, classificationColors, cogAsset, contentsOf, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, esriVectorTileUrl, classificationColors, cogAsset, contentsOf, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, tilesStyleUrl, viaLink, xyzTilesUrl } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
 import { PhotoGallery } from "./PhotoGallery";
@@ -1833,13 +1833,52 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const pm = pmtilesLink(item);
   const ducklake = ducklakeAsset(item);
-  const rows: { label: string; desc: string; url: string }[] = [];
+  const esriRenders = Object.keys(rendersOf(item)).sort();
+  // Follow the map's "Symbolize by" picker, so the URL you copy is the symbology on screen.
+  const { render: shown } = usePreviewMap();
+  const [pickedRender, setPickedRender] = useState<string>();
+  // Explicit choice wins; otherwise track the map so the two never disagree silently.
+  const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
+  const rows: { label: string; desc: string; url: string; pick?: React.ReactNode }[] = [];
   if (coll) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
   }
   if (pq) rows.push({ label: "GeoParquet", desc: "Columnar file — DuckDB / GeoPandas / QGIS", url: pq.href });
   if (pm) rows.push({ label: "PMTiles", desc: "Vector tiles for web maps", url: pm.href });
+  // The tiles service exists for clients that cannot read PMTiles directly. Only offered when the
+  // item actually has PMTiles, since that archive is what it serves.
+  if (pm) {
+    const xyz = xyzTilesUrl(id);
+    if (xyz) rows.push({ label: "XYZ vector tiles", desc: "/{z}/{x}/{y}.mvt — Leaflet, OpenLayers, QGIS", url: xyz });
+    const style = tilesStyleUrl(id, chosen);
+    if (style) rows.push({ label: "MapLibre style", desc: "Complete GL style — renders as published", url: style });
+    // Pro reads the style from the service path, so each symbology is its own service. Only the
+    // first is a row — babylon basins publishes eight `likelihood-*`, and eight near-identical URLs
+    // buried the rest of the panel. The alternates go in a disclosure below.
+    //
+    // Offered only when a render exists: an Esri vector tile layer REQUIRES a style, and a topic
+    // with none fails to load outright in the ArcGIS SDK rather than drawing unstyled. A link that
+    // cannot work is worse than no link.
+    const esri = esriRenders.length ? esriVectorTileUrl(id, chosen) : undefined;
+    if (esri) {
+      // One service per symbology, so the URL has to name one. The picker sits on the row rather
+      // than making you scroll back to the map to change what you are about to copy. It starts on
+      // whatever the map is showing.
+      rows.push({
+        label: "ArcGIS vector tiles",
+        desc: "Add in ArcGIS Pro / AGOL — symbology included",
+        url: esri,
+        pick: esriRenders.length > 1 ? (
+          <select value={chosen} onChange={(e) => setPickedRender(e.target.value)}
+            title="Which published symbology this service serves"
+            className="max-w-[11rem] shrink-0 rounded border border-input bg-card px-1 py-0.5 text-[11px] text-foreground">
+            {esriRenders.map((r) => <option key={r} value={r}>{r}</option>)}
+          </select>
+        ) : undefined,
+      });
+    }
+  }
   if (ducklake) rows.push({ label: "DuckLake", desc: "Lakehouse table", url: ducklake.href });
   if (!rows.length) return null;
   return (
@@ -1849,6 +1888,7 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
         {rows.map((r) => (
           <div key={r.label} className="flex flex-wrap items-center gap-2 text-xs">
             <span className="w-36 shrink-0 font-semibold text-foreground" title={r.desc}>{r.label}</span>
+            {r.pick}
             <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={r.url}>{r.url}</code>
             <CopyBtn text={r.url} />
             <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>

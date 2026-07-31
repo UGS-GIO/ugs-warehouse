@@ -272,7 +272,8 @@ def index(request: Request) -> dict:
              # One style per published render. A topic with no render serves tiles but has no
              # style to offer — say so with an empty list rather than a link that 404s.
              "styles": {r: f"{base}/styles/{t}.json?render={r}" for r in sorted(_renders(t))},
-             "arcgis": f"{base}/esri/{t}/VectorTileServer"}
+             "arcgis": {r: f"{base}/esri/{t}/{r}/VectorTileServer" for r in sorted(_renders(t))}
+                       or f"{base}/esri/{t}/VectorTileServer"}
             for t in sorted(_topics())
         ],
     }
@@ -423,18 +424,19 @@ def _esri_extent(meta: dict) -> dict:
             "spatialReference": {"wkid": 102100, "latestWkid": 3857}}
 
 
-@app.get("/esri/{topic}/VectorTileServer")
-def esri_service(topic: str, request: Request) -> Response:
+def _esri_descriptor(topic: str, request: Request, render: str | None) -> Response:
     """The document Pro and AGOL read before they will accept the layer."""
     if topic not in _topics():
         raise HTTPException(404, f"unknown topic: {topic}")
+    name, _ = _pick_render(topic, render) if _renders(topic) else (None, None)
     meta = _pmtiles_metadata(topic)
     layer = (meta.get("vector_layers") or [{}])[0]
     maxzoom = int(layer.get("maxzoom", 14))
     extent = _esri_extent(meta)
     doc = {
         "currentVersion": 11.2,
-        "name": topic,
+        # Esri shows this in the layer list, so a per-render service says which symbology it is.
+        "name": f"{topic} ({name})" if render and name else topic,
         "copyrightText": "Utah Geological Survey",
         "capabilities": "TilesOnly",
         "type": "indexedVector",
@@ -462,21 +464,54 @@ def esri_service(topic: str, request: Request) -> Response:
                              "Cache-Control": "public, max-age=300"})
 
 
-@app.get("/esri/{topic}/VectorTileServer/resources/styles/root.json")
-def esri_style(topic: str, request: Request, render: str | None = None) -> Response:
+@app.get("/esri/{topic}/VectorTileServer")
+def esri_service(topic: str, request: Request) -> Response:
+    """Default render. Kept so a bare topic URL still works."""
+    return _esri_descriptor(topic, request, None)
+
+
+@app.get("/esri/{topic}/{render}/VectorTileServer")
+def esri_service_render(topic: str, render: str, request: Request) -> Response:
+    """One service per published render.
+
+    Pro fetches `resources/styles/root.json` with no query string, so `?render=` is unreachable
+    from it — a topic with several renders (`enmin_ucrc_wells` → by-boxtype/by-purpose, babylon
+    basins → eight `likelihood-*`) would only ever expose whichever one `_pick_render` defaults to.
+    Putting the render in the path makes each one its own addable layer.
+    """
+    return _esri_descriptor(topic, request, render)
+
+
+def _esri_style_doc(topic: str, request: Request, render: str | None, base_path: str) -> Response:
     """Esri vector tile styles ARE MapLibre GL styles, so this is the same document `/styles`
     serves — pointed at the Esri-ordered tile route. The symbology therefore comes from ugs-styles
     like everywhere else, instead of each Pro user rebuilding it by hand as a .lyrx."""
     doc = json.loads(style(topic, request, render).body)
     for src in doc.get("sources", {}).values():
-        src["tiles"] = [f"{_base_url(request)}/esri/{topic}/VectorTileServer/tile/{{z}}/{{y}}/{{x}}.pbf"]
+        src["tiles"] = [f"{_base_url(request)}{base_path}/tile/{{z}}/{{y}}/{{x}}.pbf"]
     return Response(json.dumps(doc), media_type="application/json",
                     headers={"Access-Control-Allow-Origin": "*",
                              "Cache-Control": "public, max-age=300"})
+
+
+@app.get("/esri/{topic}/VectorTileServer/resources/styles/root.json")
+def esri_style(topic: str, request: Request, render: str | None = None) -> Response:
+    return _esri_style_doc(topic, request, render, f"/esri/{topic}/VectorTileServer")
+
+
+@app.get("/esri/{topic}/{render}/VectorTileServer/resources/styles/root.json")
+def esri_style_render(topic: str, render: str, request: Request) -> Response:
+    return _esri_style_doc(topic, request, render, f"/esri/{topic}/{render}/VectorTileServer")
 
 
 @app.get("/esri/{topic}/VectorTileServer/tile/{z}/{y}/{x}.pbf")
 def esri_tile(topic: str, z: int, y: int, x: int) -> Response:
     """Same tiles, Esri's argument order. The y/x swap is the whole difference — get it backwards
     and the map renders mirrored about the diagonal rather than erroring."""
+    return _proxy_tile(topic, z, x, y, "public, max-age=300")
+
+
+@app.get("/esri/{topic}/{render}/VectorTileServer/tile/{z}/{y}/{x}.pbf")
+def esri_tile_render(topic: str, render: str, z: int, y: int, x: int) -> Response:
+    """Renders differ in symbology only — same archive, so the render is not part of the lookup."""
     return _proxy_tile(topic, z, x, y, "public, max-age=300")

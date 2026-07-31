@@ -278,8 +278,8 @@ def index(request: Request) -> dict:
              # One style per published render. A topic with no render serves tiles but has no
              # style to offer — say so with an empty list rather than a link that 404s.
              "styles": {r: f"{base}/styles/{t}.json?render={r}" for r in sorted(_renders(t))},
-             "arcgis": {r: f"{base}/esri/{t}/{r}/VectorTileServer" for r in sorted(_renders(t))}
-                       or f"{base}/esri/{t}/VectorTileServer"}
+             # Empty when nothing styles it — Esri can't add a layer with no style.
+             "arcgis": {r: f"{base}/esri/{t}/{r}/VectorTileServer" for r in sorted(_renders(t))}}
             for t in sorted(_topics())
         ],
     }

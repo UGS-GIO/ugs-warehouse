@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "./stac";
+import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
 // layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
@@ -78,6 +79,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
+  const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
   const [basemap, setBasemap] = useState<keyof typeof BASEMAPS>("Streets");
@@ -145,6 +147,24 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
   // win the topmost-hit when they overlap a footprint.
   const allInteractiveIds = coverage ? [...interactiveIds, "coverage-fill"] : interactiveIds;
 
+  // Scale-gated overlays. A toggled-on layer whose style only draws deeper in (PLSS sections:
+  // z≥11.13) is blank at the statewide opening view, which reads as "this layer is broken" — the
+  // more so because an UNSTYLED layer falls back to paint with no gate and does draw. Name them
+  // instead. Only layers whose style has resolved carry a gate, so nothing flashes during load.
+  const gateById: Record<string, Gate | null> = {};
+  for (const l of layers) gateById[l.id] = gateOf(styleCache[l.id]);
+  const gatedOut = useGatedOut(mapRef, layers.map((l) => ({ id: l.id, gate: gateById[l.id] })), mapLoaded);
+  const hiddenGroup = (dir: "in" | "out") =>
+    groupGate(layers.filter((l) => gatedOut[l.id] === dir).map((l) => ({ title: l.title, gate: gateById[l.id] })), dir);
+  // Zoom-in wins the slot when both directions are gated — it's the case that actually occurs, since
+  // SLD MaxScaleDenominators become minzooms.
+  const inGroup = hiddenGroup("in");
+  const hidden = inGroup ?? hiddenGroup("out");
+  const hiddenDir: "in" | "out" = inGroup ? "in" : "out";
+  // Zoom only — the centre is where the user is looking, and fitting a statewide layer's bounds
+  // would land on one arbitrary feature.
+  const easeZoomTo = (z: number) => mapRef.current?.getMap().easeTo({ zoom: z, duration: 600 });
+
   const onClick = (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
     if (!f) return setPopup(null);
@@ -169,6 +189,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
       cursor={cursor}
       onMouseEnter={() => setCursor("pointer")}
       onMouseLeave={() => setCursor("")}
+      onLoad={() => setMapLoaded(true)}
       onMoveEnd={(e: ViewStateChangeEvent) => writeCam(e.viewState)}
       onClick={onClick}
     >
@@ -187,6 +208,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
           </button>
         )}
       </div>
+
+      {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
+          them all. */}
+      {hidden && (
+        <ZoomGateNotice gate={hidden.gate} dir={hiddenDir} subject={hidden.subject}
+          onZoom={() => easeZoomTo(gateZoom(hidden.gate, hiddenDir))} />
+      )}
 
       {/* Coverage overlay — all item footprints as clickable rectangles, beneath the data layers so
           those stay on top. Very light fill; the outline is what reads as "here's a mapped area". */}

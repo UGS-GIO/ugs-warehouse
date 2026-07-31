@@ -82,6 +82,12 @@ LODs are Esri's own numbers, read off a live basemap service: 512px tiles, level
 m/px, Web Mercator top-left origin — which describes the same XYZ grid our tiles use. Deriving them
 instead would render off by a zoom level.
 
+A topic with several renders needs one service each: Pro fetches `resources/styles/root.json` with
+no query string, so `?render=` is unreachable from it and a bare topic URL only ever exposes
+whichever render `_pick_render` defaults to. `enmin_ucrc_wells` has two, babylon basins has eight.
+Esri derives the layer *title* from the URL path rather than the descriptor's `name`, so a
+per-render service shows up as e.g. "By-purpose" — rename it in Pro if that matters.
+
 **Untested against real Pro/AGOL.** Verified only that the documents are well-formed and the tiles
 render through the Esri route in MapLibre. Expect a round of fixes on first contact.
 

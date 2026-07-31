@@ -18,8 +18,8 @@ range-reads the *same* archive the viewer uses. Scale-to-zero on Cloud Run.
 
 ## Exit condition
 
-**If Esri ships native PMTiles support, this whole service is deleted** — not just the `/esri/`
-routes. There is an open "Introduce a PMTileLayer" idea on the Esri community site (JavaScript Maps
+**If Esri ships native PMTiles support, this whole service is deleted** — not just the
+`/rest/services/` routes. There is an open "Introduce a PMTileLayer" idea on the Esri community site (JavaScript Maps
 SDK Ideas) that UGS has commented on; that landing is the trigger. Nothing here is core
 infrastructure. It is an accommodation with a defined end, and it should be removed the day it
 stops being necessary rather than outliving its reason.
@@ -88,13 +88,51 @@ what was missing is the descriptor Esri reads first.
 
 | Route | Esri expects |
 |---|---|
-| `/esri/{topic}/VectorTileServer` | descriptor — tile template, LODs, extent, SRS |
-| `/esri/{topic}/VectorTileServer/tile/{z}/{y}/{x}.pbf` | tiles, **y before x** |
-| `/esri/{topic}/VectorTileServer/resources/styles/root.json` | the GL style |
-| `/esri/{topic}/{render}/VectorTileServer` | one service per published symbology (…/tile/…, …/resources/styles/… under it too) |
+| `/rest/services/{topic}/VectorTileServer` | descriptor — tile template, LODs, extent, SRS |
+| `/rest/services/{topic}/VectorTileServer/tile/{z}/{y}/{x}.pbf` | tiles, **y before x** |
+| `/rest/services/{topic}/VectorTileServer/resources/styles/root.json` | the GL style |
+| `/rest/services/{topic}/{render}/VectorTileServer` | one service per published symbology (…/tile/…, …/resources/styles/… under it too) |
 
-Paste the `VectorTileServer` URL into **Pro** (Add Data → Data From Path) or **AGOL** (Add Item →
-From a URL → Vector Tile Service). Symbology rides along, so no hand-built `.lyrx` per layer.
+Paste the `VectorTileServer` URL into **Pro** (Add Data → Data From Path) or **AGOL** (Add layer
+from URL, type *ArcGIS Server web service*). Symbology rides along, so no hand-built `.lyrx` per
+layer.
+
+**The `/rest/services` prefix is load-bearing.** AGOL decides whether a URL is a vector tile
+service by matching the path against ArcGIS Server's REST layout, and it does that *before it
+makes any request* — so a perfectly correct descriptor at the wrong path is never fetched at all.
+Measured in Map Viewer on 2026-07-31:
+
+| URL | Requests reaching this service | AGOL says |
+|---|---|---|
+| `/esri/{topic}/VectorTileServer` | **zero** | "This service type is not supported." |
+| `/rest/services/{topic}/VectorTileServer` | `checkurl` + `?f=json` | adds and renders |
+
+Zero requests is the tell: nothing about the payload was ever in question. The same six routes are
+still mounted at `/esri/…` so URLs copied out of the viewer before this keep resolving, but that
+form **cannot be added in AGOL** — hand out the `/rest/services` one.
+
+**Confirmed end to end in AGOL, not just past the filter.** A throwaway Cloud Run deployment of
+this code was added to Map Viewer twice — `hazards_qfaults` (root-level service) and
+`enmin_ucrc_wells/by-purpose` (inside a folder). Both render their published symbology. The
+observed sequence, which is the whole contract:
+
+```
+checkurl (AGOL server-side)                    200
+/rest/services/…/VectorTileServer?f=json       200
+…/resources/styles/root.json                   200
+…/tile/5/12/6.pbf                              200
+…/tile/5/12/7.pbf                              204   empty tile — AGOL handles it
+```
+
+Two things that run settled. The layer came in titled **"Hazards qfaults"**, confirming Esri takes
+the title from the URL and not the descriptor's `name` (hence `_esri_service_url` dropping the
+`/default/` segment). And `by-purpose` — whose paint uses `["get", <computed key>, ["literal",
+{…}]]`, the obscurest corner of the expression grammar — drew in full colour rather than falling
+through to its grey default, so AGOL's renderer handles it.
+
+**AGOL never requested `/rest/info` or the catalog routes** on this path. They are kept as
+standard-shape insurance for Pro and Portal federation, and because the catalog is what makes the
+folder-vs-service split explicit — but only the prefix move is *proven* necessary.
 
 LODs are Esri's own numbers, read off a live basemap service: 512px tiles, level 0 at 78271.516964
 m/px, Web Mercator top-left origin — which describes the same XYZ grid our tiles use. Deriving them
@@ -110,8 +148,18 @@ per-render service shows up as e.g. "By-purpose" — rename it in Pro if that ma
 JavaScript `VectorTileLayer` — the same `VectorTileServer` contract Pro consumes: `hazards_qfaults`
 and `enmin_ucrc_wells/by-purpose` both load with zero errors and render their published symbology.
 
-**Still untested in Pro and AGOL themselves.** The JS SDK shares the contract but is a different
-implementation, so expect a round of fixes on first contact.
+**That verification is necessary but not sufficient, and this is the lesson.** `new
+VectorTileLayer({url})` takes the URL you hand it and fetches. AGOL's "Add layer from URL" first
+decides *whether the URL is a vector tile service at all*, by its path — a step the SDK never
+performs. So the SDK passed on `/esri/…` while AGOL rejected the identical service outright. When
+a client has an add-a-layer UI, the UI is part of the contract; test the UI, not just the loader.
+
+**AGOL is now measured** (see above). **Pro is still untested** — its Add Data → From Path parser
+is the same family as AGOL's, so the `/rest/services` path is expected to be what it needs too,
+but that is inference. The open questions there are whether it accepts a service URL with no
+instance segment, whether it honours a MapLibre-style `tiles` array in the style's source where
+Esri's own root.json uses a relative `"url"`, and whether its renderer supports the expression-
+driven `icon-image` in `enmin_ucrc_wells/by-boxtype` (a failure there drops every point silently).
 
 One thing that verification did settle: **an Esri vector tile layer requires a style.** A topic with
 no published render fails to load outright (`Failed to fetch` on the 404ing style resource, or

@@ -123,10 +123,23 @@ export const tilesStyleUrl = (id: string, render?: string): string | undefined =
   TILES_BASE ? `${TILES_BASE}/styles/${id}.json${render ? `?render=${encodeURIComponent(render)}` : ""}` : undefined;
 // ArcGIS Pro / AGOL. One service per render, because Pro fetches the style with no query string
 // and so cannot reach `?render=` — see tiles/README.md.
-export const esriVectorTileUrl = (id: string, render?: string): string | undefined =>
-  TILES_BASE
-    ? `${TILES_BASE}/esri/${id}${render ? `/${encodeURIComponent(render)}` : ""}/VectorTileServer`
-    : undefined;
+//
+// The `/rest/services` prefix is load-bearing, not cosmetic: AGOL's "Add layer from URL" matches
+// the path against ArcGIS Server's REST layout and rejects anything else before it makes a single
+// request ("This service type is not supported"). The service also answers on `/esri/...`, but
+// that form cannot be added in AGOL — so never hand it out here.
+// Pass the topic's full render list so this can mirror the service's folder rule: a topic whose
+// only render is `default` is a root-level SERVICE and must be addressed WITHOUT a render segment.
+// Two reasons — `/rest/services` lists it as a bare service, so the render form would disagree and
+// AGOL would make two portal items for one layer; and Esri takes the layer TITLE from the URL's
+// last segment, so the `/default/` form imports as a layer named literally "Default".
+// Omitting `renders` keeps the render segment, which is the safe default for an unknown topic.
+export const esriVectorTileUrl = (id: string, render?: string, renders?: string[]): string | undefined => {
+  if (!TILES_BASE) return undefined;
+  const soloDefault = renders?.length === 1 && renders[0] === "default";
+  const seg = render && !soloDefault ? `/${encodeURIComponent(render)}` : "";
+  return `${TILES_BASE}/rest/services/${encodeURIComponent(id)}${seg}/VectorTileServer`;
+};
 
 // The Cloud-Optimized GeoTIFF asset (range-readable, rendered client-side via cog://).
 export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>

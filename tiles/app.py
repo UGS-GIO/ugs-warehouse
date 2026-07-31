@@ -28,8 +28,9 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 
-from fastapi import FastAPI, HTTPException, Request, Response
+from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 UPSTREAM = os.environ.get("TILES_UPSTREAM", "http://127.0.0.1:8081")
@@ -257,6 +258,32 @@ def _tile_url(base: str, topic: str) -> str:
     return f"{base}/tiles/{topic}/{_version(topic)}/{{z}}/{{x}}/{{y}}.mvt"
 
 
+def _is_folder(topic: str) -> bool:
+    """Does this topic's Esri surface need a folder, i.e. more than the one `default` service?
+
+    Under Esri's layout `/rest/services/{a}/VectorTileServer` is a root-level SERVICE and
+    `/rest/services/{a}/{b}/VectorTileServer` is service `b` inside FOLDER `a`. A name is one or
+    the other, never both — real ArcGIS catalogs never list the same name in `folders` and
+    `services`.
+    """
+    return sorted(_renders(topic)) not in ([], ["default"])
+
+
+def _esri_service_url(base: str, topic: str, render: str) -> str:
+    """The addable URL for one symbology.
+
+    A topic whose only render is `default` is a root-level service, so it must NOT carry the
+    render segment. Two reasons, and the second is the one users feel: the catalog at
+    `/rest/services` lists it as a bare service, so the two would disagree and AGOL would end up
+    with two portal items for one layer — and Esri derives the layer TITLE from the URL path, so
+    the `/default/` form imports as a layer literally named "Default" (measured: `/hazards_qfaults
+    /VectorTileServer` titles "Hazards qfaults", `/hazards_qfaults/default/VectorTileServer`
+    titles "Default").
+    """
+    seg = "" if render == "default" and not _is_folder(topic) else f"/{quote(render, safe='')}"
+    return f"{base}{ESRI_PREFIX}/{quote(topic, safe='')}{seg}/VectorTileServer"
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     return {"ok": True}
@@ -277,9 +304,10 @@ def index(request: Request) -> dict:
              "tilejson": f"{base}/tilejson/{t}.json",
              # One style per published render. A topic with no render serves tiles but has no
              # style to offer — say so with an empty list rather than a link that 404s.
-             "styles": {r: f"{base}/styles/{t}.json?render={r}" for r in sorted(_renders(t))},
+             "styles": {r: f"{base}/styles/{t}.json?render={quote(r, safe='')}"
+                        for r in sorted(_renders(t))},
              # Empty when nothing styles it — Esri can't add a layer with no style.
-             "arcgis": {r: f"{base}/esri/{t}/{r}/VectorTileServer" for r in sorted(_renders(t))}}
+             "arcgis": {r: _esri_service_url(base, t, r) for r in sorted(_renders(t))}}
             for t in sorted(_topics())
         ],
     }
@@ -396,6 +424,26 @@ def tile_unversioned(topic: str, z: int, x: int, y: int) -> Response:
 # That pairing describes exactly the standard XYZ grid our tiles use (512 x 78271 = one world-wide
 # tile at z0), so the addressing lines up; using Esri's numbers verbatim avoids a subtle mismatch
 # that would render as a map offset by a zoom level.
+#
+# The PATH these live under is itself part of the contract, and it is not free-form. AGOL's "Add
+# layer from URL" decides whether a URL is a vector tile service by pattern-matching the path
+# against ArcGIS Server's REST layout BEFORE it makes any request — so a correct descriptor at the
+# wrong path is never even fetched. Measured in Map Viewer on 2026-07-31:
+#
+#   /esri/{topic}/VectorTileServer           -> "This service type is not supported."
+#                                               ZERO requests reached this service.
+#   /rest/services/{topic}/VectorTileServer  -> got past the check; AGOL called its own
+#                                               sharing/rest/portals/checkurl and then fetched
+#                                               `?f=json` here (404 at the time — the path did
+#                                               not exist yet).
+#
+# Hence ESRI_PREFIX below. `/esri` stays mounted as an alias so URLs already copied out of the
+# viewer keep resolving; everything we hand out now uses the REST-shaped path.
+#
+# Note this is specifically Map Viewer's URL parser. `new VectorTileLayer({url})` in the ArcGIS
+# Maps SDK bypasses it entirely and loads the `/esri/...` form happily, which is why the SDK-based
+# verification in README.md passed while AGOL itself never worked.
+ESRI_PREFIX = "/rest/services"
 _ESRI_R0, _ESRI_S0 = 78271.516964, 295828763.7957775
 _WEB_MERCATOR_ORIGIN = 20037508.342787
 
@@ -435,14 +483,24 @@ def _esri_descriptor(topic: str, request: Request, render: str | None) -> Respon
     """The document Pro and AGOL read before they will accept the layer."""
     if topic not in _topics():
         raise HTTPException(404, f"unknown topic: {topic}")
-    name, _ = _pick_render(topic, render) if _renders(topic) else (None, None)
+    # An Esri vector tile layer REQUIRES a style: with none, the client fails on the 404ing style
+    # resource rather than drawing unstyled. Serving a descriptor here would hand out a URL that
+    # cannot work, and would contradict `/rest/services`, which omits these topics for this reason.
+    if not _renders(topic):
+        raise HTTPException(404, f"no published style for {topic}; nothing Esri can add")
+    name, _ = _pick_render(topic, render)
     meta = _pmtiles_metadata(topic)
     layer = (meta.get("vector_layers") or [{}])[0]
     maxzoom = int(layer.get("maxzoom", 14))
     extent = _esri_extent(meta)
     doc = {
         "currentVersion": 11.2,
-        # Esri shows this in the layer list, so a per-render service says which symbology it is.
+        # NOT what the client shows in the layer list — measured through the ArcGIS Maps SDK, the
+        # title comes from the URL's last segment before `VectorTileServer` (`.../hazards_qfaults/
+        # VectorTileServer` titles "Hazards qfaults"; `.../hazards_qfaults/default/...` titles
+        # "Default"). That is why a single-`default` topic is addressed WITHOUT the render segment
+        # (see `_esri_service_url`). This field is still worth setting correctly — it is what a
+        # human sees when they open the descriptor — but do not rely on it reaching the UI.
         "name": f"{topic} ({name})" if render and name else topic,
         "copyrightText": "Utah Geological Survey",
         "capabilities": "TilesOnly",
@@ -470,13 +528,16 @@ def _esri_descriptor(topic: str, request: Request, render: str | None) -> Respon
                     headers={"Cache-Control": "public, max-age=300"})
 
 
-@app.get("/esri/{topic}/VectorTileServer")
+esri = APIRouter()
+
+
+@esri.get("/{topic}/VectorTileServer")
 def esri_service(topic: str, request: Request) -> Response:
     """Default render. Kept so a bare topic URL still works."""
     return _esri_descriptor(topic, request, None)
 
 
-@app.get("/esri/{topic}/{render}/VectorTileServer")
+@esri.get("/{topic}/{render}/VectorTileServer")
 def esri_service_render(topic: str, render: str, request: Request) -> Response:
     """One service per published render.
 
@@ -488,35 +549,120 @@ def esri_service_render(topic: str, render: str, request: Request) -> Response:
     return _esri_descriptor(topic, request, render)
 
 
-def _esri_style_doc(topic: str, request: Request, render: str | None, base_path: str) -> Response:
+_STYLE_SUFFIX = "/resources/styles/root.json"
+
+
+def _service_base_path(request: Request) -> str:
+    """The service root as the CLIENT addressed it, ready to embed in an absolute URL.
+
+    The style names its own tile URL absolutely, so it has to know which prefix this request
+    arrived on — reconstructing `/esri/{topic}/VectorTileServer` would send a client that came in
+    via `/rest/services` back out to the alias. Stripping the known suffix off the real path keeps
+    the two mounts self-consistent without either of them naming the other.
+
+    `re-quote` is the subtle half. ASGI percent-DECODES into `scope["path"]` before routing, so a
+    render named `a?b` arrives here as a literal `a?b`; interpolating that straight into a URL
+    produces `.../a?b/VectorTileServer/tile/...`, where everything from the `?` is a query string.
+    That is a 200 carrying a tile URL pointing nowhere — an empty map, nothing in any log. Every
+    render name today is URL-safe, so this is latent rather than live, but it costs one call to
+    fix and the failure mode is invisible.
+    """
+    path = request.scope["path"]
+    # Routing matched on the literal suffix, so this holds by construction — asserted, not relied on.
+    if not path.endswith(_STYLE_SUFFIX):
+        raise HTTPException(500, f"style route path {path!r} does not end in {_STYLE_SUFFIX}")
+    return quote(path[: -len(_STYLE_SUFFIX)], safe="/")
+
+
+def _esri_style_doc(topic: str, request: Request, render: str | None) -> Response:
     """Esri vector tile styles ARE MapLibre GL styles, so this is the same document `/styles`
     serves — pointed at the Esri-ordered tile route. The symbology therefore comes from ugs-styles
     like everywhere else, instead of each Pro user rebuilding it by hand as a .lyrx."""
     doc = json.loads(style(topic, request, render).body)
+    base_path = _service_base_path(request)
     for src in doc.get("sources", {}).values():
         src["tiles"] = [f"{_base_url(request)}{base_path}/tile/{{z}}/{{y}}/{{x}}.pbf"]
     return Response(json.dumps(doc), media_type="application/json",
                     headers={"Cache-Control": "public, max-age=300"})
 
 
-@app.get("/esri/{topic}/VectorTileServer/resources/styles/root.json")
+@esri.get("/{topic}/VectorTileServer" + _STYLE_SUFFIX)
 def esri_style(topic: str, request: Request, render: str | None = None) -> Response:
-    return _esri_style_doc(topic, request, render, f"/esri/{topic}/VectorTileServer")
+    return _esri_style_doc(topic, request, render)
 
 
-@app.get("/esri/{topic}/{render}/VectorTileServer/resources/styles/root.json")
+@esri.get("/{topic}/{render}/VectorTileServer" + _STYLE_SUFFIX)
 def esri_style_render(topic: str, render: str, request: Request) -> Response:
-    return _esri_style_doc(topic, request, render, f"/esri/{topic}/{render}/VectorTileServer")
+    return _esri_style_doc(topic, request, render)
 
 
-@app.get("/esri/{topic}/VectorTileServer/tile/{z}/{y}/{x}.pbf")
+@esri.get("/{topic}/VectorTileServer/tile/{z}/{y}/{x}.pbf")
 def esri_tile(topic: str, z: int, y: int, x: int) -> Response:
     """Same tiles, Esri's argument order. The y/x swap is the whole difference — get it backwards
     and the map renders mirrored about the diagonal rather than erroring."""
     return _proxy_tile(topic, z, x, y, "public, max-age=300")
 
 
-@app.get("/esri/{topic}/{render}/VectorTileServer/tile/{z}/{y}/{x}.pbf")
+@esri.get("/{topic}/{render}/VectorTileServer/tile/{z}/{y}/{x}.pbf")
 def esri_tile_render(topic: str, render: str, z: int, y: int, x: int) -> Response:
     """Renders differ in symbology only — same archive, so the render is not part of the lookup."""
     return _proxy_tile(topic, z, x, y, "public, max-age=300")
+
+
+# The REST-shaped path is the one AGOL will parse; `/esri` is the alias that keeps already-copied
+# URLs alive. The alias is out of the schema so the OpenAPI doc describes one service, not two.
+app.include_router(esri, prefix=ESRI_PREFIX)
+app.include_router(esri, prefix="/esri", include_in_schema=False)
+
+
+# --- ArcGIS Server discovery ------------------------------------------------------------------
+# Claiming the REST path shape has a second half: clients that recognise it then probe the server
+# ROOT, which they never did while we lived at `/esri/...`. `/rest/info` is the handshake — Portal,
+# IdentityManager and Pro read `authInfo` from it to decide whether a URL needs a token before they
+# will load anything from it. Absent, that read 404s, and a client is free to treat "cannot
+# determine the security model" as "do not proceed". Cheap to answer honestly; expensive to debug.
+#
+# The catalog routes below exist for the same reason. Our two service forms map onto Esri's layout
+# exactly: a single-render topic is a root-level SERVICE (`/rest/services/{topic}/VectorTileServer`)
+# and a multi-render topic reads as a FOLDER of one service per symbology
+# (`/rest/services/{topic}/{render}/VectorTileServer`). Listing them makes the facade browsable
+# instead of only addressable, which is what a client walking down from the root expects to find.
+@app.get("/rest/info")
+def rest_info() -> dict:
+    """Anonymous, no token. Stated explicitly so a client stops looking for an auth endpoint."""
+    return {"currentVersion": 11.2, "fullVersion": "11.2.0",
+            "authInfo": {"isTokenBasedSecurity": False}}
+
+
+@app.get("/rest/services")
+def rest_catalog() -> dict:
+    """Root catalog: every topic that has a style, as a service; multi-render topics also as
+    folders. Topics with no published render appear in neither — Esri cannot add a styleless
+    vector tile layer, so listing one would advertise something that fails on click."""
+    topics = [t for t in sorted(_topics()) if _renders(t)]
+    return {
+        "currentVersion": 11.2,
+        "folders": [t for t in topics if _is_folder(t)],
+        "services": [{"name": t, "type": "VectorTileServer"}
+                     for t in topics if not _is_folder(t)],
+    }
+
+
+@app.get("/rest/services/{topic}")
+def rest_folder(topic: str) -> dict:
+    """Folder listing: one service per published symbology, named `{topic}/{render}` as Esri's
+    catalog does for services inside a folder.
+
+    Only a real folder answers here. A single-`default` topic is a root-level SERVICE, and a name
+    that is both a folder and a service is a shape real ArcGIS never produces — answering would
+    invite a client to address the same layer two ways."""
+    if topic not in _topics():
+        raise HTTPException(404, f"unknown topic: {topic}")
+    if not _is_folder(topic):
+        raise HTTPException(404, f"{topic} is a service, not a folder")
+    renders = sorted(_renders(topic))
+    return {
+        "currentVersion": 11.2,
+        "folders": [],
+        "services": [{"name": f"{topic}/{r}", "type": "VectorTileServer"} for r in renders],
+    }

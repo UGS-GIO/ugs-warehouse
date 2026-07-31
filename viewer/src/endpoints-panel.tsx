@@ -60,7 +60,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
         unavailable: "needs a published style — ArcGIS cannot add a layer without one",
       });
     }
-    const esri = esriRenders.length ? esriVectorTileUrl(id, chosen) : undefined;
+    const esri = esriRenders.length ? esriVectorTileUrl(id, chosen, esriRenders) : undefined;
     if (esri) {
       // One service per symbology, so the URL has to name one.
       rows.push({

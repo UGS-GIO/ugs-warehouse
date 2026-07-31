@@ -244,7 +244,7 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick }: {
           </select>
         </div>
       )}
-      <div className="mt-2 h-96 w-full max-w-[1100px] overflow-hidden rounded-md border border-border bg-muted">
+      <div className="mt-2 h-96 w-full overflow-hidden rounded-md border border-border bg-muted">
         <MapGL
           ref={mapRef}
           mapLib={maplibregl}
@@ -348,7 +348,7 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick }: {
       </div>
 
       {isVector && IS_REVIEW && reviewFeature && item && (
-        <div className="mt-2 max-w-3xl rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
+        <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
           <div className="flex items-center justify-between">
             <h3 className="text-sm font-semibold">Feature review</h3>
             <button className="text-xs text-muted-foreground hover:underline" onClick={() => setReviewFeature(null)}>close</button>

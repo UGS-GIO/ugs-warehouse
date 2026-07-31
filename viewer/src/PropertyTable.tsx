@@ -15,7 +15,7 @@ const fmtVal = (v: unknown): string =>
     : v && typeof v === "object" ? JSON.stringify(v)
       : String(v);
 
-export function PropertyTable({ properties, className = "mt-3 max-w-3xl" }: {
+export function PropertyTable({ properties, className = "mt-3" }: {
   properties: Record<string, unknown>;
   className?: string;
 }) {

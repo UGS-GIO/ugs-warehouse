@@ -1,11 +1,28 @@
-# tiles — XYZ vector tiles + ready-to-use MapLibre styles
+# tiles — an Esri compatibility layer (plus an XYZ fallback)
 
-`/{z}/{x}/{y}.mvt` for clients that can't read PMTiles directly (Leaflet, OpenLayers, plain
-MapLibre setups, anything expecting an XYZ URL). **No data copy and no new artifact:** upstream
-[`go-pmtiles`](https://github.com/protomaps/go-pmtiles) range-reads the *same* PMTiles the viewer
-already uses on the CDN. Scale-to-zero on Cloud Run.
+**This service exists because Esri will not read PMTiles.** Everything else already can —
+MapLibre, Leaflet, OpenLayers, deck.gl and recent QGIS read the `.pmtiles` archive straight off the
+CDN with range requests, no service in the path. That is the warehouse's design and it works today.
 
-The viewer doesn't need this — it reads PMTiles directly. This exists for consumers that can't.
+So this is not a peer of the PMTiles path. It is a compatibility layer with two consumers:
+
+- **ArcGIS Pro / AGOL** — needs a `VectorTileServer` descriptor before it will accept a layer at
+  all. This is the reason the service exists.
+- **The narrow middle** — clients that want a plain tile URL but have no PMTiles support. Served by
+  `/tiles/...` as a fallback, not as the recommended path.
+
+Point anything else at the PMTiles file.
+
+**No data copy and no new artifact:** upstream [`go-pmtiles`](https://github.com/protomaps/go-pmtiles)
+range-reads the *same* archive the viewer uses. Scale-to-zero on Cloud Run.
+
+## Exit condition
+
+**If Esri ships native PMTiles support, this whole service is deleted** — not just the `/esri/`
+routes. There is an open "Introduce a PMTileLayer" idea on the Esri community site (JavaScript Maps
+SDK Ideas) that UGS has commented on; that landing is the trigger. Nothing here is core
+infrastructure. It is an accommodation with a defined end, and it should be removed the day it
+stops being necessary rather than outliving its reason.
 
 ## What it serves
 
@@ -74,6 +91,7 @@ what was missing is the descriptor Esri reads first.
 | `/esri/{topic}/VectorTileServer` | descriptor — tile template, LODs, extent, SRS |
 | `/esri/{topic}/VectorTileServer/tile/{z}/{y}/{x}.pbf` | tiles, **y before x** |
 | `/esri/{topic}/VectorTileServer/resources/styles/root.json` | the GL style |
+| `/esri/{topic}/{render}/VectorTileServer` | one service per published symbology (…/tile/…, …/resources/styles/… under it too) |
 
 Paste the `VectorTileServer` URL into **Pro** (Add Data → Data From Path) or **AGOL** (Add Item →
 From a URL → Vector Tile Service). Symbology rides along, so no hand-built `.lyrx` per layer.
@@ -88,11 +106,27 @@ whichever render `_pick_render` defaults to. `enmin_ucrc_wells` has two, babylon
 Esri derives the layer *title* from the URL path rather than the descriptor's `name`, so a
 per-render service shows up as e.g. "By-purpose" — rename it in Pro if that matters.
 
-**Untested against real Pro/AGOL.** Verified only that the documents are well-formed and the tiles
-render through the Esri route in MapLibre. Expect a round of fixes on first contact.
+**Verified with Esri's own client, not just the spec.** Loaded through the ArcGIS Maps SDK for
+JavaScript `VectorTileLayer` — the same `VectorTileServer` contract Pro consumes: `hazards_qfaults`
+and `enmin_ucrc_wells/by-purpose` both load with zero errors and render their published symbology.
+
+**Still untested in Pro and AGOL themselves.** The JS SDK shares the contract but is a different
+implementation, so expect a round of fixes on first contact.
+
+One thing that verification did settle: **an Esri vector tile layer requires a style.** A topic with
+no published render fails to load outright (`Failed to fetch` on the 404ing style resource, or
+`Cannot read properties of null (reading 'sprite')` if `defaultStyles` is omitted) — it does not
+draw unstyled. That is why the viewer only offers an ArcGIS link for topics that have a render.
 
 Tiles are for drawing — in Pro a vector tile layer is display-only. For query and analysis Pro wants
 the OGC API Features service (`featureserv/`), live over the same GeoParquet.
+
+**Drift risk, unmitigated.** The descriptor is hand-written against a contract Esri controls and
+does not version for us; those LOD numbers were read off a live Esri service. If Esri changes the
+shape, nothing here fails loudly — a user finds out. The analogue already in this repo is
+`featureserv/patches/`, pinned to an upstream SHA so `git apply` breaks the build on drift. The
+equivalent here would be a periodic diff of our descriptor's field set against a known-good public
+`VectorTileServer`. Not built.
 
 ## Behind the CDN
 

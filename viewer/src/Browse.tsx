@@ -1845,14 +1845,16 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
   }
   if (pq) rows.push({ label: "GeoParquet", desc: "Columnar file — DuckDB / GeoPandas / QGIS", url: pq.href });
-  if (pm) rows.push({ label: "PMTiles", desc: "Vector tiles for web maps", url: pm.href });
+  // PMTiles is the generic answer, not one option among equals: MapLibre, Leaflet, OpenLayers and
+  // recent QGIS read it straight off the CDN with range requests — no service in the path.
+  if (pm) rows.push({ label: "PMTiles", desc: "Vector tiles — MapLibre, Leaflet, OpenLayers, QGIS. Read direct from the CDN", url: pm.href });
   // The tiles service exists for clients that cannot read PMTiles directly. Only offered when the
   // item actually has PMTiles, since that archive is what it serves.
   if (pm) {
     const xyz = xyzTilesUrl(id);
-    if (xyz) rows.push({ label: "XYZ vector tiles", desc: "/{z}/{x}/{y}.mvt — Leaflet, OpenLayers, QGIS", url: xyz });
+    if (xyz) rows.push({ label: "XYZ tiles (fallback)", desc: "For clients that cannot read PMTiles. Prefer PMTiles above", url: xyz });
     const style = tilesStyleUrl(id, chosen);
-    if (style) rows.push({ label: "MapLibre style", desc: "Complete GL style — renders as published", url: style });
+    if (style) rows.push({ label: "Vector tile style", desc: "Complete GL style — MapLibre, Mapbox GL, ArcGIS JS SDK", url: style });
     // Pro reads the style from the service path, so each symbology is its own service. Only the
     // first is a row — babylon basins publishes eight `likelihood-*`, and eight near-identical URLs
     // buried the rest of the panel. The alternates go in a disclosure below.
@@ -1867,7 +1869,7 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
       // whatever the map is showing.
       rows.push({
         label: "ArcGIS vector tiles",
-        desc: "Add in ArcGIS Pro / AGOL — symbology included",
+        desc: "ArcGIS Pro / AGOL — the one client that needs its own service contract. Symbology included",
         url: esri,
         pick: esriRenders.length > 1 ? (
           <select value={chosen} onChange={(e) => setPickedRender(e.target.value)}

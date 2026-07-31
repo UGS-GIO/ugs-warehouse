@@ -19,7 +19,7 @@ import { ALL_PAGES, DEFAULT_PAGE_SIZE, pageLabel, PAGE_SIZES, type PageSize } fr
 import { PreviewMapSlot, type PreviewSpec, usePreviewMap, footprintSpecOf } from "./PreviewMap";
 import type { FocusSel } from "./map-model";
 import { CARD_GRID, T } from "./Page";
-import { type Asset, citeLink, classificationColors, cogAsset, contentsOf, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, type StacDoc, tableColumns, thumbnailAsset, viaLink } from "./stac";
+import { type Asset, citeLink, esriVectorTileUrl, classificationColors, cogAsset, contentsOf, featuresCollectionUrl, IS_REVIEW, ownForeignKeys, pmtilesLink, primaryKeyOf, rasterTilesAsset, relatedAssets, relatedLinks, rendersOf, type StacDoc, tableColumns, thumbnailAsset, tilesStyleUrl, viaLink, xyzTilesUrl } from "./stac";
 import { CommentsPanel } from "./CommentsPanel";
 import { DiffPanel } from "./DiffPanel";
 import { PhotoGallery } from "./PhotoGallery";
@@ -1833,6 +1833,7 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const pm = pmtilesLink(item);
   const ducklake = ducklakeAsset(item);
+  const esriRenders = Object.keys(rendersOf(item)).sort();
   const rows: { label: string; desc: string; url: string }[] = [];
   if (coll) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
@@ -1840,6 +1841,29 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
   }
   if (pq) rows.push({ label: "GeoParquet", desc: "Columnar file — DuckDB / GeoPandas / QGIS", url: pq.href });
   if (pm) rows.push({ label: "PMTiles", desc: "Vector tiles for web maps", url: pm.href });
+  // The tiles service exists for clients that cannot read PMTiles directly. Only offered when the
+  // item actually has PMTiles, since that archive is what it serves.
+  if (pm) {
+    const xyz = xyzTilesUrl(id);
+    if (xyz) rows.push({ label: "XYZ vector tiles", desc: "/{z}/{x}/{y}.mvt — Leaflet, OpenLayers, QGIS", url: xyz });
+    const style = tilesStyleUrl(id);
+    if (style) rows.push({ label: "MapLibre style", desc: "Complete GL style — renders as published", url: style });
+    // Pro reads the style from the service path, so each symbology is its own service. Only the
+    // first is a row — babylon basins publishes eight `likelihood-*`, and eight near-identical URLs
+    // buried the rest of the panel. The alternates go in a disclosure below.
+    //
+    // Offered only when a render exists: an Esri vector tile layer REQUIRES a style, and a topic
+    // with none fails to load outright in the ArcGIS SDK rather than drawing unstyled. A link that
+    // cannot work is worse than no link.
+    const esri = esriRenders.length ? esriVectorTileUrl(id, esriRenders[0]) : undefined;
+    if (esri) {
+      rows.push({
+        label: esriRenders[0] ? `ArcGIS · ${esriRenders[0]}` : "ArcGIS vector tiles",
+        desc: "Add in ArcGIS Pro / AGOL — symbology included",
+        url: esri,
+      });
+    }
+  }
   if (ducklake) rows.push({ label: "DuckLake", desc: "Lakehouse table", url: ducklake.href });
   if (!rows.length) return null;
   return (
@@ -1855,6 +1879,25 @@ function EndpointsPanel({ item }: { item: StacDoc }) {
           </div>
         ))}
       </div>
+      {pm && esriRenders.length > 1 && (
+        <details className="mt-2 text-xs">
+          <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
+            {esriRenders.length - 1} more ArcGIS symbolog{esriRenders.length === 2 ? "y" : "ies"}
+          </summary>
+          <div className="mt-1.5 flex flex-col gap-1">
+            {esriRenders.slice(1).map((r) => {
+              const u = esriVectorTileUrl(id, r);
+              return u ? (
+                <div key={r} className="flex flex-wrap items-center gap-2">
+                  <span className="w-36 shrink-0 text-foreground">{r}</span>
+                  <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={u}>{u}</code>
+                  <CopyBtn text={u} />
+                </div>
+              ) : null;
+            })}
+          </div>
+        </details>
+      )}
     </div>
   );
 }

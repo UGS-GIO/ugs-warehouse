@@ -37,6 +37,60 @@ def test_from_pubsub_rejects_incomplete_payload():
         from_pubsub({"schema": "emp"})
 
 
+# --- schema/layer are interpolated into SQL, so the type rejects non-identifiers ------------
+
+@pytest.mark.parametrize("layer", [
+    'x_current" UNION SELECT 1 --',   # escapes source.stream_transformed's identifier quoting
+    "x$pgq$ UNION SELECT 1",          # escapes the dollar-quote around the postgres_query body
+    "x current",                      # bare space — unquoted in source._describe
+    "x.y",                            # `pg.hazards.x.y` resolves as a 3-part catalog path
+    "1_current",                      # identifiers cannot start with a digit
+    "",
+    "x" * 64,                         # past PostgreSQL's 63-char identifier limit
+])
+def test_rejects_non_identifier_layer(layer):
+    with pytest.raises(ValueError):
+        Topic(layer=layer, schema="hazards")
+
+
+def test_rejects_non_identifier_schema():
+    with pytest.raises(ValueError):
+        Topic(layer="x_current", schema='hazards" --')
+
+
+def test_from_pubsub_rejects_injected_layer():
+    """The payload path is the one nothing else guards — the service gates only `schema`."""
+    with pytest.raises(ValueError):
+        from_pubsub({"schema": "hazards", "topic": 'x" UNION SELECT 1 --'})
+
+
+def test_from_pubsub_rejects_non_string_layer():
+    """ValueError, not TypeError — the service only handles ValueError, and a TypeError would
+    escape as a 500 and put Pub/Sub into redelivery."""
+    with pytest.raises(ValueError):
+        from_pubsub({"schema": "emp", "topic": 123})
+
+
+# --- artifacts are keyed by `stem`, so the suffix is required to keep stems distinct ---------
+
+def test_rejects_layer_without_the_serving_suffix():
+    """`hazards_qfaults` and `hazards_qfaults_current` would share a stem, so ingesting the first
+    would overwrite the second's published parquet, PMTiles, STAC item and DuckLake table."""
+    with pytest.raises(ValueError):
+        Topic(layer="hazards_qfaults", schema="hazards")
+
+
+def test_rejects_bare_suffix_as_layer():
+    """`_current` is a legal identifier but strips to an empty stem — `archive//.parquet`."""
+    with pytest.raises(ValueError):
+        Topic(layer="_current", schema="emp")
+
+
+def test_real_topic_names_still_accepted():
+    assert Topic(layer="enmin_ucrc_wells_current", schema="emp").layer == "enmin_ucrc_wells_current"
+    assert Topic.parse("gengis.gengis_quads_current").stem == "gengis_quads"
+
+
 def test_skip_gate_membership():
     # The service acks+skips schemas not in MART_SCHEMAS (e.g. gwportal, separate DB).
     assert "gwportal" not in MART_SCHEMAS

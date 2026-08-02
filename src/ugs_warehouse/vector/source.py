@@ -69,22 +69,30 @@ def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
     Faster than the arrow+chunk path (no duckdb→python→duckdb copy, extensions loaded once,
     one global sort instead of per-chunk sorts) and lower-memory (bounded by DuckDB spill, not a
     Python-held arrow table).
+
+    The connection outlives this call (the sinks read the materialized table through it), so the
+    CALLER closes it — `ingest._ingest`, in a finally. A failure before the handoff closes it here,
+    since no caller holds it yet.
     """
     from . import transform
     con = _connect()           # postgres ATTACHed (read-only) + spatial
-    transform.setup(con)       # memory cap + spatial + h3
-    cols = _describe(con, topic)
-    geom_col = _geom_column(cols)
-    other = [c for c, _ in cols if c not in (geom_col, "target_epsg")]
-    select_list = (
-        ", ".join(f'"{c}"' for c in other)
-        + f', ST_AsBinary("{geom_col}") AS geom_wkb'
-        + f', ST_SRID("{geom_col}") AS target_epsg'  # 0 = unstamped; transform errors, never assumes
-    )
-    pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}"'
-    # postgres_query subquery as the transform source; $pgq$ dollar-quote avoids escaping.
-    source_rel = f"(SELECT * FROM postgres_query('{PG_ALIAS}', $pgq${pg_sql}$pgq$))"
-    return con, transform.materialize(con, source_rel)
+    try:
+        transform.setup(con)       # memory cap + spatial + h3
+        cols = _describe(con, topic)
+        geom_col = _geom_column(cols)
+        other = [c for c, _ in cols if c not in (geom_col, "target_epsg")]
+        select_list = (
+            ", ".join(f'"{c}"' for c in other)
+            + f', ST_AsBinary("{geom_col}") AS geom_wkb'
+            + f', ST_SRID("{geom_col}") AS target_epsg'  # 0 = unstamped; transform errors, never assumes
+        )
+        pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}"'
+        # postgres_query subquery as the transform source; $pgq$ dollar-quote avoids escaping.
+        source_rel = f"(SELECT * FROM postgres_query('{PG_ALIAS}', $pgq${pg_sql}$pgq$))"
+        return con, transform.materialize(con, source_rel)
+    except BaseException:
+        con.close()
+        raise
 
 
 # Descriptive (catalog) metadata columns on raw.schema_registry (ugs-ingest #171).
@@ -161,6 +169,15 @@ def discover() -> list[Topic]:
         rows = con.execute(
             "SELECT * FROM postgres_query(?, ?)", [PG_ALIAS, pg_sql]
         ).fetchall()
-        return [Topic(schema=s, layer=t) for s, t in rows]
+        # Skip per row rather than abort the sweep: `Topic` rejects names it can't safely
+        # interpolate, and one such table in a mart schema must not cost every other topic its
+        # reingest.
+        out = []
+        for s, t in rows:
+            try:
+                out.append(Topic(schema=s, layer=t))
+            except ValueError as e:
+                print(f"discover: skipping {s}.{t} — {e}", file=sys.stderr)
+        return out
     finally:
         con.close()

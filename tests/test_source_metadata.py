@@ -159,3 +159,37 @@ def test_a_failed_read_still_degrades_but_says_so(monkeypatch, topic, capsys):
     assert "catalog metadata read FAILED" in err
     assert 'column "status" does not exist' in err
     assert con.closed, "connection must be released even when the query fails"
+
+
+# --- discover() degrades per row: one unusable table name must not cost the whole sweep ------
+
+class _RowsCon:
+    """Returns canned (schema, table) rows for the discover query."""
+
+    def __init__(self, rows):
+        self._rows = rows
+        self.closed = False
+
+    def execute(self, _query, _params):
+        return self
+
+    def fetchall(self):
+        return self._rows
+
+    def close(self):
+        self.closed = True
+
+
+def test_discover_skips_unusable_names_and_keeps_the_rest(monkeypatch, capsys):
+    con = _RowsCon([
+        ("hazards", "hazards_qfaults_current"),
+        ("hazards", 'bad" name_current'),   # rejected by Topic — cannot be interpolated safely
+        ("emp", "geothermal_kgra_current"),
+    ])
+    monkeypatch.setattr(source, "_connect", lambda: con)
+
+    out = source.discover()
+
+    assert [t.fqn for t in out] == ["hazards.hazards_qfaults_current", "emp.geothermal_kgra_current"]
+    assert "skipping hazards.bad" in capsys.readouterr().err
+    assert con.closed

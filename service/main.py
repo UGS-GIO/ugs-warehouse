@@ -48,10 +48,15 @@ def healthz() -> dict[str, str]:
 async def pubsub_push(req: Request) -> dict[str, str]:
     payload = _decode(await req.json())
 
+    # A payload the Topic rules reject is malformed, not transient — retrying redelivers the same
+    # bytes. The subscription has no dead-letter policy and a 1-day retention, so a non-2xx here
+    # buys 24h of redelivery for a message that can never succeed. Ack + skip, same as the
+    # unsupported-schema gate below.
     try:
         topic = from_pubsub(payload)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
+        log.warning("skip malformed payload %s: %s", payload, e)
+        return {"status": "skipped", "reason": str(e)}
 
     # dataELT (#418) notifies for every public domain schema, including ones the
     # warehouse can't reach (e.g. gwportal lives in a separate DB). Ack + skip so

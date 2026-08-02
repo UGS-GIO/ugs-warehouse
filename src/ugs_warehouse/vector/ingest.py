@@ -134,7 +134,12 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,
     # Python-held rows; DuckDB spills under its memory cap). The sinks read the materialized table.
     print(f"[{topic.fqn}] reading from Postgres (streaming, single DuckDB)")
     con, view = backend.stream_transformed(topic)
-    return _run_sinks(topic, con, view, backend, dry_run, skip_refresh, skip_unchanged)
+    # The sinks read `view` through `con`, so the close waits until they're done. Without it the
+    # Cloud Run handler leaks a connection — ATTACHed Postgres + materialized table — per push.
+    try:
+        return _run_sinks(topic, con, view, backend, dry_run, skip_refresh, skip_unchanged)
+    finally:
+        con.close()
 
 
 def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,

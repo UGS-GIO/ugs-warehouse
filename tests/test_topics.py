@@ -37,6 +37,38 @@ def test_from_pubsub_rejects_incomplete_payload():
         from_pubsub({"schema": "emp"})
 
 
+# --- schema/layer are interpolated into SQL, so the type rejects non-identifiers ------------
+
+@pytest.mark.parametrize("layer", [
+    'x_current" UNION SELECT 1 --',   # escapes source.stream_transformed's identifier quoting
+    "x$pgq$ UNION SELECT 1",          # escapes the dollar-quote around the postgres_query body
+    "x current",                      # bare space — unquoted in source._describe
+    "x.y",                            # a second dot would silently re-split the qualified name
+    "1_current",                      # identifiers cannot start with a digit
+    "",
+    "x" * 64,                         # past PostgreSQL's 63-char identifier limit
+])
+def test_rejects_non_identifier_layer(layer):
+    with pytest.raises(ValueError):
+        Topic(layer=layer, schema="hazards")
+
+
+def test_rejects_non_identifier_schema():
+    with pytest.raises(ValueError):
+        Topic(layer="x_current", schema='hazards" --')
+
+
+def test_from_pubsub_rejects_injected_layer():
+    """The payload path is the one nothing else guards — the service gates only `schema`."""
+    with pytest.raises(ValueError):
+        from_pubsub({"schema": "hazards", "topic": 'x" UNION SELECT 1 --'})
+
+
+def test_real_topic_names_still_accepted():
+    assert Topic(layer="enmin_ucrc_wells_current", schema="emp").layer == "enmin_ucrc_wells_current"
+    assert Topic.parse("gengis.gengis_quads_review").schema == "gengis"
+
+
 def test_skip_gate_membership():
     # The service acks+skips schemas not in MART_SCHEMAS (e.g. gwportal, separate DB).
     assert "gwportal" not in MART_SCHEMAS

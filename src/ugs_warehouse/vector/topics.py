@@ -29,11 +29,28 @@ TABLE_SUFFIX = os.environ.get("WAREHOUSE_TABLE_SUFFIX", "_current")
 if not re.fullmatch(r"_[a-z_]+", TABLE_SUFFIX):
     TABLE_SUFFIX = "_current"
 
+# Both halves land in SQL by interpolation (`source._describe` unquoted, `stream_transformed`
+# quoted then dollar-quoted) — neither survives a `"` or a `$pgq$` in the identifier. `layer` comes
+# from the Pub/Sub payload unchecked (the service gates only `schema`), so the guard goes on the
+# type, where every construction path hits it. Same reason TABLE_SUFFIX is validated above.
+# 63 = PostgreSQL's identifier length limit.
+IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
+
 
 @dataclass(frozen=True)
 class Topic:
     layer: str   # `_current` table name (= MapLibre source-layer)
     schema: str  # Postgres / dbt mart schema (= warehouse partition root)
+
+    def __post_init__(self) -> None:
+        """Reject anything that is not a bare SQL identifier (see IDENT_RE), on every construction
+        path — `parse`, `from_pubsub`, `discover`."""
+        for field, value in (("schema", self.schema), ("layer", self.layer)):
+            if not isinstance(value, str) or not IDENT_RE.fullmatch(value):
+                raise ValueError(
+                    f"topic {field} must be a bare SQL identifier "
+                    f"(letters/digits/underscore, <=63 chars); got {value!r}"
+                )
 
     @property
     def stem(self) -> str:

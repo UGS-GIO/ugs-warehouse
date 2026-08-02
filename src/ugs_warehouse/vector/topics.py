@@ -14,6 +14,8 @@ import os
 import re
 from dataclasses import dataclass
 
+from ..core import identifiers
+
 # The dbt serving schemas discovery scans. Must match the real Postgres schema names
 # (per dataELT #418: it's `gengis`, not `gen_gis`). `gwportal` is omitted — it lives in a
 # separate DB, so the mapping-db discovery sweep can't reach it (needs its own connection).
@@ -29,16 +31,9 @@ TABLE_SUFFIX = os.environ.get("WAREHOUSE_TABLE_SUFFIX", "_current")
 if not re.fullmatch(r"_[a-z_]+", TABLE_SUFFIX):
     TABLE_SUFFIX = "_current"
 
-# `schema` and `layer` are interpolated, never bound: unquoted in `source._describe` and in
-# `sink_ducklake`'s CREATE SCHEMA / fully-qualified name, quoted-then-dollar-quoted in
-# `source.stream_transformed`. `stem` additionally becomes a local path, a GCS object key, a
-# tippecanoe `-l` argv and a STAC item id. So quoting the SQL sites would not be enough even if it
-# were complete — the guard belongs on the type, where every construction path hits it. `layer` in
-# particular arrives from the Pub/Sub payload with nothing else checking it (the service gates only
-# `schema`, against MART_SCHEMAS). Same reason TABLE_SUFFIX is validated above.
-# Anchored because this is module-level: `.match` alone would accept a trailing injection.
-# 63 = PostgreSQL's identifier length limit.
-IDENT_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
+# The guard is on the type, not the SQL: `stem` also becomes a path, a GCS key, a tippecanoe argv
+# and a STAC item id. `layer` arrives from the Pub/Sub payload with nothing else checking it.
+IDENT_RE = identifiers.IDENT_RE  # re-export: defined here before core/identifiers.py
 
 
 @dataclass(frozen=True)
@@ -55,11 +50,7 @@ class Topic:
         catches only ValueError.
         """
         for name, value in (("schema", self.schema), ("layer", self.layer)):
-            if not isinstance(value, str) or not IDENT_RE.fullmatch(value):
-                raise ValueError(
-                    f"topic {name} must be a bare SQL identifier "
-                    f"(letters/digits/underscore, <=63 chars); got {value!r}"
-                )
+            identifiers.require_identifier(f"topic {name}", value)
         # Every artifact is keyed by `stem`, and `removesuffix` is neither injective nor
         # total: without the suffix requirement, `hazards_qfaults` and `hazards_qfaults_current`
         # share a stem, so ingesting the former would overwrite the latter's published parquet,

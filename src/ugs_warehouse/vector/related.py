@@ -34,7 +34,7 @@ import os
 import re
 import tempfile
 
-from ..core import config, gcs, stac
+from ..core import config, gcs, identifiers, stac
 from . import source
 from .topics import Topic
 
@@ -109,6 +109,10 @@ def _materialize_child(con, child_topic: str, schema: str, display: str | None,
     table = f"{child_topic}_current"
     path = f"{config.ARCHIVE_PREFIX}/{parent_stem}/related/{child_topic}.parquet"
     try:
+        # Both come from raw.schema_registry and are interpolated below. `resolve`'s docstring
+        # claims domain_topic is validated upstream; nothing here enforces that.
+        identifiers.require_identifier("related schema", schema)
+        identifiers.require_identifier("related child_topic", child_topic)
         with tempfile.TemporaryDirectory() as tmp:
             local = os.path.join(tmp, f"{table}.parquet")
             con.execute(

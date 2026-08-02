@@ -36,6 +36,9 @@ MODE = os.environ.get("MODE", "view")  # view (live, tiny — confirmed: feature
 HTTP_TIMEOUT = float(os.environ.get("GEN_DB_HTTP_TIMEOUT", "10"))
 DEADLINE = float(os.environ.get("GEN_DB_DEADLINE", "60"))
 WORKERS = int(os.environ.get("GEN_DB_WORKERS", "8"))
+# Collection ids are interpolated into DDL below. Mirrors core/identifiers.py — this image
+# installs only this file, not the package.
+_IDENT_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
 
 def warn(msg: str) -> None:
@@ -192,6 +195,9 @@ def apply(path: str, layers: list[tuple[str, str]], prior: dict[str, str] | None
     try:
         con.execute("INSTALL spatial; LOAD spatial; INSTALL httpfs; LOAD httpfs;")
         for cid in drop:
+            if not _IDENT_RE.fullmatch(cid):
+                warn(f"  ! skip drop {cid!r}: not a bare identifier")
+                continue
             con.execute(f'DROP {kw} IF EXISTS "{cid}"')
             print(f"  - {kw} {cid}")
         pending = list(add.items())
@@ -200,6 +206,9 @@ def apply(path: str, layers: list[tuple[str, str]], prior: dict[str, str] | None
                 warn(f"  ! deadline hit — {len(pending)} layer(s) left unbound")
                 break
             cid, pq = pending.pop(0)
+            if not _IDENT_RE.fullmatch(cid):
+                warn(f"  ! skip {cid!r}: not a bare identifier")
+                continue
             src = pq.replace("'", "''")
             # One unreadable layer must cost us that collection, not the whole catalog.
             try:

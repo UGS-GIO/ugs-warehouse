@@ -18,6 +18,7 @@ import sys
 
 import duckdb
 
+from ..core import identifiers
 from .topics import MART_SCHEMAS, TABLE_SUFFIX, Topic
 
 POSTGRES_DSN = os.environ.get(
@@ -81,6 +82,11 @@ def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
         cols = _describe(con, topic)
         geom_col = _geom_column(cols)
         other = [c for c, _ in cols if c not in (geom_col, "target_epsg")]
+        # Interpolated below like the table name is, and `$` is legal in an unquoted PG identifier
+        # after the first char, so `x$pgq$...` ends the fence. Raise, don't drop: a missing column
+        # would publish an artifact short of its data.
+        for c in (*other, geom_col):
+            identifiers.require_identifier(f"column in {topic.fqn}", c)
         select_list = (
             ", ".join(f'"{c}"' for c in other)
             + f', ST_AsBinary("{geom_col}") AS geom_wkb'

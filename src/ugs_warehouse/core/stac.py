@@ -29,6 +29,9 @@ PROJ_EXT = "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
 TABLE_EXT = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 # classification: machine-readable categories (value/name/color) for categorical layers.
 CLASSIFICATION_EXT = "https://stac-extensions.github.io/classification/v2.0.0/schema.json"
+# alternate-assets: a second location for the SAME bytes (`alternate`), used where we mirror a file
+# and keep the publisher's own copy addressable alongside our CDN href.
+ALTERNATE_ASSETS_EXT = "https://stac-extensions.github.io/alternate-assets/v1.2.0/schema.json"
 
 
 # ---------------------------------------------------------------- helpers

@@ -60,6 +60,29 @@ def test_aspatial_item_omits_bbox_validates():
     _validate(d)
 
 
+def test_mirrored_asset_alternate_validates():
+    """A mirrored publication file: our CDN href plus the publisher's copy as an `alternate`.
+    Exercises the alternate-assets ext, whose `alternate` entries each require an href."""
+    item = stac.build_item(
+        item_id="OFR-593", collection="OFR", collection_path="ugs-publications/OFR",
+        geometry=None, bbox=None, datetime_iso="2015-01-01T00:00:00Z",
+        properties={"title": "Mirrored pub"},
+        assets={
+            "publication": {
+                "href": "https://cdn.example/pubs/files/open_file_reports/OFR-593/OFR-593.pdf",
+                "type": "application/pdf", "title": "Publication", "roles": ["data"],
+                "alternate:name": "Warehouse CDN",
+                "alternate": {"publisher": {
+                    "href": "https://ugspub.nr.utah.gov/publications/open_file_reports/OFR-593/OFR-593.pdf",
+                    "alternate:name": "UGS publications site",
+                    "title": "Publisher copy (ugspub.nr.utah.gov)"}},
+            },
+        },
+        stac_extensions=[stac.ALTERNATE_ASSETS_EXT],
+    )
+    _validate(_drop_private(item))
+
+
 def test_collection_validates_with_license_and_providers():
     """The collection builder emits license (SPDX), providers, and a rel:license link."""
     coll = stac._collection_doc(

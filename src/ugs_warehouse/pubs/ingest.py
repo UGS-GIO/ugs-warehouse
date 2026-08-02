@@ -85,6 +85,15 @@ def _threed_classes_by_sid() -> dict[str, list[dict]]:
     return out
 
 
+def _mirrored_files() -> set[str]:
+    """Object paths of the publication source files we hold a copy of (written by pubs/mirror.py).
+
+    One listing, not a HEAD per asset: the object path IS the legacy URL's path (#120), so plain
+    set membership is everything `build_item` needs to decide which assets serve from our CDN.
+    """
+    return set(gcs.list_paths(identity.PUB_FILES_PREFIX))
+
+
 def _unit_ids() -> set[str]:
     """Series ids that have a per-map units sidecar (geolmap/units/<series_id>/…). Only directory
     segments count — files sitting at the prefix root (the statewide units.pmtiles / units.parquet)
@@ -156,8 +165,10 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     toc = _contents_by_sid()  # Survey Notes "In this issue" sidecars
     units = _unit_ids()
     foot = _cog_footprints(cogs)  # footprints derived from OUR COGs' bounds (no external service)
+    mirrored = _mirrored_files()  # source files served from our CDN instead of the publisher's host
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
-          f"{len(units)} unit sets, {len(foot)} footprints, {len(threed_ids)} 3D")
+          f"{len(units)} unit sets, {len(foot)} footprints, {len(threed_ids)} 3D, "
+          f"{len(mirrored)} mirrored source files")
 
     def process_pub(p: dict) -> bool:
         sid = (p.get("series_id") or "").strip()
@@ -169,7 +180,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
             has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
-            override=overrides_map.get(up), contents=toc.get(up),
+            override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)

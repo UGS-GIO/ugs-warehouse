@@ -169,6 +169,15 @@ def discover() -> list[Topic]:
         rows = con.execute(
             "SELECT * FROM postgres_query(?, ?)", [PG_ALIAS, pg_sql]
         ).fetchall()
-        return [Topic(schema=s, layer=t) for s, t in rows]
+        # Skip per row rather than abort the sweep: `Topic` rejects names it can't safely
+        # interpolate, and one such table in a mart schema must not cost every other topic its
+        # reingest.
+        out = []
+        for s, t in rows:
+            try:
+                out.append(Topic(schema=s, layer=t))
+            except ValueError as e:
+                print(f"discover: skipping {s}.{t} — {e}", file=sys.stderr)
+        return out
     finally:
         con.close()

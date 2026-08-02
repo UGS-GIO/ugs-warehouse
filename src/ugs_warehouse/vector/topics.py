@@ -29,12 +29,16 @@ TABLE_SUFFIX = os.environ.get("WAREHOUSE_TABLE_SUFFIX", "_current")
 if not re.fullmatch(r"_[a-z_]+", TABLE_SUFFIX):
     TABLE_SUFFIX = "_current"
 
-# Both halves land in SQL by interpolation (`source._describe` unquoted, `stream_transformed`
-# quoted then dollar-quoted) — neither survives a `"` or a `$pgq$` in the identifier. `layer` comes
-# from the Pub/Sub payload unchecked (the service gates only `schema`), so the guard goes on the
-# type, where every construction path hits it. Same reason TABLE_SUFFIX is validated above.
+# `schema` and `layer` are interpolated, never bound: unquoted in `source._describe` and in
+# `sink_ducklake`'s CREATE SCHEMA / fully-qualified name, quoted-then-dollar-quoted in
+# `source.stream_transformed`. `stem` additionally becomes a local path, a GCS object key, a
+# tippecanoe `-l` argv and a STAC item id. So quoting the SQL sites would not be enough even if it
+# were complete — the guard belongs on the type, where every construction path hits it. `layer` in
+# particular arrives from the Pub/Sub payload with nothing else checking it (the service gates only
+# `schema`, against MART_SCHEMAS). Same reason TABLE_SUFFIX is validated above.
+# Anchored because this is module-level: `.match` alone would accept a trailing injection.
 # 63 = PostgreSQL's identifier length limit.
-IDENT_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]{0,62}")
+IDENT_RE = re.compile(r"\A[A-Za-z_][A-Za-z0-9_]{0,62}\Z")
 
 
 @dataclass(frozen=True)
@@ -44,13 +48,29 @@ class Topic:
 
     def __post_init__(self) -> None:
         """Reject anything that is not a bare SQL identifier (see IDENT_RE), on every construction
-        path — `parse`, `from_pubsub`, `discover`."""
-        for field, value in (("schema", self.schema), ("layer", self.layer)):
+        path — `parse`, `from_pubsub`, `discover`.
+
+        The `isinstance` check matters: `from_pubsub` only tests truthiness, so a payload carrying
+        a non-string `topic` would otherwise raise TypeError out of the regex, and the service
+        catches only ValueError.
+        """
+        for name, value in (("schema", self.schema), ("layer", self.layer)):
             if not isinstance(value, str) or not IDENT_RE.fullmatch(value):
                 raise ValueError(
-                    f"topic {field} must be a bare SQL identifier "
+                    f"topic {name} must be a bare SQL identifier "
                     f"(letters/digits/underscore, <=63 chars); got {value!r}"
                 )
+        # Every artifact is keyed by `stem`, and `removesuffix` is neither injective nor
+        # total: without the suffix requirement, `hazards_qfaults` and `hazards_qfaults_current`
+        # share a stem, so ingesting the former would overwrite the latter's published parquet,
+        # PMTiles, STAC item and DuckLake table (CREATE OR REPLACE). `_current` alone would strip
+        # to "". Requiring the suffix also keeps a public build from being pointed at a `_review`
+        # table and publishing gated rows.
+        if not self.layer.endswith(TABLE_SUFFIX) or len(self.layer) == len(TABLE_SUFFIX):
+            raise ValueError(
+                f"topic layer must be a non-empty name ending in {TABLE_SUFFIX!r}; "
+                f"got {self.layer!r}"
+            )
 
     @property
     def stem(self) -> str:

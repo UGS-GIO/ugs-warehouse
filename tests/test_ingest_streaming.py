@@ -20,8 +20,9 @@ def _con_with_transformed():
 
 def test_streaming_path_runs_sinks_once():
     topic = Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current")
+    con = _con_with_transformed()
     backend = MagicMock()
-    backend.stream_transformed.return_value = (_con_with_transformed(), "transformed")
+    backend.stream_transformed.return_value = (con, "transformed")
     backend.read_metadata.return_value = {}
 
     with patch("ugs_warehouse.vector.ingest._backend", return_value=backend), \
@@ -42,6 +43,8 @@ def test_streaming_path_runs_sinks_once():
     pmtiles.assert_called_once()
     stac_write.assert_called_once()
     refresh.assert_called_once()
+    # Cloud Run's handler is long-lived: an unclosed connection leaks per Pub/Sub push.
+    assert _is_closed(con)
 
 
 def test_streaming_dry_run_skips_sinks():
@@ -68,27 +71,6 @@ def _is_closed(con) -> bool:
         return False
     except Exception:
         return True
-
-
-def test_connection_closed_after_ingest():
-    """Cloud Run's handler is long-lived: an unclosed connection leaks per Pub/Sub push."""
-    topic = Topic(schema="emp", layer="enmin_ucrc_wells_current")
-    con = _con_with_transformed()
-    backend = MagicMock()
-    backend.stream_transformed.return_value = (con, "transformed")
-    backend.read_metadata.return_value = {}
-
-    with patch("ugs_warehouse.vector.ingest._backend", return_value=backend), \
-         patch("ugs_warehouse.vector.sink_ducklake.write"), \
-         patch("ugs_warehouse.vector.sink_archive.write"), \
-         patch("ugs_warehouse.vector.sink_pmtiles.build"), \
-         patch("ugs_warehouse.vector.sink_stac.write"), \
-         patch("ugs_warehouse.vector.related.resolve", return_value={}), \
-         patch("ugs_warehouse.core.stac.refresh_catalog"):
-
-        _ingest(topic, dry_run=False, skip_refresh=False)
-
-    assert _is_closed(con)
 
 
 def test_connection_closed_when_a_sink_raises():

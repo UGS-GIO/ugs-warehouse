@@ -60,6 +60,59 @@ def test_streaming_dry_run_skips_sinks():
     refresh.assert_not_called()
 
 
+# --- the connection the sinks read through is closed when they're done ----------------------
+
+def _is_closed(con) -> bool:
+    try:
+        con.execute("SELECT 1")
+        return False
+    except Exception:
+        return True
+
+
+def test_connection_closed_after_ingest():
+    """Cloud Run's handler is long-lived: an unclosed connection leaks per Pub/Sub push."""
+    topic = Topic(schema="emp", layer="enmin_ucrc_wells_current")
+    con = _con_with_transformed()
+    backend = MagicMock()
+    backend.stream_transformed.return_value = (con, "transformed")
+    backend.read_metadata.return_value = {}
+
+    with patch("ugs_warehouse.vector.ingest._backend", return_value=backend), \
+         patch("ugs_warehouse.vector.sink_ducklake.write"), \
+         patch("ugs_warehouse.vector.sink_archive.write"), \
+         patch("ugs_warehouse.vector.sink_pmtiles.build"), \
+         patch("ugs_warehouse.vector.sink_stac.write"), \
+         patch("ugs_warehouse.vector.related.resolve", return_value={}), \
+         patch("ugs_warehouse.core.stac.refresh_catalog"):
+
+        _ingest(topic, dry_run=False, skip_refresh=False)
+
+    assert _is_closed(con)
+
+
+def test_connection_closed_when_a_sink_raises():
+    """Per-sink isolation already swallows the failure; the close must not depend on that."""
+    topic = Topic(schema="emp", layer="enmin_ucrc_wells_current")
+    con = _con_with_transformed()
+    backend = MagicMock()
+    backend.stream_transformed.return_value = (con, "transformed")
+    backend.read_metadata.return_value = {}
+
+    with patch("ugs_warehouse.vector.ingest._backend", return_value=backend), \
+         patch("ugs_warehouse.vector.sink_ducklake.write", side_effect=RuntimeError("boom")), \
+         patch("ugs_warehouse.vector.sink_archive.write"), \
+         patch("ugs_warehouse.vector.sink_pmtiles.build"), \
+         patch("ugs_warehouse.vector.sink_stac.write"), \
+         patch("ugs_warehouse.vector.related.resolve", return_value={}), \
+         patch("ugs_warehouse.core.stac.refresh_catalog"):
+
+        rc = _ingest(topic, dry_run=False, skip_refresh=False)
+
+    assert rc == 1
+    assert _is_closed(con)
+
+
 # --- #54: the fingerprint gates the DATA sinks, never the STAC sink ------------------------
 
 def _run_unchanged(**kwargs):

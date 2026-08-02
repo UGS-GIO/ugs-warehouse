@@ -97,11 +97,26 @@ Publications are a second producer into the same STAC catalog: scanned geologic 
 footprints, routed into three collections (`ugs-publications`, `ugs-mining-district-files`,
 `ugs-external`).
 
-!!! note "Honest gap"
-    The metadata source is pluggable via `PUBS_DB_URL` — live MySQL, live Postgres (through the
+Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
+`pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so
+the legacy URL's path *is* the object path. A mirrored file's asset serves from our CDN and keeps
+the publisher's URL as an `alternate`; unmirrored files stay linked to the publisher.
+
+```bash
+python -m ugs_warehouse.pubs.mirror --dry-run   # default slice: pubs with a harvested COG
+python -m ugs_warehouse.pubs.mirror             # then re-run pubs.ingest to repoint the assets
+```
+
+!!! note "Honest gaps"
+    **Metadata source.** Pluggable via `PUBS_DB_URL` — live MySQL, live Postgres (through the
     DuckDB postgres extension), or the vendored CSV snapshot. Prod leaves `PUBS_DB_URL` **unset**, so
     it reads the **vendored CSV snapshot** checked into the repo. That snapshot is point-in-time and
-    goes stale as upstream changes. Wiring a live source (MySQL or a Postgres mirror) is the open item.
+    goes stale as upstream changes. Wiring a live source (MySQL or a Postgres mirror) is the open
+    item (#121).
+
+    **File hosting.** The mirror is selective by design (#120): map pubs only, ~81 GB of a ~200 GB
+    full mirror. Everything else still depends on the legacy host, which sends no CORS header — so
+    browser code can navigate to those files but never read their bytes.
 
 ### ⑥ Storage, serving & consumers 🟩
 
@@ -121,5 +136,6 @@ The vector pipeline is end-to-end in production. The honest gaps:
   (`raster/`, tested) and lands items in `ugs-rasters`; the end-to-end consumer is gated on the
   promote step above.
 - 🟧 **STAC `datetime`** is ingest time, not data-validity time — waiting on an upstream validity timestamp.
-- 🟧 **Live publications source** (MySQL or Postgres mirror) instead of the vendored CSV snapshot.
+- 🟧 **Live publications source** (MySQL or Postgres mirror) instead of the vendored CSV snapshot (#121).
+- 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).
 - 🟧 **FGDC metadata** variant + raster extension (ISO 19139 done for vector + pubs).

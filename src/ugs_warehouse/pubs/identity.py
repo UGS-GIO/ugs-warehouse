@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from urllib.parse import quote, unquote
 
 # Object prefixes for the pubs producer (override via env). STAC items go to the shared
 # core.config.STAC_PREFIX (the one catalog); these are the pub *data* artifacts.
@@ -34,6 +35,36 @@ PUB_EMB_PREFIX = os.environ.get("PUB_EMB_PREFIX", "pubs/embeddings")
 # Per-scale seamless RASTER mosaics of the published geologic maps (the old ArcGIS MD_500K/250K/24K
 # equivalent), as raster PMTiles — one per scale tier. Built by pubs/geolmap_mosaics.py from the COGs.
 MOSAIC_PREFIX = os.environ.get("GEOLMAP_MOSAIC_PREFIX", "geolmap/mosaics")
+
+# The legacy host every publication file is served from — the pubs database stores paths relative
+# to it. Warehouse copies of those files (pubs/mirror.py) land under PUB_FILES_PREFIX.
+UGSPUB = "https://ugspub.nr.utah.gov/publications/"
+# Mirrored source files (PDFs, plate/GIS zips, tables). PATH-PRESERVING: the URL's path under
+# /publications/ becomes the object path, so URL→object is a pure function and needs no index —
+# `ingest` can list this prefix once and know exactly which assets it holds a copy of (#120).
+PUB_FILES_PREFIX = os.environ.get("PUB_FILES_PREFIX", "pubs/files")
+
+
+def pub_file_object(url: str) -> str | None:
+    """Object path for the warehouse copy of a legacy-hosted pub file — None if we don't mirror it.
+
+    Percent-escapes are decoded so the object name reads like the file does (a URL with `%20` and
+    one with a raw space mirror to the SAME object); callers re-encode when building a public URL.
+    """
+    u = (url or "").strip()
+    if not u.startswith(UGSPUB):
+        return None  # foreign host — theirs to serve, not ours to copy
+    rest = unquote(u[len(UGSPUB):]).lstrip("/")
+    # A query string means the path alone doesn't identify the bytes; `..` would escape the prefix.
+    if not rest or "?" in rest or "#" in rest or ".." in rest.split("/"):
+        return None
+    return f"{PUB_FILES_PREFIX}/{rest}"
+
+
+def pub_file_url(object_path: str) -> str:
+    """Public CDN URL for a mirrored file — the object path re-encoded for use in an href."""
+    from ..core import config
+    return config.public_url(quote(object_path, safe="/"))
 
 
 def pub_contents_object(series_id: str) -> str:

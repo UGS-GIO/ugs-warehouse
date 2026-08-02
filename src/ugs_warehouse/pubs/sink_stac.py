@@ -17,7 +17,7 @@ from ..core import config, stac
 from . import counties, identity, topic
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
 
-UGSPUB = "https://ugspub.nr.utah.gov/publications/"
+UGSPUB = identity.UGSPUB
 LANDING = "https://geology.utah.gov/publication-details/?pub="
 UGS_NAMES = {"UGS", "UGMS", "UTAH GEOLOGICAL SURVEY", "UTAH GEOLOGICAL AND MINERAL SURVEY"}
 
@@ -108,24 +108,40 @@ def build_item(p: dict, attachments: list[dict], *,
                has_thumb: bool = False, has_cover: bool = False,
                has_3d: bool = False, classes_3d: list[dict] | None = None,
                override: dict | None = None,
-               contents: list[dict] | None = None) -> dict:
-    """Build a pub STAC Item (collection-nested, via core.stac.build_item)."""
+               contents: list[dict] | None = None,
+               mirrored: set[str] | None = None) -> dict:
+    """Build a pub STAC Item (collection-nested, via core.stac.build_item).
+
+    `mirrored` is the set of object paths the warehouse holds copies of (see pubs/mirror.py).
+    Source files in it are served from our CDN; the rest stay linked to the publisher's host.
+    """
     sid = (p.get("series_id") or "").strip()
     yr = (p.get("pub_year") or "").strip()
     dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
 
+    # A mirrored file is served from OUR CDN, with the publisher's URL kept as an `alternate` —
+    # same bytes, two locations. Provenance survives, and a client that wants the publisher's copy
+    # (or hits our CDN cold) still has it. Unmirrored files are unchanged: a plain legacy href.
+    def source_asset(h: str, **rest) -> dict:
+        obj = identity.pub_file_object(h)
+        if not (obj and mirrored and obj in mirrored):
+            return {"href": h, **rest}
+        return {"href": identity.pub_file_url(obj), **rest, "alternate:name": "Warehouse CDN",
+                "alternate": {"publisher": {"href": h, "alternate:name": "UGS publications site",
+                                            "title": "Publisher copy (ugspub.nr.utah.gov)"}}}
+
     assets: dict = {}
     main_pdf = href(p.get("pub_url"))
     if main_pdf:
-        assets["publication"] = {"href": main_pdf, "type": media_type(main_pdf),
-                                 "title": "Publication", "roles": ["data"]}
+        assets["publication"] = source_asset(main_pdf, type=media_type(main_pdf),
+                                             title="Publication", roles=["data"])
     for a in attachments:
         h = href(a.get("pub_url"))
         if not h:
             continue
         key = re.sub(r"[^a-z0-9]+", "_", (a.get("extra_data") or "file").strip().lower()).strip("_") or "file"
-        assets.setdefault(key, {"href": h, "type": media_type(h),
-                                "title": (a.get("extra_data") or "").strip(), "roles": ["data"]})
+        assets.setdefault(key, source_asset(h, type=media_type(h),
+                                            title=(a.get("extra_data") or "").strip(), roles=["data"]))
     if has_cog:
         # The COG is warped to EPSG:3857 (harvest.py: gdalwarp -t_srs + rio-cogeo web_optimized),
         # which differs from the item-level proj:code (4326, the footprint/units CRS). The projection
@@ -179,6 +195,8 @@ def build_item(p: dict, attachments: list[dict], *,
     extensions: list[str] = []
     if has_cog:
         extensions.append(stac.PROJ_EXT)  # asset-level proj:code on the COG (EPSG:3857)
+    if any("alternate" in a for a in assets.values()):
+        extensions.append(stac.ALTERNATE_ASSETS_EXT)  # mirrored file + publisher copy
     if has_3d and classes_3d:
         extensions.append(stac.CLASSIFICATION_EXT)  # per-unit authored colors for the 3D fence
 

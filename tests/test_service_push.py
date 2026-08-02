@@ -6,11 +6,17 @@ reject is malformed, not transient — it has to ack.
 """
 import base64
 import json
+import sys
+from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from service.main import app
+# `service/` isn't in the editable install and pythonpath carries only `src`, so without this it
+# imports under `python -m pytest` (which adds CWD) but not CI's bare `pytest`.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from service.main import app  # noqa: E402 — needs the sys.path insert above
 
 client = TestClient(app)
 

@@ -131,7 +131,9 @@ which preserves object paths.
 
 The vector pipeline is end-to-end in production. The honest gaps:
 
-- ⬜ **Raster consumer** — blocked on ugs-ingest #169 (open draft); the promote step is not yet implemented.
+- ⬜ **Raster consumer** — ugs-ingest #169 (ingest side) merged 2026-07-24, so editions are landing
+  in `raw.raster_catalog`; the consumer is blocked on ugs-ingest #183, the dev→prod promote that
+  publishes the trigger.
 - 🟧 **Raster ingest** (soil-water time-series + one-off rasters) — the COG→STAC sink exists
   (`raster/`, tested) and lands items in `ugs-rasters`; the end-to-end consumer is gated on the
   promote step above.

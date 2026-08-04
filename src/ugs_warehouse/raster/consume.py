@@ -75,6 +75,23 @@ def stac_item_from_record(record: dict) -> dict:
     )
 
 
+def _staged_source(uri: object) -> str:
+    """Return `uri` if it names an allowlisted staging bucket, else raise.
+
+    Whatever this points at gets copied into the CDN-served bucket, and it's a catalog value —
+    so which bucket we'll read from is config, not something the row gets to decide.
+    """
+    if not isinstance(uri, str) or not uri.startswith("gs://"):
+        raise ValueError(f"staged_cog_uri must be a gs:// URI; got {uri!r}")
+    bucket = uri[len("gs://"):].partition("/")[0]
+    if bucket not in config.STAGED_SOURCE_BUCKETS:
+        raise ValueError(
+            f"staged_cog_uri bucket {bucket!r} is not in WAREHOUSE_STAGED_SOURCE_BUCKETS "
+            f"{config.STAGED_SOURCE_BUCKETS}"
+        )
+    return uri
+
+
 def promote(record: dict) -> str:
     """Promote a staged COG -> public bucket, then write the STAC item. Returns the item path.
 
@@ -83,7 +100,7 @@ def promote(record: dict) -> str:
     the #169 contract). The caller runs `core.stac.refresh_catalog()` after a batch.
     """
     raster = raster_from_record(record)
-    staged_cog = record["staged_cog_uri"]
+    staged_cog = _staged_source(record["staged_cog_uri"])
     gcs.copy_from_uri(staged_cog, raster.cog_object_path,
                       content_type=config.COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
     # Thumbnail source isn't a distinct contract column — derive the staged sibling. Best-effort so

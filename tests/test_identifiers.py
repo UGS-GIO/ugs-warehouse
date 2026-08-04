@@ -6,6 +6,8 @@ from unittest.mock import MagicMock
 import pytest
 
 from ugs_warehouse.core.identifiers import IDENT_RE, is_identifier, require_identifier
+from ugs_warehouse.raster import consume
+from ugs_warehouse.raster.identity import Raster
 from ugs_warehouse.vector import related, source, transform
 from ugs_warehouse.vector.topics import Topic
 
@@ -71,3 +73,41 @@ def test_featureserv_copy_matches_core():
     assert found.group(1) == f'r"{IDENT_RE.pattern}"', (
         f"featureserv copy {found.group(1)} has drifted from core {IDENT_RE.pattern!r}"
     )
+
+
+# --- raster: catalog values build GCS object paths and pick the copy source ------------------
+
+@pytest.mark.parametrize("field,value", [
+    ("layer", "../../stac"),
+    ("layer", "a/b"),
+    ("item_id", ".."),
+    ("item_id", 'x"'),
+    ("collection", "ugs-rasters/../../stac"),
+    ("collection", "ugs-rasters//slope"),
+])
+def test_raster_rejects_traversal(field, value):
+    base = dict(layer="slope", item_id="slope_ofr123_20260601",
+                collection="ugs-rasters/slope", datetime_iso="2026-06-01T00:00:00Z")
+    with pytest.raises(ValueError):
+        Raster(**{**base, field: value})
+
+
+def test_raster_accepts_a_leading_digit_piece_id():
+    """Ingest's sanitizer doesn't prefix a leading digit — `30x60 quad` is a real map sheet."""
+    r = Raster(layer="geolmap_plates", item_id="30x60_quad_ofr123_20240601",
+               collection="ugs-rasters/geolmap_plates", datetime_iso="2024-06-01T00:00:00Z")
+    assert r.cog_object_path == "cog/geolmap_plates/30x60_quad_ofr123_20240601.cog.tif"
+
+
+def test_promote_refuses_a_source_bucket_we_do_not_allow(monkeypatch):
+    """The URI is a catalog value, and whatever it names lands in the CDN-served bucket."""
+    called = []
+    monkeypatch.setattr(consume.gcs, "copy_from_uri", lambda *a, **k: called.append(a))
+    with pytest.raises(ValueError, match="not in WAREHOUSE_STAGED_SOURCE_BUCKETS"):
+        consume._staged_source("gs://someone-elses-bucket/evil.cog.tif")
+    assert not called
+
+
+def test_promote_accepts_the_allowlisted_bucket():
+    uri = "gs://stagedrasters/slope/slope_ofr123_20260601.cog.tif"
+    assert consume._staged_source(uri) == uri

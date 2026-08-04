@@ -23,7 +23,7 @@ PG_ALIAS = "pg"
 
 # item_id is ingest-authored `{piece}_{pubid}_{pubdate}`, sanitized to [a-z0-9_]. Validate before it
 # reaches the (dollar-quoted, non-parameterizable) postgres_query SQL — a hard guard against injection.
-_ITEM_ID_RE = re.compile(r"[a-z0-9_]+")
+_ITEM_ID_RE = re.compile(r"\A[a-z0-9_]+\Z")
 
 # raw.raster_catalog columns, aliased/cast to the contract names consume.py reads. publication_date and
 # footprint_geom are transformed on the Postgres side; native_crs/bbox are parsed in Python below.

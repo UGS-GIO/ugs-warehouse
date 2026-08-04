@@ -11,6 +11,12 @@ import os
 # GCS bucket all artifacts are written to (private; served publicly via the CDN).
 BUCKET = os.environ.get("WAREHOUSE_BUCKET", "ut-dnr-ugs-maps-prod-public")
 
+# Buckets a raster promote may copy FROM. `staged_cog_uri` is a catalog value, and whatever it
+# names gets copied into BUCKET, which the CDN serves — so the source is allowlisted, not trusted.
+STAGED_SOURCE_BUCKETS = tuple(
+    b for b in os.environ.get("WAREHOUSE_STAGED_SOURCE_BUCKETS", "stagedrasters").split(",") if b
+)
+
 # Public CDN base — path-preserved, the only public read surface (browsers can't fetch
 # gs://, and the bucket isn't public). Override only for a different CDN/host.
 PUBLIC_BASE_URL = os.environ.get(

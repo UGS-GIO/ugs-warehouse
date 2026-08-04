@@ -11,6 +11,8 @@ from __future__ import annotations
 import os
 from dataclasses import dataclass
 
+from ..core import identifiers
+
 # Raster *data* artifacts (the STAC catalog itself lives under core.config.STAC_PREFIX).
 # `cog/` matches the other artifact-type sinks (pmtiles/, geoparquet/, thumbs/, stac/) and the path
 # ugs-ingest #169 writes. Layout: <prefix>/<layer>/<item_id>.*
@@ -25,6 +27,13 @@ class Raster:
     item_id: str         # unique per edition, e.g. "slope_OFR123_20260601"
     collection: str      # collection LAYOUT PATH, nested per #169, e.g. "ugs-rasters/slope"
     datetime_iso: str    # publication date (ISO 8601) — never None
+
+    def __post_init__(self) -> None:
+        """All three build GCS object paths below, and arrive from `raw.raster_catalog` — only
+        `item_id` was checked, and only on the SQL path in `source.fetch_record`."""
+        identifiers.require_token("raster layer", self.layer)
+        identifiers.require_token("raster item_id", self.item_id)
+        identifiers.require_object_path("raster collection", self.collection)
 
     @property
     def collection_id(self) -> str:

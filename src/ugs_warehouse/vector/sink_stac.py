@@ -166,7 +166,12 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         properties=props,
         assets=assets,
         # `related` links (the FK graph) ride alongside the web-map pmtiles link.
-        extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem]), *rel_links],
+        # featureserv binds one collection per topic, named after the STAC item id — so the
+        # queryable OGC API Features endpoint is addressable here and nowhere else in the catalog.
+        extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem]),
+                     {"rel": "service", "href": f"{config.PGF_BASE_URL}/collections/{topic.stem}",
+                      "type": "application/json", "title": "OGC API Features collection"},
+                     *rel_links],
         stac_extensions=exts,
         proj_epsg=4326,  # transform reprojects every topic to 4326
     )

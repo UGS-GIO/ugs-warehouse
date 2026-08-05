@@ -66,9 +66,13 @@ PARQUET_MIME = "application/vnd.apache.parquet"
 PMTILES_MIME = "application/vnd.pmtiles"
 
 # OGC API Features endpoint (e.g., pg_featureserv base URL)
+# The deployed duckdb-featureserv. This is the Cloud Run hostname, not a vanity domain: the
+# placeholder `api.geology.utah.gov` that used to sit here is NXDOMAIN, so every catalog document
+# advertised a link that resolved nowhere. Deploy-specific by nature — override PGF_BASE_URL once
+# a stable domain fronts the service, and republish the catalog.
 PGF_BASE_URL = os.environ.get(
     "PGF_BASE_URL",
-    "https://api.geology.utah.gov",  # Replace with actual prod API URL
+    "https://ugs-warehouse-features-xedvkyurga-uc.a.run.app",
 ).rstrip("/")
 
 

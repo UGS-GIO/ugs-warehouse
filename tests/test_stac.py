@@ -121,13 +121,23 @@ def test_root_doc_federates_prod_only_in_review(monkeypatch):
     assert prod[0]["href"] == "https://cdn.example/warehouse/stac/catalog.json"
 
 
-def test_collection_doc_sorts_items_and_has_service_link():
-    doc = stac._collection_doc("ugs-serving-topics", "ugs-serving-topics", ["i2", "i1"])
+def test_collection_doc_sorts_items_and_links_the_service_root():
+    doc = stac._collection_doc("ugs-geologic-maps", "ugs-geologic-maps", ["i2", "i1"])
     assert doc["type"] == "Collection"
     items = [link["href"] for link in doc["links"] if link["rel"] == "item"]
     assert items == ["./i1/i1.json", "./i2/i2.json"]
-    assert any(link["rel"] == "service" for link in doc["links"])
+    # The service root, NOT /collections/<collection>: featureserv keys its collections by STAC
+    # item id, so a per-collection path 404s on every host (it named nothing that ever existed).
+    svc = [lnk["href"] for lnk in doc["links"] if lnk["rel"] == "service"]
+    assert svc == [f"{stac.PGF_BASE_URL}/collections"]
     assert any(lnk["rel"] == "root" and lnk["href"] == "../catalog.json" for lnk in doc["links"])
+
+
+def test_nested_serving_topic_collection_keeps_a_service_link():
+    """The schema collections ARE what featureserv serves — depth alone must not hide the link."""
+    doc = stac._collection_doc("hazards", "ugs-serving-topics/hazards", ["hazards_qfaults"])
+    assert [lnk["href"] for lnk in doc["links"] if lnk["rel"] == "service"] \
+        == [f"{stac.PGF_BASE_URL}/collections"]
 
 
 def test_collection_doc_nested_series_depth_and_no_service():
@@ -253,11 +263,12 @@ def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
         "./emp/collection.json", "./hazards/collection.json"]
 
     # Each schema is a real Collection. Its title is the prettified schema name — nothing is
-    # authored for a group with no upstream label — and there's no bogus OGC-Features link.
+    # authored for a group with no upstream label — and it points at the Features service root.
     hazards = json.loads(store[f"{p}/ugs-serving-topics/hazards/collection.json"])
     assert hazards["type"] == "Collection" and hazards["id"] == "hazards"
     assert hazards["title"] == "Hazards"
-    assert not any(lnk["rel"] == "service" for lnk in hazards["links"])
+    assert [lnk["href"] for lnk in hazards["links"] if lnk["rel"] == "service"] \
+        == [f"{stac.PGF_BASE_URL}/collections"]
 
     # A nested item's relative links must resolve to real objects — the depth math is off-by-one
     # bait, and a wrong `../` only shows up as a broken catalog in a client, never as an error here.

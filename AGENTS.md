@@ -37,7 +37,7 @@ Two **producers** on **shared core**:
 - `raster/` — standalone COG → STAC (`ugs-rasters` collection).
 - `restyle.py` — rebind `ugs:renders` from ugs-styles manifest, no reingest (`docs/STYLING.md`).
 
-Outside `src/`: `admin/` (Django + HTMX ops console behind IAP — drive + observe Cloud Run jobs), `service/` (Pub/Sub push handler), `featureserv/` (OGC API Features), `viewer/` (STAC viewer). One STAC catalog span producers — collections `ugs-serving-topics`, `ugs-publications`, `ugs-rasters`.
+Outside `src/`: `admin/` (Django + HTMX ops console behind IAP — drive + observe Cloud Run jobs), `service/` (Pub/Sub push handler), `featureserv/` (OGC API Features), `viewer/` (STAC viewer). One STAC catalog span producers — collections `ugs-serving-topics`, `ugs-publications`, `ugs-rasters`. The first two nest one level (`ugs-serving-topics/<mart schema>`, `ugs-publications/<series>`); serving topics also publish a rollup `items.json` at the catalog level.
 
 ## Architecture (vector producer)
 

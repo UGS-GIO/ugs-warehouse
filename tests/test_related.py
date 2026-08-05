@@ -55,6 +55,8 @@ def test_resolve_emits_links_fks_and_aspatial_assets(monkeypatch):
         if "domain_topic =" in sql:  # outgoing FKs of the parent
             return [('[{"sourceColumn": "quad", "targetDomainTopic": "mapping_quads_24k", '
                      '"targetColumn": "quad_id"}]',)]
+        if "domain_topic IN" in sql:  # FK targets' mart schemas (link paths are per-schema)
+            return [("mapping_quads_24k", "mapping")]
         # incoming children (containment query): one aspatial, one spatial
         return [
             ("enmin_ucrc_boxes", "energy_mineral", "UCRC core boxes",

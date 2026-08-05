@@ -1,5 +1,6 @@
 """Vector-topic STAC item — emitted through the shared core into the
-`ugs-serving-topics` collection of the one catalog.
+`ugs-serving-topics` catalog of the one catalog, under a per-mart-schema sub-collection
+(`ugs-serving-topics/<schema>`), the same one-level nesting pubs use for series.
 
 Assets: GeoParquet archive (`data`), PMTiles (`pmtiles`), and — only in the review catalog —
 a DuckLake table (`ducklake`, a gs:// locator read by DuckDB, not a browser). The DuckLake asset
@@ -18,9 +19,17 @@ from ..core import config, gcs, stac
 from . import ducklake
 from .topics import Topic
 
-COLLECTION = "ugs-serving-topics"
+# The nesting catalog. A topic's own collection is its dbt mart schema, one level down — the
+# collection id is the bare schema (`hazards`), matching the layout segment. Curated titles +
+# descriptions for each live in core.stac.TOPIC_GROUPS.
+CATALOG = stac.SERVING_TOPICS_CATALOG
 PARQUET_MIME = config.PARQUET_MIME
 PMTILES_MIME = config.PMTILES_MIME
+
+
+def collection_path(schema: str) -> str:
+    """GCS layout path of a mart schema's sub-collection."""
+    return f"{CATALOG}/{schema}"
 
 
 def _bbox(con: duckdb.DuckDBPyConnection, view: str) -> list[float]:
@@ -97,7 +106,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     # Preserve-on-empty: registry descriptions are often missing, so when this submit has none, keep
     # whatever the published item already had instead of blanking it (last-non-empty wins).
     desc = ov.get("description") or md.get("description") or description \
-        or stac.prior_property(COLLECTION, topic.stem, "description")
+        or stac.prior_property(collection_path(topic.schema), topic.stem, "description")
     if desc:
         props["description"] = desc
     # Curated catalog metadata (raw.schema_registry) — flows into STAC + ISO.
@@ -151,7 +160,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         exts.append(stac.TABLE_EXT)
 
     item = stac.build_item(
-        item_id=topic.stem, collection=COLLECTION,
+        item_id=topic.stem, collection=topic.schema,
+        collection_path=collection_path(topic.schema),
         geometry=stac.bbox_polygon(bb), bbox=bb, datetime_iso=now,
         properties=props,
         assets=assets,

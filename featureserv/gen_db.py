@@ -106,9 +106,12 @@ def _collection_layers(curl: str, coll: dict, deadline: float | None = None) -> 
 
 
 def _child_layers(curl: str, deadline: float | None = None) -> list[tuple[str, str]]:
-    """Layers under one root child. A child that's a Catalog of nested collections (ugs-external,
-    ugs-mining-district-files, ugs-rasters) has no item links and contributes nothing — featureserv
-    serves the flat vector collections only."""
+    """Layers under one root child — a collection, or a Catalog that publishes a rollup items index.
+
+    `ugs-serving-topics` is a Catalog of per-schema collections but carries a `rel:items` link to an
+    index spanning all of them, so it resolves in one fetch here exactly like a flat collection. A
+    Catalog without that link (ugs-external, ugs-mining-district-files, ugs-rasters) has no item
+    links and contributes nothing — featureserv serves the vector layers only."""
     try:
         coll = _get(curl, deadline)
     except Exception as e:

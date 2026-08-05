@@ -10,7 +10,10 @@ bucket, served read-only through the maps-assets CDN and a static STAC viewer.
   thumbnails, STAC item. See `docs/INTEGRATION_GEOLMAP.md`.
 
 One STAC catalog spans both, laid out with collections (`ugs-serving-topics`, `ugs-publications`,
-`ugs-rasters`). An optional Django **ops console** (`admin/`) drives + observes the Cloud Run jobs.
+`ugs-rasters`). `ugs-serving-topics` and `ugs-publications` nest one level — per dbt mart schema
+(`ugs-serving-topics/hazards`) and per publication series (`ugs-publications/DS`) — and serving
+topics also publish a rollup `ugs-serving-topics/items.json` spanning every schema. An optional
+Django **ops console** (`admin/`) drives + observes the Cloud Run jobs.
 
 ## Architecture
 

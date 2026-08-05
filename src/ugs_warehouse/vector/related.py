@@ -35,13 +35,10 @@ import re
 import tempfile
 
 from ..core import config, gcs, identifiers, stac
-from . import source
+from . import sink_stac, source
 from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
-# FK targets are serving topics (the common case); their items live in this collection. Cross-
-# collection targets (e.g. a publication) would need richer resolution — a follow-up.
-_SERVING_COLLECTION = "ugs-serving-topics"
 _GEOM_RE = re.compile(r"geometr|geography", re.IGNORECASE)
 
 
@@ -73,11 +70,28 @@ def _foreign_key(rel: dict) -> dict | None:
     return {"fields": src, "reference": {"resource": target, "fields": tgt}}
 
 
-def _related_link(target_stem: str, title: str | None = None) -> dict:
-    """A STAC `related` link to a serving-topic item (absolute CDN href — no relative-depth math)."""
-    href = config.public_url(stac.item_object_path(_SERVING_COLLECTION, target_stem))
+def _related_link(target_stem: str, schema: str, title: str | None = None) -> dict:
+    """A STAC `related` link to a serving-topic item (absolute CDN href — no relative-depth math).
+
+    `schema` is the target's mart schema: items are nested per schema, so a link can't be built
+    from the stem alone (see `_target_schemas`)."""
+    href = config.public_url(
+        stac.item_object_path(sink_stac.collection_path(schema), target_stem))
     return {"rel": "related", "href": href, "type": "application/geo+json",
             "title": title or stac.prettify(target_stem)}
+
+
+def _target_schemas(con, stems: list[str]) -> dict[str, str]:
+    """{domain_topic: mart schema} for FK targets — one registry read, not one per link.
+
+    Items live under `ugs-serving-topics/<schema>/`, so a target whose schema the registry doesn't
+    carry can't be addressed; `resolve` drops that link rather than emit a guessed 404."""
+    if not stems:
+        return {}
+    in_list = ",".join(_q(s) for s in stems)
+    rows = _pg(con, "SELECT domain_topic, target_schema FROM raw.schema_registry "
+                    f"WHERE domain_topic IN ({in_list})")
+    return {t: s for t, s in rows if t and s}
 
 
 def _has_geometry(business_schema: dict) -> bool:
@@ -155,12 +169,23 @@ def resolve(topic: Topic) -> dict:
         # T's OUTGOING FKs (T is the FK source) → related links + ugs:foreign_keys on T's data asset.
         out = _pg(con, f"SELECT relationships::text FROM raw.schema_registry "
                        f"WHERE domain_topic = {_q(stem)} LIMIT 1")
-        for rel in (json.loads(out[0][0]) if out and out[0][0] else []):
+        outgoing = json.loads(out[0][0]) if out and out[0][0] else []
+        # Resolve every target's schema up front — the link path needs it, and one IN-list read
+        # beats a lookup per relationship.
+        schemas = _target_schemas(con, [t for r in outgoing
+                                        if (t := r.get("targetDomainTopic"))])
+        for rel in outgoing:
             fk = _foreign_key(rel)
             if fk:
                 result["foreign_keys"].append(fk)
-            if rel.get("targetDomainTopic"):
-                result["links"].append(_related_link(rel["targetDomainTopic"]))
+            target = rel.get("targetDomainTopic")
+            if not target:
+                continue
+            if target not in schemas:
+                print(f"[{topic.fqn}] related '{target}': no target_schema in the registry — "
+                      "link skipped (item path is per-schema)")
+                continue
+            result["links"].append(_related_link(target, schemas[target]))
 
         # T's INCOMING FKs — children whose relationships reference T (jsonb containment).
         contains = '[{"targetDomainTopic": ' + json.dumps(stem) + "}]"
@@ -176,7 +201,12 @@ def resolve(topic: Topic) -> dict:
             business_schema = json.loads(bs_text) if bs_text else {}
             if _has_geometry(business_schema):
                 # Spatial child has its own STAC item — link to it; its own asset carries the FK.
-                result["links"].append(_related_link(child_topic, display))
+                # `target_schema` here is the child's own serving schema (same column the
+                # materialise path reads), which is exactly the child item's collection.
+                if not tgt_schema:
+                    print(f"[{topic.fqn}] related '{child_topic}': no target_schema — link skipped")
+                    continue
+                result["links"].append(_related_link(child_topic, tgt_schema, display))
                 continue
             asset = _materialize_child(con, child_topic, tgt_schema, display, rel,
                                        business_schema, stem)

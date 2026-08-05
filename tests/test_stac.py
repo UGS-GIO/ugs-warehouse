@@ -176,6 +176,88 @@ def test_group_items_keeps_only_nested_item_paths():
     assert sorted(groups["ugs-serving-topics"]) == ["x", "y"]
 
 
+def test_group_items_nested_serving_topic_paths():
+    p = config.STAC_PREFIX
+    paths = [
+        f"{p}/ugs-serving-topics/hazards/hazards_qfaults/hazards_qfaults.json",
+        f"{p}/ugs-serving-topics/emp/enmin_ucrc_wells/enmin_ucrc_wells.json",
+        f"{p}/ugs-serving-topics/items.json",             # rollup index, skipped
+        f"{p}/ugs-serving-topics/hazards/items.json",     # per-collection index, skipped
+        f"{p}/ugs-serving-topics/catalog.json",           # sub-catalog doc, skipped
+    ]
+    groups = stac._group_items(paths)
+    assert groups == {"ugs-serving-topics/hazards": ["hazards_qfaults"],
+                      "ugs-serving-topics/emp": ["enmin_ucrc_wells"]}
+
+
+def test_subcatalog_items_index_link_is_opt_in():
+    kids = [{"id": "hazards", "title": "Geologic Hazards", "count": 1}]
+    assert not any(lnk["rel"] == "items"
+                   for lnk in stac._subcatalog_doc("ugs-publications", kids)["links"])
+    rolled = stac._subcatalog_doc("ugs-serving-topics", kids, items_index=True)
+    assert any(lnk["rel"] == "items" and lnk["href"] == "./items.json" for lnk in rolled["links"])
+
+
+def _mem_gcs(monkeypatch):
+    store: dict[str, bytes] = {}
+    monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **k: store.__setitem__(p, b))
+    monkeypatch.setattr(stac.gcs, "get_bytes", lambda p: store[p])
+    monkeypatch.setattr(stac.gcs, "list_paths", lambda pre: [k for k in store if k.startswith(pre)])
+    return store
+
+
+def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
+    """Serving topics split into per-schema collections under a `ugs-serving-topics` sub-catalog,
+    with a rollup items.json so one-URL consumers (featureserv, tiles, ops) keep working."""
+    import json
+
+    from ugs_warehouse.vector import sink_stac as vec_sink
+
+    store = _mem_gcs(monkeypatch)
+    for schema, iid in (("hazards", "hazards_qfaults"), ("emp", "enmin_ucrc_wells")):
+        item = stac.build_item(
+            item_id=iid, collection=schema, collection_path=vec_sink.collection_path(schema),
+            geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
+            datetime_iso="2026-01-01T00:00:00Z",
+            properties={"ugs:dbt_schema": schema}, assets={})
+        stac.write_item(item)
+
+    stac.refresh_catalog()
+    p = config.STAC_PREFIX
+
+    # Root -> sub-catalog (not a flat collection), carrying both schemas' items.
+    root = json.loads(store[f"{p}/catalog.json"])
+    kids = [lnk["href"] for lnk in root["links"] if lnk["rel"] == "child"]
+    assert kids == ["./ugs-serving-topics/catalog.json"]
+
+    sub = json.loads(store[f"{p}/ugs-serving-topics/catalog.json"])
+    assert sub["type"] == "Catalog" and sub["ugs:item_count"] == 2
+    assert [lnk["href"] for lnk in sub["links"] if lnk["rel"] == "child"] == [
+        "./emp/collection.json", "./hazards/collection.json"]
+
+    # Each schema is a real Collection. Its title is the prettified schema name — nothing is
+    # authored for a group with no upstream label — and there's no bogus OGC-Features link.
+    hazards = json.loads(store[f"{p}/ugs-serving-topics/hazards/collection.json"])
+    assert hazards["type"] == "Collection" and hazards["id"] == "hazards"
+    assert hazards["title"] == "Hazards"
+    assert not any(lnk["rel"] == "service" for lnk in hazards["links"])
+
+    # A nested item's relative links must resolve to real objects — the depth math is off-by-one
+    # bait, and a wrong `../` only shows up as a broken catalog in a client, never as an error here.
+    import posixpath
+    item_obj = f"{p}/ugs-serving-topics/hazards/hazards_qfaults/hazards_qfaults.json"
+    item = json.loads(store[item_obj])
+    for rel in ("root", "parent", "collection"):
+        href = next(lnk["href"] for lnk in item["links"] if lnk["rel"] == rel)
+        assert posixpath.normpath(posixpath.join(posixpath.dirname(item_obj), href)) in store, rel
+
+    # Rollup index spans every child collection; per-collection indexes stay scoped.
+    rollup = json.loads(store[f"{p}/ugs-serving-topics/items.json"])
+    assert {it["id"] for it in rollup["items"]} == {"hazards_qfaults", "enmin_ucrc_wells"}
+    scoped = json.loads(store[f"{p}/ugs-serving-topics/hazards/items.json"])
+    assert [it["id"] for it in scoped["items"]] == ["hazards_qfaults"]
+
+
 def test_build_catalog_series_filter():
     from unittest.mock import patch
 

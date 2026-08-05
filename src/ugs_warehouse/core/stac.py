@@ -7,6 +7,11 @@ with collections:
     {STAC_PREFIX}/{collection}/collection.json      coll  -> items
     {STAC_PREFIX}/{collection}/{id}/{id}.json        item
 
+A collection may nest one level — a sub-catalog whose children are collections
+(`ugs-publications/<SERIES>`, `ugs-serving-topics/<SCHEMA>`). Nesting sub-catalogs listed in
+`ROLLUP_INDEX_CATALOGS` also publish an items.json spanning every child, so one-fetch consumers
+keep a single URL for "all of X".
+
 `refresh_catalog()` lists GCS and rebuilds the root + every collection.json from what's
 actually there (idempotent, concurrency-tolerant) — no manual regen, no shared-file races.
 """
@@ -349,9 +354,12 @@ def _child_link(href: str, title: str | None, count: int | None, mappable: int |
 
 
 def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None = None,
-                    description: str | None = None) -> dict:
+                    description: str | None = None, items_index: bool = False) -> dict:
     """A nesting Catalog (e.g. `ugs-publications`) whose children are per-series collections,
-    each at `./<series>/collection.json`. `children` = [{id, title, count}, …]."""
+    each at `./<series>/collection.json`. `children` = [{id, title, count}, …].
+
+    `items_index` adds a `rel:items` link to a rollup index spanning every child collection —
+    see ROLLUP_INDEX_CATALOGS."""
     total = sum(c.get("count") or 0 for c in children)
     total_mappable = sum(c.get("mappable") or 0 for c in children)
     return {
@@ -367,6 +375,8 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./catalog.json", "type": "application/json"},
+            *([{"rel": "items", "href": "./items.json", "type": "application/json",
+                "title": "Items index (all child collections)"}] if items_index else []),
             *[_child_link(f"./{c['id']}/collection.json", c.get("title"), c.get("count"), c.get("mappable"))
               for c in sorted(children, key=lambda c: c["id"])],
         ],
@@ -458,6 +468,21 @@ SERIES_DESC = {
     "SS": "Special Studies are substantive scientific works (like Bulletins), but with more restricted subject matter.",
 }
 
+# Serving-topic groups carry NO authored title or description. The group is the dbt mart schema,
+# so its only honest label is the schema name itself (prettified, the same dumb transform items
+# get). A curated name for `emp` or `gengis` would be invention — when upstream publishes one
+# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Same rule as
+# the ISO topicCategory: absent means absent, never defaulted. Pub series differ — SERIES_DESC is
+# verbatim UGS copy from geology.utah.gov/map-pub, inherited rather than written.
+
+# Vector topics nest under this catalog, one collection per mart schema (see vector.sink_stac).
+SERVING_TOPICS_CATALOG = "ugs-serving-topics"
+
+# Nesting catalogs that ALSO publish a rollup items.json spanning every child collection. Keeps
+# one-URL consumers (featureserv gen_db, the tiles service, the ops console) working across a split
+# without walking N sub-collections. Deliberately NOT pubs: thousands of items in one document.
+ROLLUP_INDEX_CATALOGS = {SERVING_TOPICS_CATALOG}
+
 
 def refresh_catalog() -> None:
     """Rebuild the root catalog + every collection.json by listing items in GCS.
@@ -473,6 +498,7 @@ def refresh_catalog() -> None:
     #    path's last segment (a series code when nested); title from the items' pub type.
     #    Record per-path {id, title, count} so the hierarchy links can carry counts.
     leaf: dict[str, dict] = {}
+    rollup: dict[str, list[dict]] = {}   # nesting catalog -> its children's items (see ROLLUP_INDEX_CATALOGS)
     with ThreadPoolExecutor(max_workers=64) as executor:
         for path, item_ids in groups.items():
             def _fetch_one(iid: str) -> dict | None:
@@ -483,11 +509,16 @@ def refresh_catalog() -> None:
 
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
             nested = "/" in path
-            cid = path.split("/")[-1]
+            top, cid = path.split("/")[0], path.split("/")[-1]
+            # Title/description are inherited, never authored here: a pub series takes the items'
+            # own pub type + the verbatim map-pub blurb; a serving-topic schema has no upstream
+            # label yet, so both stay None and _collection_doc falls back to prettify(schema).
             title = next((it.get("properties", {}).get("ugs:pub_type") for it in items
                           if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None
             mappable = sum(1 for it in items if _is_mappable(it))
-            desc = SERIES_DESC.get(cid) if nested else None  # pub-series description (map-pub text)
+            desc = SERIES_DESC.get(cid) if nested else None
+            if nested and top in ROLLUP_INDEX_CATALOGS:
+                rollup.setdefault(top, []).extend(items)
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
                                         mappable=mappable, description=desc),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
@@ -506,7 +537,10 @@ def refresh_catalog() -> None:
         if top not in groups:  # sub-catalog (nested, no direct items)
             kids = [leaf[p] for p in sorted(paths)]
             ptitle = prettify(top.replace("ugs-", ""))
-            _write_json(_subcatalog_doc(top, kids, title=ptitle),
+            rolled = rollup.get(top)
+            if rolled is not None:  # one index spanning every child collection
+                _write_json(_index_doc(top, rolled), f"{config.STAC_PREFIX}/{top}/items.json")
+            _write_json(_subcatalog_doc(top, kids, title=ptitle, items_index=rolled is not None),
                         f"{config.STAC_PREFIX}/{top}/catalog.json")
             root_children.append({"href": f"./{top}/catalog.json", "title": ptitle,
                                   "count": sum(k["count"] for k in kids),

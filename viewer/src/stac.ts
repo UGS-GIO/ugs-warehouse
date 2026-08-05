@@ -363,9 +363,10 @@ export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [numb
 // The full item.json stays the source of truth and loads on open (useStac).
 export type ItemsIndex = { type?: string; collection?: string; count?: number; items: StacDoc[] };
 
-// items.json sits next to collection.json (…/<collection>/items.json).
+// items.json sits next to collection.json (…/<collection>/items.json). A nesting sub-catalog may
+// publish one too (ugs-serving-topics), rolling up every child collection into one fetch.
 const indexUrlFor = (collectionHref: string) =>
-  collectionHref.replace(/collection\.json(\?.*)?$/, "items.json");
+  collectionHref.replace(/(collection|catalog)\.json(\?.*)?$/, "items.json");
 
 /** Fetch the compact items index for each given collection. Per-collection result carries
  *  the parsed index when present, or an error (e.g. 404 on a pre-index catalog) so the

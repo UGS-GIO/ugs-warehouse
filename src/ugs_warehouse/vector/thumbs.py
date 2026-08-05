@@ -24,10 +24,10 @@ import sys
 import tempfile
 import urllib.request
 
-from ..core import config, gcs
+from ..core import config, gcs, stac
 from ..pubs.harvest import _series_ctx, hlog, outcome_category
 
-COLLECTION = "ugs-serving-topics"
+CATALOG = stac.SERVING_TOPICS_CATALOG  # items nest one level under it, per mart schema
 # Bump to force a global re-render (renderer/style-composition change) without touching style bytes.
 RENDERER_VERSION = "1"
 RENDER_TIMEOUT_MS = int(os.environ.get("TOPIC_THUMB_TIMEOUT_MS", "30000"))
@@ -179,10 +179,11 @@ def thumb_one(item: dict, force: bool = False) -> str:
     want_hash, style_bytes = _style_hash(style_url)
     png_obj, sha_obj = thumb_object(stem), sha_object(stem)
 
-    # Items live NESTED at <collection>/<id>/<id>.json — not flat. Writing the flat path stamps a
-    # stray object the catalog never references (so the viewer never sees the thumbnail).
-    stac_path = f"{config.STAC_PREFIX}/{COLLECTION}/{stem}/{stem}.json"
-    flat_stray = f"{config.STAC_PREFIX}/{COLLECTION}/{stem}.json"  # legacy mis-write to clean up
+    # Items live NESTED at <catalog>/<schema>/<id>/<id>.json — not flat. Writing a flatter path
+    # stamps a stray object the catalog never references (so the viewer never sees the thumbnail).
+    coll_path = _collection_path(item)
+    stac_path = f"{config.STAC_PREFIX}/{coll_path}/{stem}/{stem}.json"
+    flat_stray = f"{config.STAC_PREFIX}/{coll_path}/{stem}.json"  # legacy mis-write to clean up
     thumb_href = config.public_url(png_obj)
 
     def ensure_stac_thumbnail() -> None:
@@ -240,11 +241,24 @@ def thumb_one(item: dict, force: bool = False) -> str:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def _collection_path(item: dict) -> str:
+    """Layout path of the item's sub-collection — `ugs-serving-topics/<mart schema>`.
+
+    The schema rides on the item as `ugs:dbt_schema` (written by sink_stac), so a thumbnail run
+    doesn't need the Postgres registry to find where an item lives."""
+    schema = ((item.get("properties") or {}).get("ugs:dbt_schema") or "").strip()
+    return f"{CATALOG}/{schema}" if schema else CATALOG
+
+
 def _topic_items() -> list[dict]:
-    """Read every published ugs-serving-topics item.json (skip collection.json)."""
+    """Read every published serving-topic item.json (skip catalog/collection/items docs).
+
+    Items are at `<catalog>/<schema>/<id>/<id>.json`; anything else under the prefix is a
+    generated index document."""
     out = []
-    for path in gcs.list_paths(f"{config.STAC_PREFIX}/{COLLECTION}/"):
-        if not path.endswith(".json") or path.endswith("/collection.json"):
+    for path in gcs.list_paths(f"{config.STAC_PREFIX}/{CATALOG}/"):
+        parts = path.split("/")
+        if not path.endswith(".json") or len(parts) < 2 or parts[-1] != f"{parts[-2]}.json":
             continue
         try:
             out.append(json.loads(gcs.get_bytes(path).decode()))

@@ -232,7 +232,7 @@ export function App() {
       count: l["ugs:item_count"], mappable: l["ugs:mappable_count"], kind: "collection", parentId: sc.id,
     })));
   const leafColls = [...rootChildren.filter((c) => c.kind === "collection"), ...seriesChildren];
-  const layerCollIds = layerCollectionIds(rootChildren);
+  const layerCollIds = layerCollectionIds(rootChildren, seriesChildren);
 
   const collectionId = collKeyOf(collectionUrl);  // idempotent on a bare key; also handles legacy full-url `c`
   const subCat = subCats.find((c) => c.id === collectionId);
@@ -320,9 +320,24 @@ export function App() {
   // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
   // an absolute href: construct from the open leaf, else look it up among loaded items.
   const isUrl = (s?: string) => Boolean(s) && /^https?:\/\//.test(s as string);
+
+  // Deep-link straight into a sub-catalog that publishes a rollup index — `?c=ugs-serving-topics&i=<id>`.
+  // The item lives in a child collection (its mart schema), which the index entry carries, so the
+  // href is resolvable without opening that child first. Keeps links minted before the per-schema
+  // split working, and is the path the review dashboard's "open item" takes.
+  const rollupWanted = Boolean(subCat && !leafColl && itemUrl && !isUrl(itemUrl));
+  const rollupIdx = useIndexes(rollupWanted && subCat ? [{ id: subCat.id, href: subCat.href }] : []);
+  const rollupHit = rollupIdx[0]?.index?.items?.find((d) => String(d.id) === itemUrl);
+  const rollupSchema = (rollupHit?.properties as Record<string, unknown> | undefined)?.["ugs:dbt_schema"];
+  const rollupHref = subCat && rollupHit && rollupSchema
+    ? itemHrefIn(subCat.href.replace(/catalog\.json(\?.*)?$/, `${encodeURIComponent(String(rollupSchema))}/collection.json`),
+                 String(rollupHit.id))
+    : undefined;
+
   const itemHref = isUrl(itemUrl)
     ? itemUrl
     : (leafColl && itemUrl ? itemHrefIn(leafColl.href, itemUrl) : undefined)
+      ?? rollupHref
       ?? allItems.find((r) => idOf(r.href) === itemUrl)?.href;
   const item = useStac(itemHref);
 

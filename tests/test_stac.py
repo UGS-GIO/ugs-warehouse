@@ -235,11 +235,21 @@ def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
     assert [lnk["href"] for lnk in sub["links"] if lnk["rel"] == "child"] == [
         "./emp/collection.json", "./hazards/collection.json"]
 
-    # Each schema is a real Collection with the curated title, and no bogus OGC-Features link.
+    # Each schema is a real Collection. Its title is the prettified schema name — nothing is
+    # authored for a group with no upstream label — and there's no bogus OGC-Features link.
     hazards = json.loads(store[f"{p}/ugs-serving-topics/hazards/collection.json"])
     assert hazards["type"] == "Collection" and hazards["id"] == "hazards"
-    assert hazards["title"] == stac.TOPIC_GROUPS["hazards"][0]
+    assert hazards["title"] == "Hazards"
     assert not any(lnk["rel"] == "service" for lnk in hazards["links"])
+
+    # A nested item's relative links must resolve to real objects — the depth math is off-by-one
+    # bait, and a wrong `../` only shows up as a broken catalog in a client, never as an error here.
+    import posixpath
+    item_obj = f"{p}/ugs-serving-topics/hazards/hazards_qfaults/hazards_qfaults.json"
+    item = json.loads(store[item_obj])
+    for rel in ("root", "parent", "collection"):
+        href = next(lnk["href"] for lnk in item["links"] if lnk["rel"] == rel)
+        assert posixpath.normpath(posixpath.join(posixpath.dirname(item_obj), href)) in store, rel
 
     # Rollup index spans every child collection; per-collection indexes stay scoped.
     rollup = json.loads(store[f"{p}/ugs-serving-topics/items.json"])

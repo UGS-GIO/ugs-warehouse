@@ -468,30 +468,12 @@ SERIES_DESC = {
     "SS": "Special Studies are substantive scientific works (like Bulletins), but with more restricted subject matter.",
 }
 
-# Vector serving-topic groups, keyed by dbt mart schema (vector.topics.MART_SCHEMAS) — the split
-# axis for `ugs-serving-topics`. Schema names are plumbing (`emp`, `gengis`), so curate a title +
-# description or the catalog reads like a database. A schema with no entry here still gets a
-# collection (prettified title) — discovery is zero-config and must stay that way.
-TOPIC_GROUPS: dict[str, tuple[str, str]] = {
-    "hazards": ("Geologic Hazards",
-                "Mapped geologic hazards — surface faulting, landslides, liquefaction, flooding, "
-                "rockfall, and related hazard-mapping layers."),
-    "emp": ("Energy, Minerals & Petroleum",
-            "Energy and mineral resources — oil and gas, coal, geothermal, industrial and critical "
-            "minerals, and their supporting well and production layers."),
-    "gengis": ("General Geology",
-               "Statewide general-purpose geology — bedrock and surficial units, structure, and the "
-               "reference layers that don't belong to a single program."),
-    "wetlands": ("Wetlands",
-                 "Wetland mapping and condition assessments."),
-    "mapping": ("Geologic Mapping",
-                "Geologic map coverage — quadrangle indexes, compilation footprints, and the "
-                "products of the geologic mapping program."),
-    "geochron": ("Geochronology",
-                 "Dated samples and age determinations."),
-    "boreholes": ("Boreholes",
-                  "Boreholes, wells, and their logs — the subsurface point record."),
-}
+# Serving-topic groups carry NO authored title or description. The group is the dbt mart schema,
+# so its only honest label is the schema name itself (prettified, the same dumb transform items
+# get). A curated name for `emp` or `gengis` would be invention — when upstream publishes one
+# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Same rule as
+# the ISO topicCategory: absent means absent, never defaulted. Pub series differ — SERIES_DESC is
+# verbatim UGS copy from geology.utah.gov/map-pub, inherited rather than written.
 
 # Vector topics nest under this catalog, one collection per mart schema (see vector.sink_stac).
 SERVING_TOPICS_CATALOG = "ugs-serving-topics"
@@ -528,14 +510,13 @@ def refresh_catalog() -> None:
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
             nested = "/" in path
             top, cid = path.split("/")[0], path.split("/")[-1]
-            # Curated group title/description: serving-topic schemas from TOPIC_GROUPS, pub series
-            # from the items' own pub type + SERIES_DESC. Uncurated groups fall back to prettify().
-            group = TOPIC_GROUPS.get(cid) if top == SERVING_TOPICS_CATALOG and nested else None
-            title = group[0] if group else (
-                next((it.get("properties", {}).get("ugs:pub_type") for it in items
-                      if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None)
+            # Title/description are inherited, never authored here: a pub series takes the items'
+            # own pub type + the verbatim map-pub blurb; a serving-topic schema has no upstream
+            # label yet, so both stay None and _collection_doc falls back to prettify(schema).
+            title = next((it.get("properties", {}).get("ugs:pub_type") for it in items
+                          if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None
             mappable = sum(1 for it in items if _is_mappable(it))
-            desc = group[1] if group else (SERIES_DESC.get(cid) if nested else None)
+            desc = SERIES_DESC.get(cid) if nested else None
             if nested and top in ROLLUP_INDEX_CATALOGS:
                 rollup.setdefault(top, []).extend(items)
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,

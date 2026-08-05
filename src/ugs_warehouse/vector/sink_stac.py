@@ -20,8 +20,8 @@ from . import ducklake
 from .topics import Topic
 
 # The nesting catalog. A topic's own collection is its dbt mart schema, one level down — the
-# collection id is the bare schema (`hazards`), matching the layout segment. Curated titles +
-# descriptions for each live in core.stac.TOPIC_GROUPS.
+# collection id is the bare schema (`hazards`), matching the layout segment. The collection's
+# title is that name prettified; nothing else is authored for it (see core.stac).
 CATALOG = stac.SERVING_TOPICS_CATALOG
 PARQUET_MIME = config.PARQUET_MIME
 PMTILES_MIME = config.PMTILES_MIME

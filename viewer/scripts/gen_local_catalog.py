@@ -2,7 +2,7 @@
 """Build a LOCAL collections-layout STAC catalog under viewer/public/stac/.
 
 The deployed ingest isn't reachable locally, so we reshape what's already published:
-  - 20 flat vector items  (warehouse-sandbox/stac/*.json)  -> ugs-serving-topics/<mart schema>
+  - published vector items (warehouse/stac/ugs-serving-topics/*) -> ugs-serving-topics/<mart schema>
   - prod publication items (warehouse/stac/ugs-publications/*) -> ugs-publications
 
 Items are rewritten into the nested layout the viewer expects
@@ -12,7 +12,10 @@ by `ugs:dbt_schema`, matching the published catalog.
 """
 from __future__ import annotations
 
+import argparse
 import json
+import urllib.error
+import urllib.parse
 import urllib.request
 from pathlib import Path
 
@@ -83,8 +86,9 @@ def _root_doc(children: list[tuple[str, str]]) -> dict:
 
 
 TOPICS = "ugs-serving-topics"     # nesting catalog; children are mart schemas
+PUBS = "ugs-publications"         # nesting catalog; children are publication series
+PUBS_PER_SERIES = 40              # local dev only needs enough pubs to render, not all ~7k
 OTHER_GROUP = "other"             # items the sandbox published without a ugs:dbt_schema
-SANDBOX = "https://maps-assets.geology.utah.gov/warehouse-sandbox/stac"
 PROD = "https://maps-assets.geology.utah.gov/warehouse/stac"
 OUT = Path(__file__).resolve().parents[1] / "public" / "stac"
 
@@ -92,7 +96,9 @@ STD_RELS = {"root", "parent", "collection", "self"}
 
 
 def fetch(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=30) as r:
+    # Published pub ids contain spaces ("GEOLOGIC MAP OF UTAH"), so hrefs must be percent-encoded
+    # before they reach http.client — it rejects control/space characters in the request path.
+    with urllib.request.urlopen(urllib.parse.quote(url, safe=":/?#[]@!$&'()*+,;=%"), timeout=30) as r:
         return json.load(r)
 
 
@@ -123,52 +129,126 @@ def item_hrefs(catalog: dict, base: str) -> list[str]:
             for link in catalog.get("links", []) if link["rel"] == "item"]
 
 
-def harvest_topics(base: str, catalog_id: str) -> dict[str, list[str]]:
-    """Sandbox's flat vector items → {`<catalog>/<schema>`: [item ids]}.
+def harvest_topics(base: str, catalog_id: str) -> dict[str, list[dict]]:
+    """Published vector items → {`<catalog>/<schema>`: [item docs]}, the per-schema split.
 
-    An item with no `ugs:dbt_schema` (older sandbox writes predate the property) goes to an
-    `other` collection instead of being dropped, and the count is printed — an unclassified
-    layer should be visible, not silently missing from the local catalog."""
-    cat = fetch(f"{base}/catalog.json")
-    groups: dict[str, list[str]] = {}
-    for href in item_hrefs(cat, base):
+    Reads the flat serving-topics collection (what's published today) and regroups it by
+    `ugs:dbt_schema`, so local dev sees the nested layout before a reingest exists. Falls back to
+    a bare catalog.json for the older flat-root layout.
+
+    An item with no `ugs:dbt_schema` goes to an `other` collection instead of being dropped, and
+    the count is printed — an unclassified layer should be visible, not silently missing.
+    """
+    try:
+        cat, item_base = fetch(f"{base}/{catalog_id}/collection.json"), f"{base}/{catalog_id}"
+    except urllib.error.HTTPError:
+        cat, item_base = fetch(f"{base}/catalog.json"), base
+    groups: dict[str, list[dict]] = {}
+    for href in item_hrefs(cat, item_base):
         item = fetch(href)
         schema = ((item.get("properties") or {}).get("ugs:dbt_schema") or "").strip() or OTHER_GROUP
         path = f"{catalog_id}/{schema}"
         write_item(path, item)
-        groups.setdefault(path, []).append(item["id"])
+        groups.setdefault(path, []).append(item)
         print(f"  + {path}/{item['id']}")
     if unclassified := groups.get(f"{catalog_id}/{OTHER_GROUP}"):
         print(f"  ! {len(unclassified)} item(s) with no ugs:dbt_schema -> {OTHER_GROUP}")
     return groups
 
 
-def harvest_collection(base: str, collection: str) -> list[str]:
-    coll = fetch(f"{base}/{collection}/collection.json")
-    ids = []
-    for href in item_hrefs(coll, f"{base}/{collection}"):
-        item = fetch(href)
-        write_item(collection, item)
-        ids.append(item["id"])
-        print(f"  + {collection}/{item['id']}")
-    return ids
+def child_hrefs(doc: dict, base: str) -> list[str]:
+    return [urllib.request.urljoin(base + "/", link["href"])
+            for link in doc.get("links", []) if link["rel"] == "child"]
+
+
+def harvest_collection(base: str, collection: str, limit: int | None = None) -> dict[str, list[dict]]:
+    """Published pubs → {collection path: [item docs]}.
+
+    Prod nests publications per series (`ugs-publications/<SERIES>`), so read the sub-catalog and
+    walk its child collections; a flat `collection.json` still works for an un-nested catalog.
+    `limit` caps items per series — the full set is thousands of fetches, and a local dev catalog
+    only needs enough to render.
+    """
+    try:
+        docs = [(collection, fetch(f"{base}/{collection}/collection.json"))]
+    except urllib.error.HTTPError:
+        cat = fetch(f"{base}/{collection}/catalog.json")
+        docs = [(f"{collection}/{href.rstrip('/').split('/')[-2]}", fetch(href))
+                for href in child_hrefs(cat, f"{base}/{collection}")]
+
+    groups: dict[str, list[dict]] = {}
+    for path, doc in docs:
+        for href in item_hrefs(doc, f"{base}/{path}")[:limit]:
+            item = fetch(href)
+            write_item(path, item)
+            groups.setdefault(path, []).append(item)
+            print(f"  + {path}/{item['id']}")
+    return groups
+
+
+def _index_doc(collection: str, items: list[dict]) -> dict:
+    """The compact items index the viewer reads (cover strips, item lists, search, map overlays)
+    without N item fetches. The real refresh trims entries to a property subset; a local catalog is
+    small enough to carry the items whole."""
+    return {"type": "ugs-items-index", "collection": collection,
+            "count": len(items), "items": sorted(items, key=lambda it: it.get("id", ""))}
+
+
+def write_indexes(groups: dict[str, list[dict]]) -> None:
+    """Per-collection items.json, plus the serving-topics rollup spanning every schema — the same
+    two documents `refresh_catalog()` publishes. Without them the viewer falls back to per-item
+    fetches, which feed the item list but NOT the cover strips (so thumbnails vanish)."""
+    for path, items in groups.items():
+        (OUT / path / "items.json").write_text(
+            json.dumps(_index_doc(path.split("/")[-1], items), indent=2))
+    rolled = [it for path, items in groups.items() if path.startswith(f"{TOPICS}/") for it in items]
+    if rolled:
+        (OUT / TOPICS / "items.json").write_text(json.dumps(_index_doc(TOPICS, rolled), indent=2))
+
+
+def read_written_items() -> dict[str, list[dict]]:
+    """{collection path: [item docs]} from what's already under OUT — lets `--indexes-only`
+    rebuild the index documents without re-fetching the whole catalog."""
+    groups: dict[str, list[dict]] = {}
+    for item_path in OUT.rglob("*/*.json"):
+        if item_path.stem != item_path.parent.name:  # not an <id>/<id>.json item doc
+            continue
+        path = item_path.parent.parent.relative_to(OUT).as_posix()
+        groups.setdefault(path, []).append(json.loads(item_path.read_text()))
+    return groups
 
 
 def main() -> None:
+    ap = argparse.ArgumentParser(description="Build the local dev STAC catalog")
+    ap.add_argument("--indexes-only", action="store_true",
+                    help="rebuild items.json from the already-downloaded items (no fetching)")
+    args = ap.parse_args()
+
+    if args.indexes_only:
+        groups = read_written_items()
+        write_indexes(groups)
+        print(f"[local] indexes rebuilt for {len(groups)} collection(s)")
+        return
+
     print(f"vector -> {TOPICS}/<schema>")
-    topic_groups = harvest_topics(SANDBOX, TOPICS)
-    print("pubs -> ugs-publications")
-    groups: dict[str, list[str]] = {**topic_groups,
-                                    "ugs-publications": harvest_collection(PROD, "ugs-publications")}
+    topic_groups = harvest_topics(PROD, TOPICS)
+    print(f"pubs -> {PUBS}/<series>")
+    pub_groups = harvest_collection(PROD, PUBS, limit=PUBS_PER_SERIES)
+    item_groups: dict[str, list[dict]] = {**topic_groups, **pub_groups}
+    groups = {path: [it["id"] for it in items] for path, items in item_groups.items()}
 
     for path, ids in groups.items():
         (OUT / path / "collection.json").write_text(
             json.dumps(_collection_doc(path, ids), indent=2))
-    # Serving topics nest one level: a sub-catalog over the per-schema collections.
-    (OUT / TOPICS / "catalog.json").write_text(json.dumps(
-        _subcatalog_doc(TOPICS, [p.split("/")[-1] for p in topic_groups]), indent=2))
+    write_indexes(item_groups)
+    # Both producers nest one level: a sub-catalog over their per-group collections.
+    for parent, nested in ((TOPICS, topic_groups), (PUBS, pub_groups)):
+        kids = [p.split("/")[-1] for p in nested if "/" in p]
+        if kids:
+            (OUT / parent / "catalog.json").write_text(
+                json.dumps(_subcatalog_doc(parent, kids), indent=2))
 
-    children = [(TOPICS, "catalog.json")]
+    children = [(p, "catalog.json") for p in (TOPICS, PUBS) if (OUT / p / "catalog.json").exists()]
     children += [(p, "collection.json") for p in groups if "/" not in p]
     (OUT / "catalog.json").write_text(json.dumps(_root_doc(children), indent=2))
 

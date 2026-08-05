@@ -483,6 +483,31 @@ SERVING_TOPICS_CATALOG = "ugs-serving-topics"
 # without walking N sub-collections. Deliberately NOT pubs: thousands of items in one document.
 ROLLUP_INDEX_CATALOGS = {SERVING_TOPICS_CATALOG}
 
+# Catalogs whose children are publication SERIES — the only place a group's title is the items'
+# `ugs:pub_type`, because there the collection IS the pub type ("Open File Report" = the OFR series).
+# Anywhere else that field describes the source publication, not the group: a raster mosaic built
+# from OFR plates was titled "Open File Report" instead of naming the layer (#86).
+PUB_SERIES_CATALOGS = {"ugs-publications", "ugs-mining-district-files", "ugs-external"}
+
+# Item property an ingest can send to name its own collection ("24k Geologic Map Series" for the
+# geolmap_24k_series rasters). Inherited, not authored here — absent it, the group falls back to
+# the prettified collection id, never to a field that means something else.
+COLLECTION_TITLE_PROP = "ugs:collection_title"
+
+
+def _group_title(catalog: str, items: list[dict]) -> str | None:
+    """Title for a nested collection, inherited from its items — an explicit
+    `ugs:collection_title` first, then the pub type for a publication series, else None
+    (`_collection_doc` prettifies the id)."""
+    for it in items:
+        title = (it.get("properties") or {}).get(COLLECTION_TITLE_PROP)
+        if title:
+            return title
+    if catalog in PUB_SERIES_CATALOGS:
+        return next((it.get("properties", {}).get("ugs:pub_type") for it in items
+                     if it.get("properties", {}).get("ugs:pub_type")), None)
+    return None
+
 
 def refresh_catalog() -> None:
     """Rebuild the root catalog + every collection.json by listing items in GCS.
@@ -510,13 +535,13 @@ def refresh_catalog() -> None:
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
             nested = "/" in path
             top, cid = path.split("/")[0], path.split("/")[-1]
-            # Title/description are inherited, never authored here: a pub series takes the items'
-            # own pub type + the verbatim map-pub blurb; a serving-topic schema has no upstream
-            # label yet, so both stay None and _collection_doc falls back to prettify(schema).
-            title = next((it.get("properties", {}).get("ugs:pub_type") for it in items
-                          if it.get("properties", {}).get("ugs:pub_type")), None) if nested else None
+            # Title/description are inherited, never authored here: see _group_title. A group with
+            # nothing to inherit stays None and _collection_doc falls back to prettify(id).
+            title = _group_title(top, items) if nested else None
             mappable = sum(1 for it in items if _is_mappable(it))
-            desc = SERIES_DESC.get(cid) if nested else None
+            # Series blurbs are keyed by short codes (M, C, B…) — only look them up under a pub
+            # catalog, or a raster layer that happened to be named `M` would inherit the Map series text.
+            desc = SERIES_DESC.get(cid) if top in PUB_SERIES_CATALOGS else None
             if nested and top in ROLLUP_INDEX_CATALOGS:
                 rollup.setdefault(top, []).extend(items)
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,

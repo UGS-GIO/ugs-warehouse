@@ -206,6 +206,23 @@ def _mem_gcs(monkeypatch):
     return store
 
 
+def test_group_title_only_inherits_pub_type_under_a_pub_catalog():
+    """A pub series IS its pub type; anywhere else that field describes the source publication,
+    so inheriting it mislabels the group — `geolmap_24k_series` was titled "Open File Report" (#86)."""
+    ofr_items = [{"properties": {"ugs:pub_type": "Open File Report"}}]
+    assert stac._group_title("ugs-publications", ofr_items) == "Open File Report"
+    # Rasters built from OFR plates carry the same property — the group must not take it.
+    assert stac._group_title("ugs-rasters", ofr_items) is None
+    assert stac._group_title("ugs-serving-topics", ofr_items) is None
+
+
+def test_group_title_prefers_an_ingest_supplied_collection_title():
+    items = [{"properties": {"ugs:pub_type": "Open File Report",
+                             stac.COLLECTION_TITLE_PROP: "24k Geologic Map Series"}}]
+    assert stac._group_title("ugs-rasters", items) == "24k Geologic Map Series"
+    assert stac._group_title("ugs-publications", items) == "24k Geologic Map Series"  # wins over pub type
+
+
 def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
     """Serving topics split into per-schema collections under a `ugs-serving-topics` sub-catalog,
     with a rollup items.json so one-URL consumers (featureserv, tiles, ops) keep working."""

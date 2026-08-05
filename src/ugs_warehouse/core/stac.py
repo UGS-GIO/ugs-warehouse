@@ -25,6 +25,9 @@ from . import config, gcs, iso, styles
 
 PGF_BASE_URL = config.PGF_BASE_URL
 
+# Vector topics nest under this catalog, one collection per mart schema (see vector.sink_stac).
+SERVING_TOPICS_CATALOG = "ugs-serving-topics"
+
 STAC_VERSION = "1.1.0"  # 1.1 promotes `bands` + data_type/nodata to common metadata (no raster ext)
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
@@ -294,7 +297,10 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
     pub series aren't in featureserv) unless `service` is set explicitly."""
     depth = path.count("/") + 1
     if service is None:
-        service = depth == 1
+        # Flat collections, plus the nested serving-topic schemas — those are precisely the
+        # collections whose items featureserv binds, and they'd otherwise be the only ones with
+        # no pointer to the service that serves them.
+        service = depth == 1 or path.startswith(f"{SERVING_TOPICS_CATALOG}/")
     doc = {
         "type": "Collection",
         "stac_version": STAC_VERSION,
@@ -320,7 +326,10 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             # of N item.json fetches; the per-item docs stay the source of truth for detail).
             {"rel": "items", "href": "./items.json", "type": "application/json", "title": "Items index"},
             {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
-            *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections/{collection}", "type": "application/json", "title": "OGC API Features endpoint"}] if service else []),
+            # Service ROOT, not `/collections/{collection}`: featureserv names its collections after
+            # STAC *item* ids (`hazards_qfaults`), so a per-collection path never existed on any
+            # host. The queryable per-layer link lives on the item instead (vector.sink_stac).
+            *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections", "type": "application/json", "title": "OGC API Features service"}] if service else []),
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json"}
               for i in sorted(item_ids)],
         ],
@@ -474,9 +483,6 @@ SERIES_DESC = {
 # (raw.schema_registry), inherit it here; until then the catalog says what it knows. Same rule as
 # the ISO topicCategory: absent means absent, never defaulted. Pub series differ — SERIES_DESC is
 # verbatim UGS copy from geology.utah.gov/map-pub, inherited rather than written.
-
-# Vector topics nest under this catalog, one collection per mart schema (see vector.sink_stac).
-SERVING_TOPICS_CATALOG = "ugs-serving-topics"
 
 # Nesting catalogs that ALSO publish a rollup items.json spanning every child collection. Keeps
 # one-URL consumers (featureserv gen_db, the tiles service, the ops console) working across a split

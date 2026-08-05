@@ -94,11 +94,42 @@ def test_resolve_graceful_on_db_error(monkeypatch):
     assert out == {"assets": {}, "links": [], "foreign_keys": []}
 
 
+def test_sink_stac_links_the_topics_features_collection(monkeypatch):
+    """featureserv names its collections after the STAC item id, so the queryable endpoint is
+    addressable on the item and nowhere else — the collection doc can only link the service root."""
+    captured: dict = {}
+    monkeypatch.setattr(sink_stac, "_bbox", lambda c, v: [0, 1, 2, 3])
+    monkeypatch.setattr(sink_stac, "_row_count", lambda c, v: 5)
+    monkeypatch.setattr(sink_stac, "_table_columns", lambda c, v: [])
+    # Both read GCS for a real object; unpatched they retry against a bucket this test has no
+    # business touching, which is minutes of backoff, not a failure.
+    monkeypatch.setattr(sink_stac.stac, "manual_override", lambda iid: {})
+    monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
+    monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: False)
+    monkeypatch.setattr(sink_stac.stac, "build_item",
+                        lambda **k: captured.update(k) or {"assets": k["assets"]})
+    monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "attach_iso", lambda i: None)
+    monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
+
+    sink_stac.write(Topic(schema="hazards", layer="hazards_qfaults_current"), None, "v")
+
+    svc = [lk for lk in captured["extra_links"] if lk["rel"] == "service"]
+    assert len(svc) == 1
+    assert svc[0]["href"] == f"{sink_stac.config.PGF_BASE_URL}/collections/hazards_qfaults"
+
+
 def test_sink_stac_wires_related(monkeypatch):
     captured: dict = {}
     monkeypatch.setattr(sink_stac, "_bbox", lambda c, v: [0, 1, 2, 3])
     monkeypatch.setattr(sink_stac, "_row_count", lambda c, v: 5)
     monkeypatch.setattr(sink_stac, "_table_columns", lambda c, v: [{"name": "uwi", "type": "string"}])
+    # Keep the write path off GCS — unpatched, these read real objects and burn minutes
+    # in retry backoff before falling back to their defaults.
+    monkeypatch.setattr(sink_stac.stac, "manual_override", lambda iid: {})
+    monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
+    monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: False)
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
@@ -133,6 +164,11 @@ def test_sink_stac_ducklake_review_only(monkeypatch):
     monkeypatch.setattr(sink_stac, "_bbox", lambda c, v: [0, 1, 2, 3])
     monkeypatch.setattr(sink_stac, "_row_count", lambda c, v: 5)
     monkeypatch.setattr(sink_stac, "_table_columns", lambda c, v: [{"name": "uwi", "type": "string"}])
+    # Keep the write path off GCS — unpatched, these read real objects and burn minutes
+    # in retry backoff before falling back to their defaults.
+    monkeypatch.setattr(sink_stac.stac, "manual_override", lambda iid: {})
+    monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
+    monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: False)
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)

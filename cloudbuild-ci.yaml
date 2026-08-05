@@ -23,7 +23,7 @@ steps:
         set -e
         pip install -e ".[dev]"
         ruff check .
-        pytest -q
+        python -m pytest -q
 
   # ---- viewer: typecheck + lint + unit tests ----
   - id: viewer

@@ -95,7 +95,8 @@ def test_extent_falls_back_to_utah_when_no_bbox():
     assert ext["temporal"]["interval"] == [[None, None]]
 
 
-def test_root_doc_sorts_child_hrefs():
+def test_root_doc_sorts_child_hrefs(monkeypatch):
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])  # isolate local children
     doc = stac._root_doc([{"href": "./b/collection.json", "title": "B", "count": 2},
                           {"href": "./a/collection.json", "title": "A", "count": 1}])
     assert doc["type"] == "Catalog"
@@ -106,6 +107,7 @@ def test_root_doc_sorts_child_hrefs():
 
 def test_root_doc_federates_prod_only_in_review(monkeypatch):
     kids = [{"href": "./a/collection.json", "title": "A", "count": 1}]
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])  # isolate the prod-self link
 
     # Public catalog: no external federation link.
     monkeypatch.setattr(stac.config, "IS_REVIEW_CATALOG", False)
@@ -119,6 +121,19 @@ def test_root_doc_federates_prod_only_in_review(monkeypatch):
     prod = [lnk for lnk in links if lnk["rel"] == "child" and lnk["href"].startswith("http")]
     assert len(prod) == 1
     assert prod[0]["href"] == "https://cdn.example/warehouse/stac/catalog.json"
+
+
+def test_root_doc_federates_external_catalogs(monkeypatch):
+    # EXTERNAL_CATALOGS (e.g. USWB) become rel=child links of the root, in BOTH prod
+    # and review (unlike the prod-self link, which is review-only).
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS",
+                        [("https://ext.example/stac/catalog.json", "Ext")])
+    monkeypatch.setattr(stac.config, "IS_REVIEW_CATALOG", False)
+    links = stac._root_doc([{"href": "./a/collection.json", "title": "A", "count": 1}])["links"]
+    ext = [lnk for lnk in links if lnk["rel"] == "child" and lnk["href"].startswith("http")]
+    assert len(ext) == 1
+    assert ext[0]["href"] == "https://ext.example/stac/catalog.json"
+    assert ext[0]["title"] == "Ext"
 
 
 def test_collection_doc_sorts_items_and_links_the_service_root():
@@ -241,6 +256,7 @@ def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
     from ugs_warehouse.vector import sink_stac as vec_sink
 
     store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])  # isolate local nesting from federation
     for schema, iid in (("hazards", "hazards_qfaults"), ("emp", "enmin_ucrc_wells")):
         item = stac.build_item(
             item_id=iid, collection=schema, collection_path=vec_sink.collection_path(schema),

@@ -6,6 +6,7 @@ producers share this so artifacts land in one bucket and one catalog.
 """
 from __future__ import annotations
 
+import json
 import os
 
 # GCS bucket all artifacts are written to (private; served publicly via the CDN).
@@ -45,6 +46,19 @@ PUBLIC_CATALOG_URL = os.environ.get(
 )
 
 CATALOG_ID = os.environ.get("WAREHOUSE_CATALOG_ID", "ugs-warehouse")
+
+# External STAC catalogs federated under the warehouse root as rel=child — referenced,
+# never copied, so each stays single-sourced on its own CDN (the same pattern the review
+# catalog uses to link prod). (url, title) pairs. Override via WAREHOUSE_EXTERNAL_CATALOGS
+# (JSON list of [url, title]). Default: the USWB (soil-water-balance) catalog.
+EXTERNAL_CATALOGS: list[tuple[str, str]] = [
+    tuple(pair) for pair in json.loads(  # type: ignore[misc]
+        os.environ.get(
+            "WAREHOUSE_EXTERNAL_CATALOGS",
+            '[["https://ubm-assets.geology.utah.gov/stac/catalog.json", "UGS Soil Water Balance (USWB)"]]',
+        )
+    )
+]
 
 # Per-artifact data prefixes (overridable). Vector producer defaults below; the pubs
 # producer sets its own (e.g. geolmap/cogs) via its module config.

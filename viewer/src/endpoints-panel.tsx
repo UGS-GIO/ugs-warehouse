@@ -1,7 +1,8 @@
 // API & data endpoints for an item: PMTiles, XYZ, GL style, ArcGIS VectorTileServer.
 import { useEffect, useRef, useState } from "react";
 
-import { ducklakeAsset, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, pmtilesLink, rendersOf, type StacDoc,
+import { serviceUrlOf } from "./catalog";
+import { cogAsset, ducklakeAsset, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
   tilesStyleUrl, xyzTilesUrl } from "./stac";
 import { usePreviewMap } from "./preview-map";
 
@@ -25,9 +26,14 @@ function CopyBtn({ text }: { text: string }) {
 
 export function EndpointsPanel({ item }: { item: StacDoc }) {
   const id = String(item.id ?? "");
-  const coll = featuresCollectionUrl(id);
   const pq = parquetAsset(item);
+  // What the catalog says beats what we can guess: the item's own `rel=service` link, else the
+  // id template — and only for items with a GeoParquet, which is exactly what featureserv binds.
+  // Raster and publication items have neither, so they get no row instead of a link to a
+  // collection that never existed (#85: featureserv is keyed by item id, not collection id).
+  const coll = serviceUrlOf(item, FEATURES_BASE) ?? (pq ? featuresCollectionUrl(id) : undefined);
   const pm = pmtilesLink(item);
+  const cog = cogAsset(item);
   const ducklake = ducklakeAsset(item);
   const esriRenders = Object.keys(rendersOf(item)).sort();
   // Follow the map's "Symbolize by" picker, so the URL you copy is the symbology on screen.
@@ -41,6 +47,9 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
   }
   if (pq) rows.push({ label: "GeoParquet", desc: "Columnar file — DuckDB / GeoPandas / QGIS", url: pq.href });
+  // A raster item's data IS the COG — without this row it had no endpoints at all once the
+  // bogus Features links stopped being constructed for it.
+  if (cog) rows.push({ label: "COG", desc: "Cloud-Optimized GeoTIFF — QGIS, ArcGIS, GDAL, rasterio (range reads)", url: cog.href });
   // PMTiles is the generic answer, not one option among equals: MapLibre, Leaflet, OpenLayers and
   // recent QGIS read it straight off the CDN with range requests — no service in the path.
   if (pm) rows.push({ label: "PMTiles", desc: "Vector tiles — MapLibre, Leaflet, OpenLayers, QGIS. Read direct from the CDN", url: pm.href });

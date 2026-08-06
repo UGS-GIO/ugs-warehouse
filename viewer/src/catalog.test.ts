@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layerCollectionIds } from "./catalog";
+import { layerCollectionIds, serviceUrlOf } from "./catalog";
 
 describe("layerCollectionIds", () => {
   it("selects root leaf collections, not sub-catalogs", () => {
@@ -30,5 +30,28 @@ describe("layerCollectionIds", () => {
     ];
     expect(layerCollectionIds(roots, nested)).toEqual([
       "ugs-serving-topics/hazards", "ugs-serving-topics/emp"]);
+  });
+});
+
+describe("serviceUrlOf", () => {
+  const item = (links: { rel: string; href: string }[]) => ({ links });
+
+  it("reads the endpoint the catalog published", () => {
+    expect(serviceUrlOf(item([
+      { rel: "self", href: "./hazards_qfaults.json" },
+      { rel: "service", href: "https://features.example/collections/hazards_qfaults" },
+    ]))).toBe("https://features.example/collections/hazards_qfaults");
+  });
+
+  it("returns nothing for an item featureserv does not serve", () => {
+    // Raster and publication items carry no service link — no row beats a URL built from the id,
+    // which is what made those links 404 (#85).
+    expect(serviceUrlOf(item([{ rel: "self", href: "./x.json" }]))).toBeUndefined();
+    expect(serviceUrlOf(undefined)).toBeUndefined();
+  });
+
+  it("lets a session override swap the host", () => {
+    expect(serviceUrlOf(item([{ rel: "service", href: "https://prod.example/collections/x" }]),
+                        "http://localhost:9000")).toBe("http://localhost:9000/collections/x");
   });
 });

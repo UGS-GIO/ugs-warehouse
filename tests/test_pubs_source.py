@@ -50,3 +50,20 @@ def test_from_postgres_closes_when_the_query_raises(fake_duckdb):
     with pytest.raises(RuntimeError):
         source._from_postgres("pubs.publications")
     assert fake_duckdb.closed   # the leak that mattered — the failure path
+
+
+def test_duckdb_close_actually_tears_the_connection_down():
+    """The tests above assert we CALL close(); the fix's value depends on close() doing something.
+
+    Pins that assumption against the real library — if DuckDB ever made close() a no-op, the two
+    tests above would still pass while the connections (and their ATTACHed Cloud SQL handles)
+    leaked exactly as before. Can't go further without a live Postgres: whether the ATTACH is
+    released server-side is only observable from the database's own session list.
+    """
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute("SELECT 1")
+    con.close()
+    with pytest.raises(duckdb.ConnectionException):
+        con.execute("SELECT 1")

@@ -447,6 +447,10 @@ def _root_doc(children: list[dict]) -> dict:
     if config.IS_REVIEW_CATALOG:
         links.append(_child_link(config.PUBLIC_CATALOG_URL,
                                  "UGS warehouse — published (production) catalog", None))
+    # Federated external catalogs (e.g. USWB) — referenced by URL, single-sourced on their
+    # own CDN. Standard clients follow rel=child across the origin like any other child.
+    for url, title in config.EXTERNAL_CATALOGS:
+        links.append(_child_link(url, title, None))
     return {
         "type": "Catalog",
         "stac_version": STAC_VERSION,

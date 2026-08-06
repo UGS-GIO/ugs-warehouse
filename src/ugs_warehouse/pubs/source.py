@@ -51,33 +51,43 @@ def inject_pg_password(dsn: str) -> str:
 
 
 def _from_postgres(table: str) -> list[dict]:
+    """Read a pubs table through DuckDB's postgres scanner.
+
+    The connection is closed in a `finally` (like `_from_mysql`): rows are fully materialised
+    into plain dicts before returning, so nothing outlives the call. A harvest calls this twice —
+    pubs and attachments — and each ATTACH holds a Cloud SQL connection, so leaking them costs
+    real server-side slots for the life of the process, not just Python memory.
+    """
     import duckdb
     con = duckdb.connect()
-    con.execute("INSTALL postgres; LOAD postgres;")
-    dsn = inject_pg_password(PUBS_DB_URL)
-    con.execute(f"ATTACH '{dsn}' AS pg_pubs (TYPE POSTGRES, READ_ONLY)")
+    try:
+        con.execute("INSTALL postgres; LOAD postgres;")
+        dsn = inject_pg_password(PUBS_DB_URL)
+        con.execute(f"ATTACH '{dsn}' AS pg_pubs (TYPE POSTGRES, READ_ONLY)")
 
-    if "." in table:
-        schema, name = table.split(".", 1)
-        db_table = f"pg_pubs.{schema}.{name}"
-    else:
-        db_table = f"pg_pubs.public.{table}"
+        if "." in table:
+            schema, name = table.split(".", 1)
+            db_table = f"pg_pubs.{schema}.{name}"
+        else:
+            db_table = f"pg_pubs.public.{table}"
 
-    rows = con.execute(f"SELECT * FROM {db_table}").fetchall()
-    cols = [c[0] for c in con.execute(f"DESCRIBE SELECT * FROM {db_table}").fetchall()]
+        rows = con.execute(f"SELECT * FROM {db_table}").fetchall()
+        cols = [c[0] for c in con.execute(f"DESCRIBE SELECT * FROM {db_table}").fetchall()]
 
-    out = []
-    for r in rows:
-        row_dict = {}
-        for k, v in zip(cols, r):
-            if isinstance(v, list):
-                row_dict[k] = ", ".join(str(item) for item in v if item is not None)
-            elif v is None:
-                row_dict[k] = ""
-            else:
-                row_dict[k] = str(v)
-        out.append(row_dict)
-    return out
+        out = []
+        for r in rows:
+            row_dict = {}
+            for k, v in zip(cols, r):
+                if isinstance(v, list):
+                    row_dict[k] = ", ".join(str(item) for item in v if item is not None)
+                elif v is None:
+                    row_dict[k] = ""
+                else:
+                    row_dict[k] = str(v)
+            out.append(row_dict)
+        return out
+    finally:
+        con.close()
 
 
 def _from_mysql(table: str) -> list[dict]:

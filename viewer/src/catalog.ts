@@ -14,3 +14,22 @@ export const layerCollectionIds = (
   ...rootChildren.filter((c) => c.kind === "collection").map((c) => c.id),
   ...nestedChildren.filter((c) => c.parentId && LAYER_CATALOG_IDS.has(c.parentId)).map((c) => c.id),
 ];
+
+/** An item's OWN OGC API Features endpoint, read from its `rel=service` link.
+ *
+ * The reverse of building the URL from the item id: the catalog states where an item is served,
+ * instead of the viewer guessing. Only the producer knows — the ingest stamps this link on the
+ * topics featureserv actually binds, so a raster or publication item has no link and gets no
+ * endpoint row, rather than a constructed URL to a collection that never existed (#85).
+ *
+ * `base` (the ?features= / build-time override) replaces the published host so a session can be
+ * pointed at a local service; empty base keeps the published URL as-is.
+ */
+export const serviceUrlOf = (
+  item: { links?: { rel: string; href: string }[] } | undefined,
+  base = "",
+): string | undefined => {
+  const href = (item?.links ?? []).find((l) => l.rel === "service")?.href;
+  if (!href) return undefined;
+  return base ? href.replace(/^https?:\/\/[^/]+/, base) : href;
+};

@@ -256,6 +256,7 @@ def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
     from ugs_warehouse.vector import sink_stac as vec_sink
 
     store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])  # isolate local nesting from federation
     for schema, iid in (("hazards", "hazards_qfaults"), ("emp", "enmin_ucrc_wells")):
         item = stac.build_item(
             item_id=iid, collection=schema, collection_path=vec_sink.collection_path(schema),

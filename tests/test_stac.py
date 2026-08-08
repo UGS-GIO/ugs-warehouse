@@ -223,6 +223,53 @@ def test_subcatalog_items_index_link_is_opt_in():
     assert any(lnk["rel"] == "items" and lnk["href"] == "./items.json" for lnk in rolled["links"])
 
 
+def _related_item() -> dict:
+    return {
+        "id": "enmin_ucrc_wells",
+        "collection": "emp",
+        "properties": {"title": "UCRC Wells", "ugs:dbt_schema": "emp"},
+        "assets": {"boxes": {
+            "href": "https://x/boxes.parquet", "type": "application/vnd.apache.parquet",
+            "roles": ["data", "related"], "title": "Boxes",
+            "ugs:foreign_keys": [{"fields": ["uwi"], "reference": {"resource": "enmin_ucrc_wells",
+                                                                   "fields": ["uwi"]}}],
+            "table:columns": [{"name": "uwi"}, {"name": "box_number"}],
+        }},
+    }
+
+
+def test_index_entry_self_link_resolves_to_the_item_doc():
+    """The index trims assets, so consumers needing join metadata must be able to reach the
+    full item. Leaf index sits in the collection dir; the rollup one level above it."""
+    leaf = stac._index_entry(_related_item())
+    assert {"rel": "self", "href": "./enmin_ucrc_wells/enmin_ucrc_wells.json",
+            "type": "application/geo+json"} in leaf["links"]
+    rolled = stac._index_entry(_related_item(), rollup=True)
+    assert any(lnk["rel"] == "self" and lnk["href"] == "./emp/enmin_ucrc_wells/enmin_ucrc_wells.json"
+               for lnk in rolled["links"])
+
+
+def test_index_entry_assets_stay_summaries():
+    """Widening this allowlist is a cost every list view pays. Consumers follow `self` instead —
+    reading join metadata off the index is what broke related tables in the viewer
+    (UGS-GIO/ugs-map-viewer#491)."""
+    asset = stac._index_entry(_related_item())["assets"]["boxes"]
+    assert set(asset) == {"href", "type", "roles", "title"}
+    assert "ugs:foreign_keys" not in asset and "table:columns" not in asset
+
+
+def test_index_entry_keeps_web_map_links_alongside_self():
+    item = {**_related_item(), "links": [
+        {"rel": "self", "href": "./enmin_ucrc_wells.json"},          # item-relative, not reusable
+        {"rel": "pmtiles", "href": "https://x/w.pmtiles", "type": "application/vnd.pmtiles",
+         "pmtiles:layers": ["enmin_ucrc_wells"]},
+    ]}
+    links = stac._index_entry(item)["links"]
+    assert [lnk["rel"] for lnk in links] == ["self", "pmtiles"]
+    # The item's own `self` is relative to its own directory — the index must not copy it through.
+    assert links[0]["href"] == "./enmin_ucrc_wells/enmin_ucrc_wells.json"
+
+
 def _mem_gcs(monkeypatch):
     store: dict[str, bytes] = {}
     monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **k: store.__setitem__(p, b))

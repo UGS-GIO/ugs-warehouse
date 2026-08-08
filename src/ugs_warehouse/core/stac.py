@@ -400,9 +400,15 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
 
 
-def _index_entry(item: dict) -> dict:
+def _index_entry(item: dict, *, rollup: bool = False) -> dict:
     """A compact, list-renderable subset of a STAC item (mini-doc): id, bbox, a few
-    properties, asset summaries, and any web-map links (pmtiles/cog) for map overlays."""
+    properties, asset summaries, a `rel:self` pointer to the full item, and any web-map
+    links (pmtiles/cog) for map overlays.
+
+    Assets are SUMMARIES — href/type/roles/title only. Anything a consumer needs beyond
+    that (`ugs:foreign_keys`, `table:columns`, …) lives on the full item; follow `self`
+    rather than widening this allowlist, which every list view pays for.
+    """
     props = item.get("properties") or {}
     entry: dict = {
         "id": item["id"],
@@ -418,15 +424,22 @@ def _index_entry(item: dict) -> dict:
     }
     if assets:
         entry["assets"] = assets
+    # Item docs live at `<collection>/<id>/<id>.json`. A leaf index sits inside that
+    # collection dir, the rollup one level above it — so only the rollup carries the segment.
+    sub = f"{item['collection']}/" if rollup and item.get("collection") else ""
+    self_link = {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
+                 "type": "application/geo+json"}
     wlinks = [{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
               for lnk in (item.get("links") or []) if lnk.get("rel") in ("pmtiles", "cog")]
-    if wlinks:
-        entry["links"] = wlinks
+    entry["links"] = [self_link, *wlinks]
     return entry
 
 
-def _index_doc(collection: str, items: list[dict]) -> dict:
-    entries = [_index_entry(it) for it in sorted(items, key=lambda it: it.get("id", ""))]
+def _index_doc(collection: str, items: list[dict], *, rollup: bool = False) -> dict:
+    """`rollup` = this index spans child collections (ROLLUP_INDEX_CATALOGS), so it sits one
+    directory above the items it lists and their `self` hrefs need the collection segment."""
+    entries = [_index_entry(it, rollup=rollup)
+               for it in sorted(items, key=lambda it: it.get("id", ""))]
     return {"type": "ugs-items-index", "collection": collection,
             "count": len(entries), "items": entries}
 
@@ -574,7 +587,7 @@ def refresh_catalog() -> None:
             ptitle = prettify(top.replace("ugs-", ""))
             rolled = rollup.get(top)
             if rolled is not None:  # one index spanning every child collection
-                _write_json(_index_doc(top, rolled), f"{config.STAC_PREFIX}/{top}/items.json")
+                _write_json(_index_doc(top, rolled, rollup=True), f"{config.STAC_PREFIX}/{top}/items.json")
             _write_json(_subcatalog_doc(top, kids, title=ptitle, items_index=rolled is not None),
                         f"{config.STAC_PREFIX}/{top}/catalog.json")
             root_children.append({"href": f"./{top}/catalog.json", "title": ptitle,

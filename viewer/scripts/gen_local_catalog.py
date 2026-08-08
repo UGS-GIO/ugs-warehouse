@@ -186,12 +186,47 @@ def harvest_collection(base: str, collection: str, limit: int | None = None) -> 
     return groups
 
 
-def _index_doc(collection: str, items: list[dict]) -> dict:
+_INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
+                    "ugs:topic", "ugs:scale", "ugs:author", "ugs:county", "ugs:dbt_schema",
+                    "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
+
+
+def _index_entry(item: dict, *, rollup: bool = False) -> dict:
+    """Mirror of core/stac's `_index_entry`: id, bbox, a property allowlist, asset SUMMARIES,
+    a `rel:self` to the full item, and web-map links. Keep the two in step — a local catalog
+    that carries more than production is a bug the laptop can't reproduce."""
+    props = item.get("properties") or {}
+    entry: dict = {
+        "id": item["id"],
+        "bbox": item.get("bbox"),
+        "properties": {k: props[k] for k in _INDEX_PROP_KEYS
+                       if props.get(k) not in (None, "", [])},
+    }
+    if props.get("ugs:renders"):
+        entry["properties"]["ugs:renders"] = props["ugs:renders"]
+    assets = {
+        k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
+        for k, a in (item.get("assets") or {}).items()
+    }
+    if assets:
+        entry["assets"] = assets
+    sub = f"{item['collection']}/" if rollup and item.get("collection") else ""
+    entry["links"] = [
+        {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
+         "type": "application/geo+json"},
+        *[{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
+          for lnk in (item.get("links") or []) if lnk.get("rel") in ("pmtiles", "cog")],
+    ]
+    return entry
+
+
+def _index_doc(collection: str, items: list[dict], *, rollup: bool = False) -> dict:
     """The compact items index the viewer reads (cover strips, item lists, search, map overlays)
-    without N item fetches. The real refresh trims entries to a property subset; a local catalog is
-    small enough to carry the items whole."""
-    return {"type": "ugs-items-index", "collection": collection,
-            "count": len(items), "items": sorted(items, key=lambda it: it.get("id", ""))}
+    without N item fetches. Entries are trimmed exactly as `refresh_catalog` trims them — carrying
+    items whole here would let a consumer read metadata locally that production strips."""
+    return {"type": "ugs-items-index", "collection": collection, "count": len(items),
+            "items": [_index_entry(it, rollup=rollup)
+                      for it in sorted(items, key=lambda it: it.get("id", ""))]}
 
 
 def write_indexes(groups: dict[str, list[dict]]) -> None:
@@ -203,7 +238,8 @@ def write_indexes(groups: dict[str, list[dict]]) -> None:
             json.dumps(_index_doc(path.split("/")[-1], items), indent=2))
     rolled = [it for path, items in groups.items() if path.startswith(f"{TOPICS}/") for it in items]
     if rolled:
-        (OUT / TOPICS / "items.json").write_text(json.dumps(_index_doc(TOPICS, rolled), indent=2))
+        (OUT / TOPICS / "items.json").write_text(
+            json.dumps(_index_doc(TOPICS, rolled, rollup=True), indent=2))
 
 
 def read_written_items() -> dict[str, list[dict]]:

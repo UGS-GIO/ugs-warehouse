@@ -270,6 +270,30 @@ def test_index_entry_keeps_web_map_links_alongside_self():
     assert links[0]["href"] == "./enmin_ucrc_wells/enmin_ucrc_wells.json"
 
 
+def _gen_local_catalog():
+    """The local-catalog generator inlines core/stac's builders (it can't import core/stac —
+    that pulls obstore, absent from the local env), so load it by path."""
+    import importlib.util
+    from pathlib import Path
+    path = Path(__file__).resolve().parents[1] / "viewer" / "scripts" / "gen_local_catalog.py"
+    spec = importlib.util.spec_from_file_location("gen_local_catalog", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_local_catalog_index_entries_match_production():
+    """A local catalog that carries more than production is a bug the laptop can't reproduce:
+    related tables resolved in dev off metadata prod strips, and 2.8.0 shipped without them
+    (UGS-GIO/ugs-map-viewer#491). The two builders must agree entry for entry."""
+    item = {**_related_item(), "bbox": [-114.0, 37.0, -109.0, 42.0], "links": [
+        {"rel": "pmtiles", "href": "https://x/w.pmtiles", "type": "application/vnd.pmtiles"},
+    ]}
+    local = _gen_local_catalog()
+    for rollup in (False, True):
+        assert local._index_entry(item, rollup=rollup) == stac._index_entry(item, rollup=rollup)
+
+
 def _mem_gcs(monkeypatch):
     store: dict[str, bytes] = {}
     monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **k: store.__setitem__(p, b))

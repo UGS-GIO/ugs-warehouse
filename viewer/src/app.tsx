@@ -201,7 +201,7 @@ export function App() {
     (async () => {
       const base: SettingsInput = {
         title: "Utah Geological Survey",
-        showTitle: false,   // the band is hidden in CSS; the name still rides here for a11y
+        showTitle: true,
         titleUrl: "https://geology.utah.gov",
         logo: { imageUrl: utahLogo },   // generic State of Utah emblem (until UGS has its own brand)
         mainMenu: false,
@@ -453,7 +453,8 @@ export function App() {
               below md — five tabs and a phone don't share a row. */}
           <div className="hidden gap-1 md:flex">
             {VIEWS.map((v) => (
-              <span key={v.id} className={tab(view === v.id)} onClick={() => setView(v.id)}>{v.label}</span>
+              <button key={v.id} type="button" aria-current={view === v.id ? "page" : undefined}
+                className={tab(view === v.id)} onClick={() => setView(v.id)}>{v.label}</button>
             ))}
           </div>
           {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}

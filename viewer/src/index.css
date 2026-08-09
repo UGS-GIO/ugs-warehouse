@@ -100,11 +100,26 @@ body {
 #utah-design-system { flex: none; }
 #root { flex: 1 1 auto; min-height: 0; }
 
-/* Drop the DS title band — that identity lives in our own app bar (logo + "UGS Warehouse"), which
-   buys ~90px of map on a phone. The "official website of Utah" strip is a separate element, so it
-   stays. The header is always light (state identity, light-optimized emblem). */
-header.utah-design-system.utds-header { display: none; }
+/* The DS title band stays on desktop — it is the state identity. On a phone it costs ~90px of a
+   map-first screen, and our own bar already carries the logo + app name, so it drops there only.
+   The "official website of Utah" strip is a separate element and always stays. */
+@media (max-width: 767px) {
+  header.utah-design-system.utds-header { display: none; }
+}
 .utah-design-system { color-scheme: light; }
+
+/* UDS ships no dark theme: the band hardcodes a white background and navy title, so in dark mode it
+   was the one element ignoring the toggle. Scoped to `.dark` — light mode keeps it untouched. */
+.dark header.utds-header {
+  background-color: hsl(var(--card));
+  /* !important only to reach UDS's own `border-bottom: … !important`. */
+  border-bottom-color: hsl(var(--border)) !important;
+}
+.dark .utds-title-wrapper,
+.dark .utds-title-wrapper__logo,
+.dark .utds-title-wrapper__title {
+  color: hsl(var(--foreground));
+}
 /* Same reason for the DS footer: 269px of stacked links. `legal-footer.tsx` carries the required
    links as one line instead. The skip link keeps its focus behaviour but stops reserving 68px. */
 /* !important: the DS injects its stylesheet after ours, so an equal-specificity rule loses. */

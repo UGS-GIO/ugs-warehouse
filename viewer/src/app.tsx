@@ -436,8 +436,8 @@ export function App() {
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
           {/* The mark is light-optimized, so it rides a light plate — invisible on the bar in light
               mode, a subtle chip in dark. Same treatment as the soil-water app. */}
-          <span className="flex shrink-0 items-center rounded bg-white p-1">
-            <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="Utah Geological Survey" className="h-5 w-5" />
+          <span className="flex shrink-0 items-center rounded bg-white p-0.5">
+            <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="Utah Geological Survey" className="h-7 w-7" />
           </span>
           <strong className="font-display text-lg font-semibold tracking-tight">UGS Warehouse</strong>
         </a>

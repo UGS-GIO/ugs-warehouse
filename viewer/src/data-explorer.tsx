@@ -223,7 +223,6 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
       {!desktop && !collapsed && (
         <RecordCards
           rows={rowModel}
-          columns={page?.columns ?? []}
           highlight={(r) => {
             const fid = r.original.feature_id;
             return fid != null && Number(fid) === highlightId;

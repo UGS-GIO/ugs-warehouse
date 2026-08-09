@@ -7,6 +7,8 @@
 // row. Cards show the first few fields and open to the rest — `<details>` carries that, no state.
 import { type Cell, flexRender, type Row } from "@tanstack/react-table";
 
+import { constantFields, previewOrder } from "./record-fields";
+
 const PREVIEW_FIELDS = 4;   // enough to tell records apart; the rest is one tap away
 
 export type ExplorerRow = Record<string, unknown>;
@@ -22,12 +24,17 @@ export function RecordCards({ rows, onPick, highlight }: {
   highlight?: (row: Row<ExplorerRow>) => boolean;
 }) {
   if (!rows.length) return <p className="px-1 py-2 text-muted-foreground">No rows match.</p>;
+  // Sampled, not exhaustive: "All rows" can be thousands, and 50 is plenty to spot a constant.
+  const named = (r: Row<ExplorerRow>) => r.getVisibleCells().map((c) => ({ name: headerOf(c), value: c.getValue() }));
+  const constant = constantFields(rows.slice(0, 50).map(named));
   return (
     <div className="flex flex-col gap-2">
       {rows.map((r) => {
         const cells = r.getVisibleCells();
-        const lead = cells.slice(0, PREVIEW_FIELDS);
-        const rest = cells.slice(PREVIEW_FIELDS);
+        // Lead with the fields that identify THIS record, not whichever columns came first.
+        const leadIdx = new Set(previewOrder(named(r), PREVIEW_FIELDS, constant));
+        const lead = cells.filter((_, i) => leadIdx.has(i));
+        const rest = cells.filter((_, i) => !leadIdx.has(i));
         return (
           <details key={r.id}
             className={`rounded-md border px-2.5 py-2 text-[12px] ${highlight?.(r)

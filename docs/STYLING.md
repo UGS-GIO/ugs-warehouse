@@ -55,6 +55,18 @@ block is a UGS-prefixed custom field (strict-STAC: prefixed extras are spec-lega
 The warehouse also emits a standard `roles:["style"]` asset pointing at the same URL so asset-walking
 clients (incl. STAC Browser) find the style without knowing our field.
 
+## Fonts
+
+Glyphs that 404 render **no labels at all**, silently — which is how 7 topics shipped with label
+layers asking for `Arial`, a font no open glyph server can serve (#116). ugs-styles now publishes
+the fontstacks it uses (`Noto Sans Regular/Bold/Italic`, next to the styles and sprites) and fails
+its build on any other name, so a style can only ask for type we host.
+
+Label renders carry `glyphs` in `ugs:renders` alongside `sprite`; the tiles service passes it into
+`/styles/{topic}.json`, and re-points it at `…/VectorTileServer/resources/fonts/…` for Esri, which
+reads fonts from under the service. A viewer base style that isn't ours (satellite) must name the
+same URL — OpenFreeMap's basemaps carry their own glyphs and serve the same Noto stacks.
+
 ## Legend
 
 The legend is derived from the bound style — no separate legend data, so it can't drift:

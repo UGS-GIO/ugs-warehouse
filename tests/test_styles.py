@@ -10,6 +10,9 @@ MANIFEST = (
     {"itemId": "enmin_gravity", "render": "default", "kind": "raster",
      "assets": ["cog"], "colormap_name": "viridis", "rescale": [0, 100],
      "path": "styles/enmin_gravity/default.json"},
+    {"itemId": "enmin_ut_counties", "render": "default", "kind": "vector",
+     "assets": ["pmtiles"], "path": "styles/enmin_ut_counties/default.json",
+     "glyphs": "fonts/{fontstack}/{range}.pbf"},
     {"layer": "legacy_layer", "render": "default", "kind": "vector",  # older layer-keyed entry
      "assets": ["pmtiles"], "path": "styles/legacy_layer/default.json"},
 )
@@ -113,3 +116,11 @@ def test_mirrored_comparison_operands(monkeypatch):
 
 def test_uniform_style_is_not_a_classification(monkeypatch):
     assert _classes([{"type": "fill", "paint": {"fill-color": "#888888"}}], monkeypatch) == []
+
+
+def test_label_render_carries_absolute_glyphs():
+    """Label layers draw nothing without them, and the manifest path is CDN-relative."""
+    renders, _ = styles.renders_for("enmin_ut_counties", {"pmtiles"})
+    assert renders["default"]["glyphs"].endswith("/fonts/{fontstack}/{range}.pbf")
+    assert renders["default"]["glyphs"].startswith("http")
+    assert "glyphs" not in styles.renders_for("hazards_qfaults", {"pmtiles"})[0]["default"]

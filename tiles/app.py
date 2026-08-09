@@ -44,10 +44,9 @@ COLLECTION_URL = os.environ.get(
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 CACHE_TTL = float(os.environ.get("CACHE_TTL", "300"))
 HTTP_TIMEOUT = float(os.environ.get("HTTP_TIMEOUT", "10"))
-# Fonts for label layers. ugs-styles publishes sprites but not glyphs, and this is the source
-# vector/thumbs.py already uses. Override once ugs-styles hosts its own.
+# Fallback for a render that names no glyphs of its own — ugs-styles publishes these (#116).
 GLYPHS_URL = os.environ.get(
-    "GLYPHS_URL", "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf")
+    "GLYPHS_URL", "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf")
 
 _cache: dict[str, tuple[float, object]] = {}
 _served: dict[str, str] = {}          # topic -> the version this process has served tiles for
@@ -371,9 +370,7 @@ def style(topic: str, request: Request, render: str | None = None) -> Response:
     for key in ("sprite", "glyphs"):
         if value := (fragment.get(key) or chosen.get(key)):
             doc[key] = value
-    # A style with text layers and no `glyphs` renders no labels at all — 7 of the published styles
-    # have them. ugs-styles does not host fonts, so this points at the same public glyph source
-    # `vector/thumbs.py` already falls back to rather than inventing a second convention.
+    # Text layers with no `glyphs` render nothing; covers a fragment bound before ugs-styles had them.
     if "glyphs" not in doc and any("text-field" in (lyr.get("layout") or {})
                                    for lyr in doc["layers"]):
         doc["glyphs"] = GLYPHS_URL
@@ -580,8 +577,12 @@ def _esri_style_doc(topic: str, request: Request, render: str | None) -> Respons
     like everywhere else, instead of each Pro user rebuilding it by hand as a .lyrx."""
     doc = json.loads(style(topic, request, render).body)
     base_path = _service_base_path(request)
+    base = _base_url(request)
     for src in doc.get("sources", {}).values():
-        src["tiles"] = [f"{_base_url(request)}{base_path}/tile/{{z}}/{{y}}/{{x}}.pbf"]
+        src["tiles"] = [f"{base}{base_path}/tile/{{z}}/{{y}}/{{x}}.pbf"]
+    # Esri serves glyphs from the service itself, so Pro never leaves it for fonts.
+    if "glyphs" in doc:
+        doc["glyphs"] = f"{base}{base_path}/resources/fonts/{{fontstack}}/{{range}}.pbf"
     return Response(json.dumps(doc), media_type="application/json",
                     headers={"Cache-Control": "public, max-age=300"})
 
@@ -607,6 +608,31 @@ def esri_tile(topic: str, z: int, y: int, x: int) -> Response:
 def esri_tile_render(topic: str, render: str, z: int, y: int, x: int) -> Response:
     """Renders differ in symbology only — same archive, so the render is not part of the lookup."""
     return _proxy_tile(topic, z, x, y, "public, max-age=300")
+
+
+def _proxy_glyphs(topic: str, render: str | None, fontstack: str, glyph_range: str) -> Response:
+    """Esri reads fonts from under the service; the bytes live on the CDN with the styles."""
+    if topic not in _topics():
+        raise HTTPException(404, f"unknown topic: {topic}")
+    template = (_pick_render(topic, render)[1].get("glyphs")) or GLYPHS_URL
+    url = (template.replace("{fontstack}", quote(fontstack, safe=""))
+                   .replace("{range}", quote(glyph_range, safe="")))
+    try:
+        body = _get(url)
+    except urllib.error.HTTPError as exc:
+        raise HTTPException(exc.code, f"no glyphs for {fontstack} {glyph_range}") from exc
+    return Response(body, media_type="application/x-protobuf",
+                    headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@esri.get("/{topic}/VectorTileServer/resources/fonts/{fontstack}/{glyph_range}.pbf")
+def esri_font(topic: str, fontstack: str, glyph_range: str) -> Response:
+    return _proxy_glyphs(topic, None, fontstack, glyph_range)
+
+
+@esri.get("/{topic}/{render}/VectorTileServer/resources/fonts/{fontstack}/{glyph_range}.pbf")
+def esri_font_render(topic: str, render: str, fontstack: str, glyph_range: str) -> Response:
+    return _proxy_glyphs(topic, render, fontstack, glyph_range)
 
 
 # The REST-shaped path is the one AGOL will parse; `/esri` is the alias that keeps already-copied

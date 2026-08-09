@@ -39,8 +39,10 @@ function writeCam({ longitude, latitude, zoom }: Cam): void {
 }
 
 const ofm = (s: string) => `https://tiles.openfreemap.org/styles/${s}`;
+// Ours, so it names glyphs itself (the OpenFreeMap basemaps bring their own) — else no labels (#116).
 const SATELLITE: maplibregl.StyleSpecification = {
   version: 8,
+  glyphs: "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf",
   sources: { sat: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, attribution: "Imagery © Esri" } },
   layers: [{ id: "sat", type: "raster", source: "sat" }],
 };

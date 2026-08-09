@@ -41,7 +41,8 @@ ugs-styles publishes a **fragment** — a `layers` array of paint/filter rules w
 because a fragment is portable across PMTiles and XYZ. A client pointed at a fragment renders
 nothing. `/styles/{topic}.json` binds it: injects `sources`, `source-layer`, zoom range and bounds,
 and passes through `sprite`/`glyphs` when the render has them (icon renders need the sprite sheet
-or MapLibre draws geometry and silently omits every icon).
+or MapLibre draws geometry and silently omits every icon; label renders need the glyphs or no text
+draws at all — #116).
 
 Two things it reads rather than assumes, both of which fail silently if guessed:
 
@@ -91,6 +92,7 @@ what was missing is the descriptor Esri reads first.
 | `/rest/services/{topic}/VectorTileServer` | descriptor — tile template, LODs, extent, SRS |
 | `/rest/services/{topic}/VectorTileServer/tile/{z}/{y}/{x}.pbf` | tiles, **y before x** |
 | `/rest/services/{topic}/VectorTileServer/resources/styles/root.json` | the GL style |
+| `/rest/services/{topic}/VectorTileServer/resources/fonts/{fontstack}/{range}.pbf` | glyphs — proxied from the CDN set ugs-styles publishes, so Pro never leaves the service for fonts |
 | `/rest/services/{topic}/{render}/VectorTileServer` | one service per published symbology (…/tile/…, …/resources/styles/… under it too) |
 
 Paste the `VectorTileServer` URL into **Pro** (Add Data → Data From Path) or **AGOL** (Add layer

@@ -6,14 +6,14 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { CappedMap } from "./lru";
 import { router } from "./router";
-import { applyTheme, initialTheme } from "./theme";
+import { applyTheme, getTheme } from "./theme";
 import "@fontsource-variable/source-sans-3";   // Utah DS body font, self-hosted
 import "@utahdts/utah-design-system-header/css";
 import "./index.css";
 import "maplibre-gl/dist/maplibre-gl.css";
 
 // Apply persisted theme before first paint to avoid a flash.
-applyTheme(initialTheme());
+applyTheme(getTheme());
 
 // Register the pmtiles:// protocol once (module load) so react-map-gl can read PMTiles.
 // The Protocol caches one PMTiles per archive URL in a plain `tiles` Map for the tab's life; cap it

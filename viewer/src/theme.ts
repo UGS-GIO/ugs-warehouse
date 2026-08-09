@@ -1,24 +1,42 @@
-// Light/dark theme, mirroring ugs-map-viewer: `.dark` class on <html>, persisted in
-// localStorage under `vite-ui-theme`, default dark.
-import { useEffect, useState } from "react";
+// Light / dark / system theme. Toggles the `.dark` class on <html>, which the Tailwind token
+// palette (index.css) keys off. Persisted to localStorage; on "system" it re-applies on OS change.
+// Applied once in main.tsx before render so there's no flash. The official Utah header stays light
+// by design (state identity) — only the app body themes.
+import { useSyncExternalStore } from "react";
 
-export type Theme = "light" | "dark";
-const KEY = "vite-ui-theme";
+export type Theme = "light" | "dark" | "system";
 
-// Default light — matches the official (light) State of Utah header.
-export const initialTheme = (): Theme =>
-  (localStorage.getItem(KEY) as Theme | null) ?? "light";
+const KEY = "vite-ui-theme";   // unchanged, so an existing light/dark choice carries over
+const mq = () => window.matchMedia("(prefers-color-scheme: dark)");
 
-/** Apply before first paint (call in main.tsx) so there's no flash. */
-export function applyTheme(t: Theme): void {
-  document.documentElement.classList.toggle("dark", t === "dark");
+export function getTheme(): Theme {
+  const t = localStorage.getItem(KEY);
+  return t === "light" || t === "dark" ? t : "system";
 }
 
-export function useTheme(): [Theme, () => void] {
-  const [theme, setTheme] = useState<Theme>(initialTheme);
-  useEffect(() => {
-    applyTheme(theme);
-    localStorage.setItem(KEY, theme);
-  }, [theme]);
-  return [theme, () => setTheme((t) => (t === "dark" ? "light" : "dark"))];
+const isDark = (theme: Theme): boolean => theme === "dark" || (theme === "system" && mq().matches);
+
+export function applyTheme(theme: Theme): void {
+  document.documentElement.classList.toggle("dark", isDark(theme));
+  subscribers.forEach((notify) => notify());
 }
+
+export function setTheme(theme: Theme): void {
+  localStorage.setItem(KEY, theme);
+  applyTheme(theme);
+}
+
+// Follow OS changes while on "system" — a module-level listener, no React effect.
+mq().addEventListener("change", () => {
+  if (getTheme() === "system") applyTheme("system");
+});
+
+// The RESOLVED appearance, for the few things that must render one way or the other (mermaid's
+// theme). A store, so consumers subscribe instead of re-deriving it in an effect.
+const subscribers = new Set<() => void>();
+const subscribe = (notify: () => void) => {
+  subscribers.add(notify);
+  return () => { subscribers.delete(notify); };
+};
+export const useIsDark = (): boolean =>
+  useSyncExternalStore(subscribe, () => document.documentElement.classList.contains("dark"));

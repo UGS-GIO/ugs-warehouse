@@ -3,7 +3,7 @@
 // which drift); each layer carries an honest maturity badge. The flow diagram is mermaid,
 // lazy-loaded only when this page opens (keeps it out of the main bundle).
 import { useEffect, useRef, useState } from "react";
-import { useTheme } from "./theme";
+import { useIsDark } from "./theme";
 
 type Status = "done" | "partial" | "planned";
 
@@ -82,7 +82,7 @@ const DIAGRAM = `flowchart TB
 
 function Mermaid({ chart }: { chart: string }) {
   const ref = useRef<HTMLDivElement>(null);
-  const [theme] = useTheme();
+  const dark = useIsDark();
   const [err, setErr] = useState<string>();
 
   useEffect(() => {
@@ -92,19 +92,19 @@ function Mermaid({ chart }: { chart: string }) {
         const mermaid = (await import("mermaid")).default;
         mermaid.initialize({
           startOnLoad: false,
-          theme: theme === "dark" ? "dark" : "default",
+          theme: dark ? "dark" : "default",
           securityLevel: "strict",
           flowchart: { htmlLabels: true, curve: "basis" },
         });
         // unique id per render so theme switches re-render cleanly
-        const { svg } = await mermaid.render(`arch-${theme}-${Date.now()}`, chart);
+        const { svg } = await mermaid.render(`arch-${dark ? "dark" : "light"}-${Date.now()}`, chart);
         if (!cancelled && ref.current) ref.current.innerHTML = svg;
       } catch (e) {
         if (!cancelled) setErr(String(e));
       }
     })();
     return () => { cancelled = true; };
-  }, [chart, theme]);
+  }, [chart, dark]);
 
   if (err) return <pre className="overflow-auto rounded-md border border-destructive p-3 text-xs text-destructive">{err}</pre>;
   // stretch the SVG to fill the (wide) container instead of floating at its natural size

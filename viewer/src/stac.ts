@@ -396,10 +396,11 @@ export function useIndexes(collections: { id: string; href: string }[]) {
   }));
 }
 
+export const isParquetAsset = (a: Asset): boolean =>
+  Boolean(a.type?.includes("parquet")) || a.href.endsWith(".parquet");
+
 export const parquetAsset = (item: StacDoc): Asset | undefined =>
-  Object.values(item.assets ?? {}).find(
-    (a) => a.type?.includes("parquet") || a.href.endsWith(".parquet"),
-  );
+  Object.values(item.assets ?? {}).find(isParquetAsset);
 
 export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
   Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"

@@ -1,6 +1,6 @@
 // Per-asset preview: picks a viewer by asset kind (map, 3D, PDF, table, image, text).
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { DataExplorer } from "./data-explorer";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "./preview-map";
@@ -63,7 +63,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
     <>
       <PreviewMapSlot spec={spec} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
+      {pq && <DataExplorer key={pq.href} href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
         rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}
     </>
   );
@@ -96,7 +96,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
   switch (kind) {
     case "cog": return <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />;
     case "threeD": return <ThreeDViewer asset={asset} item={item} />;
-    case "parquet": return <DataExplorer href={asset.href} />;
+    case "parquet": return <DataExplorer key={asset.href} href={asset.href} />;
     case "image":
       return (
         <img src={asset.href} alt={asset.title ?? "image"} loading="lazy"
@@ -159,8 +159,9 @@ function AssetViewer({ item }: { item: StacDoc }) {
       || KIND_RANK[x.kind] - KIND_RANK[y.kind]), [item.assets]);
   const tabs = entries.filter((e) => e.kind !== "other");
   const others = entries.filter((e) => e.kind === "other");
+  // No reset-on-item-change effect: `active` below falls back to the first tab whenever the
+  // remembered key isn't in this item's tabs.
   const [activeKey, setActiveKey] = useState<string | undefined>(tabs[0]?.key);
-  useEffect(() => { setActiveKey(tabs[0]?.key); }, [item.id]);   // reset on item change
 
   if (!tabs.length) {
     // Nothing previewable — show the footprint (if any) + download links for the raw files.

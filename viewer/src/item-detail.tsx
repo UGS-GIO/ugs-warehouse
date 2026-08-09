@@ -86,7 +86,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                 </div>
                 {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
                     range-read (never downloads the whole file). No geometry → a plain data table. */}
-                {openTables.has(key) && <DataExplorer href={asset.href} />}
+                {openTables.has(key) && <DataExplorer key={asset.href} href={asset.href} />}
                 {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
               </li>
             ))}

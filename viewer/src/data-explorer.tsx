@@ -39,7 +39,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [selPks, setSelPks] = useState<Set<string>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => { setSelPks(new Set()); setComposeOpen(false); }, [href]);
+  // Callers key this component by href, so a new dataset arrives as a fresh mount — no reset effect.
   const togglePk = (pk: string) => setSelPks((prev) => {
     const next = new Set(prev);
     if (next.has(pk)) next.delete(pk); else next.add(pk);

@@ -1,15 +1,11 @@
-// One place to get a file, and one list inside it. The item page used to offer the same GeoParquet
-// four ways, and then a "Convert to" section under the list — so the reader had to know which
-// formats were already on the CDN and which get built in the browser. That's our problem, not
-// theirs: every format is one row, and how it gets made never comes up.
-//
-// The split that matters to a reader is what they DO with it: save a file (here) versus point a
-// tool at a live URL (`endpoints-panel.tsx`, "Services"). Assets that are read over HTTP rather
-// than saved — PMTiles, the GL style, DuckLake — belong there, not in this list.
+// Every way to save a file, as one grid — whether a format sits on the CDN or gets built here by
+// GDAL-WASM is our problem, not the reader's. Assets read over HTTP instead of saved (PMTiles, the
+// GL style, DuckLake) belong in "Services" — see `endpoints-panel.tsx`.
+import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
 import { type ExportFormat, exportItem, FORMATS, shapefileWarnings, type ShapefileWarnings } from "./download";
-import { type Asset, parquetAsset, type StacDoc } from "./stac";
+import { type Asset, isParquetAsset, parquetAsset, type StacDoc } from "./stac";
 import { C } from "./ui";
 import { UiSelect } from "./ui/select";
 
@@ -24,8 +20,8 @@ const EPSG_ITEMS = [
   { value: "other", label: "Other (any EPSG)…" },
 ];
 
-// What each format is FOR — the question a reader actually has in front of ten of them. GeoJSON's
-// note is load-bearing too: it's WGS 84 by spec, so the CRS picker below can't move it.
+// What each format is FOR, in front of ten of them. GeoJSON's note also stands in for the CRS
+// picker: it's WGS 84 by spec, so the picker can't move it.
 const HINTS: Record<ExportFormat, string> = {
   shp: "ArcMap · universal",
   gpkg: "QGIS · ArcGIS Pro",
@@ -35,65 +31,51 @@ const HINTS: Record<ExportFormat, string> = {
   csv: "spreadsheet · WKT geometry",
 };
 
-/** `…/thing.parquet?x=1` → `parquet`. The file's own extension beats its mime type as a label. */
-const extOf = (href: string) => href.split(/[?#]/)[0].split(".").pop()?.toLowerCase().slice(0, 8);
-
-const isParquet = (a: Asset) =>
-  /parquet/i.test(String(a.type ?? "")) || /parquet/i.test(String(a.href ?? ""));
+/** `…/thing.parquet?x=1` → `parquet`; a real extension beats the mime type as a label. */
+const extOf = (href: string) => href.split(/[?#]/)[0].match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase();
 
 /** The item's own files. `roles:["related"]` assets (UCRC boxes/photos/attachments) are left out:
  *  the Related tables section already offers each one next to its View/Gallery buttons. */
-function fileAssets(item: StacDoc): [string, Asset][] {
-  return Object.entries(item.assets ?? {})
+const fileAssets = (item: StacDoc): [string, Asset][] =>
+  Object.entries(item.assets ?? {})
     .filter(([key, a]) => !SERVICE_KEYS.has(key) && !a.roles?.includes("related"));
-}
 
-// Tiles, not full-width rows: ten rows across a wide panel strand the download arrow half a screen
-// from the name it belongs to, and give the eye no shape to scan.
+// Tiles, not full-width rows: across a wide panel a row strands the arrow half a screen from its name.
 const TILE = "flex items-start justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 " +
   "text-left text-sm text-foreground no-underline hover:border-primary hover:text-primary disabled:opacity-50";
 const SUB = "mt-0.5 block text-xs font-normal text-muted-foreground";
+const BBOX_LABELS = ["W", "S", "E", "N"];
 
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
   const fullBbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
-  const [busy, setBusy] = useState<ExportFormat | null>(null);
-  const [err, setErr] = useState<string>();
+  // Export options — transient, and not worth putting in the URL: nobody shares "as EPSG:26912".
   const [clipOn, setClipOn] = useState(false);
   const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
-  const [warn, setWarn] = useState<ShapefileWarnings | null>(null);  // shapefile pre-flight issues
-  const [epsg, setEpsg] = useState(4326);                            // output CRS for the gdal formats
+  const [epsg, setEpsg] = useState(4326);
   const [customEpsg, setCustomEpsg] = useState(false);
 
+  // The download itself is one mutation: in-flight format, failure and the shapefile pre-flight
+  // verdict are all its state, so there's nothing to keep in sync by hand.
+  const run = useMutation({
+    mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
+      const clip = clipOn ? bbox : undefined;
+      // Warn before handing over a silently-mangled shapefile; a failed check just proceeds.
+      if (fmt === "shp" && !force) {
+        const w = await shapefileWarnings(parquet!.href, clip).catch(() => null);
+        if (w?.any) return w;
+      }
+      await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clip, epsg);
+    },
+  });
+  const busy = run.isPending ? run.variables.fmt : null;
+  const warn: ShapefileWarnings | undefined = run.data?.any ? run.data : undefined;
+
   const files = fileAssets(item);
-  if (!files.length && !parquet) return null;
+  if (!files.length) return null;
   // Data files lead, the formats we build follow, and sidecars (ISO metadata, readme) trail.
-  const [data, sidecars] = [files.filter(([, a]) => isParquet(a)), files.filter(([, a]) => !isParquet(a))];
-
-  const doExport = async (fmt: ExportFormat) => {
-    setBusy(fmt);
-    try {
-      await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clipOn ? bbox : undefined, epsg);
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const run = async (fmt: ExportFormat) => {
-    setErr(undefined);
-    setWarn(null);
-    // Shapefile pre-flight: warn before handing over a silently-mangled file.
-    if (fmt === "shp") {
-      setBusy(fmt);
-      try {
-        const w = await shapefileWarnings(parquet!.href, clipOn ? bbox : undefined);
-        if (w.any) { setWarn(w); setBusy(null); return; }
-      } catch { /* check failed → just proceed to the export */ }
-    }
-    await doExport(fmt);
-  };
+  const data = files.filter(([, a]) => isParquetAsset(a));
+  const sidecars = files.filter(([, a]) => !isParquetAsset(a));
 
   const assetTile = ([key, a]: [string, Asset]) => (
     <a key={key} href={a.href} target="_blank" rel="noopener" className={TILE}>
@@ -105,14 +87,13 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
     </a>
   );
 
-  const labels = ["W", "S", "E", "N"];
   return (
     <section className="mt-3 rounded-lg border border-border bg-muted p-3">
       <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Downloads</h3>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {data.map(assetTile)}
         {parquet && FORMATS.map((f) => (
-          <button key={f.id} disabled={busy !== null} onClick={() => run(f.id)} className={TILE}>
+          <button key={f.id} disabled={run.isPending} onClick={() => run.mutate({ fmt: f.id })} className={TILE}>
             <span className="font-medium">
               {f.label}
               <span className={SUB}>{HINTS[f.id]}</span>
@@ -157,7 +138,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {bbox.map((v, i) => (
                     <label key={i} className="flex items-center gap-1 text-muted-foreground">
-                      {labels[i]}
+                      {BBOX_LABELS[i]}
                       <input type="number" step="0.01" value={v}
                         onChange={(e) => setBbox((b) => b.map((x, j) => (j === i ? Number(e.target.value) : x)) as typeof b)}
                         className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
@@ -170,7 +151,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           )}
         </details>
       )}
-      {err && <div className="mt-1.5 text-sm text-destructive">Download failed: {err}</div>}
+      {run.error && <div className="mt-1.5 text-sm text-destructive">Download failed: {run.error.message}</div>}
 
       {warn && (
         <div className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
@@ -189,15 +170,15 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             {warn.over2gb && <li><b>~{(warn.estBytes / 1024 ** 3).toFixed(1)} GB estimated</b> — over the 2 GB shapefile limit (estimate; export may fail).</li>}
           </ul>
           <div className="mt-2 flex flex-wrap gap-2">
-            <button onClick={() => { setWarn(null); doExport("gpkg"); }}
+            <button onClick={() => run.mutate({ fmt: "gpkg" })}
               className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
               Use GeoPackage instead
             </button>
-            <button onClick={() => { setWarn(null); doExport("shp"); }}
+            <button onClick={() => run.mutate({ fmt: "shp", force: true })}
               className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
               Download shapefile anyway
             </button>
-            <button onClick={() => setWarn(null)} className="text-muted-foreground hover:underline">Cancel</button>
+            <button onClick={() => run.reset()} className="text-muted-foreground hover:underline">Cancel</button>
           </div>
         </div>
       )}

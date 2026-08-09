@@ -2,7 +2,7 @@
 // search-all → sortable item table / cards → item detail. The map is one link out.
 import {
   type ColumnDef, getCoreRowModel, getPaginationRowModel, getSortedRowModel,
-  type SortingState, useReactTable,
+  type SortingState, useReactTable, type VisibilityState,
 } from "@tanstack/react-table";
 import { useMemo, useState } from "react";
 
@@ -14,6 +14,7 @@ import { T } from "./page";
 import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "./paging";
 import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset } from "./stac";
 import { DataTable, Pager } from "./table";
+import { useIsDesktop } from "./ui/use-breakpoint";
 import { C, humanize, toggle } from "./ui";
 
 const itemIdOf = (it: ItemRef): string =>
@@ -357,6 +358,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
     [items, needle, series, topics, author, scaleTier, counties, mapOnly, force3D, yearMin, yearMax],
   );
 
+  const desktop = useIsDesktop();
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
   // Review deploy: a leading checkbox column to bulk-select items for one shared comment.
   const selectColumn: ColumnDef<ItemRef, unknown> = {
@@ -370,7 +372,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
     ...(IS_REVIEW ? [selectColumn] : []),
     { id: "id", header: "ID", accessorFn: gSeries, sortingFn: "alphanumeric",
-      cell: (i) => <span className="whitespace-nowrap font-mono text-[13px] font-semibold text-foreground">{String(i.getValue())}</span> },
+      cell: (i) => <span className="break-all font-mono text-[13px] font-semibold text-foreground md:whitespace-nowrap md:break-normal">{String(i.getValue())}</span> },
     { id: "title", header: "Title", accessorFn: gTitle,
       cell: (i) => <span className="text-primary">{String(i.getValue())}</span> },
     ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: gColl }] : []),
@@ -398,9 +400,17 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
   // One instance for all three view modes: it sorts, then pages, and `autoResetPageIndex`
   // returns you to page 1 whenever a filter or the sort changes the row set.
+  // A phone fits ID + Title + Date. The rest — and especially the asset chips, which stack one per
+  // line in a narrow cell and blow rows out to ~280px — are desktop-only; Cards view carries them.
+  const columnVisibility = useMemo<VisibilityState>(
+    () => (desktop
+      ? {}
+      : Object.fromEntries(["collection", "volume", "type", "scale", "assets"].map((c) => [c, false]))),
+    [desktop]);
+
   const table = useReactTable({
     data: rows, columns,
-    state: { sorting, pagination: { pageIndex, pageSize: perPage } },
+    state: { sorting, columnVisibility, pagination: { pageIndex, pageSize: perPage } },
     onSortingChange: setSorting,
     onPaginationChange: (u) => setPageIndex((prev) =>
       (typeof u === "function" ? u({ pageIndex: prev, pageSize: perPage }) : u).pageIndex),

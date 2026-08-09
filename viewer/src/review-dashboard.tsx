@@ -74,23 +74,23 @@ export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }
             <div className="flex flex-wrap items-baseline gap-2">
               {c.item_ids.map((it) => (
                 <button key={it} onClick={() => onOpen(it)}
-                  className="rounded bg-muted px-1.5 font-mono text-[11px] text-primary hover:underline">{it}</button>
+                  className="rounded bg-muted px-1.5 font-mono text-xs text-primary hover:underline">{it}</button>
               ))}
               <span className="font-medium text-foreground">{c.author.split("@")[0]}</span>
-              <span className="text-[11px] text-muted-foreground">{new Date(c.created_at).toLocaleString()}</span>
+              <span className="text-xs text-muted-foreground">{new Date(c.created_at).toLocaleString()}</span>
               {c.status === "resolved" && (
-                <span className="rounded-full border border-green-500/40 bg-green-500/10 px-1.5 text-[10px] text-green-600 dark:text-green-400">resolved</span>
+                <span className="rounded-full border border-green-500/40 bg-green-500/10 px-1.5 text-xs text-green-600 dark:text-green-400">resolved</span>
               )}
             </div>
             <p className="mt-0.5 whitespace-pre-wrap text-foreground">{c.body}</p>
             {(repliesByRoot.get(c.id) ?? []).map((r) => (
-              <div key={r.id} className="mt-1 border-l-2 border-border pl-2 text-[13px]">
+              <div key={r.id} className="mt-1 border-l-2 border-border pl-2 text-sm">
                 <span className="font-medium text-foreground">{r.author.split("@")[0]}</span>
-                <span className="ml-2 text-[11px] text-muted-foreground">{new Date(r.created_at).toLocaleString()}</span>
+                <span className="ml-2 text-xs text-muted-foreground">{new Date(r.created_at).toLocaleString()}</span>
                 <p className="whitespace-pre-wrap text-foreground">{r.body}</p>
               </div>
             ))}
-            <div className="mt-1 flex gap-3 text-[11px]">
+            <div className="mt-1 flex gap-3 text-xs">
               <button className="text-primary hover:underline" disabled={toggle.isPending}
                 onClick={() => toggle.mutate(c)}>{c.status === "resolved" ? "reopen" : "resolve"}</button>
               {me.data?.email === c.author && (
@@ -128,9 +128,9 @@ function LayerStatusSummary({ onOpen }: { onOpen: (itemId: string) => void }) {
           {tracked.map((s) => (
             <li key={s.item_id} className="flex flex-wrap items-center gap-2 py-1">
               <button onClick={() => onOpen(s.item_id)}
-                className="rounded bg-muted px-1.5 font-mono text-[11px] text-primary hover:underline">{s.item_id}</button>
-              <span className={`rounded-full border px-1.5 text-[10px] ${statusClass(s.status)}`}>{statusLabel(s.status)}</span>
-              <span className="text-[11px] text-muted-foreground">{s.updated_by.split("@")[0]} · {new Date(s.updated_at).toLocaleDateString()}</span>
+                className="rounded bg-muted px-1.5 font-mono text-xs text-primary hover:underline">{s.item_id}</button>
+              <span className={`rounded-full border px-1.5 text-xs ${statusClass(s.status)}`}>{statusLabel(s.status)}</span>
+              <span className="text-xs text-muted-foreground">{s.updated_by.split("@")[0]} · {new Date(s.updated_at).toLocaleDateString()}</span>
             </li>
           ))}
         </ul>

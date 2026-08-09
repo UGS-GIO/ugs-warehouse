@@ -146,7 +146,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const padBottom = vItems.length ? rowVirt.getTotalSize() - vItems[vItems.length - 1].end : 0;
   const colCount = (page?.columns?.length ?? 1) + (review ? 1 : 0);
   const btn = "rounded border border-border bg-card px-2 py-0.5 text-xs text-foreground hover:border-primary disabled:opacity-40";
-  const fIn = "w-full min-w-[64px] rounded border border-input bg-card px-1 py-0.5 text-[11px] font-normal normal-case text-foreground";
+  const fIn = "w-full min-w-16 rounded border border-input bg-card px-1 py-0.5 text-xs font-normal normal-case text-foreground";
   const hasFilters = Boolean(search) || applied.filters.length > 0
     || Object.values(draft).some((d) => d.min || d.max || d.text);
   // Per-column filters are off by default: one input under every one of 29 columns dominated the
@@ -227,7 +227,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
       </div>
       {!collapsed && (
         <div className="mb-1.5 flex flex-wrap items-center gap-2">
-          <input className={`${C.input} min-w-[12rem] flex-1`} placeholder="Search all columns…" value={search}
+          <input className={`${C.input} min-w-48 flex-1`} placeholder="Search all columns…" value={search}
             onChange={(e) => setSearch(e.target.value)} />
           {onPick && page?.bboxes.some(Boolean) && (
             <span className={C.muted}>click a row to zoom</span>
@@ -262,7 +262,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           } : undefined}
         />
       )}
-      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-[12px] ${collapsed || asCards ? "hidden" : "h-[28rem] min-h-[10rem]"}`}>
+      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-xs ${collapsed || asCards ? "hidden" : "h-112 min-h-40"}`}>
         <table className="w-auto min-w-full border-collapse">
           <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((hg) => (

@@ -24,7 +24,7 @@ function FieldsPanel({ item }: { item: StacDoc }) {
   const cols = tableColumns(item);
   if (!cols) return null;
   return (
-    <details className="group mt-3 text-[12px]">
+    <details className="group mt-3 text-xs">
       <summary className="inline-flex cursor-pointer list-none items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
         <span aria-hidden className="group-open:hidden">▸</span>
         <span aria-hidden className="hidden group-open:inline">▾</span>
@@ -34,7 +34,7 @@ function FieldsPanel({ item }: { item: StacDoc }) {
         {cols.map((c) => (
           <span key={c.name} className="inline-flex items-baseline gap-1.5">
             <span className="font-mono text-foreground">{c.name}</span>
-            {c.type && <span className="text-[11px] text-muted-foreground">{c.type}</span>}
+            {c.type && <span className="text-xs text-muted-foreground">{c.type}</span>}
           </span>
         ))}
       </div>
@@ -85,7 +85,7 @@ function TextPreview({ href }: { href: string }) {
   if (error) return <div className="mt-2 text-xs text-destructive">preview failed: {error instanceof Error ? error.message : String(error)}</div>;
   if (txt === undefined) return <div className="mt-2 text-xs text-muted-foreground">loading…</div>;
   return (
-    <pre className="mt-2 max-h-[600px] max-w-full overflow-auto rounded-md border border-border bg-muted p-3 text-[12px] leading-snug">
+    <pre className="mt-2 max-h-150 max-w-full overflow-auto rounded-md border border-border bg-muted p-3 text-xs leading-snug">
       {txt}{txt.length >= 20000 ? "\n… (truncated — open or download for the full file)" : ""}
     </pre>
   );
@@ -100,7 +100,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
     case "image":
       return (
         <img src={asset.href} alt={asset.title ?? "image"} loading="lazy"
-          className="mt-2 max-h-[600px] w-auto max-w-full rounded-md border border-border bg-muted object-contain" />
+          className="mt-2 max-h-150 w-auto max-w-full rounded-md border border-border bg-muted object-contain" />
       );
     case "pdf": return <PdfPreview asset={asset} item={item} />;
     case "text": return <TextPreview href={asset.href} />;
@@ -122,7 +122,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
   if (show) {
     return (
       <object data={asset.href} type="application/pdf"
-        className="mt-2 h-[400px] w-full rounded-md border border-border sm:h-[640px]">
+        className="mt-2 h-100 w-full rounded-md border border-border sm:h-160">
         <div className="p-3 text-xs text-muted-foreground">
           Can’t embed this PDF — <a href={asset.href} target="_blank" rel="noopener" className="text-primary">open it ↗</a>
         </div>
@@ -134,7 +134,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
       <button onClick={() => setShow(true)} title="Load the full PDF preview"
         className="group relative block w-full overflow-hidden rounded-md border border-border bg-muted">
         {poster
-          ? <img src={poster} alt={asset.title ?? "PDF cover"} className="max-h-[640px] w-full object-contain" />
+          ? <img src={poster} alt={asset.title ?? "PDF cover"} className="max-h-160 w-full object-contain" />
           : <div className="flex h-64 items-center justify-center text-xs text-muted-foreground">PDF</div>}
         <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/20">
           <span className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground shadow">View PDF ▸</span>

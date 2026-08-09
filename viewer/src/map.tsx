@@ -288,10 +288,10 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
 
       {popup && (
         <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
-          {popup.title && <div className="mb-1 text-[12px] font-semibold text-gray-900">{popup.title}</div>}
+          {popup.title && <div className="mb-1 text-xs font-semibold text-gray-900">{popup.title}</div>}
           {popup.href ? (
             <button onClick={() => { onPickFootprint?.(popup.href!); setPopup(null); }}
-              className="text-[12px] font-medium text-primary underline underline-offset-2 hover:opacity-80">
+              className="text-xs font-medium text-primary underline underline-offset-2 hover:opacity-80">
               Open item →
             </button>
           ) : (
@@ -343,7 +343,7 @@ function FeatureProps({ props }: { props: Record<string, unknown> }) {
   const rows = Object.entries(props).filter(([, v]) => v !== null && v !== "").slice(0, 14);
   if (!rows.length) return <em className="text-muted-foreground">No attributes.</em>;
   return (
-    <table className="border-collapse text-[12px]">
+    <table className="border-collapse text-xs">
       <tbody>
         {rows.map(([k, v]) => (
           <tr key={k}>

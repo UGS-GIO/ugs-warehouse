@@ -160,7 +160,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
         placeholder="e.g. Moqui marbles, Wasatch fault, gilsonite, geothermal…"
         className="mt-3 w-full rounded-md border border-border bg-background px-3 py-2 text-sm" />
 
-      <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
+      <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
         <span>
           Tips: <code className="rounded bg-muted px-1">"exact phrase"</code> ·{" "}
           <code className="rounded bg-muted px-1">-exclude</code> ·{" "}
@@ -196,7 +196,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
 
       {kind !== "item" && topicFacets.length > 1 && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Article topic</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Article topic</span>
           {topicFacets.map(([t, n]) => (
             <Chip key={t} on={topicSel === t} onClick={() => setTopicSel(topicSel === t ? null : t)}>{t} · {n}</Chip>
           ))}
@@ -223,7 +223,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
             {(pubFts.data ?? []).map((r) => (
               <li key={r.id} className="py-2">
                 <div className="flex flex-wrap items-baseline gap-x-2">
-                  {r.series && <span className="rounded bg-muted px-1.5 text-[10px] uppercase text-muted-foreground">{r.series}</span>}
+                  {r.series && <span className="rounded bg-muted px-1.5 text-xs uppercase text-muted-foreground">{r.series}</span>}
                   <span className="font-medium text-foreground">{r.title}</span>
                   <span className="font-mono text-xs text-muted-foreground">{r.id}</span>
                 </div>
@@ -250,7 +250,7 @@ function Row({ label, value, placeholder, onChange, options }: {
   const listId = options ? `dl-${label.replace(/\s+/g, "-")}` : undefined;
   return (
     <label className="flex flex-col gap-0.5">
-      <span className="text-[11px] font-medium text-muted-foreground">{label}</span>
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
       <input value={value} placeholder={placeholder} list={listId}
         onChange={(e) => onChange(e.target.value)}
         className="rounded border border-border bg-background px-2 py-1 text-sm" />
@@ -313,8 +313,8 @@ function ArticleHit({ r, q, openPub }: { r: Hit; q: string; openPub: (id: string
   return (
     <li className="py-2">
       <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="rounded bg-muted px-1.5 text-[10px] uppercase text-muted-foreground">article</span>
-        {r.topic && <span className="rounded bg-primary/10 px-1.5 text-[10px] text-primary">{r.topic}</span>}
+        <span className="rounded bg-muted px-1.5 text-xs uppercase text-muted-foreground">article</span>
+        {r.topic && <span className="rounded bg-primary/10 px-1.5 text-xs text-primary">{r.topic}</span>}
         <span className="font-medium text-foreground">{r.title}</span>
         <span className="text-xs text-muted-foreground">
           {r.issue || r.sid}{r.volume != null ? ` · Vol ${r.volume}` : ""}{r.page != null ? ` · p. ${r.page}` : ""}
@@ -335,7 +335,7 @@ function ItemHit({ r, onOpen }: { r: Hit; onOpen?: (c: string, i: string) => voi
   return (
     <li className="py-2">
       <div className="flex flex-wrap items-baseline gap-x-2">
-        <span className="rounded bg-muted px-1.5 text-[10px] uppercase text-muted-foreground">{r.collId}</span>
+        <span className="rounded bg-muted px-1.5 text-xs uppercase text-muted-foreground">{r.collId}</span>
         <span className="font-medium text-foreground">{r.title}</span>
         <span className="font-mono text-xs text-muted-foreground">{r.itemId}</span>
       </div>

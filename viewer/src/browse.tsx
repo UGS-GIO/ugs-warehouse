@@ -142,7 +142,7 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
                   </span>
                 )}
               </div>
-              <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{c.id}</div>
+              <div className="mt-0.5 font-mono text-xs text-muted-foreground">{c.id}</div>
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
               {c.covers && c.covers.length > 0 && (
                 <div className="mt-2.5 grid grid-cols-4 gap-1.5" title="Latest covers — click to open">
@@ -196,8 +196,8 @@ function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void
             : <span className="p-2 text-center font-mono text-xs text-muted-foreground">{gSeries(it)}</span>}
       </div>
       <div className="p-1.5">
-        <div className="font-mono text-[11px] font-semibold text-foreground">{gSeries(it)}</div>
-        <p className="line-clamp-2 text-[11px] text-muted-foreground">{gTitle(it)}</p>
+        <div className="font-mono text-xs font-semibold text-foreground">{gSeries(it)}</div>
+        <p className="line-clamp-2 text-xs text-muted-foreground">{gTitle(it)}</p>
       </div>
     </div>
   );
@@ -206,7 +206,7 @@ function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void
 function CardItem({ it, showCollection, onOpen }: { it: ItemRef; showCollection?: boolean; onOpen: (href: string) => void }) {
   return (
     <div className={C.card} onClick={() => onOpen(it.href)}>
-      <div className="font-mono text-[12px] font-semibold text-foreground">{gSeries(it)}</div>
+      <div className="font-mono text-xs font-semibold text-foreground">{gSeries(it)}</div>
       <p className={C.cardTitle}>{gTitle(it)}</p>
       <div>
         {showCollection && <span className={C.badge}>{gColl(it)}</span>}
@@ -372,7 +372,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
     ...(IS_REVIEW ? [selectColumn] : []),
     { id: "id", header: "ID", accessorFn: gSeries, sortingFn: "alphanumeric",
-      cell: (i) => <span className="break-all font-mono text-[13px] font-semibold text-foreground md:whitespace-nowrap md:break-normal">{String(i.getValue())}</span> },
+      cell: (i) => <span className="break-all font-mono text-sm font-semibold text-foreground md:whitespace-nowrap md:break-normal">{String(i.getValue())}</span> },
     { id: "title", header: "Title", accessorFn: gTitle,
       cell: (i) => <span className="text-primary">{String(i.getValue())}</span> },
     ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: gColl }] : []),
@@ -455,7 +455,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
       {topicFacets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Topic</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Topic</span>
           {topicFacets.map(([t, { n }]) => (
             <span key={t} className={toggle(tsel.has(t))} onClick={() => toggleTopic(t)}>{t} · {n}</span>
           ))}
@@ -467,7 +467,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
       {countyFacets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">County</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">County</span>
           {countyFacets.map(([c, { n }]) => (
             <span key={c} className={toggle(csel.has(c))} onClick={() => toggleCounty(c)}>{c} · {n}</span>
           ))}
@@ -479,7 +479,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
       {scaleFacets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Scale</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Scale</span>
           {scaleFacets.map(([t, { n }]) => (
             <span key={t} className={toggle(scaleTier === t)}
               onClick={() => setScaleTier(scaleTier === t ? null : t)}>{t} · {n}</span>
@@ -492,7 +492,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
       {facets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Series</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Series</span>
           {facets.map(([code, { n, label }]) => (
             <span key={code} className={toggle(sel.has(code))} title={label}
               onClick={() => toggleCode(code)}>{code} · {n}</span>

@@ -138,7 +138,7 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
                     onMouseEnter={() => setMentionIdx(i)}
                     className={`block w-full px-2 py-1 text-left ${i === mentionIdx ? "bg-muted" : ""}`}>
                     <span className="font-medium text-foreground">@{email.split("@")[0]}</span>
-                    <span className="ml-1 text-[10px] text-muted-foreground">{email}</span>
+                    <span className="ml-1 text-xs text-muted-foreground">{email}</span>
                   </button>
                 </li>
               ))}
@@ -183,13 +183,13 @@ function CommentRow({ c, myEmail, onToggle, toggling, onDelete, deleting }: {
     <>
       <div className="flex flex-wrap items-baseline gap-2">
         <span className="font-medium text-foreground">{c.author.split("@")[0]}</span>
-        <span className="text-[10px] text-muted-foreground">{new Date(c.created_at).toLocaleString()}</span>
+        <span className="text-xs text-muted-foreground">{new Date(c.created_at).toLocaleString()}</span>
         {c.status === "resolved" && (
-          <span className="rounded-full border border-green-500/40 bg-green-500/10 px-1.5 text-[10px] text-green-600 dark:text-green-400">resolved</span>
+          <span className="rounded-full border border-green-500/40 bg-green-500/10 px-1.5 text-xs text-green-600 dark:text-green-400">resolved</span>
         )}
       </div>
       <p className="mt-0.5 whitespace-pre-wrap text-foreground">{renderBody(c.body)}</p>
-      <div className="mt-1 flex gap-3 text-[11px]">
+      <div className="mt-1 flex gap-3 text-xs">
         {onToggle && (
           <button className="text-primary hover:underline" disabled={toggling}
             onClick={onToggle}>{c.status === "resolved" ? "reopen" : "resolve"}</button>
@@ -206,7 +206,7 @@ function CommentRow({ c, myEmail, onToggle, toggling, onDelete, deleting }: {
 function ReplyBox({ onReply, pending }: { onReply: (body: string) => void; pending?: boolean }) {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState("");
-  if (!open) return <button className="mt-1 text-[11px] text-primary hover:underline" onClick={() => setOpen(true)}>Reply</button>;
+  if (!open) return <button className="mt-1 text-xs text-primary hover:underline" onClick={() => setOpen(true)}>Reply</button>;
   return (
     <div className="mt-1 flex gap-1.5">
       <textarea value={text} onChange={(e) => setText(e.target.value)} rows={1} autoFocus

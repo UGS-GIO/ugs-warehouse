@@ -378,9 +378,9 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   };
 
   return (
-    <div className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-[640px]">
+    <div className="mt-2 flex flex-col md:flex-row gap-4 border border-border rounded-lg bg-card overflow-hidden h-160">
       {/* Free 3D orbit scene (deck.gl OrbitView) — Cartesian, flies under the surface. */}
-      <div className="flex-1 relative bg-[#0F172A] h-[400px] md:h-full">
+      <div className="flex-1 relative bg-[#0F172A] h-100 md:h-full">
         <DeckGL
           views={new OrbitView({ orbitAxis: "Z" })}
           initialViewState={initialViewState}
@@ -408,7 +408,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       </div>
 
       {/* Control sidebar + geologic legend */}
-      <div className="w-full md:w-[320px] bg-background border-t md:border-t-0 md:border-l border-border p-4 flex flex-col gap-4 overflow-y-auto h-[240px] md:h-full">
+      <div className="w-full md:w-80 bg-background border-t md:border-t-0 md:border-l border-border p-4 flex flex-col gap-4 overflow-y-auto h-[240px] md:h-full">
         <div className="border-b border-border pb-3">
           <h3 className="font-semibold text-xs text-foreground uppercase tracking-wider mb-2.5">Display Settings</h3>
           <div className="flex flex-col gap-2 text-xs">
@@ -427,7 +427,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
               </label>
             )}
           </div>
-          <p className="mt-2 text-[10px] text-muted-foreground">{terrainMesh ? "Map sheet drapes the USGS 3DEP terrain (1 m lidar); fence tops meet the ground." : "Sampling USGS 3DEP terrain…"}</p>
+          <p className="mt-2 text-xs text-muted-foreground">{terrainMesh ? "Map sheet drapes the USGS 3DEP terrain (1 m lidar); fence tops meet the ground." : "Sampling USGS 3DEP terrain…"}</p>
         </div>
 
         <div className="border-b border-border pb-3">
@@ -441,7 +441,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
         <div className="flex-1 flex flex-col min-h-0">
           <div className="flex justify-between items-center text-xs mb-2">
             <h3 className="font-semibold text-foreground uppercase tracking-wider">Geologic Legend</h3>
-            <span className="text-[10px] text-muted-foreground font-mono">{legend.length} units</span>
+            <span className="text-xs text-muted-foreground font-mono">{legend.length} units</span>
           </div>
           <input type="text" placeholder="Filter units..." value={search} onChange={(e) => setSearch(e.target.value)}
             className="w-full text-xs border border-border bg-card px-2.5 py-1.5 rounded mb-2.5 focus:outline-none focus:border-primary" />

@@ -144,7 +144,7 @@ export function Legend({ layers, entries, title, name }: {
                 {e.label}
               </span>
               {e.values && e.values.length > 0 && (
-                <div className="flex flex-wrap gap-x-3 gap-y-1 pl-[1.375rem] text-muted-foreground">
+                <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5.5 text-muted-foreground">
                   {e.values.map((v) => (
                     <span key={v.value} className="inline-flex items-center gap-1">
                       <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm border border-border" style={{ background: v.color }} />

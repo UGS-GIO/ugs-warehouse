@@ -102,7 +102,7 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
             type="button"
             onClick={() => setDockOpen((o) => !o)}
             aria-expanded={dockOpen}
-            className="flex items-center gap-2 px-3 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+            className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
           >
             <span>{dockOpen ? "▾" : "▸"}</span> Item detail
           </button>
@@ -185,7 +185,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
             type="button"
             onClick={() => selectTab(t.id)}
             aria-expanded={tab === t.id && !collapsed}
-            className={"flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-medium "
+            className={"flex flex-1 flex-col items-center gap-0.5 py-2 text-sm font-medium "
               + (tab === t.id && !collapsed ? "text-primary" : "text-muted-foreground hover:text-foreground")}
           >
             <svg className={icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

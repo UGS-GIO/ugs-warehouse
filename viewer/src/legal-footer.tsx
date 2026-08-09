@@ -9,7 +9,7 @@ const LINKS = [
 
 export function LegalFooter({ className = "", catalogUrl }: { className?: string; catalogUrl?: string }) {
   return (
-    <footer className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground ${className}`}>
+    <footer className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground ${className}`}>
       <span>An official website of the state of Utah · © state of Utah</span>
       {LINKS.map((l) => (
         <a key={l.label} href={l.href} target="_blank" rel="noreferrer" className="hover:text-foreground hover:underline">

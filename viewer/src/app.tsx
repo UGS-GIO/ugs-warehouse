@@ -83,7 +83,7 @@ const VIEWS: { id: View; label: string }[] = [
 ];
 
 const tab = (on: boolean) =>
-  "cursor-pointer border-b-2 px-2 py-1 text-[13px] transition-colors "
+  "cursor-pointer border-b-2 px-2 py-1 text-sm transition-colors "
   + (on ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground");
 const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
 

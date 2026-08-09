@@ -27,7 +27,7 @@ export function PropertyTable({ properties, className = "mt-3" }: {
       <tbody>
         {rows.map(([k, v]) => (
           <tr key={k}>
-            <td className="block break-words px-2.5 pt-1.5 align-top text-[11px] uppercase tracking-wide text-muted-foreground sm:table-cell sm:w-44 sm:border-b sm:border-border sm:py-1 sm:text-sm sm:normal-case sm:tracking-normal">{prettyKey(k)}</td>
+            <td className="block break-words px-2.5 pt-1.5 align-top text-xs uppercase tracking-wide text-muted-foreground sm:table-cell sm:w-44 sm:border-b sm:border-border sm:py-1 sm:text-sm sm:normal-case sm:tracking-normal">{prettyKey(k)}</td>
             <td className="block break-words border-b border-border px-2.5 pb-1.5 align-top sm:table-cell sm:py-1">{fmtVal(v)}</td>
           </tr>
         ))}

@@ -55,28 +55,28 @@ export function ExportPanel({ item, embedded = false }: { item: StacDoc; embedde
   const labels = ["W", "S", "E", "N"];
   return (
     <div className={embedded ? "mt-2 border-t border-border pt-2" : "mt-3 rounded-lg border border-border bg-muted p-3"}>
-      <div className="mb-1.5 text-xs font-semibold text-muted-foreground">
+      <div className="mb-1.5 text-sm font-semibold text-muted-foreground">
         {embedded ? "Convert to" : "Download as"}
       </div>
       {/* Seven buttons wrap to four rows on a phone. There, pick a format and go. */}
       <div className="flex items-center gap-2 sm:hidden">
-        <UiSelect value={fmt} onValueChange={setFmt} className="flex-1 py-1 text-xs"
+        <UiSelect value={fmt} onValueChange={setFmt} className="flex-1 py-1 text-sm"
           items={FORMATS.map((f) => ({ value: f.id, label: f.label }))} />
         <button disabled={busy !== null} onClick={() => run(fmt)}
-          className="rounded border border-border bg-card px-3 py-1 text-xs text-foreground hover:border-primary disabled:opacity-50">
+          className="rounded border border-border bg-card px-3 py-1 text-sm text-foreground hover:border-primary disabled:opacity-50">
           {busy ? "preparing…" : "Download"}
         </button>
       </div>
       <div className="hidden flex-wrap items-center gap-2 sm:flex">
         {FORMATS.map((f) => (
           <button key={f.id} disabled={busy !== null} onClick={() => run(f.id)}
-            className="rounded border border-border bg-card px-2.5 py-1 text-xs text-foreground hover:border-primary disabled:opacity-50">
+            className="rounded border border-border bg-card px-2.5 py-1 text-sm text-foreground hover:border-primary disabled:opacity-50">
             {busy === f.id ? "preparing…" : f.label}
           </button>
         ))}
       </div>
       {busy && <p className={`mt-1.5 ${C.muted}`}>running in your browser · first export loads DuckDB (~a few MB)</p>}
-      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+      <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
         <label className="flex items-center gap-1">
           Output CRS
           <UiSelect value={customEpsg ? "other" : String(epsg)} className="px-1.5 py-0.5"
@@ -97,7 +97,7 @@ export function ExportPanel({ item, embedded = false }: { item: StacDoc; embedde
         <span>— applies to Shapefile/GeoPackage/FileGDB/FlatGeobuf and CSV; GeoJSON is always WGS 84 (spec).</span>
       </div>
       {fullBbox && (
-        <div className="mt-2 text-xs">
+        <div className="mt-2 text-sm">
           <label className="flex items-center gap-1.5 text-muted-foreground">
             <input type="checkbox" checked={clipOn} onChange={(e) => setClipOn(e.target.checked)} />
             Clip to area (bbox, EPSG:4326)
@@ -117,10 +117,10 @@ export function ExportPanel({ item, embedded = false }: { item: StacDoc; embedde
           )}
         </div>
       )}
-      {err && <div className="mt-1.5 text-xs text-destructive">Export failed: {err}</div>}
+      {err && <div className="mt-1.5 text-sm text-destructive">Export failed: {err}</div>}
 
       {warn && (
-        <div className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-xs">
+        <div className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
           <div className="font-semibold text-amber-700 dark:text-amber-400">Shapefile will mangle this data</div>
           <ul className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
             {warn.mixedGeometry.length > 0 && (

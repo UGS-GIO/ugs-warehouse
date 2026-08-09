@@ -35,10 +35,10 @@ export function NotifBell({ onClick }: { onClick: () => void }) {
   return (
     <button onClick={onClick} aria-label={`Notifications${unread ? ` — ${unread} unread` : ""}`}
       title={`Notifications${unread ? ` — ${unread} unread` : ""}`}
-      className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-[13px] text-foreground hover:bg-accent">
+      className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2 py-1.5 text-sm text-foreground hover:bg-accent">
       <span aria-hidden>🔔</span>
       {unread > 0 && (
-        <span className="min-w-[1.1rem] rounded-full bg-primary px-1 text-center text-[11px] font-semibold leading-tight text-primary-foreground">
+        <span className="min-w-4.5 rounded-full bg-primary px-1 text-center text-xs font-semibold leading-tight text-primary-foreground">
           {unread}
         </span>
       )}
@@ -77,7 +77,7 @@ export function NotificationsInbox({ onOpen }: { onOpen: (itemId: string) => voi
               className={`block w-full rounded px-2 py-1 text-left text-xs hover:bg-muted ${n.seen_at ? "opacity-60" : "font-medium"}`}>
               <span className="text-foreground">{label(n)}</span>
               <span className="ml-1 text-muted-foreground">— {n.body.slice(0, 80)}{n.body.length > 80 ? "…" : ""}</span>
-              <span className="ml-1 whitespace-nowrap text-[10px] text-muted-foreground">{new Date(n.created_at).toLocaleString()}</span>
+              <span className="ml-1 whitespace-nowrap text-xs text-muted-foreground">{new Date(n.created_at).toLocaleString()}</span>
             </button>
           </li>
         ))}

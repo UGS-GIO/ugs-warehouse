@@ -26,12 +26,12 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   if (!files.length && !hasExports) return null;
   return (
     <section className="mt-3 rounded-lg border border-border bg-muted p-3">
-      <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">Downloads</h3>
+      <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Downloads</h3>
       {files.length > 0 && (
         <div className="flex flex-col gap-1">
           {files.map(([key, a]) => (
             <a key={key} href={a.href} target="_blank" rel="noopener"
-              className="flex flex-wrap items-baseline gap-x-2 text-xs text-foreground no-underline hover:text-primary">
+              className="flex flex-wrap items-baseline gap-x-2 text-sm text-foreground no-underline hover:text-primary">
               <span className="font-medium">{a.title ?? key}</span>
               {a.type && <span className={C.muted}>{a.type.split("/").pop()}</span>}
               <span className="ml-auto text-primary">↓</span>

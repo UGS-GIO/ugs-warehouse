@@ -28,7 +28,7 @@ export function MapLegend({ layers }: { layers: LegendLayer[] }) {
   const sections = layers.map(sectionOf).filter((s): s is Section => s !== null);
   if (!sections.length) return null;
   return (
-    <div className="mb-3 border-b border-border pb-2 text-xs">
+    <div className="mb-3 border-b border-border pb-2 text-sm">
       <div className="mb-1.5 font-semibold uppercase tracking-wider text-muted-foreground">Legend</div>
       <div className="flex flex-col gap-2">
         {sections.map((s) => (
@@ -39,7 +39,7 @@ export function MapLegend({ layers }: { layers: LegendLayer[] }) {
               {s.uniform && <Swatch color={s.entries[0].color} />}
               <span className="truncate">{s.title}</span>
             </div>
-            {s.field && <div className="mb-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">{s.field}</div>}
+            {s.field && <div className="mb-0.5 text-sm uppercase tracking-wide text-muted-foreground">{s.field}</div>}
             {!s.uniform && (
               <div className="flex flex-col gap-0.5">
                 {s.entries.map((e, i) => (

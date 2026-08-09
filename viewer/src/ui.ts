@@ -8,12 +8,12 @@ export const C = {
   grid: `mt-3.5 ${CARD_GRID}`,
   card: "flex flex-col rounded-lg border border-border bg-card px-4 py-3.5 cursor-pointer hover:border-primary hover:shadow-sm transition",
   cardTitle: "mb-1.5 text-sm font-semibold leading-tight",
-  badge: "mr-1.5 mt-1 inline-block rounded border border-border bg-muted px-1.5 py-px text-[11px] text-muted-foreground",
-  chip: "mr-1.5 mt-1.5 inline-block rounded bg-primary px-2 py-0.5 text-[11px] text-primary-foreground no-underline hover:opacity-90",
+  badge: "mr-1.5 mt-1 inline-block rounded border border-border bg-muted px-1.5 py-px text-xs text-muted-foreground",
+  chip: "mr-1.5 mt-1.5 inline-block rounded bg-primary px-2 py-0.5 text-xs text-primary-foreground no-underline hover:opacity-90",
   input: "w-full sm:w-72 rounded-md border border-input bg-card px-2.5 py-1.5 text-sm text-foreground placeholder:text-muted-foreground",
   bar: "my-2 flex flex-wrap items-center gap-2.5",
-  th: "cursor-pointer whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left text-[11px] uppercase tracking-wide text-muted-foreground",
-  thPlain: "whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left text-[11px] uppercase tracking-wide text-muted-foreground",
+  th: "cursor-pointer whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left text-xs uppercase tracking-wide text-muted-foreground",
+  thPlain: "whitespace-nowrap border-b border-border px-2.5 py-1.5 text-left text-xs uppercase tracking-wide text-muted-foreground",
   td: "border-b border-border px-2.5 py-1.5 align-top text-sm",
 };
 

@@ -49,12 +49,12 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
         onChange={(e) => setFilter(e.target.value)}
         placeholder="Filter layers…"
         aria-label="Filter layers"
-        className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-[13px] outline-none focus:border-primary"
+        className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm outline-none focus:border-primary"
       />
 
       {active.length > 0 && (
         <div>
-          <div className="px-1.5 pb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="px-1.5 pb-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             On the map · {active.length}
           </div>
           {active.map((r) => <Row key={r.id} r={r} on />)}
@@ -65,7 +65,7 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
       {groups.map(({ g, items }) => (
         <div key={g}>
           {/* Sticky so the group you're scrolling through stays named. */}
-          <div className="sticky top-0 z-10 bg-background px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="sticky top-0 z-10 bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             {g}
           </div>
           {items.map((r) => <Row key={r.id} r={r} on={false} />)}

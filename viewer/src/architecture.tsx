@@ -15,7 +15,7 @@ const BADGE: Record<Status, { label: string; cls: string }> = {
 
 function Badge({ status }: { status: Status }) {
   const b = BADGE[status];
-  return <span className={`ml-2 rounded px-1.5 py-0.5 text-[11px] font-medium align-middle ${b.cls}`}>{b.label}</span>;
+  return <span className={`ml-2 rounded px-1.5 py-0.5 text-xs font-medium align-middle ${b.cls}`}>{b.label}</span>;
 }
 
 // The platform flow. Mermaid `flowchart`. classDef colors mirror the status badges so the
@@ -232,7 +232,7 @@ export function Architecture() {
             </ul>
             {l.note && (
               <p className="mt-2 rounded-md border-l-2 border-[#9a6700] bg-muted/40 px-3 py-2 text-sm">
-                <strong className="text-[#9a6700]">Note:</strong> {l.note}
+                <strong className="text-accent">Note:</strong> {l.note}
               </p>
             )}
           </section>

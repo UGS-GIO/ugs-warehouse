@@ -344,7 +344,7 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick, onRenderChange }: {
           {isVector && popup && (
             <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
               <div className="max-h-56 overflow-auto">
-                <table className="border-collapse text-[11px]">
+                <table className="border-collapse text-xs">
                   <tbody>
                     {Object.entries(popup.props).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
                       <tr key={k}>
@@ -356,7 +356,7 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick, onRenderChange }: {
                 </table>
                 {IS_REVIEW && popup.props[pkCol] != null && (
                   <button
-                    className="mt-1.5 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-[11px] font-medium text-amber-700 hover:bg-amber-500/20"
+                    className="mt-1.5 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-500/20"
                     onClick={() => { setReviewFeature({ pkVal: String(popup.props[pkCol]), props: popup.props }); setPopup(null); }}>
                     💬 Comment on this feature
                   </button>

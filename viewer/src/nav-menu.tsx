@@ -17,8 +17,8 @@ const THEMES: { value: Theme; label: string; icon: string }[] = [
 
 export type NavPage = { id: string; label: string; onSelect: () => void };
 
-const ITEM = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-[13px] outline-none data-[highlighted]:bg-muted";
-const HEADING = "px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground";
+const ITEM = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-muted";
+const HEADING = "px-2 py-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground";
 
 export function NavMenu({ pages, current }: { pages: NavPage[]; current: string }) {
   const [theme, setThemeState] = useState<Theme>(getTheme);

@@ -44,7 +44,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
       <h3 className="text-sm font-semibold">Related</h3>
       {links.length > 0 && (
         <div className="mt-1.5">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Related layers</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Related layers</div>
           <ul className="mt-1 space-y-0.5">
             {links.map((l, i) => (
               <li key={i}><a href={relatedViewerHref(l.href)} className="text-primary hover:underline">{l.title ?? "related"} ›</a></li>
@@ -54,7 +54,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
       )}
       {fks.length > 0 && (
         <div className="mt-2">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">This layer references</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">This layer references</div>
           <ul className="mt-1 space-y-0.5 text-xs">
             {fks.map((fk, i) => (
               <li key={i}><code>{fk.fields.join(", ")}</code> → <span className="font-medium">{humanize(fk.reference.resource)}</span>.<code>{fk.reference.fields.join(", ")}</code></li>
@@ -64,7 +64,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
       )}
       {tables.length > 0 && (
         <div className="mt-2">
-          <div className="text-[11px] uppercase tracking-wide text-muted-foreground">Related tables</div>
+          <div className="text-xs uppercase tracking-wide text-muted-foreground">Related tables</div>
           <ul className="mt-1 space-y-1 text-xs">
             {tables.map(({ key, asset }) => (
               <li key={key}>
@@ -143,7 +143,7 @@ function CatalogReview({ item }: { item: StacDoc }) {
       <CommentsPanel itemId={id} />
       {cols && cols.length > 0 && (
         <div className="mt-3">
-          <div className="mb-1 text-[11px] uppercase tracking-wide text-muted-foreground">Columns</div>
+          <div className="mb-1 text-xs uppercase tracking-wide text-muted-foreground">Columns</div>
           <ul className="divide-y divide-border rounded border border-border text-xs">
             {cols.map((c) => (
               <li key={c.name} className="px-2 py-1">
@@ -199,19 +199,19 @@ export function ItemDetail({ collectionId, item, onBack, onMap }: {
       <div className="mt-1.5 flex flex-wrap gap-2">
         {hasGeom && (
           <button onClick={onMap}
-            className="inline-block rounded bg-emerald-700 px-2.5 py-1 text-[11px] text-white hover:bg-emerald-800">
+            className="inline-block rounded bg-emerald-700 px-2.5 py-1 text-xs text-white hover:bg-emerald-800">
             View on map ›
           </button>
         )}
         {via && (
           <a href={via.href} target="_blank" rel="noopener"
-            className="inline-block rounded bg-primary px-2.5 py-1 text-[11px] text-primary-foreground no-underline hover:opacity-90">
+            className="inline-block rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground no-underline hover:opacity-90">
             {via.title ?? "Publication page"} ↗
           </a>
         )}
         {cite && (
           <a href={cite.href} target="_blank" rel="noopener"
-            className="inline-block rounded border border-border px-2.5 py-1 text-[11px] text-foreground no-underline hover:border-primary">
+            className="inline-block rounded border border-border px-2.5 py-1 text-xs text-foreground no-underline hover:border-primary">
             Cite (DOI) ↗
           </a>
         )}

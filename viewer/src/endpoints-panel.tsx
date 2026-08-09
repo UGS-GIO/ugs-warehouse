@@ -19,7 +19,7 @@ function CopyBtn({ text }: { text: string }) {
         clearTimeout(timer.current);
         timer.current = setTimeout(() => setDone(false), 1200);
       }}
-      className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground hover:border-primary">
+      className="rounded border border-border bg-card px-1.5 py-0.5 text-sm text-foreground hover:border-primary">
       {done ? "copied" : "copy"}
     </button>
   );
@@ -80,7 +80,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
           <UiSelect value={chosen} onValueChange={setPickedRender}
             title="Which published symbology this service serves"
             items={esriRenders.map((r) => ({ value: r, label: r }))}
-            className="max-w-[11rem] shrink-0 text-[11px]" />
+            className="max-w-[11rem] shrink-0 text-sm" />
         ) : undefined,
       });
     }
@@ -89,17 +89,17 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   if (!rows.length) return null;
   return (
     <div className="mt-3 rounded-lg border border-border bg-muted p-3">
-      <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">Services</h3>
+      <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Services</h3>
       <div className="flex flex-col gap-1.5">
         {rows.map((r) => (
-          <div key={r.label} className={`flex flex-wrap items-center gap-2 text-xs ${r.unavailable ? "opacity-55" : ""}`}>
+          <div key={r.label} className={`flex flex-wrap items-center gap-2 text-sm ${r.unavailable ? "opacity-55" : ""}`}>
             <span className={`w-36 shrink-0 font-semibold ${r.unavailable ? "text-muted-foreground" : "text-foreground"}`} title={r.desc}>{r.label}</span>
             {r.pick}
             {r.unavailable ? (
-              <span className="min-w-0 flex-1 text-[11px] text-muted-foreground italic">{r.unavailable}</span>
+              <span className="min-w-0 flex-1 text-sm text-muted-foreground italic">{r.unavailable}</span>
             ) : (
               <>
-                <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={r.url}>{r.url}</code>
+                <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-sm text-muted-foreground" title={r.url}>{r.url}</code>
                 <CopyBtn text={r.url} />
                 <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
               </>

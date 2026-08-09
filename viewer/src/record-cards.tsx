@@ -41,14 +41,14 @@ export function RecordCards({ rows, onPick, highlight, summaryFields = [] }: {
         const technical = rest.filter((c) => isTechnical(headerOf(c)));
         return (
           <details key={r.id}
-            className={`rounded-md border px-2.5 py-2 text-[12px] ${highlight?.(r)
+            className={`rounded-md border px-2.5 py-2 text-xs ${highlight?.(r)
               ? "border-amber-500/60 bg-amber-100 dark:bg-amber-900/40" : "border-border bg-card"}`}>
             <summary className="cursor-pointer list-none">
               <dl className="grid grid-cols-[minmax(0,7rem)_1fr] gap-x-3 gap-y-0.5">
                 {lead.map((c) => <Field key={c.id} cell={c} />)}
               </dl>
               {rest.length > 0 && (
-                <span className="mt-1 inline-block text-[11px] text-primary">{rest.length} more fields</span>
+                <span className="mt-1 inline-block text-xs text-primary">{rest.length} more fields</span>
               )}
             </summary>
             {detail.length > 0 && (
@@ -58,7 +58,7 @@ export function RecordCards({ rows, onPick, highlight, summaryFields = [] }: {
             )}
             {technical.length > 0 && (
               <details className="mt-1.5 border-t border-border pt-1.5">
-                <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                <summary className="cursor-pointer text-xs text-muted-foreground">
                   Technical fields · {technical.length}
                 </summary>
                 <dl className="mt-1 grid grid-cols-[minmax(0,7rem)_1fr] gap-x-3 gap-y-0.5">
@@ -68,7 +68,7 @@ export function RecordCards({ rows, onPick, highlight, summaryFields = [] }: {
             )}
             {onPick && (
               <button type="button" onClick={() => onPick(r)}
-                className="mt-2 rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-muted">
+                className="mt-2 rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-muted">
                 Zoom to feature
               </button>
             )}
@@ -83,7 +83,7 @@ function Field({ cell }: { cell: Cell<ExplorerRow, unknown> }) {
   const name = headerOf(cell);
   return (
     <>
-      <dt className="truncate text-[10px] uppercase tracking-wide text-muted-foreground" title={name}>{name}</dt>
+      <dt className="truncate text-xs uppercase tracking-wide text-muted-foreground" title={name}>{name}</dt>
       <dd className="min-w-0 break-words text-foreground">
         {flexRender(cell.column.columnDef.cell, cell.getContext())}
       </dd>

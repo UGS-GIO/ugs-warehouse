@@ -20,7 +20,7 @@ export function UiSegmented<T extends string>({ value, onValueChange, items, cla
         const v = next[0];
         if (v != null) onValueChange(v);   // ignore deselect — one is always active
       }}
-      className={`flex overflow-hidden rounded-md border border-input text-xs ${className}`}
+      className={`flex overflow-hidden rounded-md border border-input text-sm ${className}`}
     >
       {items.map((it) => (
         <Toggle

@@ -10,11 +10,12 @@
  * surface is an item's metadata, not a chart.
  */
 import type { ReactNode, RefObject } from "react";
-import { useRef, useState, useSyncExternalStore } from "react";
+import { useRef, useState } from "react";
 
 import { LegalFooter } from "./legal-footer";
 import { CATALOG_URL } from "./stac";
 import { clampSize, DETENTS, nearestDetent } from "./map-model";
+import { useIsDesktop } from "./ui/use-breakpoint";
 
 type Tab = "layers" | "info";
 type RevealRef = RefObject<(() => void) | null>;
@@ -23,15 +24,6 @@ const SIDEBAR_KEY = "ugsw.mapSidebarW";
 const DOCK_KEY = "ugsw.mapDockH";
 const SIDEBAR = { initial: 320, min: 240, max: 560 };
 const DOCK = { initial: 240, min: 120, max: 640 };
-
-// md: — the breakpoint the rest of the viewer already switches on. A media query IS an external
-// store, so subscribe to it directly: no effect, and no first paint at the wrong breakpoint.
-const MD = window.matchMedia("(min-width: 768px)");
-const subscribeMd = (onChange: () => void) => {
-  MD.addEventListener("change", onChange);
-  return () => MD.removeEventListener("change", onChange);
-};
-const useIsDesktop = () => useSyncExternalStore(subscribeMd, () => MD.matches);
 
 /** A drag-resizable size persisted to localStorage. "x" grows rightward, "y" grows UPWARD. */
 function useResizable(key: string, { initial, min, max }: typeof SIDEBAR, axis: "x" | "y") {

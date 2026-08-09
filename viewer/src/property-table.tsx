@@ -23,12 +23,12 @@ export function PropertyTable({ properties, className = "mt-3" }: {
     .filter(([k, v]) => v !== null && v !== "" && !SKIP.has(k));
   if (!rows.length) return null;
   return (
-    <table className={`w-full table-fixed border-collapse text-sm ${className}`}>
+    <table className={`w-full border-collapse text-sm sm:table-fixed ${className}`}>
       <tbody>
         {rows.map(([k, v]) => (
           <tr key={k}>
-            <td className="w-44 break-words border-b border-border px-2.5 py-1 align-top text-muted-foreground">{prettyKey(k)}</td>
-            <td className="break-words border-b border-border px-2.5 py-1 align-top">{fmtVal(v)}</td>
+            <td className="block break-words px-2.5 pt-1.5 align-top text-[11px] uppercase tracking-wide text-muted-foreground sm:table-cell sm:w-44 sm:border-b sm:border-border sm:py-1 sm:text-sm sm:normal-case sm:tracking-normal">{prettyKey(k)}</td>
+            <td className="block break-words border-b border-border px-2.5 pb-1.5 align-top sm:table-cell sm:py-1">{fmtVal(v)}</td>
           </tr>
         ))}
       </tbody>

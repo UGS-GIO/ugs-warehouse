@@ -23,7 +23,8 @@ export function ExportPanel({ item }: { item: StacDoc }) {
   const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
   const [warn, setWarn] = useState<ShapefileWarnings | null>(null);  // shapefile pre-flight issues
   const [epsg, setEpsg] = useState(4326);                            // output CRS for the gdal formats
-  const [customEpsg, setCustomEpsg] = useState(false);               // typed any-EPSG vs the common list
+  const [customEpsg, setCustomEpsg] = useState(false);
+  const [fmt, setFmt] = useState<ExportFormat>(FORMATS[0].id);   // phone picker; wide layouts get a button each
   if (!parquet) return null;
 
   const doExport = async (fmt: ExportFormat) => {
@@ -55,15 +56,24 @@ export function ExportPanel({ item }: { item: StacDoc }) {
   return (
     <div className="mt-3 rounded-lg border border-border bg-muted p-3">
       <div className="mb-1.5 text-xs font-semibold text-muted-foreground">Download as</div>
-      <div className="flex flex-wrap items-center gap-2">
+      {/* Seven buttons wrap to four rows on a phone. There, pick a format and go. */}
+      <div className="flex items-center gap-2 sm:hidden">
+        <UiSelect value={fmt} onValueChange={setFmt} className="flex-1 py-1 text-xs"
+          items={FORMATS.map((f) => ({ value: f.id, label: f.label }))} />
+        <button disabled={busy !== null} onClick={() => run(fmt)}
+          className="rounded border border-border bg-card px-3 py-1 text-xs text-foreground hover:border-primary disabled:opacity-50">
+          {busy ? "preparing…" : "Download"}
+        </button>
+      </div>
+      <div className="hidden flex-wrap items-center gap-2 sm:flex">
         {FORMATS.map((f) => (
           <button key={f.id} disabled={busy !== null} onClick={() => run(f.id)}
             className="rounded border border-border bg-card px-2.5 py-1 text-xs text-foreground hover:border-primary disabled:opacity-50">
             {busy === f.id ? "preparing…" : f.label}
           </button>
         ))}
-        {busy && <span className={C.muted}>running in your browser · first export loads DuckDB (~a few MB)</span>}
       </div>
+      {busy && <p className={`mt-1.5 ${C.muted}`}>running in your browser · first export loads DuckDB (~a few MB)</p>}
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
         <label className="flex items-center gap-1">
           Output CRS

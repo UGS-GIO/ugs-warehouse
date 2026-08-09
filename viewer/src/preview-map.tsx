@@ -95,41 +95,57 @@ export function usePreviewMap(): Ctx {
   return c;
 }
 
+type Renders = ReturnType<typeof rendersOf>;
+
+/** State that belongs to one item: when `itemId` changes it reads back as `initial`. A reset effect
+ *  does this a frame late, so the new item renders once carrying the old item's highlight first. */
+function usePerItem<T>(itemId: string, initial: T) {
+  const [held, setHeld] = useState<{ id: string; v: T }>(() => ({ id: itemId, v: initial }));
+  const set = useCallback((next: T | ((prev: T) => T)) => {
+    setHeld((h) => {
+      const prev = h.id === itemId ? h.v : initial;
+      return { id: itemId, v: typeof next === "function" ? (next as (p: T) => T)(prev) : next };
+    });
+  }, [itemId, initial]);
+  return [held.id === itemId ? held.v : initial, set] as const;
+}
+
 export function PreviewMapProvider({ children }: { children: React.ReactNode }) {
   const [spec, setSpec] = useState<PreviewSpec>(null);
   const [slotEl, setSlotEl] = useState<HTMLElement | null>(null);
-  const [focus, setFocus] = useState<FocusSel | null>(null);
-  const [pick, setPick] = useState<MapPick | null>(null);
-  // Mirrors the map's "Symbolize by" picker. Owned here, set by the map, so consumers outside the
-  // map subtree (the endpoints panel) can see which symbology is on screen.
-  const [render, setRender] = useState("");
-
-  // Reset the cross-boundary wires when the shown item changes (a stale fly/highlight would mislead).
   const itemId = specItemId(spec);
-  useEffect(() => { setFocus(null); setPick(null); }, [itemId]);
+  // The cross-boundary wires belong to the shown item — a stale fly/highlight would mislead.
+  const [focus, setFocus] = usePerItem<FocusSel | null>(itemId, null);
+  const [pick, setPick] = usePerItem<MapPick | null>(itemId, null);
+
+  // "Symbolize by" is owned here rather than mirrored up out of the map: the endpoints panel hands
+  // out the style/ArcGIS URL for the symbology on screen, so both need one copy of it.
+  const renders: Renders = useMemo(() => (spec?.kind === "vector" ? rendersOf(spec.item) : {}), [spec]);
+  const [chosen, setChosen] = usePerItem(itemId, "");
+  const render = renders[chosen] ? chosen : renders.default ? "default" : Object.keys(renders)[0] ?? "";
 
   const registerSlot = useCallback((el: HTMLElement | null) => setSlotEl(el), []);
-  const onFeatureClick = useCallback((id: number) => setPick((p) => nextPick(p, id)), []);
+  const onFeatureClick = useCallback((id: number) => setPick((p) => nextPick(p, id)), [setPick]);
 
   const ctx = useMemo<Ctx>(
     () => ({ setSpec, registerSlot, focus, setFocus, pick, onFeatureClick, render }),
-    [focus, pick, registerSlot, onFeatureClick, render],
+    [focus, setFocus, pick, registerSlot, onFeatureClick, render],
   );
 
   return (
     <PreviewMapCtx.Provider value={ctx}>
       {children}
       <PreviewMap spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick}
-        onRenderChange={setRender} />
+        renders={renders} sel={render} onSel={setChosen} />
     </PreviewMapCtx.Provider>
   );
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-function PreviewMap({ spec, slotEl, focus, onFeatureClick, onRenderChange }: {
+function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number) => void;
-  onRenderChange: (r: string) => void;
+  renders: Renders; sel: string; onSel: (r: string) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
@@ -148,12 +164,8 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick, onRenderChange }: {
   const item = spec?.item;
   const itemId = specItemId(spec);
 
-  // ---- vector-specific state (reset per item) ----
-  const renders = useMemo(() => (isVector && item ? rendersOf(item) : {}), [isVector, item]);
+  // ---- vector-specific state (`renders`/`sel` are owned by the provider) ----
   const renderKeys = Object.keys(renders);
-  const [sel, setSel] = useState<string>("");
-  useEffect(() => { setSel(renders.default ? "default" : Object.keys(renders)[0] ?? ""); }, [itemId]);  // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { onRenderChange(sel); }, [sel, onRenderChange]);
   const active = renders[sel];
   const styleUrl = isVector && item ? (active?.style_url ?? defaultStyleUrl(item)) : undefined;
   const sprite = active?.sprite;
@@ -163,10 +175,9 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick, onRenderChange }: {
   // goes stale as soon as a style publishes, so it's only the fallback.
   const liveLegend = useLiveLegend(styleUrl, item ? String(item.id ?? "") : undefined, sel);
   const [spriteReady, setSpriteReady] = useState(false);
-  const [popup, setPopup] = useState<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(null);
-  const [reviewFeature, setReviewFeature] = useState<{ pkVal: string; props: Record<string, unknown> } | null>(null);
+  const [popup, setPopup] = usePerItem<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(itemId, null);
+  const [reviewFeature, setReviewFeature] = usePerItem<{ pkVal: string; props: Record<string, unknown> } | null>(itemId, null);
   const pkCol = isVector && item ? primaryKeyOf(item) : "";
-  useEffect(() => { setPopup(null); setReviewFeature(null); }, [itemId]);
 
   // Preload the render's sprite (icon renders) before its symbol layers mount.
   useEffect(() => {
@@ -255,7 +266,7 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick, onRenderChange }: {
       {isVector && renderKeys.length > 1 && (
         <div className="mb-1.5 flex items-center gap-2 text-xs">
           <span className="text-muted-foreground">Symbolize by</span>
-          <UiSelect value={sel} onValueChange={setSel}
+          <UiSelect value={sel} onValueChange={onSel}
             items={renderKeys.map((k) => ({ value: k, label: String(renders[k].title ?? k) }))} />
         </div>
       )}

@@ -422,7 +422,7 @@ export function App() {
     <PreviewMapProvider>
     <div className={mapView
       ? "grid h-full grid-cols-1 grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
-      : "h-full overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
+      : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
         {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
@@ -520,7 +520,7 @@ export function App() {
         />
       )}
       </Suspense>
-      {!mapView && <LegalFooter className="mt-6" catalogUrl={CATALOG_URL} />}
+      {!mapView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
     </div>
     </PreviewMapProvider>
   );

@@ -8,6 +8,7 @@ import { useMemo, useState } from "react";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AssetChips } from "./asset-viewer";
+import { rootGroupOf } from "./catalog";
 import { createComment } from "./comments";
 import { ItemDetail } from "./item-detail";
 import { PageHero } from "./page-hero";
@@ -30,6 +31,12 @@ export type CollectionSummary = {
   covers?: CoverRef[];
 };
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
+
+const ROOT_GROUPS = [
+  { group: "layers", heading: "Map layers" },
+  { group: "documents", heading: "Publications & records" },
+  { group: "federated", heading: "Other UGS catalogs" },
+] as const;
 
 
 
@@ -154,13 +161,18 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
                   ))}
                 </div>
               )}
-              <div className="mt-auto pt-2.5">
+              <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-2.5">
                 {c.kind === "catalog" && <span className={C.badge}>by series</span>}
                 {c.mappable === 0
                   ? <span className={C.badge}>no map data</span>
                   : c.mappable != null && c.count != null && c.mappable < c.count
                     ? <span className={C.badge}>{c.mappable.toLocaleString()} on map</span>
                     : null}
+                {/* Each child IS a complete STAC catalog — hand out its URL so a client (QGIS,
+                    pystac, a harvester) can crawl just this part without the rest. */}
+                <a href={c.href} target="_blank" rel="noopener" title={c.href}
+                  onClick={(e) => e.stopPropagation()}
+                  className="ml-auto text-xs text-primary no-underline hover:underline">STAC ↗</a>
               </div>
             </div>
           );
@@ -643,7 +655,16 @@ export function Browse(props: {
       )}
       {atRoot && (search.trim() || threeD || browseAll)
         ? <ItemList items={globalItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
-        : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
+        : atRoot
+          // Two kinds of thing live at the root: layers you add to a map, and documents you read.
+          ? ROOT_GROUPS.map(({ group, heading }) => {
+              const cards = props.cards.filter((c) => rootGroupOf(c.id) === group);
+              return cards.length
+                ? <Collections key={group} collections={cards} heading={heading}
+                    onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />
+                : null;
+            })
+          : <Collections collections={props.cards} heading="Series" onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
     </div>
     </>
   );

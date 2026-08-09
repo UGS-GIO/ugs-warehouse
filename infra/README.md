@@ -55,7 +55,7 @@ backend authenticates separately. Either grant the SA read/write on the state bu
 
 ## SAFETY CONTRACT — this config cannot touch prod data
 
-Read before every apply. These are load-bearing, not stylistic:
+Read before every apply. Break one of these and prod data is reachable:
 
 1. **No existing bucket is a managed `resource`.** The prod public bucket
    (`ut-dnr-ugs-maps-prod-public`) and its objects are referenced *only* via a read-only

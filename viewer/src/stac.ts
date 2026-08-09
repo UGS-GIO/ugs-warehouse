@@ -124,7 +124,7 @@ export const tilesStyleUrl = (id: string, render?: string): string | undefined =
 // ArcGIS Pro / AGOL. One service per render, because Pro fetches the style with no query string
 // and so cannot reach `?render=` — see tiles/README.md.
 //
-// The `/rest/services` prefix is load-bearing, not cosmetic: AGOL's "Add layer from URL" matches
+// The `/rest/services` prefix is required, not cosmetic: AGOL's "Add layer from URL" matches
 // the path against ArcGIS Server's REST layout and rejects anything else before it makes a single
 // request ("This service type is not supported"). The service also answers on `/esri/...`, but
 // that form cannot be added in AGOL — so never hand it out here.

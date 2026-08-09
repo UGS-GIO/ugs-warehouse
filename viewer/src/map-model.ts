@@ -55,6 +55,26 @@ export function nextPick(prev: MapPick | null, id: number): MapPick {
   return { id, nonce: (prev?.nonce ?? 0) + 1 };
 }
 
+// Mobile sheet snap points, as a fraction of the map area: peek / half / full.
+export const DETENTS = [0.12, 0.55, 0.92] as const;
+
+// Which detent a drag ended nearest. Ties go to the lower one — releasing mid-way biases toward
+// showing more map, which is the thing the sheet is covering.
+export function nearestDetent(frac: number): number {
+  let best = 0;
+  for (let i = 1; i < DETENTS.length; i++) {
+    if (Math.abs(DETENTS[i] - frac) < Math.abs(DETENTS[best] - frac)) best = i;
+  }
+  return best;
+}
+
+// Resizable pane size, clamped. Non-finite (a stored value from an older build, or NaN off a
+// pointer event) falls back to the default rather than collapsing the pane to zero.
+export function clampSize(n: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
 // Table row-click → map fly target. `key` identifies the SELECTION (row offset / feature id) so the
 // map re-flies on every distinct pick — even two features at the same lat/lon (identical bbox). The
 // bbox→geometry upgrade within one pick reuses the same key, so it doesn't double-fly.

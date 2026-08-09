@@ -1,12 +1,15 @@
 import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput } from "@utahdts/utah-design-system-header";
 import { useIsFetching } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { type CatalogDoc } from "./search";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
 import { layerCollectionIds } from "./catalog";
 import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./map";
+import { LegalFooter } from "./legal-footer";
+import { MapShell } from "./map-shell";
+import { NavMenu } from "./nav-menu";
 import { PreviewMapProvider } from "./preview-map";
 import { PropertyTable } from "./property-table";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
@@ -68,10 +71,20 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   return null;
 }
 
+// One list, rendered as tabs on desktop and as menu items on mobile.
+const VIEWS: { id: View; label: string }[] = [
+  { id: "catalog", label: "Catalog" },
+  { id: "map", label: "Map" },
+  { id: "search", label: "Search" },
+  { id: "arch", label: "Architecture" },
+  { id: "guide", label: "Guide" },
+  ...(IS_REVIEW ? [{ id: "review" as const, label: "Review" }] : []),
+];
+
 const tab = (on: boolean) =>
   `cursor-pointer rounded-md border px-3 py-1.5 text-[13px] ${on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-accent"}`;
 const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
-const row = "mb-1.5 cursor-pointer rounded-md border border-border bg-card px-2 py-1.5 break-all hover:border-primary";
+const row = "mb-1.5 cursor-pointer rounded-md border border-border bg-card px-2 py-1.5 break-words hover:border-primary";
 
 function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
   if (loading) return <em>Loading item…</em>;
@@ -186,7 +199,7 @@ export function App() {
     (async () => {
       const base: SettingsInput = {
         title: "Utah Geological Survey",
-        showTitle: true,
+        showTitle: false,   // the band is hidden in CSS; the name still rides here for a11y
         titleUrl: "https://geology.utah.gov",
         logo: { imageUrl: utahLogo },   // generic State of Utah emblem (until UGS has its own brand)
         mainMenu: false,
@@ -391,13 +404,16 @@ export function App() {
   // Catalog/detail = a document → the page scrolls naturally, header sticks. (No more
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
+  // Picking an item on the map raises its detail — the sheet/dock, not a navigation.
+  const revealInfo = useRef<(() => void) | null>(null);
+  useEffect(() => { if (itemUrl) revealInfo.current?.(); }, [itemUrl]);
   return (
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
     <PreviewMapProvider>
     <div className={mapView
-      ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
-      : "min-h-screen overflow-x-hidden bg-background text-sm text-foreground"}>
+      ? "grid h-full grid-cols-1 grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
+      : "h-full overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
         {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
@@ -423,15 +439,19 @@ export function App() {
           title={`viewer build — last updated ${__BUILD_DATE__} (${__BUILD_HASH__})`}>
           updated {__BUILD_DATE__} · {__BUILD_HASH__}
         </span>
-        <div className="ml-auto flex gap-1 md:ml-0">
-          <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
-          <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>
-          <span className={tab(view === "search")} onClick={() => setView("search")}>Search</span>
-          <span className={tab(view === "arch")} onClick={() => setView("arch")}>Architecture</span>
-          <span className={tab(view === "guide")} onClick={() => setView("guide")}>Guide</span>
-          {IS_REVIEW && <span className={tab(view === "review")} onClick={() => setView("review")}>Review</span>}
+        <div className="ml-auto flex items-center gap-1">
+          {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
+              below md — five tabs and a phone don't share a row. */}
+          <div className="hidden gap-1 md:flex">
+            {VIEWS.map((v) => (
+              <span key={v.id} className={tab(view === v.id)} onClick={() => setView(v.id)}>{v.label}</span>
+            ))}
+          </div>
           {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}
           <ThemeToggle />
+          <div className="md:hidden">
+            <NavMenu current={view} pages={VIEWS.map((v) => ({ id: v.id, label: v.label, onSelect: () => setView(v.id) }))} />
+          </div>
         </div>
       </header>
 
@@ -474,8 +494,11 @@ export function App() {
           onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
         />
       ) : (
-        <div className="grid h-full min-h-0 grid-rows-[55vh_1fr] overflow-hidden md:grid-cols-[320px_1fr] md:grid-rows-1">
-          <aside className="overflow-auto border-b border-border p-3 md:border-b-0 md:border-r">
+        <MapShell
+          revealInfo={revealInfo}
+          map={<ItemMap item={item.data} layers={activeLayers} footprints={footprints} onPickFootprint={openItem} />}
+          info={<MapDetail item={item.data} loading={item.isLoading} />}
+          layers={<>
             {catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
             {!leafColl &&
               (subCat ? cards : leafColls).map((c) => (
@@ -510,14 +533,11 @@ export function App() {
                 })}
               </>
             )}
-          </aside>
-          <main className="grid h-full min-h-0 grid-rows-[1fr_200px] overflow-hidden md:grid-rows-[1fr_240px]">
-            <div className="min-h-0"><ItemMap item={item.data} layers={activeLayers} footprints={footprints} onPickFootprint={openItem} /></div>
-            <section className="overflow-auto border-t border-border p-3"><MapDetail item={item.data} loading={item.isLoading} /></section>
-          </main>
-        </div>
+          </>}
+        />
       )}
       </Suspense>
+      {!mapView && <LegalFooter className="mt-6" />}
     </div>
     </PreviewMapProvider>
   );

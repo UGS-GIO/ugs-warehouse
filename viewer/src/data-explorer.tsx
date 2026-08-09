@@ -199,26 +199,41 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
 
   return (
     <div className="mt-2">
+      {/* One header line that says what this is and how big it is — the row count used to float
+          mid-toolbar and the disclosure was a bare chevron on its own line. */}
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
-        <button className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:border-primary"
-          title={collapsed ? "Expand table" : "Collapse table"} aria-expanded={!collapsed}
-          onClick={() => setCollapsed((v) => !v)}>{collapsed ? "▸" : "▾"}</button>
-        <input className={C.input} placeholder="Search all columns…" value={search}
-          onChange={(e) => setSearch(e.target.value)} />
-        <span className={C.muted}>
-          {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
-          {onPick && page?.bboxes.some(Boolean) ? " · click a row to zoom" : ""}
-        </span>
-        <button className="ml-auto rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary"
-          aria-pressed={showColFilters} onClick={() => setColFilters((v) => !v)}>
-          {showColFilters ? "Hide column filters" : "Filter columns"}
+        <button className="inline-flex items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+          title={collapsed ? "Show the data" : "Hide the data"} aria-expanded={!collapsed}
+          onClick={() => setCollapsed((v) => !v)}>
+          <span aria-hidden>{collapsed ? "▸" : "▾"}</span>
+          Data
+          <span className="font-normal">
+            · {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
+          </span>
         </button>
-        {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
-        {!desktop && (
-          <UiSegmented value={narrowView} onValueChange={setNarrowView}
-            items={[{ value: "cards", label: "Cards" }, { value: "table", label: "Table" }] as const} />
+        {!collapsed && (
+          <>
+            {!desktop && (
+              <UiSegmented className="ml-auto" value={narrowView} onValueChange={setNarrowView}
+                items={[{ value: "cards", label: "Cards" }, { value: "table", label: "Table" }] as const} />
+            )}
+            <button className={`rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary ${desktop ? "ml-auto" : ""}`}
+              aria-pressed={showColFilters} onClick={() => setColFilters((v) => !v)}>
+              {showColFilters ? "Hide column filters" : "Filter columns"}
+            </button>
+            {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
+          </>
         )}
       </div>
+      {!collapsed && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          <input className={`${C.input} min-w-[12rem] flex-1`} placeholder="Search all columns…" value={search}
+            onChange={(e) => setSearch(e.target.value)} />
+          {onPick && page?.bboxes.some(Boolean) && (
+            <span className={C.muted}>click a row to zoom</span>
+          )}
+        </div>
+      )}
       {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
       {review && selPks.size > 0 && (
         <div className="mb-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">

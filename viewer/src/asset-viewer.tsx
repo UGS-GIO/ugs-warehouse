@@ -24,8 +24,10 @@ function FieldsPanel({ item }: { item: StacDoc }) {
   const cols = tableColumns(item);
   if (!cols) return null;
   return (
-    <details className="mt-3 text-[12px]">
-      <summary className="inline-flex cursor-pointer items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+    <details className="group mt-3 text-[12px]">
+      <summary className="inline-flex cursor-pointer list-none items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+        <span aria-hidden className="group-open:hidden">▸</span>
+        <span aria-hidden className="hidden group-open:inline">▾</span>
         Fields <span className="font-normal">· {cols.length}</span>
       </summary>
       <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 rounded-md border border-border bg-card px-3 py-2.5">

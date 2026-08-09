@@ -6,9 +6,9 @@ import { DataExplorer } from "./data-explorer";
 import { PhotoGallery } from "./photo-gallery";
 
 import { DiffPanel } from "./diff-panel";
-import { AssetChips, Preview } from "./asset-viewer";
+import { Preview } from "./asset-viewer";
 import { EndpointsPanel } from "./endpoints-panel";
-import { ExportPanel } from "./export-panel";
+import { DownloadsPanel } from "./downloads-panel";
 import { T } from "./page";
 import { PropertyTable } from "./property-table";
 import { LayerStatusControl } from "./review-status";
@@ -196,7 +196,6 @@ export function ItemDetail({ collectionId, item, onBack, onMap }: {
       {typeof p.description === "string" && (
         <p className="mt-3 max-w-[75ch] text-muted-foreground">{p.description}</p>
       )}
-      {item.assets && <div className="my-2"><AssetChips assets={item.assets} /></div>}
       <div className="mt-1.5 flex flex-wrap gap-2">
         {hasGeom && (
           <button onClick={onMap}
@@ -218,7 +217,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap }: {
         )}
       </div>
       <IssueContents item={item} />
-      <ExportPanel item={item} />
+      <DownloadsPanel item={item} />
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />
       {IS_REVIEW && <CatalogReview item={item} />}

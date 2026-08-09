@@ -14,7 +14,7 @@ const EPSG_ITEMS = [
   { value: "other", label: "Other (any EPSG)…" },
 ];
 
-export function ExportPanel({ item }: { item: StacDoc }) {
+export function ExportPanel({ item, embedded = false }: { item: StacDoc; embedded?: boolean }) {
   const parquet = parquetAsset(item);
   const fullBbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
   const [busy, setBusy] = useState<ExportFormat | null>(null);
@@ -54,8 +54,10 @@ export function ExportPanel({ item }: { item: StacDoc }) {
 
   const labels = ["W", "S", "E", "N"];
   return (
-    <div className="mt-3 rounded-lg border border-border bg-muted p-3">
-      <div className="mb-1.5 text-xs font-semibold text-muted-foreground">Download as</div>
+    <div className={embedded ? "mt-2 border-t border-border pt-2" : "mt-3 rounded-lg border border-border bg-muted p-3"}>
+      <div className="mb-1.5 text-xs font-semibold text-muted-foreground">
+        {embedded ? "Convert to" : "Download as"}
+      </div>
       {/* Seven buttons wrap to four rows on a phone. There, pick a format and go. */}
       <div className="flex items-center gap-2 sm:hidden">
         <UiSelect value={fmt} onValueChange={setFmt} className="flex-1 py-1 text-xs"

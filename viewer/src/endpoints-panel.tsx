@@ -47,7 +47,6 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
   }
-  if (pq) rows.push({ label: "GeoParquet", desc: "Columnar file — DuckDB / GeoPandas / QGIS", url: pq.href });
   // A raster item's data IS the COG — without this row it had no endpoints at all once the
   // bogus Features links stopped being constructed for it.
   if (cog) rows.push({ label: "COG", desc: "Cloud-Optimized GeoTIFF — QGIS, ArcGIS, GDAL, rasterio (range reads)", url: cog.href });
@@ -90,7 +89,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   if (!rows.length) return null;
   return (
     <div className="mt-3 rounded-lg border border-border bg-muted p-3">
-      <div className="mb-1.5 text-xs font-semibold text-muted-foreground">API &amp; data endpoints</div>
+      <h3 className="mb-1.5 text-xs font-semibold text-muted-foreground">Services</h3>
       <div className="flex flex-col gap-1.5">
         {rows.map((r) => (
           <div key={r.label} className={`flex flex-wrap items-center gap-2 text-xs ${r.unavailable ? "opacity-55" : ""}`}>

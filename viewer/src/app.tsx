@@ -356,11 +356,14 @@ export function App() {
 
   // Open a collection fresh (series filter is per-collection → cleared). Item open / layer
   // toggle / back-to-items keep the active series filter so it survives drilling in + out.
+  const revealInfo = useRef<(() => void) | null>(null);   // MapShell hands back "show the detail"
   const openCollection = (href: string) => go({ view, c: collKeyOf(href) });
   // Derive the collection from the item href rather than the ambient collectionUrl — search-all results
   // span collections, so the ambient one is wrong (or absent). Mirrors openCover.
-  const openItem = (href: string) =>
+  const openItem = (href: string) => {
+    revealInfo.current?.();   // picking on the map raises its detail — the sheet/dock, not a nav
     go({ view, c: collKeyOf(href), i: idOf(href), l: layerIds, s: seriesSel });
+  };
   // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
   // collection key from the item href so it resolves + the URL stays tidy.
   const openCover = (href: string) => go({ view, c: collKeyOf(href), i: idOf(href) });
@@ -404,9 +407,6 @@ export function App() {
   // Catalog/detail = a document → the page scrolls naturally, header sticks. (No more
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
-  // Picking an item on the map raises its detail — the sheet/dock, not a navigation.
-  const revealInfo = useRef<(() => void) | null>(null);
-  useEffect(() => { if (itemUrl) revealInfo.current?.(); }, [itemUrl]);
   return (
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.

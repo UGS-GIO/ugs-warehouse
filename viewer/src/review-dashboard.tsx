@@ -4,9 +4,16 @@ import { type Comment, deleteComment, ITEM_STATUSES, listAllComments, setStatus,
 import { NotificationsInbox } from "./notifications-inbox";
 import { ReviewReport } from "./review-report";
 import { statusClass, statusLabel, useItemStatuses } from "./review-status";
+import { UiSegmented } from "./ui/segmented";
 
 // Review dashboard — every comment across the catalog, filterable by status, resolve/reopen/delete inline.
 // A "Review" tab (App.tsx) renders this on the review deploy only. onOpen jumps to the item's catalog page.
+const FILTERS = [
+  { value: "open", label: "Open" },
+  { value: "all", label: "All" },
+  { value: "resolved", label: "Resolved" },
+] as const;
+
 export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }) {
   const qc = useQueryClient();
   const [filter, setFilter] = useState<"open" | "all" | "resolved">("open");
@@ -39,12 +46,7 @@ export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }
       <NotificationsInbox onOpen={onOpen} />
 
       <div className="mt-3 flex gap-1.5 text-xs">
-        {(["open", "all", "resolved"] as const).map((f) => (
-          <button key={f} onClick={() => setFilter(f)}
-            className={`rounded border px-2 py-0.5 capitalize ${filter === f
-              ? "border-primary bg-primary text-primary-foreground"
-              : "border-border bg-card text-foreground hover:bg-accent"}`}>{f}</button>
-        ))}
+        <UiSegmented value={filter} onValueChange={setFilter} items={FILTERS} />
         {!isLoading && !error && <span className="self-center text-muted-foreground">· {comments.length} shown</span>}
         <button onClick={() => setReport(true)}
           className="ml-auto rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">

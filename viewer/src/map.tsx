@@ -1,8 +1,10 @@
+import { Toggle } from "@base-ui/react/toggle";
 import maplibregl from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "./stac";
+import { UiSegmented } from "./ui/segmented";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
@@ -46,9 +48,11 @@ const SATELLITE: maplibregl.StyleSpecification = {
   sources: { sat: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, attribution: "Imagery © Esri" } },
   layers: [{ id: "sat", type: "raster", source: "sat" }],
 };
-const BASEMAPS: Record<string, string | maplibregl.StyleSpecification> = {
+const BASEMAPS = {
   Streets: ofm("liberty"), Light: ofm("positron"), Satellite: SATELLITE,
-};
+} satisfies Record<string, string | maplibregl.StyleSpecification>;
+type BasemapId = keyof typeof BASEMAPS;
+const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
 
 type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown>; href?: string };
 
@@ -84,7 +88,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
-  const [basemap, setBasemap] = useState<keyof typeof BASEMAPS>("Streets");
+  const [basemap, setBasemap] = useState<BasemapId>("Streets");
   // Coverage overlay (all item footprints as clickable rectangles) — on by default so opening the
   // Map view immediately shows WHAT IS MAPPED WHERE, including items with no COG/PMTiles to draw.
   const [showCoverage, setShowCoverage] = useState(true);
@@ -196,18 +200,15 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
       onClick={onClick}
     >
       <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
-      <div className="absolute right-2 top-2 z-10 flex gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
-        {Object.keys(BASEMAPS).map((name) => (
-          <button key={name} onClick={() => setBasemap(name)}
-            className={`rounded px-2 py-0.5 ${basemap === name ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted"}`}>
-            {name}
-          </button>
-        ))}
+      <div className="absolute right-2 top-2 z-10 flex gap-1 text-xs">
+        <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
+          className="bg-card/95 shadow" />
         {footprints.length > 0 && (
-          <button onClick={() => setShowCoverage((v) => !v)} title="Show every item's footprint (what's mapped where)"
-            className={`rounded px-2 py-0.5 ${showCoverage ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted"}`}>
+          <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
+            title="Show every item's footprint (what's mapped where)"
+            className="cursor-pointer select-none rounded-md border border-input bg-card/95 px-2 py-1 text-foreground shadow hover:bg-muted data-[pressed]:bg-primary data-[pressed]:text-primary-foreground">
             Coverage · {footprints.length}
-          </button>
+          </Toggle>
         )}
       </div>
 

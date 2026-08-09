@@ -112,10 +112,13 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     # Curated catalog metadata (raw.schema_registry) — flows into STAC + ISO.
     if md.get("keywords"):
         props["keywords"] = list(md["keywords"])
+    # `summary_fields`: the columns that identify a row, in order. Consumers lead with these when
+    # they can't show every column (the viewer's phone cards); absent → they fall back to a guess.
     for src_key, prop in (("iso_topic_category", "ugs:topic_category"),
                           ("use_constraints", "ugs:use_constraints"),
                           ("lineage", "ugs:lineage"),
-                          ("point_of_contact", "ugs:point_of_contact")):
+                          ("point_of_contact", "ugs:point_of_contact"),
+                          ("summary_fields", "ugs:summary_fields")):
         if md.get(src_key):
             props[prop] = md[src_key]
 

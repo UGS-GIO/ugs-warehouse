@@ -18,10 +18,11 @@ const headerOf = (cell: Cell<ExplorerRow, unknown>): string => {
   return typeof h === "string" ? h : cell.column.id;
 };
 
-export function RecordCards({ rows, onPick, highlight }: {
+export function RecordCards({ rows, onPick, highlight, summaryFields = [] }: {
   rows: Row<ExplorerRow>[];
   onPick?: (row: Row<ExplorerRow>) => void;
   highlight?: (row: Row<ExplorerRow>) => boolean;
+  summaryFields?: readonly string[];   // the item's `ugs:summary_fields`, when it declares them
 }) {
   if (!rows.length) return <p className="px-1 py-2 text-muted-foreground">No rows match.</p>;
   // Sampled, not exhaustive: "All rows" can be thousands, and 50 is plenty to spot a constant.
@@ -32,7 +33,7 @@ export function RecordCards({ rows, onPick, highlight }: {
       {rows.map((r) => {
         const cells = r.getVisibleCells();
         // Lead with the fields that identify THIS record, not whichever columns came first.
-        const leadIdx = new Set(previewOrder(named(r), PREVIEW_FIELDS, constant));
+        const leadIdx = new Set(previewOrder(named(r), PREVIEW_FIELDS, constant, summaryFields));
         const lead = cells.filter((_, i) => leadIdx.has(i));
         const rest = cells.filter((_, i) => !leadIdx.has(i));
         // Opening a card shouldn't bury the data under ids and EPSG codes.

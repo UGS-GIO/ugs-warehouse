@@ -52,3 +52,15 @@ describe("isTechnical", () => {
     for (const n of ["basn_nm", "ranking", "resrvrs", "srvycnt"]) expect(isTechnical(n)).toBe(false);
   });
 });
+
+describe("declared summary fields", () => {
+  it("leads with the item's ugs:summary_fields, in the order given", () => {
+    const names = previewOrder(ROW, 3, new Set(), ["resrvrs", "id"]).map((i) => ROW[i].name);
+    expect(names).toEqual(["resrvrs", "id", "basn_nm"]);   // declared first, then the heuristic
+  });
+
+  it("ignores declared names the row doesn't have", () => {
+    const names = previewOrder(ROW, 2, new Set(), ["nope", "ranking"]).map((i) => ROW[i].name);
+    expect(names).toEqual(["ranking", "basn_nm"]);
+  });
+});

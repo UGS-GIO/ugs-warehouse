@@ -38,15 +38,22 @@ export function constantFields(rows: readonly (readonly { name: string; value: u
   return new Set([...seen].filter(([, values]) => values.size <= 1).map(([name]) => name));
 }
 
-/** Indices of the fields to show collapsed, best first, falling back to column order on ties. */
+/** Indices of the fields to show collapsed, best first, falling back to column order on ties.
+ *
+ * `declared` is the item's own `ugs:summary_fields` — the producer naming the columns that identify
+ * a row. Those lead, in their stated order; the heuristic only fills what's left. */
 export function previewOrder(
   fields: readonly { name: string; value: unknown }[],
   count: number,
   constant: ReadonlySet<string> = new Set(),
+  declared: readonly string[] = [],
 ): number[] {
-  return fields
+  const named = declared
+    .map((name) => fields.findIndex((f) => f.name === name))
+    .filter((i) => i >= 0);
+  const ranked = fields
     .map((f, i) => ({ i, score: scoreField(f.name, f.value, constant.has(f.name)) }))
     .sort((a, b) => b.score - a.score || a.i - b.i)
-    .slice(0, count)
     .map((f) => f.i);
+  return [...new Set([...named, ...ranked])].slice(0, count);
 }

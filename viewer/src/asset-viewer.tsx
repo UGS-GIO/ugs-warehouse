@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { DataExplorer } from "./data-explorer";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "./preview-map";
 import { type Asset, type AssetKind, assetKind, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
-  tableColumns, thumbnailAsset } from "./stac";
+  summaryFieldsOf, tableColumns, thumbnailAsset } from "./stac";
 import { ThreeDViewer } from "./three-d-viewer";
 import { C, toggle } from "./ui";
 
@@ -61,7 +61,8 @@ function VectorPreview({ item }: { item: StacDoc }) {
     <>
       <PreviewMapSlot spec={spec} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")} rowKey={primaryKeyOf(item)} />}
+      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
+        rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}
     </>
   );
 }

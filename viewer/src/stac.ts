@@ -173,6 +173,13 @@ export const tableColumns = (d: StacDoc | undefined): TableColumn[] | undefined 
 export const primaryKeyOf = (d: StacDoc | undefined): string =>
   String((d?.properties as Record<string, unknown> | undefined)?.["ugs:primary_key"] ?? "pk");
 
+// The columns that identify a row, named by the producer (`ugs:summary_fields`). Consumers that
+// can't show every column lead with these — the viewer's phone record cards. Absent → they guess.
+export const summaryFieldsOf = (d: StacDoc | undefined): string[] => {
+  const v = (d?.properties as Record<string, unknown> | undefined)?.["ugs:summary_fields"];
+  return Array.isArray(v) ? v.map(String) : [];
+};
+
 // STAC Classification extension: categorical value/name/color from properties.classification:classes
 // → legend entries. Undefined pre-reingest → the legend falls back to deriving from the GL style.
 export const classificationEntries = (

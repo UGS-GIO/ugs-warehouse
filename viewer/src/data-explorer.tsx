@@ -24,11 +24,12 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
+export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
   rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
+  summaryFields?: readonly string[];   // item's `ugs:summary_fields` — leads the record cards
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
   // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
@@ -223,6 +224,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
       {!desktop && !collapsed && (
         <RecordCards
           rows={rowModel}
+          summaryFields={summaryFields}
           highlight={(r) => {
             const fid = r.original.feature_id;
             return fid != null && Number(fid) === highlightId;

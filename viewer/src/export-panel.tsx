@@ -4,6 +4,15 @@ import { useState } from "react";
 import { type ExportFormat, exportItem, FORMATS, shapefileWarnings, type ShapefileWarnings } from "./download";
 import { parquetAsset, type StacDoc } from "./stac";
 import { C } from "./ui";
+import { UiSelect } from "./ui/select";
+
+const EPSG_ITEMS = [
+  { value: "4326", label: "WGS 84 (EPSG:4326)" },
+  { value: "26912", label: "NAD83 / UTM 12N (EPSG:26912)" },
+  { value: "32612", label: "WGS84 / UTM 12N (EPSG:32612)" },
+  { value: "3857", label: "Web Mercator (EPSG:3857)" },
+  { value: "other", label: "Other (any EPSG)…" },
+];
 
 export function ExportPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
@@ -58,18 +67,12 @@ export function ExportPanel({ item }: { item: StacDoc }) {
       <div className="mt-2 flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
         <label className="flex items-center gap-1">
           Output CRS
-          <select value={customEpsg ? "other" : epsg}
-            onChange={(e) => {
-              if (e.target.value === "other") { setCustomEpsg(true); }
-              else { setCustomEpsg(false); setEpsg(Number(e.target.value)); }
+          <UiSelect value={customEpsg ? "other" : String(epsg)} className="px-1.5 py-0.5"
+            onValueChange={(v) => {
+              if (v === "other") setCustomEpsg(true);
+              else { setCustomEpsg(false); setEpsg(Number(v)); }
             }}
-            className="rounded border border-input bg-card px-1.5 py-0.5 text-foreground">
-            <option value={4326}>WGS 84 (EPSG:4326)</option>
-            <option value={26912}>NAD83 / UTM 12N (EPSG:26912)</option>
-            <option value={32612}>WGS84 / UTM 12N (EPSG:32612)</option>
-            <option value={3857}>Web Mercator (EPSG:3857)</option>
-            <option value="other">Other (any EPSG)…</option>
-          </select>
+            items={EPSG_ITEMS} />
         </label>
         {customEpsg && (
           <label className="flex items-center gap-1">

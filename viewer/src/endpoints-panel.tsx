@@ -5,6 +5,7 @@ import { serviceUrlOf } from "./catalog";
 import { cogAsset, ducklakeAsset, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
   tilesStyleUrl, xyzTilesUrl } from "./stac";
 import { usePreviewMap } from "./preview-map";
+import { UiSelect } from "./ui/select";
 
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -77,11 +78,10 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
         desc: "ArcGIS Pro / AGOL — the one client that needs its own service contract. Symbology included",
         url: esri,
         pick: esriRenders.length > 1 ? (
-          <select value={chosen} onChange={(e) => setPickedRender(e.target.value)}
+          <UiSelect value={chosen} onValueChange={setPickedRender}
             title="Which published symbology this service serves"
-            className="max-w-[11rem] shrink-0 rounded border border-input bg-card px-1 py-0.5 text-[11px] text-foreground">
-            {esriRenders.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
+            items={esriRenders.map((r) => ({ value: r, label: r }))}
+            className="max-w-[11rem] shrink-0 text-[11px]" />
         ) : undefined,
       });
     }

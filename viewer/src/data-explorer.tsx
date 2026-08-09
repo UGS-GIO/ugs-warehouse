@@ -9,6 +9,7 @@ import { PAGE_SIZES } from "./paging";
 import type { FocusSel } from "./map-model";
 import { IS_REVIEW } from "./stac";
 import { C } from "./ui";
+import { UiSelect } from "./ui/select";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
@@ -320,16 +321,15 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
         <button className={btn} disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex(pageCount - 1)}>»</button>
         <label className="ml-1 flex items-center gap-1 text-muted-foreground">
           Rows
-          <select className="rounded border border-border bg-card px-1 py-0.5 text-foreground"
-            value={showAll ? "all" : pageSize}
-            onChange={(e) => {
+          <UiSelect className="px-1 py-0.5"
+            value={showAll ? "all" : String(pageSize)}
+            onValueChange={(v) => {
               setPageIndex(0);
-              if (e.target.value === "all") { setShowAll(true); }
-              else { setShowAll(false); setPageSize(Number(e.target.value)); }
-            }}>
-            {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
-            <option value="all">All</option>
-          </select>
+              if (v === "all") setShowAll(true);
+              else { setShowAll(false); setPageSize(Number(v)); }
+            }}
+            items={[...PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) })),
+                    { value: "all", label: "All" }]} />
         </label>
         <label className="flex items-center gap-1 text-muted-foreground">
           Go to

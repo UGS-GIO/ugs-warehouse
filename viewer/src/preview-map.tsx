@@ -15,6 +15,7 @@ import { CommentsPanel } from "./comments-panel";
 import { boundsOf, type FocusSel, type MapPick, nextPick, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, rendersOf, type StacDoc, useLiveLegend, useStyleLayers } from "./stac";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
+import { UiSelect } from "./ui/select";
 
 const POSITRON = "https://tiles.openfreemap.org/styles/positron";
 
@@ -254,10 +255,8 @@ function PreviewMap({ spec, slotEl, focus, onFeatureClick, onRenderChange }: {
       {isVector && renderKeys.length > 1 && (
         <div className="mb-1.5 flex items-center gap-2 text-xs">
           <span className="text-muted-foreground">Symbolize by</span>
-          <select value={sel} onChange={(e) => setSel(e.target.value)}
-            className="rounded border border-input bg-card px-2 py-1 text-foreground">
-            {renderKeys.map((k) => <option key={k} value={k}>{renders[k].title ?? k}</option>)}
-          </select>
+          <UiSelect value={sel} onValueChange={setSel}
+            items={renderKeys.map((k) => ({ value: k, label: String(renders[k].title ?? k) }))} />
         </div>
       )}
       <div className="mt-2 h-96 w-full overflow-hidden rounded-md border border-border bg-muted">

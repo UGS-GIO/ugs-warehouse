@@ -10,6 +10,7 @@ import { useEffect, useMemo, useState } from "react";
 import { lruSet } from "./lru";
 import { type Asset, classificationColors, cogAsset, type StacDoc } from "./stac";
 import { buildMeshFrom3DEP, type TerrainMesh } from "./terrain";
+import { UiSlider } from "./ui/slider";
 
 const GEOLOGIC_COLORS: Record<string, string> = {
   "red pine shale": "#556B2F",
@@ -434,8 +435,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
             <span className="font-semibold text-foreground uppercase tracking-wider">Vertical Exaggeration</span>
             <span className="text-muted-foreground font-mono">{vex.toFixed(1)}x</span>
           </div>
-          <input type="range" min="0.5" max="5.0" step="0.1" value={vex} onChange={(e) => setVex(parseFloat(e.target.value))}
-            className="w-full h-1.5 rounded-lg bg-muted appearance-none cursor-pointer accent-primary" />
+          <UiSlider value={vex} onValueChange={setVex} min={0.5} max={5} step={0.1} label="Vertical exaggeration" />
         </div>
 
         <div className="flex-1 flex flex-col min-h-0">

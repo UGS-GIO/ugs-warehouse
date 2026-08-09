@@ -63,25 +63,19 @@
   --color-ring: hsl(var(--ring));
 }
 
-/* Utah DS typography: Source Sans for the UI (self-hosted via fontsource), and the licensed
-   display face referenced from the state CDN the way the DS itself loads it — never redistributed. */
+/* Utah DS typography. Source Sans 3 is the DS body font ("can be universally used"); we self-host
+   it so the app doesn't depend on the header package for its own text. UT Industry comes FROM the
+   header package (v5+ loads all four weights and exposes the variable) — no second @font-face. */
 :root {
   font-family: "Source Sans 3 Variable", "Source Sans 3", system-ui, Helvetica, Arial, sans-serif;
   line-height: 1.5;
 }
-@font-face {
-  font-family: "UT Industry";
-  font-weight: 400;
-  font-display: swap;
-  src: url("https://cdn.utah.gov/design-system/fonts/ut-industry/woff2/UTIndustry-Regular.woff2") format("woff2");
+/* Display face — headings and high-impact text only, never body copy. The DS forbids its Bold below
+   20px and its Heavy below 28px, so this stays at medium weight and callers size it 20px+. */
+.font-display {
+  font-family: var(--ut-industry-font-family, "UT Industry", Georgia, serif);
+  font-weight: 500;
 }
-@font-face {
-  font-family: "UT Industry";
-  font-weight: 700;
-  font-display: swap;
-  src: url("https://cdn.utah.gov/design-system/fonts/ut-industry/woff2/UTIndustry-Bold.woff2") format("woff2");
-}
-.font-display { font-family: "UT Industry", Georgia, serif; }
 
 /* Viewport shell: the app fills what's left under the official strip, and only inner panes scroll.
    Without this the map view's `h-full` resolved against a taller-than-viewport page and its bottom

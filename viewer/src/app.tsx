@@ -439,11 +439,8 @@ export function App() {
           <span className="flex shrink-0 items-center rounded bg-white p-0.5">
             <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="Utah Geological Survey" className="h-7 w-7" />
           </span>
-          <strong className="font-display text-lg font-semibold tracking-tight">UGS Warehouse</strong>
+          <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </a>
-        <span className="hidden text-xs text-muted-foreground sm:inline">
-          STAC catalog · map layers, rasters and publications
-        </span>
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
               below md — five tabs and a phone don't share a row. */}

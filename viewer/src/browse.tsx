@@ -10,6 +10,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AssetChips } from "./asset-viewer";
 import { createComment } from "./comments";
 import { ItemDetail } from "./item-detail";
+import { PageHero } from "./page-hero";
 import { T } from "./page";
 import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "./paging";
 import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset } from "./stac";
@@ -616,6 +617,13 @@ export function Browse(props: {
 
   // browse level: root catalog (with search-all) OR a sub-catalog's series chooser
   return (
+    <>
+      {/* The catalog landing gets the same title band as the content pages — it IS the front door,
+          and the search that opens the whole catalog belongs in it rather than above a bare list. */}
+      {atRoot && (
+        <PageHero title="Data Catalog"
+          lead="Geologic maps, hazard layers and publications." />
+      )}
     <div className={C.wrap}>
       {!atRoot && <Breadcrumb crumbs={props.breadcrumb} />}
       {atRoot && (
@@ -637,5 +645,6 @@ export function Browse(props: {
         ? <ItemList items={globalItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
         : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
     </div>
+    </>
   );
 }

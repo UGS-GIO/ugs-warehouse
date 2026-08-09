@@ -7,6 +7,7 @@ import ReactDOM from "react-dom/client";
 import { CappedMap } from "./lru";
 import { router } from "./router";
 import { applyTheme, initialTheme } from "./theme";
+import "@fontsource-variable/source-sans-3";   // Utah DS body font, self-hosted
 import "@utahdts/utah-design-system-header/css";
 import "./index.css";
 import "maplibre-gl/dist/maplibre-gl.css";

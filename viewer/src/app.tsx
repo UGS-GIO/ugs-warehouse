@@ -8,11 +8,12 @@ import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./b
 import { layerCollectionIds } from "./catalog";
 import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./map";
 import { LegalFooter } from "./legal-footer";
+import { MapLegend } from "./map-legend";
 import { MapShell } from "./map-shell";
 import { NavMenu } from "./nav-menu";
 import { PreviewMapProvider } from "./preview-map";
 import { PropertyTable } from "./property-table";
-import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
+import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl } from "./stac";
 import { useTheme } from "./theme";
 import { DiffPanel } from "./diff-panel";
 import { CommentsPanel } from "./comments-panel";
@@ -407,6 +408,9 @@ export function App() {
   // Catalog/detail = a document → the page scrolls naturally, header sticks. (No more
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
+  // Same cached queries the map itself reads (TanStack dedupes by key) — the legend needs the bound
+  // style layers, and the drawer renders outside the map component.
+  const styleCache = useStyleLayersFor(activeLayers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
   return (
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
@@ -426,7 +430,7 @@ export function App() {
           }}
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
           <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="h-5 w-5 shrink-0" />
-          <strong className="text-[15px]">UGS Warehouse</strong>
+          <strong className="font-display text-[17px]">UGS Warehouse</strong>
         </a>
         <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">
           STAC catalog ·{" "}
@@ -513,6 +517,9 @@ export function App() {
                   <span className="cursor-pointer text-primary" onClick={() => go({ view })}>‹ collections</span>
                   <span className="text-muted-foreground">check to overlay</span>
                 </div>
+                {/* Vector overlays only: a COG/raster tile layer is a picture, not a classification. */}
+                <MapLegend layers={activeLayers.flatMap((l, i) => (l.cogHref || l.rasterPmHref ? []
+                  : [{ id: l.id, title: l.title, color: colorFor(i), styleLayers: styleCache[l.id] }]))} />
                 {allItems.map((it) => {
                   const id = idOf(it.href);
                   const on = idsForMap.includes(id);

@@ -10,6 +10,7 @@ import type { FocusSel } from "./map-model";
 import { IS_REVIEW } from "./stac";
 import { C } from "./ui";
 import { RecordCards } from "./record-cards";
+import { UiSegmented } from "./ui/segmented";
 import { UiSelect } from "./ui/select";
 import { useIsDesktop } from "./ui/use-breakpoint";
 
@@ -49,6 +50,10 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [showAll, setShowAll] = useState(false);  // "All" rows in one virtualized page
   const [sorting, setSorting] = useState<SortingState>([]);
   const desktop = useIsDesktop();
+  // Cards are the phone default, but the grid is sometimes the point — comparing a column down the
+  // rows. Keep the escape hatch rather than deciding for everyone. Desktop is always the table.
+  const [narrowView, setNarrowView] = useState<"cards" | "table">("cards");
+  const asCards = !desktop && narrowView === "cards";
   const scrollRef = useRef<HTMLDivElement>(null);  // virtualizer scroll viewport (the resizable box)
   const [search, setSearch] = useState("");
   // feature_id of the row picked from the map (or a table click) — highlighted in the table.
@@ -209,6 +214,10 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           {showColFilters ? "Hide column filters" : "Filter columns"}
         </button>
         {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
+        {!desktop && (
+          <UiSegmented value={narrowView} onValueChange={setNarrowView}
+            items={[{ value: "cards", label: "Cards" }, { value: "table", label: "Table" }] as const} />
+        )}
       </div>
       {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
       {review && selPks.size > 0 && (
@@ -221,7 +230,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
       )}
       {/* Phones get the same rows as cards: a 22-column table is ~2400px wide, which on a 390px
           screen is a sideways-scrolling box inside a scrolling page. */}
-      {!desktop && !collapsed && (
+      {asCards && !collapsed && (
         <RecordCards
           rows={rowModel}
           summaryFields={summaryFields}
@@ -238,7 +247,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           } : undefined}
         />
       )}
-      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-[12px] ${collapsed || !desktop ? "hidden" : "h-[28rem] min-h-[10rem]"}`}>
+      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-[12px] ${collapsed || asCards ? "hidden" : "h-[28rem] min-h-[10rem]"}`}>
         <table className="w-auto min-w-full border-collapse">
           <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((hg) => (

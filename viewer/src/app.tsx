@@ -8,6 +8,7 @@ import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./b
 import { layerCollectionIds } from "./catalog";
 import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./map";
 import { LegalFooter } from "./legal-footer";
+import { LayerList, type LayerRow } from "./layer-list";
 import { MapLegend } from "./map-legend";
 import { MapShell } from "./map-shell";
 import { NavMenu } from "./nav-menu";
@@ -85,7 +86,6 @@ const VIEWS: { id: View; label: string }[] = [
 const tab = (on: boolean) =>
   `cursor-pointer rounded-md border px-3 py-1.5 text-[13px] ${on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-accent"}`;
 const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
-const row = "mb-1.5 cursor-pointer rounded-md border border-border bg-card px-2 py-1.5 break-words hover:border-primary";
 
 function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
   if (loading) return <em>Loading item…</em>;
@@ -331,6 +331,21 @@ export function App() {
   ];
   const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
 
+  const mapIdx = useIndexes(view === "map" ? leafColls.map((c) => ({ id: c.id, href: c.href })) : []);
+  const mapItems: ItemRef[] = mapIdx.flatMap((r) => (r.index?.items ?? []).map((d) => ({
+    collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d,
+  })));
+  // Layer collections first — the serving topics are what the map is for; pub plates come after.
+  const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
+  const layerRows: LayerRow[] = useMemo(() => mapItems
+    .filter((r) => r.data && (pmtilesLink(r.data) || cogAsset(r.data) || rasterTilesAsset(r.data)))
+    .map((r) => ({ id: idOf(r.href), href: r.href, title: String(r.data?.properties?.title ?? idOf(r.href)),
+                   group: collTitle(r.collId), layer: layerCollIds.includes(r.collId) }))
+    .sort((a, b) => Number(b.layer) - Number(a.layer)
+                    || a.group.localeCompare(b.group) || a.title.localeCompare(b.title)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")]);
+
   // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
   // an absolute href: construct from the open leaf, else look it up among loaded items.
   const isUrl = (s?: string) => Boolean(s) && /^https?:\/\//.test(s as string);
@@ -390,7 +405,7 @@ export function App() {
   // ?c=&i= link still shows its layer). Resolved against fetched item data (for PMTiles).
   // The compact index records omit `renders`, so prefer the FULL detail item for the open id
   // (it carries the bound style_url) — otherwise the map can't style the selected layer.
-  const byId = new Map(allItems.map((r) => [idOf(r.href), r]));
+  const byId = new Map([...mapItems, ...allItems].map((r) => [idOf(r.href), r]));
   if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
   const idsForMap = layerIds?.length ? layerIds : itemUrl ? [idOf(itemUrl)] : [];
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
@@ -504,42 +519,17 @@ export function App() {
           info={<MapDetail item={item.data} loading={item.isLoading} />}
           layers={<>
             {catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
-            {!leafColl &&
-              (subCat ? cards : leafColls).map((c) => (
-                <div key={c.href} className={row} onClick={() => openCollection(c.href)}>
-                  {c.title ?? c.id}{c.count != null && <span className="text-muted-foreground"> · {c.count}</span>}
-                  {c.mappable === 0 && <span className="ml-1 text-[11px] text-muted-foreground">· no map data</span>}
-                </div>
-              ))}
-            {leafColl && (
-              <>
-                <div className="mb-2 flex items-center justify-between text-xs">
-                  <span className="cursor-pointer text-primary" onClick={() => go({ view })}>‹ collections</span>
-                  <span className="text-muted-foreground">check to overlay</span>
-                </div>
-                {/* Vector overlays only: a COG/raster tile layer is a picture, not a classification. */}
-                <MapLegend layers={activeLayers.flatMap((l, i) => (l.cogHref || l.rasterPmHref ? []
-                  : [{ id: l.id, title: l.title, color: colorFor(i), styleLayers: styleCache[l.id] }]))} />
-                {allItems.map((it) => {
-                  const id = idOf(it.href);
-                  const on = idsForMap.includes(id);
-                  const ci = activeLayers.findIndex((l) => l.id === id);
-                  // Non-blocking hint only — never disable (an item can be "on" via ?i= and must stay
-                  // uncheckable). The index carries assets + web-map links, so this is reliable.
-                  const noMap = it.data && !cogAsset(it.data) && !pmtilesLink(it.data) && !rasterTilesAsset(it.data);
-                  return (
-                    <div key={it.href} className={`${row} flex items-center gap-2`}>
-                      <input type="checkbox" checked={on} onChange={() => toggleLayer(id)} onClick={(e) => e.stopPropagation()} />
-                      {on && ci >= 0 && <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colorFor(ci) }} />}
-                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>
-                        {String(it.data?.properties?.title ?? id)}
-                        {noMap && <span className="ml-1 text-[10px] text-muted-foreground">· no map data</span>}
-                      </span>
-                    </div>
-                  );
-                })}
-              </>
-            )}
+            <LayerList
+              rows={layerRows}
+              activeIds={idsForMap}
+              openId={itemUrl ? idOf(itemUrl) : undefined}
+              colorOf={(id) => colorFor(activeLayers.findIndex((l) => l.id === id))}
+              onToggle={toggleLayer}
+              onOpen={openItem}
+              // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
+              legend={<MapLegend layers={activeLayers.flatMap((l, i) => (l.cogHref || l.rasterPmHref ? []
+                : [{ id: l.id, title: l.title, color: colorFor(i), styleLayers: styleCache[l.id] }]))} />}
+            />
           </>}
         />
       )}

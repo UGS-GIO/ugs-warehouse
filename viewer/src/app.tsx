@@ -84,7 +84,8 @@ const VIEWS: { id: View; label: string }[] = [
 ];
 
 const tab = (on: boolean) =>
-  `cursor-pointer rounded-md border px-3 py-1.5 text-[13px] ${on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-accent"}`;
+  "cursor-pointer border-b-2 px-2 py-1 text-[13px] transition-colors "
+  + (on ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground");
 const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
 
 function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
@@ -144,7 +145,7 @@ function ThemeToggle() {
   const [theme, toggle] = useTheme();
   return (
     <button onClick={toggle} aria-label="Toggle theme"
-      className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] text-foreground hover:bg-accent">
+      className="rounded px-2 py-1 text-[13px] text-muted-foreground hover:text-foreground">
       {theme === "dark" ? "☀" : "☾"}
     </button>
   );
@@ -447,17 +448,6 @@ export function App() {
           <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="h-5 w-5 shrink-0" />
           <strong className="font-display text-[17px]">UGS Warehouse</strong>
         </a>
-        <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">
-          STAC catalog ·{" "}
-          <a href={CATALOG_URL} target="_blank" rel="noreferrer"
-            className="underline decoration-dotted underline-offset-2 hover:text-foreground">
-            {CATALOG_URL.replace(/^https?:\/\//, "")}
-          </a>
-        </span>
-        <span className="hidden whitespace-nowrap text-[11px] text-muted-foreground lg:block"
-          title={`viewer build — last updated ${__BUILD_DATE__} (${__BUILD_HASH__})`}>
-          updated {__BUILD_DATE__} · {__BUILD_HASH__}
-        </span>
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
               below md — five tabs and a phone don't share a row. */}
@@ -534,7 +524,7 @@ export function App() {
         />
       )}
       </Suspense>
-      {!mapView && <LegalFooter className="mt-6" />}
+      {!mapView && <LegalFooter className="mt-6" catalogUrl={CATALOG_URL} />}
     </div>
     </PreviewMapProvider>
   );

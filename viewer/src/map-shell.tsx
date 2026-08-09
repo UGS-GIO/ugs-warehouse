@@ -13,6 +13,7 @@ import type { ReactNode, RefObject } from "react";
 import { useRef, useState, useSyncExternalStore } from "react";
 
 import { LegalFooter } from "./legal-footer";
+import { CATALOG_URL } from "./stac";
 import { clampSize, DETENTS, nearestDetent } from "./map-model";
 
 type Tab = "layers" | "info";
@@ -114,7 +115,7 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
             <span>{dockOpen ? "▾" : "▸"}</span> Item detail
           </button>
           {dockOpen && <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">{info}</div>}
-          <LegalFooter />
+          <LegalFooter catalogUrl={CATALOG_URL} />
         </section>
       </main>
     </div>
@@ -180,7 +181,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           {!collapsed && (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <div className="px-3 pb-3">{tab === "layers" ? layers : info}</div>
-              <LegalFooter />
+              <LegalFooter catalogUrl={CATALOG_URL} />
             </div>
           )}
         </div>

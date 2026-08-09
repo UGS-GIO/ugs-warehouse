@@ -12,7 +12,7 @@ export function NavMenu({ pages, current }: { pages: NavPage[]; current: string 
         type="button"
         aria-label="Views"
         popoverTarget={MENU_ID}
-        className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-foreground hover:bg-accent"
+        className="flex h-9 w-9 items-center justify-center rounded-md border border-border bg-card text-foreground hover:bg-muted"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
           <path d="M3 6h18M3 12h18M3 18h18" />
@@ -34,7 +34,7 @@ export function NavMenu({ pages, current }: { pages: NavPage[]; current: string 
             popoverTarget={MENU_ID}
             popoverTargetAction="hide"
             onClick={p.onSelect}
-            className={`flex w-full items-center rounded px-2 py-1.5 text-left text-[13px] hover:bg-accent ${p.id === current ? "text-primary" : "text-foreground"}`}
+            className={`flex w-full items-center rounded px-2 py-1.5 text-left text-[13px] hover:bg-muted ${p.id === current ? "text-primary" : "text-foreground"}`}
           >
             {p.label}
           </button>

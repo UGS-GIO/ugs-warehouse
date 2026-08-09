@@ -199,13 +199,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
       <div className="absolute right-2 top-2 z-10 flex gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
         {Object.keys(BASEMAPS).map((name) => (
           <button key={name} onClick={() => setBasemap(name)}
-            className={`rounded px-2 py-0.5 ${basemap === name ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"}`}>
+            className={`rounded px-2 py-0.5 ${basemap === name ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted"}`}>
             {name}
           </button>
         ))}
         {footprints.length > 0 && (
           <button onClick={() => setShowCoverage((v) => !v)} title="Show every item's footprint (what's mapped where)"
-            className={`rounded px-2 py-0.5 ${showCoverage ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-accent"}`}>
+            className={`rounded px-2 py-0.5 ${showCoverage ? "bg-primary text-primary-foreground" : "text-foreground hover:bg-muted"}`}>
             Coverage · {footprints.length}
           </button>
         )}

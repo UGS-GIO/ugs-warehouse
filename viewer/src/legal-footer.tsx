@@ -7,7 +7,7 @@ const LINKS = [
   { href: "https://dts.utah.gov/accessibility", label: "Accessibility" },
 ];
 
-export function LegalFooter({ className = "" }: { className?: string }) {
+export function LegalFooter({ className = "", catalogUrl }: { className?: string; catalogUrl?: string }) {
   return (
     <footer className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-[11px] text-muted-foreground ${className}`}>
       <span>© State of Utah</span>
@@ -16,6 +16,13 @@ export function LegalFooter({ className = "" }: { className?: string }) {
           {l.label}
         </a>
       ))}
+      {/* Provenance, not navigation: which catalog this viewer reads, and which build it is. */}
+      {catalogUrl && (
+        <a href={catalogUrl} target="_blank" rel="noreferrer" className="hover:text-foreground hover:underline">
+          STAC catalog
+        </a>
+      )}
+      <span title={`viewer build ${__BUILD_HASH__}`}>build {__BUILD_DATE__}</span>
       <a href="https://geology.utah.gov" target="_blank" rel="noreferrer" className="ml-auto hover:text-foreground hover:underline">
         Utah Geological Survey
       </a>

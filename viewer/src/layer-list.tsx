@@ -28,7 +28,7 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
   const groups = [...new Set(rest.map((r) => r.group))].map((g) => ({ g, items: rest.filter((r) => r.group === g) }));
 
   const Row = ({ r, on }: { r: LayerRow; on: boolean }) => (
-    <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-accent ${r.id === openId ? "bg-accent/60" : ""}`}>
+    <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-muted ${r.id === openId ? "bg-muted" : ""}`}>
       <button type="button" onClick={() => onToggle(r.id)} aria-pressed={on}
         className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <span className="h-3 w-3 shrink-0 rounded-sm border border-muted-foreground/50"

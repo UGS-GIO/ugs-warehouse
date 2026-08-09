@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { constantFields, previewOrder, scoreField } from "./record-fields";
+import { constantFields, isTechnical, previewOrder, scoreField } from "./record-fields";
 
 // The real columns of enmin_ccus_cbgeoregion, in catalog order.
 const ROW = [
@@ -41,5 +41,14 @@ describe("constantFields", () => {
     expect([...constantFields(rows)]).toEqual(["maps"]);
     const names = previewOrder(rows[0], 1, constantFields(rows)).map((i) => rows[0][i].name);
     expect(names).toEqual(["basn_nm"]);
+  });
+});
+
+describe("isTechnical", () => {
+  it("separates plumbing from the data a reader came for", () => {
+    for (const n of ["ogc_fid", "id", "metadata_publication_id", "_publication_date", "target_epsg", "shp_lng"]) {
+      expect(isTechnical(n)).toBe(true);
+    }
+    for (const n of ["basn_nm", "ranking", "resrvrs", "srvycnt"]) expect(isTechnical(n)).toBe(false);
   });
 });

@@ -7,7 +7,7 @@
 // row. Cards show the first few fields and open to the rest — `<details>` carries that, no state.
 import { type Cell, flexRender, type Row } from "@tanstack/react-table";
 
-import { constantFields, previewOrder } from "./record-fields";
+import { constantFields, isTechnical, previewOrder } from "./record-fields";
 
 const PREVIEW_FIELDS = 4;   // enough to tell records apart; the rest is one tap away
 
@@ -35,6 +35,9 @@ export function RecordCards({ rows, onPick, highlight }: {
         const leadIdx = new Set(previewOrder(named(r), PREVIEW_FIELDS, constant));
         const lead = cells.filter((_, i) => leadIdx.has(i));
         const rest = cells.filter((_, i) => !leadIdx.has(i));
+        // Opening a card shouldn't bury the data under ids and EPSG codes.
+        const detail = rest.filter((c) => !isTechnical(headerOf(c)));
+        const technical = rest.filter((c) => isTechnical(headerOf(c)));
         return (
           <details key={r.id}
             className={`rounded-md border px-2.5 py-2 text-[12px] ${highlight?.(r)
@@ -47,9 +50,21 @@ export function RecordCards({ rows, onPick, highlight }: {
                 <span className="mt-1 inline-block text-[11px] text-primary">{rest.length} more fields</span>
               )}
             </summary>
-            <dl className="mt-1.5 grid grid-cols-[minmax(0,7rem)_1fr] gap-x-3 gap-y-0.5 border-t border-border pt-1.5">
-              {rest.map((c) => <Field key={c.id} cell={c} />)}
-            </dl>
+            {detail.length > 0 && (
+              <dl className="mt-1.5 grid grid-cols-[minmax(0,7rem)_1fr] gap-x-3 gap-y-0.5 border-t border-border pt-1.5">
+                {detail.map((c) => <Field key={c.id} cell={c} />)}
+              </dl>
+            )}
+            {technical.length > 0 && (
+              <details className="mt-1.5 border-t border-border pt-1.5">
+                <summary className="cursor-pointer text-[11px] text-muted-foreground">
+                  Technical fields · {technical.length}
+                </summary>
+                <dl className="mt-1 grid grid-cols-[minmax(0,7rem)_1fr] gap-x-3 gap-y-0.5">
+                  {technical.map((c) => <Field key={c.id} cell={c} />)}
+                </dl>
+              </details>
+            )}
             {onPick && (
               <button type="button" onClick={() => onPick(r)}
                 className="mt-2 rounded border border-border px-2 py-1 text-[11px] text-foreground hover:bg-muted">

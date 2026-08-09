@@ -56,14 +56,16 @@ export function nextPick(prev: MapPick | null, id: number): MapPick {
 }
 
 // Mobile sheet snap points, as a fraction of the map area: peek / half / full.
-export const DETENTS = [0.12, 0.55, 0.92] as const;
+export const DETENTS = [0.06, 0.55, 0.92] as const;
 
 // Which detent a drag ended nearest. Ties go to the lower one — releasing mid-way biases toward
-// showing more map, which is the thing the sheet is covering.
+// showing more map, which is the thing the sheet is covering. The epsilon is what makes that true:
+// an exact midpoint is rarely exact in binary floating point, so a hair either way would otherwise
+// decide it (0.305 between 0.06 and 0.55 lands 2e-17 nearer the upper one).
 export function nearestDetent(frac: number): number {
   let best = 0;
   for (let i = 1; i < DETENTS.length; i++) {
-    if (Math.abs(DETENTS[i] - frac) < Math.abs(DETENTS[best] - frac)) best = i;
+    if (Math.abs(DETENTS[i] - frac) < Math.abs(DETENTS[best] - frac) - 1e-9) best = i;
   }
   return best;
 }

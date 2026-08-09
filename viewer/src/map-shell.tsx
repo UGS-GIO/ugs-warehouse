@@ -15,7 +15,7 @@ import { useRef, useState, useSyncExternalStore } from "react";
 import { LegalFooter } from "./legal-footer";
 import { clampSize, DETENTS, nearestDetent } from "./map-model";
 
-type Tab = "map" | "layers" | "info";
+type Tab = "layers" | "info";
 type RevealRef = RefObject<(() => void) | null>;
 
 const SIDEBAR_KEY = "ugsw.mapSidebarW";
@@ -122,19 +122,21 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
 }
 
 const icon = "h-5 w-5";
+// No "Map" tab: the map is never hidden, it's what the sheet sits on. Tapping the open tab drops
+// the sheet back to a peek, which is the move a Map button was standing in for.
 const TABS: { id: Tab; label: string; path: ReactNode }[] = [
-  { id: "map", label: "Map", path: <><path d="M9 3 3 6v15l6-3 6 3 6-3V3l-6 3-6-3Z" /><path d="M9 3v15" /><path d="M15 6v15" /></> },
   { id: "layers", label: "Layers", path: <><path d="m12 2 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></> },
   { id: "info", label: "Info", path: <><circle cx="12" cy="12" r="9" /><path d="M12 16v-5M12 8h.01" /></> },
 ];
 
-/** Mobile: full map + a draggable sheet anchored above a persistent tab bar. The bar picks the
- * sheet's content — Map drops it to a peek, Layers/Info raise it. */
+/** Mobile: full map + a draggable sheet anchored above a persistent tab bar, which picks what the
+ * sheet holds. Detent 0 (a peek) is the map view; `tab` is only what's shown when it's raised. */
 function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
-  const [tab, setTab] = useState<Tab>("map");
+  const [tab, setTab] = useState<Tab>("layers");
   const [detent, setDetent] = useState(0);
   const [dragH, setDragH] = useState<number | null>(null);
   const areaRef = useRef<HTMLDivElement>(null);
+  const collapsed = detent === 0;
 
   revealInfo.current = () => {
     setTab("info");
@@ -142,8 +144,9 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
   };
 
   const selectTab = (t: Tab) => {
+    if (t === tab && !collapsed) return setDetent(0);   // tap the open tab to get the map back
     setTab(t);
-    setDetent((d) => (t === "map" ? 0 : Math.max(d, 1)));
+    setDetent((d) => Math.max(d, 1));
   };
 
   const startDrag = (e: React.PointerEvent) => {
@@ -153,11 +156,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
     const clamp = (h: number) => clampSize(h, height * 0.06, height * 0.94, startH);
     const move = (ev: PointerEvent) => setDragH(clamp(startH + (startY - ev.clientY)));
     const up = (ev: PointerEvent) => {
-      const snapped = nearestDetent(clamp(startH + (startY - ev.clientY)) / height);
-      setDetent(snapped);
-      // Peek IS the map view; dragging up from the map defaults to the layer list.
-      if (snapped === 0) setTab("map");
-      else if (tab === "map") setTab("layers");
+      setDetent(nearestDetent(clamp(startH + (startY - ev.clientY)) / height));
       setDragH(null);
       window.removeEventListener("pointermove", move);
       window.removeEventListener("pointerup", up);
@@ -178,7 +177,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           <div onPointerDown={startDrag} className="flex shrink-0 cursor-grab touch-none items-center justify-center py-2.5">
             <span className="h-1.5 w-10 rounded-full bg-border" />
           </div>
-          {tab !== "map" && (
+          {!collapsed && (
             <div className="min-h-0 flex-1 overflow-y-auto">
               <div className="px-3 pb-3">{tab === "layers" ? layers : info}</div>
               <LegalFooter />
@@ -192,9 +191,9 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
             key={t.id}
             type="button"
             onClick={() => selectTab(t.id)}
-            aria-current={tab === t.id ? "page" : undefined}
+            aria-expanded={tab === t.id && !collapsed}
             className={"flex flex-1 flex-col items-center gap-0.5 py-2 text-[11px] font-medium "
-              + (tab === t.id ? "text-primary" : "text-muted-foreground hover:text-foreground")}
+              + (tab === t.id && !collapsed ? "text-primary" : "text-muted-foreground hover:text-foreground")}
           >
             <svg className={icon} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
               {t.path}

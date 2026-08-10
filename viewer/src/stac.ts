@@ -375,6 +375,16 @@ export type ItemsIndex = { type?: string; collection?: string; count?: number; i
 const indexUrlFor = (collectionHref: string) =>
   collectionHref.replace(/(collection|catalog)\.json(\?.*)?$/, "items.json");
 
+/** `items.json` is our own convention, not STAC. A federated catalog (USWB) is somebody else's
+ *  bucket and has no reason to publish one, so asking is three guaranteed 404s per view. */
+export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL): boolean => {
+  try {
+    return new URL(collectionHref, location.href).origin === new URL(catalogUrl, location.href).origin;
+  } catch {
+    return false;
+  }
+};
+
 /** Fetch the compact items index for each given collection. Per-collection result carries
  *  the parsed index when present, or an error (e.g. 404 on a pre-index catalog) so the
  *  caller can fall back to per-item fetches. `retry: false` — a 404 is a fast, final miss. */
@@ -385,14 +395,16 @@ export function useIndexes(collections: { id: string; href: string }[]) {
       queryFn: () => fetchJson(indexUrlFor(c.href)) as Promise<unknown>,
       staleTime: 5 * 60_000,
       retry: false,
+      enabled: hasItemsIndex(c.href),
     })),
   });
+  // A foreign catalog reports `missing` without a request — same fallback, no failed fetch.
   return collections.map((c, i) => ({
     id: c.id,
     href: c.href,
     index: results[i].data as ItemsIndex | undefined,
-    isLoading: results[i].isLoading,
-    missing: Boolean(results[i].error),
+    isLoading: hasItemsIndex(c.href) && results[i].isLoading,
+    missing: !hasItemsIndex(c.href) || Boolean(results[i].error),
   }));
 }
 

@@ -1,12 +1,12 @@
 # Per-PR preview of the warehouse viewer (#154). Trigger: pull request touching viewer/**.
 #
-# Lands in the PRIVATE review bucket under `review/viewer/pr-<N>/`, served by the existing
-# `ugs-warehouse-review-serving` Cloud Run app behind the same IAP as everything else there —
-# no new service, and previews are not world-readable. serve.py already routes a `pr-<n>` subtree
-# to its own index.html.
+# Lands in the PREVIEWS bucket — separate from the review bucket, so the SA running this build
+# (which is executing unmerged branch code) has objectAdmin on a throwaway bucket and no access to
+# review data. Served by the existing `ugs-warehouse-review-serving` Cloud Run app behind the same
+# IAP, so previews are never world-readable.
 #
-# Expiry is a bucket lifecycle rule on `review/viewer/pr-` (infra/buckets.tf), not a step here: a
-# build that dies mid-way, or a PR closed without the cleanup trigger firing, still gets swept.
+# Expiry is bucket-wide: everything in that bucket is a preview, so the lifecycle rule is "delete
+# anything older than 7 days" with no prefix to mis-target. Covers builds that die mid-way.
 #
 # NOTE on `--base`: this mirrors deploy-viewer-review in cloudbuild.yaml, which bakes an absolute
 # base because the bundle is served from a path prefix. That makes a preview a DIFFERENT ARTIFACT
@@ -16,11 +16,10 @@ substitutions:
   _REGION: us-central1
   _FEATURES_SERVICE: ugs-warehouse-features
   _TILES_SERVICE: ugs-warehouse-tiles
-  _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
+  _PREVIEWS_BUCKET: ut-dnr-ugs-maps-prod-previews
   _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
-  # Trailing `pr-` matters: the lifecycle rule keys on it, and `review/viewer/` alone would match
-  # the LIVE internal viewer.
-  _PREVIEW_PREFIX: review/viewer/pr-
+  # Object path == URL path, so what serve.py routes and what the bucket holds are the same string.
+  _PREVIEW_PATH: preview/viewer/pr-
 
 steps:
   # Same service-URL resolution as the prod build, so the preview's endpoint links aren't dead.
@@ -51,7 +50,7 @@ steps:
         export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
         cd viewer
         npm ci
-        npm run build -- --base=/${_PREVIEW_PREFIX}$_PR_NUMBER/ --outDir dist-preview
+        npm run build -- --base=/${_PREVIEW_PATH}$_PR_NUMBER/ --outDir dist-preview
 
   - id: deploy-preview
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -60,12 +59,12 @@ steps:
       - -c
       - |
         set -e
-        DEST="gs://${_REVIEW_BUCKET}/${_PREVIEW_PREFIX}$_PR_NUMBER"
+        DEST="gs://${_PREVIEWS_BUCKET}/${_PREVIEW_PATH}$_PR_NUMBER"
         gcloud storage rsync viewer/dist-preview "$$DEST" \
           --recursive --delete-unmatched-destination-objects
         # Never cache preview HTML: a force-push has to be visible on reload.
         gcloud storage objects update "$$DEST/index.html" --cache-control="no-cache"
-        echo "preview: ${_REVIEW_SERVING_URL}/${_PREVIEW_PREFIX}$_PR_NUMBER/"
+        echo "preview: ${_REVIEW_SERVING_URL}/${_PREVIEW_PATH}$_PR_NUMBER/"
 
 options:
   logging: CLOUD_LOGGING_ONLY

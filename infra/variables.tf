@@ -80,3 +80,15 @@ variable "labels" {
     managed   = "opentofu"
   }
 }
+
+variable "previews_bucket" {
+  type        = string
+  description = "Bucket holding per-PR preview bundles. Separate from the review bucket so the identity that writes previews needs no access to review data (#154)."
+  default     = "ut-dnr-ugs-maps-prod-previews"
+}
+
+variable "preview_service_account" {
+  type        = string
+  description = "Cloud Build SA for the PREVIEW triggers only. Empty → no grants are created and previews are not deployable. Deliberately not the shared build SA: a preview builds unmerged branch code, so it is the least-trusted identity in the system (#75)."
+  default     = ""
+}

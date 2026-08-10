@@ -51,6 +51,12 @@ resource "google_cloud_run_v2_service" "review_serving" {
         name  = "WAREHOUSE_STAC_PREFIX"
         value = "review/stac"
       }
+      # Per-PR previews come from their own bucket (#154); serve.py routes the `preview/` path there
+      # and reads everything else from the review bucket. Unset would simply disable previews.
+      env {
+        name  = "REVIEW_PREVIEW_BUCKET"
+        value = google_storage_bucket.previews.name
+      }
       env {
         name  = "WAREHOUSE_PUBLIC_BASE_URL"
         value = "https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app"

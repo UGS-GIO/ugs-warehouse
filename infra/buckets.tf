@@ -51,24 +51,6 @@ resource "google_storage_bucket" "review" {
     }
   }
 
-  # Viewer previews, same deal under its own prefix (#154). Two SPAs, two prefixes — a single
-  # `review/` rule would match both live bundles.
-  lifecycle_rule {
-    action { type = "Delete" }
-    condition {
-      age            = 7
-      matches_prefix = ["review/viewer/pr-"]
-    }
-  }
-
-  lifecycle_rule {
-    action { type = "Delete" }
-    condition {
-      days_since_noncurrent_time = 1
-      matches_prefix             = ["review/viewer/pr-"]
-    }
-  }
-
   # Signed URLs from /api/review-catalog (review_catalog.py) point straight at
   # storage.googleapis.com — maplibre's PMTiles range-reads and duckdb-wasm's GeoParquet reads
   # fetch them cross-origin from the hazards-review app, so the bucket (not just review-api) needs
@@ -90,5 +72,35 @@ resource "google_storage_bucket" "review" {
 
   lifecycle {
     prevent_destroy = true
+  }
+}
+
+# --- previews ------------------------------------------------------------------------------------
+# Per-PR preview bundles, in their OWN bucket rather than a prefix of the review bucket (#154).
+#
+# The reason is the privilege boundary, not tidiness. A preview is built from an UNMERGED branch,
+# so its build identity is the least trusted one we have; it must not be able to read review data.
+# A prefix-conditioned grant on the review bucket cannot express that — `storage.objects.list` is
+# evaluated against the bucket, so `resource.name.startsWith(...)` does not authorize the listing
+# an rsync performs, and the SA would need unconditioned read across the whole review bucket.
+# A separate bucket makes the boundary a resource, which IAM can actually scope to.
+#
+# Falls out of that choice: versioning stays OFF (nothing here is worth a history, and it removes
+# the noncurrent-sweep rule the review bucket needs), `force_destroy` is safe because nothing here
+# is real, and the lifecycle rule needs no prefix at all — everything in this bucket is a preview,
+# so "delete anything older than a week" cannot mis-target a live bundle. The review bucket's rules
+# carry a warning about exactly that trap (`review/app/pr-`, NOT `review/app/`).
+resource "google_storage_bucket" "previews" {
+  name                        = var.previews_bucket
+  location                    = var.region
+  storage_class               = "STANDARD"
+  force_destroy               = true
+  public_access_prevention    = "enforced"
+  uniform_bucket_level_access = true
+  labels                      = var.labels
+
+  lifecycle_rule {
+    action { type = "Delete" }
+    condition { age = 7 }
   }
 }

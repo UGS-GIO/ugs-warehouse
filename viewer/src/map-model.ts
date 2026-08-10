@@ -81,3 +81,21 @@ export function clampSize(n: number, min: number, max: number, fallback: number)
 // map re-flies on every distinct pick — even two features at the same lat/lon (identical bbox). The
 // bbox→geometry upgrade within one pick reuses the same key, so it doesn't double-fly.
 export type FocusSel = { bbox?: [number, number, number, number]; geometry?: GeoJSON.Geometry | null; key?: string | number };
+
+// A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
+// layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
+// (rasterPmHref — the per-scale geologic-map mosaics, served via the pmtiles:// protocol).
+export type ActiveLayer = {
+  id: string; title: string; bbox?: number[];
+  pmHref?: string; pmLayer?: string; styleUrl?: string;
+  cogHref?: string;
+  rasterPmHref?: string;
+};
+
+// A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
+// to open it on click. Aspatial items (no bbox) are filtered out by the caller.
+export type Footprint = { href: string; id: string; title: string; bbox: number[] };
+
+// Distinct colors cycled per active layer.
+export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
+export const colorFor = (i: number) => LAYER_COLORS[i % LAYER_COLORS.length];

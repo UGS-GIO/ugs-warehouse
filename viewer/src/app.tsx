@@ -6,7 +6,7 @@ import { type CatalogDoc } from "./search";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
 import { layerCollectionIds } from "./catalog";
-import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./map";
+import { type ActiveLayer, colorFor, type Footprint } from "./map-model";
 import { LegalFooter } from "./legal-footer";
 import { LayerList, type LayerRow } from "./layer-list";
 import { MapLegend } from "./map-legend";
@@ -25,6 +25,8 @@ const Architecture = lazy(() => import("./architecture").then((m) => ({ default:
 const ArticleSearch = lazy(() => import("./search").then((m) => ({ default: m.ArticleSearch })));
 const Guide = lazy(() => import("./guide").then((m) => ({ default: m.Guide })));
 const ReviewDashboard = lazy(() => import("./review-dashboard").then((m) => ({ default: m.ReviewDashboard })));
+// maplibre is ~1.5MB of the bundle and the catalog, search and doc views never draw a map.
+const ItemMap = lazy(() => import("./map").then((m) => ({ default: m.ItemMap })));
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name
 // that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays

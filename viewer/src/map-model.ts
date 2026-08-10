@@ -99,3 +99,14 @@ export type Footprint = { href: string; id: string; title: string; bbox: number[
 // Distinct colors cycled per active layer.
 export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
 export const colorFor = (i: number) => LAYER_COLORS[i % LAYER_COLORS.length];
+
+// The `l` search param. Three states, and collapsing two of them is why the last layer could not
+// be turned off: absent = no choice yet (the open item draws), `none` = every layer off, else a
+// list. The router drops an empty param, so "off" needs a value of its own.
+export const NO_LAYERS = "none";
+
+export const parseLayerParam = (l?: string): string[] | undefined =>
+  l === NO_LAYERS ? [] : l ? l.split(",").filter(Boolean) : undefined;
+
+export const layerParam = (ids?: string[]): string | undefined =>
+  ids ? (ids.length ? ids.join(",") : NO_LAYERS) : undefined;

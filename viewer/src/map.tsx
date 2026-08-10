@@ -76,9 +76,11 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
-  // Coverage overlay (all item footprints as clickable rectangles) — on by default so opening the
-  // Map view immediately shows WHAT IS MAPPED WHERE, including items with no COG/PMTiles to draw.
-  const [showCoverage, setShowCoverage] = useState(true);
+  // Coverage overlay (all item footprints as clickable rectangles) — OFF by default: on, every
+  // item in the open collection draws a rectangle whether or not its layer is on, so turning a
+  // layer off still left something on the map. Opt in from the toggle when you want the "what is
+  // mapped where" view.
+  const [showCoverage, setShowCoverage] = useState(false);
   const coverage = showCoverage && footprints.length ? coverageFC(footprints) : null;
   // COG (raster) layers need the cog:// protocol registered before their Source mounts. Register
   // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.

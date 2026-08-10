@@ -20,6 +20,7 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
   legend?: ReactNode;   // what the active layers mean — belongs with them, not after the whole list
 }) {
   const [filter, setFilter] = useState("");
+  const [closed, setClosed] = useState<Set<string>>(new Set());
   const q = filter.trim().toLowerCase();
   const match = (r: LayerRow) => !q || r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q);
 
@@ -62,14 +63,25 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
         </div>
       )}
 
+      {/* Collapsible: a mart schema can run to dozens of layers, and scrolling past one you don't
+          care about to reach the next was the only way through. A filter re-opens every group,
+          since a closed one would hide its own matches. */}
       {groups.map(({ g, items }) => (
-        <div key={g}>
-          {/* Sticky so the group you're scrolling through stays named. */}
-          <div className="sticky top-0 z-10 bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            {g}
-          </div>
+        <details key={g} open={Boolean(q) || !closed.has(g)}
+          onToggle={(e) => {
+            const { open } = e.currentTarget;   // read before the updater runs — React nulls it
+            setClosed((prev) => {
+              const next = new Set(prev);
+              if (open) next.delete(g); else next.add(g);
+              return next;
+            });
+          }}>
+          <summary className="sticky top-0 z-10 cursor-pointer list-none bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+            <span className="inline-block w-3 transition-transform [details[open]_&]:rotate-90">▸</span>
+            {g} <span className="font-normal normal-case">· {items.length}</span>
+          </summary>
           {items.map((r) => <Row key={r.id} r={r} on={false} />)}
-        </div>
+        </details>
       ))}
 
       {!groups.length && !active.length && (

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, clampSize, DETENTS, hasFootprint, mapKindOf, nearestDetent, nextPick, validBbox } from "./map-model";
+import { boundsOf, clampSize, DETENTS, hasFootprint, layerParam, mapKindOf, nearestDetent, nextPick,
+  NO_LAYERS, parseLayerParam, validBbox } from "./map-model";
 import type { StacDoc } from "./stac";
 
 describe("validBbox", () => {
@@ -121,5 +122,28 @@ describe("clampSize", () => {
 
   it("falls back rather than collapsing a pane on a non-numeric stored value", () => {
     expect(clampSize(NaN, 100, 500, 200)).toBe(200);
+  });
+});
+
+describe("the `l` layer param", () => {
+  it("keeps 'nothing chosen yet' and 'everything off' apart", () => {
+    // Collapsing these is the bug: with an item open, "off" fell back to drawing that item.
+    expect(parseLayerParam(undefined)).toBeUndefined();
+    expect(parseLayerParam(NO_LAYERS)).toEqual([]);
+  });
+
+  it("round-trips a selection", () => {
+    expect(parseLayerParam(layerParam(["a", "b"]))).toEqual(["a", "b"]);
+    expect(parseLayerParam(layerParam([]))).toEqual([]);
+    expect(parseLayerParam(layerParam(undefined))).toBeUndefined();
+  });
+
+  it("writes a value for 'off', since the router drops an empty param", () => {
+    expect(layerParam([])).toBe(NO_LAYERS);
+    expect(layerParam(undefined)).toBeUndefined();
+  });
+
+  it("ignores empty segments from a hand-edited url", () => {
+    expect(parseLayerParam("a,,b,")).toEqual(["a", "b"]);
   });
 });

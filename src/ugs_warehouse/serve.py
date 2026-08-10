@@ -81,9 +81,11 @@ VIEWER_INDEX = f"{VIEWER_PREFIX}/index.html"
 # review bucket, served behind the same IAP. Each SPA needs its own index for client-side-route fallback,
 # so an unknown route under /review/app/ serves the app shell, not the internal viewer's.
 APP_PREFIX = os.environ.get("REVIEW_APP_PREFIX", "review/app").strip("/")
-# Per-PR previews of the review app live under <APP_PREFIX>/pr-<n>/ (CI uploads a full build there on
-# each PR). Each preview is its own SPA and must fall back to ITS OWN index.html, not the live app's.
-_PR_PREVIEW_RE = re.compile(rf"^({re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+)(?:/|$)")
+# Per-PR previews live under <spa prefix>/pr-<n>/ (CI uploads a full build there on each PR), for
+# EITHER SPA. Each preview is its own SPA and must fall back to ITS OWN index.html, not the live
+# app's — a preview that served the live shell would silently render the wrong build.
+_PR_PREVIEW_RE = re.compile(
+    rf"^((?:{re.escape(APP_PREFIX)}|{re.escape(VIEWER_PREFIX)})/pr-[A-Za-z0-9._-]+)(?:/|$)")
 # (prefix, index) longest-prefix-first so a nested prefix wins over a shorter one.
 _SPA_INDEXES = sorted(
     [(APP_PREFIX, f"{APP_PREFIX}/index.html"), (VIEWER_PREFIX, VIEWER_INDEX)],

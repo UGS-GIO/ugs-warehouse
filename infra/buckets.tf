@@ -51,6 +51,24 @@ resource "google_storage_bucket" "review" {
     }
   }
 
+  # Viewer previews, same deal under its own prefix (#154). Two SPAs, two prefixes — a single
+  # `review/` rule would match both live bundles.
+  lifecycle_rule {
+    action { type = "Delete" }
+    condition {
+      age            = 7
+      matches_prefix = ["review/viewer/pr-"]
+    }
+  }
+
+  lifecycle_rule {
+    action { type = "Delete" }
+    condition {
+      days_since_noncurrent_time = 1
+      matches_prefix             = ["review/viewer/pr-"]
+    }
+  }
+
   # Signed URLs from /api/review-catalog (review_catalog.py) point straight at
   # storage.googleapis.com — maplibre's PMTiles range-reads and duckdb-wasm's GeoParquet reads
   # fetch them cross-origin from the hazards-review app, so the bucket (not just review-api) needs

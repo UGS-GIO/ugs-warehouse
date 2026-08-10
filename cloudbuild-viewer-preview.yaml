@@ -1,22 +1,30 @@
-# Per-PR viewer preview. Trigger: pull request touching viewer/**.
+# Per-PR preview of the warehouse viewer (#154). Trigger: pull request touching viewer/**.
 #
-# The viewer builds with Vite `base: "./"`, so the bundle is path-agnostic — these are the SAME
-# BYTES that ship to prod, just under a different prefix. You promote what you clicked, which the
-# review app's previews cannot claim (they bake `base` in at build time — see #39).
+# Lands in the PRIVATE review bucket under `review/viewer/pr-<N>/`, served by the existing
+# `ugs-warehouse-review-serving` Cloud Run app behind the same IAP as everything else there —
+# no new service, and previews are not world-readable. serve.py already routes a `pr-<n>` subtree
+# to its own index.html.
 #
-# Expiry is a bucket lifecycle rule on `warehouse/viewer/pr-` (infra/buckets.tf), not a cleanup
-# step here: a build that fails or a PR that is force-pushed still gets swept.
+# Expiry is a bucket lifecycle rule on `review/viewer/pr-` (infra/buckets.tf), not a step here: a
+# build that dies mid-way, or a PR closed without the cleanup trigger firing, still gets swept.
+#
+# NOTE on `--base`: this mirrors deploy-viewer-review in cloudbuild.yaml, which bakes an absolute
+# base because the bundle is served from a path prefix. That makes a preview a DIFFERENT ARTIFACT
+# from the public build (which ships `base: "./"`) — the same caveat #39 raises for the review app.
+# Fine for "let a reviewer click the UI"; not a substitute for testing the public bundle.
 substitutions:
   _REGION: us-central1
   _FEATURES_SERVICE: ugs-warehouse-features
-  _PUBLIC_BUCKET: ut-dnr-ugs-maps-prod-public
-  # Trailing `pr-` matters: the lifecycle rule keys on this prefix, and `warehouse/viewer/` alone
-  # would match the LIVE viewer.
-  _PREVIEW_PREFIX: warehouse/viewer/pr-
+  _TILES_SERVICE: ugs-warehouse-tiles
+  _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
+  _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
+  # Trailing `pr-` matters: the lifecycle rule keys on it, and `review/viewer/` alone would match
+  # the LIVE internal viewer.
+  _PREVIEW_PREFIX: review/viewer/pr-
 
 steps:
-  # Same feature-URL resolution as the prod deploy, so the preview's endpoint links aren't dead.
-  - id: resolve-features-url
+  # Same service-URL resolution as the prod build, so the preview's endpoint links aren't dead.
+  - id: resolve-service-urls
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
     args:
@@ -25,17 +33,25 @@ steps:
         gcloud run services describe ${_FEATURES_SERVICE} --region=${_REGION} \
           --format='value(status.url)' > /workspace/features_url 2>/dev/null \
           || printf '' > /workspace/features_url
+        gcloud run services describe ${_TILES_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' > /workspace/tiles_url 2>/dev/null \
+          || printf '' > /workspace/tiles_url
 
-  - id: build-viewer
+  - id: build-preview
     name: node:22
     entrypoint: bash
     args:
       - -c
       - |
+        set -e
         export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
+        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
+        # Reads the REVIEW catalog, like the live internal viewer — a preview pointed at the public
+        # catalog would look right while testing none of the review data path.
+        export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
         cd viewer
         npm ci
-        npm run build
+        npm run build -- --base=/${_PREVIEW_PREFIX}$_PR_NUMBER/ --outDir dist-preview
 
   - id: deploy-preview
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -44,12 +60,12 @@ steps:
       - -c
       - |
         set -e
-        DEST="gs://${_PUBLIC_BUCKET}/${_PREVIEW_PREFIX}$_PR_NUMBER"
-        gcloud storage rsync viewer/dist "$$DEST" \
+        DEST="gs://${_REVIEW_BUCKET}/${_PREVIEW_PREFIX}$_PR_NUMBER"
+        gcloud storage rsync viewer/dist-preview "$$DEST" \
           --recursive --delete-unmatched-destination-objects
-        # Preview HTML must never be cached: a force-push has to be visible on reload.
+        # Never cache preview HTML: a force-push has to be visible on reload.
         gcloud storage objects update "$$DEST/index.html" --cache-control="no-cache"
-        echo "preview: https://maps-assets.geology.utah.gov/${_PREVIEW_PREFIX}$_PR_NUMBER/index.html"
+        echo "preview: ${_REVIEW_SERVING_URL}/${_PREVIEW_PREFIX}$_PR_NUMBER/"
 
 options:
   logging: CLOUD_LOGGING_ONLY

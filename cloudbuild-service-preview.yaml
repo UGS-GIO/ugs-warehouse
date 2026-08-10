@@ -1,0 +1,51 @@
+# Per-PR preview of a Cloud Run service, as a TAGGED REVISION carrying no traffic.
+# Trigger: pull request touching the service's sources (tiles/**, api/**, src/**).
+#
+#   https://pr-123---ugs-warehouse-tiles-<hash>.a.run.app
+#
+# Why a tag rather than a separate service: same service means same IAM, same env, same secrets —
+# the preview differs from prod only in the image. `--no-traffic` keeps prod serving its current
+# revision, and a tagged revision scales to zero, so an idle preview costs nothing.
+#
+# Expiry: Cloud Run's own caps are a backstop, not a policy (1,000 revisions / 2,000 tags per
+# service, oldest first). The tag is removed when the PR closes — see the untag step in
+# cloudbuild-preview-cleanup.yaml.
+substitutions:
+  _REGION: us-central1
+  _SERVICE: ugs-warehouse-tiles
+  _CONTEXT: tiles          # build context / Dockerfile dir for this service
+
+steps:
+  - id: build-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse/${_SERVICE}:pr-$_PR_NUMBER
+      - ${_CONTEXT}
+
+  - id: push-image
+    name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse/${_SERVICE}:pr-$_PR_NUMBER
+
+  # `--no-traffic` + `--tag`: the revision is addressable at its own URL and receives nothing from
+  # the live URL. Prod is unaffected even if the preview crashloops.
+  - id: deploy-tagged-revision
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        gcloud run deploy ${_SERVICE} \
+          --region=${_REGION} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse/${_SERVICE}:pr-$_PR_NUMBER \
+          --no-traffic \
+          --tag=pr-$_PR_NUMBER
+        gcloud run services describe ${_SERVICE} --region=${_REGION} \
+          --format="value(status.traffic.filter(tag='pr-$_PR_NUMBER').extract(url))"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

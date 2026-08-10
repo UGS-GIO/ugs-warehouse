@@ -1,0 +1,55 @@
+# Per-PR viewer preview. Trigger: pull request touching viewer/**.
+#
+# The viewer builds with Vite `base: "./"`, so the bundle is path-agnostic — these are the SAME
+# BYTES that ship to prod, just under a different prefix. You promote what you clicked, which the
+# review app's previews cannot claim (they bake `base` in at build time — see #39).
+#
+# Expiry is a bucket lifecycle rule on `warehouse/viewer/pr-` (infra/buckets.tf), not a cleanup
+# step here: a build that fails or a PR that is force-pushed still gets swept.
+substitutions:
+  _REGION: us-central1
+  _FEATURES_SERVICE: ugs-warehouse-features
+  _PUBLIC_BUCKET: ut-dnr-ugs-maps-prod-public
+  # Trailing `pr-` matters: the lifecycle rule keys on this prefix, and `warehouse/viewer/` alone
+  # would match the LIVE viewer.
+  _PREVIEW_PREFIX: warehouse/viewer/pr-
+
+steps:
+  # Same feature-URL resolution as the prod deploy, so the preview's endpoint links aren't dead.
+  - id: resolve-features-url
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run services describe ${_FEATURES_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' > /workspace/features_url 2>/dev/null \
+          || printf '' > /workspace/features_url
+
+  - id: build-viewer
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
+        cd viewer
+        npm ci
+        npm run build
+
+  - id: deploy-preview
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        DEST="gs://${_PUBLIC_BUCKET}/${_PREVIEW_PREFIX}$_PR_NUMBER"
+        gcloud storage rsync viewer/dist "$$DEST" \
+          --recursive --delete-unmatched-destination-objects
+        # Preview HTML must never be cached: a force-push has to be visible on reload.
+        gcloud storage objects update "$$DEST/index.html" --cache-control="no-cache"
+        echo "preview: https://maps-assets.geology.utah.gov/${_PREVIEW_PREFIX}$_PR_NUMBER/index.html"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

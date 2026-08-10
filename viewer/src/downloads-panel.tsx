@@ -1,6 +1,5 @@
-// Every way to save a file, as one grid — whether a format sits on the CDN or gets built here by
-// GDAL-WASM is our problem, not the reader's. Assets read over HTTP instead of saved (PMTiles, the
-// GL style, DuckLake) belong in "Services" — see `endpoints-panel.tsx`.
+// Every way to save a file, as one grid. Assets read over HTTP instead of saved belong in
+// "Services" — see `endpoints-panel.tsx`.
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
@@ -10,7 +9,6 @@ import { type Asset, isParquetAsset, parquetAsset, type StacDoc } from "./stac";
 import { C } from "./ui";
 import { UiSelect } from "./ui/select";
 
-// Read by URL, not saved: these live under Services. Everything else the item publishes is a file.
 const SERVICE_KEYS = new Set(["pmtiles", "style", "xyz", "ducklake", "tiles"]);
 
 const EPSG_ITEMS = [
@@ -21,8 +19,6 @@ const EPSG_ITEMS = [
   { value: "other", label: "Other (any EPSG)…" },
 ];
 
-// What each format is FOR, in front of ten of them. GeoJSON's note also stands in for the CRS
-// picker: it's WGS 84 by spec, so the picker can't move it.
 const HINTS: Record<ExportFormat, string> = {
   shp: "ArcMap · universal",
   gpkg: "QGIS · ArcGIS Pro",
@@ -32,16 +28,14 @@ const HINTS: Record<ExportFormat, string> = {
   csv: "spreadsheet · WKT geometry",
 };
 
-/** `…/thing.parquet?x=1` → `parquet`; a real extension beats the mime type as a label. */
+/** `…/thing.parquet?x=1` → `parquet` */
 const extOf = (href: string) => href.split(/[?#]/)[0].match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase();
 
-/** The item's own files. `roles:["related"]` assets (UCRC boxes/photos/attachments) are left out:
- *  the Related tables section already offers each one next to its View/Gallery buttons. */
+/** `related` assets are skipped — the Related tables section already offers each one. */
 const fileAssets = (item: StacDoc): [string, Asset][] =>
   Object.entries(item.assets ?? {})
     .filter(([key, a]) => !SERVICE_KEYS.has(key) && !a.roles?.includes("related"));
 
-// Tiles, not full-width rows: across a wide panel a row strands the arrow half a screen from its name.
 const TILE = "flex items-start justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 " +
   "text-left text-sm text-foreground no-underline hover:border-primary hover:text-primary disabled:opacity-50";
 const SUB = "mt-0.5 block text-xs font-normal text-muted-foreground";
@@ -50,19 +44,16 @@ const BBOX_LABELS = ["W", "S", "E", "N"];
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
   const fullBbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
-  // Export options — transient, and not worth putting in the URL: nobody shares "as EPSG:26912".
   const [clipOn, setClipOn] = useState(false);
   const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
   const [epsg, setEpsg] = useState(4326);
   const [customEpsg, setCustomEpsg] = useState(false);
 
-  // The download itself is one mutation: in-flight format, failure and the shapefile pre-flight
-  // verdict are all its state, so there's nothing to keep in sync by hand.
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
       const clip = clipOn ? bbox : undefined;
       const { exportItem, shapefileWarnings } = await import("./download");   // DuckDB + GDAL, on demand
-      // Warn before handing over a silently-mangled shapefile; a failed check just proceeds.
+      // A failed pre-flight just proceeds to the export.
       if (fmt === "shp" && !force) {
         const w = await shapefileWarnings(parquet!.href, clip).catch(() => null);
         if (w?.any) return w;
@@ -75,11 +66,9 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
 
   const files = fileAssets(item);
   if (!files.length) return null;
-  // Data files lead, the formats we build follow, and sidecars (ISO metadata, readme) trail.
   const data = files.filter(([, a]) => isParquetAsset(a));
   const sidecars = files.filter(([, a]) => !isParquetAsset(a));
 
-  // The ↓ is decoration; a screen reader gets the format from the link's own name.
   const assetTile = ([key, a]: [string, Asset]) => (
     <a key={key} href={a.href} target="_blank" rel="noopener" className={TILE}>
       <span className="font-medium">
@@ -109,7 +98,6 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       </div>
       {busy && <p role="status" className={`mt-1.5 ${C.muted}`}>preparing in your browser · the first one loads DuckDB (~a few MB)</p>}
 
-      {/* Collapsed by default: the common path is pick a format and go, not reproject. */}
       {parquet && (
         <details className="mt-2 border-t border-border pt-2">
           <summary className="cursor-pointer text-sm text-muted-foreground">Projection &amp; area</summary>

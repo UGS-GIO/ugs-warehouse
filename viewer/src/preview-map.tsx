@@ -97,8 +97,8 @@ export function usePreviewMap(): Ctx {
 
 type Renders = ReturnType<typeof rendersOf>;
 
-/** State that belongs to one item: when `itemId` changes it reads back as `initial`. A reset effect
- *  does this a frame late, so the new item renders once carrying the old item's highlight first. */
+/** State scoped to one item: when `itemId` changes it reads back as `initial`. A reset effect does
+ *  this a frame late, so the new item would render once carrying the old item's highlight. */
 function usePerItem<T>(itemId: string, initial: T) {
   const [held, setHeld] = useState<{ id: string; v: T }>(() => ({ id: itemId, v: initial }));
   const set = useCallback((next: T | ((prev: T) => T)) => {
@@ -114,12 +114,12 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const [spec, setSpec] = useState<PreviewSpec>(null);
   const [slotEl, setSlotEl] = useState<HTMLElement | null>(null);
   const itemId = specItemId(spec);
-  // The cross-boundary wires belong to the shown item — a stale fly/highlight would mislead.
+  // Scoped to the shown item — a stale fly/highlight would mislead.
   const [focus, setFocus] = usePerItem<FocusSel | null>(itemId, null);
   const [pick, setPick] = usePerItem<MapPick | null>(itemId, null);
 
-  // "Symbolize by" is owned here rather than mirrored up out of the map: the endpoints panel hands
-  // out the style/ArcGIS URL for the symbology on screen, so both need one copy of it.
+  // Owned here, not mirrored up out of the map: the endpoints panel hands out the URL for the
+  // symbology on screen, so both need the same copy.
   const renders: Renders = useMemo(() => (spec?.kind === "vector" ? rendersOf(spec.item) : {}), [spec]);
   const [chosen, setChosen] = usePerItem(itemId, "");
   const render = renders[chosen] ? chosen : renders.default ? "default" : Object.keys(renders)[0] ?? "";

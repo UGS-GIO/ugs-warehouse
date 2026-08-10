@@ -194,7 +194,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap }: {
       {/* Below the map/table, not above it: the description is context for what you are looking at,
           and putting prose between the title and the data pushed the data down the page. */}
       {typeof p.description === "string" && (
-        <p className="mt-3 max-w-[75ch] text-muted-foreground">{p.description}</p>
+        <p className="mt-3 max-w-full text-muted-foreground">{p.description}</p>
       )}
       <div className="mt-1.5 flex flex-wrap gap-2">
         {hasGeom && (

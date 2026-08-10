@@ -122,6 +122,24 @@ def _row_as_json_sql(where: str) -> str:
     return f"SELECT to_jsonb(m)::text FROM ({inner}) m"
 
 
+# Columns the catalog treats as a sequence rather than a value. `to_jsonb` gets the TYPE right
+# (jsonb → list, text → str) but says nothing about SHAPE: a jsonb scalar is a valid document, so
+# `keywords = '"counties"'` parses cleanly to a str and `list(...)` then publishes eight
+# one-character keywords — #64's output with the parse looking correct. Nothing writes a scalar
+# today (the curation tool always emits an array); this is so a row that does is loud.
+_LIST_COLS = ("keywords",)
+
+
+def _checked_shapes(meta: dict) -> dict:
+    for col in _LIST_COLS:
+        if col in meta and not isinstance(meta[col], list):
+            raise TypeError(
+                f"raw.schema_registry.{col} must be a JSON array, got "
+                f"{type(meta[col]).__name__} {meta[col]!r} — fix the registry row",
+            )
+    return meta
+
+
 def read_metadata(topic: Topic) -> dict:
     """Per-topic descriptive metadata from `raw.schema_registry` (keyed by domain_topic,
     which equals the topic stem). Graceful: returns {} if the columns/table/grant aren't
@@ -154,7 +172,8 @@ def read_metadata(topic: Topic) -> dict:
     # truthy string "[]". Not guarded: a row that will not parse is a malformed registry row, and
     # swallowing it here is how the previous bug stayed invisible. Keyed by column name, so this
     # no longer depends on the SELECT order lining up with _META_COLS.
-    return {k: v for k, v in json.loads(row[0]).items() if v not in (None, "", [], {})}
+    return _checked_shapes({k: v for k, v in json.loads(row[0]).items()
+                            if v not in (None, "", [], {})})
 
 
 def discover() -> list[Topic]:

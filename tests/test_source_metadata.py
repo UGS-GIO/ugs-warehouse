@@ -137,6 +137,25 @@ def test_unparseable_row_raises_rather_than_degrading(monkeypatch, topic):
         _run(monkeypatch, topic, con)
 
 
+def test_a_jsonb_scalar_where_an_array_belongs_raises(monkeypatch, topic):
+    # `to_jsonb` fixes the TYPE, not the SHAPE: `keywords = '"counties"'::jsonb` is a valid
+    # document that parses to a str, survives the empty-filter, and `list(...)` downstream turns
+    # it into eight one-character keywords — #64's exact output with the parse looking correct.
+    con = _row({"keywords": "counties"})
+    with pytest.raises(TypeError, match="keywords"):
+        _run(monkeypatch, topic, con)
+
+
+def test_a_proper_keyword_array_still_passes(monkeypatch, topic):
+    out = _run(monkeypatch, topic, _row({"keywords": ["counties", "boundaries"]}))
+    assert out["keywords"] == ["counties", "boundaries"]
+
+
+def test_an_empty_keyword_array_is_dropped_not_raised(monkeypatch, topic):
+    # `[]` is the right shape and simply uncurated — the empty-filter removes it before the guard.
+    assert "keywords" not in _run(monkeypatch, topic, _row({"keywords": []}))
+
+
 def test_a_text_column_whose_contents_look_like_json_stays_text(monkeypatch, topic):
     # The reason type knowledge belongs in Postgres rather than a heuristic here: "parse anything
     # that looks like JSON" would turn this description into a list. Postgres knows the column is

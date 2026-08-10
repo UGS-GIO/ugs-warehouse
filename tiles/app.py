@@ -381,7 +381,18 @@ def style(topic: str, request: Request, render: str | None = None) -> Response:
 def _proxy_tile(topic: str, z: int, x: int, y: int, cache: str) -> Response:
     """Flattened tile route. go-pmtiles addresses our archives as `{topic}/{topic}` because they
     live one directory per topic on the CDN; consumers should not have to say it twice."""
-    body, status, hdrs = _upstream(f"/{topic}/{topic}/{z}/{x}/{y}.mvt")
+    try:
+        body, status, hdrs = _upstream(f"/{topic}/{topic}/{z}/{x}/{y}.mvt")
+    except HTTPException as exc:
+        # Past maxLOD — or off the archive's grid — go-pmtiles 404s. For a topic we serve that is
+        # an ABSENT tile, not an error: our descriptor advertises maxzoom 22 over maxLOD 14, so a
+        # client that overzooms by REQUESTING deeper tiles (rather than rescaling the last cached
+        # level) is inside the range we published. Esri's own services answer those with an empty
+        # tile; we answered with `404 application/json` where protobuf was asked for (#117).
+        # An unknown topic still 404s — that one is a real error.
+        if exc.status_code == 404 and topic in _topics():
+            return Response(status_code=204)
+        raise
     ctype = hdrs.get("Content-Type", "")
     encoding = hdrs.get("Content-Encoding")
     if status == 204 or not body:

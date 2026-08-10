@@ -12,6 +12,7 @@ bbox/row_count come from the transformed view.
 from __future__ import annotations
 
 import datetime
+import sys
 
 import duckdb
 
@@ -71,6 +72,50 @@ def _table_columns(con: duckdb.DuckDBPyConnection, view: str) -> list[dict]:
             for r in con.execute(f"DESCRIBE {view}").fetchall()]
 
 
+def _publication_datetime(con: duckdb.DuckDBPyConnection, view: str) -> str | None:
+    """The data's own publication date, when the serving table carries one.
+
+    `_publication_date` is the date entered on the ugs-ingest upload form; dataELT#504 put it on
+    the serving-table enrichment allowlist. Dating from the ingest clock instead made Utah counties
+    and Quaternary faults seven minutes apart, and gave every ISO record a zero-width temporal
+    extent at the run time.
+
+    PROBED, not assumed. Tables gain the column only as each is republished, and a topic published
+    off publish.sh's fallback paths may never gain it — an unconditional MAX() would raise and take
+    that item's STAC + ISO record down entirely, which is worse than a wrong-but-present date.
+
+    MAX because a serving table holds the current rows from potentially several loads: the item is
+    as new as the newest publication in it.
+    """
+    # `write()` takes no connection when the caller supplies bbox + row_count itself; nothing to
+    # probe then, same as a table without the column.
+    if con is None:
+        return None
+    cols = {r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()}
+    if "_publication_date" not in cols:
+        return None
+    value = con.execute(f'SELECT MAX("_publication_date") FROM {view}').fetchone()[0]
+    if value is None:                       # column present, nobody filled it in
+        return None
+    # The dbt source YAML doesn't declare a type, so take date, timestamp or text as they come.
+    if isinstance(value, str):
+        try:
+            value = datetime.datetime.fromisoformat(value)
+        except ValueError:
+            print(f"[{view}] _publication_date not a date: {value!r} — dating from the clock",
+                  file=sys.stderr)
+            return None
+    if isinstance(value, datetime.datetime):
+        stamp = value if value.tzinfo else value.replace(tzinfo=datetime.UTC)
+    elif isinstance(value, datetime.date):
+        stamp = datetime.datetime.combine(value, datetime.time(), tzinfo=datetime.UTC)
+    else:
+        print(f"[{view}] _publication_date is a {type(value).__name__} — dating from the clock",
+              file=sys.stderr)
+        return None
+    return stamp.astimezone(datetime.UTC).isoformat()
+
+
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           *, title: str | None = None, description: str | None = None,
           metadata: dict | None = None, bbox: list[float] | None = None,
@@ -82,7 +127,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     rel_fks = rel.get("foreign_keys") or []
     bb = bbox if bbox is not None else _bbox(con, view)
     rc = row_count if row_count is not None else _row_count(con, view)
-    now = datetime.datetime.now(datetime.UTC).isoformat()
+    # The data's date when it has one; the clock only as a fallback (#65).
+    item_dt = _publication_datetime(con, view) or datetime.datetime.now(datetime.UTC).isoformat()
     md = metadata or {}
 
     archive_path = f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}.parquet"
@@ -165,7 +211,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     item = stac.build_item(
         item_id=topic.stem, collection=topic.schema,
         collection_path=collection_path(topic.schema),
-        geometry=stac.bbox_polygon(bb), bbox=bb, datetime_iso=now,
+        geometry=stac.bbox_polygon(bb), bbox=bb, datetime_iso=item_dt,
         properties=props,
         assets=assets,
         # `related` links (the FK graph) ride alongside the web-map pmtiles link.

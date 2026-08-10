@@ -132,18 +132,37 @@ def item_hrefs(catalog: dict, base: str) -> list[str]:
 def harvest_topics(base: str, catalog_id: str) -> dict[str, list[dict]]:
     """Published vector items → {`<catalog>/<schema>`: [item docs]}, the per-schema split.
 
-    Reads the flat serving-topics collection (what's published today) and regroups it by
-    `ugs:dbt_schema`, so local dev sees the nested layout before a reingest exists. Falls back to
-    a bare catalog.json for the older flat-root layout.
+    Prefers the nested catalog (catalog.json -> one collection per mart schema), which is what
+    prod publishes now. The flat collection.json is still served alongside it and is the older
+    layout — its items predate the current style bindings, so preferring it gave local dev a
+    catalog with no `ugs:renders` and no sub-collections to browse.
 
     An item with no `ugs:dbt_schema` goes to an `other` collection instead of being dropped, and
     the count is printed — an unclassified layer should be visible, not silently missing.
     """
+    root = f"{base}/{catalog_id}"
+    groups: dict[str, list[dict]] = {}
     try:
-        cat, item_base = fetch(f"{base}/{catalog_id}/collection.json"), f"{base}/{catalog_id}"
+        children = child_hrefs(fetch(f"{root}/catalog.json"), root)
+    except urllib.error.HTTPError:
+        children = []
+    if children:
+        for child in children:
+            child_base = child.rsplit("/", 1)[0]
+            coll = fetch(child)
+            path = f"{catalog_id}/{coll.get('id') or child_base.rsplit('/', 1)[-1]}"
+            for href in item_hrefs(coll, child_base):
+                item = fetch(href)
+                write_item(path, item)
+                groups.setdefault(path, []).append(item)
+                print(f"  + {path}/{item['id']}")
+        return groups
+
+    print(f"  ! no nested catalog at {root} — falling back to the flat collection")
+    try:
+        cat, item_base = fetch(f"{root}/collection.json"), root
     except urllib.error.HTTPError:
         cat, item_base = fetch(f"{base}/catalog.json"), base
-    groups: dict[str, list[dict]] = {}
     for href in item_hrefs(cat, item_base):
         item = fetch(href)
         schema = ((item.get("properties") or {}).get("ugs:dbt_schema") or "").strip() or OTHER_GROUP

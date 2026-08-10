@@ -1,12 +1,15 @@
 # Tear down a PR's previews. Trigger: pull request closed (merged or not).
 #
-# Belt and braces, on purpose. The bucket prefix also has a lifecycle rule, so a preview from a
-# build that never reached this step still expires; this just reclaims it the same day. The Cloud
-# Run tag has no such backstop short of the per-service cap, so THIS step is the policy for tags.
+# This is the PRIMARY cleanup, not a nicety. The bucket lifecycle is a 30-day backstop, deliberately
+# longer than a PR's life: a shorter age would delete the preview of a PR that is merely sitting
+# open, and the reviewer would get a 404 with no explanation. Closing the PR is the real signal.
+#
+# Cloud Run tags have no lifecycle at all (only the 2,000/service cap), so for those this step IS
+# the policy.
 substitutions:
   _REGION: us-central1
   _PREVIEWS_BUCKET: ut-dnr-ugs-maps-prod-previews
-  _PREVIEW_PATH: preview/viewer/pr-
+  _PREVIEW_PATH: viewer/pr-
   _SERVICES: ugs-warehouse-tiles          # space-separated when more services gain previews
 
 steps:

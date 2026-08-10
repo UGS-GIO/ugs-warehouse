@@ -48,12 +48,20 @@ if _cors_origins or _cors_regex:
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"],
     )
 
+# The PREVIEWS deployment: same image, own service, own origin, own IAP, pointed at the previews
+# bucket. It serves per-PR bundles and NOTHING else — no /api/*, no live app shells. That origin
+# split is the point: preview code is unmerged branch code, and same-origin with the review API
+# would let it act as the reviewer (post/delete comments, read signed asset URLs). CORS + a
+# per-host IAP cookie stop that only if the hosts differ (#154).
+STATIC_ONLY = os.environ.get("REVIEW_STATIC_ONLY", "").lower() in ("1", "true", "yes")
+
 # Register /api routers BEFORE the catch-all object route below, or they'd be swallowed by /{path}.
-app.include_router(comments.router)
-app.include_router(comments.status_router)
-app.include_router(comments.notif_router)
-app.include_router(comments.reviewers_router)
-app.include_router(review_catalog.router)
+if not STATIC_ONLY:
+    app.include_router(comments.router)
+    app.include_router(comments.status_router)
+    app.include_router(comments.notif_router)
+    app.include_router(comments.reviewers_router)
+    app.include_router(review_catalog.router)
 
 
 @app.on_event("startup")
@@ -72,24 +80,6 @@ API_ONLY = os.environ.get("REVIEW_API_ONLY", "").lower() in ("1", "true", "yes")
 
 _store = GCSStore(bucket=config.BUCKET)
 
-# Per-PR previews live in their OWN bucket, not under a prefix of the review bucket. That's the
-# privilege boundary: the build identity that writes previews gets objectAdmin on this bucket and
-# nothing on the review bucket, which a prefix condition cannot express (`storage.objects.list` is
-# evaluated against the bucket, so a `resource.name.startsWith` binding wouldn't authorize the
-# listing an rsync does). Unset → previews are simply not served.
-PREVIEW_BUCKET = os.environ.get("REVIEW_PREVIEW_BUCKET", "").strip()
-PREVIEW_PREFIX = os.environ.get("REVIEW_PREVIEW_PREFIX", "preview").strip("/")
-_preview_store = GCSStore(bucket=PREVIEW_BUCKET) if PREVIEW_BUCKET else None
-
-
-def _store_for(object_path: str):
-    """Which bucket owns this path. Previews are a separate bucket behind the same IAP."""
-    if _preview_store is not None and (
-        object_path == PREVIEW_PREFIX or object_path.startswith(PREVIEW_PREFIX + "/")
-    ):
-        return _preview_store
-    return _store
-
 # The internal viewer's static bundle lives under this prefix in the review bucket (cloudbuild's
 # build-viewer-review deploys it there with a matching Vite base). index.html backs `/` + SPA routes.
 VIEWER_PREFIX = os.environ.get("REVIEW_VIEWER_PREFIX", "review/viewer").strip("/")
@@ -99,12 +89,14 @@ VIEWER_INDEX = f"{VIEWER_PREFIX}/index.html"
 # review bucket, served behind the same IAP. Each SPA needs its own index for client-side-route fallback,
 # so an unknown route under /review/app/ serves the app shell, not the internal viewer's.
 APP_PREFIX = os.environ.get("REVIEW_APP_PREFIX", "review/app").strip("/")
-# A per-PR preview is its own SPA and must fall back to ITS OWN index.html — one that served the
-# live shell would silently render a different build than the URL promises. Two shapes today: the
-# review app's previews under <APP_PREFIX>/pr-<n>/ (same bucket), and everything in the previews
-# bucket, which is per-PR by construction (<PREVIEW_PREFIX>/<app>/pr-<n>/).
+# A per-PR preview is its own SPA and must fall back to ITS OWN index.html — one that served a
+# different build's shell would silently render something other than the URL promises. On the
+# previews service every path is a preview (`<app>/pr-<n>/…`); on the review service the review
+# app's own previews still live under <APP_PREFIX>/pr-<n>/.
+_PREVIEW_SUBTREE = r"[A-Za-z0-9._-]+/pr-[A-Za-z0-9._-]+"
 _PR_PREVIEW_RE = re.compile(
-    rf"^((?:{re.escape(APP_PREFIX)}|{re.escape(PREVIEW_PREFIX)}/[A-Za-z0-9._-]+)/pr-[A-Za-z0-9._-]+)(?:/|$)")
+    rf"^({_PREVIEW_SUBTREE})(?:/|$)" if STATIC_ONLY
+    else rf"^({re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+)(?:/|$)")
 # (prefix, index) longest-prefix-first so a nested prefix wins over a shorter one.
 _SPA_INDEXES = sorted(
     [(APP_PREFIX, f"{APP_PREFIX}/index.html"), (VIEWER_PREFIX, VIEWER_INDEX)],
@@ -121,6 +113,9 @@ def _spa_index_for(path: str) -> str:
     m = _PR_PREVIEW_RE.match(path)
     if m:
         return f"{m.group(1)}/index.html"
+    if STATIC_ONLY:
+        # Nothing else exists on this service. Returning a live shell here is what we are avoiding.
+        raise HTTPException(status_code=404, detail="not found")
     for prefix, index in _SPA_INDEXES:
         if path == prefix or path.startswith(prefix + "/"):
             return index
@@ -183,9 +178,8 @@ def whoami(request: Request) -> dict[str, str]:
 
 def _serve_object(object_path: str, request: Request) -> Response:
     """Stream a single bucket object (with Range support). Raises 404 if it doesn't exist."""
-    store = _store_for(object_path)
     try:
-        meta = obs.head(store, object_path)  # ObjectMeta is a TypedDict
+        meta = obs.head(_store, object_path)  # ObjectMeta is a TypedDict
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="not found") from None
     size = meta["size"]
@@ -202,13 +196,13 @@ def _serve_object(object_path: str, request: Request) -> Response:
         if start > end or start >= size:
             return Response(status_code=416, headers={"Content-Range": f"bytes */{size}"})
         end = min(end, size - 1)
-        body = bytes(obs.get_range(store, object_path, start=start, end=end + 1))
+        body = bytes(obs.get_range(_store, object_path, start=start, end=end + 1))
         headers["Content-Range"] = f"bytes {start}-{end}/{size}"
         headers["Content-Length"] = str(end - start + 1)
         return Response(content=body, status_code=206, headers=headers)
 
     # Full object — stream (BytesStream is async) so large PMTiles/parquet don't buffer in memory.
-    resp = obs.get(store, object_path)
+    resp = obs.get(_store, object_path)
     headers["Content-Length"] = str(size)
     return StreamingResponse(resp.stream(), status_code=200, headers=headers, media_type=ctype)
 

@@ -27,4 +27,7 @@ export default defineConfig({
   },
   // Allow importing the canonical docs/*.md (one level above viewer/) for markdown-rendered pages.
   server: { fs: { allow: [".."] } },
+  // Default environment stays node — component tests opt into jsdom with a `@vitest-environment`
+  // docblock, so the pure tests keep running in milliseconds.
+  test: { setupFiles: ["./src/test-setup.ts"] },
 });

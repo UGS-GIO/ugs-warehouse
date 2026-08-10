@@ -4,6 +4,9 @@ import { useCallback, useState } from "react";
  *  this a frame late, so the new item would render once carrying the old item's highlight. */
 export function usePerItem<T>(itemId: string, initial: T) {
   const [held, setHeld] = useState<{ id: string; v: T }>(() => ({ id: itemId, v: initial }));
+  // React's "adjusting state during render" — re-renders before commit, so nothing stale paints.
+  // Without it the value would only be masked while another item shows, and come back on return.
+  if (held.id !== itemId) setHeld({ id: itemId, v: initial });
   const set = useCallback((next: T | ((prev: T) => T)) => {
     setHeld((h) => {
       const prev = h.id === itemId ? h.v : initial;

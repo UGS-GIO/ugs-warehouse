@@ -63,10 +63,60 @@
   --color-ring: hsl(var(--ring));
 }
 
+/* Utah DS typography. Source Sans 3 is the DS body font ("can be universally used"); we self-host
+   it so the app doesn't depend on the header package for its own text. UT Industry comes FROM the
+   header package (v5+ loads all four weights and exposes the variable) — no second @font-face. */
+:root {
+  font-family: "Source Sans 3 Variable", "Source Sans 3", system-ui, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+}
+/* Display face — headings and high-impact text only, never body copy. The DS forbids its Bold below
+   20px and its Heavy below 28px, so this stays at medium weight and callers size it 20px+. */
+.font-display {
+  font-family: var(--ut-industry-font-family, "UT Industry", Georgia, serif);
+  font-weight: 500;
+}
+
+/* Viewport shell: the app fills what's left under the official strip, and only inner panes scroll.
+   Without this the map view's `h-full` resolved against a taller-than-viewport page and its bottom
+   tab bar sat below the fold. `dvh` = the real mobile viewport (excludes the URL bar). */
+html, body {
+  margin: 0;
+  height: 100dvh;
+  overflow: hidden;
+}
 body {
+  display: flex;
+  flex-direction: column;
   background-color: hsl(var(--background));
   color: hsl(var(--foreground));
 }
+#utah-design-system { flex: none; }
+#root { flex: 1 1 auto; min-height: 0; }
+
+/* The DS title band stays on desktop — it is the state identity. On a phone it costs ~90px of a
+   map-first screen, and our own bar already carries the logo + app name, so it drops there only.
+   The "official website of Utah" strip is a separate element and always stays. */
+@media (max-width: 767px) {
+  header.utah-design-system.utds-header { display: none; }
+}
+/* The state identity bar is ALWAYS light — its palette and light-optimized emblem are not ours to
+   theme. Pin the TEXT COLOUR as well as the scheme: `color-scheme` alone doesn't stop the dark app
+   body's near-white `color` inheriting in, which turns the title invisible on the white band. */
+.utah-design-system.utds-header {
+  color: hsl(0 0% 20%);   /* Utah gray-dark */
+  color-scheme: light;
+}
+
+/* Same reason for the DS footer: 269px of stacked links. `legal-footer.tsx` carries the required
+   links as one line instead. The skip link keeps its focus behaviour but stops reserving 68px. */
+/* !important: the DS injects its stylesheet after ours, so an equal-specificity rule loses. */
+div.utds-footer.utah-design-system { display: none !important; }
+.utah-design-system.skip-link__wrapper { position: absolute; z-index: 60; }
+
+/* A strip that scrolls sideways when it must, without the bar itself taking a row of pixels. */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
 
 /* "Saved ✓" cue: hold briefly, then fade + collapse. Re-keyed per submit, so no JS timer. */
 @keyframes save-cue {
@@ -91,26 +141,4 @@ body {
   .review-report { position: absolute; inset: 0; margin: 0; padding: 0; color: #000; }
   .review-report .no-print { display: none !important; }
   @page { margin: 1.5cm; }
-}
-
-/* Utah Design System header — dark mode.
- *
- * UDS 5.1 ships no dark theme: `utds-header` hardcodes a white background and navy title, and the
- * package exposes only size variants (small/medium/large), no colour/theme setting. So in dark mode
- * the state identity bar stayed white above a #1f1f1f app — the one element that ignored the toggle.
- *
- * Scoped to `.dark` and to the app's own tokens, so light mode keeps the official appearance
- * untouched. These class names are third-party: if UDS renames them this silently stops applying
- * (the header reverts to white), which is the safe direction to fail.
- */
-.dark header.utds-header {
-  background-color: hsl(var(--card));
-  /* UDS declares `border-bottom: 1px solid #d7d7d7 !important`, so this needs !important purely to
-     reach it — not to win against anything of ours. */
-  border-bottom-color: hsl(var(--border)) !important;
-}
-.dark .utds-title-wrapper,
-.dark .utds-title-wrapper__logo,
-.dark .utds-title-wrapper__title {
-  color: hsl(var(--foreground));
 }

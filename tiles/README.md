@@ -99,7 +99,7 @@ Paste the `VectorTileServer` URL into **Pro** (Add Data → Data From Path) or *
 from URL, type *ArcGIS Server web service*). Symbology rides along, so no hand-built `.lyrx` per
 layer.
 
-**The `/rest/services` prefix is load-bearing.** AGOL decides whether a URL is a vector tile
+**The `/rest/services` prefix is required.** AGOL decides whether a URL is a vector tile
 service by matching the path against ArcGIS Server's REST layout, and it does that *before it
 makes any request* — so a perfectly correct descriptor at the wrong path is never fetched at all.
 Measured in Map Viewer on 2026-07-31:

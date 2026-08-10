@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, hasFootprint, mapKindOf, nextPick, validBbox } from "./map-model";
+import { boundsOf, clampSize, DETENTS, hasFootprint, mapKindOf, nearestDetent, nextPick, validBbox } from "./map-model";
 import type { StacDoc } from "./stac";
 
 describe("validBbox", () => {
@@ -95,5 +95,31 @@ describe("nextPick", () => {
 
   it("carries the new id and bumps the nonce when the feature changes", () => {
     expect(nextPick({ id: 42, nonce: 3 }, 99)).toEqual({ id: 99, nonce: 4 });
+  });
+});
+
+describe("nearestDetent", () => {
+  it("snaps to the closest detent", () => {
+    expect(nearestDetent(0)).toBe(0);
+    expect(nearestDetent(0.2)).toBe(0);
+    expect(nearestDetent(0.5)).toBe(1);
+    expect(nearestDetent(1)).toBe(2);
+  });
+
+  it("breaks a tie toward the lower detent, which shows more map", () => {
+    const mid = (DETENTS[0] + DETENTS[1]) / 2;
+    expect(nearestDetent(mid)).toBe(0);
+  });
+});
+
+describe("clampSize", () => {
+  it("clamps into range", () => {
+    expect(clampSize(10, 100, 500, 200)).toBe(100);
+    expect(clampSize(900, 100, 500, 200)).toBe(500);
+    expect(clampSize(300, 100, 500, 200)).toBe(300);
+  });
+
+  it("falls back rather than collapsing a pane on a non-numeric stored value", () => {
+    expect(clampSize(NaN, 100, 500, 200)).toBe(200);
   });
 });

@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ItemStatus, ITEM_STATUSES, listItemStatuses, setItemStatus } from "./comments";
+import { UiSelect } from "./ui/select";
 
 // Per-layer review status — set on a layer's Review box, summarized on the dashboard. Independent of
 // comment resolution: a reviewer marks the layer's overall progress (…→ approved = ready to promote).
@@ -34,11 +35,9 @@ export function LayerStatusControl({ itemId }: { itemId: string }) {
   return (
     <label className="flex items-center gap-2 text-xs">
       <span className="font-medium">Layer status</span>
-      <select value={current} disabled={set.isPending}
-        onChange={(e) => set.mutate(e.target.value)}
-        className={`rounded border px-1.5 py-0.5 ${statusClass(current)}`}>
-        {ITEM_STATUSES.map((s) => <option key={s} value={s}>{statusLabel(s)}</option>)}
-      </select>
+      <UiSelect value={current} disabled={set.isPending} onValueChange={(v) => set.mutate(v)}
+        items={ITEM_STATUSES.map((s) => ({ value: s, label: statusLabel(s) }))}
+        className={`px-1.5 py-0.5 ${statusClass(current)}`} />
       {set.isPending && <span className="text-muted-foreground">saving…</span>}
     </label>
   );

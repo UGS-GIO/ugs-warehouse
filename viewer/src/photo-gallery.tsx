@@ -47,7 +47,7 @@ export function PhotoGallery({ href }: { href: string }) {
                   title={String(r.filename ?? sp.split("/").pop())}>
                   <img src={thumbUrl(sp)} loading="lazy" alt={String(r.filename ?? "core photo")}
                     className="aspect-[4/3] w-full object-cover transition group-hover:opacity-90" />
-                  {cap && <div className="truncate px-1 py-0.5 text-[10px] text-muted-foreground">{cap}</div>}
+                  {cap && <div className="truncate px-1 py-0.5 text-xs text-muted-foreground">{cap}</div>}
                 </button>
               );
             })}

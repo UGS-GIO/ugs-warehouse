@@ -9,6 +9,10 @@ import { PAGE_SIZES } from "./paging";
 import type { FocusSel } from "./map-model";
 import { IS_REVIEW } from "./stac";
 import { C } from "./ui";
+import { RecordCards } from "./record-cards";
+import { UiSegmented } from "./ui/segmented";
+import { UiSelect } from "./ui/select";
+import { useIsDesktop } from "./ui/use-breakpoint";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
@@ -21,11 +25,12 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk" }: {
+export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
   rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
+  summaryFields?: readonly string[];   // item's `ugs:summary_fields` — leads the record cards
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
   // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
@@ -34,7 +39,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [selPks, setSelPks] = useState<Set<string>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
-  useEffect(() => { setSelPks(new Set()); setComposeOpen(false); }, [href]);
+  // Callers key this component by href, so a new dataset arrives as a fresh mount — no reset effect.
   const togglePk = (pk: string) => setSelPks((prev) => {
     const next = new Set(prev);
     if (next.has(pk)) next.delete(pk); else next.add(pk);
@@ -44,6 +49,11 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZE);
   const [showAll, setShowAll] = useState(false);  // "All" rows in one virtualized page
   const [sorting, setSorting] = useState<SortingState>([]);
+  const desktop = useIsDesktop();
+  // Cards are the phone default, but the grid is sometimes the point — comparing a column down the
+  // rows. Keep the escape hatch rather than deciding for everyone. Desktop is always the table.
+  const [narrowView, setNarrowView] = useState<"cards" | "table">("cards");
+  const asCards = !desktop && narrowView === "cards";
   const scrollRef = useRef<HTMLDivElement>(null);  // virtualizer scroll viewport (the resizable box)
   const [search, setSearch] = useState("");
   // feature_id of the row picked from the map (or a table click) — highlighted in the table.
@@ -136,7 +146,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const padBottom = vItems.length ? rowVirt.getTotalSize() - vItems[vItems.length - 1].end : 0;
   const colCount = (page?.columns?.length ?? 1) + (review ? 1 : 0);
   const btn = "rounded border border-border bg-card px-2 py-0.5 text-xs text-foreground hover:border-primary disabled:opacity-40";
-  const fIn = "w-full min-w-[64px] rounded border border-input bg-card px-1 py-0.5 text-[11px] font-normal normal-case text-foreground";
+  const fIn = "w-full min-w-16 rounded border border-input bg-card px-1 py-0.5 text-xs font-normal normal-case text-foreground";
   const hasFilters = Boolean(search) || applied.filters.length > 0
     || Object.values(draft).some((d) => d.min || d.max || d.text);
   // Per-column filters are off by default: one input under every one of 29 columns dominated the
@@ -189,22 +199,41 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
 
   return (
     <div className="mt-2">
+      {/* One header line that says what this is and how big it is — the row count used to float
+          mid-toolbar and the disclosure was a bare chevron on its own line. */}
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
-        <button className="rounded border border-border px-1.5 py-0.5 text-xs text-muted-foreground hover:border-primary"
-          title={collapsed ? "Expand table" : "Collapse table"} aria-expanded={!collapsed}
-          onClick={() => setCollapsed((v) => !v)}>{collapsed ? "▸" : "▾"}</button>
-        <input className={C.input} placeholder="Search all columns…" value={search}
-          onChange={(e) => setSearch(e.target.value)} />
-        <span className={C.muted}>
-          {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
-          {onPick && page?.bboxes.some(Boolean) ? " · click a row to zoom" : ""}
-        </span>
-        <button className="ml-auto rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary"
-          aria-pressed={showColFilters} onClick={() => setColFilters((v) => !v)}>
-          {showColFilters ? "Hide column filters" : "Filter columns"}
+        <button className="inline-flex items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+          title={collapsed ? "Show the data" : "Hide the data"} aria-expanded={!collapsed}
+          onClick={() => setCollapsed((v) => !v)}>
+          <span aria-hidden>{collapsed ? "▸" : "▾"}</span>
+          Data
+          <span className="font-normal">
+            · {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
+          </span>
         </button>
-        {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
+        {!collapsed && (
+          <>
+            {!desktop && (
+              <UiSegmented className="ml-auto" value={narrowView} onValueChange={setNarrowView}
+                items={[{ value: "cards", label: "Cards" }, { value: "table", label: "Table" }] as const} />
+            )}
+            <button className={`rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary ${desktop ? "ml-auto" : ""}`}
+              aria-pressed={showColFilters} onClick={() => setColFilters((v) => !v)}>
+              {showColFilters ? "Hide column filters" : "Filter columns"}
+            </button>
+            {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
+          </>
+        )}
       </div>
+      {!collapsed && (
+        <div className="mb-1.5 flex flex-wrap items-center gap-2">
+          <input className={`${C.input} min-w-48 flex-1`} placeholder="Search all columns…" value={search}
+            aria-label="Search all columns" onChange={(e) => setSearch(e.target.value)} />
+          {onPick && page?.bboxes.some(Boolean) && (
+            <span className={C.muted}>click a row to zoom</span>
+          )}
+        </div>
+      )}
       {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
       {review && selPks.size > 0 && (
         <div className="mb-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
@@ -214,7 +243,26 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           <button className="text-muted-foreground hover:underline" onClick={() => { setSelPks(new Set()); setComposeOpen(false); }}>clear</button>
         </div>
       )}
-      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-[12px] ${collapsed ? "hidden" : "h-[28rem] min-h-[10rem]"}`}>
+      {/* Phones get the same rows as cards: a 22-column table is ~2400px wide, which on a 390px
+          screen is a sideways-scrolling box inside a scrolling page. */}
+      {asCards && !collapsed && (
+        <RecordCards
+          rows={rowModel}
+          summaryFields={summaryFields}
+          highlight={(r) => {
+            const fid = r.original.feature_id;
+            return fid != null && Number(fid) === highlightId;
+          }}
+          onPick={onPick ? (r) => {
+            const bbox = page?.bboxes[r.index] ?? null;
+            if (!bbox) return;
+            pick(r.index, bbox);
+            const fid = r.original.feature_id;
+            if (fid != null) setHighlightId(Number(fid));
+          } : undefined}
+        />
+      )}
+      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-xs ${collapsed || asCards ? "hidden" : "h-112 min-h-40"}`}>
         <table className="w-auto min-w-full border-collapse">
           <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((hg) => (
@@ -253,16 +301,17 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
                   setDraft((prev) => ({ ...prev, [col]: { ...prev[col], ...patch } }));
                 return (
                   <th key={col} className="border-b border-border px-1.5 py-1 align-top">
+                    {/* Labelled per column — every placeholder here reads "contains…". */}
                     {kind === "number" ? (
                       <div className="flex gap-1">
                         <input className={fIn} placeholder="min" value={d.min ?? ""} type="number"
-                          onChange={(e) => set({ min: e.target.value })} />
+                          aria-label={`${col} minimum`} onChange={(e) => set({ min: e.target.value })} />
                         <input className={fIn} placeholder="max" value={d.max ?? ""} type="number"
-                          onChange={(e) => set({ max: e.target.value })} />
+                          aria-label={`${col} maximum`} onChange={(e) => set({ max: e.target.value })} />
                       </div>
                     ) : (
                       <input className={fIn} placeholder="contains…" value={d.text ?? ""}
-                        onChange={(e) => set({ text: e.target.value })} />
+                        aria-label={`${col} contains`} onChange={(e) => set({ text: e.target.value })} />
                     )}
                   </th>
                 );
@@ -320,16 +369,15 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
         <button className={btn} disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex(pageCount - 1)}>»</button>
         <label className="ml-1 flex items-center gap-1 text-muted-foreground">
           Rows
-          <select className="rounded border border-border bg-card px-1 py-0.5 text-foreground"
-            value={showAll ? "all" : pageSize}
-            onChange={(e) => {
+          <UiSelect className="px-1 py-0.5"
+            value={showAll ? "all" : String(pageSize)}
+            onValueChange={(v) => {
               setPageIndex(0);
-              if (e.target.value === "all") { setShowAll(true); }
-              else { setShowAll(false); setPageSize(Number(e.target.value)); }
-            }}>
-            {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
-            <option value="all">All</option>
-          </select>
+              if (v === "all") setShowAll(true);
+              else { setShowAll(false); setPageSize(Number(v)); }
+            }}
+            items={[...PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) })),
+                    { value: "all", label: "All" }]} />
         </label>
         <label className="flex items-center gap-1 text-muted-foreground">
           Go to

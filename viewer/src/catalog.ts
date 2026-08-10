@@ -33,3 +33,16 @@ export const serviceUrlOf = (
   if (!href) return undefined;
   return base ? href.replace(/^https?:\/\/[^/]+/, base) : href;
 };
+
+// Both lists are named, so an unknown root shows as "other" rather than defaulting to a publication.
+const LAYER_ROOTS = new Set(["ugs-serving-topics", "ugs-rasters", "ugs-geologic-maps"]);
+const DOCUMENT_ROOTS = new Set(["ugs-publications", "ugs-external", "ugs-mining-district-files"]);
+
+export type RootGroup = "layers" | "documents" | "federated" | "other";
+
+/** Which landing-page group a root child belongs to. A federated catalog can hold anything. */
+export const rootGroupOf = (id: string): RootGroup =>
+  /^https?:\/\//.test(id) ? "federated"
+    : LAYER_ROOTS.has(id) ? "layers"
+    : DOCUMENT_ROOTS.has(id) ? "documents"
+    : "other";

@@ -2,6 +2,7 @@ import { flexRender, type Table } from "@tanstack/react-table";
 
 import { ALL_PAGES, pageLabel, PAGE_SIZES, type PageSize } from "./paging";
 import { C } from "./ui";
+import { UiSelect } from "./ui/select";
 
 // Shared class names and table chrome — the item list and the data explorer both render these.
 
@@ -36,12 +37,10 @@ export function Pager<T>({ table, size, onSize }: {
       </span>
       <label className="flex items-center gap-1 text-xs text-muted-foreground">
         <span>Per page</span>
-        <select className="rounded border border-border bg-background px-1 py-0.5 text-xs text-foreground"
-          value={String(size)}
-          onChange={(e) => onSize(e.target.value === ALL_PAGES ? ALL_PAGES : Number(e.target.value))}>
-          {PAGE_SIZES.map((n) => <option key={n} value={n}>{n}</option>)}
-          <option value={ALL_PAGES}>All</option>
-        </select>
+        <UiSelect value={String(size)} className="px-1 py-0.5 text-xs"
+          onValueChange={(v) => onSize(v === ALL_PAGES ? ALL_PAGES : Number(v))}
+          items={[...PAGE_SIZES.map((n) => ({ value: String(n), label: String(n) })),
+                  { value: ALL_PAGES, label: "All" }]} />
       </label>
     </div>
   );

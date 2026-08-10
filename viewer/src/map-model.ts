@@ -55,7 +55,47 @@ export function nextPick(prev: MapPick | null, id: number): MapPick {
   return { id, nonce: (prev?.nonce ?? 0) + 1 };
 }
 
+// Mobile sheet snap points, as a fraction of the map area: peek / half / full.
+export const DETENTS = [0.06, 0.55, 0.92] as const;
+
+// Which detent a drag ended nearest. Ties go to the lower one — releasing mid-way biases toward
+// showing more map, which is the thing the sheet is covering. The epsilon is what makes that true:
+// an exact midpoint is rarely exact in binary floating point, so a hair either way would otherwise
+// decide it (0.305 between 0.06 and 0.55 lands 2e-17 nearer the upper one).
+export function nearestDetent(frac: number): number {
+  let best = 0;
+  for (let i = 1; i < DETENTS.length; i++) {
+    if (Math.abs(DETENTS[i] - frac) < Math.abs(DETENTS[best] - frac) - 1e-9) best = i;
+  }
+  return best;
+}
+
+// Resizable pane size, clamped. Non-finite (a stored value from an older build, or NaN off a
+// pointer event) falls back to the default rather than collapsing the pane to zero.
+export function clampSize(n: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(min, Math.min(max, n));
+}
+
 // Table row-click → map fly target. `key` identifies the SELECTION (row offset / feature id) so the
 // map re-flies on every distinct pick — even two features at the same lat/lon (identical bbox). The
 // bbox→geometry upgrade within one pick reuses the same key, so it doesn't double-fly.
 export type FocusSel = { bbox?: [number, number, number, number]; geometry?: GeoJSON.Geometry | null; key?: string | number };
+
+// A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
+// layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
+// (rasterPmHref — the per-scale geologic-map mosaics, served via the pmtiles:// protocol).
+export type ActiveLayer = {
+  id: string; title: string; bbox?: number[];
+  pmHref?: string; pmLayer?: string; styleUrl?: string;
+  cogHref?: string;
+  rasterPmHref?: string;
+};
+
+// A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
+// to open it on click. Aspatial items (no bbox) are filtered out by the caller.
+export type Footprint = { href: string; id: string; title: string; bbox: number[] };
+
+// Distinct colors cycled per active layer.
+export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
+export const colorFor = (i: number) => LAYER_COLORS[i % LAYER_COLORS.length];

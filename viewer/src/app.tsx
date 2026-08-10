@@ -1,16 +1,20 @@
 import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput } from "@utahdts/utah-design-system-header";
 import { useIsFetching } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { lazy, Suspense, useEffect, useMemo, useState, useTransition } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { type CatalogDoc } from "./search";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
 import { layerCollectionIds } from "./catalog";
-import { type ActiveLayer, colorFor, type Footprint, ItemMap } from "./map";
+import { type ActiveLayer, colorFor, type Footprint } from "./map-model";
+import { LegalFooter } from "./legal-footer";
+import { LayerList, type LayerRow } from "./layer-list";
+import { MapLegend } from "./map-legend";
+import { MapShell } from "./map-shell";
+import { NavMenu } from "./nav-menu";
 import { PreviewMapProvider } from "./preview-map";
 import { PropertyTable } from "./property-table";
-import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, defaultStyleUrl } from "./stac";
-import { useTheme } from "./theme";
+import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl } from "./stac";
 import { DiffPanel } from "./diff-panel";
 import { CommentsPanel } from "./comments-panel";
 import { NotifBell } from "./notifications-inbox";
@@ -21,6 +25,8 @@ const Architecture = lazy(() => import("./architecture").then((m) => ({ default:
 const ArticleSearch = lazy(() => import("./search").then((m) => ({ default: m.ArticleSearch })));
 const Guide = lazy(() => import("./guide").then((m) => ({ default: m.Guide })));
 const ReviewDashboard = lazy(() => import("./review-dashboard").then((m) => ({ default: m.ReviewDashboard })));
+// maplibre is ~1.5MB of the bundle and the catalog, search and doc views never draw a map.
+const ItemMap = lazy(() => import("./map").then((m) => ({ default: m.ItemMap })));
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name
 // that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
@@ -68,10 +74,20 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   return null;
 }
 
+// One list, rendered as tabs on desktop and as menu items on mobile.
+const VIEWS: { id: View; label: string }[] = [
+  { id: "catalog", label: "Catalog" },
+  { id: "map", label: "Map" },
+  { id: "search", label: "Search" },
+  { id: "arch", label: "Architecture" },
+  { id: "guide", label: "Guide" },
+  ...(IS_REVIEW ? [{ id: "review" as const, label: "Review" }] : []),
+];
+
 const tab = (on: boolean) =>
-  `cursor-pointer rounded-md border px-3 py-1.5 text-[13px] ${on ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card text-foreground hover:bg-accent"}`;
+  "cursor-pointer border-b-2 px-2 py-1 text-sm transition-colors "
+  + (on ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground");
 const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
-const row = "mb-1.5 cursor-pointer rounded-md border border-border bg-card px-2 py-1.5 break-all hover:border-primary";
 
 function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
   if (loading) return <em>Loading item…</em>;
@@ -123,16 +139,6 @@ function FetchBar({ pending }: { pending?: boolean }) {
     <div className="pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden">
       {busy && <div className="fetch-bar h-full w-full bg-primary" />}
     </div>
-  );
-}
-
-function ThemeToggle() {
-  const [theme, toggle] = useTheme();
-  return (
-    <button onClick={toggle} aria-label="Toggle theme"
-      className="rounded-md border border-border bg-card px-2 py-1.5 text-[13px] text-foreground hover:bg-accent">
-      {theme === "dark" ? "☀" : "☾"}
-    </button>
   );
 }
 
@@ -188,7 +194,8 @@ export function App() {
         title: "Utah Geological Survey",
         showTitle: true,
         titleUrl: "https://geology.utah.gov",
-        logo: { imageUrl: utahLogo },   // generic State of Utah emblem (until UGS has its own brand)
+        // `htmlString` not `imageUrl`: the latter emits an <img> with no alt. Decorative here.
+        logo: { htmlString: `<img src="${utahLogo}" alt="" />` },
         mainMenu: false,
       };
       let email = "";
@@ -317,6 +324,21 @@ export function App() {
   ];
   const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
 
+  const mapIdx = useIndexes(view === "map" ? leafColls.map((c) => ({ id: c.id, href: c.href })) : []);
+  const mapItems: ItemRef[] = mapIdx.flatMap((r) => (r.index?.items ?? []).map((d) => ({
+    collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d,
+  })));
+  // Layer collections first — the serving topics are what the map is for; pub plates come after.
+  const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
+  const layerRows: LayerRow[] = useMemo(() => mapItems
+    .filter((r) => r.data && (pmtilesLink(r.data) || cogAsset(r.data) || rasterTilesAsset(r.data)))
+    .map((r) => ({ id: idOf(r.href), href: r.href, title: String(r.data?.properties?.title ?? idOf(r.href)),
+                   group: collTitle(r.collId), layer: layerCollIds.includes(r.collId) }))
+    .sort((a, b) => Number(b.layer) - Number(a.layer)
+                    || a.group.localeCompare(b.group) || a.title.localeCompare(b.title)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")]);
+
   // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
   // an absolute href: construct from the open leaf, else look it up among loaded items.
   const isUrl = (s?: string) => Boolean(s) && /^https?:\/\//.test(s as string);
@@ -343,11 +365,14 @@ export function App() {
 
   // Open a collection fresh (series filter is per-collection → cleared). Item open / layer
   // toggle / back-to-items keep the active series filter so it survives drilling in + out.
+  const revealInfo = useRef<(() => void) | null>(null);   // MapShell hands back "show the detail"
   const openCollection = (href: string) => go({ view, c: collKeyOf(href) });
   // Derive the collection from the item href rather than the ambient collectionUrl — search-all results
   // span collections, so the ambient one is wrong (or absent). Mirrors openCover.
-  const openItem = (href: string) =>
+  const openItem = (href: string) => {
+    revealInfo.current?.();   // picking on the map raises its detail — the sheet/dock, not a nav
     go({ view, c: collKeyOf(href), i: idOf(href), l: layerIds, s: seriesSel });
+  };
   // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
   // collection key from the item href so it resolves + the URL stays tidy.
   const openCover = (href: string) => go({ view, c: collKeyOf(href), i: idOf(href) });
@@ -373,7 +398,7 @@ export function App() {
   // ?c=&i= link still shows its layer). Resolved against fetched item data (for PMTiles).
   // The compact index records omit `renders`, so prefer the FULL detail item for the open id
   // (it carries the bound style_url) — otherwise the map can't style the selected layer.
-  const byId = new Map(allItems.map((r) => [idOf(r.href), r]));
+  const byId = new Map([...mapItems, ...allItems].map((r) => [idOf(r.href), r]));
   if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
   const idsForMap = layerIds?.length ? layerIds : itemUrl ? [idOf(itemUrl)] : [];
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
@@ -391,13 +416,16 @@ export function App() {
   // Catalog/detail = a document → the page scrolls naturally, header sticks. (No more
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
+  // Same cached queries the map itself reads (TanStack dedupes by key) — the legend needs the bound
+  // style layers, and the drawer renders outside the map component.
+  const styleCache = useStyleLayersFor(activeLayers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
   return (
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
     <PreviewMapProvider>
     <div className={mapView
-      ? "grid h-screen grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
-      : "min-h-screen overflow-x-hidden bg-background text-sm text-foreground"}>
+      ? "grid h-full grid-cols-1 grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
+      : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
         {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
@@ -409,29 +437,26 @@ export function App() {
             go({ view: "catalog" });
           }}
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
-          <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" className="h-5 w-5 shrink-0" />
-          <strong className="text-[15px]">UGS Warehouse</strong>
+          {/* The mark is light-optimized, so it rides a light plate — invisible on the bar in light
+              mode, a subtle chip in dark. Same treatment as the soil-water app. */}
+          <span className="flex shrink-0 items-center rounded bg-white p-0.5">
+            <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="Utah Geological Survey" className="h-7 w-7" />
+          </span>
+          <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </a>
-        <span className="hidden flex-1 truncate text-xs text-muted-foreground md:block">
-          STAC catalog ·{" "}
-          <a href={CATALOG_URL} target="_blank" rel="noreferrer"
-            className="underline decoration-dotted underline-offset-2 hover:text-foreground">
-            {CATALOG_URL.replace(/^https?:\/\//, "")}
-          </a>
-        </span>
-        <span className="hidden whitespace-nowrap text-[11px] text-muted-foreground lg:block"
-          title={`viewer build — last updated ${__BUILD_DATE__} (${__BUILD_HASH__})`}>
-          updated {__BUILD_DATE__} · {__BUILD_HASH__}
-        </span>
-        <div className="ml-auto flex gap-1 md:ml-0">
-          <span className={tab(view === "catalog")} onClick={() => setView("catalog")}>Catalog</span>
-          <span className={tab(view === "map")} onClick={() => setView("map")}>Map</span>
-          <span className={tab(view === "search")} onClick={() => setView("search")}>Search</span>
-          <span className={tab(view === "arch")} onClick={() => setView("arch")}>Architecture</span>
-          <span className={tab(view === "guide")} onClick={() => setView("guide")}>Guide</span>
-          {IS_REVIEW && <span className={tab(view === "review")} onClick={() => setView("review")}>Review</span>}
+        <div className="ml-auto flex items-center gap-1">
+          {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
+              below md — five tabs and a phone don't share a row. */}
+          <div className="hidden gap-1 md:flex">
+            {VIEWS.map((v) => (
+              <button key={v.id} type="button" aria-current={view === v.id ? "page" : undefined}
+                className={tab(view === v.id)} onClick={() => setView(v.id)}>{v.label}</button>
+            ))}
+          </div>
           {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}
-          <ThemeToggle />
+          {/* Always mounted: it carries the theme picker, and below md the views as well. */}
+          <NavMenu current={view}
+            pages={VIEWS.map((v) => ({ id: v.id, label: v.label, onSelect: () => setView(v.id) }))} />
         </div>
       </header>
 
@@ -474,50 +499,28 @@ export function App() {
           onViewMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
         />
       ) : (
-        <div className="grid h-full min-h-0 grid-rows-[55vh_1fr] overflow-hidden md:grid-cols-[320px_1fr] md:grid-rows-1">
-          <aside className="overflow-auto border-b border-border p-3 md:border-b-0 md:border-r">
+        <MapShell
+          revealInfo={revealInfo}
+          map={<ItemMap item={item.data} layers={activeLayers} footprints={footprints} onPickFootprint={openItem} />}
+          info={<MapDetail item={item.data} loading={item.isLoading} />}
+          layers={<>
             {catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
-            {!leafColl &&
-              (subCat ? cards : leafColls).map((c) => (
-                <div key={c.href} className={row} onClick={() => openCollection(c.href)}>
-                  {c.title ?? c.id}{c.count != null && <span className="text-muted-foreground"> · {c.count}</span>}
-                  {c.mappable === 0 && <span className="ml-1 text-[11px] text-muted-foreground">· no map data</span>}
-                </div>
-              ))}
-            {leafColl && (
-              <>
-                <div className="mb-2 flex items-center justify-between text-xs">
-                  <span className="cursor-pointer text-primary" onClick={() => go({ view })}>‹ collections</span>
-                  <span className="text-muted-foreground">check to overlay</span>
-                </div>
-                {allItems.map((it) => {
-                  const id = idOf(it.href);
-                  const on = idsForMap.includes(id);
-                  const ci = activeLayers.findIndex((l) => l.id === id);
-                  // Non-blocking hint only — never disable (an item can be "on" via ?i= and must stay
-                  // uncheckable). The index carries assets + web-map links, so this is reliable.
-                  const noMap = it.data && !cogAsset(it.data) && !pmtilesLink(it.data) && !rasterTilesAsset(it.data);
-                  return (
-                    <div key={it.href} className={`${row} flex items-center gap-2`}>
-                      <input type="checkbox" checked={on} onChange={() => toggleLayer(id)} onClick={(e) => e.stopPropagation()} />
-                      {on && ci >= 0 && <span className="h-2.5 w-2.5 shrink-0 rounded-sm" style={{ background: colorFor(ci) }} />}
-                      <span className="flex-1 cursor-pointer" onClick={() => openItem(it.href)}>
-                        {String(it.data?.properties?.title ?? id)}
-                        {noMap && <span className="ml-1 text-[10px] text-muted-foreground">· no map data</span>}
-                      </span>
-                    </div>
-                  );
-                })}
-              </>
-            )}
-          </aside>
-          <main className="grid h-full min-h-0 grid-rows-[1fr_200px] overflow-hidden md:grid-rows-[1fr_240px]">
-            <div className="min-h-0"><ItemMap item={item.data} layers={activeLayers} footprints={footprints} onPickFootprint={openItem} /></div>
-            <section className="overflow-auto border-t border-border p-3"><MapDetail item={item.data} loading={item.isLoading} /></section>
-          </main>
-        </div>
+            <LayerList
+              rows={layerRows}
+              activeIds={idsForMap}
+              openId={itemUrl ? idOf(itemUrl) : undefined}
+              colorOf={(id) => colorFor(activeLayers.findIndex((l) => l.id === id))}
+              onToggle={toggleLayer}
+              onOpen={openItem}
+              // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
+              legend={<MapLegend layers={activeLayers.flatMap((l, i) => (l.cogHref || l.rasterPmHref ? []
+                : [{ id: l.id, title: l.title, color: colorFor(i), styleLayers: styleCache[l.id] }]))} />}
+            />
+          </>}
+        />
       )}
       </Suspense>
+      {!mapView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
     </div>
     </PreviewMapProvider>
   );

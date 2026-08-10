@@ -85,7 +85,7 @@ export function DiffPanel({ stem, reviewParquetUrl }: { stem: string; reviewParq
               className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400">~{sum.modified} modified</Badge>
             <Badge className="border-border bg-muted text-muted-foreground">{sum.unchanged} unchanged</Badge>
           </div>
-          <p className="text-[11px] text-muted-foreground">
+          <p className="text-xs text-muted-foreground">
             {changed === 0 ? "No changes — identical to the current version. " : `${changed} feature${changed === 1 ? "" : "s"} changed — click a badge to inspect. `}
             review {sum.reviewRows.toLocaleString()} · current {sum.currentRows.toLocaleString()} rows ·
             {" "}{sum.sourceCols.length} attribute column{sum.sourceCols.length === 1 ? "" : "s"} compared
@@ -111,7 +111,7 @@ function Detail({ kind, busy, rows, total, cols }: {
 
   return (
     <div className="rounded border border-border bg-background p-1.5">
-      <div className="mb-1 text-[11px] text-muted-foreground">
+      <div className="mb-1 text-xs text-muted-foreground">
         {kind === "modified" ? "Changed attributes (current → review)" : `${kind} features`}
         {capped ? ` · first ${rows.length} of ${total.toLocaleString()}` : ` · ${rows.length}`}
       </div>
@@ -161,7 +161,7 @@ function Badge({ children, className, onClick, active, disabled }: {
   children: React.ReactNode; className?: string;
   onClick?: () => void; active?: boolean; disabled?: boolean;
 }) {
-  const base = `rounded-full border px-2 py-0.5 text-[11px] ${className ?? ""}`;
+  const base = `rounded-full border px-2 py-0.5 text-xs ${className ?? ""}`;
   if (!onClick) return <span className={base}>{children}</span>;
   return (
     <button onClick={onClick} disabled={disabled}

@@ -2,18 +2,21 @@
 // search-all → sortable item table / cards → item detail. The map is one link out.
 import {
   type ColumnDef, getCoreRowModel, getPaginationRowModel, getSortedRowModel,
-  type SortingState, useReactTable,
+  type SortingState, useReactTable, type VisibilityState,
 } from "@tanstack/react-table";
 import { useMemo, useState } from "react";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { AssetChips } from "./asset-viewer";
+import { rootGroupOf } from "./catalog";
 import { createComment } from "./comments";
 import { ItemDetail } from "./item-detail";
+import { PageHero } from "./page-hero";
 import { T } from "./page";
 import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "./paging";
 import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset } from "./stac";
 import { DataTable, Pager } from "./table";
+import { useIsDesktop } from "./ui/use-breakpoint";
 import { C, humanize, toggle } from "./ui";
 
 const itemIdOf = (it: ItemRef): string =>
@@ -28,6 +31,13 @@ export type CollectionSummary = {
   covers?: CoverRef[];
 };
 export type ItemRef = { collId: string; href: string; data?: StacDoc };
+
+const ROOT_GROUPS = [
+  { group: "layers", heading: "Map layers" },
+  { group: "documents", heading: "Publications & records" },
+  { group: "federated", heading: "Other UGS catalogs" },
+  { group: "other", heading: "Everything else" },
+] as const;
 
 
 
@@ -141,7 +151,7 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
                   </span>
                 )}
               </div>
-              <div className="mt-0.5 font-mono text-[11px] text-muted-foreground">{c.id}</div>
+              <div className="mt-0.5 font-mono text-xs text-muted-foreground">{c.id}</div>
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
               {c.covers && c.covers.length > 0 && (
                 <div className="mt-2.5 grid grid-cols-4 gap-1.5" title="Latest covers — click to open">
@@ -152,13 +162,18 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
                   ))}
                 </div>
               )}
-              <div className="mt-auto pt-2.5">
+              <div className="mt-auto flex flex-wrap items-center gap-1.5 pt-2.5">
                 {c.kind === "catalog" && <span className={C.badge}>by series</span>}
                 {c.mappable === 0
                   ? <span className={C.badge}>no map data</span>
                   : c.mappable != null && c.count != null && c.mappable < c.count
                     ? <span className={C.badge}>{c.mappable.toLocaleString()} on map</span>
                     : null}
+                {/* Each child IS a complete STAC catalog — hand out its URL so a client (QGIS,
+                    pystac, a harvester) can crawl just this part without the rest. */}
+                <a href={c.href} target="_blank" rel="noopener" title={c.href}
+                  onClick={(e) => e.stopPropagation()}
+                  className="ml-auto text-xs text-primary no-underline hover:underline">STAC ↗</a>
               </div>
             </div>
           );
@@ -195,8 +210,8 @@ function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void
             : <span className="p-2 text-center font-mono text-xs text-muted-foreground">{gSeries(it)}</span>}
       </div>
       <div className="p-1.5">
-        <div className="font-mono text-[11px] font-semibold text-foreground">{gSeries(it)}</div>
-        <p className="line-clamp-2 text-[11px] text-muted-foreground">{gTitle(it)}</p>
+        <div className="font-mono text-xs font-semibold text-foreground">{gSeries(it)}</div>
+        <p className="line-clamp-2 text-xs text-muted-foreground">{gTitle(it)}</p>
       </div>
     </div>
   );
@@ -205,7 +220,7 @@ function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void
 function CardItem({ it, showCollection, onOpen }: { it: ItemRef; showCollection?: boolean; onOpen: (href: string) => void }) {
   return (
     <div className={C.card} onClick={() => onOpen(it.href)}>
-      <div className="font-mono text-[12px] font-semibold text-foreground">{gSeries(it)}</div>
+      <div className="font-mono text-xs font-semibold text-foreground">{gSeries(it)}</div>
       <p className={C.cardTitle}>{gTitle(it)}</p>
       <div>
         {showCollection && <span className={C.badge}>{gColl(it)}</span>}
@@ -357,6 +372,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
     [items, needle, series, topics, author, scaleTier, counties, mapOnly, force3D, yearMin, yearMax],
   );
 
+  const desktop = useIsDesktop();
   const hasVolumes = useMemo(() => items.some((it) => gVol(it) != null), [items]);
   // Review deploy: a leading checkbox column to bulk-select items for one shared comment.
   const selectColumn: ColumnDef<ItemRef, unknown> = {
@@ -370,7 +386,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
   const columns = useMemo<ColumnDef<ItemRef, unknown>[]>(() => [
     ...(IS_REVIEW ? [selectColumn] : []),
     { id: "id", header: "ID", accessorFn: gSeries, sortingFn: "alphanumeric",
-      cell: (i) => <span className="whitespace-nowrap font-mono text-[13px] font-semibold text-foreground">{String(i.getValue())}</span> },
+      cell: (i) => <span className="break-all font-mono text-sm font-semibold text-foreground md:whitespace-nowrap md:break-normal">{String(i.getValue())}</span> },
     { id: "title", header: "Title", accessorFn: gTitle,
       cell: (i) => <span className="text-primary">{String(i.getValue())}</span> },
     ...(showCollection ? [{ id: "collection", header: "Collection", accessorFn: gColl }] : []),
@@ -398,9 +414,17 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
   // One instance for all three view modes: it sorts, then pages, and `autoResetPageIndex`
   // returns you to page 1 whenever a filter or the sort changes the row set.
+  // A phone fits ID + Title + Date. The rest — and especially the asset chips, which stack one per
+  // line in a narrow cell and blow rows out to ~280px — are desktop-only; Cards view carries them.
+  const columnVisibility = useMemo<VisibilityState>(
+    () => (desktop
+      ? {}
+      : Object.fromEntries(["collection", "volume", "type", "scale", "assets"].map((c) => [c, false]))),
+    [desktop]);
+
   const table = useReactTable({
     data: rows, columns,
-    state: { sorting, pagination: { pageIndex, pageSize: perPage } },
+    state: { sorting, columnVisibility, pagination: { pageIndex, pageSize: perPage } },
     onSortingChange: setSorting,
     onPaginationChange: (u) => setPageIndex((prev) =>
       (typeof u === "function" ? u({ pageIndex: prev, pageSize: perPage }) : u).pageIndex),
@@ -445,7 +469,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
       {topicFacets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Topic</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Topic</span>
           {topicFacets.map(([t, { n }]) => (
             <span key={t} className={toggle(tsel.has(t))} onClick={() => toggleTopic(t)}>{t} · {n}</span>
           ))}
@@ -457,7 +481,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
       {countyFacets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">County</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">County</span>
           {countyFacets.map(([c, { n }]) => (
             <span key={c} className={toggle(csel.has(c))} onClick={() => toggleCounty(c)}>{c} · {n}</span>
           ))}
@@ -469,7 +493,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
       {scaleFacets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Scale</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Scale</span>
           {scaleFacets.map(([t, { n }]) => (
             <span key={t} className={toggle(scaleTier === t)}
               onClick={() => setScaleTier(scaleTier === t ? null : t)}>{t} · {n}</span>
@@ -482,7 +506,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
       {facets.length > 1 && (
         <div className="mb-2 flex flex-wrap items-center gap-1.5">
-          <span className="mr-0.5 text-[11px] uppercase tracking-wide text-muted-foreground">Series</span>
+          <span className="mr-0.5 text-xs uppercase tracking-wide text-muted-foreground">Series</span>
           {facets.map(([code, { n, label }]) => (
             <span key={code} className={toggle(sel.has(code))} title={label}
               onClick={() => toggleCode(code)}>{code} · {n}</span>
@@ -606,6 +630,13 @@ export function Browse(props: {
 
   // browse level: root catalog (with search-all) OR a sub-catalog's series chooser
   return (
+    <>
+      {/* The catalog landing gets the same title band as the content pages — it IS the front door,
+          and the search that opens the whole catalog belongs in it rather than above a bare list. */}
+      {atRoot && (
+        <PageHero title="Data Catalog"
+          lead="Geologic maps, hazard layers and publications." />
+      )}
     <div className={C.wrap}>
       {!atRoot && <Breadcrumb crumbs={props.breadcrumb} />}
       {atRoot && (
@@ -625,7 +656,17 @@ export function Browse(props: {
       )}
       {atRoot && (search.trim() || threeD || browseAll)
         ? <ItemList items={globalItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
-        : <Collections collections={props.cards} heading={atRoot ? "Collections" : "Series"} onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
+        : atRoot
+          // Two kinds of thing live at the root: layers you add to a map, and documents you read.
+          ? ROOT_GROUPS.map(({ group, heading }) => {
+              const cards = props.cards.filter((c) => rootGroupOf(c.id) === group);
+              return cards.length
+                ? <Collections key={group} collections={cards} heading={heading}
+                    onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />
+                : null;
+            })
+          : <Collections collections={props.cards} heading="Series" onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
     </div>
+    </>
   );
 }

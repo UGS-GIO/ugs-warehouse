@@ -124,7 +124,7 @@ export const tilesStyleUrl = (id: string, render?: string): string | undefined =
 // ArcGIS Pro / AGOL. One service per render, because Pro fetches the style with no query string
 // and so cannot reach `?render=` — see tiles/README.md.
 //
-// The `/rest/services` prefix is load-bearing, not cosmetic: AGOL's "Add layer from URL" matches
+// The `/rest/services` prefix is required, not cosmetic: AGOL's "Add layer from URL" matches
 // the path against ArcGIS Server's REST layout and rejects anything else before it makes a single
 // request ("This service type is not supported"). The service also answers on `/esri/...`, but
 // that form cannot be added in AGOL — so never hand it out here.
@@ -172,6 +172,13 @@ export const tableColumns = (d: StacDoc | undefined): TableColumn[] | undefined 
 // hazards-review map viewer, and PostGIS — unlike the ephemeral feature_id.
 export const primaryKeyOf = (d: StacDoc | undefined): string =>
   String((d?.properties as Record<string, unknown> | undefined)?.["ugs:primary_key"] ?? "pk");
+
+// The columns that identify a row, named by the producer (`ugs:summary_fields`). Consumers that
+// can't show every column lead with these — the viewer's phone record cards. Absent → they guess.
+export const summaryFieldsOf = (d: StacDoc | undefined): string[] => {
+  const v = (d?.properties as Record<string, unknown> | undefined)?.["ugs:summary_fields"];
+  return Array.isArray(v) ? v.map(String) : [];
+};
 
 // STAC Classification extension: categorical value/name/color from properties.classification:classes
 // → legend entries. Undefined pre-reingest → the legend falls back to deriving from the GL style.
@@ -389,10 +396,11 @@ export function useIndexes(collections: { id: string; href: string }[]) {
   }));
 }
 
+export const isParquetAsset = (a: Asset): boolean =>
+  Boolean(a.type?.includes("parquet")) || a.href.endsWith(".parquet");
+
 export const parquetAsset = (item: StacDoc): Asset | undefined =>
-  Object.values(item.assets ?? {}).find(
-    (a) => a.type?.includes("parquet") || a.href.endsWith(".parquet"),
-  );
+  Object.values(item.assets ?? {}).find(isParquetAsset);
 
 export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
   Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"

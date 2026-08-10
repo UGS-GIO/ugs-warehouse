@@ -1,11 +1,11 @@
 // Per-asset preview: picks a viewer by asset kind (map, 3D, PDF, table, image, text).
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 import { DataExplorer } from "./data-explorer";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "./preview-map";
 import { type Asset, type AssetKind, assetKind, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
-  tableColumns, thumbnailAsset } from "./stac";
+  summaryFieldsOf, tableColumns, thumbnailAsset } from "./stac";
 import { ThreeDViewer } from "./three-d-viewer";
 import { C, toggle } from "./ui";
 
@@ -24,15 +24,17 @@ function FieldsPanel({ item }: { item: StacDoc }) {
   const cols = tableColumns(item);
   if (!cols) return null;
   return (
-    <details className="mt-3 text-[12px]">
-      <summary className="inline-flex cursor-pointer items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+    <details className="group mt-3 text-xs">
+      <summary className="inline-flex cursor-pointer list-none items-baseline gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground">
+        <span aria-hidden className="group-open:hidden">▸</span>
+        <span aria-hidden className="hidden group-open:inline">▾</span>
         Fields <span className="font-normal">· {cols.length}</span>
       </summary>
       <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 rounded-md border border-border bg-card px-3 py-2.5">
         {cols.map((c) => (
           <span key={c.name} className="inline-flex items-baseline gap-1.5">
             <span className="font-mono text-foreground">{c.name}</span>
-            {c.type && <span className="text-[11px] text-muted-foreground">{c.type}</span>}
+            {c.type && <span className="text-xs text-muted-foreground">{c.type}</span>}
           </span>
         ))}
       </div>
@@ -61,7 +63,8 @@ function VectorPreview({ item }: { item: StacDoc }) {
     <>
       <PreviewMapSlot spec={spec} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")} rowKey={primaryKeyOf(item)} />}
+      {pq && <DataExplorer key={pq.href} href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
+        rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}
     </>
   );
 }
@@ -82,7 +85,7 @@ function TextPreview({ href }: { href: string }) {
   if (error) return <div className="mt-2 text-xs text-destructive">preview failed: {error instanceof Error ? error.message : String(error)}</div>;
   if (txt === undefined) return <div className="mt-2 text-xs text-muted-foreground">loading…</div>;
   return (
-    <pre className="mt-2 max-h-[600px] max-w-full overflow-auto rounded-md border border-border bg-muted p-3 text-[12px] leading-snug">
+    <pre className="mt-2 max-h-150 max-w-full overflow-auto rounded-md border border-border bg-muted p-3 text-xs leading-snug">
       {txt}{txt.length >= 20000 ? "\n… (truncated — open or download for the full file)" : ""}
     </pre>
   );
@@ -93,11 +96,11 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
   switch (kind) {
     case "cog": return <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />;
     case "threeD": return <ThreeDViewer asset={asset} item={item} />;
-    case "parquet": return <DataExplorer href={asset.href} />;
+    case "parquet": return <DataExplorer key={asset.href} href={asset.href} />;
     case "image":
       return (
         <img src={asset.href} alt={asset.title ?? "image"} loading="lazy"
-          className="mt-2 max-h-[600px] w-auto max-w-full rounded-md border border-border bg-muted object-contain" />
+          className="mt-2 max-h-150 w-auto max-w-full rounded-md border border-border bg-muted object-contain" />
       );
     case "pdf": return <PdfPreview asset={asset} item={item} />;
     case "text": return <TextPreview href={asset.href} />;
@@ -119,7 +122,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
   if (show) {
     return (
       <object data={asset.href} type="application/pdf"
-        className="mt-2 h-[400px] w-full rounded-md border border-border sm:h-[640px]">
+        className="mt-2 h-100 w-full rounded-md border border-border sm:h-160">
         <div className="p-3 text-xs text-muted-foreground">
           Can’t embed this PDF — <a href={asset.href} target="_blank" rel="noopener" className="text-primary">open it ↗</a>
         </div>
@@ -131,7 +134,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
       <button onClick={() => setShow(true)} title="Load the full PDF preview"
         className="group relative block w-full overflow-hidden rounded-md border border-border bg-muted">
         {poster
-          ? <img src={poster} alt={asset.title ?? "PDF cover"} className="max-h-[640px] w-full object-contain" />
+          ? <img src={poster} alt={asset.title ?? "PDF cover"} className="max-h-160 w-full object-contain" />
           : <div className="flex h-64 items-center justify-center text-xs text-muted-foreground">PDF</div>}
         <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/20">
           <span className="rounded-md bg-primary px-3 py-1.5 text-sm text-primary-foreground shadow">View PDF ▸</span>
@@ -156,8 +159,9 @@ function AssetViewer({ item }: { item: StacDoc }) {
       || KIND_RANK[x.kind] - KIND_RANK[y.kind]), [item.assets]);
   const tabs = entries.filter((e) => e.kind !== "other");
   const others = entries.filter((e) => e.kind === "other");
+  // No reset-on-item-change effect: `active` below falls back to the first tab whenever the
+  // remembered key isn't in this item's tabs.
   const [activeKey, setActiveKey] = useState<string | undefined>(tabs[0]?.key);
-  useEffect(() => { setActiveKey(tabs[0]?.key); }, [item.id]);   // reset on item change
 
   if (!tabs.length) {
     // Nothing previewable — show the footprint (if any) + download links for the raw files.

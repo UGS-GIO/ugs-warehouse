@@ -5,6 +5,7 @@ import { serviceUrlOf } from "./catalog";
 import { cogAsset, ducklakeAsset, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
   tilesStyleUrl, xyzTilesUrl } from "./stac";
 import { usePreviewMap } from "./preview-map";
+import { UiSelect } from "./ui/select";
 
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -18,7 +19,7 @@ function CopyBtn({ text }: { text: string }) {
         clearTimeout(timer.current);
         timer.current = setTimeout(() => setDone(false), 1200);
       }}
-      className="rounded border border-border bg-card px-1.5 py-0.5 text-[11px] text-foreground hover:border-primary">
+      className="rounded border border-border bg-card px-1.5 py-0.5 text-sm text-foreground hover:border-primary">
       {done ? "copied" : "copy"}
     </button>
   );
@@ -46,7 +47,6 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
   }
-  if (pq) rows.push({ label: "GeoParquet", desc: "Columnar file — DuckDB / GeoPandas / QGIS", url: pq.href });
   // A raster item's data IS the COG — without this row it had no endpoints at all once the
   // bogus Features links stopped being constructed for it.
   if (cog) rows.push({ label: "COG", desc: "Cloud-Optimized GeoTIFF — QGIS, ArcGIS, GDAL, rasterio (range reads)", url: cog.href });
@@ -77,11 +77,10 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
         desc: "ArcGIS Pro / AGOL — the one client that needs its own service contract. Symbology included",
         url: esri,
         pick: esriRenders.length > 1 ? (
-          <select value={chosen} onChange={(e) => setPickedRender(e.target.value)}
+          <UiSelect value={chosen} onValueChange={setPickedRender}
             title="Which published symbology this service serves"
-            className="max-w-[11rem] shrink-0 rounded border border-input bg-card px-1 py-0.5 text-[11px] text-foreground">
-            {esriRenders.map((r) => <option key={r} value={r}>{r}</option>)}
-          </select>
+            items={esriRenders.map((r) => ({ value: r, label: r }))}
+            className="max-w-[11rem] shrink-0 text-sm" />
         ) : undefined,
       });
     }
@@ -90,17 +89,17 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   if (!rows.length) return null;
   return (
     <div className="mt-3 rounded-lg border border-border bg-muted p-3">
-      <div className="mb-1.5 text-xs font-semibold text-muted-foreground">API &amp; data endpoints</div>
+      <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Services</h3>
       <div className="flex flex-col gap-1.5">
         {rows.map((r) => (
-          <div key={r.label} className={`flex flex-wrap items-center gap-2 text-xs ${r.unavailable ? "opacity-55" : ""}`}>
+          <div key={r.label} className={`flex flex-wrap items-center gap-2 text-sm ${r.unavailable ? "opacity-55" : ""}`}>
             <span className={`w-36 shrink-0 font-semibold ${r.unavailable ? "text-muted-foreground" : "text-foreground"}`} title={r.desc}>{r.label}</span>
             {r.pick}
             {r.unavailable ? (
-              <span className="min-w-0 flex-1 text-[11px] text-muted-foreground italic">{r.unavailable}</span>
+              <span className="min-w-0 flex-1 text-sm text-muted-foreground italic">{r.unavailable}</span>
             ) : (
               <>
-                <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-[11px] text-muted-foreground" title={r.url}>{r.url}</code>
+                <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-sm text-muted-foreground" title={r.url}>{r.url}</code>
                 <CopyBtn text={r.url} />
                 <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
               </>

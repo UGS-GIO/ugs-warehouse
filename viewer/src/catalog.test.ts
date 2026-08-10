@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { layerCollectionIds, serviceUrlOf } from "./catalog";
+import { layerCollectionIds, rootGroupOf, serviceUrlOf } from "./catalog";
 
 describe("layerCollectionIds", () => {
   it("selects root leaf collections, not sub-catalogs", () => {
@@ -53,5 +53,30 @@ describe("serviceUrlOf", () => {
   it("lets a session override swap the host", () => {
     expect(serviceUrlOf(item([{ rel: "service", href: "https://prod.example/collections/x" }]),
                         "http://localhost:9000")).toBe("http://localhost:9000/collections/x");
+  });
+});
+
+describe("rootGroupOf", () => {
+  it("separates layers from documents so the landing can group them", () => {
+    expect(rootGroupOf("ugs-serving-topics")).toBe("layers");
+    expect(rootGroupOf("ugs-rasters")).toBe("layers");
+    expect(rootGroupOf("ugs-geologic-maps")).toBe("layers");
+    expect(rootGroupOf("ugs-publications")).toBe("documents");
+    expect(rootGroupOf("ugs-mining-district-files")).toBe("documents");
+  });
+
+  it("never guesses for a federated catalog — it lives elsewhere and can hold anything", () => {
+    expect(rootGroupOf("https://ubm-assets.geology.utah.gov/stac/catalog.json")).toBe("federated");
+  });
+
+  // The alarm for a new root (ugs-flux): classify it here rather than let it read as a publication.
+  it("says other for a root child it doesn't know", () => {
+    expect(rootGroupOf("ugs-flux")).toBe("other");
+  });
+
+  it("classifies every root child the live catalog publishes", () => {
+    const live = ["ugs-external", "ugs-geologic-maps", "ugs-mining-district-files",
+      "ugs-publications", "ugs-rasters", "ugs-serving-topics"];
+    for (const id of live) expect(rootGroupOf(id), id).not.toBe("other");
   });
 });

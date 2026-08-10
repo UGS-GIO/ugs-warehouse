@@ -6,7 +6,7 @@ import { type CatalogDoc } from "./search";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
 import { layerCollectionIds } from "./catalog";
-import { type ActiveLayer, colorFor, type Footprint } from "./map-model";
+import { type ActiveLayer, colorFor, type Footprint, layerParam, parseLayerParam } from "./map-model";
 import { LegalFooter } from "./legal-footer";
 import { LayerList, type LayerRow } from "./layer-list";
 import { MapLegend } from "./map-legend";
@@ -154,7 +154,7 @@ export function App() {
   const view: View = sp.view ?? "catalog";
   const collectionUrl = sp.c;
   const itemUrl = sp.i;
-  const layerIds = sp.l ? sp.l.split(",").filter(Boolean) : undefined;
+  const layerIds = parseLayerParam(sp.l);
   const seriesSel = sp.s ? sp.s.split(",").filter(Boolean) : undefined;
 
   // Navigate by setting the nav search params; everything else in the search is preserved. push for
@@ -169,7 +169,7 @@ export function App() {
           view: next.view === "catalog" ? undefined : next.view,
           c: next.c || undefined,
           i: next.i || undefined,
-          l: next.l?.length ? next.l.join(",") : undefined,
+          l: layerParam(next.l),
           s: next.s?.length ? next.s.join(",") : undefined,
         };
       },
@@ -400,7 +400,7 @@ export function App() {
   // (it carries the bound style_url) — otherwise the map can't style the selected layer.
   const byId = new Map([...mapItems, ...allItems].map((r) => [idOf(r.href), r]));
   if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
-  const idsForMap = layerIds?.length ? layerIds : itemUrl ? [idOf(itemUrl)] : [];
+  const idsForMap = layerIds ?? (itemUrl ? [idOf(itemUrl)] : []);
   const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
 
   // Coverage overlay data: every loaded item that has a bbox → a footprint rectangle. Lets the map

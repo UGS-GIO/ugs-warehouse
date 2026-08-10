@@ -10,6 +10,39 @@ import { useState } from "react";
 // `layer` = a serving topic rather than a publication plate; those sort first and lead the list.
 export type LayerRow = { id: string; href: string; title: string; group: string; layer: boolean };
 
+// Two kinds of thing, and mart schema / publication series only groups WITHIN one of them. Without
+// this level the plates bury the topics — one series alone runs to 28 rows.
+const PLATES = "Published maps";
+const SECTIONS = [
+  { key: "Data layers", layer: true },
+  { key: PLATES, layer: false },
+];
+
+/** One collapsible level. Open/closed lives in the caller's set so both levels share one store. */
+function Fold({ id, label, indent, forceOpen, closed, setClosed, children }: {
+  id: string; label: ReactNode; indent?: boolean; forceOpen: boolean;
+  closed: Set<string>; setClosed: (fn: (prev: Set<string>) => Set<string>) => void;
+  children: ReactNode;
+}) {
+  return (
+    <details open={forceOpen || !closed.has(id)} className={indent ? "ml-2" : undefined}
+      onToggle={(e) => {
+        const { open } = e.currentTarget;   // read before the updater runs — React nulls it
+        setClosed((prev) => {
+          const next = new Set(prev);
+          if (open) next.delete(id); else next.add(id);
+          return next;
+        });
+      }}>
+      <summary className="sticky top-0 z-10 cursor-pointer list-none bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+        <span className="inline-block w-3 transition-transform [details[open]>summary_&]:rotate-90">▸</span>
+        {label}
+      </summary>
+      {children}
+    </details>
+  );
+}
+
 export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, legend }: {
   rows: LayerRow[];
   activeIds: string[];
@@ -20,12 +53,19 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
   legend?: ReactNode;   // what the active layers mean — belongs with them, not after the whole list
 }) {
   const [filter, setFilter] = useState("");
+  // Published maps start closed: they outnumber the serving topics several times over, and someone
+  // opening the map view is nearly always after a data layer.
+  const [closed, setClosed] = useState<Set<string>>(() => new Set([PLATES]));
   const q = filter.trim().toLowerCase();
   const match = (r: LayerRow) => !q || r.title.toLowerCase().includes(q) || r.id.toLowerCase().includes(q);
 
   const active = activeIds.map((id) => rows.find((r) => r.id === id)).filter((r): r is LayerRow => Boolean(r));
   const rest = rows.filter((r) => !activeIds.includes(r.id) && match(r));
-  const groups = [...new Set(rest.map((r) => r.group))].map((g) => ({ g, items: rest.filter((r) => r.group === g) }));
+  const groupsOf = (items: LayerRow[]) =>
+    [...new Set(items.map((r) => r.group))].map((g) => ({ g, items: items.filter((r) => r.group === g) }));
+  const sections = SECTIONS
+    .map((s) => ({ ...s, items: rest.filter((r) => r.layer === s.layer) }))
+    .filter((s) => s.items.length);
 
   const Row = ({ r, on }: { r: LayerRow; on: boolean }) => (
     <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-muted ${r.id === openId ? "bg-muted" : ""}`}>
@@ -62,17 +102,21 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
         </div>
       )}
 
-      {groups.map(({ g, items }) => (
-        <div key={g}>
-          {/* Sticky so the group you're scrolling through stays named. */}
-          <div className="sticky top-0 z-10 bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            {g}
-          </div>
-          {items.map((r) => <Row key={r.id} r={r} on={false} />)}
-        </div>
+      {/* Collapsible, two deep: kind, then mart schema / publication series. A filter force-opens
+          everything, since a closed group would hide its own matches. */}
+      {sections.map((s) => (
+        <Fold key={s.key} id={s.key} closed={closed} setClosed={setClosed} forceOpen={Boolean(q)}
+          label={<>{s.key} <span className="font-normal normal-case">· {s.items.length}</span></>}>
+          {groupsOf(s.items).map(({ g, items }) => (
+            <Fold key={g} id={`${s.key}/${g}`} closed={closed} setClosed={setClosed} forceOpen={Boolean(q)}
+              label={<>{g} <span className="font-normal normal-case">· {items.length}</span></>} indent>
+              {items.map((r) => <Row key={r.id} r={r} on={false} />)}
+            </Fold>
+          ))}
+        </Fold>
       ))}
 
-      {!groups.length && !active.length && (
+      {!sections.length && !active.length && (
         <p className="px-1.5 text-muted-foreground">{q ? `Nothing matches “${filter}”.` : "No mappable layers loaded."}</p>
       )}
     </div>

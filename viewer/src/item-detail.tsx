@@ -187,7 +187,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap }: {
         </div>
         {/* Title leads. The machine id is the subtitle — it was set in blue mono ABOVE the human
             name, so the thing nobody reads outranked the thing everybody does. */}
-        <h2 className={T.pageTitle}>{String(p.title ?? item.id ?? "")}</h2>
+        <h1 className={T.pageTitle}>{String(p.title ?? item.id ?? "")}</h1>
         <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
       </div>
       <Preview item={item} />

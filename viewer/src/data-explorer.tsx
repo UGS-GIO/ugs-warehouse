@@ -228,7 +228,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
       {!collapsed && (
         <div className="mb-1.5 flex flex-wrap items-center gap-2">
           <input className={`${C.input} min-w-48 flex-1`} placeholder="Search all columns…" value={search}
-            onChange={(e) => setSearch(e.target.value)} />
+            aria-label="Search all columns" onChange={(e) => setSearch(e.target.value)} />
           {onPick && page?.bboxes.some(Boolean) && (
             <span className={C.muted}>click a row to zoom</span>
           )}
@@ -301,16 +301,17 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
                   setDraft((prev) => ({ ...prev, [col]: { ...prev[col], ...patch } }));
                 return (
                   <th key={col} className="border-b border-border px-1.5 py-1 align-top">
+                    {/* Labelled per column — every placeholder here reads "contains…". */}
                     {kind === "number" ? (
                       <div className="flex gap-1">
                         <input className={fIn} placeholder="min" value={d.min ?? ""} type="number"
-                          onChange={(e) => set({ min: e.target.value })} />
+                          aria-label={`${col} minimum`} onChange={(e) => set({ min: e.target.value })} />
                         <input className={fIn} placeholder="max" value={d.max ?? ""} type="number"
-                          onChange={(e) => set({ max: e.target.value })} />
+                          aria-label={`${col} maximum`} onChange={(e) => set({ max: e.target.value })} />
                       </div>
                     ) : (
                       <input className={fIn} placeholder="contains…" value={d.text ?? ""}
-                        onChange={(e) => set({ text: e.target.value })} />
+                        aria-label={`${col} contains`} onChange={(e) => set({ text: e.target.value })} />
                     )}
                   </th>
                 );

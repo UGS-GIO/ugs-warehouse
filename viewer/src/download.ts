@@ -10,16 +10,9 @@
 //     write these correctly (incl. Esri .gdb — OpenFileGDB write, GDAL ≥ 3.6). gdal3.js
 //     is ~40 MB (wasm+data), so it's dynamically imported only when one is requested.
 
-export type ExportFormat = "shp" | "gpkg" | "gdb" | "fgb" | "geojson" | "csv";
+import type { ExportFormat } from "./export-formats";
 
-export const FORMATS: { id: ExportFormat; label: string }[] = [
-  { id: "shp", label: "Shapefile (zip)" },
-  { id: "gpkg", label: "GeoPackage" },
-  { id: "gdb", label: "File Geodatabase (zip)" },
-  { id: "fgb", label: "FlatGeobuf" },
-  { id: "geojson", label: "GeoJSON" },
-  { id: "csv", label: "CSV (WKT)" },
-];
+export type { ExportFormat };
 
 // The transform writes the geometry column as `geom` (GEOMETRY 4326); pub/external parquet may
 // use `geometry` / `wkb_geometry`. GEOM = the canonical name (export); GEOM_NAMES = all hidden

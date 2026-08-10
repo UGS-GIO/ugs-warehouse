@@ -34,14 +34,17 @@ export const serviceUrlOf = (
   return base ? href.replace(/^https?:\/\/[^/]+/, base) : href;
 };
 
-// Root children that hold MAP LAYERS rather than documents. The landing page groups on this: a
-// hazard layer you add to a map and a scanned report you read are not the same kind of thing, and
-// listing them in one grid makes the visitor sort them out.
+// A map layer and a scanned report aren't the same kind of thing, so the landing groups them.
+// Both lists are named: an unknown root shows as "other" instead of defaulting to a publication.
 const LAYER_ROOTS = new Set(["ugs-serving-topics", "ugs-rasters", "ugs-geologic-maps"]);
+const DOCUMENT_ROOTS = new Set(["ugs-publications", "ugs-external", "ugs-mining-district-files"]);
 
-export type RootGroup = "layers" | "documents" | "federated";
+export type RootGroup = "layers" | "documents" | "federated" | "other";
 
 /** Which landing-page group a root child belongs to. Federated catalogs live elsewhere and can
  *  hold anything, so they say so rather than being guessed into one of ours. */
 export const rootGroupOf = (id: string): RootGroup =>
-  /^https?:\/\//.test(id) ? "federated" : LAYER_ROOTS.has(id) ? "layers" : "documents";
+  /^https?:\/\//.test(id) ? "federated"
+    : LAYER_ROOTS.has(id) ? "layers"
+    : DOCUMENT_ROOTS.has(id) ? "documents"
+    : "other";

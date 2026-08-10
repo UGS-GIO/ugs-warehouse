@@ -36,6 +36,7 @@ const ROOT_GROUPS = [
   { group: "layers", heading: "Map layers" },
   { group: "documents", heading: "Publications & records" },
   { group: "federated", heading: "Other UGS catalogs" },
+  { group: "other", heading: "Everything else" },
 ] as const;
 
 

@@ -68,4 +68,15 @@ describe("rootGroupOf", () => {
   it("never guesses for a federated catalog — it lives elsewhere and can hold anything", () => {
     expect(rootGroupOf("https://ubm-assets.geology.utah.gov/stac/catalog.json")).toBe("federated");
   });
+
+  // The alarm for a new root (ugs-flux): classify it here rather than let it read as a publication.
+  it("says other for a root child it doesn't know", () => {
+    expect(rootGroupOf("ugs-flux")).toBe("other");
+  });
+
+  it("classifies every root child the live catalog publishes", () => {
+    const live = ["ugs-external", "ugs-geologic-maps", "ugs-mining-district-files",
+      "ugs-publications", "ugs-rasters", "ugs-serving-topics"];
+    for (const id of live) expect(rootGroupOf(id), id).not.toBe("other");
+  });
 });

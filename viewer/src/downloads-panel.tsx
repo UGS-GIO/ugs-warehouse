@@ -4,7 +4,8 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
-import { type ExportFormat, exportItem, FORMATS, shapefileWarnings, type ShapefileWarnings } from "./download";
+import type { ShapefileWarnings } from "./download";
+import { type ExportFormat, FORMATS } from "./export-formats";
 import { type Asset, isParquetAsset, parquetAsset, type StacDoc } from "./stac";
 import { C } from "./ui";
 import { UiSelect } from "./ui/select";
@@ -60,6 +61,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
       const clip = clipOn ? bbox : undefined;
+      const { exportItem, shapefileWarnings } = await import("./download");   // DuckDB + GDAL, on demand
       // Warn before handing over a silently-mangled shapefile; a failed check just proceeds.
       if (fmt === "shp" && !force) {
         const w = await shapefileWarnings(parquet!.href, clip).catch(() => null);
@@ -77,13 +79,14 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const data = files.filter(([, a]) => isParquetAsset(a));
   const sidecars = files.filter(([, a]) => !isParquetAsset(a));
 
+  // The ↓ is decoration; a screen reader gets the format from the link's own name.
   const assetTile = ([key, a]: [string, Asset]) => (
     <a key={key} href={a.href} target="_blank" rel="noopener" className={TILE}>
       <span className="font-medium">
         {a.title ?? key}
         <span className={SUB}>{extOf(a.href)}</span>
       </span>
-      <span className="shrink-0 text-primary">↓</span>
+      <span aria-hidden className="shrink-0 text-primary">↓</span>
     </a>
   );
 
@@ -93,17 +96,18 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {data.map(assetTile)}
         {parquet && FORMATS.map((f) => (
-          <button key={f.id} disabled={run.isPending} onClick={() => run.mutate({ fmt: f.id })} className={TILE}>
+          <button key={f.id} disabled={run.isPending} onClick={() => run.mutate({ fmt: f.id })}
+            aria-label={`Download ${f.label}`} className={TILE}>
             <span className="font-medium">
               {f.label}
               <span className={SUB}>{HINTS[f.id]}</span>
             </span>
-            <span className="shrink-0 text-primary">{busy === f.id ? "…" : "↓"}</span>
+            <span aria-hidden className="shrink-0 text-primary">{busy === f.id ? "…" : "↓"}</span>
           </button>
         ))}
         {sidecars.map(assetTile)}
       </div>
-      {busy && <p className={`mt-1.5 ${C.muted}`}>preparing in your browser · the first one loads DuckDB (~a few MB)</p>}
+      {busy && <p role="status" className={`mt-1.5 ${C.muted}`}>preparing in your browser · the first one loads DuckDB (~a few MB)</p>}
 
       {/* Collapsed by default: the common path is pick a format and go, not reproject. */}
       {parquet && (
@@ -151,7 +155,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           )}
         </details>
       )}
-      {run.error && <div className="mt-1.5 text-sm text-destructive">Download failed: {run.error.message}</div>}
+      {run.error && <div role="alert" className="mt-1.5 text-sm text-destructive">Download failed: {run.error.message}</div>}
 
       {warn && (
         <div className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">

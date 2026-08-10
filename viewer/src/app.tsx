@@ -192,7 +192,8 @@ export function App() {
         title: "Utah Geological Survey",
         showTitle: true,
         titleUrl: "https://geology.utah.gov",
-        logo: { imageUrl: utahLogo },   // generic State of Utah emblem (until UGS has its own brand)
+        // `htmlString` not `imageUrl`: the latter emits an <img> with no alt. Decorative here.
+        logo: { htmlString: `<img src="${utahLogo}" alt="" />` },
         mainMenu: false,
       };
       let email = "";

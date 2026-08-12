@@ -238,7 +238,8 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
             <Source id="pm-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
               <Layer id="pm-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
               <Layer id="pm-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
-              <Layer id="pm-hl-pt" type="circle" paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
+              {/* Point-only — an unfiltered circle layer draws a dot on every polygon/line vertex. */}
+              <Layer id="pm-hl-pt" type="circle" filter={["in", ["geometry-type"], ["literal", ["Point", "MultiPoint"]]]} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
             </Source>
           )}
 

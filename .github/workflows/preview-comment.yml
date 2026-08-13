@@ -28,7 +28,11 @@ jobs:
         with:
           script: |
             const sha = context.payload.pull_request.head.sha;
-            const checkName = "ugs-warehouse-viewer-preview";
+            // Cloud Build suffixes the trigger name with " (PROJECT_ID)" in the check-run name
+            // it posts -- confirmed live: "ugs-warehouse-viewer-preview (ut-dnr-ugs-backend-tools)".
+            // startsWith, not ===, so this doesn't silently stop matching if that project ever
+            // changes (this is exactly the kind of assumption that timed out silently once already).
+            const checkNamePrefix = "ugs-warehouse-viewer-preview";
             // Cloud Build's own trigger runs on skip too (non-viewer PRs) -- this workflow only
             // fires on viewer/** changes at all, so a miss here just means the check hasn't
             // reported yet. Poll for ~10 minutes; that's generously above observed build time.
@@ -38,7 +42,7 @@ jobs:
                 repo: context.repo.repo,
                 ref: sha,
               });
-              const run = data.check_runs.find((c) => c.name === checkName);
+              const run = data.check_runs.find((c) => c.name.startsWith(checkNamePrefix));
               if (run && run.status === "completed") {
                 core.setOutput("conclusion", run.conclusion);
                 return;

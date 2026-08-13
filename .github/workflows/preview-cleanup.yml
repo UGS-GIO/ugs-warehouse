@@ -1,0 +1,42 @@
+# Tears down a PR's previews on close (#154 / #156 / #159).
+#
+# Why GitHub Actions and not a Cloud Build trigger, like the other two preview builds: Cloud
+# Build's GitHub-App trigger only fires pull_request on opened/reopened/synchronize — there is no
+# "closed" event to hook. `pull_request: types: [closed]` is a GitHub Actions primitive Cloud
+# Build's trigger config has no equivalent for.
+#
+# Auth is WIF (no long-lived key): github-actions-sa's federation already allows this repo. This
+# job itself only submits the build — the actual deletes run under `ugs-warehouse-preview-build`
+# (--service-account below), the same least-trusted identity the viewer/tiles preview triggers use,
+# so a compromised Actions run still can't reach past the previews bucket + the tiles service tag.
+name: PR preview cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/534590904912/locations/global/workloadIdentityPools/github-actions/providers/github
+          service_account: github-actions-sa@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Run cloudbuild-preview-cleanup.yaml as the preview-build SA
+        run: |
+          gcloud builds submit --no-source \
+            --project=ut-dnr-ugs-backend-tools \
+            --region=us-central1 \
+            --config=cloudbuild-preview-cleanup.yaml \
+            --service-account=projects/ut-dnr-ugs-backend-tools/serviceAccounts/ugs-warehouse-preview-build@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com \
+            --substitutions=_PR_NUMBER=${{ github.event.pull_request.number }}

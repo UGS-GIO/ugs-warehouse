@@ -106,3 +106,27 @@ resource "google_service_account_iam_member" "serving_sign_blob" {
   role               = "roles/iam.serviceAccountTokenCreator"
   member             = "serviceAccount:${google_service_account.serving.email}"
 }
+
+# --- previews ------------------------------------------------------------------------------------
+# The preview build identity. Scoped to the previews bucket and nothing else — no review bucket, no
+# public bucket, no project-level role. A preview is built from an UNMERGED branch, so whatever that
+# branch says runs under this identity; the blast radius is one throwaway bucket.
+resource "google_storage_bucket_iam_member" "preview_write_previews" {
+  count  = var.preview_service_account != "" ? 1 : 0
+  bucket = google_storage_bucket.previews.name
+  role   = "roles/storage.objectAdmin"
+  member = "serviceAccount:${var.preview_service_account}"
+}
+
+# The previews SERVICE reads them. Read-only, only this bucket, and it is a different identity from
+# the review serving SA — which keeps no access to previews, and gives previews none to review data.
+resource "google_storage_bucket_iam_member" "previews_read" {
+  bucket = google_storage_bucket.previews.name
+  role   = "roles/storage.objectViewer"
+  member = "serviceAccount:${google_service_account.previews.email}"
+}
+
+# NOT granted here, on purpose: nothing gives the preview SA access to the review bucket, and no
+# `roles/run.*` binding exists for it. Service previews (tagged revisions) deploy to services in the
+# BUILD project, which this config does not manage — those grants live with that project, and should
+# be resource-scoped to the one service rather than project-wide.

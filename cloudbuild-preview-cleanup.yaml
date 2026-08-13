@@ -1,0 +1,40 @@
+# Tear down a PR's previews. Trigger: pull request closed (merged or not).
+#
+# This is the PRIMARY cleanup, not a nicety. The bucket lifecycle is a 30-day backstop, deliberately
+# longer than a PR's life: a shorter age would delete the preview of a PR that is merely sitting
+# open, and the reviewer would get a 404 with no explanation. Closing the PR is the real signal.
+#
+# Cloud Run tags have no lifecycle at all (only the 2,000/service cap), so for those this step IS
+# the policy.
+substitutions:
+  _REGION: us-central1
+  _PREVIEWS_BUCKET: ut-dnr-ugs-maps-prod-previews
+  _PREVIEW_PATH: viewer/pr-
+  _SERVICES: ugs-warehouse-tiles          # space-separated when more services gain previews
+
+steps:
+  - id: drop-viewer-preview
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        # Not `set -e`: a PR that never built a preview has nothing to delete, which is not a
+        # failure. Same for a tag that was never created below.
+        gcloud storage rm --recursive \
+          "gs://${_PREVIEWS_BUCKET}/${_PREVIEW_PATH}$_PR_NUMBER" || \
+          echo "no viewer preview for PR $_PR_NUMBER"
+
+  - id: untag-service-revisions
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        for svc in ${_SERVICES}; do
+          gcloud run services update-traffic "$$svc" --region=${_REGION} \
+            --remove-tags="pr-$_PR_NUMBER" || echo "no tag pr-$_PR_NUMBER on $$svc"
+        done
+
+options:
+  logging: CLOUD_LOGGING_ONLY

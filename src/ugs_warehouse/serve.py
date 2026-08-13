@@ -48,12 +48,20 @@ if _cors_origins or _cors_regex:
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"],
     )
 
+# The PREVIEWS deployment: same image, own service, own origin, own IAP, pointed at the previews
+# bucket. It serves per-PR bundles and NOTHING else — no /api/*, no live app shells. That origin
+# split is the point: preview code is unmerged branch code, and same-origin with the review API
+# would let it act as the reviewer (post/delete comments, read signed asset URLs). CORS + a
+# per-host IAP cookie stop that only if the hosts differ (#154).
+STATIC_ONLY = os.environ.get("REVIEW_STATIC_ONLY", "").lower() in ("1", "true", "yes")
+
 # Register /api routers BEFORE the catch-all object route below, or they'd be swallowed by /{path}.
-app.include_router(comments.router)
-app.include_router(comments.status_router)
-app.include_router(comments.notif_router)
-app.include_router(comments.reviewers_router)
-app.include_router(review_catalog.router)
+if not STATIC_ONLY:
+    app.include_router(comments.router)
+    app.include_router(comments.status_router)
+    app.include_router(comments.notif_router)
+    app.include_router(comments.reviewers_router)
+    app.include_router(review_catalog.router)
 
 
 @app.on_event("startup")
@@ -81,9 +89,14 @@ VIEWER_INDEX = f"{VIEWER_PREFIX}/index.html"
 # review bucket, served behind the same IAP. Each SPA needs its own index for client-side-route fallback,
 # so an unknown route under /review/app/ serves the app shell, not the internal viewer's.
 APP_PREFIX = os.environ.get("REVIEW_APP_PREFIX", "review/app").strip("/")
-# Per-PR previews of the review app live under <APP_PREFIX>/pr-<n>/ (CI uploads a full build there on
-# each PR). Each preview is its own SPA and must fall back to ITS OWN index.html, not the live app's.
-_PR_PREVIEW_RE = re.compile(rf"^({re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+)(?:/|$)")
+# A per-PR preview is its own SPA and must fall back to ITS OWN index.html — one that served a
+# different build's shell would silently render something other than the URL promises. On the
+# previews service every path is a preview (`<app>/pr-<n>/…`); on the review service the review
+# app's own previews still live under <APP_PREFIX>/pr-<n>/.
+_PREVIEW_SUBTREE = r"[A-Za-z0-9._-]+/pr-[A-Za-z0-9._-]+"
+_PR_PREVIEW_RE = re.compile(
+    rf"^({_PREVIEW_SUBTREE})(?:/|$)" if STATIC_ONLY
+    else rf"^({re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+)(?:/|$)")
 # (prefix, index) longest-prefix-first so a nested prefix wins over a shorter one.
 _SPA_INDEXES = sorted(
     [(APP_PREFIX, f"{APP_PREFIX}/index.html"), (VIEWER_PREFIX, VIEWER_INDEX)],
@@ -100,6 +113,9 @@ def _spa_index_for(path: str) -> str:
     m = _PR_PREVIEW_RE.match(path)
     if m:
         return f"{m.group(1)}/index.html"
+    if STATIC_ONLY:
+        # Nothing else exists on this service. Returning a live shell here is what we are avoiding.
+        raise HTTPException(status_code=404, detail="not found")
     for prefix, index in _SPA_INDEXES:
         if path == prefix or path.startswith(prefix + "/"):
             return index

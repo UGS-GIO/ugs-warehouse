@@ -1,0 +1,68 @@
+# Per-PR preview of the warehouse viewer (#154). Trigger: pull request touching viewer/**.
+#
+# Serves from `ugs-warehouse-previews` — its OWN Cloud Run service, own origin, own IAP, reading
+# the previews bucket and nothing else. Not the review app: preview JavaScript is unmerged branch
+# code, and on that origin it would inherit the reviewer's IAP session (post/delete comments as
+# them, pull signed URLs to private review assets). Different host → different cookie, plus CORS.
+#
+# THE SAME BYTES AS PROD. No `--base` override, no separate outDir: the viewer builds `base: "./"`
+# and has exactly one route (all state is in search params), so the bundle resolves correctly at
+# any depth. What a reviewer clicks is what gets promoted — which is the one thing #39 says the
+# review app's previews cannot claim.
+#
+# Expiry is bucket-wide (infra/buckets.tf) — everything in that bucket is a preview, so there is no
+# prefix to mis-target and a build that dies halfway still gets swept.
+substitutions:
+  _REGION: us-central1
+  _FEATURES_SERVICE: ugs-warehouse-features
+  _TILES_SERVICE: ugs-warehouse-tiles
+  _PREVIEWS_BUCKET: ut-dnr-ugs-maps-prod-previews
+  _PREVIEWS_SERVICE: ugs-warehouse-previews
+  _PREVIEW_PATH: viewer/pr-
+
+steps:
+  # Same service-URL resolution as the prod build, so the preview's endpoint links aren't dead.
+  - id: resolve-service-urls
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run services describe ${_FEATURES_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' > /workspace/features_url 2>/dev/null \
+          || printf '' > /workspace/features_url
+        gcloud run services describe ${_TILES_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' > /workspace/tiles_url 2>/dev/null \
+          || printf '' > /workspace/tiles_url
+
+  - id: build-viewer
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
+        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
+        cd viewer
+        npm ci
+        npm run build
+
+  - id: deploy-preview
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        DEST="gs://${_PREVIEWS_BUCKET}/${_PREVIEW_PATH}$_PR_NUMBER"
+        gcloud storage rsync viewer/dist "$$DEST" \
+          --recursive --delete-unmatched-destination-objects
+        # Never cache preview HTML: a force-push has to be visible on reload.
+        gcloud storage objects update "$$DEST/index.html" --cache-control="no-cache"
+        URL="$$(gcloud run services describe ${_PREVIEWS_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' 2>/dev/null)"
+        echo "preview: $$URL/${_PREVIEW_PATH}$_PR_NUMBER/"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

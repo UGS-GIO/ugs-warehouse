@@ -310,6 +310,31 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
       - --region=${_REGION}
 
+  # ugs-warehouse-previews (#154/#156/#159) — the per-PR preview origin runs the SAME image as
+  # review-serving (REVIEW_STATIC_ONLY=1 picked at runtime), so it needs the same keep-current
+  # treatment. Found the hard way: tofu apply pins whatever :latest resolves to AT THAT INSTANT
+  # into an immutable revision and never looks at the tag again. Without this step the service
+  # silently drifts stale until someone notices and redeploys by hand -- which is exactly what
+  # happened between #156 merging and #159's tofu apply grabbing :latest ~40 minutes before this
+  # same push's image landed, so the first real preview (#161) 404'd on routing logic that
+  # existed in the repo but not yet in the image it was served from.
+  # allowFailure: true until infra/iam.tf's build_deploy_previews/build_can_actas_previews land
+  # (needs var.build_service_account set + a tofu apply) -- same bootstrapping gap as
+  # deploy-review-api below.
+  - id: deploy-previews
+    waitFor: [push-warehouse]
+    allowFailure: true
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - services
+      - update
+      - ugs-warehouse-previews
+      - --project=${_REVIEW_PROJECT}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
+      - --region=${_REGION}
+
   # DuckLake maintenance — expire old snapshots, compact small parquet, GC orphaned files. Same
   # image + DSN setup as the ingest job (RUN_MODULE swaps the CLI). Run periodically (weekly is plenty):
   # `gcloud run jobs execute ${_MAINTAIN_JOB} --region=${_REGION}` (or the ops console button).

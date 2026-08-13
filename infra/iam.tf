@@ -141,3 +141,26 @@ resource "google_storage_bucket_iam_member" "previews_read" {
 # `roles/run.*` binding exists for it. Service previews (tagged revisions) deploy to services in the
 # BUILD project, which this config does not manage — those grants live with that project, and should
 # be resource-scoped to the one service rather than project-wide.
+
+# The MAIN build SA must be able to redeploy ugs-warehouse-previews on every push to main, same as
+# review-serving/review-api below. Found the hard way (#159 provisioning): tofu apply pins whatever
+# :latest resolves to AT APPLY TIME into an immutable revision — it does not track the tag
+# afterward. Without this, previews silently runs stale code (missing whatever the next serve.py
+# change was) until someone notices and redeploys it by hand, which is what happened here: the
+# revision that answered #161's first real preview predated the routing logic PR #156 added, by
+# the ~40 minutes it took the deploy pipeline to catch up on that same merge.
+resource "google_cloud_run_v2_service_iam_member" "build_deploy_previews" {
+  count    = var.build_service_account != "" ? 1 : 0
+  name     = google_cloud_run_v2_service.previews.name
+  project  = var.project_id
+  location = var.region
+  role     = "roles/run.admin"
+  member   = "serviceAccount:${var.build_service_account}"
+}
+
+resource "google_service_account_iam_member" "build_can_actas_previews" {
+  count              = var.build_service_account != "" ? 1 : 0
+  service_account_id = google_service_account.previews.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.build_service_account}"
+}

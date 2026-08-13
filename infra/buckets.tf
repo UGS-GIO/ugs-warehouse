@@ -99,11 +99,11 @@ resource "google_storage_bucket" "previews" {
   uniform_bucket_level_access = true
   labels                      = var.labels
 
-  # 30 days, not 7: age resets only on redeploy, so a shorter rule deletes the preview of a PR that
+  # 10 days, not 7: age resets only on redeploy, so a shorter rule deletes the preview of a PR that
   # is simply open and idle — the reviewer gets a 404 with nothing to explain it. Closing the PR is
   # the real signal (cloudbuild-preview-cleanup.yaml); this only catches what that misses.
   lifecycle_rule {
     action { type = "Delete" }
-    condition { age = 30 }
+    condition { age = 10 }
   }
 }

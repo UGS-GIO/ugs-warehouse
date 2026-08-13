@@ -78,9 +78,12 @@ steps:
   # actually need. Post the link where it's clickable: as a PR comment, upserted (not re-posted)
   # so a force-push updates the same comment instead of piling up new ones.
   #
-  # Non-fatal on purpose (the `|| true` at the end): a comment failure must never fail a build that
-  # already deployed successfully — see #161/#162, the exact failure mode this step exists to avoid
-  # repeating for itself.
+  # A standalone script, not an inline heredoc: see scripts/post_preview_comment.py's docstring for
+  # why embedding one in a YAML block-scalar bash step doesn't work.
+  #
+  # Non-fatal on purpose (the `|| true` at the end, on top of the script's own internal catch): a
+  # comment failure must never fail a build that already deployed successfully — see #161/#162, the
+  # exact failure mode this step exists to avoid repeating for itself.
   - id: comment-preview-url
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
@@ -88,37 +91,9 @@ steps:
     args:
       - -c
       - |
-        python3 - <<'PYEOF' || true
-        import json, urllib.request, os
-
-        repo = "${_REPO}"
-        pr = "$_PR_NUMBER"
-        url = "${_PREVIEWS_BASE_URL}/${_PREVIEW_PATH}%s/" % pr
-        marker = "<!-- ugs-warehouse-preview: viewer -->"
-        body = "%s\n🔗 **Viewer preview:** %s" % (marker, url)
-        token = os.environ["GITHUB_TOKEN"]
-        headers = {
-            "Authorization": "Bearer %s" % token,
-            "Accept": "application/vnd.github+json",
-        }
-
-        def req(method, path, data=None):
-            r = urllib.request.Request(
-                "https://api.github.com%s" % path,
-                method=method,
-                headers=headers,
-                data=json.dumps(data).encode() if data else None,
-            )
-            with urllib.request.urlopen(r) as resp:
-                return json.load(resp)
-
-        existing = req("GET", "/repos/%s/issues/%s/comments?per_page=100" % (repo, pr))
-        mine = next((c for c in existing if marker in c.get("body", "")), None)
-        if mine:
-            req("PATCH", "/repos/%s/issues/comments/%s" % (repo, mine["id"]), {"body": body})
-        else:
-            req("POST", "/repos/%s/issues/%s/comments" % (repo, pr), {"body": body})
-        PYEOF
+        REPO="${_REPO}" PR_NUMBER="$_PR_NUMBER" \
+          PREVIEW_URL="${_PREVIEWS_BASE_URL}/${_PREVIEW_PATH}$_PR_NUMBER/" \
+          python3 scripts/post_preview_comment.py || true
 
 options:
   logging: CLOUD_LOGGING_ONLY

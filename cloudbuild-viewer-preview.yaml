@@ -24,12 +24,6 @@ substitutions:
   # the service's *.run.app URL is stable for its lifetime, so it's a substitution instead.
   _PREVIEWS_BASE_URL: https://ugs-warehouse-previews-ufyuidl4mq-uc.a.run.app
   _PREVIEW_PATH: viewer/pr-
-  _REPO: UGS-GIO/ugs-warehouse
-
-availableSecrets:
-  secretManager:
-    - versionName: projects/ut-dnr-ugs-backend-tools/secrets/ugs-warehouse-github-github-oauthtoken-86b32a/versions/latest
-      env: GITHUB_TOKEN
 
 steps:
   # Same service-URL resolution as the prod build, so the preview's endpoint links aren't dead.
@@ -73,27 +67,11 @@ steps:
         gcloud storage objects update "$$DEST/index.html" --cache-control="no-cache"
         echo "preview: ${_PREVIEWS_BASE_URL}/${_PREVIEW_PATH}$_PR_NUMBER/"
 
-  # Cloud Build's own GitHub check only links back to the Cloud Build console — the previous
-  # incarnation of this build made a reviewer dig through console logs to find the one thing they
-  # actually need. Post the link where it's clickable: as a PR comment, upserted (not re-posted)
-  # so a force-push updates the same comment instead of piling up new ones.
-  #
-  # A standalone script, not an inline heredoc: see scripts/post_preview_comment.py's docstring for
-  # why embedding one in a YAML block-scalar bash step doesn't work.
-  #
-  # Non-fatal on purpose (the `|| true` at the end, on top of the script's own internal catch): a
-  # comment failure must never fail a build that already deployed successfully — see #161/#162, the
-  # exact failure mode this step exists to avoid repeating for itself.
-  - id: comment-preview-url
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    secretEnv: ["GITHUB_TOKEN"]
-    args:
-      - -c
-      - |
-        REPO="${_REPO}" PR_NUMBER="$_PR_NUMBER" \
-          PREVIEW_URL="${_PREVIEWS_BASE_URL}/${_PREVIEW_PATH}$_PR_NUMBER/" \
-          python3 scripts/post_preview_comment.py || true
+  # Posting the link as a PR comment lives in .github/workflows/preview-comment.yml, not here.
+  # Tried it here first (#163) via the GitHub connection's OAuth token — 403s, because Cloud
+  # Build's GitHub App install has read/checks scopes, not issues:write. GitHub Actions'
+  # own GITHUB_TOKEN gets pull-requests:write for free via `permissions:`, no secret needed, so
+  # that's where it belongs. That workflow watches for this trigger's check to go green.
 
 options:
   logging: CLOUD_LOGGING_ONLY

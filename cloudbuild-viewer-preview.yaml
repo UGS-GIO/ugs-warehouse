@@ -17,7 +17,12 @@ substitutions:
   _FEATURES_SERVICE: ugs-warehouse-features
   _TILES_SERVICE: ugs-warehouse-tiles
   _PREVIEWS_BUCKET: ut-dnr-ugs-maps-prod-previews
-  _PREVIEWS_SERVICE: ugs-warehouse-previews
+  # Static, not resolved at build time: ugs-warehouse-previews lives in ut-dnr-ugs-maps-prod, a
+  # DIFFERENT project from where this build runs (ut-dnr-ugs-backend-tools). A `gcloud run services
+  # describe` here — like the same-project ones below for features/tiles — would need `--project`
+  # AND cross-project run.viewer for the preview-build SA, just to print a URL. Not worth either:
+  # the service's *.run.app URL is stable for its lifetime, so it's a substitution instead.
+  _PREVIEWS_BASE_URL: https://ugs-warehouse-previews-ufyuidl4mq-uc.a.run.app
   _PREVIEW_PATH: viewer/pr-
 
 steps:
@@ -60,9 +65,7 @@ steps:
           --recursive --delete-unmatched-destination-objects
         # Never cache preview HTML: a force-push has to be visible on reload.
         gcloud storage objects update "$$DEST/index.html" --cache-control="no-cache"
-        URL="$$(gcloud run services describe ${_PREVIEWS_SERVICE} --region=${_REGION} \
-          --format='value(status.url)' 2>/dev/null)"
-        echo "preview: $$URL/${_PREVIEW_PATH}$_PR_NUMBER/"
+        echo "preview: ${_PREVIEWS_BASE_URL}/${_PREVIEW_PATH}$_PR_NUMBER/"
 
 options:
   logging: CLOUD_LOGGING_ONLY

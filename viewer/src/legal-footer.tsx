@@ -22,7 +22,9 @@ export function LegalFooter({ className = "", catalogUrl }: { className?: string
           STAC catalog
         </a>
       )}
-      <span title={`viewer build ${__BUILD_HASH__}`}>build {__BUILD_DATE__}</span>
+      {/* Hash inline, not just in the tooltip: on a per-PR preview it's how you tell which bundle
+          you're actually looking at. */}
+      <span title={`viewer build ${__BUILD_HASH__}`}>build {__BUILD_DATE__} · {__BUILD_HASH__}</span>
       <a href="https://geology.utah.gov" target="_blank" rel="noreferrer" className="ml-auto hover:text-foreground hover:underline">
         Utah Geological Survey
       </a>

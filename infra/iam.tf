@@ -96,6 +96,17 @@ resource "google_service_account_iam_member" "build_can_actas_serving" {
   member             = "serviceAccount:${var.build_service_account}"
 }
 
+# Same actAs gap, hit on the FIRST apply of previews.tf (#159): deploying google_cloud_run_v2_service
+# "previews" 403'd with `iam.serviceaccounts.actAs denied on ugs-warehouse-previews` because
+# serviceAccountAdmin (above) manages the SA but doesn't let the deploy SA run AS it. Folding in the
+# same fix as deploy_can_actas_serving so a clean re-apply never needs the manual grant.
+resource "google_service_account_iam_member" "deploy_can_actas_previews" {
+  count              = var.deploy_service_account != "" ? 1 : 0
+  service_account_id = google_service_account.previews.name
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.deploy_service_account}"
+}
+
 # SELF-signBlob: review-api mints V4 signed GCS URLs for the private review assets via obstore, which
 # calls iamcredentials `signBlob` on its OWN identity (the serving SA). On Cloud Run the ambient identity
 # IS this SA, so the signBlob target = its own email — it just needs serviceAccountTokenCreator on itself.

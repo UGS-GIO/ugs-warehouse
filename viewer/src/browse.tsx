@@ -14,7 +14,8 @@ import { ItemDetail } from "./item-detail";
 import { PageHero } from "./page-hero";
 import { T } from "./page";
 import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "./paging";
-import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset } from "./stac";
+import { type Asset, assetKind, CATALOG_URL, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset } from "./stac";
+import { StacUrlChip } from "./stac-url-chip";
 import { DataTable, Pager } from "./table";
 import { useIsDesktop } from "./ui/use-breakpoint";
 import { C, humanize, toggle } from "./ui";
@@ -635,7 +636,9 @@ export function Browse(props: {
           and the search that opens the whole catalog belongs in it rather than above a bare list. */}
       {atRoot && (
         <PageHero title="Data Catalog"
-          lead="Geologic maps, hazard layers and publications." />
+          lead="Geologic maps, hazard layers and publications.">
+          <StacUrlChip url={CATALOG_URL} />
+        </PageHero>
       )}
     <div className={C.wrap}>
       {!atRoot && <Breadcrumb crumbs={props.breadcrumb} />}

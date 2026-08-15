@@ -16,10 +16,14 @@ export function LegalFooter({ className = "", catalogUrl }: { className?: string
           {l.label}
         </a>
       ))}
-      {/* Provenance, not navigation: which catalog this viewer reads, and which build it is. */}
+      {/* Provenance, not navigation: which catalog this viewer reads, and which build it is. The
+          URL is spelled out rather than hidden behind a label — a sandbox/review override (?catalog=)
+          is otherwise invisible, and "which catalog am I looking at" is the first question a wrong
+          layer raises. Scheme dropped for length; the href keeps it. */}
       {catalogUrl && (
-        <a href={catalogUrl} target="_blank" rel="noreferrer" className="hover:text-foreground hover:underline">
-          STAC catalog
+        <a href={catalogUrl} target="_blank" rel="noreferrer" title={catalogUrl}
+           className="hover:text-foreground hover:underline">
+          STAC catalog: {catalogUrl.replace(/^https?:\/\//, "")}
         </a>
       )}
       {/* Hash inline, not just in the tooltip: on a per-PR preview it's how you tell which bundle

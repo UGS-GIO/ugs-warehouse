@@ -441,8 +441,8 @@ export const cubeVariables = (item: StacDoc): Record<string, CubeVariable> => {
 export const timeDimensionOf = (item: StacDoc): string | undefined =>
   Object.entries(cubeDimensions(item)).find(([n, d]) => d.type === "temporal" || n === "time")?.[0];
 
-export const zarrAsset = (item: StacDoc): Asset | undefined =>
-  Object.values(item.assets ?? {}).find((a) => assetKind(a) === "zarr");
+export const zarrAsset = (item: StacDoc | undefined): Asset | undefined =>
+  Object.values(item?.assets ?? {}).find((a) => assetKind(a) === "zarr");
 
 const extOf = (href: string) => (href.split("?")[0].split(".").pop() ?? "").toLowerCase();
 

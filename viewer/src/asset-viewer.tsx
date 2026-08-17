@@ -1,6 +1,6 @@
-// Per-asset preview: picks a viewer by asset kind (map, 3D, PDF, table, image, text).
+// Per-asset preview: picks a viewer by asset kind (map, datacube, 3D, PDF, table, image, text).
 import { useQuery } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 
 import { DataExplorer } from "./data-explorer";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "./preview-map";
@@ -8,6 +8,9 @@ import { type Asset, type AssetKind, assetKind, KIND_RANK, parquetAsset, pmtiles
   summaryFieldsOf, tableColumns, thumbnailAsset } from "./stac";
 import { ThreeDViewer } from "./three-d-viewer";
 import { C, toggle } from "./ui";
+
+// deck.gl-zarr drags in luma.gl + the reprojection stack; only datacube items pay for it.
+const ZarrMap = lazy(() => import("./zarr-map").then((m) => ({ default: m.ZarrMap })));
 
 export function AssetChips({ assets }: { assets: Record<string, Asset> }) {
   return (
@@ -70,7 +73,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
 }
 
 const KIND_LABEL: Record<AssetKind, string> = {
-  cog: "Map", threeD: "3D", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
+  cog: "Map", zarr: "Datacube", threeD: "3D", pdf: "PDF", parquet: "Data", image: "Image", text: "Text", other: "File",
 };
 
 
@@ -95,6 +98,12 @@ function TextPreview({ href }: { href: string }) {
 function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item: StacDoc }) {
   switch (kind) {
     case "cog": return <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />;
+    case "zarr":
+      return (
+        <Suspense fallback={<div className="mt-2 h-96 w-full animate-pulse rounded-md border border-border bg-muted" />}>
+          <ZarrMap asset={asset} item={item} />
+        </Suspense>
+      );
     case "threeD": return <ThreeDViewer asset={asset} item={item} />;
     case "parquet": return <DataExplorer key={asset.href} href={asset.href} />;
     case "image":

@@ -14,7 +14,7 @@ import { ItemDetail } from "./item-detail";
 import { PageHero } from "./page-hero";
 import { T } from "./page";
 import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "./paging";
-import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset } from "./stac";
+import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, zarrAsset } from "./stac";
 import { DataTable, Pager } from "./table";
 import { useIsDesktop } from "./ui/use-breakpoint";
 import { C, humanize, toggle } from "./ui";
@@ -84,9 +84,11 @@ const scaleTierOf = (it: ItemRef): string => {
   return d <= 62500 ? "24k" : d <= 350000 ? "250k" : "500k";
 };
 const haystack = (it: ItemRef) => (it.href + JSON.stringify(it.data?.properties ?? {})).toLowerCase();
-// "Mappable" = has something to draw on the map: a COG (raster), vector PMTiles, or a raster PMTiles
-// mosaic. Items with none (metadata-only pubs) do nothing when toggled — the filter hides them.
-const hasMapData = (it: ItemRef) => !!(cogAsset(it.data) || pmtilesLink(it.data) || rasterTilesAsset(it.data));
+// "Mappable" = has something to draw on the map: a COG (raster), vector PMTiles, a raster PMTiles
+// mosaic, or a zarr datacube. Items with none (metadata-only pubs) do nothing when toggled — the
+// filter hides them.
+const hasMapData = (it: ItemRef) =>
+  !!(cogAsset(it.data) || pmtilesLink(it.data) || rasterTilesAsset(it.data) || zarrAsset(it.data));
 // Item carries an interactive 3D fence-diagram asset (role 3d-vector) → eligible for the 3D viewer.
 const has3D = (it: ItemRef) => Object.values(it.data?.assets ?? {}).some((a) => assetKind(a as Asset) === "threeD");
 // Data-series code = the alpha prefix of the publication series id (DS-8 → DS, OFR-647 →
@@ -460,7 +462,7 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
             onChange={(e) => setYearMax(e.target.value)}
             className="w-14 rounded border border-border bg-background px-1 py-0.5" />
         </span>
-        <span className={toggle(mapOnly)} title="Only items with a COG or vector tiles to display on the map"
+        <span className={toggle(mapOnly)} title="Only items with a COG, vector tiles, or a zarr datacube to display on the map"
           onClick={() => setMapOnly((v) => !v)}>Mappable</span>
         <span className={toggle(mode === "table")} onClick={() => setMode("table")}>Table</span>
         <span className={toggle(mode === "thumbs")} onClick={() => setMode("thumbs")}>Thumbnails</span>

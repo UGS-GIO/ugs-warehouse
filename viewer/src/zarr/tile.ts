@@ -19,7 +19,8 @@ export async function getTileData(
   if (chunk.shape.length !== 2) {
     throw new Error(`Expected a 2D (y, x) slice, got [${chunk.shape.join(", ")}]`);
   }
-  const data = Float32Array.from(chunk.data as ArrayLike<number>);
+  // Cast, not a copy — openZarr rejects anything but float32, and this runs per tile.
+  const data = chunk.data as Float32Array;
   const texture = device.createTexture({
     format: "r32float",
     width,

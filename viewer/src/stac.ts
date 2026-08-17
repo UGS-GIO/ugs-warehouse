@@ -441,6 +441,13 @@ export const cubeVariables = (item: StacDoc): Record<string, CubeVariable> => {
 export const timeDimensionOf = (item: StacDoc): string | undefined =>
   Object.entries(cubeDimensions(item)).find(([n, d]) => d.type === "temporal" || n === "time")?.[0];
 
+// Every dim that isn't x/y. ZarrLayer requires ALL of them pinned or sliced, and they are not all
+// temporal — the climatology cubes key on `month` (type "other"), so keying off time alone throws.
+export const nonSpatialDimensions = (item: StacDoc): string[] =>
+  Object.entries(cubeDimensions(item))
+    .filter(([n, d]) => d.type !== "spatial" && !["x", "y", "lat", "lon", "latitude", "longitude"].includes(n))
+    .map(([n]) => n);
+
 export const zarrAsset = (item: StacDoc | undefined): Asset | undefined =>
   Object.values(item?.assets ?? {}).find((a) => assetKind(a) === "zarr");
 

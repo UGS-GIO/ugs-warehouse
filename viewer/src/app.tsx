@@ -14,7 +14,7 @@ import { MapShell } from "./map-shell";
 import { NavMenu } from "./nav-menu";
 import { PreviewMapProvider } from "./preview-map";
 import { PropertyTable } from "./property-table";
-import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl } from "./stac";
+import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./stac-url-chip";
 import { DiffPanel } from "./diff-panel";
 import { CommentsPanel } from "./comments-panel";
@@ -72,6 +72,15 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox };
   const raster = rasterTilesAsset(ref.data);
   if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };
+  const zarr = zarrAsset(ref.data);
+  if (zarr) {
+    return {
+      id, title, bbox: ref.data.bbox,
+      zarrHref: zarr.href,
+      zarrVariable: Object.keys(cubeVariables(ref.data))[0],
+      zarrPinDims: nonSpatialDimensions(ref.data),
+    };
+  }
   return null;
 }
 
@@ -325,20 +334,37 @@ export function App() {
   ];
   const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
 
-  const mapIdx = useIndexes(view === "map" ? leafColls.map((c) => ({ id: c.id, href: c.href })) : []);
-  const mapItems: ItemRef[] = mapIdx.flatMap((r) => (r.index?.items ?? []).map((d) => ({
-    collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d,
-  })));
+  const mapColls = view === "map" ? leafColls : [];
+  const mapIdx = useIndexes(mapColls.map((c) => ({ id: c.id, href: c.href })));
+  // Same collection.json → item-links fallback the browse list uses. Without it a federated
+  // catalog contributes no layers at all: it publishes no items.json, so the index is empty and
+  // its datacubes never reach the layer list. Bounded — only index-less collections take this path.
+  const mapFbColls = mapColls.filter((_, i) => mapIdx[i]?.missing);
+  const mapFbCollDocs = useDocs(mapFbColls.map((c) => c.href));
+  const mapFbRefs = mapFbColls.flatMap((c, i) =>
+    itemLinks(mapFbCollDocs.docs[i]?.data, c.href).map((l) => ({ collId: c.id, href: l.href })));
+  const mapFbDocs = useDocs(mapFbRefs.map((r) => r.href));
+  const mapItems: ItemRef[] = [
+    ...mapIdx.flatMap((r) => (r.index?.items ?? []).map((d) => ({
+      collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d,
+    }))),
+    ...mapFbRefs.map((r, i) => ({ ...r, data: mapFbDocs.docs[i]?.data })),
+  ];
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
   const layerRows: LayerRow[] = useMemo(() => mapItems
-    .filter((r) => r.data && (pmtilesLink(r.data) || cogAsset(r.data) || rasterTilesAsset(r.data)))
+    .filter((r) => r.data && (pmtilesLink(r.data) || cogAsset(r.data) || rasterTilesAsset(r.data) || zarrAsset(r.data)))
+    // A datacube is a data layer whatever catalog it came from — the sub-catalog allowlist only
+    // knows our own ids, so a federated cube would otherwise file under publication plates.
     .map((r) => ({ id: idOf(r.href), href: r.href, title: String(r.data?.properties?.title ?? idOf(r.href)),
-                   group: collTitle(r.collId), layer: layerCollIds.includes(r.collId) }))
+                   group: collTitle(r.collId), layer: layerCollIds.includes(r.collId) || !!zarrAsset(r.data) }))
     .sort((a, b) => Number(b.layer) - Number(a.layer)
                     || a.group.localeCompare(b.group) || a.title.localeCompare(b.title)),
+    // Fallback docs land after the indexes, so they're in the key too — else federated layers
+    // (which only arrive that way) never make it into the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")]);
+    [mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|"),
+     mapFbRefs.length, mapFbDocs.docs.filter((d) => d?.data).length]);
 
   // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
   // an absolute href: construct from the open leaf, else look it up among loaded items.

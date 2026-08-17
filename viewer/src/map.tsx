@@ -1,7 +1,7 @@
 import { Toggle } from "@base-ui/react/toggle";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
@@ -9,6 +9,9 @@ import { type StacDoc, useCogBoxes, useStyleLayersFor } from "./stac";
 import { UiSegmented } from "./ui/segmented";
 import { type ActiveLayer, colorFor, type Footprint } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+
+// deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
+const ZarrOverlay = lazy(() => import("./zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 
@@ -86,6 +89,11 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
   // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.
   const [cogReady, setCogReady] = useState(false);
   const hasCog = layers.some((l) => l.cogHref);
+  // Datacubes render through deck.gl, not a maplibre Source, so they're collected here and drawn by
+  // one overlay rather than in the per-layer Source switch below.
+  const zarrSpecs = layers.flatMap((l) => (l.zarrHref
+    ? [{ id: l.id, href: l.zarrHref, variable: l.zarrVariable, pinDims: l.zarrPinDims }]
+    : []));
   useEffect(() => {
     if (!hasCog || cogReady) return;
     let live = true;
@@ -223,8 +231,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
         </Source>
       )}
 
+      {zarrSpecs.length > 0 && (
+        <Suspense fallback={null}><ZarrOverlay specs={zarrSpecs} /></Suspense>
+      )}
+
       {layers.map((l, i) => {
         const s = slugOf(l.id);
+        if (l.zarrHref) return null;   // drawn by the deck overlay above
         // Raster PMTiles mosaic — the per-scale geologic-map tiles, served via the already-registered
         // pmtiles:// protocol as a raster source. No styling: it's the published map image.
         if (l.rasterPmHref) {

@@ -90,6 +90,9 @@ export type ActiveLayer = {
   pmHref?: string; pmLayer?: string; styleUrl?: string;
   cogHref?: string;
   rasterPmHref?: string;
+  // Zarr datacube: the store plus what to slice out of it. Carried here (not re-read from STAC in
+  // the map) so the layer list and the map agree on which variable is drawn.
+  zarrHref?: string; zarrVariable?: string; zarrPinDims?: string[];
 };
 
 // A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough

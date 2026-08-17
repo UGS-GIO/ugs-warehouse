@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetKind, cubeVariables, timeDimensionOf } from "./stac";
+import { assetKind, cubeVariables, nonSpatialDimensions, timeDimensionOf } from "./stac";
 import { fillValueOf } from "./zarr/store";
 
 // Shaped like the UBM items the warehouse federates.
@@ -54,6 +54,31 @@ describe("timeDimensionOf", () => {
   it("returns undefined for a purely spatial cube", () => {
     const item = { properties: { "cube:dimensions": { x: { type: "spatial" }, y: { type: "spatial" } } } };
     expect(timeDimensionOf(item)).toBeUndefined();
+  });
+});
+
+// ZarrLayer throws "selection is missing non-spatial dim" unless every one of these is pinned.
+describe("nonSpatialDimensions", () => {
+  it("pins a temporal dim", () => {
+    const item = { properties: { "cube:dimensions": { time: { type: "temporal" }, x: { type: "spatial" }, y: { type: "spatial" } } } };
+    expect(nonSpatialDimensions(item)).toEqual(["time"]);
+  });
+
+  // The bug this closes: the climatology cubes key on `month` (type "other"), so pinning only the
+  // temporal dim left it unpinned and the layer threw on init.
+  it("pins a non-temporal extra dim like month", () => {
+    const item = { properties: { "cube:dimensions": { month: { type: "other" }, x: { type: "spatial" }, y: { type: "spatial" } } } };
+    expect(nonSpatialDimensions(item)).toEqual(["month"]);
+  });
+
+  it("never pins the spatial axes, even untyped", () => {
+    const item = { properties: { "cube:dimensions": { lat: {}, lon: {}, time: { type: "temporal" } } } };
+    expect(nonSpatialDimensions(item)).toEqual(["time"]);
+  });
+
+  it("returns nothing for a purely 2D cube", () => {
+    const item = { properties: { "cube:dimensions": { x: { type: "spatial" }, y: { type: "spatial" } } } };
+    expect(nonSpatialDimensions(item)).toEqual([]);
   });
 });
 

@@ -7,4 +7,6 @@ dist-review
 public/stac/
 .playwright-mcp/
 *.png
+# …except the colormap sprite: the zarr layer samples it at runtime, so it ships with the build.
+!public/colormaps.png
 *.tsbuildinfo

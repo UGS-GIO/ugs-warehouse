@@ -418,15 +418,43 @@ export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
   Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"
     || a.roles?.includes("ducklake") || a.href.includes("ducklake"))?.[1];
 
+// ---- datacube extension (zarr) ----
+// https://github.com/stac-extensions/datacube — what turns a bare store href into something
+// renderable: which dims are spatial vs. temporal, and which variables can be drawn.
+export type CubeDimension = { type?: string; axis?: string; extent?: unknown[]; values?: unknown[]; step?: unknown };
+export type CubeVariable = { dimensions?: string[]; type?: string; unit?: string; description?: string };
+
+const cubeProp = <T,>(item: StacDoc, key: string): Record<string, T> =>
+  ((item.properties?.[key] ?? (item as Record<string, unknown>)[key]) as Record<string, T>) ?? {};
+
+export const cubeDimensions = (item: StacDoc): Record<string, CubeDimension> =>
+  cubeProp<CubeDimension>(item, "cube:dimensions");
+
+// Only variables STAC calls `data` are drawable; auxiliary/coordinate entries are metadata.
+export const cubeVariables = (item: StacDoc): Record<string, CubeVariable> => {
+  const all = cubeProp<CubeVariable>(item, "cube:variables");
+  const data = Object.entries(all).filter(([, v]) => v.type === undefined || v.type === "data");
+  return Object.fromEntries(data.length ? data : Object.entries(all));
+};
+
+// The dim a time slider would drive. `type` is authoritative; the name is the fallback.
+export const timeDimensionOf = (item: StacDoc): string | undefined =>
+  Object.entries(cubeDimensions(item)).find(([n, d]) => d.type === "temporal" || n === "time")?.[0];
+
+export const zarrAsset = (item: StacDoc): Asset | undefined =>
+  Object.values(item.assets ?? {}).find((a) => assetKind(a) === "zarr");
+
 const extOf = (href: string) => (href.split("?")[0].split(".").pop() ?? "").toLowerCase();
 
-export type AssetKind = "cog" | "threeD" | "pdf" | "image" | "parquet" | "text" | "other";
-export const KIND_RANK: Record<AssetKind, number> = { cog: 0, threeD: 1, pdf: 2, parquet: 3, image: 4, text: 5, other: 9 };
+export type AssetKind = "cog" | "zarr" | "threeD" | "pdf" | "image" | "parquet" | "text" | "other";
+export const KIND_RANK: Record<AssetKind, number> = { cog: 0, zarr: 0, threeD: 1, pdf: 2, parquet: 3, image: 4, text: 5, other: 9 };
 
 export function assetKind(a: Asset): AssetKind {
   const t = (a.type ?? "").toLowerCase();
   const ext = extOf(a.href);
   if (a.roles?.includes("3d-vector") || ext.includes("3d") || a.href.includes("3d_polygons")) return "threeD";
+  // Zarr before COG: a datacube asset carries no extension, only the media type.
+  if (t.includes("zarr") || ext === "zarr") return "zarr";
   if (t.includes("profile=cloud-optimized") || a.roles?.includes("cloud-optimized") || a.href.endsWith(".cog.tif")) return "cog";
   if (t === "application/pdf" || ext === "pdf") return "pdf";
   if (t.startsWith("image/") || ["png", "jpg", "jpeg", "gif", "webp", "svg"].includes(ext)) return "image";

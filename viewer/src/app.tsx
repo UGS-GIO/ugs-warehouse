@@ -52,8 +52,8 @@ const ROOT_HREF = location.pathname || "/";
 type View = "catalog" | "map" | "arch" | "guide" | "search" | "review";
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
-// An ItemRef → map ActiveLayer. Prefer PMTiles (vector); else fall back to a COG (raster) so
-// publication/raster items render on the overlay too. null if it has neither.
+// An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
+// null when the item carries none of them — it isn't a layer.
 function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   if (!ref?.data) return null;
   const id = idOf(ref.href);
@@ -73,12 +73,12 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   const raster = rasterTilesAsset(ref.data);
   if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };
   const zarr = zarrAsset(ref.data);
-  if (zarr) {
+  // No drawable variable → not a layer, rather than a row that can never render.
+  const variable = zarr && Object.keys(cubeVariables(ref.data))[0];
+  if (zarr && variable) {
     return {
       id, title, bbox: ref.data.bbox,
-      zarrHref: zarr.href,
-      zarrVariable: Object.keys(cubeVariables(ref.data))[0],
-      zarrPinDims: nonSpatialDimensions(ref.data),
+      zarr: { href: zarr.href, variable, pinDims: nonSpatialDimensions(ref.data) },
     };
   }
   return null;
@@ -350,6 +350,10 @@ export function App() {
     }))),
     ...mapFbRefs.map((r, i) => ({ ...r, data: mapFbDocs.docs[i]?.data })),
   ];
+  // How much of the map's data has loaded. The fallback count is what federated layers depend on:
+  // they arrive only that way, and always after the indexes.
+  const mapLoadKey = mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
+    + `|fb:${mapFbDocs.docs.filter((d) => d?.data).length}`;
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
   const layerRows: LayerRow[] = useMemo(() => mapItems
@@ -360,11 +364,8 @@ export function App() {
                    group: collTitle(r.collId), layer: layerCollIds.includes(r.collId) || !!zarrAsset(r.data) }))
     .sort((a, b) => Number(b.layer) - Number(a.layer)
                     || a.group.localeCompare(b.group) || a.title.localeCompare(b.title)),
-    // Fallback docs land after the indexes, so they're in the key too — else federated layers
-    // (which only arrive that way) never make it into the list.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|"),
-     mapFbRefs.length, mapFbDocs.docs.filter((d) => d?.data).length]);
+    [mapLoadKey]);
 
   // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
   // an absolute href: construct from the open leaf, else look it up among loaded items.

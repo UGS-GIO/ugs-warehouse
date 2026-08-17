@@ -8,12 +8,10 @@ import * as zarr from "zarrita";
 
 export interface ZarrSource {
   array: zarr.Array<zarr.NumberDataType, zarr.Readable>;
-  groupAttrs: Record<string, unknown>;
+  /** Carries the GeoZarr `spatial:*` / `proj:wkt2` attrs the layer needs to place the raster. */
   arrayAttrs: Record<string, unknown>;
   /** The array's own fill sentinel — masked out on the GPU before the colormap. */
   noDataValue: number;
-  /** Length of the leading non-spatial dim, if the array has one. */
-  numSteps: number;
 }
 
 async function openRoot(href: string): Promise<zarr.Group<zarr.Readable>> {
@@ -33,13 +31,7 @@ export async function openZarr(href: string, variable: string): Promise<ZarrSour
   if (!node.is("float32")) {
     throw new Error(`Variable '${variable}' is ${node.dtype}; only float32 renders today.`);
   }
-  return {
-    array: node,
-    groupAttrs: { ...root.attrs },
-    arrayAttrs: { ...node.attrs },
-    noDataValue: fillValueOf(node.attrs),
-    numSteps: node.shape.length > 2 ? node.shape[0] : 1,
-  };
+  return { array: node, arrayAttrs: { ...node.attrs }, noDataValue: fillValueOf(node.attrs) };
 }
 
 /** Read the sentinel off the array itself — a sibling's would mask the wrong value. */
@@ -49,17 +41,17 @@ export function fillValueOf(attrs: Record<string, unknown>): number {
 }
 
 /**
- * Colour stretch from one sampled window. STAC carries no statistics for these cubes and a wrong
- * stretch renders flat, so read a corner of the first step and take a 2–98% clip of it. Approximate
- * by construction — it samples one window, not the cube — but it puts real data on screen.
+ * Colour stretch from one sampled window: a 512² corner of the first step, clipped 2–98%.
+ * Approximate by construction, and only needed because STAC carries no statistics for these cubes —
+ * a producer-side `raster:bands` statistic should replace it.
  */
-export async function sampleRange(src: ZarrSource, step = 0): Promise<[number, number]> {
+export async function sampleRange(src: ZarrSource): Promise<[number, number]> {
   const { array, noDataValue } = src;
   const dims = array.shape.length;
   const [h, w] = array.shape.slice(-2);
   const win = (n: number) => zarr.slice(0, Math.min(n, 512));
   const sel = dims > 2
-    ? [...Array<number>(dims - 2).fill(step), win(h), win(w)]
+    ? [...Array<number>(dims - 2).fill(0), win(h), win(w)]   // first index of each non-spatial dim
     : [win(h), win(w)];
 
   const chunk = await zarr.get(array, sel);

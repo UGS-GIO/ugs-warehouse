@@ -91,9 +91,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
   const hasCog = layers.some((l) => l.cogHref);
   // Datacubes render through deck.gl, not a maplibre Source, so they're collected here and drawn by
   // one overlay rather than in the per-layer Source switch below.
-  const zarrSpecs = layers.flatMap((l) => (l.zarrHref
-    ? [{ id: l.id, href: l.zarrHref, variable: l.zarrVariable, pinDims: l.zarrPinDims }]
-    : []));
+  const zarrSpecs = layers.flatMap((l) => (l.zarr ? [{ id: l.id, ...l.zarr }] : []));
   useEffect(() => {
     if (!hasCog || cogReady) return;
     let live = true;
@@ -237,7 +235,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
 
       {layers.map((l, i) => {
         const s = slugOf(l.id);
-        if (l.zarrHref) return null;   // drawn by the deck overlay above
+        if (l.zarr) return null;   // drawn by the deck overlay above
         // Raster PMTiles mosaic — the per-scale geologic-map tiles, served via the already-registered
         // pmtiles:// protocol as a raster source. No styling: it's the published map image.
         if (l.rasterPmHref) {

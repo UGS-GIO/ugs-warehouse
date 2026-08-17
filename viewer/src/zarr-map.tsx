@@ -16,13 +16,15 @@ import maplibregl from "maplibre-gl";
 import { useMemo, useState } from "react";
 import { Map as MapGL, NavigationControl, useControl } from "react-map-gl/maplibre";
 
+// The library's own sprite, not a vendored copy — Vite hashes it and it tracks the package version.
+import colormapsPng from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png?url";
+
 import { type Asset, cubeVariables, type StacDoc, timeDimensionOf } from "./stac";
 import { makeLocalEpsgResolver } from "./zarr/epsg";
 import { openZarr, sampleRange } from "./zarr/store";
 import { getTileData, makeRenderTile } from "./zarr/tile";
 
 const POSITRON = "https://tiles.openfreemap.org/styles/positron";
-const COLORMAPS_PNG = import.meta.env.BASE_URL + "colormaps.png";
 
 /** deck.gl layers as a maplibre control. `interleaved` keeps basemap labels above the raster. */
 function DeckOverlay(props: MapboxOverlayProps) {
@@ -49,10 +51,10 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
     retry: false,
   });
 
-  // The sprite is a static asset shared by every colormap; decode once, upload per device.
+  // One sprite holds every colormap's LUT; decode once, upload per device.
   const { data: sprite } = useQuery({
     queryKey: ["colormap-sprite"],
-    queryFn: async () => decodeColormapSprite(await (await fetch(COLORMAPS_PNG)).arrayBuffer()),
+    queryFn: async () => decodeColormapSprite(await (await fetch(colormapsPng)).arrayBuffer()),
     staleTime: Infinity,
   });
   const colormapTexture = useMemo(

@@ -15,6 +15,7 @@ import { NavMenu } from "./nav-menu";
 import { PreviewMapProvider } from "./preview-map";
 import { PropertyTable } from "./property-table";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl } from "./stac";
+import { StacUrlChip } from "./stac-url-chip";
 import { DiffPanel } from "./diff-panel";
 import { CommentsPanel } from "./comments-panel";
 import { NotifBell } from "./notifications-inbox";
@@ -444,6 +445,8 @@ export function App() {
           </span>
           <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </a>
+        {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
+        <StacUrlChip url={CATALOG_URL} />
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
               below md — five tabs and a phone don't share a row. */}
@@ -455,7 +458,7 @@ export function App() {
           </div>
           {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}
           {/* Always mounted: it carries the theme picker, and below md the views as well. */}
-          <NavMenu current={view}
+          <NavMenu current={view} catalogUrl={CATALOG_URL}
             pages={VIEWS.map((v) => ({ id: v.id, label: v.label, onSelect: () => setView(v.id) }))} />
         </div>
       </header>

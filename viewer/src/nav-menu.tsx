@@ -7,6 +7,7 @@
 import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
+import { CheckIcon, CopyIcon, copyCatalogUrl } from "./stac-url-chip";
 import { getTheme, setTheme, type Theme, useIsDark } from "./theme";
 
 const THEMES: { value: Theme; label: string; icon: string }[] = [
@@ -20,16 +21,22 @@ export type NavPage = { id: string; label: string; onSelect: () => void };
 const ITEM = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-muted";
 const HEADING = "px-2 py-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground";
 
-export function NavMenu({ pages, current }: { pages: NavPage[]; current: string }) {
+export function NavMenu({ pages, current, catalogUrl }: { pages: NavPage[]; current: string; catalogUrl?: string }) {
   const [theme, setThemeState] = useState<Theme>(getTheme);
+  const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const dark = useIsDark();
   const pick = (value: Theme) => {
     setTheme(value);
     setThemeState(value);
   };
 
+  const copy = async () => {
+    setCopied(catalogUrl && (await copyCatalogUrl(catalogUrl)) ? "copied" : "failed");
+  };
+
   return (
-    <Menu.Root>
+    // Closing resets the copy state — the menu's own lifetime is the feedback's, so no timer.
+    <Menu.Root onOpenChange={(open) => !open && setCopied("idle")}>
       {/* One menu, two faces: a hamburger below md (it carries the views too), and the current
           theme's own icon on desktop, where the views are already tabs. */}
       <Menu.Trigger
@@ -60,6 +67,25 @@ export function NavMenu({ pages, current }: { pages: NavPage[]; current: string 
                     {p.label}
                   </Menu.Item>
                 ))}
+                <Menu.Separator className="my-1 h-px bg-border" />
+              </div>
+            )}
+            {/* The header chip is desktop-only, so below md this is the one way to get the URL. */}
+            {catalogUrl && (
+              <div className="md:hidden">
+                {copied === "failed" ? (
+                  // No clipboard (denied, or a non-secure origin) — open it instead of dead-ending.
+                  <Menu.Item className={ITEM} nativeButton={false}
+                    render={<a href={catalogUrl} target="_blank" rel="noreferrer" />}>
+                    <CopyIcon />
+                    <span className="flex-1">Open STAC catalog</span>
+                  </Menu.Item>
+                ) : (
+                  <Menu.Item className={ITEM} closeOnClick={false} onClick={copy}>
+                    {copied === "copied" ? <CheckIcon /> : <CopyIcon />}
+                    <span className="flex-1">{copied === "copied" ? "Copied" : "Copy STAC URL"}</span>
+                  </Menu.Item>
+                )}
                 <Menu.Separator className="my-1 h-px bg-border" />
               </div>
             )}

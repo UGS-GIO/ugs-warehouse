@@ -22,6 +22,7 @@ import tempfile
 import duckdb
 
 from ..core import config, gcs
+from . import introspect
 from .topics import Topic
 
 TIPPECANOE_BIN = os.environ.get("TIPPECANOE_BIN", "tippecanoe")
@@ -46,19 +47,19 @@ TILE_OPTS = [
     # and silently drops features to fit the 500KB/tile, 200k-feature/tile defaults.
     "--no-tile-size-limit",
     "--no-feature-limit",
-    # Promote the transform's `feature_id` to the native MVT feature id, so the viewer can join a
-    # clicked map feature to its GeoParquet table row (both carry the same id). MapLibre then
-    # exposes it as `feature.id` (enables setFeatureState highlight) — no promoteId needed.
-    "--use-attribute-for-id=feature_id",
+    # NOTE: --use-attribute-for-id is appended per-topic in _tile_and_upload (ugs_key on armed
+    # topics, else feature_id) — it is NOT a fixed option, so it lives outside TILE_OPTS.
 ]
 
 
-def tiling_signature() -> str:
-    """Stable string of the tiling inputs (build version + fixed flags + env opts). Folded into the
-    content fingerprint so a change in HOW a topic is tiled forces a rebuild even when the data is
-    byte-identical. `--force` is excluded — it's not a tiling-output input."""
+def tiling_signature(id_attr: str) -> str:
+    """Stable string of the tiling inputs (build version + the MVT id column + fixed flags + env
+    opts). Folded into the content fingerprint so a change in HOW a topic is tiled forces a rebuild
+    even when the data is byte-identical. Including `id_attr` means a dormant→armed topic (whose id
+    source flips feature_id→ugs_key) re-tiles exactly when that happens. `--force` is excluded —
+    it's not a tiling-output input."""
     opts = [o for o in (*TILE_OPTS, *EXTRA_OPTS) if o != "--force"]
-    return "|".join([f"v{PMTILES_BUILD_VERSION}", *opts])
+    return "|".join([f"v{PMTILES_BUILD_VERSION}", f"id={id_attr}", *opts])
 
 
 def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
@@ -66,9 +67,11 @@ def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> Non
     con.execute(f"COPY (SELECT * FROM {view}) TO '{path}' (FORMAT GDAL, DRIVER 'GeoJSONSeq')")
 
 
-def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
+def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> None:
     """tippecanoe over a GeoJSONSeq file → PMTiles → GCS (latest pointer). Output sits next to
-    the input so callers control the temp dir."""
+    the input so callers control the temp dir. `id_attr` is promoted to the native MVT feature id
+    (ugs_key on armed topics, else feature_id) so the viewer can join a clicked map feature to its
+    GeoParquet table row — both carry the same id; MapLibre exposes it as `feature.id`."""
     if not shutil.which(TIPPECANOE_BIN):
         raise RuntimeError(
             f"{TIPPECANOE_BIN} not on PATH — install tippecanoe in the runtime image"
@@ -79,6 +82,7 @@ def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
         "-o", pmtiles,
         "-l", topic.stem,
         *TILE_OPTS,
+        f"--use-attribute-for-id={id_attr}",
         *EXTRA_OPTS,
         geojsonl,
     ]
@@ -105,4 +109,4 @@ def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         geojsonl = os.path.join(tmp, f"{topic.stem}.geojsonl")
         _write_geojsonl(con, view, geojsonl)
-        _tile_and_upload(topic, geojsonl)
+        _tile_and_upload(topic, geojsonl, introspect.id_column(con, view))

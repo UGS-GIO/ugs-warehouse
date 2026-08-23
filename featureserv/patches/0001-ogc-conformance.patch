@@ -196,7 +196,7 @@ index 79da489..eb35f63 100644
 +// this convention is the substitute. Without it IDColumn stays "", which drops the GeoJSON "id"
 +// member (clients that derive an object id from it cannot load the layer) and renders the
 +// single-feature query as WHERE "" = $1, so /items/{fid} always errors.
-+const idColumnCandidates = "['feature_id','fid','ogc_fid','objectid','gid','id']"
++const idColumnCandidates = "['ugs_key','feature_id','fid','ogc_fid','objectid','gid','id']"
 +
 +var sqlTables = fmt.Sprintf(`
 +SELECT

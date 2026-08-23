@@ -17,7 +17,7 @@ import sys
 import duckdb
 
 from ..core import config, gcs, stac
-from . import ducklake
+from . import ducklake, introspect
 from .topics import Topic
 
 # The nesting catalog. A topic's own collection is its dbt mart schema, one level down — the
@@ -144,6 +144,12 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         "ugs:layer": topic.layer,
         "ugs:row_count": rc,
     }
+    # Durable row key. Stamp `ugs:primary_key` when the served view carries ugs_key (an ARMED
+    # topic), so consumers know which column is the stable per-row identity — enables row
+    # commenting/deep-links keyed on it. Absent on dormant topics → consumers keep their fallback.
+    # Presence-probed (con may be None on the bbox/row_count-supplied path).
+    if con is not None and introspect.has_ugs_key(con, view):
+        props["ugs:primary_key"] = introspect.UGS_KEY
     # Content fingerprint (skip-unchanged ingest). Lets a later `--skip-unchanged` run detect that
     # nothing changed and skip the rebuild. Absent when the caller didn't compute one.
     if content_hash:

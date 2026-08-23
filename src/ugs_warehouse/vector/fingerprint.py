@@ -20,7 +20,7 @@ import json
 import duckdb
 
 from ..core import config, gcs, stac
-from . import sink_pmtiles, sink_stac
+from . import introspect, sink_pmtiles, sink_stac
 from .topics import Topic
 
 CONTENT_HASH_PROP = "ugs:content_hash"
@@ -35,7 +35,7 @@ def compute(con: duckdb.DuckDBPyConnection, view: str) -> str:
     n, h = con.execute(
         f"SELECT count(*)::BIGINT, COALESCE(sum(hash(v)::HUGEINT), 0)::VARCHAR FROM {view} v"
     ).fetchone()
-    return f"{n}:{h}:{sink_pmtiles.tiling_signature()}"
+    return f"{n}:{h}:{sink_pmtiles.tiling_signature(introspect.id_column(con, view))}"
 
 
 def published_hash(topic: Topic) -> str | None:

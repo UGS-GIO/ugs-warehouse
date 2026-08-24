@@ -12,7 +12,7 @@ import tempfile
 import duckdb
 import pytest
 
-from ugs_warehouse.vector import sink_ducklake
+from ugs_warehouse.vector import introspect, sink_ducklake
 
 COLS = ["ugs_key", "name", "faultage", "geom", "feature_id"]
 
@@ -66,6 +66,49 @@ def test_merge_delta_and_feature_id_excluded(ducklake_con):
     assert rows[1][1] == "a"                            # row 1 content untouched
     assert rows[2] == (2, "b2", 21)                     # row 2 updated
     assert rows[3][1] == "c"                            # row 3 inserted
+
+
+def test_merge_raises_on_null_key(ducklake_con):
+    """A NULL ugs_key must fail loud, not silently vanish. A NULL never matches the MERGE `ON`, so it
+    falls into WHEN NOT MATCHED (inserted) and is then removed by the DELETE in the same transaction
+    — the row would disappear from DuckLake while the GeoParquet/PMTiles from the same run still
+    carry it. The guard refuses before touching the table."""
+    con = ducklake_con
+    _seed_target(con)
+    con.execute(
+        "CREATE TABLE src AS SELECT * FROM (VALUES "
+        "(1,'a','old',ST_Point(-111,39),10), "
+        "(NULL,'z','new',ST_Point(-115,43),50)"   # NULL key — must trigger the guard
+        ") v(ugs_key,name,faultage,geom,feature_id)"
+    )
+    with pytest.raises(ValueError, match="NULL ugs_key"):
+        sink_ducklake._merge(con, "w.hazards.t", "src", COLS)
+    # guard fires before BEGIN → the target is untouched (no partial insert/delete)
+    survivors = {r[0] for r in con.execute("SELECT ugs_key FROM w.hazards.t").fetchall()}
+    assert survivors == {1, 2, 4}
+
+
+def test_ducklake_preserves_describe_types_so_guard_merges(ducklake_con):
+    """The rebuild guard in `write` MERGEs only when the source view and the existing DuckLake table
+    have identical (name, type) schemas. That relies on DuckLake preserving each column's DESCRIBE
+    type string across `CREATE OR REPLACE ... AS SELECT *`. If a type normalized on storage (esp.
+    TIMESTAMP WITH TIME ZONE, TIMESTAMP_NS, GEOMETRY), the guard would false-mismatch on every later
+    ingest and silently fall back to CREATE OR REPLACE — defeating the delta-merge with no error.
+    Assert the round-trip is faithful for the types armed topics carry."""
+    con = ducklake_con
+    con.execute(
+        "CREATE VIEW src_typed AS SELECT "
+        "CAST(1 AS BIGINT) AS ugs_key, CAST(1 AS BIGINT) AS feature_id, "
+        "CAST('x' AS VARCHAR) AS name, CAST(1.5 AS DOUBLE) AS val, "
+        "CAST(1 AS INTEGER) AS ogc_fid, CAST('2020-01-02' AS DATE) AS d, "
+        "CAST('2020-01-02 03:04:05' AS TIMESTAMP WITH TIME ZONE) AS ts_tz, "
+        "CAST('2020-01-02 03:04:05' AS TIMESTAMP_NS) AS ts_ns, "
+        "ST_Point(-111,39) AS geom"
+    )
+    con.execute("CREATE OR REPLACE TABLE w.hazards.typed AS SELECT * FROM src_typed")
+
+    assert introspect.column_schema(con, "src_typed") \
+        == introspect.column_schema(con, "w.hazards.typed")
 
 
 def test_merge_is_idempotent(ducklake_con):

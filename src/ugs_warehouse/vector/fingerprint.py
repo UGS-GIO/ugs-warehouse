@@ -35,7 +35,7 @@ def compute(con: duckdb.DuckDBPyConnection, view: str) -> str:
     n, h = con.execute(
         f"SELECT count(*)::BIGINT, COALESCE(sum(hash(v)::HUGEINT), 0)::VARCHAR FROM {view} v"
     ).fetchone()
-    return f"{n}:{h}:{sink_pmtiles.tiling_signature(introspect.id_column(con, view))}"
+    return f"{n}:{h}:{sink_pmtiles.tiling_signature(introspect.has_ugs_key(con, view))}"
 
 
 def published_hash(topic: Topic) -> str | None:

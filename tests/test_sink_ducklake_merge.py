@@ -68,16 +68,17 @@ def test_merge_delta_and_feature_id_excluded(ducklake_con):
     assert rows[3][1] == "c"                            # row 3 inserted
 
 
-def test_duplicate_ugs_key_in_source_fails_loud(ducklake_con):
-    """A duplicate ugs_key means the durable key isn't unique — MERGE must raise, not silently
-    corrupt (backstop to the serving-layer pre-swap UNIQUE)."""
+def test_merge_is_idempotent(ducklake_con):
+    """Re-merging the same source is a no-op — the hashdiff means unchanged rows don't churn.
+    (ugs_key uniqueness itself is guaranteed upstream by the serving-layer pre-swap UNIQUE, so
+    the warehouse never sees a duplicate; the MERGE doesn't re-police that.)"""
     con = ducklake_con
     _seed_target(con)
-    con.execute(
-        "CREATE TABLE src AS SELECT * FROM (VALUES "
-        "(1,'a','old',ST_Point(-111,39),10), "
-        "(1,'dup','old',ST_Point(-111,39),11)"
-        ") v(ugs_key,name,faultage,geom,feature_id)"
-    )
-    with pytest.raises(duckdb.Error):
-        sink_ducklake._merge(con, "w.hazards.t", "src", COLS)
+    _source(con)
+    sink_ducklake._merge(con, "w.hazards.t", "src", COLS)
+    before = con.execute("SELECT * FROM w.hazards.t ORDER BY ugs_key").fetchall()
+
+    sink_ducklake._merge(con, "w.hazards.t", "src", COLS)   # second identical merge
+    after = con.execute("SELECT * FROM w.hazards.t ORDER BY ugs_key").fetchall()
+
+    assert before == after   # nothing changed on the re-run

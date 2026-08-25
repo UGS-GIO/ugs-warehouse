@@ -8,7 +8,8 @@ const repoFile = (rel: string) =>
 
 describe("toMermaid", () => {
   it("emits nodes, edges and one classDef per status", () => {
-    const src = toMermaid(FLOWS[0]);
+    // By title, not FLOWS[0] — a new lead diagram shouldn't fail an assertion about this one.
+    const src = toMermaid(FLOWS.find((f) => f.title === "Ingest → artifacts")!);
     expect(src.startsWith("flowchart LR")).toBe(true);
     expect(src).toContain('SVC["warehouse service<br/>Pub/Sub push handler"]:::done');
     expect(src).toContain('PG -- "{schema, topic}" --> SVC');

@@ -24,12 +24,28 @@ export const STATUS_COLOR: Record<Status, { fill: string; stroke: string; text: 
 
 export const FLOWS: Flow[] = [
   {
+    // The general shape only — five stages, no service names. Anyone who wants the steps inside a
+    // stage reads the flows below; this one exists so the shape fits in one glance.
+    title: "Overview", wide: true,
+    nodes: [
+      { id: "UP", label: "upstream|dataELT gold → serving tables", status: "done" },
+      { id: "WH", label: "warehouse|Pub/Sub → DuckDB transform", status: "done" },
+      { id: "OP", label: "other producers|rasters · publications · styles", status: "partial" },
+      { id: "ART", label: "artifacts|DuckLake · GeoParquet · PMTiles · COG · STAC", status: "done" },
+      { id: "AFT", label: "after publish|thumbnails · DuckLake expiry", status: "done" },
+    ],
+    edges: [
+      { from: "UP", to: "WH" }, { from: "WH", to: "ART" },
+      { from: "OP", to: "ART" }, { from: "ART", to: "AFT" },
+    ],
+  },
+  {
     title: "Ingest → artifacts", wide: true,
     nodes: [
       { id: "ELT", label: "dataELT medallion|bronze → silver → gold", status: "done" },
       { id: "PG", label: "Postgres seamlessgeolmap|{schema}.{topic}_current", status: "done" },
       { id: "SVC", label: "warehouse service|Pub/Sub push handler", status: "done", unit: "ugs-warehouse-service" },
-      { id: "TR", label: "DuckDB transform|reproject 4326 · hilbert sort", status: "done" },
+      { id: "TR", label: "DuckDB transform|reproject 4326 · hilbert · ugs_key", status: "done" },
       { id: "RC", label: "raster consume + promote|staged COG → public", status: "partial" },
       { id: "STY", label: "ugs-styles|manifest · sprites · glyphs", status: "done" },
       { id: "RS", label: "restyle job|rebind ugs:renders", status: "done", unit: "ugs-warehouse-restyle" },
@@ -51,7 +67,7 @@ export const FLOWS: Flow[] = [
       { id: "GCS", label: "GCS bucket (private)", status: "done" },
       { id: "CDN", label: "CDN|maps-assets.geology.utah.gov", status: "done" },
       { id: "EXT", label: "external catalogs (USWB)", status: "done" },
-      { id: "VW", label: "STAC viewer|browse · map · explore · export", status: "done" },
+      { id: "VW", label: "STAC viewer|browse · map · datacubes · export", status: "done" },
       { id: "FS", label: "OGC API Features|duckdb_featureserv", status: "done", unit: "ugs-warehouse-features" },
       { id: "TS", label: "tiles service|XYZ · MapLibre styles · Esri VTS", status: "done", unit: "ugs-warehouse-tiles" },
       { id: "PGFS", label: "pg_featureserv|parallel · config stale", status: "partial", unit: "ugs-warehouse-api" },

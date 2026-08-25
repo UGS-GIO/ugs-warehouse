@@ -7,58 +7,50 @@ GeoParquet, PMTiles, DuckLake, COGs — tied together by a STAC catalog.
 Legend: 🟩 built & in production · 🟧 partial / has a known gap · ⬜ not yet / blocked.
 
 ```mermaid
-flowchart TB
-  subgraph UP["1. Upstream - ugs-ingest / dataELT"]
+flowchart LR
+  subgraph P["Producers"]
     direction TB
-    ELT["dataELT medallion: bronze, silver, gold"]
-    PG["Cloud SQL Postgres - schema.topic_current tables"]
-    ELT --> PG
+    ELT["dataELT gold<br/>schema.topic_current"]
+    PUBS["publications<br/>plates → COG · GeMS → glTF"]
+    RAS["rasters<br/>staged COG → promote"]
   end
-  PG -->|"Pub/Sub trigger 418"| SVC
-  subgraph WH["3. Warehouse - ugs-warehouse"]
+
+  ELT -- "Pub/Sub {schema, topic}" --> TR
+  TR["warehouse transform<br/>DuckDB · EPSG:4326 · hilbert · ugs_key"]
+
+  ART["artifacts in one private bucket<br/>GeoParquet · PMTiles · DuckLake · COG · STAC"]
+  STY["ugs-styles<br/>rebind ugs:renders by item id"]
+
+  TR --> ART
+  PUBS --> ART
+  RAS --> ART
+  STY --> ART
+  ART --> CDN["CDN<br/>maps-assets.geology.utah.gov"]
+
+  subgraph S["Serving"]
     direction TB
-    SVC["ugs-warehouse-service - Cloud Run handler"]
-    TR["DuckDB transform: reproject 4326, h3, hilbert"]
-    SVC --> TR
-    TR --> DL["DuckLake table"]
-    TR --> GP["GeoParquet (latest + dated)"]
-    TR --> PM["PMTiles"]
-    TR --> ST["STAC item"]
+    VW["STAC viewer<br/>browse · map · zarr datacubes · export"]
+    FS["OGC Features · tiles<br/>duckdb_featureserv · XYZ · Esri VTS"]
   end
-  subgraph STY["4. Styling - ugs-styles"]
-    SM["styles manifest"]
-    RS["restyle job - rebind ugs:renders by item id"]
-    SM --> RS
-  end
-  RS -->|"ugs:renders + style asset"| ST
-  subgraph PUBS["5. Publications"]
-    MY["MySQL pubsdb - source of truth"]
-    PGM["Postgres mirror - DuckDB postgres ext"]
-    CSV["vendored CSV snapshot - prod default, can go stale"]
-    HV["harvest - GDAL to COG"]
-    PI["pubs ingest to STAC - 3 collections"]
-    MY -. "manual export" .-> CSV
-    MY -. "PUBS_DB_URL (unset in prod)" .-> PI
-    PGM -. "PUBS_DB_URL (unset in prod)" .-> PI
-    CSV --> PI
-    HV --> PI
-  end
-  PI --> ST
-  subgraph SRV["6. Storage + Serving + Consumers"]
-    GCS["GCS bucket (private)"]
-    CDN["CDN - maps-assets.geology.utah.gov"]
-    VW["STAC viewer"]
-    FS["OGC API Features - duckdb_featureserv"]
-  end
-  DL --> GCS
-  GP --> GCS
-  PM --> GCS
-  ST --> GCS
-  GCS --> CDN
+
   CDN --> VW
   CDN --> FS
-  FS --> POOL["ArcGIS Pro, QGIS, federation"]
+  FS --> POOL["ArcGIS Pro · QGIS · AGOL"]
+
+  ELT -. "_review tables" .-> RV["review catalog (IAP)<br/>prod ∪ review · comments"]
+  RV -. "promote" .-> ART
+
+  classDef done fill:#1a7f37,stroke:#0b4a20,color:#fff,rx:4,ry:4;
+  classDef partial fill:#9a6700,stroke:#5c3d00,color:#fff,rx:4,ry:4;
+  class ELT,TR,ART,STY,CDN,VW,FS,POOL,RV done;
+  class PUBS,RAS partial;
 ```
+
+!!! tip "The detailed diagram is generated, not hand-typed"
+    This page keeps the simplified spine. The full graph — every deployed Cloud Run service, the
+    publications jobs, the review path — is generated from `viewer/src/architecture-model.ts` and
+    rendered on the viewer's **Architecture** page, where a test asserts it still covers everything
+    `cloudbuild.yaml` deploys. Hand-copying that detail here is what let this page drift.
 
 ## The pipeline, layer by layer
 
@@ -84,6 +76,10 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
   bbox-prune well. (Unstamped SRID-0 geometry errors loudly rather than assuming 4326.)
 - **Four sinks per topic:** DuckLake table · GeoParquet (`latest` + dated, citable) · PMTiles
   (tippecanoe, `-r1`) · STAC item (the discovery + linking layer).
+- **Durable key.** A topic whose serving table carries `ugs_key` gets DuckLake delta-MERGEs keyed on
+  it (instead of a full rewrite) and a `ugs:primary_key` STAC stamp, so a row comment resolves to the
+  same feature across reingests. The feature **id** stays `feature_id` — promoting `ugs_key` to the
+  MVT/OGC id has to land with the viewer's id-column switch, so it's a follow-up.
 
 ### ④ Styling — ugs-styles 🟩
 
@@ -123,20 +119,29 @@ python -m ugs_warehouse.pubs.mirror             # then re-run pubs.ingest to rep
 Artifacts land in one private GCS bucket and are served read-only through the **maps-assets CDN**,
 which preserves object paths.
 
-- Static surfaces (no server): GeoParquet, PMTiles, COG, STAC JSON — read directly from the CDN.
-- STAC viewer: catalog browse + map + COG preview + client-side export.
+- Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.
+- STAC viewer: catalog browse + map + COG preview + zarr datacube layers + client-side export.
 - OGC API Features for ArcGIS Pro / QGIS: `duckdb_featureserv` over the GeoParquet, scale-to-zero.
+- `ugs-warehouse-tiles`: XYZ tiles, ready-made MapLibre styles, and an Esri VectorTileServer facade
+  so AGOL and Pro can add a layer at all.
+- Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.
+- External catalogs (USWB) federate in as children of the root, so one catalog URL covers them.
+
+### ⑦ Review path 🟩
+
+The same pipeline against `_review` serving tables, written under `review/` prefixes and served
+behind IAP. The review app federates prod ∪ review and takes comments at item, column and row level;
+promotion turns a thread into read-only history rather than deleting it.
 
 ## What's still open
 
 The vector pipeline is end-to-end in production. The honest gaps:
 
-- ⬜ **Raster consumer** — ugs-ingest #169 (ingest side) merged 2026-07-24, so editions are landing
-  in `raw.raster_catalog`; the consumer is blocked on ugs-ingest #183, the dev→prod promote that
-  publishes the trigger.
-- 🟧 **Raster ingest** (soil-water time-series + one-off rasters) — the COG→STAC sink exists
-  (`raster/`, tested) and lands items in `ugs-rasters`; the end-to-end consumer is gated on the
-  promote step above.
+- 🟧 **Raster path** — consume/promote is deployed and provisioned (#61 closed 2026-07-26), and the
+  COG→STAC sink lands items in `ugs-rasters`. What's left is quality, not wiring: promoted items
+  don't render on the viewer map because the visual asset is the native-CRS COG (#84), `native_crs`
+  is trusted text that's never verified against the promoted COG (#83), and promote shares an
+  instance with ingest with no dead-letter policy, so one bad message is an outage (#81).
 - 🟧 **STAC `datetime`** is ingest time, not data-validity time — waiting on an upstream validity timestamp.
 - 🟧 **Live publications source** (MySQL or Postgres mirror) instead of the vendored CSV snapshot (#121).
 - 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).

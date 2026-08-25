@@ -10,6 +10,7 @@ export type Node = {
   label: string;          // `|` splits into lines
   status: Status;
   unit?: string;          // the Cloud Run service/job this node IS, when it is one
+  group?: string;         // draws inside a labelled subgraph with the others sharing the name
 };
 
 export type Edge = { from: string; to: string; label?: string; dashed?: boolean };
@@ -24,37 +25,33 @@ export const STATUS_COLOR: Record<Status, { fill: string; stroke: string; text: 
 
 export const FLOWS: Flow[] = [
   {
-    // Ingest to artifacts, end to end and nothing collapsed: the source database through each of
-    // the sinks it produces, plus the two producers that write into the same catalog and the jobs
-    // that run after. Serving and consumers are deliberately out of scope — see the flows below.
+    // Ingest to artifacts, end to end. Grouped into lanes because the shape people need is
+    // "three producers converge on one catalog, two jobs run after" — without the lanes that
+    // reads as a pile of boxes. Serving and consumers are out of scope; see the flows below.
     title: "Overview — ingest to warehouse artifacts", wide: true,
     nodes: [
-      { id: "PGSRC", label: "Cloud SQL Postgres|seamlessgeolmap", status: "done" },
-      { id: "ELT", label: "dataELT medallion|bronze → silver → gold", status: "done" },
-      { id: "CUR", label: "topic_current|+ topic_review", status: "done" },
-      { id: "PS", label: "Pub/Sub|{schema, topic}", status: "done" },
-      { id: "SVC", label: "warehouse service|Cloud Run push handler", status: "done", unit: "ugs-warehouse-service" },
-      { id: "TR", label: "DuckDB transform|EPSG:4326 · hilbert · ugs_key", status: "done" },
-      { id: "STG", label: "staged COG bucket", status: "done" },
-      { id: "RC", label: "raster consume + promote", status: "partial", unit: "ugs-warehouse-ingest" },
-      { id: "HV", label: "pubs harvest|GDAL → COG · mosaics", status: "done", unit: "ugs-geolmap-mosaics" },
-      { id: "PI", label: "pubs ingest|+ 3D · thumbs · search", status: "done", unit: "ugs-pubs-ingest" },
-      { id: "STY", label: "ugs-styles → restyle|rebind ugs:renders", status: "done", unit: "ugs-warehouse-restyle" },
-      { id: "DL", label: "DuckLake table|delta MERGE on ugs_key", status: "done" },
-      { id: "GP", label: "GeoParquet|latest + dated", status: "done" },
-      { id: "PM", label: "PMTiles", status: "done" },
-      { id: "CG", label: "COG", status: "done" },
-      { id: "ST", label: "STAC item|discovery + linking", status: "done" },
-      { id: "TH", label: "topic thumbnails|styled PMTiles → PNG", status: "done", unit: "ugs-topics-thumbs" },
-      { id: "MT", label: "DuckLake maintenance|expire snapshots · delete files", status: "done", unit: "ugs-warehouse-ducklake-maintain" },
+      { id: "PGSRC", label: "Cloud SQL Postgres|seamlessgeolmap", status: "done", group: "Upstream" },
+      { id: "ELT", label: "dataELT medallion|bronze → silver → gold", status: "done", group: "Upstream" },
+      { id: "CUR", label: "topic_current|+ topic_review", status: "done", group: "Upstream" },
+      { id: "PS", label: "Pub/Sub|{schema, topic}", status: "done", group: "Warehouse" },
+      { id: "SVC", label: "warehouse service|Cloud Run push handler", status: "done", group: "Warehouse", unit: "ugs-warehouse-service" },
+      { id: "TR", label: "DuckDB transform|EPSG:4326 · hilbert · ugs_key", status: "done", group: "Warehouse" },
+      { id: "RC", label: "raster promote|staged COG → public", status: "partial", group: "Other producers", unit: "ugs-warehouse-ingest" },
+      { id: "PI", label: "pubs harvest → ingest|COG · 3D · thumbs · search", status: "done", group: "Other producers", unit: "ugs-pubs-ingest" },
+      { id: "STY", label: "ugs-styles → restyle|rebind ugs:renders", status: "done", group: "Other producers", unit: "ugs-warehouse-restyle" },
+      { id: "DL", label: "DuckLake|delta MERGE on ugs_key", status: "done", group: "Artifacts" },
+      { id: "GP", label: "GeoParquet|latest + dated", status: "done", group: "Artifacts" },
+      { id: "PM", label: "PMTiles", status: "done", group: "Artifacts" },
+      { id: "CG", label: "COG", status: "done", group: "Artifacts" },
+      { id: "ST", label: "STAC item|discovery + linking", status: "done", group: "Artifacts" },
+      { id: "TH", label: "topic thumbnails|styled PMTiles → PNG", status: "done", group: "After publish", unit: "ugs-topics-thumbs" },
+      { id: "MT", label: "DuckLake maintenance|expire snapshots · delete files", status: "done", group: "After publish", unit: "ugs-warehouse-ducklake-maintain" },
     ],
     edges: [
       { from: "PGSRC", to: "ELT" }, { from: "ELT", to: "CUR" }, { from: "CUR", to: "PS" },
       { from: "PS", to: "SVC" }, { from: "SVC", to: "TR" },
       { from: "TR", to: "DL" }, { from: "TR", to: "GP" }, { from: "TR", to: "PM" }, { from: "TR", to: "ST" },
-      { from: "STG", to: "RC" }, { from: "RC", to: "CG" }, { from: "RC", to: "ST" },
-      { from: "HV", to: "PI" }, { from: "PI", to: "ST" }, { from: "PI", to: "CG" },
-      { from: "STY", to: "ST" },
+      { from: "RC", to: "CG" }, { from: "RC", to: "ST" }, { from: "PI", to: "ST" }, { from: "STY", to: "ST" },
       { from: "PM", to: "TH" }, { from: "DL", to: "MT" },
     ],
   },
@@ -133,9 +130,29 @@ const classDefs = (): string =>
     return `  classDef ${s} fill:${c.fill},stroke:${c.stroke},color:${c.text},rx:4,ry:4${dash};`;
   }).join("\n");
 
+const lines = (label: string): string => label.split("|").join("<br/>");
+
+/** Nodes sharing a `group`, in first-appearance order; ungrouped ones keep their own slot. */
+function grouped(flow: Flow): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const n of flow.nodes) {
+    if (!n.group) { out.push(`  ${n.id}["${lines(n.label)}"]:::${n.status}`); continue; }
+    if (seen.has(n.group)) continue;
+    seen.add(n.group);
+    // Subgraph ids must not collide with node ids, hence the prefix.
+    const members = flow.nodes.filter((m) => m.group === n.group);
+    // No `direction` — the lane inherits the chart's LR, so an edge into a lane lands on the
+    // node it actually points at instead of the cluster's leftmost row.
+    out.push(`  subgraph g_${n.group.replace(/\W+/g, "_")}["${n.group}"]`,
+      ...members.map((m) => `    ${m.id}["${lines(m.label)}"]:::${m.status}`), "  end");
+  }
+  return out;
+}
+
 /** One flow → mermaid source. `|` in a label becomes a line break. */
 export function toMermaid(flow: Flow): string {
-  const nodes = flow.nodes.map((n) => `  ${n.id}["${n.label.split("|").join("<br/>")}"]:::${n.status}`);
+  const nodes = grouped(flow);
   // Mermaid's four edge spellings — a label changes the arrow, it isn't just inserted into it.
   const edges = flow.edges.map((e) => {
     if (e.dashed) return e.label ? `  ${e.from} -. "${e.label}" .-> ${e.to}` : `  ${e.from} -.-> ${e.to}`;

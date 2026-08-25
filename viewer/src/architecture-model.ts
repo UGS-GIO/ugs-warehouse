@@ -24,28 +24,38 @@ export const STATUS_COLOR: Record<Status, { fill: string; stroke: string; text: 
 
 export const FLOWS: Flow[] = [
   {
-    // The whole platform on one line, for someone who has never seen it. The flows below re-draw
-    // each stage with its real service names; this one deliberately names none of them.
-    title: "Overview", wide: true,
+    // Ingest to artifacts, end to end and nothing collapsed: the source database through each of
+    // the sinks it produces, plus the two producers that write into the same catalog and the jobs
+    // that run after. Serving and consumers are deliberately out of scope — see the flows below.
+    title: "Overview — ingest to warehouse artifacts", wide: true,
     nodes: [
-      { id: "ELT", label: "dataELT gold|schema.topic_current", status: "done" },
-      { id: "TR", label: "warehouse transform|EPSG:4326 · hilbert · ugs_key", status: "done" },
-      { id: "PUBS", label: "publications|plates → COG · GeMS → glTF", status: "partial" },
-      { id: "RAS", label: "rasters|staged COG → promote", status: "partial" },
-      { id: "STY", label: "ugs-styles|rebind by STAC item id", status: "done" },
-      { id: "ART", label: "artifacts, one private bucket|GeoParquet · PMTiles · DuckLake · COG · STAC", status: "done" },
-      { id: "CDN", label: "CDN|maps-assets.geology.utah.gov", status: "done" },
-      { id: "VW", label: "STAC viewer|browse · map · export", status: "done" },
-      { id: "FS", label: "OGC Features · tiles", status: "done" },
-      { id: "POOL", label: "ArcGIS Pro · QGIS · AGOL", status: "done" },
-      { id: "RV", label: "review catalog (IAP)|prod ∪ review · comments", status: "done" },
+      { id: "PGSRC", label: "Cloud SQL Postgres|seamlessgeolmap", status: "done" },
+      { id: "ELT", label: "dataELT medallion|bronze → silver → gold", status: "done" },
+      { id: "CUR", label: "topic_current|+ topic_review", status: "done" },
+      { id: "PS", label: "Pub/Sub|{schema, topic}", status: "done" },
+      { id: "SVC", label: "warehouse service|Cloud Run push handler", status: "done", unit: "ugs-warehouse-service" },
+      { id: "TR", label: "DuckDB transform|EPSG:4326 · hilbert · ugs_key", status: "done" },
+      { id: "STG", label: "staged COG bucket", status: "done" },
+      { id: "RC", label: "raster consume + promote", status: "partial", unit: "ugs-warehouse-ingest" },
+      { id: "HV", label: "pubs harvest|GDAL → COG · mosaics", status: "done", unit: "ugs-geolmap-mosaics" },
+      { id: "PI", label: "pubs ingest|+ 3D · thumbs · search", status: "done", unit: "ugs-pubs-ingest" },
+      { id: "STY", label: "ugs-styles → restyle|rebind ugs:renders", status: "done", unit: "ugs-warehouse-restyle" },
+      { id: "DL", label: "DuckLake table|delta MERGE on ugs_key", status: "done" },
+      { id: "GP", label: "GeoParquet|latest + dated", status: "done" },
+      { id: "PM", label: "PMTiles", status: "done" },
+      { id: "CG", label: "COG", status: "done" },
+      { id: "ST", label: "STAC item|discovery + linking", status: "done" },
+      { id: "TH", label: "topic thumbnails|styled PMTiles → PNG", status: "done", unit: "ugs-topics-thumbs" },
+      { id: "MT", label: "DuckLake maintenance|expire snapshots · delete files", status: "done", unit: "ugs-warehouse-ducklake-maintain" },
     ],
     edges: [
-      { from: "ELT", to: "TR" }, { from: "TR", to: "ART" },
-      { from: "PUBS", to: "ART" }, { from: "RAS", to: "ART" }, { from: "STY", to: "ART" },
-      { from: "ART", to: "CDN" }, { from: "CDN", to: "VW" }, { from: "CDN", to: "FS" },
-      { from: "FS", to: "POOL" },
-      { from: "ELT", to: "RV", dashed: true }, { from: "RV", to: "ART", dashed: true },
+      { from: "PGSRC", to: "ELT" }, { from: "ELT", to: "CUR" }, { from: "CUR", to: "PS" },
+      { from: "PS", to: "SVC" }, { from: "SVC", to: "TR" },
+      { from: "TR", to: "DL" }, { from: "TR", to: "GP" }, { from: "TR", to: "PM" }, { from: "TR", to: "ST" },
+      { from: "STG", to: "RC" }, { from: "RC", to: "CG" }, { from: "RC", to: "ST" },
+      { from: "HV", to: "PI" }, { from: "PI", to: "ST" }, { from: "PI", to: "CG" },
+      { from: "STY", to: "ST" },
+      { from: "PM", to: "TH" }, { from: "DL", to: "MT" },
     ],
   },
   {

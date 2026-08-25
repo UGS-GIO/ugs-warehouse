@@ -22,6 +22,7 @@ import tempfile
 import duckdb
 
 from ..core import config, gcs
+from . import introspect
 from .topics import Topic
 
 TIPPECANOE_BIN = os.environ.get("TIPPECANOE_BIN", "tippecanoe")
@@ -46,19 +47,31 @@ TILE_OPTS = [
     # and silently drops features to fit the 500KB/tile, 200k-feature/tile defaults.
     "--no-tile-size-limit",
     "--no-feature-limit",
-    # Promote the transform's `feature_id` to the native MVT feature id, so the viewer can join a
-    # clicked map feature to its GeoParquet table row (both carry the same id). MapLibre then
-    # exposes it as `feature.id` (enables setFeatureState highlight) — no promoteId needed.
-    "--use-attribute-for-id=feature_id",
+    # NOTE: --use-attribute-for-id=feature_id is appended per-topic in _tile_and_upload — it takes
+    # the input's id attr, so it's NOT a fixed option. Always feature_id, never ugs_key: see
+    # tiling_signature for why.
 ]
 
 
-def tiling_signature() -> str:
-    """Stable string of the tiling inputs (build version + fixed flags + env opts). Folded into the
-    content fingerprint so a change in HOW a topic is tiled forces a rebuild even when the data is
-    byte-identical. `--force` is excluded — it's not a tiling-output input."""
+def tiling_signature(has_ugs_key: bool) -> str:
+    """Stable string of the tiling inputs (build version + whether ugs_key rides as a tile property
+    + fixed flags + env opts). Folded into the content fingerprint so a change in HOW a topic is
+    tiled forces a rebuild even when the data is byte-identical.
+
+    The MVT feature id is always `feature_id` — the viewer joins a clicked map feature to its table
+    row on it and MapLibre exposes it as `feature.id`. `ugs_key` is deliberately NOT promoted to the
+    id: tippecanoe's `--use-attribute-for-id` *moves* the attribute out of tile `properties`, which
+    would strip `ugs_key` from the properties the viewer's ugs_key-keyed row-commenting reads.
+    Instead `ugs_key` stays a plain tile property on armed topics, and `has_ugs_key` is folded in
+    here so a dormant→armed topic re-tiles exactly once to pick that property up. `--force` is
+    excluded — it's not a tiling-output input.
+
+    Blast radius: this component is new to the content fingerprint, so the first `--all` run after
+    this ships re-tiles the whole catalog once (enmin_plss_sections' 84k features included);
+    thereafter a topic re-tiles only when its data changes or it arms. `PMTILES_BUILD_VERSION` is the
+    knob for any future forced whole-catalog rebuild."""
     opts = [o for o in (*TILE_OPTS, *EXTRA_OPTS) if o != "--force"]
-    return "|".join([f"v{PMTILES_BUILD_VERSION}", *opts])
+    return "|".join([f"v{PMTILES_BUILD_VERSION}", f"ugskey={int(has_ugs_key)}", *opts])
 
 
 def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
@@ -66,9 +79,13 @@ def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> Non
     con.execute(f"COPY (SELECT * FROM {view}) TO '{path}' (FORMAT GDAL, DRIVER 'GeoJSONSeq')")
 
 
-def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
-    """tippecanoe over a GeoJSONSeq file → PMTiles → GCS (latest pointer). Output sits next to
-    the input so callers control the temp dir."""
+def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> None:
+    """tippecanoe over a GeoJSONSeq file → PMTiles → GCS (latest pointer). Output sits next to the
+    input so callers control the temp dir. `id_attr` (always `feature_id`) is promoted to the native
+    MVT feature id so the viewer can join a clicked map feature to its GeoParquet table row — both
+    carry the same id; MapLibre exposes it as `feature.id`. `ugs_key`, when present, is NOT used as
+    the id here (see tiling_signature): `--use-attribute-for-id` would MOVE it out of `properties`,
+    and the viewer's ugs_key-keyed row-commenting reads it from the tile properties."""
     if not shutil.which(TIPPECANOE_BIN):
         raise RuntimeError(
             f"{TIPPECANOE_BIN} not on PATH — install tippecanoe in the runtime image"
@@ -79,6 +96,7 @@ def _tile_and_upload(topic: Topic, geojsonl: str) -> None:
         "-o", pmtiles,
         "-l", topic.stem,
         *TILE_OPTS,
+        f"--use-attribute-for-id={id_attr}",
         *EXTRA_OPTS,
         geojsonl,
     ]
@@ -105,4 +123,5 @@ def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
     with tempfile.TemporaryDirectory() as tmp:
         geojsonl = os.path.join(tmp, f"{topic.stem}.geojsonl")
         _write_geojsonl(con, view, geojsonl)
-        _tile_and_upload(topic, geojsonl)
+        # MVT id is always feature_id (viewer map→table join); ugs_key rides along as a property.
+        _tile_and_upload(topic, geojsonl, introspect.FEATURE_ID)

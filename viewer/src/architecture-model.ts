@@ -41,12 +41,11 @@ export const FLOWS: Flow[] = [
       { id: "RV", label: "review catalog (IAP)|prod ∪ review · comments", status: "done" },
     ],
     edges: [
-      { from: "ELT", to: "TR", label: "Pub/Sub" }, { from: "TR", to: "ART" },
+      { from: "ELT", to: "TR" }, { from: "TR", to: "ART" },
       { from: "PUBS", to: "ART" }, { from: "RAS", to: "ART" }, { from: "STY", to: "ART" },
       { from: "ART", to: "CDN" }, { from: "CDN", to: "VW" }, { from: "CDN", to: "FS" },
       { from: "FS", to: "POOL" },
-      { from: "ELT", to: "RV", label: "_review", dashed: true },
-      { from: "RV", to: "ART", label: "promote", dashed: true },
+      { from: "ELT", to: "RV", dashed: true }, { from: "RV", to: "ART", dashed: true },
     ],
   },
   {
@@ -77,7 +76,7 @@ export const FLOWS: Flow[] = [
       { id: "GCS", label: "GCS bucket (private)", status: "done" },
       { id: "CDN", label: "CDN|maps-assets.geology.utah.gov", status: "done" },
       { id: "EXT", label: "external catalogs (USWB)", status: "done" },
-      { id: "VW", label: "STAC viewer|browse · map · zarr datacubes · export", status: "done" },
+      { id: "VW", label: "STAC viewer|browse · map · datacubes · export", status: "done" },
       { id: "FS", label: "OGC API Features|duckdb_featureserv", status: "done", unit: "ugs-warehouse-features" },
       { id: "TS", label: "tiles service|XYZ · MapLibre styles · Esri VTS", status: "done", unit: "ugs-warehouse-tiles" },
       { id: "PGFS", label: "pg_featureserv|parallel · config stale", status: "partial", unit: "ugs-warehouse-api" },

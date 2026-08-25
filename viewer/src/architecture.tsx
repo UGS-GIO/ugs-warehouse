@@ -90,6 +90,7 @@ const LAYERS: Layer[] = [
       "Reproject every source CRS → EPSG:4326 (the uniform publish CRS).",
       "Hilbert-sort rows so Parquet row-groups bbox-prune well (locality doubles as the spatial index).",
       "Memory-capped (spills to disk) to survive the free-tier container limit.",
+      "Armed topics carry a durable `ugs_key`: DuckLake merges deltas on it and STAC advertises it as `ugs:primary_key`. The feature id stays `feature_id`.",
       "Rasters take a second path: consume a staged COG, promote it to the public bucket, write its STAC item.",
     ],
     note: "Serving topics nest one collection per mart schema under `ugs-serving-topics`, with a rollup items index so one fetch still gets everything.",
@@ -117,7 +118,8 @@ const LAYERS: Layer[] = [
     n: "⑥", title: "Storage, CDN + serving", status: "done",
     lead: "Artifacts land in one private GCS bucket and are served read-only through the maps-assets CDN, which preserves object paths.",
     points: [
-      "Static surfaces (no server): GeoParquet, PMTiles, COG, STAC JSON — read directly from the CDN.",
+      "Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.",
+      "Datacube items (STAC datacube extension) render as zarr layers on the viewer map, sliced per dimension.",
       "OGC API Features for ArcGIS Pro / QGIS: `duckdb_featureserv` over the GeoParquet on the CDN, scale-to-zero.",
       "`ugs-warehouse-tiles`: XYZ tiles, ready-to-use MapLibre styles, and an Esri VectorTileServer facade so AGOL and Pro can add a layer at all.",
       "External catalogs (USWB) are federated in as children of the root, so one catalog URL covers them too.",
@@ -136,7 +138,7 @@ const LAYERS: Layer[] = [
 ];
 
 const ROADMAP: { status: Status; text: string }[] = [
-  { status: "partial", text: "Raster consumer — the consume/promote code is on main; what's left is deploy provisioning on the work box (promote topic, push subscription, staged-bucket grant)." },
+  { status: "partial", text: "Raster path — consume/promote is deployed and provisioned (#61), but promoted items still don't render on the map (the visual asset is the native-CRS COG, #84), `native_crs` is trusted text rather than verified (#83), and promote shares an instance with ingest and has no DLQ (#81)." },
   { status: "planned", text: "Grouping model — dataset/collection/group spine so a project or a seamless mosaic is a first-class object (ugs-ingest #342)." },
   { status: "partial", text: "STAC `datetime` is ingest time, not data-validity time — waiting on an upstream validity timestamp." },
   { status: "partial", text: "Metadata export: ISO 19139 sidecar done for vector + pubs; FGDC variant and raster extension still open." },

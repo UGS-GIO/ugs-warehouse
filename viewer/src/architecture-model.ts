@@ -24,6 +24,32 @@ export const STATUS_COLOR: Record<Status, { fill: string; stroke: string; text: 
 
 export const FLOWS: Flow[] = [
   {
+    // The whole platform on one line, for someone who has never seen it. The flows below re-draw
+    // each stage with its real service names; this one deliberately names none of them.
+    title: "Overview", wide: true,
+    nodes: [
+      { id: "ELT", label: "dataELT gold|schema.topic_current", status: "done" },
+      { id: "TR", label: "warehouse transform|EPSG:4326 · hilbert · ugs_key", status: "done" },
+      { id: "PUBS", label: "publications|plates → COG · GeMS → glTF", status: "partial" },
+      { id: "RAS", label: "rasters|staged COG → promote", status: "partial" },
+      { id: "STY", label: "ugs-styles|rebind by STAC item id", status: "done" },
+      { id: "ART", label: "artifacts, one private bucket|GeoParquet · PMTiles · DuckLake · COG · STAC", status: "done" },
+      { id: "CDN", label: "CDN|maps-assets.geology.utah.gov", status: "done" },
+      { id: "VW", label: "STAC viewer|browse · map · export", status: "done" },
+      { id: "FS", label: "OGC Features · tiles", status: "done" },
+      { id: "POOL", label: "ArcGIS Pro · QGIS · AGOL", status: "done" },
+      { id: "RV", label: "review catalog (IAP)|prod ∪ review · comments", status: "done" },
+    ],
+    edges: [
+      { from: "ELT", to: "TR", label: "Pub/Sub" }, { from: "TR", to: "ART" },
+      { from: "PUBS", to: "ART" }, { from: "RAS", to: "ART" }, { from: "STY", to: "ART" },
+      { from: "ART", to: "CDN" }, { from: "CDN", to: "VW" }, { from: "CDN", to: "FS" },
+      { from: "FS", to: "POOL" },
+      { from: "ELT", to: "RV", label: "_review", dashed: true },
+      { from: "RV", to: "ART", label: "promote", dashed: true },
+    ],
+  },
+  {
     title: "Ingest → artifacts", wide: true,
     nodes: [
       { id: "ELT", label: "dataELT medallion|bronze → silver → gold", status: "done" },

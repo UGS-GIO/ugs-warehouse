@@ -166,6 +166,11 @@ export function Architecture() {
         ))}
       </div>
 
+      <p className="mt-4 max-w-3xl text-sm text-muted-foreground">
+        The first diagram is the whole platform on one line. The ones after it re-draw each stage
+        with the services that actually run it.
+      </p>
+
       <div className="mt-6 grid gap-4 xl:grid-cols-2">
         {FLOWS.map((flow) => (
           <section key={flow.title}

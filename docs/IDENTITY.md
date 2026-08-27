@@ -35,7 +35,7 @@ State legend matches the canonical contract (🟢 gate · 🔵 test · ⚙️ co
 | C1 | DuckLake MERGE keys on `ugs_key`; a NULL `ugs_key` in an armed topic **fails loud before the txn** (a NULL never matches the `ON`, so it would insert-then-delete and silently vanish while the GeoParquet/PMTiles from the same run still carry it) | `sink_ducklake.py` `_merge` NULL guard + two-statement MERGE | 🟢 gate |
 | C2 | Change-detection (the merge `hashdiff`) excludes **both** `ugs_key` and `feature_id`; geometry is included. `feature_id` is a Hilbert ordinal that reshuffles on any insert/delete — including it would churn ~100% of rows every load | `sink_ducklake.py` diff-column selection | ⚙️ convention |
 | C3 | STAC advertises the durable key as `ugs:primary_key` on armed topics | `sink_stac.py:147-152` (stamped only when the served view carries `ugs_key`) | ⚙️ convention |
-| C4 | A previously-armed topic that arrives with **no** `ugs_key` reverts to full-rewrite **with a loud signal**, not silently | `sink_ducklake.py` first-armed / de-arm branch — **loud-signal fix owed** (issue #177) | 🔴 gap |
+| C4 | A previously-armed topic that arrives with **no** `ugs_key` reverts to full-rewrite **with a loud signal**, not silently | `sink_ducklake.py` `_is_dearm` → loud WARNING before the fallback rewrite (still proceeds — a deliberate de-arm is legitimate) | 🔵 test |
 | C5 | The surfaced feature id (MVT / OGC / Esri) follows the per-surface policy below | today hardcoded to `feature_id`; `ugs_key` is not yet an OGC id candidate | 🔴 gap (#174) |
 | C6 | Viewer id lookups are hardened for a full-range `ugs_key` id (`[1, 2^53−1]`, exact as a JS `Number` — `2^53−1` is `Number.MAX_SAFE_INTEGER`) | defensive hardening for the id-flip, not a live precision bug | 🔴 gap (#174) |
 

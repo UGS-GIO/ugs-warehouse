@@ -25,6 +25,8 @@ No WKB cast, no tz normalize — DuckLake stores native DuckDB types directly.
 """
 from __future__ import annotations
 
+import sys
+
 import duckdb
 
 from . import ducklake as catalog
@@ -62,6 +64,10 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool 
     fqn = f"{alias}.{topic.schema}.{topic.stem}"
 
     if append:
+        # NOTE: append is a plain INSERT and does NOT run the C4 de-arm check below. It has no live
+        # caller today (ingest.py calls write() with append defaulting False); if chunked append is
+        # reintroduced for armed topics, a de-arm here would skip the warning — though a narrower
+        # de-armed source INSERTed into a still-armed target raises duckdb.Error, caught loudly upstream.
         con.execute(f"INSERT INTO {fqn} SELECT * FROM {view}")
         mode = "insert"
     else:
@@ -85,7 +91,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool 
                 print(
                     f"[{topic.fqn}] WARNING: previously-armed topic arrived with no "
                     f"{introspect.UGS_KEY} — reverting to full-rewrite; durable identity will break "
-                    f"for existing rows. Producer-side de-arm — investigate before it recurs."
+                    f"for existing rows. Producer-side de-arm — investigate before it recurs.",
+                    file=sys.stderr,  # stderr → ERROR severity in Cloud Run, matching the module's other alerts
                 )
             con.execute(f"CREATE OR REPLACE TABLE {fqn} AS SELECT * FROM {view}")
             mode = "create-or-replace"

@@ -45,6 +45,16 @@ def _target_schema(con: duckdb.DuckDBPyConnection, fqn: str) -> list[tuple[str, 
         return None
 
 
+def _is_dearm(target_schema: list[tuple[str, str]] | None, cols: list[str]) -> bool:
+    """A previously-armed target (its DuckLake table carries ugs_key) receiving a source with NO
+    ugs_key — a producer-side de-arm (governance C4). Distinct from a dormant topic that never had
+    the key (the normal CREATE-OR-REPLACE path) and from a brand-new table."""
+    if target_schema is None:
+        return False
+    target_has_key = any(name == introspect.UGS_KEY for name, _ in target_schema)
+    return target_has_key and introspect.UGS_KEY not in cols
+
+
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool = False) -> None:
     """Overwrite / MERGE / append the topic's DuckLake table from the transformed view."""
     alias = catalog.attach(con)
@@ -67,6 +77,16 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool 
             _merge(con, fqn, view, cols)
             mode = "merge"
         else:
+            # C4: a previously-armed topic arriving with no ugs_key is a producer-side de-arm.
+            # A silent full rewrite would drop durable identity (row comments, deep links,
+            # non-churning merge) for existing rows. Warn loudly — but still proceed, because a
+            # deliberate de-arm is legitimate; visibility, not a refusal.
+            if _is_dearm(target_schema, cols):
+                print(
+                    f"[{topic.fqn}] WARNING: previously-armed topic arrived with no "
+                    f"{introspect.UGS_KEY} — reverting to full-rewrite; durable identity will break "
+                    f"for existing rows. Producer-side de-arm — investigate before it recurs."
+                )
             con.execute(f"CREATE OR REPLACE TABLE {fqn} AS SELECT * FROM {view}")
             mode = "create-or-replace"
 

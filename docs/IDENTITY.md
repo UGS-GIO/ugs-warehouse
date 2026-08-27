@@ -51,6 +51,13 @@ the canonical contract's P6). "Backfill the key" is a non-op — keys mint at vi
 and the dormant/keyless fallback id. `ugs_key` is the **durable identity** — the DuckLake merge key,
 the STAC comment key (`ugs:primary_key`), and the target viewer/OGC feature id.
 
+**Where each is set.** `feature_id` is minted `1..N` in Hilbert order, tie-broken by `hash(row)` so
+it is cross-ingest-deterministic (`transform.py:74-75`). It is promoted to the MVT tile id via
+tippecanoe `--use-attribute-for-id=feature_id` (`sink_pmtiles.py`), and on armed topics `ugs_key`
+rides the tiles as a plain property — never the tile id, so the viewer's `ugs_key`-keyed row
+comments can still read it. The durable-identity surfaces are the DuckLake merge key and the
+`ugs:primary_key` STAC stamp; the MVT id is the render surface.
+
 **Open decision (blocks the id-flip — #174 / ALL-5715):** whether `ugs_key` becomes the *surfaced*
 id on viewer/OGC (and Esri). Blocked on an **unmeasured** assumption — that the deployed Esri
 *feature* layer uses a 32-bit OBJECTID a 53-bit `ugs_key` overflows. The ceiling is written nowhere
@@ -61,8 +68,14 @@ both the MVT id and a readable property.
 
 ## Keeping this file honest
 
-This is the file the **warehouse row-identity doc-sync gate** (§10.2 of the canonical contract;
-tracked as issue #178) checks a PR's identity-machinery changes against — the sinks, `introspect.py`,
-and the featureserv id patch. It **references** the canonical contract for the producer invariants and
-the recipe; it must not duplicate them. When a `C*` gap here closes, update this file in the same PR;
-the nightly diff against the canonical contract is the backstop.
+This file is kept honest by the **warehouse row-identity doc-sync gate** (§10.2 of the canonical
+contract) — `scripts/check_identity_doc_sync.py`, run in CI by `tests/test_identity_doc_sync.py`.
+On every build it checks that this doc cites each identity-machinery path (the vector sinks,
+`introspect.py`, and `transform.py`), that each `path:line` it cites still resolves, and that it
+**references** — never copies — the canonical contract. Rename or delete an identity file, drop a
+citation, or let a `path:line` fall off the end of its file and the gate goes red — it guards this
+doc's structural fidelity, not the semantics of each invariant (review and the §8 nightly diff cover
+those). When the id-flip (#174) wires `ugs_key` onto the
+featureserv OGC/Esri surface, add that path to the gate's `IDENTITY_PATHS` in the same PR that
+documents it. Cross-repo drift against the canonical contract is the §8 nightly diff's backstop,
+not this gate's job. When a `C*` gap here closes, update this file in the same PR.

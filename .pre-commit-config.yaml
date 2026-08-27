@@ -16,3 +16,12 @@ repos:
     rev: v0.16.0              # keep in lockstep with `ruff==` in pyproject [dev]
     hooks:
       - id: ruff                # Python lint (the project linter)
+
+  - repo: local
+    hooks:
+      - id: row-identity-doc-sync   # docs/IDENTITY.md must stay in sync with the identity machinery
+        name: row-identity doc-sync (governance §10.2)
+        entry: python3 scripts/check_identity_doc_sync.py   # python3, not python — macOS has no `python` shim
+        language: system
+        pass_filenames: false       # whole-repo check, not per-file
+        always_run: true

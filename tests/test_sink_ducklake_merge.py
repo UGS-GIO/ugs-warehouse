@@ -111,6 +111,28 @@ def test_ducklake_preserves_describe_types_so_guard_merges(ducklake_con):
         == introspect.column_schema(con, "w.hazards.typed")
 
 
+def test_is_dearm_flags_a_previously_armed_topic_losing_ugs_key():
+    """C4: a target that already carries ugs_key receiving a source WITHOUT it is a producer-side
+    de-arm — durable identity is about to be dropped. This is what the loud warning guards."""
+    target = [("ugs_key", "BIGINT"), ("name", "VARCHAR"), ("geom", "GEOMETRY")]
+    assert sink_ducklake._is_dearm(target, ["name", "geom"]) is True
+
+
+def test_is_dearm_false_when_the_source_still_carries_the_key():
+    target = [("ugs_key", "BIGINT"), ("name", "VARCHAR")]
+    assert sink_ducklake._is_dearm(target, ["ugs_key", "name"]) is False
+
+
+def test_is_dearm_false_for_a_dormant_topic_that_never_had_the_key():
+    """A target that never carried ugs_key (unarmed) is the normal CREATE-OR-REPLACE path, not a de-arm."""
+    target = [("name", "VARCHAR"), ("geom", "GEOMETRY")]
+    assert sink_ducklake._is_dearm(target, ["name", "geom"]) is False
+
+
+def test_is_dearm_false_for_a_brand_new_table():
+    assert sink_ducklake._is_dearm(None, ["name"]) is False
+
+
 def test_merge_is_idempotent(ducklake_con):
     """Re-merging the same source is a no-op — the hashdiff means unchanged rows don't churn.
     (ugs_key uniqueness itself is guaranteed upstream by the serving-layer pre-swap UNIQUE, so

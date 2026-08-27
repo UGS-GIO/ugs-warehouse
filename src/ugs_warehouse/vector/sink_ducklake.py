@@ -25,6 +25,8 @@ No WKB cast, no tz normalize — DuckLake stores native DuckDB types directly.
 """
 from __future__ import annotations
 
+import sys
+
 import duckdb
 
 from . import ducklake as catalog
@@ -45,6 +47,16 @@ def _target_schema(con: duckdb.DuckDBPyConnection, fqn: str) -> list[tuple[str, 
         return None
 
 
+def _is_dearm(target_schema: list[tuple[str, str]] | None, cols: list[str]) -> bool:
+    """A previously-armed target (its DuckLake table carries ugs_key) receiving a source with NO
+    ugs_key — a producer-side de-arm (governance C4). Distinct from a dormant topic that never had
+    the key (the normal CREATE-OR-REPLACE path) and from a brand-new table."""
+    if target_schema is None:
+        return False
+    target_has_key = any(name == introspect.UGS_KEY for name, _ in target_schema)
+    return target_has_key and introspect.UGS_KEY not in cols
+
+
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool = False) -> None:
     """Overwrite / MERGE / append the topic's DuckLake table from the transformed view."""
     alias = catalog.attach(con)
@@ -52,6 +64,10 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool 
     fqn = f"{alias}.{topic.schema}.{topic.stem}"
 
     if append:
+        # NOTE: append is a plain INSERT and does NOT run the C4 de-arm check below. It has no live
+        # caller today (ingest.py calls write() with append defaulting False); if chunked append is
+        # reintroduced for armed topics, a de-arm here would skip the warning — though a narrower
+        # de-armed source INSERTed into a still-armed target raises duckdb.Error, caught loudly upstream.
         con.execute(f"INSERT INTO {fqn} SELECT * FROM {view}")
         mode = "insert"
     else:
@@ -67,6 +83,17 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool 
             _merge(con, fqn, view, cols)
             mode = "merge"
         else:
+            # C4: a previously-armed topic arriving with no ugs_key is a producer-side de-arm.
+            # A silent full rewrite would drop durable identity (row comments, deep links,
+            # non-churning merge) for existing rows. Warn loudly — but still proceed, because a
+            # deliberate de-arm is legitimate; visibility, not a refusal.
+            if _is_dearm(target_schema, cols):
+                print(
+                    f"[{topic.fqn}] WARNING: previously-armed topic arrived with no "
+                    f"{introspect.UGS_KEY} — reverting to full-rewrite; durable identity will break "
+                    f"for existing rows. Producer-side de-arm — investigate before it recurs.",
+                    file=sys.stderr,  # stderr → ERROR severity in Cloud Run, matching the module's other alerts
+                )
             con.execute(f"CREATE OR REPLACE TABLE {fqn} AS SELECT * FROM {view}")
             mode = "create-or-replace"
 

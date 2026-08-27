@@ -207,6 +207,7 @@ export function App() {
         // `htmlString` not `imageUrl`: the latter emits an <img> with no alt. Decorative here.
         logo: { htmlString: `<img src="${utahLogo}" alt="" />` },
         mainMenu: false,
+        utahId: false,
       };
       let email = "";
       if (IS_REVIEW) {

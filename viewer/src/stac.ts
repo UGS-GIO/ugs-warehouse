@@ -3,6 +3,12 @@
 // the source of truth (the warehouse writes them via core/stac).
 import { useQueries, useQuery } from "@tanstack/react-query";
 
+// Import guard: the pure item view-model (item-view.ts) reuses this module's asset helpers and is
+// unit-tested in the node env, where there is no `location`. Read it through this shim so the module
+// is importable without a DOM; in the browser it IS `location`, so behavior is unchanged.
+const LOC: { search: string; href: string } =
+  typeof location !== "undefined" ? location : { search: "", href: "http://localhost/" };
+
 // Default catalog is build-time overridable (VITE_CATALOG_URL) so the INTERNAL/review deploy bakes
 // the review catalog (review/stac) as its default while the public deploy keeps warehouse/stac —
 // same codebase, one env var (the two-deploy, topology-enforced design). Runtime ?catalog= still wins.
@@ -12,8 +18,8 @@ export const DEFAULT_CATALOG =
 // ?catalog=<url> to point at sandbox / another deployment. Resolved to an absolute
 // URL (a relative ?catalog=/stac/... would otherwise be an invalid base for `abs`).
 export const CATALOG_URL = new URL(
-  new URLSearchParams(location.search).get("catalog") || DEFAULT_CATALOG,
-  location.href,
+  new URLSearchParams(LOC.search).get("catalog") || DEFAULT_CATALOG,
+  LOC.href,
 ).href;
 
 // Review deploy = catalog points at review/stac. Gates the review-only UI (diff, comments, dashboard).
@@ -22,7 +28,7 @@ export const CATALOG_URL = new URL(
 // `?review=1` forces it on for LOCAL DEV preview ONLY (gated to dev builds so prod can't toggle it).
 const DEV = Boolean((import.meta as { env?: Record<string, unknown> }).env?.DEV);
 export const IS_REVIEW = CATALOG_URL.includes("/review/") ||
-  (DEV && new URLSearchParams(location.search).get("review") === "1");
+  (DEV && new URLSearchParams(LOC.search).get("review") === "1");
 
 export type Link = {
   rel: string;
@@ -102,7 +108,7 @@ export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
 // VITE_FEATURES_BASE, or per-session via ?features=<url>. Empty → the link is hidden (no dead
 // link). A serving-topic's STAC item id == its featureserv collection id.
 export const FEATURES_BASE = (
-  new URLSearchParams(location.search).get("features")
+  new URLSearchParams(LOC.search).get("features")
   || ((import.meta as { env?: Record<string, string> }).env?.VITE_FEATURES_BASE)
   || ""
 ).replace(/\/+$/, "");
@@ -113,7 +119,7 @@ export const featuresCollectionUrl = (id: string): string | undefined =>
 // baked at build time, overridable per session, and empty hides the links rather than printing
 // dead ones. The service serves every topic that has PMTiles, keyed by STAC item id.
 export const TILES_BASE = (
-  new URLSearchParams(location.search).get("tiles")
+  new URLSearchParams(LOC.search).get("tiles")
   || ((import.meta as { env?: Record<string, string> }).env?.VITE_TILES_BASE)
   || ""
 ).replace(/\/+$/, "");
@@ -379,7 +385,7 @@ const indexUrlFor = (collectionHref: string) =>
  *  bucket and has no reason to publish one, so asking is three guaranteed 404s per view. */
 export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL): boolean => {
   try {
-    return new URL(collectionHref, location.href).origin === new URL(catalogUrl, location.href).origin;
+    return new URL(collectionHref, LOC.href).origin === new URL(catalogUrl, LOC.href).origin;
   } catch {
     return false;
   }

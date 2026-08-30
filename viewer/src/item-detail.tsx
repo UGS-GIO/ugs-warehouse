@@ -1,6 +1,9 @@
-// Item detail page: header, preview, related layers, review state, properties.
-import { useState } from "react";
+// Item detail: two layouts share one component. `page` = the full-width catalog/browse detail (a
+// 2/3 · 1/3 grid); `drawer` = the single-column stack that fits the 560px Discover result drawer. Both
+// reuse the same capability panels (Preview, Downloads, Endpoints, Related, Review, schema, STAC JSON).
+import { type ReactNode, useState } from "react";
 
+import type { ItemRef } from "./browse";
 import { CommentsPanel } from "./comments-panel";
 import { DataExplorer } from "./data-explorer";
 import { PhotoGallery } from "./photo-gallery";
@@ -9,9 +12,12 @@ import { DiffPanel } from "./diff-panel";
 import { Preview } from "./asset-viewer";
 import { EndpointsPanel } from "./endpoints-panel";
 import { DownloadsPanel } from "./downloads-panel";
+import { bylineParts, categorize, curatedDerived, kindLabel, type MetaRow, recordCountLabel } from "./item-view";
 import { T } from "./page";
 import { PropertyTable } from "./property-table";
-import { LayerStatusControl } from "./review-status";
+import { SchemaTable } from "./schema-table";
+import { StacJson } from "./stac-json";
+import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "./review-status";
 import { type Asset, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
   relatedLinks, type StacDoc, tableColumns, viaLink } from "./stac";
 import { C, humanize } from "./ui";
@@ -170,21 +176,156 @@ function CatalogReview({ item }: { item: StacDoc }) {
   );
 }
 
-export function ItemDetail({ collectionId, item, onBack, onMap }: {
+// ── page-layout pieces (the drawer keeps its plain single-column stack below) ────────────────────
+function Badge({ children, tone = "default" }: { children: ReactNode; tone?: "default" | "primary" | "warn" }) {
+  const cls = tone === "primary" ? "border-primary/30 bg-primary/10 text-primary"
+    : tone === "warn" ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+      : "border-border bg-muted text-muted-foreground";
+  return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${cls}`}>{children}</span>;
+}
+
+function Section({ title, children }: { title: string; children: ReactNode }) {
+  return (
+    <section aria-label={title} className="space-y-3">
+      <h2 className="text-base font-semibold tracking-tight text-foreground">{title}</h2>
+      {children}
+    </section>
+  );
+}
+
+// One labeled metadata group (Curated / Derived) as a key→value list; hidden when it has no rows.
+function MetaGroup({ label, rows }: { label: string; rows: MetaRow[] }) {
+  if (!rows.length) return null;
+  return (
+    <div className="space-y-2">
+      <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</h3>
+      <dl className="divide-y divide-border overflow-hidden rounded-lg border border-border">
+        {rows.map((r) => (
+          <div key={r.label} className="flex items-baseline justify-between gap-4 bg-card px-3 py-2">
+            <dt className="shrink-0 text-sm text-muted-foreground">{r.label}</dt>
+            <dd className="min-w-0 break-words text-right text-sm font-medium text-foreground">{r.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
+}
+
+// Header review badge — reads the shared item-status cache (the same query LayerStatusControl uses, so
+// no extra fetch); review deploy only.
+function ReviewBadge({ itemId }: { itemId: string }) {
+  const { data } = useItemStatuses();
+  const list = (data ?? []) as { item_id: string; status: string }[];
+  const status = list.find((s) => s.item_id === itemId)?.status ?? "pending";
+  return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
+}
+
+export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
+  onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
+  layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
   if (!item) return <em className={C.muted}>Loading…</em>;
   const p = item.properties ?? {};
   const hasGeom = Boolean(item.geometry || item.bbox);
   const via = viaLink(item);
   const cite = citeLink(item);
+
+  // The way-out buttons, shared by both layouts.
+  const actions = (
+    <div className="flex flex-wrap gap-2">
+      {hasGeom && (
+        <button onClick={onMap} className="inline-block rounded bg-emerald-700 px-2.5 py-1 text-xs text-white hover:bg-emerald-800">
+          View on map ›
+        </button>
+      )}
+      {onExplore && (
+        <button onClick={onExplore} className="inline-block rounded border border-border px-2.5 py-1 text-xs text-foreground hover:border-primary">
+          Explore ⤢
+        </button>
+      )}
+      {via && (
+        <a href={via.href} target="_blank" rel="noopener"
+          className="inline-block rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground no-underline hover:opacity-90">
+          {via.title ?? "Publication page"} ↗
+        </a>
+      )}
+      {cite && (
+        <a href={cite.href} target="_blank" rel="noopener"
+          className="inline-block rounded border border-border px-2.5 py-1 text-xs text-foreground no-underline hover:border-primary">
+          Cite (DOI) ↗
+        </a>
+      )}
+    </div>
+  );
+
+  const crumb = (
+    <div className="mb-1.5 text-xs">
+      <span className={C.crumb} onClick={onBack}>{collectionId}</span>
+      <span className={C.muted}> / {item.id}</span>
+    </div>
+  );
+
+  if (layout === "page") {
+    // The item-view getters read an ItemRef; build a lightweight one over the resolved doc.
+    const it: ItemRef = { collId: collectionId, href: "", data: item };
+    const cat = categorize(it);
+    const rows = recordCountLabel(it);
+    const byline = bylineParts(it);
+    const meta = curatedDerived(p);
+    return (
+      // No outer padding — the caller (Browse) already wraps this in C.wrap.
+      <>
+        {crumb}
+        <header>
+          <div className="flex flex-wrap items-center gap-1.5">
+            <Badge tone="primary">{kindLabel(it)}</Badge>
+            <Badge>{cat.label}</Badge>
+            {hasGeom && <Badge>Mappable</Badge>}
+            {rows && <Badge>{rows}</Badge>}
+            {IS_REVIEW && item.id && <ReviewBadge itemId={String(item.id)} />}
+          </div>
+          <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{String(p.title ?? item.id ?? "")}</h1>
+          <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
+          {byline.length > 0 && <p className="mt-1.5 text-sm text-muted-foreground">{byline.join(" · ")}</p>}
+          {typeof p.description === "string" && <p className="mt-3 max-w-3xl text-muted-foreground">{p.description}</p>}
+        </header>
+        <div className="mt-5 grid gap-8 lg:grid-cols-3">
+          <div className="space-y-6 lg:col-span-2">
+            {actions}
+            <Preview item={item} />
+            <IssueContents item={item} />
+            <Section title="Data schema"><SchemaTable columns={tableColumns(item)} /></Section>
+            <RelatedPanel item={item} />
+            {IS_REVIEW && <CatalogReview item={item} />}
+          </div>
+          <aside className="space-y-6">
+            <Section title="Metadata">
+              {meta.curated.length || meta.derived.length ? (
+                <div className="space-y-5">
+                  <MetaGroup label="Curated at upload" rows={meta.curated} />
+                  <MetaGroup label="Derived" rows={meta.derived} />
+                </div>
+              ) : <p className="text-sm text-muted-foreground">No metadata published.</p>}
+            </Section>
+            <DownloadsPanel item={item} />
+            <EndpointsPanel item={item} />
+            <Section title="Developer"><StacJson item={item} title={`${item.id} — STAC JSON`} /></Section>
+            <details className="rounded-lg border border-border">
+              <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted-foreground">All properties</summary>
+              <div className="px-3 pb-2"><PropertyTable properties={p} className="mt-0" /></div>
+            </details>
+          </aside>
+        </div>
+      </>
+    );
+  }
+
+  // drawer — the single-column stack (fits the 560px Discover drawer).
   return (
     <>
       <div className="mb-4 border-b border-border pb-3">
-        <div className="mb-1.5 text-xs">
-          <span className={C.crumb} onClick={onBack}>{collectionId}</span>
-          <span className={C.muted}> / {item.id}</span>
-        </div>
+        {crumb}
         {/* Title leads. The machine id is the subtitle — it was set in blue mono ABOVE the human
             name, so the thing nobody reads outranked the thing everybody does. */}
         <h1 className={T.pageTitle}>{String(p.title ?? item.id ?? "")}</h1>
@@ -196,26 +337,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap }: {
       {typeof p.description === "string" && (
         <p className="mt-3 max-w-full text-muted-foreground">{p.description}</p>
       )}
-      <div className="mt-1.5 flex flex-wrap gap-2">
-        {hasGeom && (
-          <button onClick={onMap}
-            className="inline-block rounded bg-emerald-700 px-2.5 py-1 text-xs text-white hover:bg-emerald-800">
-            View on map ›
-          </button>
-        )}
-        {via && (
-          <a href={via.href} target="_blank" rel="noopener"
-            className="inline-block rounded bg-primary px-2.5 py-1 text-xs text-primary-foreground no-underline hover:opacity-90">
-            {via.title ?? "Publication page"} ↗
-          </a>
-        )}
-        {cite && (
-          <a href={cite.href} target="_blank" rel="noopener"
-            className="inline-block rounded border border-border px-2.5 py-1 text-xs text-foreground no-underline hover:border-primary">
-            Cite (DOI) ↗
-          </a>
-        )}
-      </div>
+      <div className="mt-1.5">{actions}</div>
       <IssueContents item={item} />
       <DownloadsPanel item={item} />
       <EndpointsPanel item={item} />

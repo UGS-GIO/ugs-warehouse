@@ -5,18 +5,20 @@
 // — restyled onto the Utah Design System tokens + shared controls (UiSegmented / UiSelect), no new deps.
 // All pure logic lives in ./discovery-model; this file is the React shell + the map/detail wiring.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import {
-  applyFacets, collectionLabel, discoverySeries, discoveryTitle, docIdOf, extractFacets,
-  type FacetCount, type FacetSelection, filterByViewport, hasGeometry, sortItems, type SortKey,
-  SORTS, typeOf,
+  activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf,
+  extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, sortItems,
+  type SortKey, SORTS,
 } from "./discovery-model";
+import { categoryLabel, collectionLabel, discoverHref } from "./item-view";
 import type { Footprint } from "./map-model";
+import { type LinkAttrs, ResultCard, ResultRow } from "./result-card";
 import { buildIndex, toSearchDoc } from "./search-index";
-import { type StacDoc, thumbnailAsset } from "./stac";
+import type { StacDoc } from "./stac";
 import { ItemDetail } from "./item-detail";
-import { C } from "./ui";
 import { UiSegmented } from "./ui/segmented";
 import { UiSelect } from "./ui/select";
 import { useIsWide } from "./ui/use-breakpoint";
@@ -25,32 +27,17 @@ import { useIsWide } from "./ui/use-breakpoint";
 // (App already code-splits ./map, so this shares that chunk).
 const ItemMap = lazy(() => import("./map").then((m) => ({ default: m.ItemMap })));
 
-type Layout = "gallery" | "list";
-type Density = "comfortable" | "compact";
 const LAYOUTS = [{ value: "gallery" as const, label: "Gallery" }, { value: "list" as const, label: "List" }];
 const DENSITIES = [{ value: "comfortable" as const, label: "Comfy" }, { value: "compact" as const, label: "Compact" }];
 const SORT_ITEMS = SORTS.map((s) => ({ value: s.key, label: s.label }));
 const PAGE = 48; // cards per "Show more" step (reference parity)
 
 const idOf = (href: string) => href.split("/").slice(-2)[0];
-const dateOf = (it: ItemRef): string => {
-  const d = (it.data?.properties as Record<string, unknown> | undefined)?.datetime;
-  return typeof d === "string" ? d.slice(0, 10) : "";
-};
 // Escape a value for a [data-href="…"] selector (scroll a map-hovered card into view).
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
-// A shareable viewer URL that opens the item in Discover — the fallback a cmd/middle-click uses to
-// open a new tab. A plain left-click is intercepted (→ in-app nav) so it never navigates here itself.
-const openHref = (it: ItemRef) => `?view=discover&c=${encodeURIComponent(it.collId)}&i=${encodeURIComponent(idOf(it.href))}`;
-
-type LinkAttrs = {
-  href: string; "data-href": string;
-  onClick: (e: React.MouseEvent) => void;
-  onMouseEnter: () => void; onMouseLeave: () => void;
-};
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap,
+  items, itemsKey, onOpenItem, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
@@ -60,18 +47,38 @@ export function DiscoveryView({
   selectedCollectionId?: string;
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
+  onExplore?: () => void;              // opens the selected item full-screen in the Preview view
 }) {
-  const [q, setQ] = useState("");
-  const [colls, setColls] = useState<string[]>([]);
-  const [types, setTypes] = useState<string[]>([]);
-  const [geometry, setGeometry] = useState<FacetSelection["geometry"]>("all");
-  const [sort, setSort] = useState<SortKey>("relevance");
-  const [layout, setLayout] = useState<Layout>("gallery");
-  const [density, setDensity] = useState<Density>("comfortable");
+  const navigate = useNavigate() as unknown as (opts: {
+    replace?: boolean; search: (prev: Record<string, unknown>) => Record<string, unknown>;
+  }) => void;
+  // The whole filter/sort/layout state lives in the URL (namespaced Discover keys), so a landing tile,
+  // a shared link, or the Back button reproduces the view. App still owns view/c/i/l/s; we patch only
+  // our own keys. parse is cheap → recomputed each render; the memos below key on the SERIALIZED values
+  // (not the arrays, which are fresh each parse) so they don't re-run on unrelated renders.
+  const sp = useSearch({ strict: false }) as Record<string, unknown>;
+  const st = parseDiscovery(sp);
+  const { q, geometry, sort, layout, density, area } = st;
+  const { collections: colls, categories: cats, types, formats } = st;
+  const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
+  const areaK = area ? area.join(",") : "";
+
+  // Merge a partial state change into the URL. push (default) for discrete filter changes so Back
+  // undoes them one at a time; replace for typing + view prefs (layout/density) so they don't pile up.
+  const patch = (p: Partial<DiscoveryState>, replace = false) => {
+    const next = discoveryPatch({ ...st, ...p });
+    navigate({ replace, search: (prev) => ({ ...prev, ...next }) });
+  };
+  const toggleList = (key: "collections" | "categories" | "types" | "formats", value: string) => {
+    const cur = st[key];
+    patch({ [key]: cur.includes(value) ? cur.filter((k) => k !== value) : [...cur, value] });
+  };
+
+  // Ephemeral UI state (never shareable): the map toggle, the hover highlight, the live viewport, and
+  // how many cards are rendered.
   const [showMap, setShowMap] = useState(true);
   const [hoverHref, setHoverHref] = useState<string | null>(null);
   const [bounds, setBounds] = useState<[number, number, number, number] | null>(null); // live viewport
-  const [area, setArea] = useState<[number, number, number, number] | null>(null);      // applied "this area"
   const [visible, setVisible] = useState(PAGE);
   const isWide = useIsWide(); // only MOUNT the map pane at ≥lg — keeps maplibre off phones/tablets
 
@@ -106,13 +113,15 @@ export function DiscoveryView({
   const facets = useMemo(() => extractFacets(queried), [queried]);
 
   const results = useMemo(() => {
-    let base = applyFacets(queried, { collections: colls, types, geometry });
+    let base = applyFacets(queried, { collections: colls, categories: cats, types, formats, geometry });
     if (area) base = filterByViewport(base, area);
     return sortItems(base, sort);
-  }, [queried, colls, types, geometry, area, sort]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [queried, collsK, catsK, typesK, formatsK, geometry, areaK, sort]);
 
-  // Reset paging whenever the working set changes (new query/filter/sort) — reference parity.
-  useEffect(() => setVisible(PAGE), [q, colls, types, geometry, area, sort, itemsKey]);
+  // Reset paging whenever the working set changes (new query/filter/sort) — reference parity. The
+  // listed keys are all serialized primitives (none referenced in the body), so no disable is needed.
+  useEffect(() => setVisible(PAGE), [q, collsK, catsK, typesK, formatsK, geometry, areaK, sort, itemsKey]);
   const shown = results.slice(0, visible);
 
   // Every result's footprint → the map's coverage overlay (synced to the card set as filters narrow).
@@ -136,7 +145,7 @@ export function DiscoveryView({
   // Result link: a real <a> (keyboard-focusable + cmd/middle-click opens a new tab), but a plain
   // left-click is intercepted for in-app nav — the same pattern the app's home link uses.
   const cardLink = (it: ItemRef): LinkAttrs => ({
-    href: openHref(it),
+    href: discoverHref(it),
     "data-href": it.href,
     onClick: (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
@@ -165,16 +174,16 @@ export function DiscoveryView({
     };
   }, [itemSelected]);
 
-  const toggleIn = (list: string[], set: (v: string[]) => void, key: string) =>
-    set(list.includes(key) ? list.filter((k) => k !== key) : [...list, key]);
-  const activeFilters = colls.length + types.length + (geometry === "all" ? 0 : 1) + (area ? 1 : 0);
-  const resetAll = () => { setColls([]); setTypes([]); setGeometry("all"); setArea(null); };
+  // The removable filter chips (pure), and a one-shot reset of every filter (text + sort/layout kept).
+  const chips = activeChips(st, { collection: collectionLabel, category: categoryLabel });
+  const activeFilters = chips.length;
+  const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], geometry: "all", area: null });
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
-        <input value={q} onChange={(e) => setQ(e.target.value)}
+        <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
           placeholder="Search every layer & publication…" aria-label="Search the catalog"
           className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
@@ -182,7 +191,7 @@ export function DiscoveryView({
         </span>
         {/* Clearable even when the map is hidden — the map's own "clear area" pill can be off-screen. */}
         {area && (
-          <button type="button" onClick={() => setArea(null)}
+          <button type="button" onClick={() => patch({ area: null })}
             title="Results are limited to the map area — click to clear"
             className="shrink-0 rounded-full border border-primary bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20">
             Map area ✕
@@ -191,10 +200,10 @@ export function DiscoveryView({
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <label className="flex items-center gap-1 text-xs text-muted-foreground">
             Sort
-            <UiSelect value={sort} onValueChange={setSort} items={SORT_ITEMS} className="text-xs" />
+            <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={SORT_ITEMS} className="text-xs" />
           </label>
-          <UiSegmented value={density} onValueChange={setDensity} items={DENSITIES} className="text-xs" />
-          <UiSegmented value={layout} onValueChange={setLayout} items={LAYOUTS} className="text-xs" />
+          <UiSegmented value={density} onValueChange={(v) => patch({ density: v }, true)} items={DENSITIES} className="text-xs" />
+          <UiSegmented value={layout} onValueChange={(v) => patch({ layout: v }, true)} items={LAYOUTS} className="text-xs" />
           {isWide && (
             <button type="button" onClick={() => setShowMap((v) => !v)} aria-pressed={showMap}
               title={showMap ? "Hide the map" : "Show the map"}
@@ -217,11 +226,15 @@ export function DiscoveryView({
               <button type="button" onClick={resetAll} className="text-xs text-primary hover:underline">Clear all</button>
             )}
           </div>
+          <FacetSection label="Category" facets={facets.categories} selected={new Set(cats)}
+            onToggle={(k) => toggleList("categories", k)} />
           <FacetSection label="Collection" facets={facets.collections} selected={new Set(colls)}
-            onToggle={(k) => toggleIn(colls, setColls, k)} />
+            onToggle={(k) => toggleList("collections", k)} />
           <FacetSection label="Type" facets={facets.types} selected={new Set(types)}
-            onToggle={(k) => toggleIn(types, setTypes, k)} />
-          <GeometrySection facets={facets.geometry} value={geometry} onChange={setGeometry} />
+            onToggle={(k) => toggleList("types", k)} />
+          <FacetSection label="Format" facets={facets.formats} selected={new Set(formats)}
+            onToggle={(k) => toggleList("formats", k)} />
+          <GeometrySection facets={facets.geometry} value={geometry} onChange={(v) => patch({ geometry: v })} />
           <div className="px-3 py-4 text-[11px] leading-snug text-muted-foreground">
             Filters narrow the cards and the map together. Hover a card to find it on the map.
           </div>
@@ -229,6 +242,22 @@ export function DiscoveryView({
 
         {/* CENTER — result cards (the star): gallery grid or list, paginated. */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-3 py-3">
+          {/* Removable active-filter chips — a legible summary of what's narrowing the set, above the
+              cards (the rail is md+ only, so on a phone this is the ONLY way to see/clear a filter). */}
+          {chips.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-1.5">
+              {chips.map((c) => (
+                <button key={c.id} type="button" onClick={() => patch(c.patch)}
+                  className="inline-flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20">
+                  {c.label} <span aria-hidden>✕</span>
+                  <span className="sr-only">remove filter</span>
+                </button>
+              ))}
+              <button type="button" onClick={resetAll} className="px-1 text-xs text-muted-foreground hover:text-foreground hover:underline">
+                Clear all
+              </button>
+            </div>
+          )}
           {withData.length === 0 ? (
             <p className="px-1 py-16 text-center text-sm text-muted-foreground">Loading the catalog…</p>
           ) : shown.length === 0 ? (
@@ -272,12 +301,12 @@ export function DiscoveryView({
             </Suspense>
             <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
               {area ? (
-                <button type="button" onClick={() => setArea(null)}
+                <button type="button" onClick={() => patch({ area: null })}
                   className="pointer-events-auto rounded-full border border-primary bg-primary px-3 py-1 text-xs font-medium text-primary-foreground shadow">
                   ✕ Clear map area
                 </button>
               ) : (
-                <button type="button" onClick={() => bounds && setArea(bounds)} disabled={!bounds}
+                <button type="button" onClick={() => bounds && patch({ area: bounds })} disabled={!bounds}
                   title="Limit results to what's in the current map view"
                   className="pointer-events-auto rounded-full border border-border bg-card/95 px-3 py-1 text-xs font-medium text-foreground shadow hover:bg-muted disabled:opacity-50">
                   Search this area
@@ -300,8 +329,8 @@ export function DiscoveryView({
                 className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted">✕ Close</button>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem}
-                onBack={onCloseItem} onMap={onViewOnMap} />
+              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} layout="drawer"
+                onBack={onCloseItem} onMap={onViewOnMap} onExplore={onExplore} />
             </div>
           </aside>
         </>
@@ -396,61 +425,5 @@ function GeometrySection({ facets, value, onChange }: {
   );
 }
 
-type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs };
-
-// collection · type · date, as a muted meta line (reference parity — text, not a badge wall).
-const metaLine = (it: ItemRef) => [collectionLabel(it.collId), typeOf(it), dateOf(it)].filter(Boolean).join(" · ");
-// Muted, NON-anchor format chips — the card is itself an <a>, so it must contain no nested anchors.
-// Thumbnails/images are already the card image, so they're dropped.
-const formatBadges = (it: ItemRef) =>
-  Object.entries(it.data?.assets ?? {})
-    .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.type?.startsWith("image/"))
-    .slice(0, 4)
-    .map(([k, a]) => <span key={k} className={C.badge}>{a.title ?? k}</span>);
-
-const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
-
-// Gallery card — the centerpiece: thumbnail + title + series + meta (+ format chips when roomy). The
-// whole card is one <a>, so it's keyboard-operable and cmd/middle-click opens a new tab.
-function ResultCard({ it, density, on, link }: CardProps) {
-  const th = thumbnailAsset(it.data);
-  const compact = density === "compact";
-  return (
-    <a {...link}
-      className={`flex cursor-pointer gap-3 rounded-lg border bg-card p-3 text-inherit no-underline transition hover:border-primary hover:shadow-sm ${FOCUS_RING} ${on ? "border-primary ring-1 ring-primary" : "border-border"}`}>
-      <div className={`${compact ? "h-12 w-12" : "h-20 w-20"} flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted`}>
-        {th ? <img src={th.href} alt="" loading="lazy" className="h-full w-full object-cover" />
-          : <span className="px-1 text-center font-mono text-[10px] leading-tight text-muted-foreground">{discoverySeries(it)}</span>}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <span className="truncate font-mono text-[11px] font-semibold text-foreground" title={discoverySeries(it)}>{discoverySeries(it)}</span>
-          {hasGeometry(it) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
-        </div>
-        <p className={`font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{discoveryTitle(it)}</p>
-        <div className="mt-1 truncate text-xs text-muted-foreground" title={metaLine(it)}>{metaLine(it)}</div>
-        {!compact && <div className="mt-1">{formatBadges(it)}</div>}
-      </div>
-    </a>
-  );
-}
-
-// List row — one dense line for scanning many at once.
-function ResultRow({ it, density, on, link }: CardProps) {
-  const compact = density === "compact";
-  return (
-    <li>
-      <a {...link}
-        className={`flex cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING} ${on ? "bg-primary/10" : "hover:bg-muted"}`}>
-        <span className="shrink-0 font-mono text-[11px] font-semibold text-foreground">{discoverySeries(it)}</span>
-        <span className="truncate text-sm text-foreground" title={discoveryTitle(it)}>{discoveryTitle(it)}</span>
-        {!compact && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{collectionLabel(it.collId)}</span>}
-        {hasGeometry(it) && (
-          <span className="ml-auto shrink-0 text-primary">
-            <span aria-hidden className="text-[10px]">◆</span><span className="sr-only">on the map</span>
-          </span>
-        )}
-      </a>
-    </li>
-  );
-}
+// The result card + list row now live in result-card.tsx (shared with the Landing "Recently updated"
+// strip). This file keeps only the Discover shell + the facet-rail sections above.

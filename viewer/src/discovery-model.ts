@@ -3,34 +3,20 @@
 // the already-pure validBbox from map-model — so it runs in the (node) test env. The view component
 // wires these to MiniSearch (the shared search-index) and the live map; neither belongs in this layer.
 import type { ItemRef } from "./browse";
+import { categorize, collectionLabel, docIdOf, formatsOf, hasGeometry, propsOf,
+  title, typeOf } from "./item-view";
 import { validBbox } from "./map-model";
 
-// ---- field getters (null-safe; mirror browse.tsx's g* accessors, kept local so this file stays
-// framework-free and testable rather than importing the React-heavy Browse module) ----
-const propsOf = (it: ItemRef): Record<string, unknown> =>
-  (it.data?.properties ?? {}) as Record<string, unknown>;
-// The STAC item id (== the publication series id / layer stem), else the item folder from the href.
-const itemIdOf = (it: ItemRef): string =>
-  String(it.data?.id ?? it.href.split("/").slice(-2)[0] ?? it.href);
-
-export const discoveryTitle = (it: ItemRef): string => String(propsOf(it).title ?? itemIdOf(it));
-export const discoverySeries = (it: ItemRef): string => itemIdOf(it);
-// collId is the unique collection key (e.g. `ugs-publications/B`); the leaf folder is the label.
-export const collectionLabel = (collId: string): string => collId.split("/").pop() ?? collId;
-// Coarse "type" for the facet: a publication's type, else a layer's topic, else its series bucket.
-export const typeOf = (it: ItemRef): string => {
-  const p = propsOf(it);
-  return String(p["ugs:pub_type"] ?? p["ugs:topic"] ?? p["ugs:series"] ?? "");
-};
-// "Has geometry" = a valid lon/lat bbox or an explicit geometry — i.e. it can draw on the map.
-export const hasGeometry = (it: ItemRef): boolean =>
-  Boolean(validBbox(it.data?.bbox) || it.data?.geometry);
-
-// The doc id bridging a MiniSearch hit (built by search-index.toSearchDoc) back to its item.
-export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
+// The field getters now live in item-view.ts (one source of truth, shared with browse.tsx). Re-export
+// the discovery-facing names so this module's API and the view stay unchanged.
+export { collectionLabel, docIdOf, hasGeometry, typeOf };
+export const discoveryTitle = title;
 
 export type FacetCount = { key: string; label: string; n: number };
-export type Facets = { collections: FacetCount[]; types: FacetCount[]; geometry: FacetCount[] };
+export type Facets = {
+  collections: FacetCount[]; categories: FacetCount[]; types: FacetCount[];
+  formats: FacetCount[]; geometry: FacetCount[];
+};
 
 // Geometry facet keys (also the `geometry` field of a FacetSelection).
 export const GEOM_HAS = "has";
@@ -49,38 +35,52 @@ const bump = (m: Map<string, FacetCount>, key: string, label: string) => {
 // toggle, so the rail reads like a table of contents rather than jumping around).
 export function extractFacets(items: ItemRef[]): Facets {
   const colls = new Map<string, FacetCount>();
+  const cats = new Map<string, FacetCount>();
   const types = new Map<string, FacetCount>();
+  const formats = new Map<string, FacetCount>();
   let has = 0;
   let none = 0;
   for (const it of items) {
     if (!it.data) continue; // not yet loaded → not a facetable result
     if (it.collId) bump(colls, it.collId, collectionLabel(it.collId));
+    const cat = categorize(it);
+    bump(cats, cat.key, cat.label);
     const t = typeOf(it);
     if (t) bump(types, t, t);
+    for (const f of formatsOf(it)) bump(formats, f, f);
     if (hasGeometry(it)) has++;
     else none++;
   }
   const geometry: FacetCount[] = [];
   if (has) geometry.push({ key: GEOM_HAS, label: "On the map", n: has });
   if (none) geometry.push({ key: GEOM_NONE, label: "No footprint", n: none });
-  return { collections: ranked(colls), types: ranked(types), geometry };
+  return {
+    collections: ranked(colls), categories: ranked(cats), types: ranked(types),
+    formats: ranked(formats), geometry,
+  };
 }
 
 export type FacetSelection = {
   collections: string[];
   types: string[];
+  categories?: string[]; // one home category per item (categorize)
+  formats?: string[];    // an item matches if it carries ANY selected format
   geometry: "all" | typeof GEOM_HAS | typeof GEOM_NONE;
 };
 
 // Keep items matching every active facet group — AND across the groups, OR within a multi-select
-// group (collections / types). An item without loaded data is never a result.
+// group (collections / categories / types / formats). An item without loaded data is never a result.
 export function applyFacets(items: ItemRef[], sel: FacetSelection): ItemRef[] {
   const colls = new Set(sel.collections);
+  const cats = new Set(sel.categories ?? []);
   const types = new Set(sel.types);
+  const formats = new Set(sel.formats ?? []);
   return items.filter((it) => {
     if (!it.data) return false;
     if (colls.size && !colls.has(it.collId)) return false;
+    if (cats.size && !cats.has(categorize(it).key)) return false;
     if (types.size && !types.has(typeOf(it))) return false;
+    if (formats.size && !formatsOf(it).some((f) => formats.has(f))) return false;
     if (sel.geometry === GEOM_HAS && !hasGeometry(it)) return false;
     if (sel.geometry === GEOM_NONE && hasGeometry(it)) return false;
     return true;
@@ -132,4 +132,109 @@ export function sortItems(items: ItemRef[], key: SortKey): ItemRef[] {
     if (!db) return -1;
     return dir * da.localeCompare(db);
   });
+}
+
+// ---- URL <-> Discover state (the boundary) ------------------------------------------------------
+// The Discover view's whole filter/sort/layout state lives in the URL so a landing tile or a shared
+// link reproduces the view. These two pure functions are the validated boundary: parse the raw search
+// (all strings, possibly bad) into a typed state, and serialize a state back to a search patch that
+// drops defaults (so a pristine view stays a clean `?view=discover`). Namespaced keys — q / collections
+// / types / category / formats / geometry / sort / layout / density / area — never touch App's c/i/l/s.
+export type Layout = "gallery" | "list";
+export type Density = "comfortable" | "compact";
+export type Area = [number, number, number, number];
+
+export type DiscoveryState = {
+  q: string;
+  collections: string[];
+  categories: string[];
+  types: string[];
+  formats: string[];
+  geometry: FacetSelection["geometry"];
+  sort: SortKey;
+  layout: Layout;
+  density: Density;
+  area: Area | null;
+};
+
+export const DEFAULT_DISCOVERY: DiscoveryState = {
+  q: "", collections: [], categories: [], types: [], formats: [],
+  geometry: "all", sort: "relevance", layout: "gallery", density: "comfortable", area: null,
+};
+
+const str = (v: unknown): string => (typeof v === "string" ? v : "");
+// A CSV param → a trimmed, de-duplicated, non-empty string list.
+const toStringArray = (v: unknown): string[] =>
+  [...new Set(str(v).split(",").map((s) => s.trim()).filter(Boolean))];
+const oneOf = <T extends string>(v: unknown, allowed: readonly T[], fallback: T): T =>
+  (allowed as readonly string[]).includes(str(v)) ? (str(v) as T) : fallback;
+
+const GEOMETRIES = ["all", GEOM_HAS, GEOM_NONE] as const;
+const LAYOUTS_K = ["gallery", "list"] as const;
+const DENSITIES_K = ["comfortable", "compact"] as const;
+const SORT_KEYS = SORTS.map((s) => s.key);
+
+const parseArea = (v: unknown): Area | null => {
+  const parts = str(v).split(",").map(Number);
+  if (parts.length !== 4 || parts.some((n) => !Number.isFinite(n))) return null;
+  return validBbox(parts) ? (parts as Area) : null;
+};
+
+/** Raw search params → a validated DiscoveryState (bad/absent values fall back to the default). */
+export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
+  return {
+    q: str(sp.q),
+    collections: toStringArray(sp.collections),
+    categories: toStringArray(sp.category),
+    types: toStringArray(sp.types),
+    formats: toStringArray(sp.formats),
+    geometry: oneOf(sp.geometry, GEOMETRIES, "all"),
+    sort: oneOf(sp.sort, SORT_KEYS, "relevance"),
+    layout: oneOf(sp.layout, LAYOUTS_K, "gallery"),
+    density: oneOf(sp.density, DENSITIES_K, "comfortable"),
+    area: parseArea(sp.area),
+  };
+}
+
+const csv = (list: string[]): string | undefined => (list.length ? list.join(",") : undefined);
+
+/** A DiscoveryState → a search patch (each Discover key set or cleared). Defaults serialize to
+ *  `undefined` so they drop out of the URL, keeping a pristine view a bare `?view=discover`. */
+export function discoveryPatch(s: DiscoveryState): Record<string, string | undefined> {
+  return {
+    // Keep the RAW query (internal + trailing spaces intact) whenever it has real content — the box is
+    // controlled from the URL and round-trips q on every keystroke, so trimming here would eat the
+    // space the instant it's typed ("salt lake" → "saltlake"). Consumers trim before searching.
+    q: s.q.trim() ? s.q : undefined,
+    collections: csv(s.collections),
+    category: csv(s.categories),
+    types: csv(s.types),
+    formats: csv(s.formats),
+    geometry: s.geometry === "all" ? undefined : s.geometry,
+    sort: s.sort === "relevance" ? undefined : s.sort,
+    layout: s.layout === "gallery" ? undefined : s.layout,
+    density: s.density === "comfortable" ? undefined : s.density,
+    area: s.area ? s.area.join(",") : undefined,
+  };
+}
+
+/** The active-filter chips (removable) for the row above the cards — pure so it's testable. Each
+ *  carries the patch that REMOVES just that filter. Text search + sort/layout/density aren't "filters". */
+export type FilterChip = { id: string; label: string; patch: Partial<DiscoveryState> };
+export function activeChips(s: DiscoveryState, labelFor: {
+  collection: (key: string) => string; category: (key: string) => string;
+}): FilterChip[] {
+  const chips: FilterChip[] = [];
+  for (const key of s.collections)
+    chips.push({ id: `coll:${key}`, label: labelFor.collection(key), patch: { collections: s.collections.filter((k) => k !== key) } });
+  for (const key of s.categories)
+    chips.push({ id: `cat:${key}`, label: labelFor.category(key), patch: { categories: s.categories.filter((k) => k !== key) } });
+  for (const key of s.types)
+    chips.push({ id: `type:${key}`, label: key, patch: { types: s.types.filter((k) => k !== key) } });
+  for (const key of s.formats)
+    chips.push({ id: `fmt:${key}`, label: key, patch: { formats: s.formats.filter((k) => k !== key) } });
+  if (s.geometry === GEOM_HAS) chips.push({ id: "geom", label: "On the map", patch: { geometry: "all" } });
+  if (s.geometry === GEOM_NONE) chips.push({ id: "geom", label: "No footprint", patch: { geometry: "all" } });
+  if (s.area) chips.push({ id: "area", label: "Map area", patch: { area: null } });
+  return chips;
 }

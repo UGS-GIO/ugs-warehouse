@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { ItemRef } from "./browse";
 import {
-  applyFacets, bboxIntersects, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE,
-  hasGeometry, sortItems, typeOf,
+  activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
+  extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery, sortItems, typeOf,
 } from "./discovery-model";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
@@ -128,5 +128,95 @@ describe("sortItems", () => {
 
   it("oldest sorts by datetime asc, undated still last", () => {
     expect(titles(sortItems(dated, "oldest"))).toEqual(["Gamma", "Beta", "Alpha", "Delta"]);
+  });
+});
+
+describe("category & format facets", () => {
+  const withAssets: ItemRef[] = [
+    item("ugs-serving-topics/emp", "wells", { "ugs:dbt_schema": "emp", title: "Wells" }, [-114, 37, -109, 42]),
+    item("ugs-serving-topics/hazards", "qf", { "ugs:dbt_schema": "hazards", title: "Faults" }, [-112, 40, -111, 41]),
+    { collId: "ugs-publications/GQ", href: "https://x/ugs-publications/GQ/GQ-1/GQ-1.json",
+      data: { id: "GQ-1", properties: { "ugs:series": "GQ", title: "Map" }, assets: { pub: { href: "a.pdf", type: "application/pdf" } } } },
+  ];
+
+  it("counts one home category per item and buckets formats", () => {
+    const f = extractFacets(withAssets);
+    expect(Object.fromEntries(f.categories.map((c) => [c.key, c.n]))).toEqual({
+      "energy-minerals": 1, hazards: 1, publications: 1,
+    });
+    expect(f.formats.map((x) => x.key)).toEqual(["PDF"]);
+  });
+
+  it("filters by category and by format (OR within, AND across)", () => {
+    const ids = (out: ItemRef[]) => out.map((it) => it.data!.id);
+    expect(ids(applyFacets(withAssets, { collections: [], types: [], categories: ["hazards"], geometry: "all" })))
+      .toEqual(["qf"]);
+    expect(ids(applyFacets(withAssets, { collections: [], types: [], formats: ["PDF"], geometry: "all" })))
+      .toEqual(["GQ-1"]);
+  });
+});
+
+describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
+  it("defaults a bare/garbage search to the default state", () => {
+    expect(parseDiscovery({})).toEqual(DEFAULT_DISCOVERY);
+    expect(parseDiscovery({ sort: "bogus", layout: "x", geometry: "nope", area: "1,2" }))
+      .toEqual(DEFAULT_DISCOVERY);
+  });
+
+  it("parses CSV lists, enums, and a valid area; drops an invalid area", () => {
+    const s = parseDiscovery({
+      q: "faults", collections: "a,b,a", category: "hazards", types: "Report",
+      formats: "PDF,COG", geometry: "has", sort: "newest", layout: "list",
+      density: "compact", area: "-114,37,-109,42",
+    });
+    expect(s).toEqual({
+      q: "faults", collections: ["a", "b"], categories: ["hazards"], types: ["Report"],
+      formats: ["PDF", "COG"], geometry: "has", sort: "newest", layout: "list",
+      density: "compact", area: [-114, 37, -109, 42],
+    });
+    expect(parseDiscovery({ area: "999,999,0,0" }).area).toBeNull();
+  });
+
+  it("serializes a state back, dropping defaults (a pristine view is a clean URL)", () => {
+    expect(discoveryPatch(DEFAULT_DISCOVERY)).toEqual({
+      q: undefined, collections: undefined, category: undefined, types: undefined,
+      formats: undefined, geometry: undefined, sort: undefined, layout: undefined,
+      density: undefined, area: undefined,
+    });
+    const patched = discoveryPatch({ ...DEFAULT_DISCOVERY, q: "x", categories: ["hazards"], area: [-114, 37, -109, 42], sort: "newest" });
+    expect(patched.q).toBe("x");
+    expect(patched.category).toBe("hazards");
+    expect(patched.area).toBe("-114,37,-109,42");
+    expect(patched.sort).toBe("newest");
+  });
+
+  it("round-trips through parse → patch → parse", () => {
+    const s = parseDiscovery({ q: "x", collections: "a,b", category: "hazards", geometry: "none", sort: "oldest" });
+    expect(parseDiscovery(discoveryPatch(s) as Record<string, unknown>)).toEqual(s);
+  });
+
+  it("preserves spaces in q so a multi-word query survives the per-keystroke URL round-trip", () => {
+    // The box is controlled from the URL; trimming on write would strip the space the instant it's
+    // typed, collapsing "salt lake" → "saltlake". Internal AND trailing spaces must survive.
+    expect(discoveryPatch({ ...DEFAULT_DISCOVERY, q: "salt lake" }).q).toBe("salt lake");
+    expect(discoveryPatch({ ...DEFAULT_DISCOVERY, q: "salt lake " }).q).toBe("salt lake ");
+    expect(parseDiscovery({ q: "salt lake" }).q).toBe("salt lake");
+    // A whitespace-only query is still dropped (it's not a real search).
+    expect(discoveryPatch({ ...DEFAULT_DISCOVERY, q: "   " }).q).toBeUndefined();
+  });
+});
+
+describe("activeChips", () => {
+  const labelFor = { collection: (k: string) => `Coll ${k}`, category: (k: string) => `Cat ${k}` };
+  it("lists a removable chip per active filter, and each chip's patch removes only itself", () => {
+    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, collections: ["a", "b"], categories: ["hazards"], geometry: GEOM_HAS, area: [-1, 0, 1, 2] };
+    const chips = activeChips(s, labelFor);
+    expect(chips.map((c) => c.label)).toEqual(["Coll a", "Coll b", "Cat hazards", "On the map", "Map area"]);
+    // removing collection "a" leaves "b"
+    expect(chips[0].patch.collections).toEqual(["b"]);
+    expect(chips.find((c) => c.id === "area")?.patch.area).toBeNull();
+  });
+  it("has no chips for a pristine state", () => {
+    expect(activeChips(DEFAULT_DISCOVERY, labelFor)).toEqual([]);
   });
 });

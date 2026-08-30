@@ -66,7 +66,7 @@ export function Landing({ items, itemsKey, loading, onSearch, onOpenItem, onOpen
     <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">
       <section className="py-16 text-center sm:py-24">
         <h1 className="mx-auto max-w-3xl font-display text-4xl tracking-tight sm:text-5xl">
-          Utah&rsquo;s geoscience data, <span className="text-primary">in one place</span>.
+          Utah&rsquo;s geoscience data, in one place.
         </h1>
         <p className="mx-auto mt-4 max-w-2xl text-muted-foreground">
           Search and explore the Utah Geological Survey warehouse — hazards, energy &amp; minerals,

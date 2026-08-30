@@ -7,7 +7,7 @@ import { ensureCogProtocol } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "./stac";
 import { UiSegmented } from "./ui/segmented";
-import { type ActiveLayer, colorFor, type Footprint } from "./map-model";
+import { type ActiveLayer, colorFor, type Footprint, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -70,15 +70,45 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
   };
 }
 
-export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
+export function ItemMap({ item, layers, footprints = [], onPickFootprint,
+  highlightBbox, onHoverFootprint, onBoundsChange }: {
   item?: StacDoc; layers: ActiveLayer[];
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
+  // Discovery sync (all optional — the map works standalone without them): a footprint to emphasize
+  // (a hovered discovery card), a callback when a coverage footprint is hovered on the map (→ the
+  // card list highlights it), and the viewport bounds after load/move (→ "Search this area").
+  highlightBbox?: number[];
+  onHoverFootprint?: (href: string | null) => void;
+  onBoundsChange?: (bbox: [number, number, number, number]) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
+  // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
+  // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
+  const highlight = validBbox(highlightBbox);
+  // Report the viewport bbox on load + after every move, for the panel's "Search this area".
+  const reportBounds = () => {
+    const m = mapRef.current?.getMap();
+    if (!m || !onBoundsChange) return;
+    const b = m.getBounds();
+    onBoundsChange([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+  };
+  // Map → card: when the cursor is over a coverage footprint, report its href (deduped via a ref so
+  // a continuous mousemove doesn't spam state). Only fires when the coverage overlay is shown.
+  const hoveredHref = useRef<string | null>(null);
+  const emitHover = (href: string | null) => {
+    if (href === hoveredHref.current) return;
+    hoveredHref.current = href;
+    onHoverFootprint?.(href);
+  };
+  const onHover = (e: MapLayerMouseEvent) => {
+    if (!onHoverFootprint) return;
+    const f = e.features?.find((ft) => ft.layer.id === "coverage-fill");
+    emitHover(f?.properties?.href ? String(f.properties.href) : null);
+  };
   // Coverage overlay (all item footprints as clickable rectangles) — OFF by default: on, every
   // item in the open collection draws a rectangle whether or not its layer is on, so turning a
   // layer off still left something on the map. Opt in from the toggle when you want the "what is
@@ -189,9 +219,10 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
       interactiveLayerIds={allInteractiveIds}
       cursor={cursor}
       onMouseEnter={() => setCursor("pointer")}
-      onMouseLeave={() => setCursor("")}
-      onLoad={() => setMapLoaded(true)}
-      onMoveEnd={(e: ViewStateChangeEvent) => writeCam(e.viewState)}
+      onMouseLeave={() => { setCursor(""); emitHover(null); }}
+      onMouseMove={onHover}
+      onLoad={() => { setMapLoaded(true); reportBounds(); }}
+      onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
       onClick={onClick}
     >
       <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
@@ -220,6 +251,16 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint }: {
         <Source id="coverage" type="geojson" data={coverage}>
           <Layer id="coverage-fill" type="fill" paint={{ "fill-color": "#2b6cdf", "fill-opacity": 0.05 }} />
           <Layer id="coverage-line" type="line" paint={{ "line-color": "#2b6cdf", "line-width": 0.7, "line-opacity": 0.55 }} />
+        </Source>
+      )}
+
+      {/* Discovery highlight — the hovered card's footprint, emphasized (orange, above coverage).
+          Non-interactive, so it never steals clicks/hover from the data layers or coverage. */}
+      {highlight && (
+        <Source id="discovery-highlight" type="geojson"
+          data={{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: bboxRing(highlight) } }}>
+          <Layer id="discovery-highlight-fill" type="fill" paint={{ "fill-color": "#d1491c", "fill-opacity": 0.12 }} />
+          <Layer id="discovery-highlight-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 2.5 }} />
         </Source>
       )}
 

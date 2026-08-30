@@ -21,7 +21,11 @@ export type NavPage = { id: string; label: string; onSelect: () => void };
 const ITEM = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-muted";
 const HEADING = "px-2 py-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground";
 
-export function NavMenu({ pages, current, catalogUrl }: { pages: NavPage[]; current: string; catalogUrl?: string }) {
+export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
+  pages: NavPage[];      // the primary tabs — shown here only below md, where the tab row is hidden
+  overflow?: NavPage[];  // secondary views (Architecture/Guide/Developers/Review) — always in the menu
+  current: string; catalogUrl?: string;
+}) {
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const dark = useIsDark();
@@ -62,6 +66,19 @@ export function NavMenu({ pages, current, catalogUrl }: { pages: NavPage[]; curr
               <div className="md:hidden">
                 <div className={HEADING}>Views</div>
                 {pages.map((p) => (
+                  <Menu.Item key={p.id} onClick={p.onSelect}
+                    className={`${ITEM} ${p.id === current ? "text-primary" : ""}`}>
+                    {p.label}
+                  </Menu.Item>
+                ))}
+                <Menu.Separator className="my-1 h-px bg-border" />
+              </div>
+            )}
+            {/* Secondary views live only here (both desktop + mobile) so the tab row never overflows. */}
+            {overflow.length > 0 && (
+              <div>
+                <div className={HEADING}>More</div>
+                {overflow.map((p) => (
                   <Menu.Item key={p.id} onClick={p.onSelect}
                     className={`${ITEM} ${p.id === current ? "text-primary" : ""}`}>
                     {p.label}

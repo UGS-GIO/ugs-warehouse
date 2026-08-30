@@ -1,6 +1,6 @@
-// Pure, unit-tested core for the Map view's DiscoveryPanel: facet extraction + result filtering over
-// the map's loaded items. Framework/DOM-free — type-only imports of the item + STAC shapes, plus the
-// already-pure validBbox from map-model — so it runs in the (node) test env. The panel component
+// Pure, unit-tested core for the Discover view: facet extraction + result filtering + sorting over
+// the loaded catalog items. Framework/DOM-free — type-only imports of the item + STAC shapes, plus
+// the already-pure validBbox from map-model — so it runs in the (node) test env. The view component
 // wires these to MiniSearch (the shared search-index) and the live map; neither belongs in this layer.
 import type { ItemRef } from "./browse";
 import { validBbox } from "./map-model";
@@ -102,4 +102,34 @@ export function bboxIntersects(a: number[] | undefined, b: number[] | undefined)
 export function filterByViewport(items: ItemRef[], viewport: number[] | undefined): ItemRef[] {
   if (!validBbox(viewport)) return items;
   return items.filter((it) => bboxIntersects(it.data?.bbox, viewport));
+}
+
+// ISO datetime (or empty) for date sorts — lexicographic on ISO strings == chronological.
+const datetimeOf = (it: ItemRef): string => String(propsOf(it).datetime ?? "");
+
+export type SortKey = "relevance" | "title" | "newest" | "oldest";
+export const SORTS: { key: SortKey; label: string }[] = [
+  { key: "relevance", label: "Best match" },
+  { key: "newest", label: "Newest" },
+  { key: "oldest", label: "Oldest" },
+  { key: "title", label: "Title A–Z" },
+];
+
+// Order results for display. "relevance" preserves the caller's order (the MiniSearch score order,
+// or the facet-count order when there's no query) — so it's the identity. The others return a NEW
+// array (never mutate the input). Items missing a datetime sort last under both date orders, so an
+// undated pub never jumps to the top of "Newest".
+export function sortItems(items: ItemRef[], key: SortKey): ItemRef[] {
+  if (key === "relevance") return items;
+  const out = [...items];
+  if (key === "title") return out.sort((a, b) => discoveryTitle(a).localeCompare(discoveryTitle(b)));
+  const dir = key === "newest" ? -1 : 1;
+  return out.sort((a, b) => {
+    const da = datetimeOf(a);
+    const db = datetimeOf(b);
+    if (da === db) return 0;
+    if (!da) return 1; // undated → last, regardless of direction
+    if (!db) return -1;
+    return dir * da.localeCompare(db);
+  });
 }

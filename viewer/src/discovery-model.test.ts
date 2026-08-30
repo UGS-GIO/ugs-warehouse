@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "./browse";
 import {
   applyFacets, bboxIntersects, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE,
-  hasGeometry, typeOf,
+  hasGeometry, sortItems, typeOf,
 } from "./discovery-model";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
@@ -98,5 +98,35 @@ describe("bboxIntersects / filterByViewport", () => {
 
   it("returns everything when the viewport is missing/invalid", () => {
     expect(filterByViewport(items, undefined)).toHaveLength(items.length);
+  });
+});
+
+describe("sortItems", () => {
+  // A fixture with distinct titles + datetimes; DS-9 is deliberately undated.
+  const dated: ItemRef[] = [
+    item("c", "b-item", { title: "Beta", datetime: "2021-05-01T00:00:00Z" }),
+    item("c", "a-item", { title: "Alpha", datetime: "2023-01-01T00:00:00Z" }),
+    item("c", "c-item", { title: "Gamma", datetime: "2019-09-01T00:00:00Z" }),
+    item("c", "d-item", { title: "Delta" }), // undated
+  ];
+  const titles = (out: ItemRef[]) => out.map((it) => String(it.data!.properties!.title));
+
+  it("relevance preserves the caller's order (identity)", () => {
+    const out = sortItems(dated, "relevance");
+    expect(out).toBe(dated); // same reference — no copy, no reorder
+  });
+
+  it("title sorts A–Z and does not mutate the input", () => {
+    const out = sortItems(dated, "title");
+    expect(titles(out)).toEqual(["Alpha", "Beta", "Delta", "Gamma"]);
+    expect(titles(dated)).toEqual(["Beta", "Alpha", "Gamma", "Delta"]); // input untouched
+  });
+
+  it("newest sorts by datetime desc, undated last", () => {
+    expect(titles(sortItems(dated, "newest"))).toEqual(["Alpha", "Beta", "Gamma", "Delta"]);
+  });
+
+  it("oldest sorts by datetime asc, undated still last", () => {
+    expect(titles(sortItems(dated, "oldest"))).toEqual(["Gamma", "Beta", "Alpha", "Delta"]);
   });
 });

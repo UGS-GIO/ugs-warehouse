@@ -71,7 +71,7 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
 }
 
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
-  highlightBbox, onHoverFootprint, onBoundsChange }: {
+  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false }: {
   item?: StacDoc; layers: ActiveLayer[];
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
   // Discovery sync (all optional — the map works standalone without them): a footprint to emphasize
@@ -80,6 +80,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   highlightBbox?: number[];
   onHoverFootprint?: (href: string | null) => void;
   onBoundsChange?: (bbox: [number, number, number, number]) => void;
+  // Start with the coverage overlay ON. The Discover view leaves it default (footprints ARE its
+  // point); the Map view omits it, so coverage stays opt-in there as before.
+  coverageDefault?: boolean;
 }) {
   const mapRef = useRef<MapRef>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -113,7 +116,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // item in the open collection draws a rectangle whether or not its layer is on, so turning a
   // layer off still left something on the map. Opt in from the toggle when you want the "what is
   // mapped where" view.
-  const [showCoverage, setShowCoverage] = useState(false);
+  const [showCoverage, setShowCoverage] = useState(coverageDefault);
   const coverage = showCoverage && footprints.length ? coverageFC(footprints) : null;
   // COG (raster) layers need the cog:// protocol registered before their Source mounts. Register
   // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.

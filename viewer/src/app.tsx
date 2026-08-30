@@ -14,7 +14,6 @@ import { MapShell } from "./map-shell";
 import { NavMenu } from "./nav-menu";
 import { PreviewMapProvider } from "./preview-map";
 import { PropertyTable } from "./property-table";
-import { UiSegmented } from "./ui/segmented";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./stac-url-chip";
 import { DiffPanel } from "./diff-panel";
@@ -29,9 +28,8 @@ const Guide = lazy(() => import("./guide").then((m) => ({ default: m.Guide })));
 const ReviewDashboard = lazy(() => import("./review-dashboard").then((m) => ({ default: m.ReviewDashboard })));
 // maplibre is ~1.5MB of the bundle and the catalog, search and doc views never draw a map.
 const ItemMap = lazy(() => import("./map").then((m) => ({ default: m.ItemMap })));
-// The Map view's discovery panel — lazy so its MiniSearch index (like the Search view's) stays out
-// of the main bundle. Rendered in the sidebar under its own small Suspense so the map never waits.
-const DiscoveryPanel = lazy(() => import("./discovery-panel").then((m) => ({ default: m.DiscoveryPanel })));
+// The full-width Discover view — lazy so its MiniSearch index + maplibre stay out of the main bundle.
+const DiscoveryView = lazy(() => import("./discovery-view").then((m) => ({ default: m.DiscoveryView })));
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name
 // that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
@@ -53,7 +51,7 @@ const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its fo
 const ROOT_HREF = location.pathname || "/";
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-type View = "catalog" | "map" | "arch" | "guide" | "search" | "review";
+type View = "catalog" | "map" | "discover" | "arch" | "guide" | "search" | "review";
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
@@ -92,6 +90,7 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
 const VIEWS: { id: View; label: string }[] = [
   { id: "catalog", label: "Catalog" },
   { id: "map", label: "Map" },
+  { id: "discover", label: "Discover" },
   { id: "search", label: "Search" },
   { id: "arch", label: "Architecture" },
   { id: "guide", label: "Guide" },
@@ -102,9 +101,6 @@ const tab = (on: boolean) =>
   "cursor-pointer border-b-2 px-2 py-1 text-sm transition-colors "
   + (on ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground");
 
-// Map-view sidebar: the discovery panel (default) toggles with the existing layer list.
-type SidebarTab = "discover" | "layers";
-const SIDEBAR_TABS = [{ value: "discover" as const, label: "Discover" }, { value: "layers" as const, label: "Layers" }];
 const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
 
 function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
@@ -236,12 +232,6 @@ export function App() {
   const [search, setSearch] = useState("");
   const [threeD, setThreeD] = useState(false);  // global "3D pubs" discovery filter (loads all items)
   const [browseAll, setBrowseAll] = useState(false);  // flat catalog-wide list, newest-first (loads all items)
-  // Map view: which sidebar surface is showing (discovery is the default "on" state), plus the two
-  // pieces of shared state the discovery panel and the map sync through — the hovered item's href
-  // and the live viewport bounds ("Search this area").
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>("discover");
-  const [hoverHref, setHoverHref] = useState<string | null>(null);
-  const [mapBounds, setMapBounds] = useState<[number, number, number, number] | null>(null);
 
   const catalog = useStac(CATALOG_URL);
 
@@ -349,7 +339,8 @@ export function App() {
   ];
   const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
 
-  const mapColls = view === "map" ? leafColls : [];
+  // The Map AND Discover views load every leaf collection's index (all items → the map + facets).
+  const mapColls = view === "map" || view === "discover" ? leafColls : [];
   const mapIdx = useIndexes(mapColls.map((c) => ({ id: c.id, href: c.href })));
   // Same collection.json → item-links fallback the browse list uses. Without it a federated
   // catalog contributes no layers at all: it publishes no items.json, so the index is empty and
@@ -455,15 +446,13 @@ export function App() {
                    title: String(r.data?.properties?.title ?? idOf(r.href)), bbox: r.data?.bbox }))
     .filter((f): f is Footprint => Array.isArray(f.bbox) && f.bbox.length >= 4);
 
-  // The hovered discovery card's footprint (card→map highlight). Looked up in the map's FULL item
-  // set (mapItems), so it works even when no collection is open — unlike footprints/coverage, which
-  // stay scoped to the open leaf. Map→card hover flows the other way via onHoverFootprint.
-  const hoverBbox = hoverHref ? mapItems.find((r) => r.href === hoverHref)?.data?.bbox : undefined;
-
   // Map view = locked viewport (the map fills the screen, panels scroll internally).
   // Catalog/detail = a document → the page scrolls naturally, header sticks. (No more
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
+  // The Map and Discover views both LOCK the viewport (a full-height split whose inner panes scroll)
+  // — unlike the document views (catalog/search/…), which scroll the page under a sticky header.
+  const lockedView = mapView || view === "discover";
   // Same cached queries the map itself reads (TanStack dedupes by key) — the legend needs the bound
   // style layers, and the drawer renders outside the map component.
   const styleCache = useStyleLayersFor(activeLayers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
@@ -471,11 +460,11 @@ export function App() {
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
     <PreviewMapProvider>
-    <div className={mapView
+    <div className={lockedView
       ? "grid h-full grid-cols-1 grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
       : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
-      <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
+      <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
         {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
             plain click still does in-app SPA nav. href is the viewer root (no search params). */}
         <a href={ROOT_HREF} title="Home — catalog root"
@@ -522,6 +511,20 @@ export function App() {
         <Architecture />
       ) : view === "search" ? (
         <ArticleSearch catalog={catalogDocs} onOpen={(collId, itemId) => go({ view: "catalog", c: collId, i: itemId })} />
+      ) : view === "discover" ? (
+        // Full-width discovery split — same loaded item set as the map, its own facet rail / cards /
+        // synced map. Opening a card sets ?i= (staying in Discover); App resolves the full item doc
+        // (below, via ?c=/?i=) → the drawer. "View on map" hands off to the Map view.
+        <DiscoveryView
+          items={mapItems}
+          itemsKey={mapLoadKey}
+          onOpenItem={openItem}
+          itemSelected={Boolean(itemUrl)}
+          selectedItem={item.data}
+          selectedCollectionId={collectionId}
+          onCloseItem={() => go({ view })}
+          onViewOnMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
+        />
       ) : !mapView ? (
         <Browse
           cards={cardsWithCovers}
@@ -551,39 +554,26 @@ export function App() {
       ) : (
         <MapShell
           revealInfo={revealInfo}
-          map={<ItemMap item={item.data} layers={activeLayers} footprints={footprints} onPickFootprint={openItem}
-            highlightBbox={hoverBbox} onHoverFootprint={setHoverHref} onBoundsChange={setMapBounds} />}
+          map={<ItemMap item={item.data} layers={activeLayers} footprints={footprints} onPickFootprint={openItem} />}
           info={<MapDetail item={item.data} loading={item.isLoading} />}
           layers={<>
             {catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
-            {/* Discover (default) ⇄ Layers — the discovery panel and the layer list share the sidebar,
-                one at a time, each scrolling in its own aside. The item detail keeps its own dock. */}
-            <div className="mb-2">
-              <UiSegmented value={sidebarTab} onValueChange={setSidebarTab} items={SIDEBAR_TABS} />
-            </div>
-            {sidebarTab === "discover" ? (
-              <Suspense fallback={<p className="text-muted-foreground">Loading discovery…</p>}>
-                <DiscoveryPanel items={mapItems} itemsKey={mapLoadKey} onOpenItem={openItem}
-                  hoverHref={hoverHref} onHoverItem={setHoverHref} viewport={mapBounds} />
-              </Suspense>
-            ) : (
-              <LayerList
-                rows={layerRows}
-                activeIds={idsForMap}
-                openId={itemUrl ? idOf(itemUrl) : undefined}
-                colorOf={(id) => colorFor(activeLayers.findIndex((l) => l.id === id))}
-                onToggle={toggleLayer}
-                onOpen={openItem}
-                // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
-                legend={<MapLegend layers={activeLayers.flatMap((l, i) => (l.cogHref || l.rasterPmHref ? []
-                  : [{ id: l.id, title: l.title, color: colorFor(i), styleLayers: styleCache[l.id] }]))} />}
-              />
-            )}
+            <LayerList
+              rows={layerRows}
+              activeIds={idsForMap}
+              openId={itemUrl ? idOf(itemUrl) : undefined}
+              colorOf={(id) => colorFor(activeLayers.findIndex((l) => l.id === id))}
+              onToggle={toggleLayer}
+              onOpen={openItem}
+              // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
+              legend={<MapLegend layers={activeLayers.flatMap((l, i) => (l.cogHref || l.rasterPmHref ? []
+                : [{ id: l.id, title: l.title, color: colorFor(i), styleLayers: styleCache[l.id] }]))} />}
+            />
           </>}
         />
       )}
       </Suspense>
-      {!mapView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
+      {!lockedView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
     </div>
     </PreviewMapProvider>
   );

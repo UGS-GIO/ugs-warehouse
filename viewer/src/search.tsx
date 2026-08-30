@@ -28,8 +28,8 @@ export const CORPUS_URL = new URL(
   location.href,
 ).href;
 
-// Article / CatalogDoc / Hit + buildIndex now live in ./search-index (imported above) so the Map
-// view's DiscoveryPanel builds the SAME index; consumers import those types from ./search-index.
+// Article / CatalogDoc / Hit + buildIndex now live in ./search-index (imported above) so the Discover
+// view builds the SAME index; consumers import those types from ./search-index.
 
 const seriesCode = (sid: string) => sid.match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? sid;
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -1,7 +1,7 @@
 // The shared MiniSearch index builder + the flat doc shapes it indexes. Extracted from search.tsx so
-// the Map view's DiscoveryPanel searches the SAME index (one builder, one config) rather than a second
-// engine. No React; MiniSearch is the only runtime import, so this stays out of the main bundle —
-// both consumers (the lazy Search view and the lazy DiscoveryPanel) pull it into their own chunks.
+// the Discover view searches the SAME index (one builder, one config) rather than a second engine.
+// No React; MiniSearch is the only runtime import, so this stays out of the main bundle — both
+// consumers (the lazy Search view and the lazy Discover view) pull it into their own chunks.
 import MiniSearch from "minisearch";
 import type { StacDoc } from "./stac";
 
@@ -39,7 +39,7 @@ export function toSearchDoc(collId: string, d: StacDoc): CatalogDoc {
 
 // Build the combined index + a flat doc list (the latter powers field-only queries like `series:GQ`,
 // which have no keyword to hand MiniSearch). Plain function, memoized by the caller. Pass `[]` articles
-// to index catalog items only (the DiscoveryPanel's case).
+// to index catalog items only (the Discover view's case).
 export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
   const docs: Hit[] = [
     ...articles.map((a) => ({

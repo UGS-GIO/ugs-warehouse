@@ -509,12 +509,9 @@ export function App() {
             e.preventDefault();
             go({ view: "landing" });
           }}
-          className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
-          {/* The mark is light-optimized, so it rides a light plate — invisible on the bar in light
-              mode, a subtle chip in dark. Same treatment as the soil-water app. */}
-          <span className="flex shrink-0 items-center rounded bg-white p-0.5">
-            <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="Utah Geological Survey" className="h-7 w-7" />
-          </span>
+          className="flex items-center whitespace-nowrap hover:opacity-80">
+          {/* Wordmark only — the state header above already carries the UGS beehive mark, and a
+              second copy 60px below it read as a duplicate (and, in dark mode, as a white sticker). */}
           <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </a>
         {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}

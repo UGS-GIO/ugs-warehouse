@@ -38,6 +38,7 @@ const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
   items, itemsKey, onOpenItem, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  onFullPage, fullPageHref,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
@@ -48,6 +49,8 @@ export function DiscoveryView({
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
   onExplore?: () => void;              // opens the selected item full-screen in the Preview view
+  onFullPage?: () => void;             // opens the selected item on the full catalog page
+  fullPageHref?: string;               // the same destination as a URL, so the link is cmd/middle-clickable
 }) {
   const navigate = useNavigate() as unknown as (opts: {
     replace?: boolean; search: (prev: Record<string, unknown>) => Record<string, unknown>;
@@ -325,8 +328,21 @@ export function DiscoveryView({
             className="absolute inset-y-0 right-0 z-30 flex w-full max-w-[560px] flex-col border-l border-border bg-background shadow-xl">
             <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Item detail</span>
-              <button ref={closeRef} type="button" onClick={onCloseItem}
-                className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted">✕ Close</button>
+              <div className="flex items-center gap-1">
+                {/* The drawer is the single-column layout; the two-column page lives on the Catalog
+                    view. A real <a> so cmd/middle-click opens it in a tab, plain click is SPA nav. */}
+                {onFullPage && (
+                  <a href={fullPageHref} onClick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                    e.preventDefault();
+                    onFullPage();
+                  }} className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+                    Open full page ↗
+                  </a>
+                )}
+                <button ref={closeRef} type="button" onClick={onCloseItem}
+                  className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted">✕ Close</button>
+              </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
               <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} layout="drawer"

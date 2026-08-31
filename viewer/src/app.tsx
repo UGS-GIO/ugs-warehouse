@@ -54,6 +54,14 @@ const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its fo
 // modifier/middle-click opens the catalog in a new tab. Uses the document's own pathname (…/index.html
 // in prod) to match router.tsx's basepath, so the link points at a real object (no NoSuchKey).
 const ROOT_HREF = location.pathname || "/";
+// The catalog page for an item, as a plain URL — lets a drawer/card link be a real <a> (new-tab,
+// middle-click) while its onClick still does in-app nav. Same params the router reads.
+const catalogItemHref = (c?: string, i?: string) => {
+  const sp = new URLSearchParams({ view: "catalog" });
+  if (c) sp.set("c", c);
+  if (i) sp.set("i", i);
+  return `${ROOT_HREF}?${sp}`;
+};
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
 type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "search" | "developers" | "preview" | "review";
@@ -560,6 +568,8 @@ export function App() {
           onCloseItem={() => go({ view })}
           onViewOnMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
           onExplore={() => go({ view: "preview", c: collectionUrl, i: itemUrl })}
+          onFullPage={() => go({ view: "catalog", c: collectionUrl, i: itemUrl })}
+          fullPageHref={catalogItemHref(collectionUrl, itemUrl)}
         />
       ) : view === "landing" ? (
         // The param-less front door. Reuses the same loaded item set as Map/Discover (mapItems) — no

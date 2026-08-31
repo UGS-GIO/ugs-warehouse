@@ -121,6 +121,41 @@ body {
   filter: brightness(0) invert(1);
 }
 
+/* Hover and focus on the header lockup must never paint a plate behind the emblem — on the dark
+   band it reads as a white sticker. Kill every background/shadow the DS or the UA can put on the
+   link or anything inside it, then draw our own ring. Ported from ugs-map-viewer. */
+.utds-header .utds-logo-wrapper,
+.utds-header .utds-logo-wrapper:hover,
+.utds-header .utds-title-wrapper,
+.utds-header .utds-title-wrapper:link,
+.utds-header .utds-title-wrapper:visited,
+.utds-header .utds-title-wrapper:hover,
+.utds-header .utds-title-wrapper:focus,
+.utds-header .utds-title-wrapper:focus-within,
+.utds-header .utds-title-wrapper:focus-visible,
+.utds-header .utds-title-wrapper:active,
+.utds-header .utds-title-wrapper *,
+.utds-header .utds-title-wrapper:hover *,
+.utds-header .utds-title-wrapper:focus * {
+  background: transparent !important;
+  box-shadow: none !important;
+  text-decoration: none !important;
+}
+.utds-header .utds-title-wrapper {
+  border-radius: 6px;
+}
+.utds-header .utds-title-wrapper:hover,
+.utds-header .utds-title-wrapper:focus,
+.utds-header .utds-title-wrapper:focus-visible {
+  outline: 2px solid hsl(var(--ring));   /* --ring is the UDS Utah blue */
+  outline-offset: 3px;
+}
+.dark .utds-header .utds-title-wrapper:hover,
+.dark .utds-header .utds-title-wrapper:focus,
+.dark .utds-header .utds-title-wrapper:focus-visible {
+  outline-color: hsl(var(--foreground));
+}
+
 /* Same reason for the DS footer: 269px of stacked links. `legal-footer.tsx` carries the required
    links as one line instead. The skip link keeps its focus behaviour but stops reserving 68px. */
 /* !important: the DS injects its stylesheet after ours, so an equal-specificity rule loses. */

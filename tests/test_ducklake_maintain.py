@@ -1,12 +1,14 @@
-"""DuckLake maintenance: compaction actually drains a small-file backlog.
+"""DuckLake maintenance: compaction drains a backlog, and the orphan sweep deletes only orphans.
 
-Both assertions here encode a behaviour that was verified against DuckDB 1.5.3 + DuckLake
-e6a3bd0a and that the previous implementation got wrong:
+Each of these encodes a behaviour verified against DuckDB 1.5.3 + DuckLake e6a3bd0a that a previous
+implementation got wrong:
 
   * `ducklake_merge_adjacent_files` compacts one batch per call, so it has to be looped — a single
     call leaves the backlog in place while returning a row per table, which reads like success.
   * Passing `min_file_size`/`max_file_size` turns the merge into a no-op. `compact()` must not pass
     them; this test fails if someone adds them back.
+  * `sweep_orphans` deletes whatever it cannot match to a catalog reference, so the path
+    normalization is a delete-the-warehouse bug if it drifts.
 """
 from __future__ import annotations
 
@@ -129,3 +131,39 @@ def test_orphaned_file_is_collected(lake):
         f"SELECT * FROM ducklake_delete_orphaned_files('{CATALOG}', cleanup_all => true, dry_run => true)"
     ).fetchall()
     assert [orphan] == [r[0] for r in found]
+
+
+# --- orphan sweep path normalization -------------------------------------------------------------
+# The sweep deletes anything under the data path it cannot match to a catalog reference, so a
+# normalization slip here is a delete-the-warehouse bug. These pin both shapes DuckLake can return.
+
+@pytest.fixture()
+def gs_data_path(monkeypatch):
+    monkeypatch.setattr(maintain.ducklake, "DATA_PATH", "gs://a-bucket/warehouse/ducklake/")
+    return "a-bucket", "warehouse/ducklake/"
+
+
+def test_data_path_parts_splits_bucket_and_prefix(gs_data_path):
+    assert maintain._data_path_parts() == gs_data_path
+
+
+def test_data_path_parts_none_for_local(monkeypatch):
+    monkeypatch.setattr(maintain.ducklake, "DATA_PATH", "/tmp/ducklake/")
+    assert maintain._data_path_parts() is None
+
+
+@pytest.mark.parametrize("data_file", [
+    "gs://a-bucket/warehouse/ducklake/emp/wells/f.parquet",   # full URI
+    "warehouse/ducklake/emp/wells/f.parquet",                 # already bucket-relative
+    "emp/wells/f.parquet",                                    # relative to the data path
+    "/warehouse/ducklake/emp/wells/f.parquet",                # leading slash
+])
+def test_as_object_path_normalizes_every_shape(data_file, gs_data_path):
+    bucket, prefix = gs_data_path
+    assert maintain._as_object_path(data_file, bucket, prefix) == "warehouse/ducklake/emp/wells/f.parquet"
+
+
+def test_sweep_skips_non_gcs_data_path(monkeypatch, capsys):
+    monkeypatch.setattr(maintain.ducklake, "DATA_PATH", "/tmp/ducklake/")
+    assert maintain.sweep_orphans(None, "w") == 0
+    assert "skipped" in capsys.readouterr().out

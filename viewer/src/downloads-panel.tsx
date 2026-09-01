@@ -5,7 +5,7 @@ import { useState } from "react";
 
 import type { ShapefileWarnings } from "./download";
 import { type ExportFormat, FORMATS } from "./export-formats";
-import { type Asset, isParquetAsset, parquetAsset, type StacDoc } from "./stac";
+import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "./stac";
 import { C } from "./ui";
 import { UiSelect } from "./ui/select";
 
@@ -31,10 +31,19 @@ const HINTS: Record<ExportFormat, string> = {
 /** `…/thing.parquet?x=1` → `parquet` */
 const extOf = (href: string) => href.split(/[?#]/)[0].match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase();
 
-/** `related` assets are skipped — the Related tables section already offers each one. */
+/**
+ * `related` assets are skipped — the Related tables section already offers each one.
+ *
+ * Zarr stores are skipped too: the href is a store PREFIX, not an object, so a plain GET returns
+ * the bucket's NoSuchKey XML. Nothing here can save one as a file — an Icechunk store is
+ * content-addressed chunks plus manifests, with no single object holding a variable or a
+ * timestep. It is read over HTTP, so per this file's own split it belongs in Services.
+ */
 const fileAssets = (item: StacDoc): [string, Asset][] =>
   Object.entries(item.assets ?? {})
-    .filter(([key, a]) => !SERVICE_KEYS.has(key) && !a.roles?.includes("related"));
+    .filter(([key, a]) => !SERVICE_KEYS.has(key)
+      && !a.roles?.includes("related")
+      && assetKind(a) !== "zarr");
 
 const TILE = "flex items-start justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 " +
   "text-left text-sm text-foreground no-underline hover:border-primary hover:text-primary disabled:opacity-50";

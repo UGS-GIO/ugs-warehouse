@@ -164,4 +164,33 @@ else
     --uri="${RUN_URI}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
 fi
 
+# --- reliability audit -----------------------------------------------------------------------
+# A push subscription with no dead-letter policy retries forever. That is not a hypothetical: in
+# August 2026 `ugs-warehouse-ingest-push` had a 600s ack deadline, no delivery cap and no backoff,
+# so a slow reingest saturated the service, got 429s, and was redelivered into itself until Pub/Sub
+# expired the message a day later — 3.97B GCS operations and ~$2.2k.
+#
+# Nothing catches a missing dead_letter_policy: it is an absent block, so neither the console nor
+# terraform nor a code review flags it. This does. Subscriptions this script owns are a hard
+# failure; everything else (Eventarc-managed, other repos) is reported but not fatal, since fixing
+# them is not this script's business.
+echo "→ audit: push subscriptions without a dead-letter policy"
+audit_fail=0
+while IFS=, read -r sub endpoint attempts; do
+  [ -z "${sub}" ] && continue          # not a push subscription
+  [ -z "${endpoint}" ] && continue
+  [ -n "${attempts}" ] && continue     # has a dead-letter policy
+  if [ "${sub}" = "${SUB}" ] || [ "${sub}" = "${RASTER_SUB}" ]; then
+    echo "  ✗ ${sub} — owned here and has NO dead-letter policy" >&2
+    audit_fail=1
+  else
+    echo "  ! ${sub} — no dead-letter policy (not owned by this script; retries are unbounded)"
+  fi
+done < <(gcloud pubsub subscriptions list --project="${PROJECT}" \
+  --format="csv[no-heading](name.basename(),pushConfig.pushEndpoint,deadLetterPolicy.maxDeliveryAttempts)")
+if [ "${audit_fail}" -ne 0 ]; then
+  echo "✗ a subscription this script owns has no delivery cap — re-run or fix before shipping" >&2
+  exit 1
+fi
+
 echo "✓ provisioned"

@@ -17,24 +17,33 @@ REL = '"mapping"."huc12_current"'
 SELECT_LIST = '"id", ST_AsBinary("geom") AS geom_wkb, ST_SRID("geom") AS target_epsg'
 
 
-class _Con:
-    """Stands in for the DuckDB connection: answers the size probe, or raises like a failed one."""
+BLOCK = 8192
 
-    def __init__(self, pages: int | None):
+
+class _Con:
+    """Stands in for the DuckDB connection: answers the size probe, or raises like a failed one.
+
+    `toast` is the out-of-line geometry PostGIS keeps outside the heap — the thing that made the
+    first version of this mis-size huc12.
+    """
+
+    def __init__(self, pages: int | None, toast: int = 0):
         self.pages = pages
+        self.toast = toast
 
     def execute(self, sql: str):
         if self.pages is None:
             raise duckdb.Error("no such table")
-        return _Result(self.pages)
+        heap = self.pages * BLOCK
+        return _Result(self.pages, heap, heap + self.toast)
 
 
 class _Result:
-    def __init__(self, pages: int):
-        self.pages = pages
+    def __init__(self, pages, heap, total):
+        self.row = (pages, heap, total)
 
     def fetchone(self):
-        return (self.pages,)
+        return self.row
 
 
 def _ranges(chunks: list[str]) -> list[tuple[int, int | None]]:
@@ -94,3 +103,23 @@ def test_every_chunk_carries_the_select_list(monkeypatch, pages):
     for chunk in source._scan_chunks(_Con(pages=pages), REL, SELECT_LIST):
         assert SELECT_LIST in chunk
         assert REL in chunk
+
+
+def test_toast_heavy_table_is_chunked_even_with_a_tiny_heap(monkeypatch):
+    """huc12: polygons live in TOAST, so the heap looks small. Sizing on the heap alone returned a
+    single unchunked scan and the hydrate OOMed on chunk 0."""
+    monkeypatch.setattr(source, "PAGES_PER_CHUNK", 2000)
+    monkeypatch.setattr(source, "CHUNK_TARGET_BYTES", 16 * 1024 * 1024)
+    # 200 heap pages (1.6MB) but 400MB of TOASTed geometry.
+    chunks = source._scan_chunks(_Con(pages=200, toast=400 * 1024 * 1024), REL, SELECT_LIST)
+    assert len(chunks) > 1, "a TOAST-heavy table must still be chunked"
+    assert all("ctid" in c for c in chunks)
+
+
+def test_chunk_width_shrinks_as_toast_grows(monkeypatch):
+    """More out-of-line bytes per heap page means fewer heap pages per chunk."""
+    monkeypatch.setattr(source, "PAGES_PER_CHUNK", 2000)
+    monkeypatch.setattr(source, "CHUNK_TARGET_BYTES", 16 * 1024 * 1024)
+    light = _ranges(source._scan_chunks(_Con(pages=4000, toast=0), REL, SELECT_LIST))
+    heavy = _ranges(source._scan_chunks(_Con(pages=4000, toast=1024 * 1024 * 1024), REL, SELECT_LIST))
+    assert (heavy[0][1] - heavy[0][0]) < (light[0][1] - light[0][0])

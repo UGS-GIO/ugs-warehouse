@@ -12,6 +12,7 @@ stays inside DuckDB, no pyarrow. Sinks then read the materialized table.
 from __future__ import annotations
 
 import os
+from collections.abc import Sequence
 
 import duckdb
 
@@ -72,7 +73,7 @@ def _select(source_rel: str) -> str:
     return f"SELECT * EXCLUDE (geom_wkb), {geom_hydrate} AS geom FROM {source_rel}"
 
 
-def materialize(con: duckdb.DuckDBPyConnection, source_rel: str,
+def materialize(con: duckdb.DuckDBPyConnection, source_rel: str | Sequence[str],
                 name: str = "transformed") -> str:
     """Materialize the transform ONCE into a DuckDB table, hilbert-ordered, without ever sorting the
     wide rows: DuckDB spills a narrow sort but OOMs a wide one, so only (rowid, hilbert, hash) is
@@ -83,7 +84,12 @@ def materialize(con: duckdb.DuckDBPyConnection, source_rel: str,
     """
     hydrated, ranks = f"_{name}_hydrated", f"_{name}_ranks"
 
-    con.execute(f"CREATE OR REPLACE TABLE {hydrated} AS {_select(source_rel)}")
+    # A str is one scan; a sequence is pre-partitioned scans, hydrated one at a time so the
+    # geometry of the whole table never has to fit at once.
+    rels = [source_rel] if isinstance(source_rel, str) else list(source_rel)
+    con.execute(f"CREATE OR REPLACE TABLE {hydrated} AS {_select(rels[0])}")
+    for rel in rels[1:]:
+        con.execute(f"INSERT INTO {hydrated} {_select(rel)}")
     con.execute(
         f"CREATE OR REPLACE TABLE {ranks} AS "
         f"SELECT rid, row_number() OVER (ORDER BY h, hsh) AS feature_id FROM ("

@@ -112,3 +112,29 @@ def test_intermediate_tables_are_cleaned_up():
     ).fetchone()[0]
     assert left == 0
     con.close()
+
+
+def test_partitioned_scans_give_the_same_result_as_one_scan():
+    """Chunking the read must not change what lands: same ids, same order, same rows.
+
+    It does NOT assert the memory benefit — a local table streams fine either way, so the real
+    huc12 failure (a buffered postgres_query result) cannot be reproduced here.
+    """
+    con = _con()
+    con.execute("""
+        CREATE OR REPLACE TABLE src AS
+        SELECT i, repeat('x', 60) AS pad,
+               ST_Point(-112 + (i % 1000) / 1000.0, 39 + (i % 997) / 997.0) AS geom
+        FROM range(20000) s(i)
+    """)
+    cols = "i, pad, ST_AsWKB(geom) AS geom_wkb, 4326 AS target_epsg"
+    whole = f"(SELECT {cols} FROM src)"
+    parts = [f"(SELECT {cols} FROM src WHERE i >= {lo} AND i < {lo + 5000})"
+             for lo in range(0, 20000, 5000)]
+
+    transform.materialize(con, whole, name="one_scan")
+    transform.materialize(con, parts, name="partitioned")
+
+    assert _ids(con, "partitioned") == _ids(con, "one_scan")
+    assert _is_physically_ordered(con, "partitioned")
+    con.close()

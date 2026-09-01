@@ -11,6 +11,7 @@ import { AssetChips } from "./asset-viewer";
 import { rootGroupOf } from "./catalog";
 import { createComment } from "./comments";
 import { ItemDetail } from "./item-detail";
+import { author, collectionLabel, county, dateOf, fmtDate, scale, series, title, typeOf, year } from "./item-view";
 import { PageHero } from "./page-hero";
 import { T } from "./page";
 import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "./paging";
@@ -44,35 +45,23 @@ const ROOT_GROUPS = [
 const BADGE_KEYS = ["ugs:series", "ugs:pub_type", "ugs:topic", "ugs:scale", "ugs:author"];
 
 
-const idFromHref = (href: string) => href.split("/").slice(-2)[0];
 const props = (it: ItemRef) => it.data?.properties ?? {};
 // Survey Notes volume (warehouse ugs:volume, from SNT-{vol}-{issue}) → group issues under it.
 const gVol = (it: ItemRef): number | null => {
   const v = props(it)["ugs:volume"];
   return typeof v === "number" ? v : null;
 };
-// The STAC item id IS the publication series id (DS-8, OFR-647, …) / the layer stem.
-const gSeries = (it: ItemRef) => String(it.data?.id ?? idFromHref(it.href));
-// collId is the unique collection key (e.g. `ugs-publications/B`); show just the leaf folder as label.
-const gColl = (it: ItemRef) => it.collId.split("/").pop() ?? it.collId;
-const gTitle = (it: ItemRef) => String(props(it).title ?? it.data?.id ?? idFromHref(it.href));
-const gDate = (it: ItemRef) => (typeof props(it).datetime === "string" ? (props(it).datetime as string).slice(0, 10) : "");
-const gYear = (it: ItemRef): number | null => { const y = parseInt(gDate(it).slice(0, 4), 10); return Number.isFinite(y) ? y : null; };
-const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-// Show the date precision we actually have. UGS pubs carry year-only (stored as a Jan-1 placeholder)
-// or year+month; the day is never real — so don't render a misleading "2026-01-01". Sorting still uses
-// the raw ISO from gDate; this is display-only.
-const fmtDate = (iso: string): string => {
-  if (!iso) return "";
-  const [y, m, d] = iso.split("-");
-  if (m === "01" && d === "01") return y;                  // year-only placeholder → just the year
-  if (d === "01") return `${MONTHS[+m - 1] ?? m} ${y}`;    // month precision → "Sep 2026"
-  return iso;                                              // genuine full date
-};
-const gType = (it: ItemRef) => String(props(it)["ugs:pub_type"] ?? props(it)["ugs:series"] ?? props(it)["ugs:topic"] ?? "");
-const gScale = (it: ItemRef) => String(props(it)["ugs:scale"] ?? "");
-const gAuthor = (it: ItemRef) => String(props(it)["ugs:author"] ?? "");
-const gCounty = (it: ItemRef) => String(props(it)["ugs:county"] ?? "");
+// The generic item getters live in item-view.ts (the one source of truth, shared with the discovery
+// core). Thin local aliases keep the rest of this module reading gTitle/gSeries/gType/… unchanged.
+const gSeries = series;
+const gColl = (it: ItemRef) => collectionLabel(it.collId);
+const gTitle = title;
+const gDate = dateOf;
+const gYear = year;
+const gType = typeOf;
+const gScale = scale;
+const gAuthor = author;
+const gCounty = county;
 // Bin a free-text publication scale into a tier (matches the raster-mosaic tiers). "" = unknown.
 const scaleTierOf = (it: ItemRef): string => {
   const s = gScale(it).replace(/,/g, "").toLowerCase();
@@ -605,7 +594,7 @@ export function Browse(props: {
   if (collectionId && itemSelected) {
     return (
       <div className={C.wrap}>
-        <ItemDetail collectionId={collectionId} item={props.item}
+        <ItemDetail collectionId={collectionId} item={props.item} layout="page"
           onBack={props.onBackToItems} onMap={props.onViewMap} />
       </div>
     );

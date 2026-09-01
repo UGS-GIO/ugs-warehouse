@@ -8,7 +8,7 @@ import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
 import { CheckIcon, CopyIcon, copyCatalogUrl } from "./stac-url-chip";
-import { getTheme, setTheme, type Theme, useIsDark } from "./theme";
+import { getTheme, setTheme, type Theme } from "./theme";
 
 const THEMES: { value: Theme; label: string; icon: string }[] = [
   { value: "light", label: "Light", icon: "☀" },
@@ -21,10 +21,13 @@ export type NavPage = { id: string; label: string; onSelect: () => void };
 const ITEM = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-muted";
 const HEADING = "px-2 py-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground";
 
-export function NavMenu({ pages, current, catalogUrl }: { pages: NavPage[]; current: string; catalogUrl?: string }) {
+export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
+  pages: NavPage[];      // the primary tabs — shown here only below md, where the tab row is hidden
+  overflow?: NavPage[];  // secondary views (Architecture/Guide/Developers/Review) — always in the menu
+  current: string; catalogUrl?: string;
+}) {
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
-  const dark = useIsDark();
   const pick = (value: Theme) => {
     setTheme(value);
     setThemeState(value);
@@ -37,21 +40,21 @@ export function NavMenu({ pages, current, catalogUrl }: { pages: NavPage[]; curr
   return (
     // Closing resets the copy state — the menu's own lifetime is the feedback's, so no timer.
     <Menu.Root onOpenChange={(open) => !open && setCopied("idle")}>
-      {/* One menu, two faces: a hamburger below md (it carries the views too), and the current
-          theme's own icon on desktop, where the views are already tabs. */}
+      {/* One menu, two faces: a hamburger below md (it carries the views too), and a labeled
+          "More" on desktop. A bare theme icon here hid Architecture/Guide/Developers behind
+          something that read as a light-switch — the word is what makes them findable. */}
       <Menu.Trigger
-        aria-label={pages.length ? "Menu" : "Theme"}
-        className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:text-foreground md:h-8 md:w-8"
+        aria-label={pages.length ? "Menu" : "More"}
+        className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground hover:text-foreground md:h-8 md:w-auto md:gap-1 md:px-2"
       >
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
           strokeLinecap="round" strokeLinejoin="round" aria-hidden className="md:hidden">
           <path d="M3 6h18M3 12h18M3 18h18" />
         </svg>
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
+        <span className="hidden text-sm md:inline">More</span>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
           strokeLinecap="round" strokeLinejoin="round" aria-hidden className="hidden md:block">
-          {dark
-            ? <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79Z" />
-            : <><circle cx="12" cy="12" r="4" /><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M6.34 17.66l-1.41 1.41M19.07 4.93l-1.41 1.41" /></>}
+          <path d="m6 9 6 6 6-6" />
         </svg>
       </Menu.Trigger>
       <Menu.Portal>
@@ -62,6 +65,21 @@ export function NavMenu({ pages, current, catalogUrl }: { pages: NavPage[]; curr
               <div className="md:hidden">
                 <div className={HEADING}>Views</div>
                 {pages.map((p) => (
+                  <Menu.Item key={p.id} onClick={p.onSelect}
+                    className={`${ITEM} ${p.id === current ? "text-primary" : ""}`}>
+                    {p.label}
+                  </Menu.Item>
+                ))}
+                <Menu.Separator className="my-1 h-px bg-border" />
+              </div>
+            )}
+            {/* Secondary views live only here (both desktop + mobile) so the tab row never overflows. */}
+            {overflow.length > 0 && (
+              <div>
+                {/* On desktop the trigger already says "More"; the heading only earns its keep
+                    below md, where it separates these from the primary Views. */}
+                <div className={`${HEADING} md:hidden`}>More</div>
+                {overflow.map((p) => (
                   <Menu.Item key={p.id} onClick={p.onSelect}
                     className={`${ITEM} ${p.id === current ? "text-primary" : ""}`}>
                     {p.label}

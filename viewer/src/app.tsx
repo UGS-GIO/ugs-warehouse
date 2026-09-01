@@ -2,7 +2,7 @@ import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput 
 import { useIsFetching } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { lazy, Suspense, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { type CatalogDoc } from "./search";
+import { type CatalogDoc } from "./search-index";
 import utahLogo from "./assets/utah-logo.png";
 import { Browse, type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
 import { layerCollectionIds } from "./catalog";
@@ -11,6 +11,7 @@ import { LegalFooter } from "./legal-footer";
 import { LayerList, type LayerRow } from "./layer-list";
 import { MapLegend } from "./map-legend";
 import { MapShell } from "./map-shell";
+import { Landing } from "./landing";
 import { NavMenu } from "./nav-menu";
 import { PreviewMapProvider } from "./preview-map";
 import { PropertyTable } from "./property-table";
@@ -28,6 +29,12 @@ const Guide = lazy(() => import("./guide").then((m) => ({ default: m.Guide })));
 const ReviewDashboard = lazy(() => import("./review-dashboard").then((m) => ({ default: m.ReviewDashboard })));
 // maplibre is ~1.5MB of the bundle and the catalog, search and doc views never draw a map.
 const ItemMap = lazy(() => import("./map").then((m) => ({ default: m.ItemMap })));
+// The full-width Discover view — lazy so its MiniSearch index + maplibre stay out of the main bundle.
+const DiscoveryView = lazy(() => import("./discovery-view").then((m) => ({ default: m.DiscoveryView })));
+// Preview reuses the heavy asset-viewer (deck.gl/duckdb); Developers is light but stays behind the
+// same Suspense boundary. Both lazy so they never touch the main bundle or the landing paint.
+const PreviewView = lazy(() => import("./preview-view").then((m) => ({ default: m.PreviewView })));
+const Developers = lazy(() => import("./developers-view").then((m) => ({ default: m.Developers })));
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name
 // that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
@@ -47,9 +54,17 @@ const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its fo
 // modifier/middle-click opens the catalog in a new tab. Uses the document's own pathname (…/index.html
 // in prod) to match router.tsx's basepath, so the link points at a real object (no NoSuchKey).
 const ROOT_HREF = location.pathname || "/";
+// The catalog page for an item, as a plain URL — lets a drawer/card link be a real <a> (new-tab,
+// middle-click) while its onClick still does in-app nav. Same params the router reads.
+const catalogItemHref = (c?: string, i?: string) => {
+  const sp = new URLSearchParams({ view: "catalog" });
+  if (c) sp.set("c", c);
+  if (i) sp.set("i", i);
+  return `${ROOT_HREF}?${sp}`;
+};
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-type View = "catalog" | "map" | "arch" | "guide" | "search" | "review";
+type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "search" | "developers" | "preview" | "review";
 type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
@@ -84,19 +99,25 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   return null;
 }
 
-// One list, rendered as tabs on desktop and as menu items on mobile.
-const VIEWS: { id: View; label: string }[] = [
-  { id: "catalog", label: "Catalog" },
+// Primary tabs: the desktop tab row + the mobile menu's "Views". Discover leads (it's the star).
+const PRIMARY_VIEWS: { id: View; label: string }[] = [
+  { id: "discover", label: "Discover" },
   { id: "map", label: "Map" },
+  { id: "catalog", label: "Catalog" },
   { id: "search", label: "Search" },
+];
+// Secondary views — always in the NavMenu overflow (desktop + mobile) so the tab row never overflows.
+const OVERFLOW_VIEWS: { id: View; label: string }[] = [
   { id: "arch", label: "Architecture" },
   { id: "guide", label: "Guide" },
+  { id: "developers", label: "Developers" },
   ...(IS_REVIEW ? [{ id: "review" as const, label: "Review" }] : []),
 ];
 
 const tab = (on: boolean) =>
   "cursor-pointer border-b-2 px-2 py-1 text-sm transition-colors "
   + (on ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground");
+
 const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
 
 function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
@@ -161,22 +182,33 @@ export function App() {
   const navigate = useNavigate() as unknown as (opts: {
     replace?: boolean; search: (prev: Record<string, unknown>) => Record<string, unknown>;
   }) => void;
-  const view: View = sp.view ?? "catalog";
+  // Param-less URL → the Landing front door, EXCEPT a legacy deep link that carries a catalog item
+  // (?c=&i= with no view=) still opens the catalog detail it always did — so old links keep working.
+  const view: View = sp.view ?? (sp.i || sp.c ? "catalog" : "landing");
   const collectionUrl = sp.c;
   const itemUrl = sp.i;
   const layerIds = parseLayerParam(sp.l);
   const seriesSel = sp.s ? sp.s.split(",").filter(Boolean) : undefined;
 
-  // Navigate by setting the nav search params; everything else in the search is preserved. push for
-  // user nav (back/forward works via the router), replace for programmatic syncs.
+  // Navigate by setting the nav search params; override/spike params are preserved. push for user nav
+  // (back/forward works via the router), replace for programmatic syncs. The Discover-owned keys
+  // (q/collections/category/…) are stripped when leaving Discover so its filters don't linger on
+  // another view, and preserved when staying in Discover (open/close a drawer over the filtered set).
   const go = (next: Nav, push = true) => {
     navigate({
       replace: !push,
       search: (prev) => {
-        const { view: _v, c: _c, i: _i, l: _l, s: _s, ...rest } = prev;  // keep override params
+        const { view: _v, c: _c, i: _i, l: _l, s: _s,
+          q, collections, category, types, formats, geometry, sort, layout, density, area,
+          ...rest } = prev;  // keep override params (rest); Discover keys re-added only when staying
+        // Preview is only ever reached from Discover, so carry the filter state through it → Back
+        // restores the filtered result set the user came from.
+        const discover = next.view === "discover" || next.view === "preview"
+          ? { q, collections, category, types, formats, geometry, sort, layout, density, area } : {};
         return {
           ...rest,
-          view: next.view === "catalog" ? undefined : next.view,
+          ...discover,
+          view: next.view === "landing" ? undefined : next.view,
           c: next.c || undefined,
           i: next.i || undefined,
           l: layerParam(next.l),
@@ -335,7 +367,9 @@ export function App() {
   ];
   const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
 
-  const mapColls = view === "map" ? leafColls : [];
+  // The Map, Discover AND Landing views load every leaf collection's index (all items → the map +
+  // facets + the landing tiles/recent strip). Landing reuses this exact cached set — no extra fetch.
+  const mapColls = view === "map" || view === "discover" || view === "landing" ? leafColls : [];
   const mapIdx = useIndexes(mapColls.map((c) => ({ id: c.id, href: c.href })));
   // Same collection.json → item-links fallback the browse list uses. Without it a federated
   // catalog contributes no layers at all: it publishes no items.json, so the index is empty and
@@ -355,6 +389,8 @@ export function App() {
   // they arrive only that way, and always after the indexes.
   const mapLoadKey = mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
     + `|fb:${mapFbDocs.docs.filter((d) => d?.data).length}`;
+  // Still-streaming signal for the Landing tiles/recent strip, so counts aren't shown mid-crawl.
+  const mapItemsLoading = mapColls.length > 0 && (mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
   const layerRows: LayerRow[] = useMemo(() => mapItems
@@ -405,6 +441,18 @@ export function App() {
   // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
   // collection key from the item href so it resolves + the URL stays tidy.
   const openCover = (href: string) => go({ view, c: collKeyOf(href), i: idOf(href) });
+  // Landing → Discover: open an item's drawer, or start Discover on a query / a category tile (each
+  // clears any stale Discover keys so the handoff is a clean, shareable ?view=discover&…).
+  const openInDiscover = (href: string) => go({ view: "discover", c: collKeyOf(href), i: idOf(href) });
+  const openDiscoverSearch = (opts: { q?: string; category?: string }) =>
+    navigate({
+      search: (prev) => {
+        const { view: _v, c: _c, i: _i, l: _l, s: _s,
+          q: _q, collections: _co, category: _ca, types: _ty, formats: _fo, geometry: _ge,
+          sort: _so, layout: _la, density: _de, area: _ar, ...rest } = prev;
+        return { ...rest, view: "discover", q: opts.q || undefined, category: opts.category || undefined };
+      },
+    });
   const setSeries = (codes: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: layerIds, s: codes });
   const toggleLayer = (id: string) => {
     const set = new Set(layerIds ?? []);
@@ -445,6 +493,10 @@ export function App() {
   // Catalog/detail = a document → the page scrolls naturally, header sticks. (No more
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
+  // The Map, Discover and Preview views LOCK the viewport (a full-height split/shell whose inner panes
+  // scroll) — unlike the document views (landing/catalog/search/developers/…), which scroll the page
+  // under a sticky header.
+  const lockedView = mapView || view === "discover" || view === "preview";
   // Same cached queries the map itself reads (TanStack dedupes by key) — the legend needs the bound
   // style layers, and the drawer renders outside the map component.
   const styleCache = useStyleLayersFor(activeLayers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
@@ -452,25 +504,22 @@ export function App() {
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
     <PreviewMapProvider>
-    <div className={mapView
+    <div className={lockedView
       ? "grid h-full grid-cols-1 grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
       : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
-      <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${mapView ? "" : "sticky top-0 z-20"}`}>
+      <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
         {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
             plain click still does in-app SPA nav. href is the viewer root (no search params). */}
         <a href={ROOT_HREF} title="Home — catalog root"
           onClick={(e) => {
             if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
             e.preventDefault();
-            go({ view: "catalog" });
+            go({ view: "landing" });
           }}
-          className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
-          {/* The mark is light-optimized, so it rides a light plate — invisible on the bar in light
-              mode, a subtle chip in dark. Same treatment as the soil-water app. */}
-          <span className="flex shrink-0 items-center rounded bg-white p-0.5">
-            <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="Utah Geological Survey" className="h-7 w-7" />
-          </span>
+          className="flex items-center whitespace-nowrap hover:opacity-80">
+          {/* Wordmark only — the state header above already carries the UGS beehive mark, and a
+              second copy 60px below it read as a duplicate (and, in dark mode, as a white sticker). */}
           <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </a>
         {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
@@ -479,15 +528,17 @@ export function App() {
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
               below md — five tabs and a phone don't share a row. */}
           <div className="hidden gap-1 md:flex">
-            {VIEWS.map((v) => (
+            {PRIMARY_VIEWS.map((v) => (
               <button key={v.id} type="button" aria-current={view === v.id ? "page" : undefined}
                 className={tab(view === v.id)} onClick={() => setView(v.id)}>{v.label}</button>
             ))}
           </div>
           {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}
-          {/* Always mounted: it carries the theme picker, and below md the views as well. */}
+          {/* Always mounted: it carries the theme picker + the overflow views, and below md the
+              primary tabs as well. */}
           <NavMenu current={view} catalogUrl={CATALOG_URL}
-            pages={VIEWS.map((v) => ({ id: v.id, label: v.label, onSelect: () => setView(v.id) }))} />
+            pages={PRIMARY_VIEWS.map((v) => ({ id: v.id, label: v.label, onSelect: () => setView(v.id) }))}
+            overflow={OVERFLOW_VIEWS.map((v) => ({ id: v.id, label: v.label, onSelect: () => setView(v.id) }))} />
         </div>
       </header>
 
@@ -503,6 +554,46 @@ export function App() {
         <Architecture />
       ) : view === "search" ? (
         <ArticleSearch catalog={catalogDocs} onOpen={(collId, itemId) => go({ view: "catalog", c: collId, i: itemId })} />
+      ) : view === "discover" ? (
+        // Full-width discovery split — same loaded item set as the map, its own facet rail / cards /
+        // synced map. Opening a card sets ?i= (staying in Discover); App resolves the full item doc
+        // (below, via ?c=/?i=) → the drawer. "View on map" hands off to the Map view.
+        <DiscoveryView
+          items={mapItems}
+          itemsKey={mapLoadKey}
+          onOpenItem={openItem}
+          itemSelected={Boolean(itemUrl)}
+          selectedItem={item.data}
+          selectedCollectionId={collectionId}
+          onCloseItem={() => go({ view })}
+          onViewOnMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
+          onExplore={() => go({ view: "preview", c: collectionUrl, i: itemUrl })}
+          onFullPage={() => go({ view: "catalog", c: collectionUrl, i: itemUrl })}
+          fullPageHref={catalogItemHref(collectionUrl, itemUrl)}
+        />
+      ) : view === "landing" ? (
+        // The param-less front door. Reuses the same loaded item set as Map/Discover (mapItems) — no
+        // extra fetch — for its category-tile counts + "recently updated" strip. Everything hands off
+        // to Discover: the search box, the tiles, and opening a card.
+        <Landing
+          items={mapItems}
+          itemsKey={mapLoadKey}
+          loading={mapItemsLoading}
+          onSearch={(text) => openDiscoverSearch({ q: text })}
+          onOpenCategory={(key) => openDiscoverSearch({ category: key })}
+          onOpenItem={openInDiscover}
+        />
+      ) : view === "developers" ? (
+        <Developers catalogUrl={CATALOG_URL} groups={rootChildren} />
+      ) : view === "preview" ? (
+        // The selected item full-screen, hosting the SAME Preview as the drawer/detail page inside the
+        // already-mounted preview map. Back returns to the Discover drawer it was launched from.
+        <PreviewView
+          item={item.data}
+          loading={item.isLoading}
+          onBack={() => go({ view: "discover", c: collectionUrl, i: itemUrl })}
+          onMap={() => go({ view: "map", c: collectionUrl, i: itemUrl, l: itemUrl ? [idOf(itemUrl)] : layerIds })}
+        />
       ) : !mapView ? (
         <Browse
           cards={cardsWithCovers}
@@ -551,7 +642,7 @@ export function App() {
         />
       )}
       </Suspense>
-      {!mapView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
+      {!lockedView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
     </div>
     </PreviewMapProvider>
   );

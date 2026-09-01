@@ -4,7 +4,6 @@
 // so a query hits article bodies AND any publication or layer. Results link the PDF page and the
 // in-app catalog detail.
 import { useQuery } from "@tanstack/react-query";
-import MiniSearch from "minisearch";
 import { type ReactNode, useMemo, useState } from "react";
 
 import { searchPubs } from "./ftsearch";
@@ -12,6 +11,7 @@ import {
   baseTerms, fieldInput, isEmptyQuery, matchesQuery, parseQuery, type Query,
   type SearchDoc, serializeQuery, withExcludes, withField, withSinglePhrase, withTerms,
 } from "./query";
+import { type Article, buildIndex, type CatalogDoc, type Hit } from "./search-index";
 
 // A small toggle chip for the search filters.
 function Chip({ on, onClick, children }: { on: boolean; onClick: () => void; children: ReactNode }) {
@@ -28,17 +28,8 @@ export const CORPUS_URL = new URL(
   location.href,
 ).href;
 
-export type Article = {
-  id: string; sid: string; volume: number | null; issue?: string;
-  pdf?: string; title: string; page: number | null; text: string; topic?: string;
-};
-// A catalog item flattened for search (pub or vector layer). Passed in from App's loaded indexes.
-export type CatalogDoc = {
-  id: string; collId: string; itemId: string; title: string; keywords?: string; meta?: string;
-};
-type Hit = { id: string; kind: "article" | "item"; title: string; text?: string; keywords?: string;
-  sid?: string; pdf?: string; page?: number | null; volume?: number | null; issue?: string;
-  collId?: string; itemId?: string; topic?: string; score: number };
+// Article / CatalogDoc / Hit + buildIndex now live in ./search-index (imported above) so the Discover
+// view builds the SAME index; consumers import those types from ./search-index.
 
 const seriesCode = (sid: string) => sid.match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? sid;
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
@@ -284,28 +275,6 @@ function AdvancedPanel({ q, onChange, options }: {
         options={options.colls} onChange={(v) => set(withField(query, "coll", v))} />
     </div>
   );
-}
-
-// Build the combined index + a flat doc list (the latter powers field-only queries like `series:GQ`,
-// which have no keyword to hand MiniSearch). Plain function, memoized by the caller.
-function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
-  const docs: Hit[] = [
-    ...articles.map((a) => ({
-      id: a.id, kind: "article" as const, title: a.title, text: a.text, keywords: "",
-      sid: a.sid, pdf: a.pdf, page: a.page, volume: a.volume, issue: a.issue, topic: a.topic, score: 0,
-    })),
-    ...catalog.map((c) => ({
-      id: c.id, kind: "item" as const, title: c.title, text: c.meta ?? "", keywords: c.keywords ?? "",
-      collId: c.collId, itemId: c.itemId, page: null, score: 0,
-    })),
-  ];
-  const ms = new MiniSearch({
-    fields: ["title", "text", "keywords"],
-    storeFields: ["kind", "title", "text", "keywords", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic"],
-    searchOptions: { boost: { title: 4 }, prefix: true, fuzzy: 0.2, combineWith: "AND" },
-  });
-  ms.addAll(docs);
-  return { index: ms, docs };
 }
 
 function ArticleHit({ r, q, openPub }: { r: Hit; q: string; openPub: (id: string) => void }) {

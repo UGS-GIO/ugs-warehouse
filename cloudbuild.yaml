@@ -671,9 +671,10 @@ steps:
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=PGPASSWORD=${_SECRET}:latest
       - --set-env-vars=^|^SOURCE_BACKEND=postgres|POSTGRES_DSN=host=/cloudsql/${_SQL_INSTANCE} dbname=seamlessgeolmap user=schema_owner|DUCKLAKE_DATA_PATH=${_DATA_PATH}|DUCKDB_MAX_MEMORY=384MB
-      # 512Mi container, DuckDB was capped at 128MB — the materialized table alone filled it.
       # ingest runs synchronously inside the push handler — give it room past the 300s default
       - --timeout=3600
+      # 384MB DuckDB + Python does not fit 512Mi — Cloud Run SIGKILLed it (signal 9).
+      - --memory=1Gi
 
   # Ops console — gated by direct Cloud Run IAP (--iap, no load balancer). Grant users the
   # iap.httpsResourceAccessor role on the service out-of-band. The runtime SA (_ADMIN_SA) also needs

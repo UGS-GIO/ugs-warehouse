@@ -195,6 +195,61 @@ def sweep_orphans(con: duckdb.DuckDBPyConnection, cat: str, *,
     return len(orphans)
 
 
+def drop_dangling_tables(con: duckdb.DuckDBPyConnection, cat: str, targets: list[str], *,
+                         dry_run: bool = False) -> int:
+    """Drop DuckLake tables whose referenced parquet is entirely absent from GCS.
+
+    A table pointing at files that no longer exist is unreadable, and its dead reference blocks
+    sweep_orphans (which refuses to delete while any reference is unmatched). Dropping it lets the
+    nightly sweep run unattended instead of needing --allow-missing-refs forever.
+
+    Refuses if ANY of the table's files still exist, so this cannot be used to delete live data.
+    """
+    parts = _data_path_parts()
+    if parts is None:
+        raise SystemExit(f"--drop-table needs a gs:// data path, got {ducklake.DATA_PATH}")
+    bucket, prefix = parts
+
+    import obstore as obs
+    from obstore.store import GCSStore
+    store = GCSStore(bucket=bucket)
+
+    dropped = 0
+    for target in targets:
+        schema, _, table = target.partition(".")
+        if not schema or not table:
+            raise SystemExit(f"--drop-table expects SCHEMA.TABLE, got {target!r}")
+
+        present = []
+        for (data_file,) in con.execute(
+            f"SELECT data_file FROM ducklake_list_files('{cat}', '{table}', schema => '{schema}')"
+        ).fetchall():
+            path = _as_object_path(data_file, bucket, prefix)
+            try:
+                obs.head(store, path)
+            except Exception:  # noqa: BLE001 — absent is the whole point
+                continue
+            present.append(path)
+
+        if present:
+            raise RuntimeError(
+                f"refusing to drop {target}: {len(present)} of its file(s) still exist in GCS "
+                f"(e.g. {present[0]}). This flag is only for tables whose data is already gone."
+            )
+
+        print(f"[maintain] drop_dangling_tables: {target} references no existing file"
+              f"{' (dry-run, not dropped)' if dry_run else ' — dropping'}")
+        if not dry_run:
+            con.execute(f"DROP TABLE {cat}.{_q(schema)}.{_q(table)}")
+        dropped += 1
+    return dropped
+
+
+def _q(name: str) -> str:
+    """Double-quote a DuckDB identifier."""
+    return '"' + name.replace('"', '""') + '"'
+
+
 def _tables(con: duckdb.DuckDBPyConnection, cat: str) -> list[tuple[str, str]]:
     return [
         (r[0], r[1]) for r in con.execute(
@@ -308,6 +363,9 @@ def main() -> int:
     ap.add_argument("--budget-seconds", type=int, default=DEFAULT_BUDGET_SECONDS,
                     help=f"wall-clock cap on the compaction loop (default {DEFAULT_BUDGET_SECONDS}, "
                          "or $DUCKLAKE_MERGE_BUDGET_SECONDS)")
+    ap.add_argument("--drop-table", action="append", metavar="SCHEMA.TABLE", default=[],
+                    help="drop a DuckLake table whose parquet is already gone from GCS, then exit "
+                         "(refuses if any of its files still exist). Repeatable.")
     ap.add_argument("--allow-missing-refs", action="store_true",
                     help="proceed when a referenced file is absent from the listing (confirm each "
                          "is a dangling catalog entry first — see sweep_orphans)")
@@ -320,6 +378,14 @@ def main() -> int:
         con = duckdb.connect(":memory:")
         try:
             return report(con, ducklake.attach(con))
+        finally:
+            con.close()
+
+    if args.drop_table:
+        con = duckdb.connect(":memory:")
+        try:
+            drop_dangling_tables(con, ducklake.attach(con), args.drop_table, dry_run=args.dry_run)
+            return 0
         finally:
             con.close()
 

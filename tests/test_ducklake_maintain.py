@@ -167,3 +167,23 @@ def test_sweep_skips_non_gcs_data_path(monkeypatch, capsys):
     monkeypatch.setattr(maintain.ducklake, "DATA_PATH", "/tmp/ducklake/")
     assert maintain.sweep_orphans(None, "w") == 0
     assert "skipped" in capsys.readouterr().out
+
+
+# --- dropping a dangling table -------------------------------------------------------------------
+
+def test_drop_table_rejects_bad_target(lake, monkeypatch):
+    con, _ = lake
+    monkeypatch.setattr(maintain.ducklake, "DATA_PATH", "gs://a-bucket/warehouse/ducklake/")
+    with pytest.raises(SystemExit):
+        maintain.drop_dangling_tables(con, CATALOG, ["no_schema_separator"])
+
+
+def test_drop_table_requires_gcs_data_path(lake, monkeypatch):
+    con, _ = lake
+    monkeypatch.setattr(maintain.ducklake, "DATA_PATH", "/tmp/ducklake/")
+    with pytest.raises(SystemExit):
+        maintain.drop_dangling_tables(con, CATALOG, ["emp.wells"])
+
+
+def test_quote_identifier_escapes_quotes():
+    assert maintain._q('we"ird') == '"we""ird"'

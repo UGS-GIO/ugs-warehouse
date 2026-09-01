@@ -39,6 +39,17 @@
               Force rebuild — ignore the unchanged-skip (rebuilds every topic)
             </label>
             {% endif %}
+            {% if job.modes %}
+            {# Read-only variants — no confirm, they rewrite and delete nothing. #}
+            <div class="mt-2 flex items-center gap-1.5 flex-wrap">
+              <span class="text-xs text-slate-400">Look first:</span>
+              {% for value, label in job.modes %}
+              <button class="rounded border border-slate-300 text-slate-700 text-xs px-2 py-1 hover:bg-slate-50 disabled:opacity-50"
+                hx-post="{% url 'ops:run_maintain' value %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
+                hx-disabled-elt="this">{{ label }}</button>
+              {% endfor %}
+            </div>
+            {% endif %}
             {% if job.tiers %}
             {# Per-variant regen (mosaic scale tiers): each rebuilds ONE tier, reporting into the same result slot. #}
             <div class="mt-2 flex items-center gap-1.5 flex-wrap">

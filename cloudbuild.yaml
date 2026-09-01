@@ -18,7 +18,7 @@ substitutions:
   _DATA_PATH: gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/
   _JOB: ugs-warehouse-ingest              # Cloud Run job (batch --all reingest). Distinct resource from the Pub/Sub topic of the same name below.
   _REVIEW_JOB: ugs-warehouse-ingest-review # Cloud Run job: same ingest over `_review` serving tables → writes the gated catalog under review/ (pre-release; promote _review→_current to publish)
-  _MAINTAIN_JOB: ugs-warehouse-ducklake-maintain # Cloud Run job: DuckLake housekeeping (expire snapshots + compact small files + GC orphaned parquet). Run weekly.
+  _MAINTAIN_JOB: ugs-warehouse-ducklake-maintain # Cloud Run job: DuckLake housekeeping (expire snapshots + compact small files + GC orphaned parquet). Run daily.
   _PUBS_JOB: ugs-pubs-ingest              # Cloud Run job: rebuild the ugs-publications STAC collection from pub metadata (no COG re-harvest)
   _PUBTHUMB_JOB: ugs-pubs-thumbs          # Cloud Run job: render PDF first-page cover thumbnails for every pub (poppler)
   _PIPELINE_JOB: ugs-pubs-pipeline        # Cloud Run job: orchestrator — loops thumbs then runs pubs-ingest (one-click "full refresh")
@@ -336,7 +336,8 @@ steps:
       - --region=${_REGION}
 
   # DuckLake maintenance — expire old snapshots, compact small parquet, GC orphaned files. Same
-  # image + DSN setup as the ingest job (RUN_MODULE swaps the CLI). Run periodically (weekly is plenty):
+  # image + DSN setup as the ingest job (RUN_MODULE swaps the CLI). Runs DAILY via Cloud Scheduler
+  # (see scripts/provision.sh); ad hoc:
   # `gcloud run jobs execute ${_MAINTAIN_JOB} --region=${_REGION}` (or the ops console button).
   #
   # 2026-08-16: DUCKLAKE_KEEP_DAYS=30 let the expirable-snapshot backlog grow week over week
@@ -345,6 +346,12 @@ steps:
   # before hard failure, with expire_snapshots never even completing/logging). Dropped the retention
   # window to the script's own default (7d) so the weekly backlog stays small, and doubled the
   # timeout to give this run room to clear the existing backlog.
+  #
+  # 2026-08-31: compaction had never actually run — merge_adjacent_files does one batch per call and
+  # the old code called it once. 111,635 files accumulated at ~550KB each; DuckDB range-reads every
+  # one per scan, billing 3.97B Class B ops in August (~$1.6k of a $2.2k bill; bytes were ~$50).
+  # maintain.py now loops the merge and pins target_file_size. The budget stays inside --task-timeout
+  # so cleanup always runs — a run that times out mid-merge frees nothing.
   - id: deploy-ducklake-maintain-job
     waitFor: [push-warehouse]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -362,12 +369,13 @@ steps:
       # DUCKLAKE_KEEP_DAYS=7: keep a week of snapshots for rollback. Was 30, but at weekly maintenance
       # cadence that let the expire backlog balloon (see note above) — 7d keeps each run's expire set
       # bounded to what accumulated since the last run.
-      - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.maintain@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKLAKE_KEEP_DAYS=7
+      - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.maintain@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKLAKE_KEEP_DAYS=7@DUCKLAKE_TARGET_FILE_SIZE=256MB@DUCKLAKE_MERGE_BUDGET_SECONDS=4800
       - --command=scripts/cloudrun_entrypoint.sh
       - --task-timeout=7200
       - --max-retries=1
-      - --cpu=2
-      - --memory=2Gi
+      # 2Gi was sized for the old no-op merge; real compaction rewrites whole tables.
+      - --cpu=4
+      - --memory=8Gi
 
   - id: deploy-harvest-job
     waitFor: [push-harvest]

@@ -32,6 +32,7 @@ class Job:
     tasks: int | None = None  # override task_count (parallel shards) at run time; None = job default
     tiers: tuple[tuple[str, str], ...] | None = None  # per-variant regen (value, label); e.g. mosaic scale tiers
     force_toggle: bool = False  # render a "force rebuild" checkbox (ingest: override the default skip-unchanged)
+    modes: tuple[tuple[str, str], ...] | None = None  # read-only variants (value, label); rendered as secondary buttons
 
 
 # Pipeline stages mirror the Architecture page (docs/ARCHITECTURE.md + viewer Architecture.tsx) so
@@ -81,7 +82,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
     Job("ducklake-maintain", "ugs-warehouse-ducklake-maintain", "DuckLake maintenance",
         "Expire snapshots older than 7 days, compact small parquet, and GC orphaned files from GCS. "
-        "Keeps the append-only DuckLake catalog fast + bounded. Safe to re-run; run ~weekly."),
+        "Keeps the append-only DuckLake catalog fast + bounded — small files are billed per scan as "
+        "GCS ops, not bytes. Runs nightly on its own; safe to re-run. Compaction is budgeted, so a "
+        "large backlog clears over several runs.",
+        modes=(("report", "Report"), ("dry-run", "Dry run"))),
     Job("fts", "ugs-pubs-fts", "Build full-text search",
         "Rebuild the all-pub full-text-search DuckDB (BM25 FTS) → CDN. Run after pub text changes."),
     Job("embed", "ugs-pubs-embed", "Build semantic search",
@@ -171,6 +175,37 @@ def run_ingest(force: bool = False) -> dict:
         op = client.run_job(request=req)
         exec_name = (op.metadata.name if op.metadata else "") or "(started)"
         return {"ok": True, "message": f"started {job.name} --all --force", "execution": exec_name}
+    except Exception as e:  # noqa: BLE001 — surface the error to the operator
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
+# Read-only variants of the maintenance job. Unlike the mosaics job (command=python), this one is
+# deployed with command=cloudrun_entrypoint.sh and no args, and the entrypoint execs
+# `python -m $RUN_MODULE "$@"` — so the override is just the CLI flag.
+#   --report   prints per-table file counts + catalog options; touches nothing.
+#   --dry-run  reports what expire/cleanup WOULD remove, and skips compaction entirely.
+MAINTAIN_MODE_ARGS = {"report": ["--report"], "dry-run": ["--dry-run"]}
+
+
+def run_maintain(mode: str) -> dict:
+    """Run DuckLake maintenance in a read-only mode. Neither mode rewrites or deletes anything."""
+    job = JOBS.get("ducklake-maintain")
+    args = MAINTAIN_MODE_ARGS.get(mode)
+    if not job or not args:
+        return {"ok": False, "message": f"unknown maintenance mode {mode!r}"}
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "message": f"DRY-RUN: would execute {job.name} {' '.join(args)}",
+                "dry_run": True}
+    try:
+        from google.cloud import run_v2
+        client = run_v2.JobsClient()
+        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=args)
+        req = run_v2.RunJobRequest(
+            name=_job_path(job),
+            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
+        op = client.run_job(request=req)
+        exec_name = (op.metadata.name if op.metadata else "") or "(started)"
+        return {"ok": True, "message": f"started {job.name} {' '.join(args)}", "execution": exec_name}
     except Exception as e:  # noqa: BLE001 — surface the error to the operator
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 

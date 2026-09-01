@@ -12,6 +12,7 @@ import pytest
 
 from ugs_warehouse.vector import transform
 
+
 def _global_sort(rel: str) -> str:
     """The one-shot global sort materialize() replaces — the reference for the assertions below.
 

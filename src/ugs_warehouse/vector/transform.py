@@ -17,13 +17,12 @@ import duckdb
 
 TARGET_SRS = 4326
 
-# Free-tier OOM guard: DuckDB spills to disk past this. Tunable now that pyarrow no longer
-# loads on the streaming path — raise it for more in-RAM sort (faster, less spill) if headroom.
+# Hard ceiling — the global sort in _select does NOT spill. Size to ~2x the largest table.
 MAX_MEMORY = os.environ.get("DUCKDB_MAX_MEMORY", "128MB")
 
 
 def setup(con: duckdb.DuckDBPyConnection) -> None:
-    """Cap memory (free-tier OOM guard → DuckDB spills to disk) + load spatial.
+    """Cap memory (MAX_MEMORY — a hard ceiling; the sort does not spill) + load spatial.
 
     LOAD first: the Docker image pre-bakes the extension, so the common path is a local load with
     NO network call to the extension servers. INSTALL is the fallback for an un-baked env (local dev).
@@ -80,8 +79,8 @@ def _select(source_rel: str) -> str:
 
 def materialize(con: duckdb.DuckDBPyConnection, source_rel: str,
                 name: str = "transformed") -> str:
-    """Materialize the transform ONCE into a DuckDB table (global hilbert sort; spills under the
-    memory cap). Sinks then read the table without recomputing the scan/transform/sort per sink.
+    """Materialize the transform ONCE into a DuckDB table (global hilbert sort; OOMs past
+    MAX_MEMORY rather than spilling). Sinks then read it without recomputing the transform.
     `con` must already have `setup()` run. Returns the table name."""
     con.execute(f"CREATE OR REPLACE TABLE {name} AS {_select(source_rel)}")
     return name

@@ -17,8 +17,12 @@ import duckdb
 
 TARGET_SRS = 4326
 
-# Hard ceiling — the global sort in _select does NOT spill. Size to ~2x the largest table.
+# Hard ceiling — DuckDB spills narrow sorts but OOMs wide ones. materialize() works within it.
 MAX_MEMORY = os.environ.get("DUCKDB_MAX_MEMORY", "128MB")
+
+# Rows reattached per pass in materialize(). Halved on OOM, so this is a starting point, not a limit.
+SORT_CHUNK_ROWS = int(os.environ.get("DUCKDB_SORT_CHUNK_ROWS", "50000"))
+MIN_SORT_CHUNK_ROWS = 1000
 
 
 def setup(con: duckdb.DuckDBPyConnection) -> None:
@@ -65,22 +69,49 @@ def _select(source_rel: str) -> str:
         f"    'EPSG:{TARGET_SRS}', always_xy := true) "
         f"END"
     )
-    return f"""
-        WITH hydrated AS (
-          SELECT * EXCLUDE (geom_wkb), {geom_hydrate} AS geom FROM {source_rel}
-        )
-        SELECT *,
-               row_number() OVER (ORDER BY ST_Hilbert(ST_Centroid(geom)), hash(hydrated))
-                 AS feature_id
-        FROM hydrated
-        ORDER BY ST_Hilbert(ST_Centroid(geom)), hash(hydrated)
-    """
+    return f"SELECT * EXCLUDE (geom_wkb), {geom_hydrate} AS geom FROM {source_rel}"
 
 
 def materialize(con: duckdb.DuckDBPyConnection, source_rel: str,
                 name: str = "transformed") -> str:
-    """Materialize the transform ONCE into a DuckDB table (global hilbert sort; OOMs past
-    MAX_MEMORY rather than spilling). Sinks then read it without recomputing the transform.
-    `con` must already have `setup()` run. Returns the table name."""
-    con.execute(f"CREATE OR REPLACE TABLE {name} AS {_select(source_rel)}")
+    """Materialize the transform ONCE into a DuckDB table, hilbert-ordered, without ever sorting the
+    wide rows: DuckDB spills a narrow sort but OOMs a wide one, so only (rowid, hilbert, hash) is
+    sorted and the payload is reattached in feature_id order, one bounded chunk at a time.
+
+    Produces byte-identical feature_ids and the same physical order as a single global ORDER BY.
+    `con` must already have `setup()` run. Returns the table name.
+    """
+    hydrated, ranks = f"_{name}_hydrated", f"_{name}_ranks"
+
+    con.execute(f"CREATE OR REPLACE TABLE {hydrated} AS {_select(source_rel)}")
+    con.execute(
+        f"CREATE OR REPLACE TABLE {ranks} AS "
+        f"SELECT rid, row_number() OVER (ORDER BY h, hsh) AS feature_id FROM ("
+        f"  SELECT rowid AS rid, ST_Hilbert(ST_Centroid(geom)) AS h, hash({hydrated}) AS hsh "
+        f"  FROM {hydrated})"
+    )
+    total = con.execute(f"SELECT count(*) FROM {ranks}").fetchone()[0]
+    con.execute(
+        f"CREATE OR REPLACE TABLE {name} AS "
+        f"SELECT h.*, r.feature_id FROM {hydrated} h, {ranks} r WHERE false"
+    )
+
+    lo, chunk = 1, SORT_CHUNK_ROWS
+    while lo <= total:
+        try:
+            con.execute(
+                f"INSERT INTO {name} SELECT h.*, r.feature_id FROM {ranks} r "
+                f"JOIN {hydrated} h ON h.rowid = r.rid "
+                f"WHERE r.feature_id BETWEEN {lo} AND {lo + chunk - 1} ORDER BY r.feature_id"
+            )
+        except duckdb.OutOfMemoryException:
+            # Chunk size is in rows but the limit is bytes — halve until this table's rows fit.
+            if chunk <= MIN_SORT_CHUNK_ROWS:
+                raise
+            chunk = max(chunk // 2, MIN_SORT_CHUNK_ROWS)
+            continue
+        lo += chunk
+
+    con.execute(f"DROP TABLE IF EXISTS {ranks}")
+    con.execute(f"DROP TABLE IF EXISTS {hydrated}")
     return name

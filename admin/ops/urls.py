@@ -26,6 +26,7 @@ urlpatterns = [
     path("publications/<path:series_id>/logs", views.pub_logs, name="pub_logs"),
     path("publications/<path:series_id>/reharvest", views.reharvest, name="reharvest"),
     path("jobs/mosaics/tier/<str:tier>", views.rebuild_mosaic, name="rebuild_mosaic"),
+    path("jobs/ducklake-maintain/mode/<str:mode>", views.run_maintain, name="run_maintain"),
     path("contents", views.contents_list, name="contents"),
     path("contents/row", views.contents_row, name="contents_row"),
     path("contents/<path:series_id>/edit", views.contents_edit, name="contents_edit"),

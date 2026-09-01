@@ -1,66 +1,191 @@
 """DuckLake maintenance — keep the catalog + GCS data path from bloating over time.
 
-DuckLake is append-only: every ingest writes new parquet chunks + a new snapshot, and superseded
-files are NEVER removed on their own (that snapshot model is what makes time-travel work). Left
-unmaintained the data path grows without bound and each table accumulates many small parquet files,
-which slows scans + query planning. This runs the three housekeeping calls in the ONLY correct order:
+DuckLake is append-only: superseded parquet is never removed on its own, and small files accumulate.
+DuckDB range-reads every file per scan, so the bill is Class B operations, not stored bytes.
 
-  1. expire_snapshots      — retire snapshots older than the retention window (drops their refs)
-  2. merge_adjacent_files  — compact each table's small parquet into fewer, larger files
-  3. cleanup_old_files     — physically delete the now-unreferenced parquet from GCS
+  1. ensure_options        — pin target_file_size so writes AND compaction emit large files
+  2. expire_snapshots      — retire snapshots older than the retention window
+  3. merge_adjacent_files  — compact small parquet into fewer, larger files
+  4. cleanup_old_files     — delete the now-unreferenced parquet from GCS
+  5. delete_orphaned_files — delete parquet the catalog never referenced (failed writes)
 
-Reuses ducklake.attach(), so the delete/rewrite IO routes through the same obstore/fsspec GCS
-filesystem the writes use (httpfs/HMAC is blocked by org policy — see ducklake.py).
+Two gotchas, verified on DuckDB 1.5.3 + DuckLake e6a3bd0a:
 
-    python -m ugs_warehouse.vector.maintain [--keep-days N] [--dry-run] [--no-merge]
+  * merge_adjacent_files compacts ONE batch per call and returns a row per table, not per file, so
+    step 3 loops. The old code called it once and logged count(*) as files compacted.
+  * Passing min_file_size/max_file_size makes the merge a no-op. Don't add them back.
 
-Deployed as the `ugs-warehouse-ducklake-maintain` Cloud Run job; run periodically (weekly is plenty).
+Step 3 runs under a budget inside the job timeout so steps 4-5 always run; a run that times out
+mid-merge frees nothing.
+
+    python -m ugs_warehouse.vector.maintain [--keep-days N] [--dry-run] [--no-merge] [--report]
 """
 from __future__ import annotations
 
 import argparse
 import os
+import time
 
 import duckdb
 
 from . import ducklake
 
-# Retention window (days). Should exceed the data-update interval so at least the previous data
-# version stays rollback-able — updates here are infrequent, so keep this generous. Env lets the
-# deployed job set it without CLI args (the scheduler just triggers the job).
+# Retention window (days). Must exceed the data-update interval so the previous version stays
+# rollback-able.
 DEFAULT_KEEP_DAYS = int(os.environ.get("DUCKLAKE_KEEP_DAYS", "7"))
 
+# Target parquet size, on ingest AND compaction. Persisted in the catalog, so it applies to every
+# writer without redeploying them. At 256MB the 38GB enmin_ucrc_wells is ~150 files, not 70,353.
+DEFAULT_TARGET_FILE_SIZE = os.environ.get("DUCKLAKE_TARGET_FILE_SIZE", "256MB")
 
-def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True) -> int:
-    """Expire old snapshots, compact small files, GC orphaned parquet. Returns 0 on success."""
+# Wall-clock budget for the compaction loop; job timeout is 7200s, so this leaves room for cleanup.
+DEFAULT_BUDGET_SECONDS = int(os.environ.get("DUCKLAKE_MERGE_BUDGET_SECONDS", "4800"))
+
+# Grace before an unreferenced file counts as an orphan. Must exceed the longest ingest, or this
+# deletes parquet a run has written but not yet committed.
+ORPHAN_GRACE_DAYS = int(os.environ.get("DUCKLAKE_ORPHAN_GRACE_DAYS", "7"))
+
+
+_UNITS = {"": 1, "B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9}
+
+
+def _as_bytes(size: str | None) -> int | None:
+    """Normalize '256MB' / '256000000' to a byte count.
+
+    DuckLake stores the option normalized, so the check below must compare bytes — comparing raw
+    strings never matches and would rewrite the option every run.
+    """
+    if size is None:
+        return None
+    text = str(size).strip().upper()
+    for suffix, mult in sorted(_UNITS.items(), key=lambda kv: -len(kv[0])):
+        if suffix and text.endswith(suffix):
+            text = text[: -len(suffix)].strip()
+            break
+    else:
+        mult = 1
+    try:
+        return int(float(text) * mult)
+    except ValueError:
+        return None
+
+
+def ensure_options(con: duckdb.DuckDBPyConnection, cat: str, *,
+                   target_file_size: str = DEFAULT_TARGET_FILE_SIZE,
+                   dry_run: bool = False) -> None:
+    """Pin the catalog-level write options. Idempotent; persisted in the catalog Postgres."""
+    current = dict(con.execute(f"SELECT option_name, value FROM ducklake_options('{cat}')").fetchall())
+    have = current.get("target_file_size")
+    if _as_bytes(have) is not None and _as_bytes(have) == _as_bytes(target_file_size):
+        print(f"[maintain] target_file_size already {have}")
+        return
+    if dry_run:
+        print(f"[maintain] target_file_size {have or 'unset'} -> {target_file_size} (dry-run, not set)")
+        return
+    con.execute(f"CALL ducklake_set_option('{cat}', 'target_file_size', '{target_file_size}')")
+    print(f"[maintain] target_file_size {have or 'unset'} -> {target_file_size}")
+
+
+def _tables(con: duckdb.DuckDBPyConnection, cat: str) -> list[tuple[str, str]]:
+    return [
+        (r[0], r[1]) for r in con.execute(
+            "SELECT table_schema, table_name FROM information_schema.tables "
+            "WHERE table_catalog = ? ORDER BY 1, 2", [cat]
+        ).fetchall()
+    ]
+
+
+def report(con: duckdb.DuckDBPyConnection, cat: str) -> int:
+    """Print per-table file counts + bytes. Read-only — rewrites and deletes nothing."""
+    opts = con.execute(f"SELECT option_name, value FROM ducklake_options('{cat}')").fetchall()
+    print("[report] catalog options:")
+    for name, value in opts:
+        print(f"           {name} = {value}")
+
+    total_files = total_bytes = 0
+    rows = []
+    for schema, table in _tables(con, cat):
+        n, nbytes = con.execute(
+            f"SELECT count(*), coalesce(sum(data_file_size_bytes), 0) "
+            f"FROM ducklake_list_files('{cat}', '{table}', schema => '{schema}')"
+        ).fetchone()
+        rows.append((n, nbytes, f"{schema}.{table}"))
+        total_files += n
+        total_bytes += nbytes
+
+    print(f"[report] {len(rows)} table(s), {total_files:,} referenced file(s), {total_bytes / 1e9:.1f} GB")
+    for n, nbytes, name in sorted(rows, reverse=True)[:20]:
+        avg = nbytes / n / 1e6 if n else 0
+        print(f"           {n:>8,} files  {nbytes / 1e9:>8.2f} GB  avg {avg:>7.2f} MB  {name}")
+    return 0
+
+
+def compact(con: duckdb.DuckDBPyConnection, cat: str, *,
+            budget_seconds: int = DEFAULT_BUDGET_SECONDS) -> tuple[int, int]:
+    """Loop merge_adjacent_files until it reports no work, or the budget runs out.
+
+    One call compacts a single batch, so one call cannot drain a backlog.
+    """
+    deadline = time.monotonic() + budget_seconds
+    processed = created = passes = 0
+    while True:
+        if time.monotonic() >= deadline:
+            print(f"[maintain] merge budget ({budget_seconds}s) spent after {passes} pass(es) — "
+                  f"stopping so cleanup still runs; the next run resumes from here")
+            break
+        # No min_file_size/max_file_size — passing them makes this a no-op.
+        batch = con.execute(f"SELECT * FROM ducklake_merge_adjacent_files('{cat}')").fetchall()
+        batch_processed = sum(r[2] for r in batch)
+        if not batch_processed:
+            print(f"[maintain] merge_adjacent_files: converged after {passes} pass(es)")
+            break
+        passes += 1
+        processed += batch_processed
+        created += sum(r[3] for r in batch)
+    print(f"[maintain] merge_adjacent_files: {processed:,} file(s) compacted into {created:,}")
+    return processed, created
+
+
+def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True,
+             budget_seconds: int = DEFAULT_BUDGET_SECONDS,
+             target_file_size: str = DEFAULT_TARGET_FILE_SIZE) -> int:
+    """Pin options, expire old snapshots, compact small files, GC parquet. Returns 0 on success."""
     con = duckdb.connect(":memory:")
     cat = ducklake.attach(con)  # registers the obstore fsspec for the GCS data path
     dr = "true" if dry_run else "false"
     tag = " (dry-run)" if dry_run else ""
 
-    # 1. Expire snapshots older than the retention window. Keeps recent history for rollback /
-    #    time-travel; everything older loses its references so its files become collectable.
-    expired = con.execute(
-        f"SELECT count(*) FROM ducklake_expire_snapshots('{cat}', "
+    # 1. Pin options first, so anything step 3 rewrites lands at the target size.
+    ensure_options(con, cat, target_file_size=target_file_size, dry_run=dry_run)
+
+    # 2. Expire old snapshots so their files lose their references and become collectable.
+    expired = len(con.execute(
+        f"SELECT * FROM ducklake_expire_snapshots('{cat}', "
         f"older_than => now() - INTERVAL '{int(keep_days)} days', dry_run => {dr})"
-    ).fetchone()[0]
+    ).fetchall())
     print(f"[maintain] expire_snapshots older than {keep_days}d{tag}: {expired} snapshot(s)")
 
-    # 2. Compact adjacent small parquet files per table → fewer, larger files (faster scans).
-    #    Skipped under --dry-run (it rewrites data) and --no-merge.
+    # 3. Compact. Skipped under --dry-run (it rewrites data) and --no-merge.
     if merge and not dry_run:
-        merged = con.execute(f"SELECT count(*) FROM ducklake_merge_adjacent_files('{cat}')").fetchone()[0]
-        print(f"[maintain] merge_adjacent_files: {merged} file group(s) compacted")
+        compact(con, cat, budget_seconds=budget_seconds)
     else:
         print(f"[maintain] merge_adjacent_files: skipped{tag or ' (--no-merge)'}")
 
-    # 3. Delete the parquet the expiry (+ merge) left unreferenced. cleanup_all removes every
-    #    now-orphaned file, not just those past a grace window.
-    deleted = con.execute(
-        f"SELECT count(*) FROM ducklake_cleanup_old_files('{cat}', "
+    # 4. Delete the parquet the expiry + merge left unreferenced.
+    deleted = len(con.execute(
+        f"SELECT * FROM ducklake_cleanup_old_files('{cat}', "
         f"cleanup_all => true, dry_run => {dr})"
-    ).fetchone()[0]
-    print(f"[maintain] cleanup_old_files{tag}: {deleted} file(s) removed from GCS")
+    ).fetchall())
+    print(f"[maintain] cleanup_old_files{tag}: {deleted:,} file(s) removed from GCS")
+
+    # 5. Delete parquet the catalog never referenced — what an ingest that died before committing
+    #    leaves behind. cleanup_old_files walks references only, so it cannot see these.
+    orphaned = len(con.execute(
+        f"SELECT * FROM ducklake_delete_orphaned_files('{cat}', "
+        f"older_than => now() - INTERVAL '{int(ORPHAN_GRACE_DAYS)} days', dry_run => {dr})"
+    ).fetchall())
+    print(f"[maintain] delete_orphaned_files older than {ORPHAN_GRACE_DAYS}d{tag}: "
+          f"{orphaned:,} file(s) removed from GCS")
 
     con.close()
     return 0
@@ -73,8 +198,25 @@ def main() -> int:
                          "or $DUCKLAKE_KEEP_DAYS)")
     ap.add_argument("--dry-run", action="store_true", help="report only; delete/rewrite nothing")
     ap.add_argument("--no-merge", action="store_true", help="skip the file-compaction step")
+    ap.add_argument("--report", action="store_true",
+                    help="print per-table file counts and exit; changes nothing")
+    ap.add_argument("--budget-seconds", type=int, default=DEFAULT_BUDGET_SECONDS,
+                    help=f"wall-clock cap on the compaction loop (default {DEFAULT_BUDGET_SECONDS}, "
+                         "or $DUCKLAKE_MERGE_BUDGET_SECONDS)")
+    ap.add_argument("--target-file-size", default=DEFAULT_TARGET_FILE_SIZE,
+                    help=f"parquet target size pinned in the catalog (default {DEFAULT_TARGET_FILE_SIZE}, "
+                         "or $DUCKLAKE_TARGET_FILE_SIZE)")
     args = ap.parse_args()
-    return maintain(args.keep_days, dry_run=args.dry_run, merge=not args.no_merge)
+
+    if args.report:
+        con = duckdb.connect(":memory:")
+        try:
+            return report(con, ducklake.attach(con))
+        finally:
+            con.close()
+
+    return maintain(args.keep_days, dry_run=args.dry_run, merge=not args.no_merge,
+                    budget_seconds=args.budget_seconds, target_file_size=args.target_file_size)
 
 
 if __name__ == "__main__":

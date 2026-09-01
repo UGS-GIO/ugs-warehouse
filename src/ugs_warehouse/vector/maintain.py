@@ -131,7 +131,7 @@ def _referenced_files(con: duckdb.DuckDBPyConnection, cat: str, bucket: str, pre
 
 def sweep_orphans(con: duckdb.DuckDBPyConnection, cat: str, *,
                   grace_days: int = ORPHAN_GRACE_DAYS, dry_run: bool = False,
-                  batch_size: int = 1000) -> int:
+                  batch_size: int = 1000, allow_missing_refs: bool = False) -> int:
     """Delete parquet under the data path that no snapshot references.
 
     Replaces `ducklake_delete_orphaned_files`, which cannot run here: it calls fsspec `modified()`
@@ -152,30 +152,38 @@ def sweep_orphans(con: duckdb.DuckDBPyConnection, cat: str, *,
     store = GCSStore(bucket=bucket)
     cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=grace_days)
 
-    orphans, live, young = [], 0, 0
+    orphans, young, seen = [], 0, set()
     for page in obs.list(store, prefix=prefix):
         for meta in page:
             path = meta["path"]
             if not path.endswith(".parquet"):
                 continue
             if path in referenced:
-                live += 1
+                seen.add(path)
                 continue
             if meta["last_modified"] > cutoff:
                 young += 1
                 continue
             orphans.append(path)
 
-    # Guard: if normalization ever drifts, `referenced` goes empty and every live file looks like an
-    # orphan. Refuse rather than delete the warehouse.
-    if referenced and live == 0 and orphans:
-        raise RuntimeError(
-            f"sweep_orphans: matched 0 of {len(referenced)} referenced file(s) against "
-            f"{len(orphans)} candidate(s) — path normalization is wrong, refusing to delete."
-        )
-
+    live = len(seen)
     print(f"[maintain] sweep_orphans: {len(referenced):,} referenced, {live:,} matched live, "
           f"{young:,} inside {grace_days}d grace, {len(orphans):,} orphan(s)")
+
+    # Every referenced file must be found in the listing. One that isn't is either a dangling
+    # catalog entry (harmless) or a path we normalized wrong — and in the second case its real
+    # object is sitting in `orphans`, so deleting would destroy live data. We cannot tell the two
+    # apart from counts, so refuse and name them.
+    if referenced - seen:
+        missing = sorted(referenced - seen)
+        detail = (f"sweep_orphans: {len(missing)} referenced file(s) not found in the listing: "
+                  f"{missing[:10]}")
+        if not allow_missing_refs:
+            raise RuntimeError(
+                detail + " — refusing to delete, because a mis-normalized path would be deleted as "
+                "an orphan. Confirm each is a dangling catalog entry, then pass --allow-missing-refs."
+            )
+        print(f"[maintain] WARNING: {detail} — proceeding (--allow-missing-refs)")
     if dry_run:
         for path in orphans[:5]:
             print(f"           would delete {path}")
@@ -249,7 +257,8 @@ def compact(con: duckdb.DuckDBPyConnection, cat: str, *,
 
 def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True,
              budget_seconds: int = DEFAULT_BUDGET_SECONDS,
-             target_file_size: str = DEFAULT_TARGET_FILE_SIZE) -> int:
+             target_file_size: str = DEFAULT_TARGET_FILE_SIZE,
+             allow_missing_refs: bool = False) -> int:
     """Pin options, expire old snapshots, compact small files, GC parquet. Returns 0 on success."""
     con = duckdb.connect(":memory:")
     cat = ducklake.attach(con)  # registers the obstore fsspec for the GCS data path
@@ -281,7 +290,7 @@ def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True,
 
     # 5. Delete parquet nothing references — stranded when expiry dropped its snapshot's refs, or
     #    left by an ingest that died before committing. cleanup_old_files cannot see either.
-    sweep_orphans(con, cat, dry_run=dry_run)
+    sweep_orphans(con, cat, dry_run=dry_run, allow_missing_refs=allow_missing_refs)
 
     con.close()
     return 0
@@ -299,6 +308,9 @@ def main() -> int:
     ap.add_argument("--budget-seconds", type=int, default=DEFAULT_BUDGET_SECONDS,
                     help=f"wall-clock cap on the compaction loop (default {DEFAULT_BUDGET_SECONDS}, "
                          "or $DUCKLAKE_MERGE_BUDGET_SECONDS)")
+    ap.add_argument("--allow-missing-refs", action="store_true",
+                    help="proceed when a referenced file is absent from the listing (confirm each "
+                         "is a dangling catalog entry first — see sweep_orphans)")
     ap.add_argument("--target-file-size", default=DEFAULT_TARGET_FILE_SIZE,
                     help=f"parquet target size pinned in the catalog (default {DEFAULT_TARGET_FILE_SIZE}, "
                          "or $DUCKLAKE_TARGET_FILE_SIZE)")
@@ -312,7 +324,8 @@ def main() -> int:
             con.close()
 
     return maintain(args.keep_days, dry_run=args.dry_run, merge=not args.no_merge,
-                    budget_seconds=args.budget_seconds, target_file_size=args.target_file_size)
+                    budget_seconds=args.budget_seconds, target_file_size=args.target_file_size,
+                    allow_missing_refs=args.allow_missing_refs)
 
 
 if __name__ == "__main__":

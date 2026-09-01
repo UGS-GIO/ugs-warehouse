@@ -37,9 +37,11 @@ gcloud iam service-accounts create warehouse-deploy --project=$PROJECT \
   --display-name="ugs-warehouse tofu deploy"
 
 # Roles this tofu actually needs (scoped to the project) — nothing broader. No compute.admin:
-# native Cloud Run IAP has no load-balancer/compute resources.
+# native Cloud Run IAP has no load-balancer/compute resources. The two monitoring roles are for
+# monitoring.tf's cost alert; they are the narrow pair, NOT roles/monitoring.editor.
 for R in roles/storage.admin roles/run.admin \
-         roles/iap.admin roles/iam.serviceAccountAdmin; do
+         roles/iap.admin roles/iam.serviceAccountAdmin \
+         roles/monitoring.notificationChannelEditor roles/monitoring.alertPolicyEditor; do
   gcloud projects add-iam-policy-binding $PROJECT \
     --member="serviceAccount:${SA}" --role=$R --condition=None >/dev/null
 done

@@ -27,6 +27,10 @@ POSTGRES_DSN = os.environ.get(
 )
 PG_ALIAS = "pg"
 
+# Postgres heap pages per hydrate chunk. ctid ranges, not LIMIT/OFFSET — OFFSET rescans from the
+# top each time and turns a chunked read into O(n^2). 0 disables chunking.
+PAGES_PER_CHUNK = int(os.environ.get("INGEST_PAGES_PER_CHUNK", "2000"))
+
 
 def _connect() -> duckdb.DuckDBPyConnection:
     con = duckdb.connect()
@@ -62,6 +66,36 @@ def _geom_column(cols: list[tuple[str, str]]) -> str:
     raise RuntimeError("no GEOMETRY column found")
 
 
+def _scan_chunks(con: duckdb.DuckDBPyConnection, rel: str, select_list: str) -> list[str]:
+    """Partition the table into ctid page ranges — disjoint, index-free, and no ordering needed
+    (feature_id is assigned later from its own sort). Falls back to one scan if sizing fails."""
+    def scan(where: str = "") -> str:
+        pg_sql = f"SELECT {select_list} FROM {rel} {where}"
+        return f"(SELECT * FROM postgres_query('{PG_ALIAS}', $pgq${pg_sql}$pgq$))"
+
+    if PAGES_PER_CHUNK <= 0:
+        return [scan()]
+    size_sql = (f"SELECT pg_relation_size('{rel}'::regclass) / "
+                f"current_setting('block_size')::int AS pages")
+    try:
+        pages = con.execute(
+            f"SELECT pages FROM postgres_query('{PG_ALIAS}', $pgq${size_sql}$pgq$)"
+        ).fetchone()[0]
+    except duckdb.Error:
+        return [scan()]
+    if not pages or pages <= PAGES_PER_CHUNK:
+        return [scan()]
+
+    chunks = [
+        scan(f"WHERE ctid >= '({lo},0)'::tid AND ctid < '({lo + PAGES_PER_CHUNK},0)'::tid")
+        for lo in range(0, pages, PAGES_PER_CHUNK)
+    ]
+    # Open-ended tail: pages is a snapshot, and anything written past it must not be dropped.
+    last = (pages // PAGES_PER_CHUNK + 1) * PAGES_PER_CHUNK
+    chunks.append(scan(f"WHERE ctid >= '({last},0)'::tid"))
+    return chunks
+
+
 def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
     """Prod streaming path: Postgres → transform → materialize, ALL in one DuckDB connection —
     no pyarrow, no rows ever in Python. DuckDB streams the postgres scan and spills the global
@@ -92,10 +126,9 @@ def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
             + f', ST_AsBinary("{geom_col}") AS geom_wkb'
             + f', ST_SRID("{geom_col}") AS target_epsg'  # 0 = unstamped; transform errors, never assumes
         )
-        pg_sql = f'SELECT {select_list} FROM "{topic.schema}"."{topic.layer}"'
         # postgres_query subquery as the transform source; $pgq$ dollar-quote avoids escaping.
-        source_rel = f"(SELECT * FROM postgres_query('{PG_ALIAS}', $pgq${pg_sql}$pgq$))"
-        return con, transform.materialize(con, source_rel)
+        rel = f'"{topic.schema}"."{topic.layer}"'
+        return con, transform.materialize(con, _scan_chunks(con, rel, select_list))
     except BaseException:
         con.close()
         raise

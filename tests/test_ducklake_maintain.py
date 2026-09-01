@@ -187,3 +187,24 @@ def test_drop_table_requires_gcs_data_path(lake, monkeypatch):
 
 def test_quote_identifier_escapes_quotes():
     assert maintain._q('we"ird') == '"we""ird"'
+
+
+def test_merge_budget_is_trimmed_by_elapsed_time(lake, monkeypatch, capsys):
+    """expire_snapshots ahead of the merge can eat most of the task timeout. The merge budget has to
+    count from job start, or budget + elapsed overruns it and the task dies before cleanup runs."""
+    con, _ = lake
+    seen = {}
+
+    monkeypatch.setattr(maintain.ducklake, "attach", lambda c: CATALOG)
+    monkeypatch.setattr(maintain.duckdb, "connect", lambda *a, **k: con)
+    monkeypatch.setattr(maintain, "JOB_TIMEOUT_SECONDS", 100)
+    monkeypatch.setattr(maintain, "CLEANUP_RESERVE_SECONDS", 20)
+    monkeypatch.setattr(maintain, "compact", lambda c, cat, **kw: seen.update(kw) or (0, 0))
+    monkeypatch.setattr(maintain, "sweep_orphans", lambda c, cat, **kw: 0)
+    monkeypatch.setattr(maintain, "ensure_options", lambda *a, **k: None)
+
+    # Budget asked for is larger than what the timeout leaves.
+    maintain.maintain(7, budget_seconds=4800)
+
+    assert seen["budget_seconds"] <= 100 - 20, seen
+    assert "trimmed" in capsys.readouterr().out

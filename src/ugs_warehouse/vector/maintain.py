@@ -46,8 +46,16 @@ DEFAULT_KEEP_DAYS = int(os.environ.get("DUCKLAKE_KEEP_DAYS", "7"))
 # writer without redeploying them. At 256MB the 38GB enmin_ucrc_wells is ~150 files, not 70,353.
 DEFAULT_TARGET_FILE_SIZE = os.environ.get("DUCKLAKE_TARGET_FILE_SIZE", "256MB")
 
-# Wall-clock budget for the compaction loop; job timeout is 7200s, so this leaves room for cleanup.
+# Wall-clock budget for the compaction loop.
 DEFAULT_BUDGET_SECONDS = int(os.environ.get("DUCKLAKE_MERGE_BUDGET_SECONDS", "4800"))
+
+# The Cloud Run task timeout this job is deployed with, and how much of it to hold back for steps
+# 4-5. The merge budget alone is not enough: it is measured from when the merge starts, and
+# expire_snapshots ahead of it can take over an hour on a large catalog, so budget + elapsed can
+# exceed the timeout and the task is killed before anything is collected. The real deadline has to
+# count from job start.
+JOB_TIMEOUT_SECONDS = int(os.environ.get("DUCKLAKE_JOB_TIMEOUT_SECONDS", "7200"))
+CLEANUP_RESERVE_SECONDS = int(os.environ.get("DUCKLAKE_CLEANUP_RESERVE_SECONDS", "1200"))
 
 # Grace before an unreferenced file counts as an orphan. Must exceed the longest ingest, or this
 # deletes parquet a run has written but not yet committed.
@@ -315,6 +323,7 @@ def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True,
              target_file_size: str = DEFAULT_TARGET_FILE_SIZE,
              allow_missing_refs: bool = False) -> int:
     """Pin options, expire old snapshots, compact small files, GC parquet. Returns 0 on success."""
+    started = time.monotonic()
     con = duckdb.connect(":memory:")
     cat = ducklake.attach(con)  # registers the obstore fsspec for the GCS data path
     dr = "true" if dry_run else "false"
@@ -332,7 +341,14 @@ def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True,
 
     # 3. Compact. Skipped under --dry-run (it rewrites data) and --no-merge.
     if merge and not dry_run:
-        compact(con, cat, budget_seconds=budget_seconds)
+        # Whatever expire just used comes out of the merge's budget, so cleanup + sweep still fit.
+        remaining = JOB_TIMEOUT_SECONDS - (time.monotonic() - started) - CLEANUP_RESERVE_SECONDS
+        allowed = int(min(budget_seconds, max(remaining, 0)))
+        if allowed < budget_seconds:
+            print(f"[maintain] merge budget trimmed {budget_seconds}s -> {allowed}s "
+                  f"({time.monotonic() - started:.0f}s already spent, reserving "
+                  f"{CLEANUP_RESERVE_SECONDS}s for cleanup)")
+        compact(con, cat, budget_seconds=allowed)
     else:
         print(f"[maintain] merge_adjacent_files: skipped{tag or ' (--no-merge)'}")
 

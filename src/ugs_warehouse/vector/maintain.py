@@ -42,8 +42,8 @@ from . import ducklake
 # rollback-able.
 DEFAULT_KEEP_DAYS = int(os.environ.get("DUCKLAKE_KEEP_DAYS", "7"))
 
-# Target parquet size, on ingest AND compaction. Persisted in the catalog, so it applies to every
-# writer without redeploying them. At 256MB the 38GB enmin_ucrc_wells is ~150 files, not 70,353.
+# Target parquet size. Set here, but spent by the ingest service — keep it under that writer's
+# DUCKDB_MAX_MEMORY (transform.py).
 DEFAULT_TARGET_FILE_SIZE = os.environ.get("DUCKLAKE_TARGET_FILE_SIZE", "256MB")
 
 # Wall-clock budget for the compaction loop.

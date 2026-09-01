@@ -92,3 +92,23 @@ variable "preview_service_account" {
   description = "Cloud Build SA for the PREVIEW triggers only. Empty → no grants are created and previews are not deployable. Deliberately not the shared build SA: a preview builds unmerged branch code, so it is the least-trusted identity in the system (#75)."
   default     = ""
 }
+
+variable "alert_emails" {
+  type        = list(string)
+  description = <<-EOT
+    Who gets the cost/volume alerts for the public bucket. A list, not a single address: the August
+    2026 cost incident ran ~17 days partly because the only pipeline alerts in the org went to one
+    person's inbox. Each becomes its own notification channel in project_id.
+  EOT
+  default     = ["clunn@utah.gov", "marshallrobinson@utah.gov"]
+}
+
+variable "bucket_ops_alert_threshold" {
+  type        = number
+  description = <<-EOT
+    GCS operations per second on public_bucket that, sustained for 30 minutes, raises an alert.
+    Normal is 0.1-0.5/s; the heaviest legitimate day observed was ~2/s; the 2026-08 incident ran at
+    ~3,472/s. 60 leaves ~30x headroom over maintenance while catching a runaway the same hour.
+  EOT
+  default     = 60
+}

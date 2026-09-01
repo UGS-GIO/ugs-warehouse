@@ -484,15 +484,26 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             prof["predictor"] = 2
 
         rgb_clipped = ensure_rgb(clipped)
-        cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
-        # Fallback: some inputs yield an empty/undersized webp COG -> retry lossless LZW,
-        # keeping web_optimized so the result is still tiled+overviewed for range reads.
-        if not os.path.exists(cog) or os.path.getsize(cog) < 100_000:
-            hlog("webp COG empty/undersized → retry with lzw", step="cog", level="WARNING")
+
+        def _to_lzw(why: str) -> None:
+            hlog(f"webp COG {why} → retry with lzw", step="cog", level="WARNING")
             if os.path.exists(cog):
                 os.remove(cog)
             prof["compress"] = "lzw"
+            prof.pop("quality", None)          # webp-only; lzw rejects it
             cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
+
+        # webp is 8-bit-only and raises on 16-bit/float plates; lossless lzw keeps web_optimized
+        # so the result is still tiled + overviewed for range reads.
+        try:
+            cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
+        except Exception as e:  # noqa: BLE001 — any encode failure is worth one lossless retry
+            if COG_COMPRESS != "webp":
+                raise
+            _to_lzw(f"failed ({type(e).__name__}: {str(e)[:80]})")
+        else:
+            if not os.path.exists(cog) or os.path.getsize(cog) < 100_000:
+                _to_lzw("empty/undersized")
 
         # Free up tmpfs RAM by deleting the intermediate clipped/rgb and plate images
         for f in (clipped, rgb_clipped):
@@ -539,8 +550,9 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             run(["gdal_translate", "-of", "PNG", "-outsize", "700", "0", cog, th])
             gcs.upload(th, f"{identity.COG_PREFIX}/{series_id}.thumb.png",
                        content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
-        hlog(f"OK ({COG_DPI}dpi {COG_COMPRESS} q{COG_QUALITY}) → {pub.cog_object}",
-             step="result", category="ok")
+        used = prof.get("compress", COG_COMPRESS)          # may have fallen back from webp
+        qual = f" q{COG_QUALITY}" if used == "webp" else ""
+        hlog(f"OK ({COG_DPI}dpi {used}{qual}) → {pub.cog_object}", step="result", category="ok")
         return "ok"
     except ZipTooLargeError as e:
         hlog(f"zip too large to process (size cap): {e}", step="download",

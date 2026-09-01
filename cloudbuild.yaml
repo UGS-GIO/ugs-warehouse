@@ -394,11 +394,12 @@ steps:
       - --set-env-vars=^|^SOURCE_BACKEND=postgres|POSTGRES_DSN=host=/cloudsql/${_SQL_INSTANCE} dbname=seamlessgeolmap user=schema_owner|DUCKLAKE_DATA_PATH=${_DATA_PATH}
       - --command=python
       - --args=-m,ugs_warehouse.pubs.harvest,--all
-      - --task-timeout=3600
+      # Shards timed out on the 1.7GB plates and the backfill stalled ~322 pubs short.
+      - --task-timeout=21600
       - --max-retries=1
       - --cpu=2
       - --memory=4Gi
-      - --tasks=5
+      - --tasks=10
 
   # Pubs metadata → STAC rebuild. Decoupled from the COG harvest above: this only re-reads
   # pub metadata (live from the publications app feed via PUBS_DB_URL) + lists GCS for harvested

@@ -30,6 +30,8 @@ PG_ALIAS = "pg"
 # Postgres heap pages per hydrate chunk. ctid ranges, not LIMIT/OFFSET — OFFSET rescans from the
 # top each time and turns a chunked read into O(n^2). 0 disables chunking.
 PAGES_PER_CHUNK = int(os.environ.get("INGEST_PAGES_PER_CHUNK", "2000"))
+# Below this total size (incl. TOAST) a table is read in one scan.
+CHUNK_TARGET_BYTES = int(os.environ.get("INGEST_CHUNK_TARGET_BYTES", str(16 * 1024 * 1024)))
 
 
 def _connect() -> duckdb.DuckDBPyConnection:
@@ -75,23 +77,30 @@ def _scan_chunks(con: duckdb.DuckDBPyConnection, rel: str, select_list: str) -> 
 
     if PAGES_PER_CHUNK <= 0:
         return [scan()]
+    # heap pages address the ctid ranges, but PostGIS keeps big geometry in TOAST — out of line and
+    # NOT counted by pg_relation_size. Sizing on the heap alone reads a polygon table as tiny and
+    # hands back one unchunked scan. total/heap is how much each heap page really drags in.
     size_sql = (f"SELECT pg_relation_size('{rel}'::regclass) / "
-                f"current_setting('block_size')::int AS pages")
+                f"current_setting('block_size')::int AS pages, "
+                f"pg_relation_size('{rel}'::regclass) AS heap, "
+                f"pg_total_relation_size('{rel}'::regclass) AS total")
     try:
-        pages = con.execute(
-            f"SELECT pages FROM postgres_query('{PG_ALIAS}', $pgq${size_sql}$pgq$)"
-        ).fetchone()[0]
+        pages, heap, total = con.execute(
+            f"SELECT pages, heap, total FROM postgres_query('{PG_ALIAS}', $pgq${size_sql}$pgq$)"
+        ).fetchone()
     except duckdb.Error:
         return [scan()]
-    if not pages or pages <= PAGES_PER_CHUNK:
+    if not pages or not total or total <= CHUNK_TARGET_BYTES:
         return [scan()]
 
+    expansion = max(total / max(heap, 1), 1.0)
+    per_chunk = max(int(PAGES_PER_CHUNK / expansion), 1)
     chunks = [
-        scan(f"WHERE ctid >= '({lo},0)'::tid AND ctid < '({lo + PAGES_PER_CHUNK},0)'::tid")
-        for lo in range(0, pages, PAGES_PER_CHUNK)
+        scan(f"WHERE ctid >= '({lo},0)'::tid AND ctid < '({lo + per_chunk},0)'::tid")
+        for lo in range(0, pages, per_chunk)
     ]
     # Open-ended tail: pages is a snapshot, and anything written past it must not be dropped.
-    last = (pages // PAGES_PER_CHUNK + 1) * PAGES_PER_CHUNK
+    last = (pages // per_chunk + 1) * per_chunk
     chunks.append(scan(f"WHERE ctid >= '({last},0)'::tid"))
     return chunks
 

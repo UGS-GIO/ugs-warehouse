@@ -7,13 +7,20 @@ DuckDB range-reads every file per scan, so the bill is Class B operations, not s
   2. expire_snapshots      — retire snapshots older than the retention window
   3. merge_adjacent_files  — compact small parquet into fewer, larger files
   4. cleanup_old_files     — delete the now-unreferenced parquet from GCS
-  5. delete_orphaned_files — delete parquet the catalog never referenced (failed writes)
+  5. sweep_orphans          — delete parquet nothing references
 
-Two gotchas, verified on DuckDB 1.5.3 + DuckLake e6a3bd0a:
+Three gotchas, verified on DuckDB 1.5.3 + DuckLake e6a3bd0a:
 
   * merge_adjacent_files compacts ONE batch per call and returns a row per table, not per file, so
     step 3 loops. The old code called it once and logged count(*) as files compacted.
   * Passing min_file_size/max_file_size makes the merge a no-op. Don't add them back.
+  * ducklake_delete_orphaned_files cannot run against gs:// here — it HEADs the data path as if it
+    were a directory, which 404s on GCS. Step 5 does the listing/diff itself instead.
+
+Step 5 exists because steps 2 and 4 cannot cover each other: expiring a snapshot drops its files'
+catalog references, and cleanup_old_files only walks references — so every file an expiry stranded
+is invisible to it and bills forever. That is how this data path reached 111,635 files (273 GB)
+against 41 actually referenced (0.1 GB).
 
 Step 3 runs under a budget inside the job timeout so steps 4-5 always run; a run that times out
 mid-merge frees nothing.
@@ -23,6 +30,7 @@ mid-merge frees nothing.
 from __future__ import annotations
 
 import argparse
+import datetime
 import os
 import time
 
@@ -84,6 +92,99 @@ def ensure_options(con: duckdb.DuckDBPyConnection, cat: str, *,
         return
     con.execute(f"CALL ducklake_set_option('{cat}', 'target_file_size', '{target_file_size}')")
     print(f"[maintain] target_file_size {have or 'unset'} -> {target_file_size}")
+
+
+def _data_path_parts() -> tuple[str, str] | None:
+    """(bucket, prefix) from ducklake.DATA_PATH, or None when it isn't a gs:// path."""
+    path = ducklake.DATA_PATH
+    for scheme in ("gs://", "gcs://"):
+        if path.startswith(scheme):
+            bucket, _, prefix = path[len(scheme):].partition("/")
+            return bucket, prefix.strip("/") + "/" if prefix.strip("/") else ""
+    return None
+
+
+def _as_object_path(data_file: str, bucket: str, prefix: str) -> str:
+    """Normalize a catalog data_file to a bucket-relative object path.
+
+    DuckLake may hand back a full gs:// URI or a path already relative to the data path; both have
+    to compare equal to what obstore's listing yields.
+    """
+    for scheme in ("gs://", "gcs://"):
+        if data_file.startswith(scheme):
+            _, _, rest = data_file[len(scheme):].partition("/")
+            return rest
+    stripped = data_file.lstrip("/")
+    return stripped if stripped.startswith(prefix) else prefix + stripped
+
+
+def _referenced_files(con: duckdb.DuckDBPyConnection, cat: str, bucket: str, prefix: str) -> set[str]:
+    refs: set[str] = set()
+    for schema, table in _tables(con, cat):
+        for (data_file,) in con.execute(
+            f"SELECT data_file FROM ducklake_list_files('{cat}', '{table}', schema => '{schema}')"
+        ).fetchall():
+            if data_file:
+                refs.add(_as_object_path(data_file, bucket, prefix))
+    return refs
+
+
+def sweep_orphans(con: duckdb.DuckDBPyConnection, cat: str, *,
+                  grace_days: int = ORPHAN_GRACE_DAYS, dry_run: bool = False,
+                  batch_size: int = 1000) -> int:
+    """Delete parquet under the data path that no snapshot references.
+
+    Replaces `ducklake_delete_orphaned_files`, which cannot run here: it calls fsspec `modified()`
+    on the data path itself, and HEADing a GCS prefix 404s because GCS has no directory objects.
+    `cleanup_old_files` cannot cover these either — it walks catalog references, and an expired
+    snapshot takes its files' references with it, stranding the files permanently.
+    """
+    parts = _data_path_parts()
+    if parts is None:
+        print(f"[maintain] sweep_orphans: skipped (data path is not gs://: {ducklake.DATA_PATH})")
+        return 0
+    bucket, prefix = parts
+
+    import obstore as obs
+    from obstore.store import GCSStore
+
+    referenced = _referenced_files(con, cat, bucket, prefix)
+    store = GCSStore(bucket=bucket)
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=grace_days)
+
+    orphans, live, young = [], 0, 0
+    for page in obs.list(store, prefix=prefix):
+        for meta in page:
+            path = meta["path"]
+            if not path.endswith(".parquet"):
+                continue
+            if path in referenced:
+                live += 1
+                continue
+            if meta["last_modified"] > cutoff:
+                young += 1
+                continue
+            orphans.append(path)
+
+    # Guard: if normalization ever drifts, `referenced` goes empty and every live file looks like an
+    # orphan. Refuse rather than delete the warehouse.
+    if referenced and live == 0 and orphans:
+        raise RuntimeError(
+            f"sweep_orphans: matched 0 of {len(referenced)} referenced file(s) against "
+            f"{len(orphans)} candidate(s) — path normalization is wrong, refusing to delete."
+        )
+
+    print(f"[maintain] sweep_orphans: {len(referenced):,} referenced, {live:,} matched live, "
+          f"{young:,} inside {grace_days}d grace, {len(orphans):,} orphan(s)")
+    if dry_run:
+        for path in orphans[:5]:
+            print(f"           would delete {path}")
+        return len(orphans)
+
+    for i in range(0, len(orphans), batch_size):
+        obs.delete(store, orphans[i:i + batch_size])
+    print(f"[maintain] sweep_orphans: deleted {len(orphans):,} file(s)")
+    return len(orphans)
 
 
 def _tables(con: duckdb.DuckDBPyConnection, cat: str) -> list[tuple[str, str]]:
@@ -178,14 +279,9 @@ def maintain(keep_days: int = 7, *, dry_run: bool = False, merge: bool = True,
     ).fetchall())
     print(f"[maintain] cleanup_old_files{tag}: {deleted:,} file(s) removed from GCS")
 
-    # 5. Delete parquet the catalog never referenced — what an ingest that died before committing
-    #    leaves behind. cleanup_old_files walks references only, so it cannot see these.
-    orphaned = len(con.execute(
-        f"SELECT * FROM ducklake_delete_orphaned_files('{cat}', "
-        f"older_than => now() - INTERVAL '{int(ORPHAN_GRACE_DAYS)} days', dry_run => {dr})"
-    ).fetchall())
-    print(f"[maintain] delete_orphaned_files older than {ORPHAN_GRACE_DAYS}d{tag}: "
-          f"{orphaned:,} file(s) removed from GCS")
+    # 5. Delete parquet nothing references — stranded when expiry dropped its snapshot's refs, or
+    #    left by an ingest that died before committing. cleanup_old_files cannot see either.
+    sweep_orphans(con, cat, dry_run=dry_run)
 
     con.close()
     return 0

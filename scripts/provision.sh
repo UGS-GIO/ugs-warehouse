@@ -35,6 +35,16 @@ PUBSUB_SA="service-${PROJECT_NUMBER}@gcp-sa-pubsub.iam.gserviceaccount.com"
 
 # A dead-letter topic + a parking subscription on it, so capped messages are retained rather than
 # dropped. Mirrors the raster-ingest / geoparquet / gdb-ingest DLQs already in this project.
+#
+# The `-dlq-parking` SUFFIX IS LOAD-BEARING: the "Ingest pipeline DLQ has parked messages" alert
+# policy selects subscriptions by `monitoring.regex.full_match(".*-dlq-parking")`, so a parking
+# subscription named anything else is silently unmonitored — no error, just no alert.
+#
+# That policy is NOT owned here and is not in this repo's tofu — it is created by
+# `ugs-ingest/scripts/setup-monitoring-alerts.sh`. Do not import it into infra/: two owners would
+# fight over one resource. Change the alert there; keep the suffix here.
+# Caveat: that script only CREATES (it early-returns if the displayName exists), so editing its
+# notification channels does not update an already-deployed policy — that needs a one-time patch.
 ensure_dlq() {
   local dlq="$1"
   gcloud pubsub topics describe "${dlq}" --project="${PROJECT}" >/dev/null 2>&1 \

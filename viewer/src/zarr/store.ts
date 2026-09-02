@@ -64,12 +64,19 @@ async function openVariable(
 
   const { multiscales: _drop, ...rest } = varNode.attrs;
   const layout = (varNode.attrs.multiscales as { layout?: Record<string, unknown>[] } | undefined)?.layout?.[0];
-  return {
-    node,
-    attrs: layout
-      ? { ...rest, "spatial:transform": layout["spatial:transform"], "spatial:shape": layout["spatial:shape"] }
-      : { ...rest },
-  };
+  const attrs = layout
+    ? { ...rest, "spatial:transform": layout["spatial:transform"], "spatial:shape": layout["spatial:shape"] }
+    : { ...rest };
+
+  // Returning the merged attrs is not enough: ZarrLayer re-parses `node.attrs` itself, and a
+  // pyramid level has none — its schema then rejects the missing `spatial:dimensions` with
+  // "expected array". Stamp the instance so every consumer sees them, however it reaches the
+  // node. Dropping `multiscales` makes the level look like the single-resolution variable it
+  // effectively is. A Proxy or prototype clone breaks zarrita's private fields.
+  if (node !== varNode) {
+    Object.defineProperty(node, "attrs", { value: attrs, configurable: true });
+  }
+  return { node, attrs };
 }
 
 /**

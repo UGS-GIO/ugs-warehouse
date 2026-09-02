@@ -112,3 +112,13 @@ variable "bucket_ops_alert_threshold" {
   EOT
   default     = 60
 }
+
+variable "firebase_site_id" {
+  type        = string
+  description = <<-EOT
+    Firebase Hosting site id for the public discovery viewer. Matches the existing convention in
+    this project (hazards-/wetlands-/ccus-/minerals-geology-utah-gov) and pre-matches the eventual
+    custom domain data.geology.utah.gov.
+  EOT
+  default     = "data-geology-utah-gov"
+}

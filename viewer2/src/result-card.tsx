@@ -1,0 +1,77 @@
+// The shared result card + list row for the discovery experience. Lifted out of discovery-view.tsx so
+// the Landing "Recently updated" strip and the Discover result grid render one identical card. The
+// whole card is a single <a> (keyboard-focusable, cmd/middle-click opens a new tab) whose plain
+// left-click the caller intercepts for in-app nav; a caller that wants map↔card hover sync passes the
+// mouse handlers, and one that doesn't (Landing) omits them.
+import type { ItemRef } from "./browse";
+import { collectionLabel, dateOf, hasGeometry, series, title, typeOf } from "./item-view";
+import { thumbnailAsset } from "./stac";
+import { C } from "./ui";
+
+export type Density = "comfortable" | "compact";
+
+export type LinkAttrs = {
+  href: string;
+  "data-href": string;
+  onClick: (e: React.MouseEvent) => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+};
+
+type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs };
+
+// collection · type · date, as a muted meta line (reference parity — text, not a badge wall).
+const metaLine = (it: ItemRef) => [collectionLabel(it.collId), typeOf(it), dateOf(it)].filter(Boolean).join(" · ");
+// Muted, NON-anchor format chips — the card is itself an <a>, so it must contain no nested anchors.
+// Thumbnails/images are already the card image, so they're dropped.
+const formatBadges = (it: ItemRef) =>
+  Object.entries(it.data?.assets ?? {})
+    .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.type?.startsWith("image/"))
+    .slice(0, 4)
+    .map(([k, a]) => <span key={k} className={C.badge}>{a.title ?? k}</span>);
+
+const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
+
+// Gallery card — the centerpiece: thumbnail + series + title + meta (+ format chips when roomy).
+export function ResultCard({ it, density, on, link }: CardProps) {
+  const th = thumbnailAsset(it.data);
+  const compact = density === "compact";
+  return (
+    <a {...link}
+      className={`flex cursor-pointer gap-3 rounded-lg border bg-card p-3 text-inherit no-underline transition hover:border-primary hover:shadow-sm ${FOCUS_RING} ${on ? "border-primary ring-1 ring-primary" : "border-border"}`}>
+      <div className={`${compact ? "h-12 w-12" : "h-20 w-20"} flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted`}>
+        {th ? <img src={th.href} alt="" loading="lazy" className="h-full w-full object-cover" />
+          : <span className="px-1 text-center font-mono text-[10px] leading-tight text-muted-foreground">{series(it)}</span>}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-baseline gap-1.5">
+          <span className="truncate font-mono text-[11px] font-semibold text-foreground" title={series(it)}>{series(it)}</span>
+          {hasGeometry(it) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
+        </div>
+        <p className={`font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{title(it)}</p>
+        <div className="mt-1 truncate text-xs text-muted-foreground" title={metaLine(it)}>{metaLine(it)}</div>
+        {!compact && <div className="mt-1">{formatBadges(it)}</div>}
+      </div>
+    </a>
+  );
+}
+
+// List row — one dense line for scanning many at once.
+export function ResultRow({ it, density, on, link }: CardProps) {
+  const compact = density === "compact";
+  return (
+    <li>
+      <a {...link}
+        className={`flex cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING} ${on ? "bg-primary/10" : "hover:bg-muted"}`}>
+        <span className="shrink-0 font-mono text-[11px] font-semibold text-foreground">{series(it)}</span>
+        <span className="truncate text-sm text-foreground" title={title(it)}>{title(it)}</span>
+        {!compact && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{collectionLabel(it.collId)}</span>}
+        {hasGeometry(it) && (
+          <span className="ml-auto shrink-0 text-primary">
+            <span aria-hidden className="text-[10px]">◆</span><span className="sr-only">on the map</span>
+          </span>
+        )}
+      </a>
+    </li>
+  );
+}

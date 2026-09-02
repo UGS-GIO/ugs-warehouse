@@ -128,7 +128,9 @@ gcloud pubsub subscriptions add-iam-policy-binding "${RASTER_SUB}" --project="${
 # orchestrator can't touch any other Cloud Run resource. + actAs the runtime SA (itself) to launch
 # executions that run as ${RUNTIME_SA}.
 echo "→ pipeline orchestrator: execute rights on the sub-jobs only (least privilege)"
-for SUBJOB in ugs-pubs-thumbs ugs-pubs-threed ugs-pubs-ingest ugs-pubs-fts ugs-pubs-embed ugs-geolmap-mosaics ugs-pubs-graph; do
+# ugs-warehouse-ingest is here because the push handler starts it per topic instead of ingesting
+# in-request (service/main.py).
+for SUBJOB in ugs-pubs-thumbs ugs-pubs-threed ugs-pubs-ingest ugs-pubs-fts ugs-pubs-embed ugs-geolmap-mosaics ugs-pubs-graph ugs-warehouse-ingest; do
   gcloud run jobs add-iam-policy-binding "${SUBJOB}" --region="${REGION}" --project="${PROJECT}" \
     --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
 done
@@ -191,6 +193,55 @@ done < <(gcloud pubsub subscriptions list --project="${PROJECT}" \
 if [ "${audit_fail}" -ne 0 ]; then
   echo "✗ a subscription this script owns has no delivery cap — re-run or fix before shipping" >&2
   exit 1
+fi
+
+# --- job failure alerting -----------------------------------------------------------------------
+# The push handler now starts the ingest job and acks immediately, so a failed ingest reaches no
+# DLQ and no retry. The existing "Ingest pipeline Cloud Run 5xx" policy watches SERVICES, not jobs,
+# so without this a dead ingest is silent — you find out when the layer never appears.
+ALERT_NAME="Warehouse job execution failed"
+ALERT_API="https://monitoring.googleapis.com/v3/projects/${PROJECT}/alertPolicies"
+ALERT_TOKEN=$(gcloud auth print-access-token)
+# Quotes are pre-escaped: this is interpolated INTO a JSON string below.
+WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\")'
+
+echo "→ alert policy: ${ALERT_NAME}"
+if curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200" \
+     | jq -e --arg n "${ALERT_NAME}" '[.alertPolicies[]? | select(.displayName == $n)] | length > 0' >/dev/null; then
+  echo "  ✓ exists"
+else
+  CHANNELS=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" \
+    "https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels" \
+    | jq -c '[.notificationChannels[]? | select(.type=="email") | .name]')
+  curl -sf -X POST -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" \
+    -d "$(cat <<JSON
+{
+  "displayName": "${ALERT_NAME}",
+  "documentation": {
+    "content": "A warehouse Cloud Run job execution failed. Nothing retries it: the Pub/Sub push handler starts the ingest job and acks immediately, so a failure here never reaches the dead-letter queue.\n\nTriage: gcloud run jobs executions list --job=<job> --region=us-central1 --project=${PROJECT}\nThen read its logs by execution name. Re-run by re-promoting the topic, or execute the job directly with --args=--topic,<schema>.<layer>_current.",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "conditions": [{
+    "displayName": "job execution result=failed",
+    "conditionThreshold": {
+      "filter": "resource.type = \"cloud_run_job\" AND metric.type = \"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result = \"failed\" AND resource.labels.job_name = ${WATCHED_JOBS}",
+      "comparison": "COMPARISON_GT",
+      "thresholdValue": 0,
+      "duration": "0s",
+      "aggregations": [{
+        "alignmentPeriod": "300s",
+        "perSeriesAligner": "ALIGN_DELTA",
+        "crossSeriesReducer": "REDUCE_SUM",
+        "groupByFields": ["resource.labels.job_name"]
+      }],
+      "trigger": { "count": 1 }
+    }
+  }],
+  "notificationChannels": ${CHANNELS}
+}
+JSON
+)" "${ALERT_API}" >/dev/null && echo "  ✓ created" || echo "  ✗ could not create (monitoring.alertPolicyEditor?)" >&2
 fi
 
 echo "✓ provisioned"

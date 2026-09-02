@@ -1,5 +1,13 @@
 """Cloud Run service: Pub/Sub push handler that triggers per-topic ingest.
 
+The handler does NOT ingest inline. It starts the `ugs-warehouse-ingest` Cloud Run job for the
+topic and acks immediately. Ingesting inside the request meant a DuckDB/geometry workload ran in a
+512Mi HTTP container: it needed a 3600s request timeout, an OOM killed the container mid-request,
+and a slow topic produced 429s that Pub/Sub retried into a redelivery storm (~$2.2k of GCS ops in
+2026-08). The job is built for it (2Gi, its own timeout) and the handler returns in milliseconds.
+
+Set INGEST_INLINE=1 to ingest in-process instead — local dev and tests.
+
 Pub/Sub push delivers an HTTP POST with envelope:
     { "message": { "data": "<base64-encoded-JSON>", ... }, "subscription": "..." }
 
@@ -15,6 +23,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+import os
 
 from fastapi import FastAPI, HTTPException, Request
 
@@ -26,6 +35,27 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger("ugs-warehouse.service")
 
 app = FastAPI(title="ugs-warehouse")
+
+INGEST_JOB = os.environ.get("INGEST_JOB", "ugs-warehouse-ingest")
+INGEST_JOB_REGION = os.environ.get("INGEST_JOB_REGION", "us-central1")
+INGEST_JOB_PROJECT = os.environ.get("INGEST_JOB_PROJECT", "")
+INGEST_INLINE = os.environ.get("INGEST_INLINE", "0") == "1"
+
+
+def _start_ingest_job(topic_fqn: str) -> str:
+    """Start the ingest job for one topic. Returns the execution name."""
+    from google.cloud import run_v2
+
+    if not INGEST_JOB_PROJECT:
+        raise RuntimeError("INGEST_JOB_PROJECT is unset — cannot address the ingest job")
+    client = run_v2.JobsClient()
+    # Args REPLACE the job's configured `--all`; the entrypoint execs `python -m <module> "$@"`.
+    override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=["--topic", topic_fqn])
+    op = client.run_job(request=run_v2.RunJobRequest(
+        name=f"projects/{INGEST_JOB_PROJECT}/locations/{INGEST_JOB_REGION}/jobs/{INGEST_JOB}",
+        overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1),
+    ))
+    return (op.metadata.name if op.metadata else "") or "(started)"
 
 
 def _decode(envelope: dict) -> dict:
@@ -66,13 +96,21 @@ async def pubsub_push(req: Request) -> dict[str, str]:
         return {"status": "skipped", "topic": topic.fqn,
                 "reason": f"{topic.schema} not in MART_SCHEMAS"}
 
-    log.info("ingest start: %s", topic.fqn)
-    rc = ingest_topic(topic)
-    log.info("ingest done : %s rc=%s", topic.fqn, rc)
+    if INGEST_INLINE:
+        log.info("ingest start (inline): %s", topic.fqn)
+        rc = ingest_topic(topic)
+        log.info("ingest done : %s rc=%s", topic.fqn, rc)
+        # rc != 0 = at least one sink failed — already logged. Ack anyway so
+        # Pub/Sub does not retry-storm; recovery happens on the next publish.
+        return {"status": "ok", "topic": topic.fqn, "rc": str(rc)}
 
-    # rc != 0 = at least one sink failed — already logged. Ack anyway so
-    # Pub/Sub does not retry-storm; recovery happens on the next publish.
-    return {"status": "ok", "topic": topic.fqn, "rc": str(rc)}
+    try:
+        execution = _start_ingest_job(topic.fqn)
+    except Exception as e:  # noqa: BLE001 — a 5xx here is what Pub/Sub retries into a storm
+        log.exception("could not start ingest job for %s", topic.fqn)
+        return {"status": "error", "topic": topic.fqn, "reason": f"{type(e).__name__}: {e}"}
+    log.info("ingest queued: %s -> %s", topic.fqn, execution)
+    return {"status": "queued", "topic": topic.fqn, "execution": execution}
 
 
 @app.post("/raster")

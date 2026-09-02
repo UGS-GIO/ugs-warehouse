@@ -218,7 +218,7 @@ else
 {
   "displayName": "${ALERT_NAME}",
   "documentation": {
-    "content": "A warehouse Cloud Run job execution failed. Nothing retries it: the Pub/Sub push handler starts the ingest job and acks immediately, so a failure here never reaches the dead-letter queue.\n\nTriage: gcloud run jobs executions list --job=<job> --region=us-central1 --project=${PROJECT}\nThen read its logs by execution name. Re-run by re-promoting the topic, or execute the job directly with --args=--topic,<schema>.<layer>_current.",
+    "content": "A warehouse Cloud Run job execution failed. Nothing retries it: the Pub/Sub push handler starts the ingest job and acks immediately, so a failure here never reaches the dead-letter queue.\n\nTriage: list the executions for the failing job with `gcloud run jobs executions list`, then read that execution's logs by name. Re-run by re-promoting the topic, or by executing the job directly with a topic arg. Placeholders are omitted here because this field renders as markdown and eats angle brackets.",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",

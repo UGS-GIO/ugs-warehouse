@@ -16,6 +16,8 @@ import { LegalFooter } from "./legal-footer";
 import { CATALOG_URL } from "./stac";
 import { clampSize, DETENTS, nearestDetent } from "./map-model";
 import { useIsDesktop } from "./ui/use-breakpoint";
+import { ResizeHandle } from "./ui/resizable";
+import { useResizable } from "./ui/use-resizable";
 
 type Tab = "layers" | "info";
 type RevealRef = RefObject<(() => void) | null>;
@@ -24,35 +26,6 @@ const SIDEBAR_KEY = "ugsw.mapSidebarW";
 const DOCK_KEY = "ugsw.mapDockH";
 const SIDEBAR = { initial: 320, min: 240, max: 560 };
 const DOCK = { initial: 240, min: 120, max: 640 };
-
-/** A drag-resizable size persisted to localStorage. "x" grows rightward, "y" grows UPWARD. */
-function useResizable(key: string, { initial, min, max }: typeof SIDEBAR, axis: "x" | "y") {
-  const [size, setSize] = useState(() => clampSize(Number(localStorage.getItem(key)), min, max, initial));
-  const commit = (n: number) => {
-    const v = clampSize(n, min, max, initial);
-    setSize(v);
-    localStorage.setItem(key, String(v));
-  };
-  const onPointerDown = (e: React.PointerEvent) => {
-    e.preventDefault();
-    const start = axis === "x" ? e.clientX : e.clientY;
-    const startSize = size;
-    const delta = (ev: PointerEvent) => (axis === "x" ? ev.clientX - start : start - ev.clientY);
-    const move = (ev: PointerEvent) => setSize(clampSize(startSize + delta(ev), min, max, initial));
-    const up = (ev: PointerEvent) => {
-      commit(startSize + delta(ev));
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-      document.body.style.cursor = "";
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    document.body.style.cursor = axis === "x" ? "col-resize" : "row-resize";
-  };
-  return { size, onPointerDown, nudge: (d: number) => commit(size + d) };
-}
-
-const grip = "bg-muted-foreground/30 transition-colors group-hover:bg-primary group-focus:bg-primary";
 
 function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
   const [dockOpen, setDockOpen] = useState(true);
@@ -65,38 +38,12 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
       <aside style={{ width: sidebar.size }} className="flex shrink-0 flex-col overflow-y-auto border-r border-border p-3">
         {layers}
       </aside>
-      <div
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize layer list"
-        tabIndex={0}
-        onPointerDown={sidebar.onPointerDown}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowLeft") sidebar.nudge(-16);
-          else if (e.key === "ArrowRight") sidebar.nudge(16);
-        }}
-        className="group relative z-10 -mx-1.5 flex w-4 shrink-0 cursor-col-resize items-center justify-center focus:outline-none"
-      >
-        <span className={`absolute h-10 w-1.5 rounded-full ${grip}`} />
-      </div>
+      <ResizeHandle resizable={sidebar} label="Resize layer list" className="relative z-10 -mx-1.5 shrink-0" />
       <main className="flex min-h-0 min-w-0 flex-1 flex-col">
         <div className="relative min-h-0 flex-1">{map}</div>
         <section style={dockOpen ? { height: dock.size } : undefined} className="relative flex shrink-0 flex-col border-t border-border">
           {dockOpen && (
-            <div
-              role="separator"
-              aria-orientation="horizontal"
-              aria-label="Resize detail panel"
-              tabIndex={0}
-              onPointerDown={dock.onPointerDown}
-              onKeyDown={(e) => {
-                if (e.key === "ArrowUp") dock.nudge(16);
-                else if (e.key === "ArrowDown") dock.nudge(-16);
-              }}
-              className="group absolute inset-x-0 -top-1.5 z-10 flex h-3 cursor-row-resize items-center justify-center focus:outline-none"
-            >
-              <span className={`h-1.5 w-10 rounded-full ${grip}`} />
-            </div>
+            <ResizeHandle resizable={dock} label="Resize detail panel" className="absolute inset-x-0 -top-1.5 z-10" />
           )}
           <button
             type="button"

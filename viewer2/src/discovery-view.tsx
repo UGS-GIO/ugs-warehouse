@@ -22,6 +22,8 @@ import { ItemDetail } from "./item-detail";
 import { UiSegmented } from "./ui/segmented";
 import { UiSelect } from "./ui/select";
 import { useIsWide } from "./ui/use-breakpoint";
+import { ResizeHandle } from "./ui/resizable";
+import { useResizable } from "./ui/use-resizable";
 
 // maplibre is ~1.5MB — lazy so the rail + cards paint immediately and the map streams in behind them
 // (App already code-splits ./map, so this shares that chunk).
@@ -31,6 +33,10 @@ const LAYOUTS = [{ value: "gallery" as const, label: "Gallery" }, { value: "list
 const DENSITIES = [{ value: "comfortable" as const, label: "Comfy" }, { value: "compact" as const, label: "Compact" }];
 const SORT_ITEMS = SORTS.map((s) => ({ value: s.key, label: s.label }));
 const PAGE = 48; // cards per "Show more" step (reference parity)
+// Detail drawer width: drag-resizable and remembered, since how much room the preview deserves
+// depends on the item (a long abstract vs. a thumbnail). CSS caps it on narrow viewports.
+const DRAWER_KEY = "ugsw.discoverDrawerW";
+const DRAWER = { initial: 560, min: 360, max: 1100 };
 
 const idOf = (href: string) => href.split("/").slice(-2)[0];
 // Escape a value for a [data-href="…"] selector (scroll a map-hovered card into view).
@@ -178,6 +184,8 @@ export function DiscoveryView({
   }, [itemSelected]);
 
   // The removable filter chips (pure), and a one-shot reset of every filter (text + sort/layout kept).
+  const drawer = useResizable(DRAWER_KEY, DRAWER, "x-left");
+
   const chips = activeChips(st, { collection: collectionLabel, category: categoryLabel });
   const activeFilters = chips.length;
   const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], geometry: "all", area: null });
@@ -325,7 +333,11 @@ export function DiscoveryView({
         <>
           <div className="absolute inset-0 z-20 bg-black/40" onClick={onCloseItem} aria-hidden />
           <aside role="dialog" aria-modal="true" aria-label="Item detail"
-            className="absolute inset-y-0 right-0 z-30 flex w-full max-w-[560px] flex-col border-l border-border bg-background shadow-xl">
+            style={isWide ? { width: drawer.size } : undefined}
+            className="absolute inset-y-0 right-0 z-30 flex w-full max-w-[calc(100vw-2rem)] flex-col border-l border-border bg-background shadow-xl">
+            {/* Drag (or arrow-key) the left edge to widen the preview. Full-bleed below lg, so the
+                handle only exists where there's something to trade width with. */}
+            {isWide && <ResizeHandle resizable={drawer} label="Resize item detail" className="absolute inset-y-0 -left-2 z-10" />}
             <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Item detail</span>
               <div className="flex items-center gap-1">

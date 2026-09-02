@@ -71,3 +71,8 @@ tf-apply:
 
 tf-output:
     cd infra && tofu output
+
+# Serve the built viewer exactly as Firebase Hosting will (SPA rewrites + cache headers).
+# Build first: cd viewer && npm run build
+viewer-preview:
+    firebase emulators:start --only hosting --project demo-ugs

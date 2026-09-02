@@ -41,7 +41,8 @@ gcloud iam service-accounts create warehouse-deploy --project=$PROJECT \
 # monitoring.tf's cost alert; they are the narrow pair, NOT roles/monitoring.editor.
 for R in roles/storage.admin roles/run.admin \
          roles/iap.admin roles/iam.serviceAccountAdmin \
-         roles/monitoring.notificationChannelEditor roles/monitoring.alertPolicyEditor; do
+         roles/monitoring.notificationChannelEditor roles/monitoring.alertPolicyEditor \
+         roles/firebasehosting.admin; do
   gcloud projects add-iam-policy-binding $PROJECT \
     --member="serviceAccount:${SA}" --role=$R --condition=None >/dev/null
 done

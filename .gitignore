@@ -59,3 +59,6 @@ infra/.terraform/
 infra/.terraform.lock.hcl
 *.tfstate
 *.tfstate.*
+
+# Firebase Hosting deploy cache
+.firebase/

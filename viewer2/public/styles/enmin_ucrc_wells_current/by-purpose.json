@@ -1,0 +1,107 @@
+{
+  "layers": [
+    {
+      "id": "enmin_ucrc_wells-circle",
+      "type": "circle",
+      "paint": {
+        "circle-radius": [
+          "interpolate",
+          [
+            "linear"
+          ],
+          [
+            "zoom"
+          ],
+          4,
+          2,
+          7,
+          4,
+          10,
+          6,
+          13,
+          8,
+          16,
+          10
+        ],
+        "circle-stroke-width": 1,
+        "circle-opacity": 0.85,
+        "circle-color": [
+          "match",
+          [
+            "coalesce",
+            [
+              "get",
+              "purpose"
+            ],
+            ""
+          ],
+          "Oil and Gas",
+          "#2B83BA",
+          "Mining",
+          "#D7191C",
+          "Tar Sands",
+          "#4B3621",
+          "Water",
+          "#41B6C4",
+          "Potash",
+          "#E66101",
+          "Coal",
+          "#333333",
+          "Stratigraphy",
+          "#7B68EE",
+          "Building or Construction",
+          "#FDB863",
+          "Oil Shale",
+          "#8C6D31",
+          "Geothermal",
+          "#E31A1C",
+          "Teaching",
+          "#A6D854",
+          "Display",
+          "#FF69B4",
+          "Other",
+          "#BDBDBD",
+          "#BDBDBD"
+        ],
+        "circle-stroke-color": [
+          "match",
+          [
+            "coalesce",
+            [
+              "get",
+              "purpose"
+            ],
+            ""
+          ],
+          "Oil and Gas",
+          "#1A5276",
+          "Mining",
+          "#922B21",
+          "Tar Sands",
+          "#2C1F13",
+          "Water",
+          "#2C7F8C",
+          "Potash",
+          "#A04500",
+          "Coal",
+          "#1A1A1A",
+          "Stratigraphy",
+          "#5548A6",
+          "Building or Construction",
+          "#B08045",
+          "Oil Shale",
+          "#5E4921",
+          "Geothermal",
+          "#9E1213",
+          "Teaching",
+          "#74963B",
+          "Display",
+          "#B3497E",
+          "Other",
+          "#858585",
+          "#858585"
+        ]
+      }
+    }
+  ]
+}

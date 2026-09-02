@@ -215,13 +215,33 @@ def _aux_srs(aux_path):
     return None
 
 
+def _sidecar(stem: str, exts: tuple[str, ...]) -> str | None:
+    """Sibling of `stem` with one of `exts`, matched case-insensitively.
+
+    The zip extractor accepts any case (`n.lower().endswith(...)`), so an uppercase FOO.TFW lands on
+    disk and then an exact-case lookup misses it — the bundle looks unreferenced when it is not.
+    """
+    directory = os.path.dirname(stem) or "."
+    base = os.path.basename(stem).lower()
+    try:
+        entries = os.listdir(directory)
+    except OSError:
+        return None
+    for entry in entries:
+        low = entry.lower()
+        if any(low == base + e for e in exts):
+            return os.path.join(directory, entry)
+    return None
+
+
 def _prj_srs(work):
     """CRS from any sibling .prj in the bundle — GIS bundles ship .prj for shapefiles but often
     not for the base raster, yet the raster's world-file coords are in that same project CRS."""
-    import glob
-
     from rasterio.crs import CRS
-    for p in sorted(glob.glob(os.path.join(work, "**", "*.prj"), recursive=True)):
+    found = []
+    for root, _dirs, files in os.walk(work):
+        found += [os.path.join(root, f) for f in files if f.lower().endswith(".prj")]
+    for p in sorted(found):
         try:
             c = CRS.from_wkt(open(p).read())
             return f"EPSG:{c.to_epsg()}" if c.to_epsg() else c.to_wkt()
@@ -254,13 +274,12 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
         return gtif
     if zip_path and inner_gtif:
         inner_stem = re.sub(r"\.[^.]+$", "", inner_gtif)
-        wf = next((os.path.join(work, inner_stem + e) for e in (".tfwx", ".tfw", ".wld")
-                   if os.path.exists(os.path.join(work, inner_stem + e))), None)
-        aux = os.path.join(work, inner_gtif + ".aux.xml") if os.path.exists(os.path.join(work, inner_gtif + ".aux.xml")) else None
+        wf = _sidecar(os.path.join(work, inner_stem), (".tfwx", ".tfw", ".wld"))
+        aux = _sidecar(os.path.join(work, inner_gtif), (".aux.xml",))
     else:
         stem = re.sub(r"\.[^.]+$", "", gtif)
-        wf = next((stem + e for e in (".tfwx", ".tfw", ".wld") if os.path.exists(stem + e)), None)
-        aux = gtif + ".aux.xml" if os.path.exists(gtif + ".aux.xml") else None
+        wf = _sidecar(stem, (".tfwx", ".tfw", ".wld"))
+        aux = _sidecar(gtif, (".aux.xml",))
     srs = _aux_srs(aux) if aux else None
     if not srs:
         srs = _prj_srs(work)

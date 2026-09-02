@@ -394,7 +394,10 @@ steps:
       - --set-env-vars=^|^SOURCE_BACKEND=postgres|POSTGRES_DSN=host=/cloudsql/${_SQL_INSTANCE} dbname=seamlessgeolmap user=schema_owner|DUCKLAKE_DATA_PATH=${_DATA_PATH}
       - --command=python
       - --args=-m,ugs_warehouse.pubs.harvest,--all
-      - --task-timeout=3600
+      # Observed on run t5psj: 2 of 5 shards hit "Terminating task because it has reached the
+      # maximum timeout of 3600 seconds". More pubs succeeding means MORE work per shard, not less.
+      # SKIP_EXISTING checks GCS before downloading, so a longer run resumes cheaply.
+      - --task-timeout=21600
       - --max-retries=1
       # /tmp is RAM on Cloud Run, so memory IS the disk here. GDAL refused at 4Gi: "Free disk space
       # available is 1.32 GB, whereas 3.53 GB are at least necessary" on a 1.7GB plate.

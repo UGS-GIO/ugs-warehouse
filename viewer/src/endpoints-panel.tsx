@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { serviceUrlOf } from "./catalog";
 import { cogAsset, ducklakeAsset, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
-  tilesStyleUrl, xyzTilesUrl } from "./stac";
+  tilesStyleUrl, xyzTilesUrl, zarrAsset } from "./stac";
 import { usePreviewMap } from "./preview-map";
 import { UiSelect } from "./ui/select";
 
@@ -36,13 +36,15 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   const pm = pmtilesLink(item);
   const cog = cogAsset(item);
   const ducklake = ducklakeAsset(item);
+  const zarrStore = zarrAsset(item);
   const esriRenders = Object.keys(rendersOf(item)).sort();
   // Follow the map's "Symbolize by" picker, so the URL you copy is the symbology on screen.
   const { render: shown } = usePreviewMap();
   const [pickedRender, setPickedRender] = useState<string>();
   // Explicit choice wins; otherwise track the map so the two never disagree silently.
   const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
-  const rows: { label: string; desc: string; url: string; pick?: React.ReactNode; unavailable?: string }[] = [];
+  // `noOpen`: copyable but not openable — a store prefix returns NoSuchKey in a browser.
+  const rows: { label: string; desc: string; url: string; pick?: React.ReactNode; unavailable?: string; noOpen?: boolean }[] = [];
   if (coll) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
@@ -50,6 +52,16 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   // A raster item's data IS the COG — without this row it had no endpoints at all once the
   // bogus Features links stopped being constructed for it.
   if (cog) rows.push({ label: "COG", desc: "Cloud-Optimized GeoTIFF — QGIS, ArcGIS, GDAL, rasterio (range reads)", url: cog.href });
+  // A datacube's data IS the store, and it is read, never fetched: the href is a prefix, so it
+  // belongs here rather than in Downloads, where it rendered as a link that could only 404.
+  if (zarrStore) {
+    rows.push({
+      label: "Zarr (Icechunk)",
+      desc: "Datacube store — open with xarray / icechunk",
+      url: zarrStore.href,
+      noOpen: true,
+    });
+  }
   // PMTiles is the generic answer, not one option among equals: MapLibre, Leaflet, OpenLayers and
   // recent QGIS read it straight off the CDN with range requests — no service in the path.
   if (pm) rows.push({ label: "PMTiles", desc: "Vector tiles — MapLibre, Leaflet, OpenLayers, QGIS. Read direct from the CDN", url: pm.href });
@@ -101,7 +113,9 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
               <>
                 <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-sm text-muted-foreground" title={r.url}>{r.url}</code>
                 <CopyBtn text={r.url} />
-                <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
+                {!r.noOpen && (
+                  <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
+                )}
               </>
             )}
           </div>

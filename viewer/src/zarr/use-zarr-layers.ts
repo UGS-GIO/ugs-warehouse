@@ -12,7 +12,7 @@ import { useMemo } from "react";
 
 import { makeLocalEpsgResolver } from "./epsg";
 import { openZarr, sampleRange } from "./store";
-import { getTileData, makeRenderTile } from "./tile";
+import { makeGetTileData, makeRenderTile } from "./tile";
 
 /** `pinDims` = every non-spatial dim; ZarrLayer throws unless all of them are pinned. */
 export type ZarrSpec = { id: string; href: string; variable: string; pinDims: string[] };
@@ -69,7 +69,7 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
         selection: Object.fromEntries(s.pinDims.map((d) => [d, 0])),
         opacity: 0.85,
         epsgResolver: makeLocalEpsgResolver(src.arrayAttrs),
-        getTileData,
+        getTileData: makeGetTileData(src.noDataValue),
         renderTile: makeRenderTile({
           colormapTexture,
           colormapIndex: COLORMAP_INDEX.viridis,

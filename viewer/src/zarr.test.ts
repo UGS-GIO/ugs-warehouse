@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import { assetKind, cubeVariables, nonSpatialDimensions, timeDimensionOf } from "./stac";
-import { fillValueOf } from "./zarr/store";
+import { decodeFillValue, fillValueOf } from "./zarr/store";
+import { effectiveNoData, maskNaN, NODATA_SENTINEL } from "./zarr/tile";
 
 // Shaped like the UBM items the warehouse federates.
 const zarrAsset = { href: "https://ubm-assets.geology.utah.gov/zarr/ubm/v1/DAYMET_DISALEXI", type: "application/vnd.zarr", roles: ["data"] };
@@ -91,8 +92,56 @@ describe("fillValueOf", () => {
     expect(fillValueOf({ missing_value: -1 })).toBe(-1);
   });
 
-  // NaN would mask nothing on the GPU; -9999 is the export default.
-  it("ignores a non-finite sentinel", () => {
-    expect(fillValueOf({ _FillValue: NaN })).toBe(-9999);
+  // Was: coerced to -9999 because "NaN would mask nothing on the GPU". But -9999 appears
+  // nowhere in the data either, so that masked nothing too — nodata rendered as the colormap
+  // floor. Keep what the array declares; the render boundary resolves it (effectiveNoData +
+  // maskNaN), so the sentinel is decided where the shader constraint actually lives.
+  it("keeps a non-finite sentinel rather than substituting one that matches nothing", () => {
+    expect(fillValueOf({ _FillValue: NaN })).toBeNaN();
+  });
+});
+
+describe("fill value decoding", () => {
+  it("decodes a base64 IEEE NaN, which stores use because JSON has no NaN", () => {
+    // Read as an opaque string this fell through to -9999, a value that appears nowhere in
+    // the data, so nodata was never masked and rendered as the colormap floor.
+    expect(decodeFillValue("AAAAAAAA+H8=")).toBeNaN();
+    expect(fillValueOf({ _FillValue: "AAAAAAAA+H8=" })).toBeNaN();
+  });
+
+  it("decodes the spelled-out non-finite forms", () => {
+    expect(decodeFillValue("NaN")).toBeNaN();
+    expect(decodeFillValue("Infinity")).toBe(Number.POSITIVE_INFINITY);
+    expect(decodeFillValue("-Infinity")).toBe(Number.NEGATIVE_INFINITY);
+  });
+
+  it("passes a plain numeric fill through", () => {
+    expect(fillValueOf({ _FillValue: -9999 })).toBe(-9999);
+    expect(fillValueOf({ missing_value: 0 })).toBe(0);
+  });
+
+  it("falls back only when the array declares nothing usable", () => {
+    expect(fillValueOf({})).toBe(-9999);
+    expect(decodeFillValue(undefined)).toBeUndefined();
+  });
+});
+
+describe("nodata sentinel", () => {
+  it("swaps a non-finite fill for one the shader can compare", () => {
+    // FilterNoDataVal tests equality; NaN never equals itself.
+    expect(effectiveNoData(Number.NaN)).toBe(NODATA_SENTINEL);
+    expect(effectiveNoData(Number.POSITIVE_INFINITY)).toBe(NODATA_SENTINEL);
+    expect(effectiveNoData(-9999)).toBe(-9999);
+  });
+
+  it("stays inside mediump range so mobile GPUs do not fold it to Inf", () => {
+    expect(Math.abs(NODATA_SENTINEL)).toBeLessThan(65504);
+  });
+
+  it("masks NaN in place", () => {
+    expect(Array.from(maskNaN(new Float32Array([1, Number.NaN, 3]), NODATA_SENTINEL)))
+      .toEqual([1, NODATA_SENTINEL, 3]);
+    // Must write what the shader tests for, not a fixed sentinel.
+    expect(Array.from(maskNaN(new Float32Array([1, Number.NaN]), -9999))).toEqual([1, -9999]);
   });
 });

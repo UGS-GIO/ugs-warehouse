@@ -6,6 +6,7 @@
 // discovery-model.ts into ONE source of truth (both now import from here).
 import type { ItemRef } from "./browse";
 import { validBbox } from "./map-model";
+import { mountHref } from "./mount";
 import {
   type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset,
   type TableColumn, zarrAsset,
@@ -66,7 +67,7 @@ export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
 // to open a new tab (a plain click is intercepted for in-app nav). `?i=` is the href's item folder,
 // which is exactly what App resolves ?i against.
 export const discoverHref = (it: ItemRef): string =>
-  `?view=discover&c=${encodeURIComponent(it.collId)}&i=${encodeURIComponent(it.href.split("/").slice(-2)[0])}`;
+  mountHref("/discover", new URLSearchParams({ c: it.collId, i: it.href.split("/").slice(-2)[0] }));
 
 // A row count where the warehouse published one (serving topics), else undefined.
 export const rowCount = (it: ItemRef): number | undefined => {

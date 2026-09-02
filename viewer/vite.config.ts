@@ -17,10 +17,13 @@ const BUILD_HASH = sh("git describe --tags --always --dirty", "dev");
 // HEAD commit date; if git is absent (tarball build), use the build date.
 const BUILD_DATE = sh("git log -1 --format=%cd --date=short", new Date().toISOString().slice(0, 10));
 
-// base: "./" so the built static bundle works under any CDN path.
+// base has to be an ABSOLUTE mount path, not "./": path routes mean the document's own directory
+// varies with the route (/map vs /discover/x), so a relative asset URL resolves differently per
+// page. It also feeds the router's basepath (src/routes.tsx). "/" for Firebase; the review and
+// preview builds pass their own prefix with --base.
 export default defineConfig({
   plugins: [react(), tailwindcss()],
-  base: "./",
+  base: "/",
   define: {
     __BUILD_HASH__: JSON.stringify(BUILD_HASH),
     __BUILD_DATE__: JSON.stringify(BUILD_DATE),

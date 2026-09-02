@@ -7,6 +7,48 @@
       "**/.*",
       "**/node_modules/**"
     ],
+    "rewrites": [
+      {
+        "source": "/",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/catalog{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/map{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/discover{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/search{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/arch{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/guide{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/developers{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/preview{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/review{,/**}",
+        "destination": "/index.html"
+      }
+    ],
     "headers": [
       {
         "source": "**",

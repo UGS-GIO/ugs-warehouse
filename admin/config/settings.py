@@ -30,9 +30,9 @@ GCP_REGION = env("GCP_REGION", default="us-central1")
 SERVICES_PROJECT = env("SERVICES_PROJECT", default="ut-dnr-ugs-maps-prod")
 SERVICES_REGION = env("SERVICES_REGION", default=GCP_REGION)
 STAC_BASE = env("STAC_BASE", default="https://maps-assets.geology.utah.gov/warehouse/stac").rstrip("/")
-# Viewer deep-link base — pub item opens at {VIEWER_BASE}?c={series_code}&i={series_id}. Must point
-# at index.html: the CDN does NOT serve it for the bare `/viewer/` path (that 404s), only explicitly.
-VIEWER_BASE = env("VIEWER_BASE", default="https://maps-assets.geology.utah.gov/warehouse/viewer/index.html")
+# Viewer deep-link base — pub item opens at {VIEWER_BASE}?c={series_code}&i={series_id}. The viewer
+# is on Firebase Hosting now, so a real route is fine; /catalog is the view those params address.
+VIEWER_BASE = env("VIEWER_BASE", default="https://data-geology-utah-gov.web.app/catalog")
 
 # Serving surfaces to ping for the health row. Add more (api, featureserv) via HEALTH_CHECKS env
 # as "Name|url,Name|url". Defaults cover the public CDN surfaces the admin can always reach.

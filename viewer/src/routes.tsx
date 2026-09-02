@@ -1,7 +1,6 @@
-// Path-based route tree. viewer/ uses ONE root route with `?view=` because it is served from a GCS
-// bucket that cannot rewrite an arbitrary path to index.html — a real path 404s on reload there.
-// viewer2 targets Firebase Hosting, whose SPA rewrite (`** -> /index.html`, firebase.json) serves
-// index.html for any path, so views can be real routes: /map, /discover, /catalog, ….
+// Path-based route tree. Every host we deploy to rewrites an unknown path to index.html — Firebase
+// Hosting via firebase.json, the IAP review app and the previews service via serve.py's SPA
+// fallback — so views are real routes: /map, /discover, /catalog, ….
 //
 // Search params stay for what is genuinely *state about a view*, not the view itself:
 //   c/i  selected collection / item      l  active layer ids      s  series selection
@@ -10,6 +9,7 @@
 import { createRootRoute, createRoute, createRouter, type RouteComponent } from "@tanstack/react-router";
 
 import { AppLayout } from "./app";
+import { toBasepath } from "./mount";
 import { ArchRoute, DevelopersRoute, GuideRoute, ReviewRoute, SearchRoute } from "./routes/simple";
 import { CatalogRoute, DiscoverRoute, LandingRoute, MapRoute, PreviewRoute } from "./routes/views";
 
@@ -23,6 +23,10 @@ const validateSearch = (s: Record<string, unknown>) => ({
   l: str(s.l),
   s: str(s.s),
 });
+
+// Path routes have to know where the bundle is mounted or they'd read the mount prefix as part of
+// the route. Vite's `base` is that prefix (see mount.ts).
+const basepath = toBasepath(import.meta.env.BASE_URL);
 
 const rootRoute = createRootRoute({ component: AppLayout, validateSearch });
 
@@ -44,7 +48,7 @@ const routeTree = rootRoute.addChildren([
   route("/review", ReviewRoute),
 ]);
 
-export const router = createRouter({ routeTree, defaultPreload: false });
+export const router = createRouter({ routeTree, basepath, defaultPreload: false });
 
 declare module "@tanstack/react-router" {
   interface Register {

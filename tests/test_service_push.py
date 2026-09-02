@@ -45,9 +45,13 @@ def test_unsupported_schema_still_acks():
     assert r.json()["status"] == "skipped"
 
 
-def test_valid_payload_reaches_ingest():
-    with patch("service.main.ingest_topic", return_value=0) as ingest:
+def test_valid_payload_is_acted_on():
+    """The handler now starts the ingest job rather than ingesting in-request (see
+    tests/test_service_push_starts_job.py); a valid payload must still be acted on, not skipped."""
+    with patch("service.main._start_ingest_job", return_value="exec-1") as start, \
+         patch("service.main.INGEST_JOB_PROJECT", "a-project"), \
+         patch("service.main.INGEST_INLINE", False):
         r = _push({"schema": "hazards", "topic": "hazards_qfaults_current"})
     assert r.status_code == 200
-    assert r.json()["status"] == "ok"
-    ingest.assert_called_once()
+    assert r.json()["status"] == "queued"
+    start.assert_called_once()

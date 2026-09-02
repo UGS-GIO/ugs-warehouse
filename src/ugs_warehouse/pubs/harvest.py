@@ -586,6 +586,21 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         shutil.rmtree(work, ignore_errors=True)
 
 
+def exit_code(tally: dict[str, int], *, strict: bool = False) -> int:
+    """0 for per-publication failures; they are data, not a broken run.
+
+    ~86 publications are permanently unharvestable (their bundle carries no raster), so failing on
+    any per-pub failure meant the job exited 1 on EVERY run — the job-failure alert then fires every
+    time and a real breakage is indistinguishable from known-bad inputs.
+
+    Deliberately no "everything attempted failed" heuristic: a shard can legitimately draw only
+    unharvestable publications, so that would false-alarm. Infrastructure failures still exit
+    non-zero because they raise. Per-pub failures surface as category="attention" (ops console) —
+    watch that count, not this exit code. `--strict` restores the old all-or-nothing behaviour.
+    """
+    return 1 if (strict and tally["attention"]) else 0
+
+
 def main() -> int:
     import argparse
 
@@ -598,6 +613,9 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to harvest")
     ap.add_argument("--dry-run", action="store_true", help="Dry run (check and locate metadata URLs only)")
     ap.add_argument("--force", action="store_true", help="Force harvest even if COG already exists in GCS")
+    ap.add_argument("--strict", action="store_true",
+                    help="exit non-zero if ANY publication needs attention (default: only when "
+                         "everything attempted failed)")
     args = ap.parse_args()
 
     sids = []
@@ -625,18 +643,15 @@ def main() -> int:
     if args.limit:
         sids = sids[:args.limit]
 
-    rc = 0
     tally = {"ok": 0, "expected": 0, "attention": 0}
     for sid in sids:
         res = harvest_one(sid, dry_run=args.dry_run, force=args.force)
         tally[outcome_category(res)] += 1
-        if res.startswith("fail"):
-            rc |= 1
     _series_ctx.set("")  # the summary is job-level, not scoped to the last pub
     hlog(f"run complete: {tally['ok']} ok, {tally['expected']} expected (skip / PDF-only), "
          f"{tally['attention']} need attention", step="summary",
          level="WARNING" if tally["attention"] else "NOTICE")
-    return rc
+    return exit_code(tally, strict=args.strict)
 
 
 if __name__ == "__main__":

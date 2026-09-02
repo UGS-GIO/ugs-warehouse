@@ -1,0 +1,10 @@
+node_modules
+dist
+dist-review
+*.local
+
+# locally-generated dev catalog (regen: python3 scripts/gen_local_catalog.py)
+public/stac/
+.playwright-mcp/
+*.png
+*.tsbuildinfo

@@ -22,6 +22,19 @@ export const itemIdOf = (it: ItemRef): string =>
 export const title = (it: ItemRef): string => String(propsOf(it).title ?? itemIdOf(it));
 // The item id IS the series id (DS-8, OFR-647…) / the layer stem — the mono code shown on a card.
 export const series = (it: ItemRef): string => itemIdOf(it);
+
+// The id worth printing ABOVE a title, or undefined when it only repeats it. A publication's id is
+// its citation ("DS-9" over "Geologic map of…") and earns the line; a serving topic's is the title
+// with a schema prefix ("geolmap_strat_columns_geologic_history_book" over
+// "strat_columns_geologic_history_book"), which is noise rendered louder than the name.
+const squash = (v: string) => v.toLowerCase().replace(/[^a-z0-9]/g, "");
+export const seriesLabel = (it: ItemRef): string | undefined => {
+  const id = series(it);
+  const t = squash(title(it));
+  const i = squash(id);
+  if (!t || !i) return id || undefined;
+  return i === t || i.includes(t) || t.includes(i) ? undefined : id;
+};
 // collId is the unique collection key (e.g. `ugs-publications/B`); the leaf folder is the label.
 export const collectionLabel = (collId: string): string => collId.split("/").pop() ?? collId;
 // The sub-catalog / top collection a collId hangs under (`ugs-serving-topics/emp` → `ugs-serving-topics`).

@@ -4,7 +4,7 @@
 // left-click the caller intercepts for in-app nav; a caller that wants map↔card hover sync passes the
 // mouse handlers, and one that doesn't (Landing) omits them.
 import type { ItemRef } from "./browse";
-import { collectionLabel, dateOf, hasGeometry, series, title, typeOf } from "./item-view";
+import { collectionLabel, dateOf, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
 import { thumbnailAsset } from "./stac";
 import { C } from "./ui";
 
@@ -35,20 +35,22 @@ const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visibl
 // Gallery card — the centerpiece: thumbnail + series + title + meta (+ format chips when roomy).
 export function ResultCard({ it, density, on, link }: CardProps) {
   const th = thumbnailAsset(it.data);
+  const sid = seriesLabel(it);
   const compact = density === "compact";
   return (
     <a {...link}
       className={`flex cursor-pointer gap-3 rounded-lg border bg-card p-3 text-inherit no-underline transition hover:border-primary hover:shadow-sm ${FOCUS_RING} ${on ? "border-primary ring-1 ring-primary" : "border-border"}`}>
       <div className={`${compact ? "h-12 w-12" : "h-20 w-20"} flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted`}>
-        {th ? <img src={th.href} alt="" loading="lazy" className="h-full w-full object-cover" />
-          : <span className="px-1 text-center font-mono text-[10px] leading-tight text-muted-foreground">{series(it)}</span>}
+        {/* No placeholder text: at 48-80px the id just clips ("geolmap_strat_columns_geol…"), so an
+            empty slot reads as "no thumbnail" more honestly than a truncated machine name. */}
+        {th && <img src={th.href} alt="" loading="lazy" className="h-full w-full object-cover" />}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5">
-          <span className="truncate font-mono text-[11px] font-semibold text-foreground" title={series(it)}>{series(it)}</span>
+          <p className={`min-w-0 flex-1 font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{title(it)}</p>
           {hasGeometry(it) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
         </div>
-        <p className={`font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{title(it)}</p>
+        {sid && <div className="truncate font-mono text-[11px] text-muted-foreground" title={sid}>{sid}</div>}
         <div className="mt-1 truncate text-xs text-muted-foreground" title={metaLine(it)}>{metaLine(it)}</div>
         {!compact && <div className="mt-1">{formatBadges(it)}</div>}
       </div>
@@ -59,12 +61,13 @@ export function ResultCard({ it, density, on, link }: CardProps) {
 // List row — one dense line for scanning many at once.
 export function ResultRow({ it, density, on, link }: CardProps) {
   const compact = density === "compact";
+  const sid = seriesLabel(it);
   return (
     <li>
       <a {...link}
         className={`flex cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING} ${on ? "bg-primary/10" : "hover:bg-muted"}`}>
-        <span className="shrink-0 font-mono text-[11px] font-semibold text-foreground">{series(it)}</span>
         <span className="truncate text-sm text-foreground" title={title(it)}>{title(it)}</span>
+        {sid && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{sid}</span>}
         {!compact && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{collectionLabel(it.collId)}</span>}
         {hasGeometry(it) && (
           <span className="ml-auto shrink-0 text-primary">

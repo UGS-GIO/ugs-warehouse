@@ -447,13 +447,19 @@ function useViewState() {
   // Landing → Discover: open an item's drawer, or start Discover on a query / a category tile (each
   // clears any stale Discover keys so the handoff is a clean, shareable /discover?…).
   const openInDiscover = (href: string) => go({ view: "discover", c: collKeyOf(href), i: idOf(href) });
+  // The full item page. Below lg this replaces the Discover drawer — see catalogHref.
+  const openItemPage = (href: string) => go({ view: "catalog", c: collKeyOf(href), i: idOf(href) });
+  // Landing hands off to Discover: the search box, the category rows, "Browse all". `to` is
+  // REQUIRED — a view is a path now, so navigating with search alone stayed on "/" and appended a
+  // ?view= nobody reads, which is what made the landing buttons look dead.
   const openDiscoverSearch = (opts: { q?: string; category?: string }) =>
     navigate({
+      to: pathFor("discover"),
       search: (prev) => {
         const { view: _v, c: _c, i: _i, l: _l, s: _s,
           q: _q, collections: _co, category: _ca, types: _ty, formats: _fo, geometry: _ge,
           sort: _so, layout: _la, density: _de, area: _ar, ...rest } = prev;
-        return { ...rest, view: "discover", q: opts.q || undefined, category: opts.category || undefined };
+        return { ...rest, q: opts.q || undefined, category: opts.category || undefined };
       },
     });
   const setSeries = (codes: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: layerIds, s: codes });
@@ -506,7 +512,7 @@ function useViewState() {
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
     catalogDocs, mapItems, mapLoadKey, mapItemsLoading,
-    openItem, openInDiscover, openDiscoverSearch, openCollection, openCover,
+    openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, collectionId, collectionUrl, layerIds, seriesSel,
     rootChildren, cardsWithCovers, allItems, itemsLoading, leafColl, crumbs,
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,

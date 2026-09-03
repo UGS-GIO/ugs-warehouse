@@ -38,3 +38,10 @@ build_service_account = "REPLACE-cloudbuild-sa@REPLACE-build-project.iam.gservic
 # *.run.app URL (see `tofu output serving_url`). One-time console setting, not tofu: the project's
 # OAuth consent screen needs a support email set once for IAP to serve.
 iap_group = "nrugsall@utah.gov"
+
+# --- Cloud Build triggers (cloudbuild-triggers.tf) -------------------------------------------------
+# Both must be set for the triggers to be managed here; leave empty and they stay console-managed.
+# The repository comes from the GitHub App install, not tofu:
+#   gcloud builds connections list --region=us-central1 --project=ut-dnr-ugs-backend-tools
+# build_repository        = "projects/ut-dnr-ugs-backend-tools/locations/us-central1/connections/ugs-warehouse-github/repositories/ugs-warehouse"
+# trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/534590904912-compute@developer.gserviceaccount.com"

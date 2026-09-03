@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ItemRef } from "./browse";
 import {
-  author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived,
+  author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatsOf, hasGeometry, itemKind, kindLabel, recordCountLabel, rowCount, scale,
   series, title, typeOf, year,
 } from "./item-view";
@@ -85,6 +85,15 @@ describe("categorize", () => {
   it("maps the top collections by collId root", () => {
     expect(categorize(item("ugs-rasters/x", "dem")).key).toBe("rasters");
     expect(categorize(item("ugs-geologic-maps", "gm")).key).toBe("geologic-maps");
+  });
+
+  it("files the mapping serving tables and the geologic-map mosaics under ONE category", () => {
+    // geolmap_geolunits_500k (a mapping serving table) and geologic-maps-500k (the seamless tile
+    // layer of the same 1:500k units) used to land in two categories a letter apart.
+    const table = item("ugs-serving-topics/mapping", "geolmap_geolunits_500k", { "ugs:dbt_schema": "mapping" });
+    const mosaic = item("ugs-geologic-maps", "geologic-maps-500k");
+    expect(categorize(table).key).toBe(categorize(mosaic).key);
+    expect(categorize(table).label).toBe("Geologic Maps");
     expect(categorize(item("ugs-mining-district-files/x", "m")).key).toBe("mining-district-files");
   });
   it("falls back to Publications, then Other", () => {
@@ -145,5 +154,34 @@ describe("curatedDerived", () => {
   });
   it("is empty for empty props", () => {
     expect(curatedDerived({})).toEqual({ curated: [], derived: [] });
+  });
+});
+
+describe("seriesLabel", () => {
+  it("keeps a publication id — it is the citation, not the title repeated", () => {
+    expect(seriesLabel(item("ugs-publications/DS", "DS-9", { title: "Geologic map of the Wasatch" })))
+      .toBe("DS-9");
+  });
+
+  it("drops an id that only prefixes the title", () => {
+    // The card used to print geolmap_strat_columns_geologic_history_book ABOVE
+    // strat_columns_geologic_history_book, in a heavier weight than the title itself.
+    expect(seriesLabel(item("ugs-serving-topics/mapping", "geolmap_strat_columns_geologic_history_book",
+      { title: "strat_columns_geologic_history_book" }))).toBeUndefined();
+  });
+
+  it("drops an id equal to the title, ignoring punctuation and case", () => {
+    expect(seriesLabel(item("ugs-serving-topics/emp", "enmin_ucrc_wells", { title: "Enmin UCRC Wells" })))
+      .toBeUndefined();
+  });
+
+  it("drops an id that only adds the schema prefix — the meta line already names the schema", () => {
+    expect(seriesLabel(item("ugs-serving-topics/emp", "enmin_ucrc_wells", { title: "UCRC Wells" })))
+      .toBeUndefined();
+  });
+
+  it("keeps an id carrying something the title does not say", () => {
+    expect(seriesLabel(item("ugs-serving-topics/hazards", "qfaults_2024", { title: "Quaternary Faults" })))
+      .toBe("qfaults_2024");
   });
 });

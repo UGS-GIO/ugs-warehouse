@@ -238,6 +238,45 @@ curl -sI -H 'Range: bytes=0-99' \
 The viewer's engine (duckdb-wasm) and model host are self-hosted by default; `?ftsdb=`, `?vssdb=`,
 `?models=`, and `?extrepo=` override them for local spikes (see `viewer/src/duckdb.ts` / `vsearch.ts`).
 
+## 6. Cross-boundary grants — preflight (#223)
+
+Builds run in `ut-dnr-ugs-backend-tools`; serving resources live in `ut-dnr-ugs-maps-prod`. Every
+capability that crosses that boundary (or crosses into a third project, or lets one SA act as
+another) needs its own IAM grant, and most of the ones below were found by a 403 mid-deploy, not by
+reading a list (`infra/iam.tf`'s own comments document three of these as "found the hard way").
+This table is that list. Some rows ARE Terraform-managed (`infra/iam.tf`) and this duplicates what
+`tofu plan` would also confirm, cheaper and without needing deploy-SA impersonation; other rows —
+marked below — are NOT and never will be (a different project's IAM, or a grant made out-of-band
+pending its own issue), which is exactly why a script that only trusted `infra/iam.tf` would miss
+them.
+
+```
+just check-grants
+```
+
+Reads the table below, calls `gcloud *.getIamPolicy` for each row (read-only — no GCP write perms
+needed), and prints ✓/✗ per grant. Exit 1 if anything is missing. Add a row here when a new
+cross-boundary capability is discovered; the script starts checking it immediately, and stops
+rotting because the script fails when the table is wrong. See `scripts/check_grants.py`.
+
+<!-- check-grants:begin -->
+| principal | role | resource_type | resource | breaks_without |
+|---|---|---|---|---|
+| 534590904912-compute@developer.gserviceaccount.com | roles/run.admin | run_service | ut-dnr-ugs-maps-prod/us-central1/ugs-warehouse-review-serving | build SA 403s deploying the review viewer/API image (`infra/iam.tf` build_deploy_serving) |
+| 534590904912-compute@developer.gserviceaccount.com | roles/run.admin | run_service | ut-dnr-ugs-maps-prod/us-central1/ugs-warehouse-review-api | build SA 403s on `run services update ugs-warehouse-review-api` (`infra/iam.tf` build_deploy_review_api) |
+| 534590904912-compute@developer.gserviceaccount.com | roles/run.admin | run_service | ut-dnr-ugs-maps-prod/us-central1/ugs-warehouse-previews | main build SA can't redeploy previews on push to main — it silently pins `:latest` at apply time and never tracks the tag again (`infra/iam.tf` build_deploy_previews, #159) |
+| warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/iam.serviceAccountUser | service_account | ugs-warehouse-review-srv@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | deploy SA can't actAs the serving SA — `iam.serviceaccounts.actAs denied` mid-apply (`infra/iam.tf` deploy_can_actas_serving) |
+| warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/iam.serviceAccountUser | service_account | ugs-warehouse-previews@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | same actAs gap on the FIRST apply of `previews.tf` (`infra/iam.tf` deploy_can_actas_previews, #159) |
+| ugs-warehouse-review-srv@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/secretmanager.secretAccessor | secret | ut-dnr-ugs-maps-prod/review-writer-db-password | review serving/API can't read the DB password — Cloud SQL connection 5xxs |
+| ugs-warehouse-review-srv@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/cloudsql.client | project | ut-dnr-ugs-mappingdb-prod | **NOT Terraform-managed** — third project (dataELT's), our deploy identity has no IAM-admin there. App deploys fine but the comments API can't reach the DB (graceful 5xx) until the DB owner runs the grant by hand (`infra/iam.tf` line ~20) |
+| warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/firebasehosting.admin | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — granted out-of-band for #220 (2026-09-03). Missing this and both Firebase deploy workflows fail closed with no image published |
+| warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/cloudbuild.builds.editor | project | ut-dnr-ugs-backend-tools | **Expected missing until #222 lands** — needed to `tofu import`/manage Cloud Build triggers, which live in the build project, not `project_id`. First real proof this tool catches something before a deploy does |
+<!-- check-grants:end -->
+
+`534590904912-compute@developer.gserviceaccount.com` is the project's default Compute SA — see
+`docs/CLOUD_BUILD_CI.md` for why Cloud Build triggers run as this identity rather than
+`warehouse-deploy@`, despite the latter being the CI/CD identity everywhere else.
+
 ## Scheduling (optional)
 
 Cloud Scheduler → Cloud Run Jobs for a nightly full re-ingest:

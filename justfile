@@ -47,6 +47,11 @@ maintain *ARGS:
 fts:
     python -m ugs_warehouse.pubs.fts
 
+# Cross-boundary IAM grant preflight (#223, docs/DEPLOY.md §6). Read-only gcloud calls — no
+# impersonation, no tofu state needed. Fails (exit 1) if anything in the table is missing.
+check-grants:
+    python3 scripts/check_grants.py
+
 # Run the IAP review serving app locally (streams WAREHOUSE_BUCKET read-only). PORT defaults to 8080.
 serve bucket="ut-dnr-ugs-maps-prod-review":
     WAREHOUSE_BUCKET={{bucket}} python -m ugs_warehouse.serve

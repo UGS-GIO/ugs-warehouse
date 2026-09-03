@@ -198,7 +198,8 @@ over (DNS-gated). `index.html` is `no-cache`; hashed assets are immutable (`fire
 
 The two Cloud Run surfaces stay behind IAP because they read the review catalog and its private
 assets. A viewer PR gets both previews: they differ in catalog, and only the review one exercises
-the comment and diff surfaces. `cloudbuild-viewer-preview.yaml` builds the review flavour —
+the comment and diff surfaces. `cloudbuild-review-viewer.yaml` builds the review viewer on
+`viewer/**` pushes and `cloudbuild-viewer-preview.yaml` builds its per-PR preview; in both,
 `VITE_CATALOG_URL` pointing at the review catalog is what `stac.ts` derives `IS_REVIEW` from.
 
 Any bundle mounted under a prefix must be told which one, via Vite's `--base` (it is also the

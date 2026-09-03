@@ -52,7 +52,6 @@ substitutions:
   _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
   _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
   _REVIEW_PROJECT: ut-dnr-ugs-maps-prod   # the serving Cloud Run service + buckets live HERE, not the build's $PROJECT_ID (backend-tools)
-  _REVIEW_VIEWER_PREFIX: review/viewer      # internal viewer bundle in the PRIVATE review bucket (served by the IAP app, never the CDN)
   # Tag used for images (defaults to SHORT_SHA in automated triggers)
   _TAG: $SHORT_SHA
 
@@ -760,86 +759,14 @@ steps:
       - --memory=512Mi
       - --timeout=60
 
-  # Resolve the deployed OGC API Features URL → file, so the viewer can bake it as
-  # VITE_FEATURES_BASE (the "OGC API" link). Runs after deploy-features (serial order); empty
-  # file if the service isn't up → the viewer link stays hidden (no dead link).
-  - id: resolve-features-url
-    waitFor: [deploy-features]
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        gcloud run services describe ${_FEATURES_SERVICE} --region=${_REGION} \
-          --format='value(status.url)' > /workspace/features_url 2>/dev/null \
-          || printf '' > /workspace/features_url
-        echo "VITE_FEATURES_BASE=$$(cat /workspace/features_url)"
-
-  # Same for the tiles service, so the item page can offer XYZ / MapLibre style / ArcGIS
-  # VectorTileServer links. Empty on failure → the viewer hides them rather than printing dead URLs.
-  - id: resolve-tiles-url
-    waitFor: [deploy-tiles]
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        gcloud run services describe ${_TILES_SERVICE} --region=${_REGION} \
-          --format='value(status.url)' > /workspace/tiles_url 2>/dev/null \
-          || printf '' > /workspace/tiles_url
-        echo "VITE_TILES_BASE=$$(cat /workspace/tiles_url)"
-
-  # Build the public viewer. The DEPLOY is .github/workflows/firebase-hosting-merge.yml — Cloud
-  # Build has no Firebase credentials. This step stays because build-viewer-review reuses its
-  # node_modules, and because a viewer that cannot build should fail the deploy build.
-  - id: build-viewer
-    waitFor: [resolve-features-url, resolve-tiles-url]
-    name: node:22
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
-        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
-        cd viewer
-        npm ci
-        npm run build
-
-  # Internal review viewer (ugs-warehouse#16) — same codebase, built against the review catalog +
-  # served THROUGH the IAP app from the private review bucket (same-origin as the STAC/assets, one IAP
-  # session). Separate outDir (dist-review) + Vite base so it neither clobbers the public dist nor
-  # mis-resolves its own asset URLs (they live under /review/viewer/). The base is also the router's
-  # basepath (src/routes.tsx), so path routes resolve under that prefix; serve.py already serves this
-  # bundle's index.html for an unknown path there. Runs after build-viewer, so node_modules is
-  # already installed in the shared workspace.
-  - id: build-viewer-review
-    waitFor: [build-viewer]
-    name: node:22
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
-        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
-        export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
-        cd viewer
-        npm run build -- --base=/${_REVIEW_VIEWER_PREFIX}/ --outDir dist-review
-
-  # Publish → PRIVATE review bucket (served by the IAP app, never the CDN). allowFailure until the
-  # build SA has objectAdmin on the review bucket (tofu grants it: build_write_review, gated on
-  # build_service_account being set).
-  - id: deploy-viewer-review
-    waitFor: [build-viewer-review]
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    allowFailure: true
-    args:
-      - -c
-      - |
-        gcloud storage rsync viewer/dist-review gs://${_REVIEW_BUCKET}/${_REVIEW_VIEWER_PREFIX} \
-          --recursive --delete-unmatched-destination-objects
-        gcloud storage objects update gs://${_REVIEW_BUCKET}/${_REVIEW_VIEWER_PREFIX}/index.html \
-          --cache-control="no-cache"
+  # No resolve-features-url / resolve-tiles-url here any more: they existed only to bake
+  # VITE_FEATURES_BASE / VITE_TILES_BASE into the viewer build, and nothing in this config builds
+  # the viewer now. cloudbuild-review-viewer.yaml resolves them for the review bundle; the Action
+  # takes them from repo variables, having no GCP credentials to ask Cloud Run.
+  # The viewer is NOT built or deployed here. The public one deploys from
+  # .github/workflows/firebase-hosting-merge.yml (Cloud Build has no Firebase credentials); the
+  # review bundle from cloudbuild-review-viewer.yaml, on a viewer/**-scoped trigger. Keeping them
+  # here meant a one-line CSS change rebuilt every service image — see docs/CLOUD_BUILD_CI.md.
 
 images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles

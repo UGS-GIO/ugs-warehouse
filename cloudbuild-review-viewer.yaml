@@ -1,0 +1,66 @@
+# Review-viewer fast path: Vite build + rsync to the private review bucket, NO image builds.
+# Trigger: pushes to main touching viewer/** (see docs/CLOUD_BUILD_CI.md).
+#
+# This is the `viewer/**`-scoped trigger CLOUD_BUILD_CI.md left undecided, now that the decision is
+# forced: the PUBLIC viewer deploys from GitHub Actions (Cloud Build has no Firebase credentials),
+# so the only thing a viewer change still needs from Cloud Build is the review bundle. Running the
+# unscoped cloudbuild.yaml for that rebuilds every service image for a one-line CSS change.
+#
+# The review bundle cannot move to the Action with the public one: it is built against the review
+# catalog and lands in a private bucket the Action has no credentials for.
+substitutions:
+  _REGION: us-central1
+  _FEATURES_SERVICE: ugs-warehouse-features
+  _TILES_SERVICE: ugs-warehouse-tiles
+  _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
+  _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
+  _REVIEW_VIEWER_PREFIX: review/viewer
+
+steps:
+  # Same service-URL resolution as the full deploy, so the endpoint links aren't dead. Empty on
+  # failure → the viewer hides them rather than printing a dead URL.
+  - id: resolve-service-urls
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        gcloud run services describe ${_FEATURES_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' > /workspace/features_url 2>/dev/null \
+          || printf '' > /workspace/features_url
+        gcloud run services describe ${_TILES_SERVICE} --region=${_REGION} \
+          --format='value(status.url)' > /workspace/tiles_url 2>/dev/null \
+          || printf '' > /workspace/tiles_url
+
+  # --base is both the asset prefix and the router basepath (src/mount.ts); serve.py serves this
+  # bundle's index.html for an unknown path under the prefix. VITE_CATALOG_URL is what stac.ts
+  # derives IS_REVIEW from — it is what makes this the review flavour.
+  - id: build-viewer-review
+    name: node:22
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
+        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
+        export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
+        cd viewer
+        npm ci
+        npm run build -- --base=/${_REVIEW_VIEWER_PREFIX}/ --outDir dist-review
+
+  - id: deploy-viewer-review
+    waitFor: [build-viewer-review]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        gcloud storage rsync viewer/dist-review gs://${_REVIEW_BUCKET}/${_REVIEW_VIEWER_PREFIX} \
+          --recursive --delete-unmatched-destination-objects
+        gcloud storage objects update gs://${_REVIEW_BUCKET}/${_REVIEW_VIEWER_PREFIX}/index.html \
+          --cache-control="no-cache"
+
+options:
+  logging: CLOUD_LOGGING_ONLY

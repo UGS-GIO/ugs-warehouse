@@ -65,15 +65,16 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build �
 `includedFiles`) and `ugs-warehouse-docs` (→ `cloudbuild-docs.yaml`, scoped to `docs/**`,
 `mkdocs.yml`, `docs-requirements.txt`) exist alongside `ugs-warehouse-pr-ci`.
 
-**Update (#220, 2026-09):** `cloudbuild.yaml` no longer deploys the *public* viewer — that moved to
-`.github/workflows/firebase-hosting-merge.yml` (see `docs/DEPLOY.md` §5). It still has a
-`build-viewer` step (kept only so a broken viewer build fails the deploy, and so
-`build-viewer-review` can reuse its `node_modules`), and it still builds **and deploys** the
-*review* viewer (`build-viewer-review` / `deploy-viewer-review`, → the private review bucket, behind
-IAP). So `ugs-warehouse-deploy` remains unscoped and still owns the review viewer's deploy — a
-viewer-only change still fires the full image-build pipeline, it just no longer also republishes the
-public site through it. `cloudbuild-viewer.yaml` is still unreferenced by any trigger (dead-but-kept
-fast-path config, see #185); nothing currently scopes `ugs-warehouse-deploy` down (#222).
+**Update (#220 then #221, 2026-09):** `cloudbuild.yaml` no longer builds or deploys **any** viewer.
+#220 moved the public one to `.github/workflows/firebase-hosting-merge.yml` (`docs/DEPLOY.md` §5);
+#221 moved the review bundle out too, into `cloudbuild-review-viewer.yaml`, and deleted the old
+`cloudbuild-viewer.yaml`. `build-viewer`, `build-viewer-review`, `deploy-viewer-review` and the two
+`resolve-*-url` steps that only fed them are gone from `cloudbuild.yaml`.
+
+That is only half the fix. **`ugs-warehouse-deploy` is still unscoped**, so a viewer-only change
+still fires the full image-build pipeline — it now just does no viewer work while doing it. And
+`cloudbuild-review-viewer.yaml` has **no trigger yet**, so nothing rebuilds `/review/viewer/` until
+one exists. Both are #222.
 
 **GHA is back, partially (#220).** #49 deleted all GHA workflows in favor of Cloud Build for
 everything; #220 reintroduced `.github/workflows/` for exactly the two things Cloud Build
@@ -83,9 +84,14 @@ and deploy in this repo (images, Cloud Run services, the review viewer, docs, CI
 ## Trigger inventory — what owns what (#224)
 
 Every trigger below was found by `gcloud builds triggers describe`, not by reading config in this
-repo — **none of them are declared in Terraform.** An earlier plan (referenced in #221/#222/#223)
-assumed `infra/cloudbuild-triggers.tf` already existed with two triggers imported; it does not exist
-anywhere in this repo's history. Treat that as not started, not partially done.
+repo — **none of them is applied from Terraform.** #221 adds `infra/cloudbuild-triggers.tf`
+declaring two of them (`ugs-warehouse-deploy`, `ugs-warehouse-review-viewer`), but declaring is not
+applying: both are guarded on `build_repository`/`trigger_service_account` being set, neither is
+imported, and no `tofu apply` has run. Treat the triggers as console-owned until #222 closes.
+
+The table below is the authority on what is actually deployed; the `.tf` is a proposal until
+imported. Note the service accounts differ per trigger, which that file's single
+`trigger_service_account` variable does not yet express.
 
 All five Cloud Build triggers live in `ut-dnr-ugs-backend-tools` (the build project), on the
 2nd-gen GitHub connection `ugs-warehouse-github` (repository resource `ugs-warehouse`) — itself
@@ -98,6 +104,7 @@ console/CLI-created (§ One-time setup above), not Terraform-managed either.
 | `ugs-warehouse-docs` | `cloudbuild-docs.yaml` | push to `main` | `docs/**`, `mkdocs.yml`, `docs-requirements.txt` | default Compute SA |
 | `ugs-warehouse-viewer-preview` | `cloudbuild-viewer-preview.yaml` | PR to `main` | `viewer/**` | `ugs-warehouse-preview-build@` |
 | `ugs-warehouse-tiles-preview` | `cloudbuild-service-preview.yaml` | PR to `main` | `tiles/**`, `api/**`, `src/**` | `ugs-warehouse-preview-build@` |
+| `ugs-warehouse-review-viewer` | `cloudbuild-review-viewer.yaml` | push to `main` | `viewer/**` | — | **DOES NOT EXIST YET (#222).** The config landed in #221; until the trigger is created, nothing rebuilds the review viewer bundle.
 
 `default Compute SA` = `534590904912-compute@developer.gserviceaccount.com` — see the "why not
 `warehouse-deployer@`" note above (§ One-time setup, point 2); that finding still holds.
@@ -115,7 +122,8 @@ Cloud Build on events the trigger config can't express:
 - **Tofu** (`infra/*.tf`): buckets, Cloud Run services, service accounts + their IAM bindings, IAP,
   the Firebase Hosting *site* (`infra/firebase.tf`). Apply is two-box (personal authors `.tf`, work
   box runs `tofu plan`/`apply` impersonating `warehouse-deploy@`) — see `infra/README.md`.
-- **Console/CLI, not tofu**: all 5 Cloud Build triggers (table above), the GitHub host connection,
+- **Console/CLI, not tofu**: all 5 Cloud Build triggers (table above) — two now *declared* in
+  `infra/cloudbuild-triggers.tf` but not imported or applied — the GitHub host connection,
   `warehouse-deploy@`'s `roles/firebasehosting.admin` grant (added out-of-band for #220, same gap
   #223 already tracks for other cross-project grants).
 - **GitHub repo settings, not this repo's code**: the required secret

@@ -109,38 +109,29 @@ type Category = CategoryResult & {
   facet: { key: "category"; value: string };
 };
 
-// `ugs:dbt_schema` → category. Real warehouse schemas: emp / mapping / hazards / wetlands (+ groundwater
-// reserved). Also the friendly labels the facet rail shows for a raw schema.
-const SCHEMA_CATEGORIES: { schema: string; key: string; label: string }[] = [
-  { schema: "hazards", key: "hazards", label: "Hazards" },
-  { schema: "emp", key: "energy-minerals", label: "Energy & Minerals" },
-  { schema: "mapping", key: "geologic-mapping", label: "Geologic Mapping" },
-  { schema: "wetlands", key: "wetlands", label: "Wetlands" },
-  { schema: "groundwater", key: "groundwater", label: "Groundwater" },
-];
-const COLLECTION_CATEGORIES: { root: string; key: string; label: string }[] = [
-  { root: "ugs-geologic-maps", key: "geologic-maps", label: "Geologic Maps" },
-  { root: "ugs-rasters", key: "rasters", label: "Rasters" },
-  { root: "ugs-mining-district-files", key: "mining-district-files", label: "Mining District Files" },
-];
+// A category is keyed by `ugs:dbt_schema` (serving topics), by collection root, or both.
+// Real warehouse schemas: emp / mapping / hazards / wetlands (+ groundwater reserved).
+const bySchema = (schema: string) => (it: ItemRef) => propsOf(it)["ugs:dbt_schema"] === schema;
+const byRoot = (root: string) => (it: ItemRef) => collectionRoot(it.collId) === root;
+const cat = (key: string, label: string, match: (it: ItemRef) => boolean): Category =>
+  ({ key, label, match, facet: { key: "category", value: key } });
 
 // The ordered taxonomy: topics (by schema) resolve before collection then publication fallbacks.
 export const CATEGORIES: Category[] = [
-  ...SCHEMA_CATEGORIES.map((s) => ({
-    key: s.key, label: s.label,
-    match: (it: ItemRef) => propsOf(it)["ugs:dbt_schema"] === s.schema,
-    facet: { key: "category" as const, value: s.key },
-  })),
-  ...COLLECTION_CATEGORIES.map((c) => ({
-    key: c.key, label: c.label,
-    match: (it: ItemRef) => collectionRoot(it.collId) === c.root,
-    facet: { key: "category" as const, value: c.key },
-  })),
-  {
-    key: "publications", label: "Publications",
-    match: isPublication,
-    facet: { key: "category" as const, value: "publications" },
-  },
+  cat("hazards", "Hazards", bySchema("hazards")),
+  cat("energy-minerals", "Energy & Minerals", bySchema("emp")),
+  // ONE category, two shapes of the same subject. The `mapping` serving tables and the
+  // ugs-geologic-maps mosaic collection were separate categories whose labels differed by a single
+  // letter ("Geologic Mapping" vs "Geologic Maps") — and geolmap_geolunits_500k and
+  // geologic-maps-500k are the same 1:500k units, one as a table, one as a seamless tile layer.
+  // Nothing distinguished them to a reader, so the split only ever split the subject.
+  cat("geologic-maps", "Geologic Maps",
+    (it) => bySchema("mapping")(it) || byRoot("ugs-geologic-maps")(it)),
+  cat("wetlands", "Wetlands", bySchema("wetlands")),
+  cat("groundwater", "Groundwater", bySchema("groundwater")),
+  cat("rasters", "Rasters", byRoot("ugs-rasters")),
+  cat("mining-district-files", "Mining District Files", byRoot("ugs-mining-district-files")),
+  cat("publications", "Publications", isPublication),
 ];
 const OTHER: CategoryResult = { key: "other", label: "Other" };
 

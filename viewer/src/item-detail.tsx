@@ -290,8 +290,11 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
           {byline.length > 0 && <p className="mt-1.5 text-sm text-muted-foreground">{byline.join(" · ")}</p>}
           {typeof p.description === "string" && <p className="mt-3 max-w-3xl text-muted-foreground">{p.description}</p>}
         </header>
+        {/* min-w-0 on the grid CHILDREN, not a width on anything: a grid item defaults to
+            min-width:auto, so the single mobile column sized itself to its widest descendant's
+            max-content (861px inside a 360px phone) and everything below inherited that. */}
         <div className="mt-5 grid gap-8 lg:grid-cols-3">
-          <div className="space-y-6 lg:col-span-2">
+          <div className="min-w-0 space-y-6 lg:col-span-2">
             {actions}
             <Preview item={item} />
             <IssueContents item={item} />
@@ -299,7 +302,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
             <RelatedPanel item={item} />
             {IS_REVIEW && <CatalogReview item={item} />}
           </div>
-          <aside className="space-y-6">
+          <aside className="min-w-0 space-y-6">
             <Section title="Metadata">
               {meta.curated.length || meta.derived.length ? (
                 <div className="space-y-5">

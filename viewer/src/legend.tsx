@@ -136,7 +136,7 @@ export function Legend({ layers, entries, title, name }: {
     <div className="mt-2 rounded-md border border-border bg-card p-2.5 text-xs">
       <div className="mb-1.5 font-semibold text-muted-foreground">{heading}</div>
       {grouped ? (
-        <div className="grid gap-x-6 gap-y-2 [grid-template-columns:repeat(auto-fill,minmax(260px,1fr))]">
+        <div className="grid gap-x-6 gap-y-2 [grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr))]">
           {items.map((e, i) => (
             <div key={i} className="flex flex-col gap-0.5 break-inside-avoid">
               <span className="inline-flex items-center gap-1.5 font-medium text-foreground">

@@ -133,6 +133,16 @@ Cloud Build on events the trigger config can't express:
 | `.github/workflows/preview-cleanup.yml` | PR `closed` (no trigger equivalent for this event) | `cloudbuild-preview-cleanup.yaml` | `ugs-warehouse-preview-build@` (WIF, no key) |
 | `.github/workflows/firebase-hosting-merge.yml` / `-pull-request.yml` | push to `main` / PR, `viewer/**` | nothing — deploys directly via `firebase-tools`, no Cloud Build involved | Firebase service-account key (`FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` repo secret, see `docs/DEPLOY.md` §5) |
 
+`-pull-request.yml` also upserts the single PR comment carrying **both** preview links — the public
+Firebase channel it just deployed, and the IAP review preview from `cloudbuild-viewer-preview.yaml`
+(whose URL is deterministic, `…/viewer/pr-<n>/`). It replaced `preview-comment.yml`, which posted a
+second comment for the review link alone.
+
+Both previews are always built. They cannot be reduced to one, and the review one cannot be
+path-filtered away: it is the same tree built against the review catalog, and `IS_REVIEW` branches
+inside shared files (`item-detail.tsx`, `browse.tsx`, `app.tsx`, `stac.ts`, …), so a "review code
+changed?" filter would skip the review preview on precisely the PRs that alter review rendering.
+
 **What's Terraform-owned vs. not**, the actual current boundary:
 
 - **Tofu** (`infra/*.tf`): buckets, Cloud Run services, service accounts + their IAM bindings, IAP,

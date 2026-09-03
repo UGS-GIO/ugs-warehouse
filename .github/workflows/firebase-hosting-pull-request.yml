@@ -17,7 +17,8 @@ on:
     paths: ["viewer/**", "firebase.json"]
 
 # Repo default is read-only GITHUB_TOKEN (org policy). action-hosting-deploy needs checks: write to
-# post the deploy status as a check run, and pull-requests: write to post the preview-URL comment.
+# post the deploy status as a check run; pull-requests: write is for the preview comment, which this
+# workflow now upserts itself (the action runs with disableComment).
 permissions:
   contents: read
   checks: write
@@ -49,11 +50,46 @@ jobs:
 
       # channelId is never `live`, so this cannot overwrite the site. The action posts (and updates)
       # the preview URL as a PR comment itself — no separate comment workflow to keep in sync.
+      # disableComment: this workflow posts ONE comment carrying both previews. A viewer PR always
+      # produces two — the public one here and the IAP review one from cloudbuild-viewer-preview.yaml
+      # — and two bot comments per push is noise. They cannot be reduced to one BUILD: the review
+      # flavour is the same tree built against the review catalog, and IS_REVIEW branches inside
+      # shared files (item-detail, browse, app, stac, …), so a path filter would hide review
+      # regressions on exactly the PRs that cause them.
       - uses: FirebaseExtended/action-hosting-deploy@v0
+        id: firebase
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD }}
           projectId: ut-dnr-ugs-maps-prod
           channelId: pr-${{ github.event.number }}
           expires: 7d
+          disableComment: true
           firebaseToolsVersion: "13.29.1"
+
+      # The review preview's URL is deterministic (<previews host>/viewer/pr-<n>/), so it can be
+      # named here rather than waited on; its Cloud Build check is what says when it is live.
+      - name: Upsert the preview comment
+        uses: actions/github-script@v7
+        env:
+          PUBLIC_URL: ${{ steps.firebase.outputs.details_url }}
+        with:
+          script: |
+            const n = context.payload.pull_request.number;
+            const marker = "<!-- ugs-warehouse-preview -->";
+            const review = `https://ugs-warehouse-previews-ufyuidl4mq-uc.a.run.app/viewer/pr-${n}/`;
+            const body = [
+              marker,
+              `🌎 **Preview** (public, no login): ${process.env.PUBLIC_URL}`,
+              `🔒 **Review viewer** (IAP, review catalog): ${review}`,
+              "",
+              "<sub>Same tree, two builds — the review one is what exercises comments and diffs. "
+                + "It appears once `ugs-warehouse-viewer-preview` goes green.</sub>",
+            ].join("\n");
+            const { data } = await github.rest.issues.listComments({
+              owner: context.repo.owner, repo: context.repo.repo, issue_number: n, per_page: 100,
+            });
+            const mine = data.find((c) => c.body.includes(marker));
+            const args = { owner: context.repo.owner, repo: context.repo.repo, body };
+            if (mine) await github.rest.issues.updateComment({ ...args, comment_id: mine.id });
+            else await github.rest.issues.createComment({ ...args, issue_number: n });

@@ -282,7 +282,7 @@ export function DiscoveryView({
               )}
             </div>
           ) : layout === "gallery" ? (
-            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(240px,1fr))]">
+            <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr))]">
               {shown.map((it) => (
                 <ResultCard key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)} />
               ))}

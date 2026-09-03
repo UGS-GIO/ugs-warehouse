@@ -13,7 +13,9 @@ export function Page({ width = "full", className = "", children }: {
 }
 
 // auto-fill, not auto-fit: a short row keeps card width instead of stretching to fill.
-export const CARD_GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(320px,1fr))]";
+// min(320px,100%) not a bare 320px: a px floor cannot shrink, so the track outgrows any container
+// narrower than it and the whole subtree inherits that width.
+export const CARD_GRID = "grid gap-4 [grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr))]";
 
 // Type scale. These were all within ~2px of each other, so nothing led the eye.
 export const T = {

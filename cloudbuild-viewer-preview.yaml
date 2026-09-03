@@ -76,7 +76,8 @@ steps:
         gcloud storage objects update "$$DEST/index.html" --cache-control="no-cache"
         echo "preview: ${_PREVIEWS_BASE_URL}/${_PREVIEW_PATH}$_PR_NUMBER/"
 
-  # Posting the link as a PR comment lives in .github/workflows/preview-comment.yml, not here.
+  # Posting the link as a PR comment lives in .github/workflows/firebase-hosting-pull-request.yml,
+  # which upserts ONE comment carrying both this preview and the public Firebase one.
   # Tried it here first (#163) via the GitHub connection's OAuth token — 403s, because Cloud
   # Build's GitHub App install has read/checks scopes, not issues:write. GitHub Actions'
   # own GITHUB_TOKEN gets pull-requests:write for free via `permissions:`, no secret needed, so

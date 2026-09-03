@@ -81,6 +81,22 @@ everything; #220 reintroduced `.github/workflows/` for exactly the two things Cl
 structurally cannot do — see the trigger inventory below. Cloud Build still owns every other build
 and deploy in this repo (images, Cloud Run services, the review viewer, docs, CI).
 
+## Applying the scope (#222)
+
+`infra/cloudbuild-triggers.tf` declares `ugs-warehouse-deploy` and `ugs-warehouse-review-viewer`.
+It is not applied — see the inventory below for what is actually live. To apply:
+
+```bash
+# the deploy trigger already exists — import it, or the create 409s
+tofu import 'google_cloudbuild_trigger.deploy[0]' \
+  projects/ut-dnr-ugs-backend-tools/locations/us-central1/triggers/ugs-warehouse-deploy
+tofu apply    # re-scopes deploy, creates ugs-warehouse-review-viewer
+```
+
+Set `build_repository` and `trigger_service_account` in `terraform.tfvars` first. The triggers live
+in the BUILD project, not `var.project_id`, so the deploy SA needs `roles/cloudbuild.builds.editor`
+there — a cross-project grant, of exactly the kind `just check-grants` (#223) now enumerates.
+
 ## Trigger inventory — what owns what (#224)
 
 Every trigger below was found by `gcloud builds triggers describe`, not by reading config in this

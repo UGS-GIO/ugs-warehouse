@@ -11,14 +11,15 @@ import { colorFor } from "../map-model";
 // The param-less front door. Reuses the same loaded item set as Map/Discover (mapItems) — no extra
 // fetch — for its category-tile counts + "recently updated" strip. Everything hands off to Discover.
 export const LandingRoute = () => {
-  const { mapItems, mapLoadKey, mapItemsLoading, openDiscoverSearch, openInDiscover } = useViewCtx();
+  const { mapItems, mapLoadKey, mapItemsLoading, openDiscoverSearch, openInDiscover, openItemPage } = useViewCtx();
   return <Landing
     items={mapItems}
     itemsKey={mapLoadKey}
     loading={mapItemsLoading}
     onSearch={(text: string) => openDiscoverSearch({ q: text })}
     onOpenCategory={(key: string) => openDiscoverSearch({ category: key })}
-    onOpenItem={openInDiscover} />;
+    onOpenItem={openInDiscover}
+    onOpenItemPage={openItemPage} />;
 };
 
 // Full-width discovery split — same loaded item set as the map, its own facet rail / cards / synced
@@ -29,6 +30,7 @@ export const DiscoverRoute = () => {
     items={c.mapItems}
     itemsKey={c.mapLoadKey}
     onOpenItem={c.openItem}
+    onOpenItemPage={c.openItemPage}
     itemSelected={Boolean(c.itemUrl)}
     selectedItem={c.item.data}
     selectedCollectionId={c.collectionId}

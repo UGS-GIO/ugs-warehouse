@@ -82,6 +82,11 @@ export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
 export const discoverHref = (it: ItemRef): string =>
   mountHref("/discover", new URLSearchParams({ c: it.collId, i: it.href.split("/").slice(-2)[0] }));
 
+// The same item on the full catalog page. Below lg that IS the item view — the Discover drawer is a
+// side panel, and a side panel on a phone is a sliver of list next to a cramped column.
+export const catalogHref = (it: ItemRef): string =>
+  mountHref("/catalog", new URLSearchParams({ c: it.collId, i: it.href.split("/").slice(-2)[0] }));
+
 // A row count where the warehouse published one (serving topics), else undefined.
 export const rowCount = (it: ItemRef): number | undefined => {
   const n = propsOf(it)["ugs:row_count"];

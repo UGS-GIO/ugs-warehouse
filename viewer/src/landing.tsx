@@ -6,7 +6,8 @@
 import { type FormEvent, useMemo, useState } from "react";
 
 import type { ItemRef } from "./browse";
-import { CATEGORIES, categorize, dateOf, discoverHref } from "./item-view";
+import { catalogHref, CATEGORIES, categorize, dateOf, discoverHref } from "./item-view";
+import { useIsWide } from "./ui/use-breakpoint";
 import { type LinkAttrs, ResultCard } from "./result-card";
 
 const RECENT_COUNT = 6;
@@ -36,15 +37,17 @@ function recentlyUpdated(items: ItemRef[]): ItemRef[] {
     .map(({ it }) => it);
 }
 
-export function Landing({ items, itemsKey, loading, onSearch, onOpenItem, onOpenCategory }: {
+export function Landing({ items, itemsKey, loading, onSearch, onOpenItem, onOpenItemPage, onOpenCategory }: {
   items: ItemRef[];
   itemsKey: string;                       // App's mapLoadKey — the stable memo key for the item set
   loading: boolean;                       // the catalog crawl is still streaming → counts not final yet
   onSearch: (text: string) => void;       // → /discover?q=…
   onOpenItem: (href: string) => void;     // → opens the item in Discover
+  onOpenItemPage: (href: string) => void; // → the full item page (below lg; see catalogHref)
   onOpenCategory: (key: string) => void;  // → /discover?category=…
 }) {
   const [text, setText] = useState("");
+  const isWide = useIsWide();   // below lg a result opens the full page, not Discover's side drawer
   const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const recent = useMemo(() => recentlyUpdated(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -53,12 +56,12 @@ export function Landing({ items, itemsKey, loading, onSearch, onOpenItem, onOpen
 
   // A non-hover result link (Landing has no map to sync) that opens the item in Discover.
   const link = (it: ItemRef): LinkAttrs => ({
-    href: discoverHref(it),
+    href: isWide ? discoverHref(it) : catalogHref(it),
     "data-href": it.href,
     onClick: (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
       e.preventDefault();
-      onOpenItem(it.href);
+      (isWide ? onOpenItem : onOpenItemPage)(it.href);
     },
   });
 

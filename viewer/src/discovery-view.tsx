@@ -13,7 +13,7 @@ import {
   extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
-import { categoryLabel, collectionLabel, discoverHref } from "./item-view";
+import { catalogHref, categoryLabel, collectionLabel, discoverHref } from "./item-view";
 import type { Footprint } from "./map-model";
 import { type LinkAttrs, ResultCard, ResultRow } from "./result-card";
 import { buildIndex, toSearchDoc } from "./search-index";
@@ -43,12 +43,13 @@ const idOf = (href: string) => href.split("/").slice(-2)[0];
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, itemsKey, onOpenItem, onOpenItemPage, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
   onFullPage, fullPageHref,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
   onOpenItem: (href: string) => void;
+  onOpenItemPage: (href: string) => void;   // below lg a tap opens the full page, not the drawer
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
   selectedItem?: StacDoc;              // its full doc (App resolves it from ?c=/?i=); undefined while loading
   selectedCollectionId?: string;
@@ -154,12 +155,14 @@ export function DiscoveryView({
   // Result link: a real <a> (keyboard-focusable + cmd/middle-click opens a new tab), but a plain
   // left-click is intercepted for in-app nav — the same pattern the app's home link uses.
   const cardLink = (it: ItemRef): LinkAttrs => ({
-    href: discoverHref(it),
+    // Below lg the drawer would be a cramped column beside a dead sliver of list, so a result goes
+    // to the full item page instead. The href matches the click so a new tab lands the same place.
+    href: isWide ? discoverHref(it) : catalogHref(it),
     "data-href": it.href,
     onClick: (e) => {
       if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
       e.preventDefault();
-      onOpenItem(it.href);
+      (isWide ? onOpenItem : onOpenItemPage)(it.href);
     },
     onMouseEnter: () => { hoverSrc.current = "card"; setHoverHref(it.href); },
     onMouseLeave: () => { hoverSrc.current = "card"; setHoverHref(null); },
@@ -334,7 +337,7 @@ export function DiscoveryView({
           <div className="absolute inset-0 z-20 bg-black/40" onClick={onCloseItem} aria-hidden />
           <aside role="dialog" aria-modal="true" aria-label="Item detail"
             style={isWide ? { width: drawer.size } : undefined}
-            className="absolute inset-y-0 right-0 z-30 flex w-full max-w-[calc(100vw-2rem)] flex-col border-l border-border bg-background shadow-xl">
+            className="absolute inset-y-0 right-0 z-30 flex w-full flex-col border-l border-border bg-background shadow-xl lg:max-w-[calc(100vw-2rem)]">
             {/* Drag (or arrow-key) the left edge to widen the preview. Full-bleed below lg, so the
                 handle only exists where there's something to trade width with. */}
             {isWide && <ResizeHandle resizable={drawer} label="Resize item detail" className="absolute inset-y-0 -left-2 z-10" />}

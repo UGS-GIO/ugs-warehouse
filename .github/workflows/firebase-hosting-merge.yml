@@ -11,6 +11,12 @@ on:
     branches: [main]
     paths: ["viewer/**", "firebase.json"]
 
+# Repo default is read-only GITHUB_TOKEN (org policy). action-hosting-deploy needs checks: write to
+# post the deploy status as a check run on the commit.
+permissions:
+  contents: read
+  checks: write
+
 jobs:
   deploy:
     runs-on: ubuntu-latest

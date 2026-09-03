@@ -148,39 +148,64 @@ Nothing to change on the dataELT side — #418 owns `publish.sh`; the warehouse 
 needed to listen. Drop `allowFailure` from `wire-pubsub` once it's green if you want the
 wiring to gate future builds.
 
-## 5. Static viewer → CDN
+## 5. Static viewer → Firebase Hosting
 
-`cloudbuild.yaml` `build-viewer` + `deploy-viewer` build `viewer/` (Vite) and rsync
-`viewer/dist` → `gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX}` (default
-`warehouse/viewer`), served at **https://maps-assets.geology.utah.gov/warehouse/viewer/**.
-`index.html` is set `no-cache`; hashed assets are immutable. `deploy-viewer` is
-`allowFailure` until the build SA can write the bucket:
+The viewer deploys from **GitHub Actions**, not Cloud Build:
 
-```bash
-# build SA needs objectAdmin on the public bucket (one-time)
-gcloud storage buckets add-iam-policy-binding gs://$_PUBLIC_BUCKET \
-  --member="serviceAccount:$CB_SA" --role=roles/storage.objectAdmin
-```
+| workflow | trigger | lands on |
+|---|---|---|
+| `.github/workflows/firebase-hosting-merge.yml` | push to `main` touching `viewer/**` | live site `data-geology-utah-gov` |
+| `.github/workflows/firebase-hosting-pull-request.yml` | PR touching `viewer/**` | preview channel `pr-<n>`, public no-login URL, 7-day expiry |
 
-(`$CB_SA` from §4.) After the grant, the next build publishes the viewer. The viewer's
-default catalog is the prod STAC, so no extra config — it just works once live.
+Both use `FirebaseExtended/action-hosting-deploy` with a service-account secret — the same pattern
+and the same secret name as `ugs-map-viewer`. The preview workflow runs only for same-repo PRs, so
+a fork never sees the credential, and its `channelId` is never `live`, so it cannot overwrite the
+site. The action posts the preview URL as a PR comment itself.
 
-**Bare-prefix serving (one-time, needs `storage.buckets.update`).** The canonical URL is
-`…/warehouse/viewer/index.html`. The *bare* prefix `…/warehouse/viewer/` returns GCS
-`NoSuchKey` because the bucket has no default index document. Fix it so `…/warehouse/viewer/`
-(and the clean deep-links `…/warehouse/viewer/?c=…&i=…`) resolve to `index.html`:
+**Why not Cloud Build.** It has no Firebase credentials, and the only role that would give it any
+is project-level `roles/firebasehosting.admin` — there is no per-site or channels-only role. The
+preview build identity is deliberately scoped to the previews bucket and nothing else
+(`infra/iam.tf` §previews); handing it site-wide Hosting admin would let unmerged branch code
+publish over production. Cloud Build still owns images, Cloud Run, and the review viewer bundle.
 
-```bash
-# MainPageSuffix makes a directory request serve that dir's index.html. Bucket-global, but
-# only affects directory-style requests, so it's safe for the shared maps-assets bucket.
-gcloud storage buckets update gs://$_PUBLIC_BUCKET --web-main-page-suffix=index.html
-# DO NOT set --web-error-page to the viewer: a bucket-wide 404 page would return the viewer
-# HTML for any missing object (a missing COG/tile would 200 with HTML). Leave NotFoundPage unset.
-```
+**Not the CDN bucket.** The viewer uses real path routes (`/map`, `/discover`, …). A Cloud LB
+backend bucket cannot rewrite an unknown path to `index.html` — `--web-main-page-suffix` only
+handles directory-style requests — so every deep link would 404 on reload. Firebase Hosting's
+rewrites (`firebase.json`) do it. The old `gs://${_PUBLIC_BUCKET}/warehouse/viewer` copy is
+retired; the bucket still serves STAC, COGs and tiles, unchanged.
 
-Routing is query-param (`?c=&i=&view=&l=&m=`) on the single `index.html`, so MainPageSuffix
-alone is sufficient — no per-route rewrite needed. Until this is set, link to the explicit
-`…/warehouse/viewer/index.html`.
+The Hosting *site* is tofu-managed (`infra/firebase.tf`). Served at
+**https://data-geology-utah-gov.web.app** until the custom domain `data.geology.utah.gov` is cut
+over (DNS-gated). `index.html` is `no-cache`; hashed assets are immutable (`firebase.json`).
+
+### One-time setup
+
+1. Add the repo secret `FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` — copy the value from
+   `ugs-map-viewer`, which already holds a key for the same project.
+2. Optional repo variables `VITE_FEATURES_BASE` / `VITE_TILES_BASE`: the deployed OGC API Features
+   and tiles URLs. Cloud Build resolves these with `gcloud run services describe`; an Action has no
+   GCP credentials, so they are variables here. Left unset, the viewer hides those links rather
+   than printing dead ones.
+
+### Which surface serves what
+
+| surface | host | auth |
+|---|---|---|
+| prod viewer | Firebase Hosting, live channel | public |
+| prod PR preview | Firebase Hosting, channel `pr-<n>` | public, no login |
+| review viewer | Cloud Run `ugs-warehouse-review-serving`, `/review/viewer/` | IAP |
+| review PR preview | Cloud Run `ugs-warehouse-previews`, `/viewer/pr-<n>/` | IAP |
+
+The two Cloud Run surfaces stay behind IAP because they read the review catalog and its private
+assets. A viewer PR gets both previews: they differ in catalog, and only the review one exercises
+the comment and diff surfaces. `cloudbuild-viewer-preview.yaml` builds the review flavour —
+`VITE_CATALOG_URL` pointing at the review catalog is what `stac.ts` derives `IS_REVIEW` from.
+
+Any bundle mounted under a prefix must be told which one, via Vite's `--base` (it is also the
+router basepath, `src/mount.ts`): `/review/viewer/` for the review app, `/viewer/pr-<n>/` for a
+review preview. A Firebase channel serves at a host root, so it needs no `--base`.
+`src/ugs_warehouse/serve.py` already serves the right bundle's `index.html` for an unknown path
+under either subtree, so no server change.
 
 ## 5a. Pub search assets → CDN
 

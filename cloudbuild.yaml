@@ -46,14 +46,12 @@ substitutions:
   # public OGC api connects read-only — never schema_owner (role + secret provisioned by Marshall)
   _API_DB_USER: schema_reader
   _API_SECRET: schema-reader-db-password
-  # Static STAC viewer → public bucket → CDN (https://maps-assets.geology.utah.gov/warehouse/viewer/)
   _PUBLIC_BUCKET: ut-dnr-ugs-maps-prod-public
   # Private review bucket (tofu-created, no CDN) + the IAP-gated *.run.app URL of the review serving
   # app (tofu `serving_url` output). The review ingest job writes here + tags STAC hrefs at this host.
   _REVIEW_BUCKET: ut-dnr-ugs-maps-prod-review
   _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
   _REVIEW_PROJECT: ut-dnr-ugs-maps-prod   # the serving Cloud Run service + buckets live HERE, not the build's $PROJECT_ID (backend-tools)
-  _VIEWER_PREFIX: warehouse/viewer
   _REVIEW_VIEWER_PREFIX: review/viewer      # internal viewer bundle in the PRIVATE review bucket (served by the IAP app, never the CDN)
   # Tag used for images (defaults to SHORT_SHA in automated triggers)
   _TAG: $SHORT_SHA
@@ -791,7 +789,9 @@ steps:
           || printf '' > /workspace/tiles_url
         echo "VITE_TILES_BASE=$$(cat /workspace/tiles_url)"
 
-  # Build the static STAC viewer (Vite, base "./" so it works under any CDN subpath).
+  # Build the public viewer. The DEPLOY is .github/workflows/firebase-hosting-merge.yml — Cloud
+  # Build has no Firebase credentials. This step stays because build-viewer-review reuses its
+  # node_modules, and because a viewer that cannot build should fail the deploy build.
   - id: build-viewer
     waitFor: [resolve-features-url, resolve-tiles-url]
     name: node:22
@@ -805,27 +805,13 @@ steps:
         npm ci
         npm run build
 
-  # Publish viewer/dist → public bucket → CDN. Idempotent rsync; index.html revalidates
-  # (hashed assets are immutable). allowFailure until the build SA has objectAdmin on the
-  # bucket (grant in docs/DEPLOY.md §5).
-  - id: deploy-viewer
-    waitFor: [build-viewer]
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    allowFailure: true
-    args:
-      - -c
-      - |
-        gcloud storage rsync viewer/dist gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX} \
-          --recursive --delete-unmatched-destination-objects
-        gcloud storage objects update gs://${_PUBLIC_BUCKET}/${_VIEWER_PREFIX}/index.html \
-          --cache-control="no-cache"
-
   # Internal review viewer (ugs-warehouse#16) — same codebase, built against the review catalog +
   # served THROUGH the IAP app from the private review bucket (same-origin as the STAC/assets, one IAP
   # session). Separate outDir (dist-review) + Vite base so it neither clobbers the public dist nor
-  # mis-resolves its own asset URLs (they live under /review/viewer/). Runs after build-viewer, so
-  # node_modules is already installed in the shared workspace.
+  # mis-resolves its own asset URLs (they live under /review/viewer/). The base is also the router's
+  # basepath (src/routes.tsx), so path routes resolve under that prefix; serve.py already serves this
+  # bundle's index.html for an unknown path there. Runs after build-viewer, so node_modules is
+  # already installed in the shared workspace.
   - id: build-viewer-review
     waitFor: [build-viewer]
     name: node:22

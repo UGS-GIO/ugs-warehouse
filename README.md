@@ -70,7 +70,7 @@ src/ugs_warehouse/
 service/         Cloud Run service: Pub/Sub push → vector ingest
 admin/           Django + HTMX ops console (IAP): run/observe the Cloud Run jobs
 featureserv/     duckdb_featureserv config — OGC API Features over the GeoParquet
-viewer/          React + MapLibre STAC viewer (static; reads the catalog off the CDN)
+viewer/          React + MapLibre STAC viewer (static, on Firebase Hosting; catalog off the CDN)
 scripts/         CLI: bootstrap catalog, manual ingest, provision pub/sub
 docs/            MkDocs site (ARCHITECTURE, SERVING, STYLING, USER_GUIDE, …)
 ```

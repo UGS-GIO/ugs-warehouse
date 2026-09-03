@@ -50,7 +50,7 @@ Two things that are true everywhere:
 ## Web viewer
 *No install. The fastest way to see what exists and grab a slice.*
 
-Open **<https://maps-assets.geology.utah.gov/warehouse/viewer/>**
+Open **<https://data-geology-utah-gov.web.app/>**
 
 - Browse the catalog, search, filter by attribute.
 - Click a layer → interactive map + a full data table (sortable/filterable).

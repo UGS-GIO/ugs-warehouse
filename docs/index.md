@@ -40,7 +40,7 @@ GeoTIFF, and a STAC catalog**, served from a CDN with (mostly) no running servic
 
 Everything is **EPSG:4326** and lives under **`https://maps-assets.geology.utah.gov`**.
 
-The interactive **[STAC viewer](https://maps-assets.geology.utah.gov/warehouse/viewer/)** is the
+The interactive **[STAC viewer](https://data-geology-utah-gov.web.app/)** is the
 no-install way to browse, filter, and export.
 
 ---

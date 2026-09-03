@@ -1,14 +1,19 @@
-# Per-PR preview of the warehouse viewer (#154). Trigger: pull request touching viewer/**.
+# Per-PR preview of the REVIEW viewer (#154). Trigger: pull request touching viewer/**.
+#
+# The prod flavour of this preview is a Firebase Hosting channel now
+# (.github/workflows/firebase-hosting-pull-request.yml) — public, no login. What stays here is the
+# review flavour, which cannot move: it is built against the review catalog and its assets are
+# private, so it has to stay behind IAP. Prod and review previews are both worth having on a viewer
+# PR — they differ in catalog, and only the review one exercises the comment/diff surfaces.
 #
 # Serves from `ugs-warehouse-previews` — its OWN Cloud Run service, own origin, own IAP, reading
 # the previews bucket and nothing else. Not the review app: preview JavaScript is unmerged branch
 # code, and on that origin it would inherit the reviewer's IAP session (post/delete comments as
 # them, pull signed URLs to private review assets). Different host → different cookie, plus CORS.
 #
-# THE SAME BYTES AS PROD. No `--base` override, no separate outDir: the viewer builds `base: "./"`
-# and has exactly one route (all state is in search params), so the bundle resolves correctly at
-# any depth. What a reviewer clicks is what gets promoted — which is the one thing #39 says the
-# review app's previews cannot claim.
+# `--base=/viewer/pr-<n>/` is both the asset prefix and the router basepath (src/mount.ts): the
+# viewer has real path routes, so a bundle mounted under a prefix has to be told which one.
+# serve.py serves this bundle's own index.html for an unknown path under the subtree.
 #
 # Expiry is bucket-wide (infra/buckets.tf) — everything in that bucket is a preview, so there is no
 # prefix to mis-target and a build that dies halfway still gets swept.
@@ -24,6 +29,9 @@ substitutions:
   # the service's *.run.app URL is stable for its lifetime, so it's a substitution instead.
   _PREVIEWS_BASE_URL: https://ugs-warehouse-previews-ufyuidl4mq-uc.a.run.app
   _PREVIEW_PATH: viewer/pr-
+  # The review catalog this preview reads. stac.ts derives IS_REVIEW from the "/review/" in it, so
+  # this one variable is what makes the bundle the review flavour.
+  _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
 
 steps:
   # Same service-URL resolution as the prod build, so the preview's endpoint links aren't dead.
@@ -49,9 +57,10 @@ steps:
         set -e
         export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
         export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
+        export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
         cd viewer
         npm ci
-        npm run build
+        npm run build -- --base=/${_PREVIEW_PATH}$_PR_NUMBER/
 
   - id: deploy-preview
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

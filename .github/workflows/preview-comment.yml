@@ -1,5 +1,6 @@
-# Posts (and updates) a PR comment linking to the viewer preview built by
-# cloudbuild-viewer-preview.yaml (#154/#156/#159).
+# Posts (and updates) a PR comment linking to the REVIEW viewer preview built by
+# cloudbuild-viewer-preview.yaml (#154/#156/#159). The prod preview comments itself, from the
+# Firebase action in firebase-hosting-pull-request.yml.
 #
 # Why here and not in the Cloud Build step itself: tried that first (#163) using the GitHub
 # connection's OAuth token to call the comments API directly from Cloud Build -- 403, because
@@ -7,7 +8,7 @@
 # own GITHUB_TOKEN gets pull-requests:write for free via `permissions:` below, no secret to
 # provision or scope-guess. This workflow does no building itself -- it only watches the
 # ugs-warehouse-viewer-preview check on the same commit and comments once it's green.
-name: PR preview comment
+name: Review preview comment
 
 on:
   pull_request:
@@ -59,7 +60,7 @@ jobs:
             const prNumber = context.payload.pull_request.number;
             const url = `https://ugs-warehouse-previews-ufyuidl4mq-uc.a.run.app/viewer/pr-${prNumber}/`;
             const marker = "<!-- ugs-warehouse-preview -->";
-            const body = `${marker}\n🔗 **Viewer preview:** ${url}`;
+            const body = `${marker}\n🔒 **Review viewer preview (IAP):** ${url}`;
 
             const comments = await github.rest.issues.listComments({
               owner: context.repo.owner,

@@ -1,4 +1,4 @@
-// The Preview view (?view=preview&c=&i=): a locked full-viewport shell that hosts the EXISTING item
+// The Preview view (/preview?c=&i=): a locked full-viewport shell that hosts the EXISTING item
 // Preview at full height. The persistent preview map already lives in App's PreviewMapProvider, so the
 // map portals in as usual — this is just a slim bar (title · Back · View on map) over the same Preview
 // the item-detail page and the Discover drawer render. Reached from the drawer's "Explore" action.

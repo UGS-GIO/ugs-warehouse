@@ -1,0 +1,59 @@
+# Per-PR preview of the viewer, on a Firebase Hosting preview channel — a PUBLIC, no-login URL,
+# which is the payoff #187 is after. It replaces the IAP-gated Cloud Run preview
+# (cloudbuild-viewer-preview.yaml) that a reviewer had to hold a session for.
+#
+# Why an Action and not Cloud Build, when CI lives in Cloud Build: the deploy needs Firebase
+# credentials. Cloud Build's SA would need project-level roles/firebasehosting.admin (there is no
+# per-site or channels-only role), and the preview build identity is deliberately scoped to the
+# previews bucket and nothing else — infra/iam.tf §previews. An Action with the same
+# FIREBASE_SERVICE_ACCOUNT_* secret ugs-map-viewer uses keeps that boundary where it is.
+#
+# Same-repo PRs only: a fork PR must never see the service-account secret.
+name: Viewer preview
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths: ["viewer/**", "firebase.json"]
+
+# Repo default is read-only GITHUB_TOKEN (org policy). action-hosting-deploy needs checks: write to
+# post the deploy status as a check run, and pull-requests: write to post the preview-URL comment.
+permissions:
+  contents: read
+  checks: write
+  pull-requests: write
+
+jobs:
+  preview:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: viewer/package-lock.json
+
+      # Both are optional: the viewer hides the OGC/tiles links when they're empty rather than
+      # printing dead URLs. Set them as repo variables to give previews the real endpoints.
+      - name: Build
+        working-directory: viewer
+        env:
+          VITE_FEATURES_BASE: ${{ vars.VITE_FEATURES_BASE }}
+          VITE_TILES_BASE: ${{ vars.VITE_TILES_BASE }}
+        run: |
+          npm ci
+          npm run build
+
+      # channelId is never `live`, so this cannot overwrite the site. The action posts (and updates)
+      # the preview URL as a PR comment itself — no separate comment workflow to keep in sync.
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD }}
+          projectId: ut-dnr-ugs-maps-prod
+          channelId: pr-${{ github.event.number }}
+          expires: 7d
+          firebaseToolsVersion: "13.29.1"

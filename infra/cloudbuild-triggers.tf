@@ -12,7 +12,7 @@
 # DECLARED IS NOT APPLIED. Nothing here has been imported and no apply has run, so the live triggers
 # are whatever the console holds. docs/CLOUD_BUILD_CI.md carries the inventory taken from
 # `gcloud builds triggers describe` and is the authority on what is deployed; this file is a
-# proposal until #222 imports it.
+# proposal until it gets imported.
 #
 # All five live triggers are declared, transcribed from the inventory in docs/CLOUD_BUILD_CI.md
 # (which came from `gcloud builds triggers describe`) — plus review-viewer, which does not exist yet.
@@ -128,7 +128,6 @@ resource "google_cloudbuild_trigger" "pr_ci" {
   project         = var.build_project
   location        = var.region
   name            = "ugs-warehouse-pr-ci"
-  description     = "ruff + pytest + viewer tsc/eslint/vitest/build on every PR."
   service_account = var.trigger_service_account
 
   repository_event_config {
@@ -150,7 +149,6 @@ resource "google_cloudbuild_trigger" "docs" {
   project         = var.build_project
   location        = var.region
   name            = "ugs-warehouse-docs"
-  description     = "MkDocs site build + publish."
   service_account = var.trigger_service_account
 
   repository_event_config {
@@ -161,7 +159,7 @@ resource "google_cloudbuild_trigger" "docs" {
   }
 
   filename       = "cloudbuild-docs.yaml"
-  included_files = ["docs/**", "mkdocs.yml", "docs-requirements.txt"]
+  included_files = ["docs/**", "mkdocs.yml", "docs-requirements.txt", "cloudbuild-docs.yaml"]
 }
 
 # The two PR previews run as the LEAST-TRUSTED identity: they build unmerged branch code.
@@ -204,5 +202,5 @@ resource "google_cloudbuild_trigger" "tiles_preview" {
   }
 
   filename       = "cloudbuild-service-preview.yaml"
-  included_files = ["tiles/**", "api/**", "src/**"]
+  included_files = ["tiles/**"]
 }

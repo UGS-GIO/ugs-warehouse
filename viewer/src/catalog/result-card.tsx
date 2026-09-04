@@ -7,8 +7,8 @@ import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { collectionLabel, dateOf, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
-import { thumbnailAsset } from "../stac";
-import { C } from "../ui/ui";
+import { thumbnailAsset } from "@/stac";
+import { C } from "@/ui/ui";
 
 export type Density = "comfortable" | "compact";
 

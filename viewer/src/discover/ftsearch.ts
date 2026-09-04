@@ -3,8 +3,8 @@
 // **range-reads** the remote file (fetches only the index pages a query touches — spiked + confirmed).
 // The engine is self-hosted (see ./duckdb); the DB is fetched lazily on first use, so it costs nothing
 // until the "full text" toggle is switched on.
-import { bm25Terms, bm25Where, parseQuery } from "../data/query";
-import { attach, type Conn } from "../data/duckdb";
+import { bm25Terms, bm25Where, parseQuery } from "@/data/query";
+import { attach, type Conn } from "@/data/duckdb";
 
 export type PubHit = { id: string; title: string; series: string; pdf?: string; score: number };
 

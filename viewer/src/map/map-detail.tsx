@@ -1,9 +1,9 @@
 // The map's right-hand detail pane: assets, properties, and — on the review deploy — the diff and
 // comments for the selected item. Lived in app.tsx purely because the map route imported it there.
-import { CommentsPanel } from "../review/comments-panel";
-import { DiffPanel } from "../review/diff-panel";
-import { PropertyTable } from "../catalog/property-table";
-import { IS_REVIEW, type StacDoc } from "../stac";
+import { CommentsPanel } from "@/review/comments-panel";
+import { DiffPanel } from "@/review/diff-panel";
+import { PropertyTable } from "@/catalog/property-table";
+import { IS_REVIEW, type StacDoc } from "@/stac";
 
 const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
 

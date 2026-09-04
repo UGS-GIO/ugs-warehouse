@@ -4,7 +4,7 @@
 // restores focus to the trigger. Ported from the reference StacJsonDialog onto the viewer's tokens.
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import type { StacDoc } from "../stac";
+import type { StacDoc } from "@/stac";
 
 // The item's own STAC URL (rel=self) — an "open .json" target where the catalog carries one.
 const selfHrefOf = (item: StacDoc): string | undefined =>

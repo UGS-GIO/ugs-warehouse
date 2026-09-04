@@ -2,7 +2,7 @@
 // (`table:columns` on the GeoParquet `data` asset). Empty-safe: a dataset with no published schema
 // (many pubs, compact index rows) shows a note instead of a bare table. Ported from the reference
 // SchemaTable onto the viewer's UDS tokens; the description column shows only when any row has one.
-import type { TableColumn } from "../stac";
+import type { TableColumn } from "@/stac";
 
 export function SchemaTable({ columns }: { columns: TableColumn[] | undefined }) {
   if (!columns || columns.length === 0) {

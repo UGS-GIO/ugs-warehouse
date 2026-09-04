@@ -12,12 +12,12 @@
 import type { ReactNode, RefObject } from "react";
 import { useRef, useState } from "react";
 
-import { LegalFooter } from "../shell/legal-footer";
-import { CATALOG_URL } from "../stac";
+import { LegalFooter } from "@/shell/legal-footer";
+import { CATALOG_URL } from "@/stac";
 import { clampSize, DETENTS, nearestDetent } from "./map-model";
-import { useIsDesktop } from "../ui/use-breakpoint";
-import { ResizeHandle } from "../ui/resizable";
-import { useResizable } from "../ui/use-resizable";
+import { useIsDesktop } from "@/ui/use-breakpoint";
+import { ResizeHandle } from "@/ui/resizable";
+import { useResizable } from "@/ui/use-resizable";
 
 type Tab = "layers" | "info";
 type RevealRef = RefObject<(() => void) | null>;

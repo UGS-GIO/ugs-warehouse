@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ItemStatus, ITEM_STATUSES, listItemStatuses, setItemStatus } from "./comments";
-import { UiSelect } from "../ui/select";
+import { UiSelect } from "@/ui/select";
 
 // Per-layer review status — set on a layer's Review box, summarized on the dashboard. Independent of
 // comment resolution: a reviewer marks the layer's overall progress (…→ approved = ready to promote).

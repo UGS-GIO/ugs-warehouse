@@ -4,7 +4,7 @@
 // keys) passes through untouched so override and deep links keep working.
 import { createRootRoute, Link } from "@tanstack/react-router";
 
-import { AppLayout } from "../app";
+import { AppLayout } from "@/app";
 
 // The index signature is the passthrough contract, and it is what lets `useSearch` stay typed
 // without a cast: the four known keys are narrowed, everything else survives as unknown.

@@ -3,16 +3,16 @@ import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReac
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import { CommentsPanel } from "../review/comments-panel";
+import { CommentsPanel } from "@/review/comments-panel";
 import type { ColFilter } from "./download";
 import { PAGE_SIZES } from "./paging";
-import type { FocusSel } from "../map/map-model";
-import { IS_REVIEW } from "../stac";
-import { C } from "../ui/ui";
-import { RecordCards } from "../catalog/record-cards";
-import { UiSegmented } from "../ui/segmented";
-import { UiSelect } from "../ui/select";
-import { useIsDesktop } from "../ui/use-breakpoint";
+import type { FocusSel } from "@/map/map-model";
+import { IS_REVIEW } from "@/stac";
+import { C } from "@/ui/ui";
+import { RecordCards } from "@/catalog/record-cards";
+import { UiSegmented } from "@/ui/segmented";
+import { UiSelect } from "@/ui/select";
+import { useIsDesktop } from "@/ui/use-breakpoint";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via

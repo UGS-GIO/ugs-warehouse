@@ -3,11 +3,11 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
 
-import type { ShapefileWarnings } from "../data/download";
-import { type ExportFormat, FORMATS } from "../data/export-formats";
-import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "../stac";
-import { C } from "../ui/ui";
-import { UiSelect } from "../ui/select";
+import type { ShapefileWarnings } from "@/data/download";
+import { type ExportFormat, FORMATS } from "@/data/export-formats";
+import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
+import { C } from "@/ui/ui";
+import { UiSelect } from "@/ui/select";
 
 const SERVICE_KEYS = new Set(["pmtiles", "style", "xyz", "ducklake", "tiles"]);
 
@@ -61,7 +61,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
       const clip = clipOn ? bbox : undefined;
-      const { exportItem, shapefileWarnings } = await import("../data/download");   // DuckDB + GDAL, on demand
+      const { exportItem, shapefileWarnings } = await import("@/data/download");   // DuckDB + GDAL, on demand
       // A failed pre-flight just proceeds to the export.
       if (fmt === "shp" && !force) {
         const w = await shapefileWarnings(parquet!.href, clip).catch(() => null);

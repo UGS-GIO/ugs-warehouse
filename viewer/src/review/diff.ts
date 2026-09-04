@@ -7,7 +7,7 @@
 // identity. A geometry hash (`md5(geom)` over the raw WKB) is stable: same geometry → same feature.
 // A geometry *edit* therefore shows as remove+add (correct for a diff; move-tracking via the source
 // PK is a future enhancement).
-import { openParquet } from "../data/duckdb";
+import { openParquet } from "@/data/duckdb";
 
 // The public (current) GeoParquet always lives on the CDN under warehouse/geoparquet/<stem>/, whatever
 // deploy we're on. Overridable via ?currentcdn= for testing against a different host.

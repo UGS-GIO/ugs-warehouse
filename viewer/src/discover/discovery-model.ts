@@ -2,10 +2,10 @@
 // the loaded catalog items. Framework/DOM-free — type-only imports of the item + STAC shapes, plus
 // the already-pure validBbox from map-model — so it runs in the (node) test env. The view component
 // wires these to MiniSearch (the shared search-index) and the live map; neither belongs in this layer.
-import type { ItemRef } from "../catalog/browse";
+import type { ItemRef } from "@/catalog/browse";
 import { categorize, collectionLabel, docIdOf, formatsOf, hasGeometry, propsOf,
-  title, typeOf } from "../catalog/item-view";
-import { validBbox } from "../map/map-model";
+  title, typeOf } from "@/catalog/item-view";
+import { validBbox } from "@/map/map-model";
 
 // The field getters now live in item-view.ts (one source of truth, shared with browse.tsx). Re-export
 // the discovery-facing names so this module's API and the view stay unchanged.

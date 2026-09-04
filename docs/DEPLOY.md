@@ -237,7 +237,7 @@ curl -sI -H 'Range: bytes=0-99' \
 ```
 
 The viewer's engine (duckdb-wasm) and model host are self-hosted by default; `?ftsdb=`, `?vssdb=`,
-`?models=`, and `?extrepo=` override them for local spikes (see `viewer/src/duckdb.ts` / `vsearch.ts`).
+`?models=`, and `?extrepo=` override them for local spikes (see `viewer/src/data/duckdb.ts`).
 
 ## 6. Cross-boundary grants — preflight (#223)
 

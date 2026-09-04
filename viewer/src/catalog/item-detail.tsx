@@ -4,23 +4,23 @@
 import { type ReactNode, useState } from "react";
 
 import type { ItemRef } from "./browse";
-import { CommentsPanel } from "../review/comments-panel";
-import { DataExplorer } from "../data/data-explorer";
+import { CommentsPanel } from "@/review/comments-panel";
+import { DataExplorer } from "@/data/data-explorer";
 import { PhotoGallery } from "./photo-gallery";
 
-import { DiffPanel } from "../review/diff-panel";
+import { DiffPanel } from "@/review/diff-panel";
 import { Preview } from "./asset-viewer";
 import { EndpointsPanel } from "./endpoints-panel";
 import { DownloadsPanel } from "./downloads-panel";
 import { bylineParts, categorize, curatedDerived, kindLabel, type MetaRow, recordCountLabel } from "./item-view";
-import { T } from "../shell/page";
+import { T } from "@/shell/page";
 import { PropertyTable } from "./property-table";
 import { SchemaTable } from "./schema-table";
 import { StacJson } from "./stac-json";
-import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "../review/review-status";
+import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { type Asset, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
-  relatedLinks, type StacDoc, tableColumns, viaLink } from "../stac";
-import { C, humanize } from "../ui/ui";
+  relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+import { C, humanize } from "@/ui/ui";
 
 const relatedViewerHref = (stacHref: string): string => {
   const m = stacHref.match(/\/([^/]+)\/([^/]+)\/[^/]+\.json(?:\?.*)?$/);

@@ -3,7 +3,7 @@
 // guide's OGC examples show the real URL when one is configured (else the {OGC_API_BASE} placeholder).
 import guideMd from "../../../docs/USER_GUIDE.md?raw";
 import { MarkdownPage } from "./markdown-page";
-import { FEATURES_BASE } from "../stac";
+import { FEATURES_BASE } from "@/stac";
 
 export function Guide() {
   const source = FEATURES_BASE

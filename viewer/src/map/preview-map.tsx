@@ -4,8 +4,8 @@
 import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { type FocusSel, type MapPick, nextPick } from "./map-model";
 import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
-import { rendersOf } from "../stac";
-import { usePerItem } from "../lib/use-per-item";
+import { rendersOf } from "@/stac";
+import { usePerItem } from "@/lib/use-per-item";
 
 export { footprintSpecOf } from "./preview-spec";
 export type { PreviewSpec } from "./preview-spec";

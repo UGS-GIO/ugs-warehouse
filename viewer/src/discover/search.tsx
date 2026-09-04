@@ -10,7 +10,7 @@ import { searchPubs } from "./ftsearch";
 import {
   baseTerms, fieldInput, isEmptyQuery, matchesQuery, parseQuery, type Query,
   type SearchDoc, serializeQuery, withExcludes, withField, withSinglePhrase, withTerms,
-} from "../data/query";
+} from "@/data/query";
 import { type Article, buildIndex, type CatalogDoc, type Hit } from "./search-index";
 
 // A small toggle chip for the search filters.

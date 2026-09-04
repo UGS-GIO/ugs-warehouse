@@ -1,5 +1,5 @@
 // Shared class names and small text helpers.
-import { CARD_GRID } from "../shell/page";
+import { CARD_GRID } from "@/shell/page";
 
 export const C = {
   wrap: "w-full px-4 py-6 sm:px-6 lg:px-10",

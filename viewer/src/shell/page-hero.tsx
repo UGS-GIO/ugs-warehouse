@@ -5,7 +5,7 @@
 // gradient guarantees contrast rather than hoping for it, and `drop-shadow` covers bright patches.
 import type { ReactNode } from "react";
 
-import heroImg from "../assets/fantasy-canyon.jpg";
+import heroImg from "@/assets/fantasy-canyon.jpg";
 
 export function PageHero({ eyebrow, title, lead, children }: {
   eyebrow?: string;       // section, NOT the agency — the state band above already names it

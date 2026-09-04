@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { ItemRef } from "../catalog/browse";
+import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
   extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery, sortItems, typeOf,

@@ -6,8 +6,8 @@
 // Architecture (a conceptual platform diagram) and Guide (end-user prose) — it duplicates neither.
 import { type ReactNode, useMemo } from "react";
 
-import type { CollectionSummary } from "../catalog/browse";
-import { humanize } from "../ui/ui";
+import type { CollectionSummary } from "@/catalog/browse";
+import { humanize } from "@/ui/ui";
 
 // CDN origin behind the catalog (…/warehouse/stac/catalog.json → https://maps-assets.geology.utah.gov).
 const cdnBase = (catalogUrl: string): string => {

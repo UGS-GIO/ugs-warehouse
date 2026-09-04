@@ -3,7 +3,7 @@
 // so these tests guard the parts we CAN check deterministically).
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
-import type { StacDoc } from "../stac";
+import type { StacDoc } from "@/stac";
 
 // Which map surface an item needs. A single consolidated map renders the right sources per kind, so
 // switching between items of different kinds swaps sources instead of remounting a whole component

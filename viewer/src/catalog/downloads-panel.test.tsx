@@ -5,13 +5,13 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DownloadsPanel } from "./downloads-panel";
-import type { StacDoc } from "../stac";
+import type { StacDoc } from "@/stac";
 
 // `vi.mock` is hoisted above the file's consts, so the spies have to be hoisted with it.
 const { exportItem, shapefileWarnings } = vi.hoisted(() => ({
   exportItem: vi.fn(), shapefileWarnings: vi.fn(),
 }));
-vi.mock("../data/download", () => ({ exportItem, shapefileWarnings }));
+vi.mock("@/data/download", () => ({ exportItem, shapefileWarnings }));
 
 const HREF = "https://cdn.example/x.parquet";
 const item: StacDoc = {

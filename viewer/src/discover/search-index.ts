@@ -3,7 +3,7 @@
 // No React; MiniSearch is the only runtime import, so this stays out of the main bundle — both
 // consumers (the lazy Search view and the lazy Discover view) pull it into their own chunks.
 import MiniSearch from "minisearch";
-import type { StacDoc } from "../stac";
+import type { StacDoc } from "@/stac";
 
 export type Article = {
   id: string; sid: string; volume: number | null; issue?: string;

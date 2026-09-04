@@ -18,7 +18,7 @@ export function PhotoGallery({ href }: { href: string }) {
   const { data, isLoading, error } = useQuery({
     queryKey: ["ucrc-photo-gallery", href, page],
     queryFn: async () => {
-      const { queryParquet } = await import("../data/download");
+      const { queryParquet } = await import("@/data/download");
       // depth-order so a box's photos read top→bottom; range-read, never downloads the file.
       return queryParquet(href, { limit: PAGE, offset: page * PAGE, orderBy: "top_depth", desc: false });
     },

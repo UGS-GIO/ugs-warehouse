@@ -9,7 +9,8 @@ Pairs the warehouse's embedding search (pubs-vss.duckdb) with a local LLM:
   3. Generate a grounded, cited answer with a local Ollama model (default qwen2.5:32b).
 
 No GCP perms (the .duckdb is public on the CDN). No API bills. Retrieval is CPU; only generation
-uses the model. Query embedding matches viewer/src/vsearch.ts (same model + retrieval prefix).
+uses the model. The viewer's semantic search was dropped in 69c7bfd (4 CVEs), so nothing
+mirrors this embedding path client-side any more.
 
     ollama pull qwen2.5:32b          # once (generation)
     ollama serve                     # background

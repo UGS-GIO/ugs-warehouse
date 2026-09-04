@@ -5,7 +5,7 @@
 // (well above the real layer count, so normal browsing never evicts) so a runaway can't grow unbounded.
 import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
-import { CappedMap } from "../lib/lru";
+import { CappedMap } from "@/lib/lru";
 
 const PMTILES_ARCHIVE_CAP = 32;
 let registered = false;

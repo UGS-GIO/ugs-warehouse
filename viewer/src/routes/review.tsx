@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { useViewCtx } from "../app";
-import { ReviewDashboard } from "../review/review-dashboard";
+import { useViewCtx } from "@/app";
+import { ReviewDashboard } from "@/review/review-dashboard";
 
 // Review data are vector serving-topics → the ugs-serving-topics collection. Open the item there.
 function Review() {

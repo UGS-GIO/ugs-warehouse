@@ -7,27 +7,27 @@
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 
-import type { ItemRef } from "../catalog/browse";
+import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf,
   extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
-import { categoryLabel, collectionLabel } from "../catalog/item-view";
-import type { Footprint } from "../map/map-model";
-import { type LinkAttrs, ResultCard, ResultRow } from "../catalog/result-card";
+import { categoryLabel, collectionLabel } from "@/catalog/item-view";
+import type { Footprint } from "@/map/map-model";
+import { type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
 import { buildIndex, toSearchDoc } from "./search-index";
-import type { StacDoc } from "../stac";
-import { ItemDetail } from "../catalog/item-detail";
-import { UiSegmented } from "../ui/segmented";
-import { UiSelect } from "../ui/select";
-import { useIsWide } from "../ui/use-breakpoint";
-import { ResizeHandle } from "../ui/resizable";
-import { useResizable } from "../ui/use-resizable";
+import type { StacDoc } from "@/stac";
+import { ItemDetail } from "@/catalog/item-detail";
+import { UiSegmented } from "@/ui/segmented";
+import { UiSelect } from "@/ui/select";
+import { useIsWide } from "@/ui/use-breakpoint";
+import { ResizeHandle } from "@/ui/resizable";
+import { useResizable } from "@/ui/use-resizable";
 
 // maplibre is ~1.5MB — lazy so the rail + cards paint immediately and the map streams in behind them
 // (App already code-splits ./map, so this shares that chunk).
-const ItemMap = lazy(() => import("../map/map").then((m) => ({ default: m.ItemMap })));
+const ItemMap = lazy(() => import("@/map/map").then((m) => ({ default: m.ItemMap })));
 
 const LAYOUTS = [{ value: "gallery" as const, label: "Gallery" }, { value: "list" as const, label: "List" }];
 const DENSITIES = [{ value: "comfortable" as const, label: "Comfy" }, { value: "compact" as const, label: "Compact" }];

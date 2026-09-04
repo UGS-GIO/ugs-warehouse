@@ -3,9 +3,9 @@ import { useEffect, useRef, useState } from "react";
 
 import { serviceUrlOf } from "./catalog";
 import { cogAsset, ducklakeAsset, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
-  tilesStyleUrl, xyzTilesUrl, zarrAsset } from "../stac";
-import { usePreviewMap } from "../map/preview-map";
-import { UiSelect } from "../ui/select";
+  tilesStyleUrl, xyzTilesUrl, zarrAsset } from "@/stac";
+import { usePreviewMap } from "@/map/preview-map";
+import { UiSelect } from "@/ui/select";
 
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);

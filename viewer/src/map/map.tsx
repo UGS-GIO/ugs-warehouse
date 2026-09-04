@@ -5,13 +5,13 @@ import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
-import { type StacDoc, useCogBoxes, useStyleLayersFor } from "../stac";
-import { UiSegmented } from "../ui/segmented";
+import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
+import { UiSegmented } from "@/ui/segmented";
 import { type ActiveLayer, colorFor, type Footprint, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
-const ZarrOverlay = lazy(() => import("../zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
+const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 

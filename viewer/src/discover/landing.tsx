@@ -5,10 +5,10 @@
 // ~7.6k docs on an unrelated render. Mirrors ugs-data-catalog/src/routes/index.tsx onto UDS tokens.
 import { type FormEvent, useMemo, useState } from "react";
 
-import type { ItemRef } from "../catalog/browse";
-import { CATEGORIES, categorize, dateOf } from "../catalog/item-view";
-import { useIsWide } from "../ui/use-breakpoint";
-import { type LinkAttrs, ResultCard } from "../catalog/result-card";
+import type { ItemRef } from "@/catalog/browse";
+import { CATEGORIES, categorize, dateOf } from "@/catalog/item-view";
+import { useIsWide } from "@/ui/use-breakpoint";
+import { type LinkAttrs, ResultCard } from "@/catalog/result-card";
 
 const RECENT_COUNT = 6;
 

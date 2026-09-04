@@ -4,7 +4,7 @@ import { type Comment, deleteComment, ITEM_STATUSES, listAllComments, setStatus,
 import { NotificationsInbox } from "./notifications-inbox";
 import { ReviewReport } from "./review-report";
 import { statusClass, statusLabel, useItemStatuses } from "./review-status";
-import { UiSegmented } from "../ui/segmented";
+import { UiSegmented } from "@/ui/segmented";
 
 // Review dashboard — every comment across the catalog, filterable by status, resolve/reopen/delete inline.
 // A "Review" tab (App.tsx) renders this on the review deploy only. onOpen jumps to the item's catalog page.

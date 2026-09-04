@@ -1,12 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { idOf, useViewCtx } from "../app";
-import { ItemMap } from "../map/map";
-import { MapDetail } from "../map/map-detail";
-import { LayerList } from "../map/layer-list";
-import { MapLegend } from "../map/map-legend";
-import { MapShell } from "../map/map-shell";
-import { colorFor } from "../map/map-model";
+import { idOf, useViewCtx } from "@/app";
+import { ItemMap } from "@/map/map";
+import { MapDetail } from "@/map/map-detail";
+import { LayerList } from "@/map/layer-list";
+import { MapLegend } from "@/map/map-legend";
+import { MapShell } from "@/map/map-shell";
+import { colorFor } from "@/map/map-model";
 
 function MapView() {
 const c = useViewCtx();

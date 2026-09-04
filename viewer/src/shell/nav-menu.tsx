@@ -7,7 +7,7 @@
 import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
-import { CheckIcon, CopyIcon, copyCatalogUrl } from "../catalog/stac-url-chip";
+import { CheckIcon, CopyIcon, copyCatalogUrl } from "@/catalog/stac-url-chip";
 import { getTheme, setTheme, type Theme } from "./theme";
 
 const THEMES: { value: Theme; label: string; icon: string }[] = [

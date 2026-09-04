@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetKind, cubeVariables, nonSpatialDimensions, timeDimensionOf } from "../stac";
+import { assetKind, cubeVariables, nonSpatialDimensions, timeDimensionOf } from "@/stac";
 import { decodeFillValue, fillValueOf } from "./store";
 import { effectiveNoData, maskNaN, NODATA_SENTINEL } from "./tile";
 

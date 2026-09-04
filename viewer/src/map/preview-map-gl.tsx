@@ -9,13 +9,13 @@ import { Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type Map
 import { ensureCogProtocol } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { CommentsPanel } from "../review/comments-panel";
+import { CommentsPanel } from "@/review/comments-panel";
 import { boundsOf, type FocusSel, validBbox } from "./map-model";
-import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, useLiveLegend, useStyleLayers } from "../stac";
+import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, useLiveLegend, useStyleLayers } from "@/stac";
 import { bboxPolygon, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
-import { usePerItem } from "../lib/use-per-item";
+import { usePerItem } from "@/lib/use-per-item";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
-import { UiSelect } from "../ui/select";
+import { UiSelect } from "@/ui/select";
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 

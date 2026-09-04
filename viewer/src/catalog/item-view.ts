@@ -5,11 +5,11 @@
 // it runs in the node test env. Consolidates the getters that had drifted between browse.tsx and
 // discovery-model.ts into ONE source of truth (both now import from here).
 import type { ItemRef } from "./browse";
-import { validBbox } from "../map/map-model";
+import { validBbox } from "@/map/map-model";
 import {
   type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset,
   type TableColumn, zarrAsset,
-} from "../stac";
+} from "@/stac";
 
 // ---- field getters (null-safe; the single home for what browse.tsx + discovery-model.ts duplicated) ----
 export const propsOf = (it: ItemRef): Record<string, unknown> =>

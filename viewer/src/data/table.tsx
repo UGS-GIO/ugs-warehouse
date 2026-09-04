@@ -1,8 +1,8 @@
 import { flexRender, type Table } from "@tanstack/react-table";
 
 import { ALL_PAGES, pageLabel, PAGE_SIZES, type PageSize } from "./paging";
-import { C } from "../ui/ui";
-import { UiSelect } from "../ui/select";
+import { C } from "@/ui/ui";
+import { UiSelect } from "@/ui/select";
 
 // Shared class names and table chrome — the item list and the data explorer both render these.
 

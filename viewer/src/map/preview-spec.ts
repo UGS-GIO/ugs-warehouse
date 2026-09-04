@@ -1,7 +1,7 @@
 // What the persistent map should draw, and the helpers both halves of it need. Split out so the
 // provider can live in the entry chunk while maplibre stays behind a lazy import.
 import { validBbox } from "./map-model";
-import { rendersOf, type StacDoc } from "../stac";
+import { rendersOf, type StacDoc } from "@/stac";
 
 export type PreviewSpec =
   | { kind: "vector"; item: StacDoc; pmHref: string; sourceLayer: string }

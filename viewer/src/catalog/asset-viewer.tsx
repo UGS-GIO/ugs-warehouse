@@ -2,15 +2,15 @@
 import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useMemo, useState } from "react";
 
-import { DataExplorer } from "../data/data-explorer";
-import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "../map/preview-map";
+import { DataExplorer } from "@/data/data-explorer";
+import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
 import { type Asset, type AssetKind, assetKind, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
-  summaryFieldsOf, tableColumns, thumbnailAsset } from "../stac";
-import { ThreeDViewer } from "../data/three-d-viewer";
-import { C, toggle } from "../ui/ui";
+  summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
+import { ThreeDViewer } from "@/data/three-d-viewer";
+import { C, toggle } from "@/ui/ui";
 
 // deck.gl-zarr drags in luma.gl + the reprojection stack; only datacube items pay for it.
-const ZarrMap = lazy(() => import("../zarr/zarr-map").then((m) => ({ default: m.ZarrMap })));
+const ZarrMap = lazy(() => import("@/zarr/zarr-map").then((m) => ({ default: m.ZarrMap })));
 
 export function AssetChips({ assets }: { assets: Record<string, Asset> }) {
   return (

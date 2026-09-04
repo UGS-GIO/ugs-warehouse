@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { boundsOf, clampSize, DETENTS, hasFootprint, layerParam, mapKindOf, nearestDetent, nextPick,
   NO_LAYERS, parseLayerParam, validBbox } from "./map-model";
-import type { StacDoc } from "../stac";
+import type { StacDoc } from "@/stac";
 
 describe("validBbox", () => {
   it("returns undefined for missing / non-array / too-short bbox", () => {

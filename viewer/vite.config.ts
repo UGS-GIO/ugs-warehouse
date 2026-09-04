@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
@@ -27,6 +28,8 @@ export default defineConfig({
   // react plugin has to see the generated output.
   plugins: [tanstackRouter({ target: "react", autoCodeSplitting: true }), react(), tailwindcss()],
   base: "/",
+  // "@" is src/ — a cross-folder import says where it comes from without counting ../ hops.
+  resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },
   define: {
     __BUILD_HASH__: JSON.stringify(BUILD_HASH),
     __BUILD_DATE__: JSON.stringify(BUILD_DATE),

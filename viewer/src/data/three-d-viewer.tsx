@@ -7,10 +7,10 @@ import DeckGL from "@deck.gl/react";
 import { useQuery } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 
-import { lruSet } from "../lib/lru";
-import { type Asset, classificationColors, cogAsset, type StacDoc } from "../stac";
-import { buildMeshFrom3DEP, type TerrainMesh } from "../map/terrain";
-import { UiSlider } from "../ui/slider";
+import { lruSet } from "@/lib/lru";
+import { type Asset, classificationColors, cogAsset, type StacDoc } from "@/stac";
+import { buildMeshFrom3DEP, type TerrainMesh } from "@/map/terrain";
+import { UiSlider } from "@/ui/slider";
 
 const GEOLOGIC_COLORS: Record<string, string> = {
   "red pine shale": "#556B2F",

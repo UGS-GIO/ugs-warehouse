@@ -9,7 +9,7 @@ import maplibregl from "maplibre-gl";
 import { useMemo, useState } from "react";
 import { Map as MapGL, NavigationControl } from "react-map-gl/maplibre";
 
-import { type Asset, cubeVariables, nonSpatialDimensions, type StacDoc } from "../stac";
+import { type Asset, cubeVariables, nonSpatialDimensions, type StacDoc } from "@/stac";
 import { DeckOverlay } from "./zarr-overlay";
 import { useZarrLayers } from "./use-zarr-layers";
 

@@ -7,19 +7,19 @@ import {
 import { useMemo, useState } from "react";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { idOf, useViewCtx } from "../app";
+import { idOf, useViewCtx } from "@/app";
 import { AssetChips } from "./asset-viewer";
 import { rootGroupOf } from "./catalog";
-import { createComment } from "../review/comments";
+import { createComment } from "@/review/comments";
 import { ItemDetail } from "./item-detail";
 import { author, collectionLabel, county, dateOf, fmtDate, scale, series, title, typeOf, year } from "./item-view";
-import { PageHero } from "../shell/page-hero";
-import { T } from "../shell/page";
-import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "../data/paging";
-import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, zarrAsset } from "../stac";
-import { DataTable, Pager } from "../data/table";
-import { useIsDesktop } from "../ui/use-breakpoint";
-import { C, humanize, toggle } from "../ui/ui";
+import { PageHero } from "@/shell/page-hero";
+import { T } from "@/shell/page";
+import { ALL_PAGES, DEFAULT_PAGE_SIZE, PAGE_SIZES, type PageSize } from "@/data/paging";
+import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, zarrAsset } from "@/stac";
+import { DataTable, Pager } from "@/data/table";
+import { useIsDesktop } from "@/ui/use-breakpoint";
+import { C, humanize, toggle } from "@/ui/ui";
 
 const itemIdOf = (it: ItemRef): string =>
   String(it.data?.id ?? it.href.replace(/\/[^/]+\.json.*$/, "").split("/").pop() ?? it.href);

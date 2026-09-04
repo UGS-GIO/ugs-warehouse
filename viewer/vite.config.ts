@@ -1,6 +1,7 @@
 import { execSync } from "node:child_process";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
+import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vite";
 
 // Build stamp — git short hash + the HEAD commit's date, so the date and hash
@@ -22,7 +23,9 @@ const BUILD_DATE = sh("git log -1 --format=%cd --date=short", new Date().toISOSt
 // page. It also feeds the router's basepath (src/routes.tsx). "/" for Firebase; the review and
 // preview builds pass their own prefix with --base.
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  // tanstackRouter must precede react(): it generates routeTree.gen.ts from src/routes/ and the
+  // react plugin has to see the generated output.
+  plugins: [tanstackRouter({ target: "react", autoCodeSplitting: true }), react(), tailwindcss()],
   base: "/",
   define: {
     __BUILD_HASH__: JSON.stringify(BUILD_HASH),

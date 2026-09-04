@@ -63,7 +63,13 @@ function RelatedPanel({ item }: { item: StacDoc }) {
           <div className="text-xs uppercase tracking-wide text-muted-foreground">This layer references</div>
           <ul className="mt-1 space-y-0.5 text-xs">
             {fks.map((fk, i) => (
-              <li key={i}><code>{fk.fields.join(", ")}</code> → <span className="font-medium">{humanize(fk.reference.resource)}</span>.<code>{fk.reference.fields.join(", ")}</code></li>
+              <li key={i}>
+                <code>{fk.fields.join(", ")}</code> →{" "}
+                {fk.reference.href
+                  ? <a href={fk.reference.href} className="font-medium text-primary hover:underline" download>{humanize(fk.reference.resource)}</a>
+                  : <span className="font-medium">{humanize(fk.reference.resource)}</span>}
+                .<code>{fk.reference.fields.join(", ")}</code>
+              </li>
             ))}
           </ul>
         </div>

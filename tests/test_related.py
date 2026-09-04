@@ -3,6 +3,7 @@
 These cover the pure projection helpers and the sink_stac wiring. The registry round-trip
 (resolve()) is exercised by faking `_pg` so no Postgres/GCS is touched.
 """
+from ugs_warehouse.core import config
 from ugs_warehouse.vector import related, sink_stac
 from ugs_warehouse.vector.topics import Topic
 
@@ -19,13 +20,17 @@ def test_foreign_key_single_and_composite():
     single = related._foreign_key(
         {"sourceColumn": "uwi", "targetDomainTopic": "enmin_ucrc_wells", "targetColumn": "uwi"})
     assert single == {"fields": ["uwi"],
-                      "reference": {"resource": "enmin_ucrc_wells", "fields": ["uwi"]}}
+                      "reference": {"resource": "enmin_ucrc_wells",
+                                    "href": config.public_url(config.archive_path("enmin_ucrc_wells")),
+                                    "fields": ["uwi"]}}
 
     comp = related._foreign_key(
         {"sourceColumns": ["quad", "year"], "targetDomainTopic": "mapping_quads_24k",
          "targetColumns": ["quad_id", "yr"]})
     assert comp == {"fields": ["quad", "year"],
-                    "reference": {"resource": "mapping_quads_24k", "fields": ["quad_id", "yr"]}}
+                    "reference": {"resource": "mapping_quads_24k",
+                                  "href": config.public_url(config.archive_path("mapping_quads_24k")),
+                                  "fields": ["quad_id", "yr"]}}
 
     assert related._foreign_key({"targetDomainTopic": "x"}) is None  # no columns → no FK
 
@@ -73,8 +78,11 @@ def test_resolve_emits_links_fks_and_aspatial_assets(monkeypatch):
     out = related.resolve(Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current"))
 
     # Outgoing FK → foreignKeys on the parent + a related link to the target.
-    assert {"fields": ["quad"], "reference": {"resource": "mapping_quads_24k",
-            "fields": ["quad_id"]}} in out["foreign_keys"]
+    # reference.href resolves the join: `resource` alone is a bare topic name.
+    assert {"fields": ["quad"],
+            "reference": {"resource": "mapping_quads_24k",
+                          "href": config.public_url(config.archive_path("mapping_quads_24k")),
+                          "fields": ["quad_id"]}} in out["foreign_keys"]
     hrefs = [lk["href"] for lk in out["links"]]
     assert any("mapping_quads_24k" in h for h in hrefs)        # outgoing target link
     assert any("enmin_ucrc_sites" in h for h in hrefs)         # spatial child link
@@ -142,8 +150,10 @@ def test_sink_stac_wires_related(monkeypatch):
                              "roles": ["data", "related"], "title": "UCRC core boxes",
                              "table:columns": [{"name": "uwi"}]}},
         "links": [{"rel": "related", "href": "u", "type": "application/geo+json", "title": "quads"}],
-        "foreign_keys": [{"fields": ["quad"], "reference": {"resource": "mapping_quads_24k",
-                                                            "fields": ["quad_id"]}}],
+        "foreign_keys": [{"fields": ["quad"],
+                          "reference": {"resource": "mapping_quads_24k",
+                                        "href": "https://cdn.example/quads.parquet",
+                                        "fields": ["quad_id"]}}],
     }
     sink_stac.write(Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current"),
                     None, "v", related=related_info)

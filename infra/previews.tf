@@ -43,6 +43,19 @@ resource "google_cloud_run_v2_service" "previews" {
       max_instance_count = 2
     }
   }
+
+  # Same split as review_serving/review_api: cloudbuild owns image rollouts (deploy-previews ships
+  # :$SHORT_SHA on every push), so a commit tag here is correct and an apply must not revert it —
+  # cloudbuild.yaml's deploy-previews comment has what that cost last time (#161).
+  # `scaling` is the service-level block gcloud stamps, not the template.scaling declared above.
+  lifecycle {
+    ignore_changes = [
+      template[0].containers[0].image,
+      client,
+      client_version,
+      scaling,
+    ]
+  }
 }
 
 # Its own identity: read-only, and only the previews bucket (the grant is in iam.tf). Sharing the

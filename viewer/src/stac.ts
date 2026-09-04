@@ -352,7 +352,7 @@ export function useStyleLayersFor(layers: { id: string; styleUrl?: string }[]): 
 // staleTime:Infinity (a COG's extent is immutable); retry:1 so a transient blip on a bbox-less COG
 // isn't cached as a permanent failure. Returns href→bbox for those that resolved.
 async function fetchCogBox(cogHref: string): Promise<[number, number, number, number] | null> {
-  const { ensureCogProtocol } = await import("./cog");
+  const { ensureCogProtocol } = await import("./map/cog");
   await ensureCogProtocol();
   const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
   const meta = await getCogMetadata(cogHref);

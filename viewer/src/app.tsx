@@ -2,18 +2,18 @@ import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput 
 import { useIsFetching } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { type CatalogDoc } from "./search-index";
+import { type CatalogDoc } from "./discover/search-index";
 import utahLogo from "./assets/utah-logo.png";
-import { type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
-import { layerCollectionIds } from "./catalog";
-import { type ActiveLayer, type Footprint, layerParam, parseLayerParam } from "./map-model";
-import { LegalFooter } from "./legal-footer";
-import { type LayerRow } from "./layer-list";
-import { NavMenu } from "./nav-menu";
-import { PreviewMapProvider } from "./preview-map";
+import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/browse";
+import { layerCollectionIds } from "./catalog/catalog";
+import { type ActiveLayer, type Footprint, layerParam, parseLayerParam } from "./map/map-model";
+import { LegalFooter } from "./shell/legal-footer";
+import { type LayerRow } from "./map/layer-list";
+import { NavMenu } from "./shell/nav-menu";
+import { PreviewMapProvider } from "./map/preview-map";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
-import { StacUrlChip } from "./stac-url-chip";
-import { NotifBell } from "./notifications-inbox";
+import { StacUrlChip } from "./catalog/stac-url-chip";
+import { NotifBell } from "./review/notifications-inbox";
 
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name

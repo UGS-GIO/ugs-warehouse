@@ -2,7 +2,7 @@
 // @tanstack/router-plugin — see vite.config.ts). Nothing here is hand-maintained but the basepath.
 import { createRouter } from "@tanstack/react-router";
 
-import { toBasepath } from "./mount";
+import { toBasepath } from "./lib/mount";
 import { routeTree } from "./routeTree.gen";
 
 // Path routes have to know where the bundle is mounted or they'd read the mount prefix as part of

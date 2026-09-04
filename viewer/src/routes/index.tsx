@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { useViewCtx } from "../app";
-import { Landing } from "../landing";
+import { Landing } from "../discover/landing";
 
 // The param-less front door. Reuses the same loaded item set as Map/Discover (mapItems) — no extra
 // fetch — for its category-tile counts + "recently updated" strip. Everything hands off to Discover.

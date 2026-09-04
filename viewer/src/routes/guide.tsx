@@ -1,5 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { Guide } from "../guide";
+import { Guide } from "../shell/guide";
 
 export const Route = createFileRoute("/guide")({ component: Guide });

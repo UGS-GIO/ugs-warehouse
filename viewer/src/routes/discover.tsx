@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
 import { idOf, useViewCtx } from "../app";
-import { DiscoveryView } from "../discovery-view";
+import { DiscoveryView } from "../discover/discovery-view";
 
 // Full-width discovery split — same loaded item set as the map, its own facet rail / cards / synced
 // map. Opening a card sets ?i= (staying here); the layout resolves the full doc → the drawer.

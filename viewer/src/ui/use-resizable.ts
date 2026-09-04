@@ -4,7 +4,7 @@
 import type { KeyboardEvent, PointerEvent } from "react";
 import { useState } from "react";
 
-import { clampSize } from "../map-model";
+import { clampSize } from "@/map/map-model";
 
 export type SizeSpec = { initial: number; min: number; max: number };
 

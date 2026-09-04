@@ -1,38 +1,20 @@
 import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput } from "@utahdts/utah-design-system-header";
 import { useIsFetching } from "@tanstack/react-query";
-import { Outlet, useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
-import { createContext, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { type CatalogDoc } from "./search-index";
+import { Link, Outlet, useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
+import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { type CatalogDoc } from "./discover/search-index";
 import utahLogo from "./assets/utah-logo.png";
-import { type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
-import { layerCollectionIds } from "./catalog";
-import { type ActiveLayer, type Footprint, layerParam, parseLayerParam } from "./map-model";
-import { LegalFooter } from "./legal-footer";
-import { type LayerRow } from "./layer-list";
-import { mountHref } from "./mount";
-import { NavMenu } from "./nav-menu";
-import { PreviewMapProvider } from "./preview-map";
-import { PropertyTable } from "./property-table";
+import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/browse";
+import { layerCollectionIds } from "./catalog/catalog";
+import { type ActiveLayer, type Footprint, layerParam, parseLayerParam } from "./map/map-model";
+import { LegalFooter } from "./shell/legal-footer";
+import { type LayerRow } from "./map/layer-list";
+import { NavMenu } from "./shell/nav-menu";
+import { PreviewMapProvider } from "./map/preview-map";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
-import { StacUrlChip } from "./stac-url-chip";
-import { DiffPanel } from "./diff-panel";
-import { CommentsPanel } from "./comments-panel";
-import { NotifBell } from "./notifications-inbox";
+import { StacUrlChip } from "./catalog/stac-url-chip";
+import { NotifBell } from "./review/notifications-inbox";
 
-// Heavy content views, code-split out of the main bundle (mermaid/cytoscape/katex, MiniSearch, the
-// markdown renderer) — they load on first open with a Suspense fallback instead of bloating startup.
-export const Architecture = lazy(() => import("./architecture").then((m) => ({ default: m.Architecture })));
-export const ArticleSearch = lazy(() => import("./search").then((m) => ({ default: m.ArticleSearch })));
-export const Guide = lazy(() => import("./guide").then((m) => ({ default: m.Guide })));
-export const ReviewDashboard = lazy(() => import("./review-dashboard").then((m) => ({ default: m.ReviewDashboard })));
-// maplibre is ~1.5MB of the bundle and the catalog, search and doc views never draw a map.
-export const ItemMap = lazy(() => import("./map").then((m) => ({ default: m.ItemMap })));
-// The full-width Discover view — lazy so its MiniSearch index + maplibre stay out of the main bundle.
-export const DiscoveryView = lazy(() => import("./discovery-view").then((m) => ({ default: m.DiscoveryView })));
-// Preview reuses the heavy asset-viewer (deck.gl/duckdb); Developers is light but stays behind the
-// same Suspense boundary. Both lazy so they never touch the main bundle or the landing paint.
-export const PreviewView = lazy(() => import("./preview-view").then((m) => ({ default: m.PreviewView })));
-export const Developers = lazy(() => import("./developers-view").then((m) => ({ default: m.Developers })));
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name
 // that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
@@ -48,20 +30,17 @@ const collKeyOf = (href?: string): string | undefined => {
 };
 export const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
-// Viewer root URL — the logo's <a href>, so modifier/middle-click opens the landing page in a new tab.
-const ROOT_HREF = mountHref("/");
-// The catalog page for an item, as a plain URL — lets a drawer/card link be a real <a> (new-tab,
-// middle-click) while its onClick still does in-app nav. Same params the router reads.
-export const catalogItemHref = (c?: string, i?: string) => {
-  const sp = new URLSearchParams();
-  if (c) sp.set("c", c);
-  if (i) sp.set("i", i);
-  return mountHref("/catalog", sp);
-};
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
 export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "search" | "developers" | "preview" | "review";
-const VIEW_PATHS: readonly View[] = ["catalog", "map", "discover", "arch", "guide", "search", "developers", "preview", "review"];
+// `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
+// route tree — a computed `/${view}` string would not, which is what the old cast papered over.
+const VIEW_PATH = {
+  landing: "/", catalog: "/catalog", map: "/map", discover: "/discover", arch: "/arch",
+  guide: "/guide", search: "/search", developers: "/developers", preview: "/preview",
+  review: "/review",
+} satisfies Record<View, string>;
+const isView = (v: string): v is View => v !== "landing" && v in VIEW_PATH;
 export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
@@ -115,32 +94,6 @@ const tab = (on: boolean) =>
   "cursor-pointer border-b-2 px-2 py-1 text-sm transition-colors "
   + (on ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground");
 
-const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
-
-export function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
-  if (loading) return <em>Loading item…</em>;
-  if (!item) return <em className="text-muted-foreground">Pick an item to see detail, footprint, and assets.</em>;
-  const p = item.properties ?? {};
-  // Review deploy only: offer a diff of this _review item against its live _current counterpart.
-  const isReview = IS_REVIEW;
-  const geoparquet = Object.entries(item.assets ?? {})
-    .find(([k, a]) => /parquet/i.test(String(a.type ?? "")) || /parquet|geoparquet/i.test(k))?.[1]?.href;
-  return (
-    <>
-      <h2 className="mb-1.5 text-base font-semibold">{String(p.title ?? item.id ?? "")}</h2>
-      <div>
-        {Object.entries(item.assets ?? {}).map(([k, a]) => (
-          <a key={k} className={asset} href={a.href} target="_blank" rel="noopener">{a.title ?? k}</a>
-        ))}
-      </div>
-      {isReview && geoparquet && (
-        <DiffPanel stem={String(item.id ?? "")} reviewParquetUrl={geoparquet} />
-      )}
-      {isReview && item.id && <CommentsPanel itemId={String(item.id)} />}
-      <PropertyTable properties={p} className="mt-2" />
-    </>
-  );
-}
 
 // The IAP user as a Utah-header action item (top-right of the official banner). Display-only — IAP
 // already gated access; the username shows, the full email is the tooltip. Clicking signs out via
@@ -173,20 +126,15 @@ function FetchBar({ pending }: { pending?: boolean }) {
 function useViewState() {
   // Nav state ← URL search (TanStack Router). l/s stay as csv strings in the URL; the override params
   // (catalog, m, ftsdb, …) ride in the same search untouched (see router.tsx validateSearch).
-  const sp = useSearch({ strict: false }) as { view?: View; c?: string; i?: string; l?: string; s?: string };
-  // Loose navigate signature — the router types it strictly against the search schema, but we manage
-  // these params dynamically (and pass override params through), so a permissive reducer is intended.
-  const navigate = useNavigate() as unknown as (opts: {
-    to?: string; replace?: boolean; search: (prev: Record<string, unknown>) => Record<string, unknown>;
-  }) => void;
+  const sp = useSearch({ from: "__root__" });
+  const navigate = useNavigate();
   // Param-less URL → the Landing front door, EXCEPT a legacy deep link that carries a catalog item
   // (?c=&i= with no view=) still opens the catalog detail it always did — so old links keep working.
   // The view is the PATH, not a ?view= param — see routes.tsx for why.
   // A bare "/" with a selection still means the catalog, so old ?c=/?i= links keep working.
   const pathname = useRouterState({ select: (st) => st.location.pathname });
   const seg = pathname.replace(/^\/+|\/+$/g, "").split("/")[0];
-  const view: View = (VIEW_PATHS.includes(seg as View) ? (seg as View)
-    : sp.i || sp.c ? "catalog" : "landing");
+  const view: View = isView(seg) ? seg : sp.i || sp.c ? "catalog" : "landing";
   const collectionUrl = sp.c;
   const itemUrl = sp.i;
   const layerIds = parseLayerParam(sp.l);
@@ -196,10 +144,9 @@ function useViewState() {
   // (back/forward works via the router), replace for programmatic syncs. The Discover-owned keys
   // (q/collections/category/…) are stripped when leaving Discover so its filters don't linger on
   // another view, and preserved when staying in Discover (open/close a drawer over the filtered set).
-  const pathFor = (v: View) => (v === "landing" ? "/" : `/${v}`);
   const go = (next: Nav, push = true) => {
     navigate({
-      to: pathFor(next.view),
+      to: VIEW_PATH[next.view],
       replace: !push,
       search: (prev) => {
         const { view: _v, c: _c, i: _i, l: _l, s: _s,
@@ -447,14 +394,14 @@ function useViewState() {
   // Landing → Discover: open an item's drawer, or start Discover on a query / a category tile (each
   // clears any stale Discover keys so the handoff is a clean, shareable /discover?…).
   const openInDiscover = (href: string) => go({ view: "discover", c: collKeyOf(href), i: idOf(href) });
-  // The full item page. Below lg this replaces the Discover drawer — see catalogHref.
+  // The full item page. Below lg this replaces the Discover drawer.
   const openItemPage = (href: string) => go({ view: "catalog", c: collKeyOf(href), i: idOf(href) });
   // Landing hands off to Discover: the search box, the category rows, "Browse all". `to` is
   // REQUIRED — a view is a path now, so navigating with search alone stayed on "/" and appended a
   // ?view= nobody reads, which is what made the landing buttons look dead.
   const openDiscoverSearch = (opts: { q?: string; category?: string }) =>
     navigate({
-      to: pathFor("discover"),
+      to: VIEW_PATH.discover,
       search: (prev) => {
         const { view: _v, c: _c, i: _i, l: _l, s: _s,
           q: _q, collections: _co, category: _ca, types: _ty, formats: _fo, geometry: _ge,
@@ -534,7 +481,7 @@ export const useViewCtx = (): ViewCtx => {
 /** Root layout route: owns the data + shell, renders the matched view through <Outlet />. */
 export function AppLayout() {
   const state = useViewState();
-  const { view, setView, catalog, go, lockedView, pending } = state;
+  const { view, setView, catalog, lockedView, pending } = state;
   return (
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
@@ -544,19 +491,12 @@ export function AppLayout() {
       : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
-        {/* Real <a> (not a button) so cmd/ctrl/middle-click opens the catalog in a new tab; a
-            plain click still does in-app SPA nav. href is the viewer root (no search params). */}
-        <a href={ROOT_HREF} title="Home — catalog root"
-          onClick={(e) => {
-            if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-            e.preventDefault();
-            go({ view: "landing" });
-          }}
+        <Link to="/" title="Home — catalog root"
           className="flex items-center whitespace-nowrap hover:opacity-80">
           {/* Wordmark only — the state header above already carries the UGS beehive mark, and a
               second copy 60px below it read as a duplicate (and, in dark mode, as a white sticker). */}
           <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
-        </a>
+        </Link>
         {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
         <StacUrlChip url={CATALOG_URL} />
         <div className="ml-auto flex items-center gap-1">

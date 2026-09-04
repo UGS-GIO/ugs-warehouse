@@ -48,7 +48,7 @@ flowchart LR
 
 !!! tip "The detailed diagram is generated, not hand-typed"
     This page keeps the simplified spine. The full graph — every deployed Cloud Run service, the
-    publications jobs, the review path — is generated from `viewer/src/architecture-model.ts` and
+    publications jobs, the review path — is generated from `viewer/src/shell/architecture-model.ts` and
     rendered on the viewer's **Architecture** page, where a test asserts it still covers everything
     `cloudbuild.yaml` deploys. Hand-copying that detail here is what let this page drift.
 

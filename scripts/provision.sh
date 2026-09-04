@@ -195,6 +195,23 @@ if [ "${audit_fail}" -ne 0 ]; then
   exit 1
 fi
 
+# --- audit: extra subscriptions on the topics this script owns ---------------------------------
+# A second subscription on a topic double-delivers every message, and nothing surfaces that: the
+# script's own subscription stays healthy, so every check above passes. An untracked subscription
+# with a default short ack deadline redelivers work that takes minutes.
+echo "→ audit: unexpected subscriptions on owned topics"
+for t in "${TOPIC}" "${RASTER_TOPIC}"; do
+  [ -z "${t}" ] && continue
+  while read -r sub; do
+    [ -z "${sub}" ] && continue
+    case "${sub}" in
+      "${SUB}"|"${RASTER_SUB}") ;;
+      *) echo "  ! ${sub} on ${t} — not owned by this script; every message is delivered twice" ;;
+    esac
+  done < <(gcloud pubsub topics list-subscriptions "${t}" --project="${PROJECT}" \
+             --format="value(basename())" 2>/dev/null)
+done
+
 # --- job failure alerting -----------------------------------------------------------------------
 # The push handler now starts the ingest job and acks immediately, so a failed ingest reaches no
 # DLQ and no retry. The existing "Ingest pipeline Cloud Run 5xx" policy watches SERVICES, not jobs,

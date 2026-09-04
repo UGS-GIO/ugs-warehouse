@@ -55,7 +55,7 @@ export function Landing({ items, itemsKey, loading, onSearch, onOpenCategory }: 
   // A non-hover result link (Landing has no map to sync) that opens the item in Discover.
   const link = (it: ItemRef): LinkAttrs => ({
     to: isWide ? "/discover" : "/catalog",
-    search: { c: it.collId, i: it.href.split("/").slice(-2)[0] },
+    search: { c: it.collId, i: it.href.split("/").slice(-2)[0] },   // landing carries no filters
     "data-href": it.href,
   });
 

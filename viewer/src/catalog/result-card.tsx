@@ -16,7 +16,7 @@ export type Density = "comfortable" | "compact";
 // plain click and leaves modifier/middle-click to the browser — all of which this used to hand-roll.
 export type LinkAttrs = {
   to: "/catalog" | "/discover";
-  search: Record<string, unknown>;
+  search: Record<string, unknown> | ((prev: Record<string, unknown>) => Record<string, unknown>);
   "data-href": string;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;

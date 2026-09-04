@@ -8,7 +8,7 @@ import { type FormEvent, useMemo, useState } from "react";
 import type { ItemRef } from "@/catalog/browse";
 import { CATEGORIES, categorize, dateOf } from "@/catalog/item-view";
 import { useIsWide } from "@/ui/use-breakpoint";
-import { type LinkAttrs, ResultCard } from "@/catalog/result-card";
+import { itemLink, type LinkAttrs, ResultCard } from "@/catalog/result-card";
 
 const RECENT_COUNT = 6;
 
@@ -53,11 +53,7 @@ export function Landing({ items, itemsKey, loading, onSearch, onOpenCategory }: 
   const onSubmit = (e: FormEvent) => { e.preventDefault(); onSearch(text.trim()); };
 
   // A non-hover result link (Landing has no map to sync) that opens the item in Discover.
-  const link = (it: ItemRef): LinkAttrs => ({
-    to: isWide ? "/discover" : "/catalog",
-    search: { c: it.collId, i: it.href.split("/").slice(-2)[0] },   // landing carries no filters
-    "data-href": it.href,
-  });
+  const link = (it: ItemRef): LinkAttrs => itemLink(it, isWide);
 
   return (
     <div className="mx-auto w-full max-w-6xl px-4 sm:px-6">

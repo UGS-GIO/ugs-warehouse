@@ -15,7 +15,7 @@ import {
 } from "./discovery-model";
 import { categoryLabel, collectionLabel } from "@/catalog/item-view";
 import type { Footprint } from "@/map/map-model";
-import { type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
+import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
 import { buildIndex, toSearchDoc } from "./search-index";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
@@ -152,13 +152,7 @@ export function DiscoveryView({
   // Below lg the drawer would be a cramped column beside a dead sliver of list, so a result goes to
   // the full item page instead. One descriptor drives both the click and the href.
   const cardLink = (it: ItemRef): LinkAttrs => ({
-    to: isWide ? "/discover" : "/catalog",
-    // An updater, not a replacement: a plain object drops the Discover filter keys, so opening a
-    // card from a filtered set cleared the filter. Leaving for /catalog drops them on purpose.
-    search: (prev: Record<string, unknown>) => isWide
-      ? { ...prev, c: it.collId, i: it.href.split("/").slice(-2)[0] }
-      : { c: it.collId, i: it.href.split("/").slice(-2)[0] },
-    "data-href": it.href,
+    ...itemLink(it, isWide),
     onMouseEnter: () => { hoverSrc.current = "card"; setHoverHref(it.href); },
     onMouseLeave: () => { hoverSrc.current = "card"; setHoverHref(null); },
   });

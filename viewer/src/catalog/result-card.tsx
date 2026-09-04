@@ -24,6 +24,18 @@ export type LinkAttrs = {
 
 type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs };
 
+/** Where a result card points. Wide opens the Discover drawer and must PRESERVE the filter keys —
+ *  a plain object replaces the search and silently clears them. Narrow leaves for the full page,
+ *  where the Discover filters do not apply, so there it replaces on purpose. */
+export const itemLink = (it: ItemRef, wide: boolean): LinkAttrs => {
+  const sel = { c: it.collId, i: it.href.split("/").slice(-2)[0] };
+  return {
+    to: wide ? "/discover" : "/catalog",
+    search: wide ? (prev: Record<string, unknown>) => ({ ...prev, ...sel }) : sel,
+    "data-href": it.href,
+  };
+};
+
 // collection · type · date, as a muted meta line (reference parity — text, not a badge wall).
 const metaLine = (it: ItemRef) => [collectionLabel(it.collId), typeOf(it), dateOf(it)].filter(Boolean).join(" · ");
 // Muted, NON-anchor format chips — the card is itself an <a>, so it must contain no nested anchors.

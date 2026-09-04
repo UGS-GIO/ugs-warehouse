@@ -80,7 +80,9 @@ const PRIMARY_VIEWS: { id: View; label: string }[] = [
   { id: "discover", label: "Discover" },
   { id: "map", label: "Map" },
   { id: "catalog", label: "Catalog" },
-  { id: "search", label: "Search" },
+  // "Full text" not "Search": Discover has a search box too, and a tab row with both reading
+  // "Search" gave no way to tell which one reaches article bodies.
+  { id: "search", label: "Full text" },
 ];
 // Secondary views — always in the NavMenu overflow (desktop + mobile) so the tab row never overflows.
 const OVERFLOW_VIEWS: { id: View; label: string }[] = [

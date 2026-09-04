@@ -187,7 +187,7 @@ export function DiscoveryView({
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
         <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
-          placeholder="Search every layer & publication…" aria-label="Search the catalog"
+          placeholder="Filter these results…" aria-label="Filter the results"
           className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}

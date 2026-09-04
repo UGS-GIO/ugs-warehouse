@@ -7,6 +7,8 @@ import { type FormEvent, useMemo, useState } from "react";
 
 import type { ItemRef } from "@/catalog/browse";
 import { CATEGORIES, categorize, dateOf } from "@/catalog/item-view";
+import { Link } from "@tanstack/react-router";
+
 import { useIsWide } from "@/ui/use-breakpoint";
 import { itemLink, type LinkAttrs, ResultCard } from "@/catalog/result-card";
 
@@ -65,15 +67,21 @@ export function Landing({ items, itemsKey, loading, onSearch, onOpenCategory }: 
       <section className="pt-8 pb-6">
         <h1 className="sr-only">UGS Warehouse — data catalog</h1>
         <form onSubmit={onSubmit} role="search" className="flex items-center gap-2">
-          <input type="search" aria-label="Search datasets"
-            placeholder="Search datasets, publications, topics…"
+          <input type="search" aria-label="Find datasets"
+            placeholder="Find datasets, maps and publications…"
             value={text} onChange={(e) => setText(e.target.value)}
             className="h-10 flex-1 rounded-md border border-input bg-card px-3 text-sm text-foreground outline-none placeholder:text-muted-foreground focus-visible:ring-2 focus-visible:ring-ring" />
           <button type="submit"
             className="h-10 rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground transition-colors hover:opacity-90">
-            Search
+            Find
           </button>
         </form>
+        {/* The other search, named at the point of choosing. This box matches catalog metadata; only
+            full-text reaches article bodies, and nothing here would have told you that. */}
+        <p className="mt-2 text-xs text-muted-foreground">
+          Searching the text of Survey Notes articles?{" "}
+          <Link to="/search" className="text-primary hover:underline">Full-text search</Link>
+        </p>
       </section>
 
       <section className="pb-10">

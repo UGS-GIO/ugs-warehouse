@@ -142,7 +142,7 @@ export function ArticleSearch({ catalog = [], onOpen }: {
   const nArticles = corpus.data?.length ?? 0;
   return (
     <div className="mx-auto max-w-[75ch] p-4">
-      <h2 className="text-lg font-semibold">Search the catalog</h2>
+      <h2 className="text-lg font-semibold">Full-text search</h2>
       <p className="mt-0.5 text-sm text-muted-foreground">
         Survey Notes article full text{nArticles ? ` (${nArticles} articles)` : ""} + every publication
         &amp; map layer by title, keywords, and topic.

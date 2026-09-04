@@ -9,18 +9,19 @@
 # in a PR. It also takes the 2nd-gen footgun off a human: `gcloud builds triggers update` 400s on
 # these, so the documented fix is delete + recreate; tofu just does the replace.
 #
-# DECLARED IS NOT APPLIED. Nothing here has been imported and no apply has run, so the live triggers
-# are whatever the console holds. docs/CLOUD_BUILD_CI.md carries the inventory taken from
-# `gcloud builds triggers describe` and is the authority on what is deployed; this file is a
-# proposal until it gets imported.
-#
-# All five live triggers are declared, transcribed from the inventory in docs/CLOUD_BUILD_CI.md
-# (which came from `gcloud builds triggers describe`) — plus review-viewer, which does not exist yet.
+# All five pre-existing triggers are imported and this file is applied — docs/CLOUD_BUILD_CI.md
+# still carries the reference inventory. review-viewer was created here (it didn't exist before).
 # preview-cleanup is deliberately absent: it is not a trigger, it is a GitHub Action submitting a
 # build over WIF, because Cloud Build has no "PR closed" event.
 #
-# These live in the BUILD project, not var.project_id, so the deploy SA needs
-# roles/cloudbuild.builds.editor there — a cross-project grant, like the Firebase one.
+# These live in the BUILD project, not var.project_id, so the deploy SA needs, cross-project:
+#   - roles/cloudbuild.builds.editor on build_project (like the Firebase grant)
+#   - roles/iam.serviceAccountUser on trigger_service_account AND preview_trigger_service_account —
+#     creating/updating a trigger with a given runtime SA requires actAs on it, builds.editor alone
+#     403s with "does not have impersonation permission on the trigger service account specified"
+#   - roles/iam.securityReviewer on those same two SAs — read-only, needed for every plan/apply to
+#     refresh the actAs grants below, or it 403s on IAM_PERMISSION_DENIED with nothing changed
+# All four are in iam.tf (deploy_can_actas_trigger_sa and neighbors).
 
 variable "build_project" {
   type        = string

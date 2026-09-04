@@ -425,3 +425,21 @@ def test_list_series(capsys):
          assert "Discovered series codes:" in captured.out
          assert "DS" in captured.out
          assert "OFR" in captured.out
+
+
+def test_root_doc_carries_a_title(monkeypatch):
+    """Without this a STAC Browser shows the bare id at the top of the tree."""
+    monkeypatch.setattr(stac.config, "CATALOG_TITLE", "Utah Geological Survey data warehouse")
+    assert stac._root_doc([])["title"] == "Utah Geological Survey data warehouse"
+
+
+def test_collection_doc_titles_its_item_links():
+    """Without titles, listing a collection is an N+1 fetch just to learn item names."""
+    doc = stac._collection_doc(
+        "hazards", "ugs-serving-topics/hazards", ["qfaults", "landslides"],
+        item_titles={"qfaults": "Quaternary Faults"},
+    )
+    items = {lnk["href"]: lnk for lnk in doc["links"] if lnk["rel"] == "item"}
+    assert items["./qfaults/qfaults.json"]["title"] == "Quaternary Faults"
+    # A failed fetch has no title: emit the link anyway, without an empty title attribute.
+    assert "title" not in items["./landslides/landslides.json"]

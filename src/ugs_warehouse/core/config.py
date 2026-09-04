@@ -46,6 +46,8 @@ PUBLIC_CATALOG_URL = os.environ.get(
 )
 
 CATALOG_ID = os.environ.get("WAREHOUSE_CATALOG_ID", "ugs-warehouse")
+# Without this a STAC Browser shows the bare id at the top of the tree.
+CATALOG_TITLE = os.environ.get("WAREHOUSE_CATALOG_TITLE", "Utah Geological Survey data warehouse")
 
 # External STAC catalogs federated under the warehouse root as rel=child — referenced,
 # never copied, so each stays single-sourced on its own CDN (the same pattern the review

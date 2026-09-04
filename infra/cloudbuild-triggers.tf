@@ -9,18 +9,19 @@
 # in a PR. It also takes the 2nd-gen footgun off a human: `gcloud builds triggers update` 400s on
 # these, so the documented fix is delete + recreate; tofu just does the replace.
 #
-# DECLARED IS NOT APPLIED. Nothing here has been imported and no apply has run, so the live triggers
-# are whatever the console holds. docs/CLOUD_BUILD_CI.md carries the inventory taken from
-# `gcloud builds triggers describe` and is the authority on what is deployed; this file is a
-# proposal until #222 imports it.
+# All five pre-existing triggers are imported and this file is applied — docs/CLOUD_BUILD_CI.md
+# still carries the reference inventory. review-viewer was created here (it didn't exist before).
+# preview-cleanup is deliberately absent: it is not a trigger, it is a GitHub Action submitting a
+# build over WIF, because Cloud Build has no "PR closed" event.
 #
-# NOT all triggers are here: pr-ci, docs and the two preview triggers stay console-managed. The
-# preview triggers run as ugs-warehouse-preview-build@, NOT the Compute SA the two below use, so
-# declaring them needs more than one trigger_service_account variable. preview-cleanup is not a
-# trigger at all — it is a GitHub Action submitting a build over WIF.
-#
-# These live in the BUILD project, not var.project_id, so the deploy SA needs
-# roles/cloudbuild.builds.editor there — a cross-project grant, like the Firebase one.
+# These live in the BUILD project, not var.project_id, so the deploy SA needs, cross-project:
+#   - roles/cloudbuild.builds.editor on build_project (like the Firebase grant)
+#   - roles/iam.serviceAccountUser on trigger_service_account AND preview_trigger_service_account —
+#     creating/updating a trigger with a given runtime SA requires actAs on it, builds.editor alone
+#     403s with "does not have impersonation permission on the trigger service account specified"
+#   - roles/iam.securityReviewer on those same two SAs — read-only, needed for every plan/apply to
+#     refresh the actAs grants below, or it 403s on IAM_PERMISSION_DENIED with nothing changed
+# All four are in iam.tf (deploy_can_actas_trigger_sa and neighbors).
 
 variable "build_project" {
   type        = string
@@ -37,7 +38,13 @@ variable "build_repository" {
 variable "trigger_service_account" {
   type        = string
   default     = ""
-  description = "SA the triggers run as, as projects/…/serviceAccounts/… . Empty → no triggers are managed here. A bare trigger-create 400s without one (docs/CLOUD_BUILD_CI.md)."
+  description = "SA the deploy/docs/CI triggers run as, as projects/…/serviceAccounts/… . The default Compute SA, NOT warehouse-deploy@ — infra/iam.tf grants the cross-project run.admin to whatever build_service_account names, and that is the Compute SA (docs/CLOUD_BUILD_CI.md §One-time setup). Empty → no triggers are managed here. Mandatory on create: org policy blocks the legacy Cloud Build SA, so a bare trigger-create 400s with a bare INVALID_ARGUMENT."
+}
+
+variable "preview_trigger_service_account" {
+  type        = string
+  default     = ""
+  description = "SA the PR-preview triggers run as — the least-trusted identity, scoped to the previews bucket (infra/iam.tf §previews). A preview builds unmerged branch code, so it deliberately differs from trigger_service_account. Empty → the preview triggers are not managed here."
 }
 
 # Paths that actually need an image rebuild. Everything NOT listed here — viewer/**, docs/** — must
@@ -53,7 +60,8 @@ variable "deploy_included_files" {
 }
 
 locals {
-  manage_triggers = var.build_repository != "" && var.trigger_service_account != "" ? 1 : 0
+  manage_triggers         = var.build_repository != "" && var.trigger_service_account != "" ? 1 : 0
+  manage_preview_triggers = var.build_repository != "" && var.preview_trigger_service_account != "" ? 1 : 0
 }
 
 # The full deploy: images + Cloud Run. Builds no viewer (see cloudbuild.yaml).
@@ -101,4 +109,99 @@ resource "google_cloudbuild_trigger" "review_viewer" {
 
   filename       = "cloudbuild-review-viewer.yaml"
   included_files = ["viewer/**"]
+}
+
+# ---- the rest of the live triggers, transcribed from the docs/CLOUD_BUILD_CI.md inventory --------
+# All four ALREADY EXIST. Import before the first apply or every create 409s — loop in
+# docs/CLOUD_BUILD_CI.md.
+#
+# TRANSCRIBED BY HAND, AND NOTHING HERE VERIFIES THAT. `tofu validate` checks the schema, not
+# whether these fields match the live triggers. The check is `tofu plan` after importing: these four
+# must show NO CHANGES. A diff means this file is wrong, not the trigger — and applying would
+# overwrite a working trigger with a bad included_files, comment_control or service account. Fix the
+# file to match, then re-plan. Only `deploy` (update) and `review_viewer` (create) should differ.
+
+# PR validation. Unscoped on purpose: it is test-only, and a backend change can break the viewer
+# build (and vice versa) through shared config.
+resource "google_cloudbuild_trigger" "pr_ci" {
+  count = local.manage_triggers
+
+  project         = var.build_project
+  location        = var.region
+  name            = "ugs-warehouse-pr-ci"
+  service_account = var.trigger_service_account
+
+  repository_event_config {
+    repository = var.build_repository
+    pull_request {
+      branch = "^.*$"
+      # Default on create is COMMENTS_ENABLED, which holds EVERY PR build until a collaborator
+      # comments /gcbrun — that is the `action_required` the first PR check came back with.
+      comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
+    }
+  }
+
+  filename = "cloudbuild-ci.yaml"
+}
+
+resource "google_cloudbuild_trigger" "docs" {
+  count = local.manage_triggers
+
+  project         = var.build_project
+  location        = var.region
+  name            = "ugs-warehouse-docs"
+  service_account = var.trigger_service_account
+
+  repository_event_config {
+    repository = var.build_repository
+    push {
+      branch = "^main$"
+    }
+  }
+
+  filename       = "cloudbuild-docs.yaml"
+  included_files = ["docs/**", "mkdocs.yml", "docs-requirements.txt", "cloudbuild-docs.yaml"]
+}
+
+# The two PR previews run as the LEAST-TRUSTED identity: they build unmerged branch code.
+resource "google_cloudbuild_trigger" "viewer_preview" {
+  count = local.manage_preview_triggers
+
+  project         = var.build_project
+  location        = var.region
+  name            = "ugs-warehouse-viewer-preview"
+  description     = "Per-PR review viewer preview → previews bucket, behind IAP."
+  service_account = var.preview_trigger_service_account
+
+  repository_event_config {
+    repository = var.build_repository
+    pull_request {
+      branch          = "^main$"
+      comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
+    }
+  }
+
+  filename       = "cloudbuild-viewer-preview.yaml"
+  included_files = ["viewer/**"]
+}
+
+resource "google_cloudbuild_trigger" "tiles_preview" {
+  count = local.manage_preview_triggers
+
+  project         = var.build_project
+  location        = var.region
+  name            = "ugs-warehouse-tiles-preview"
+  description     = "Per-PR tagged Cloud Run revision of the tiles service."
+  service_account = var.preview_trigger_service_account
+
+  repository_event_config {
+    repository = var.build_repository
+    pull_request {
+      branch          = "^main$"
+      comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
+    }
+  }
+
+  filename       = "cloudbuild-service-preview.yaml"
+  included_files = ["tiles/**"]
 }

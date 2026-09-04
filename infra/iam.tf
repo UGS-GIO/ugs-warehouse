@@ -96,6 +96,44 @@ resource "google_service_account_iam_member" "build_can_actas_serving" {
   member             = "serviceAccount:${var.build_service_account}"
 }
 
+# Same actAs need, cross-project: cloudbuild-triggers.tf sets each trigger's service_account to
+# trigger_service_account / preview_trigger_service_account, and creating or updating a trigger with
+# a given runtime SA requires actAs on that SA — cloudbuild.builds.editor alone isn't enough, it 403s
+# with "does not have impersonation permission on the trigger service account specified". Both SAs
+# live in build_project, not var.project_id, hence the separate grant here instead of on the SA
+# resources above.
+resource "google_service_account_iam_member" "deploy_can_actas_trigger_sa" {
+  count              = var.deploy_service_account != "" && var.trigger_service_account != "" ? 1 : 0
+  service_account_id = var.trigger_service_account
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.deploy_service_account}"
+}
+
+resource "google_service_account_iam_member" "deploy_can_actas_preview_trigger_sa" {
+  count              = var.deploy_service_account != "" && var.preview_trigger_service_account != "" ? 1 : 0
+  service_account_id = var.preview_trigger_service_account
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.deploy_service_account}"
+}
+
+# serviceAccountUser (above) covers actAs at create/update time but not the getIamPolicy read every
+# `tofu plan`/apply does to refresh these two google_service_account_iam_member resources — without
+# it, every subsequent plan 403s on IAM_PERMISSION_DENIED even though nothing changed. Read-only,
+# resource-scoped to just these two SAs (not roles/iam.serviceAccountViewer project-wide).
+resource "google_service_account_iam_member" "deploy_can_read_trigger_sa_iam" {
+  count              = var.deploy_service_account != "" && var.trigger_service_account != "" ? 1 : 0
+  service_account_id = var.trigger_service_account
+  role               = "roles/iam.securityReviewer"
+  member             = "serviceAccount:${var.deploy_service_account}"
+}
+
+resource "google_service_account_iam_member" "deploy_can_read_preview_trigger_sa_iam" {
+  count              = var.deploy_service_account != "" && var.preview_trigger_service_account != "" ? 1 : 0
+  service_account_id = var.preview_trigger_service_account
+  role               = "roles/iam.securityReviewer"
+  member             = "serviceAccount:${var.deploy_service_account}"
+}
+
 # Same actAs gap, hit on the FIRST apply of previews.tf (#159): deploying google_cloud_run_v2_service
 # "previews" 403'd with `iam.serviceaccounts.actAs denied on ugs-warehouse-previews` because
 # serviceAccountAdmin (above) manages the SA but doesn't let the deploy SA run AS it. Folding in the

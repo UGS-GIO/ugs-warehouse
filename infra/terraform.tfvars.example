@@ -45,3 +45,5 @@ iap_group = "nrugsall@utah.gov"
 #   gcloud builds connections list --region=us-central1 --project=ut-dnr-ugs-backend-tools
 # build_repository        = "projects/ut-dnr-ugs-backend-tools/locations/us-central1/connections/ugs-warehouse-github/repositories/ugs-warehouse"
 # trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/534590904912-compute@developer.gserviceaccount.com"
+# The PR-preview triggers run as the least-trusted identity, not the Compute SA above:
+# preview_trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/ugs-warehouse-preview-build@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"

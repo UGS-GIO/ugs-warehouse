@@ -99,15 +99,46 @@ there — a cross-project grant, of exactly the kind `just check-grants` (#223) 
 
 ## Trigger inventory — what owns what (#224)
 
-Every trigger below was found by `gcloud builds triggers describe`, not by reading config in this
-repo — **none of them is applied from Terraform.** #221 adds `infra/cloudbuild-triggers.tf`
-declaring two of them (`ugs-warehouse-deploy`, `ugs-warehouse-review-viewer`), but declaring is not
-applying: both are guarded on `build_repository`/`trigger_service_account` being set, neither is
-imported, and no `tofu apply` has run. Treat the triggers as console-owned until #222 closes.
+Every trigger below was found by `gcloud builds triggers describe`. **All five are now declared in
+`infra/cloudbuild-triggers.tf`** (transcribed from this table), plus `ugs-warehouse-review-viewer`
+which does not exist yet — but declaring is not applying: they are guarded on `build_repository` +
+the two SA variables, none is imported, and no `tofu apply` has run. Treat the triggers as
+console-owned until #222 closes.
 
-The table below is the authority on what is actually deployed; the `.tf` is a proposal until
-imported. Note the service accounts differ per trigger, which that file's single
-`trigger_service_account` variable does not yet express.
+The table below stays the authority on what is actually deployed; the `.tf` is a proposal until
+imported. The two preview triggers run as `ugs-warehouse-preview-build@` rather than the Compute SA,
+so the file carries a separate `preview_trigger_service_account` — a preview builds unmerged branch
+code and must stay the least-trusted identity.
+
+Import each before the first apply, or every create 409s:
+
+```bash
+cd infra
+B=projects/ut-dnr-ugs-backend-tools/locations/us-central1/triggers
+for r in deploy:ugs-warehouse-deploy pr_ci:ugs-warehouse-pr-ci docs:ugs-warehouse-docs \
+         viewer_preview:ugs-warehouse-viewer-preview tiles_preview:ugs-warehouse-tiles-preview; do
+  tofu import "google_cloudbuild_trigger.${r%%:*}[0]" "$B/${r##*:}"
+done
+tofu plan    # <- THE ACCEPTANCE TEST, read it before applying
+```
+
+**`tofu plan` after the imports is what proves the transcription.** The four transcribed triggers —
+`pr_ci`, `docs`, `viewer_preview`, `tiles_preview` — must show **no changes**. They were copied from
+`triggers describe` by hand and nothing else checks that; a diff on any of them means the `.tf` is
+wrong, not the live trigger, and applying would overwrite a working trigger with a bad field
+(`included_files`, `comment_control`, or the service account). Fix the file to match, re-plan.
+
+Only two changes are expected:
+
+| resource | expected plan |
+|---|---|
+| `deploy` | **update** — `included_files` added, the whole point of #222 |
+| `review_viewer` | **create** — does not exist yet |
+| the other four | **no changes** |
+
+```bash
+tofu apply   # only once the plan reads as above
+```
 
 All five Cloud Build triggers live in `ut-dnr-ugs-backend-tools` (the build project), on the
 2nd-gen GitHub connection `ugs-warehouse-github` (repository resource `ugs-warehouse`) — itself
@@ -148,7 +179,7 @@ changed?" filter would skip the review preview on precisely the PRs that alter r
 - **Tofu** (`infra/*.tf`): buckets, Cloud Run services, service accounts + their IAM bindings, IAP,
   the Firebase Hosting *site* (`infra/firebase.tf`). Apply is two-box (personal authors `.tf`, work
   box runs `tofu plan`/`apply` impersonating `warehouse-deploy@`) — see `infra/README.md`.
-- **Console/CLI, not tofu**: all 5 Cloud Build triggers (table above) — two now *declared* in
+- **Console/CLI, not tofu**: all 5 Cloud Build triggers (table above) — now *declared* in
   `infra/cloudbuild-triggers.tf` but not imported or applied — the GitHub host connection,
   `warehouse-deploy@`'s `roles/firebasehosting.admin` grant (added out-of-band for #220, same gap
   #223 already tracks for other cross-project grants).

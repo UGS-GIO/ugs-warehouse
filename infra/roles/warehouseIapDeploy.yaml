@@ -1,0 +1,13 @@
+# warehouse-deploy@'s tightened replacement for roles/iap.admin.
+#
+# NOT Terraform-managed: the app stack applies AS warehouse-deploy, which cannot manage its own
+# privileged role, so declaring it there 403s on every plan refresh. Apply needs Role Admin —
+# command in docs/DEPLOY.md §6, which also checks the BINDING; this file is the permission list.
+title: Warehouse IAP Deploy
+description: Manage IAP settings and IAM on warehouse services. Applied out-of-band.
+stage: GA
+includedPermissions:
+  - iap.webServices.getIamPolicy
+  - iap.webServices.setIamPolicy
+  - iap.webServices.getSettings
+  - iap.webServices.updateSettings

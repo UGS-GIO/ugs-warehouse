@@ -271,8 +271,18 @@ rotting because the script fails when the table is wrong. See `scripts/check_gra
 | ugs-warehouse-review-srv@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/secretmanager.secretAccessor | secret | ut-dnr-ugs-maps-prod/review-writer-db-password | review serving/API can't read the DB password — Cloud SQL connection 5xxs |
 | ugs-warehouse-review-srv@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/cloudsql.client | project | ut-dnr-ugs-mappingdb-prod | **NOT Terraform-managed** — third project (dataELT's), our deploy identity has no IAM-admin there. App deploys fine but the comments API can't reach the DB (graceful 5xx) until the DB owner runs the grant by hand (`infra/iam.tf` line ~20) |
 | warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/firebasehosting.admin | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — granted out-of-band for #220 (2026-09-03). Missing this and both Firebase deploy workflows fail closed with no image published |
-| warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/cloudbuild.builds.editor | project | ut-dnr-ugs-backend-tools | **Expected missing until #222 lands** — needed to `tofu import`/manage Cloud Build triggers, which live in the build project, not `project_id`. First real proof this tool catches something before a deploy does |
+| warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | projects/ut-dnr-ugs-maps-prod/roles/warehouseIapDeploy | project | ut-dnr-ugs-maps-prod | **NOT Terraform-managed** — the app stack applies AS this SA, which cannot manage its own privileged role. Without it the deploy cannot set IAP IAM/settings on review-api. Permission list lives in `infra/roles/warehouseIapDeploy.yaml` |
+| warehouse-deploy@ut-dnr-ugs-maps-prod.iam.gserviceaccount.com | roles/cloudbuild.builds.editor | project | ut-dnr-ugs-backend-tools | **NOT Terraform-managed** — needed to manage Cloud Build triggers, which live in the build project, not `project_id`. |
 <!-- check-grants:end -->
+
+A custom role's *binding* is checked above; its *permission list* is not — a policy only records
+which role is bound, never what the role contains. `infra/roles/warehouseIapDeploy.yaml` holds that
+list, and re-applying it is one command:
+
+```bash
+gcloud iam roles update warehouseIapDeploy \
+  --project=ut-dnr-ugs-maps-prod --file=infra/roles/warehouseIapDeploy.yaml
+```
 
 `534590904912-compute@developer.gserviceaccount.com` is the project's default Compute SA — see
 `docs/CLOUD_BUILD_CI.md` for why Cloud Build triggers run as this identity rather than

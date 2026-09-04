@@ -2,7 +2,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { Browse, type CollectionSummary } from "./browse";
+import { CollectionsGrid, type CollectionSummary } from "./browse";
 
 const card = (id: string, title: string): CollectionSummary =>
   ({ id, title, href: `https://cdn.example/stac/${id}/collection.json`, count: 1 });
@@ -18,11 +18,10 @@ const CARDS = [
 
 const noop = () => {};
 const atRoot = (cards: CollectionSummary[]) => render(
-  <Browse cards={cards} allItems={[]} itemsLoading={false} showItems={false} atRoot
+  <CollectionsGrid cards={cards} allItems={[]} itemsLoading={false} atRoot
     breadcrumb={[]} search="" onSearch={noop} threeD={false} onThreeD={noop}
     browseAll={false} onBrowseAll={noop} layerCollectionIds={[]} series={[]} onSeries={noop}
-    itemSelected={false} onOpenCollection={vi.fn()} onOpenItem={noop} onOpenCover={noop}
-    onBackToItems={noop} onViewMap={noop} />,
+    onOpenCollection={vi.fn()} onOpenItem={noop} onOpenCover={noop} />,
 );
 
 describe("the catalog landing", () => {

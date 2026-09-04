@@ -7,6 +7,7 @@ import {
 import { useMemo, useState } from "react";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { idOf, useViewCtx } from "./app";
 import { AssetChips } from "./asset-viewer";
 import { rootGroupOf } from "./catalog";
 import { createComment } from "./comments";
@@ -562,64 +563,56 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 // A related item's STAC .json href → a viewer deep-link (?c=<collection>&i=<id>).
 
 // Registry-driven relationships (FK graph): related layers, this layer's references, related tables.
-export function Browse(props: {
+// One collection's items.
+function CollectionItems({ items, itemsLoading, breadcrumb, series, onOpenItem, onSeries }: {
+  items: ItemRef[];
+  itemsLoading: boolean;
+  breadcrumb: { label: string; onClick?: () => void }[];
+  series: string[];
+  onOpenItem: (href: string) => void;
+  onSeries: (codes: string[]) => void;
+}) {
+  return (
+    <div className={C.wrap}>
+      <Breadcrumb crumbs={breadcrumb} />
+      {itemsLoading && <span className={C.muted}>loading items…</span>}
+      <ItemList items={items} onOpen={onOpenItem} series={series} onSeries={onSeries} />
+    </div>
+  );
+}
+
+// The root catalog (with search-all) or a sub-catalog's series chooser. Exported for the render
+// tests, which exercise the root grouping and want nothing to do with the view context.
+export function CollectionsGrid({
+  cards, allItems, itemsLoading, breadcrumb, atRoot, layerCollectionIds, series,
+  search, onSearch, threeD, onThreeD, browseAll, onBrowseAll,
+  onOpenCollection, onOpenItem, onOpenCover, onSeries,
+}: {
   cards: CollectionSummary[];
-  collectionId?: string;
   allItems: ItemRef[];
   itemsLoading: boolean;
-  showItems: boolean;
-  atRoot: boolean;
   breadcrumb: { label: string; onClick?: () => void }[];
+  atRoot: boolean;
+  layerCollectionIds: string[];
+  series: string[];
   search: string;
   onSearch: (q: string) => void;
   threeD: boolean;
   onThreeD: (v: boolean) => void;
   browseAll: boolean;
   onBrowseAll: (v: boolean) => void;
-  layerCollectionIds: string[];
-  series: string[];
-  onSeries: (codes: string[]) => void;
-  item?: StacDoc;
-  itemSelected: boolean;
   onOpenCollection: (href: string) => void;
   onOpenItem: (href: string) => void;
   onOpenCover: (href: string) => void;
-  onBackToItems: () => void;
-  onViewMap: () => void;
+  onSeries: (codes: string[]) => void;
 }) {
-  const { collectionId, itemSelected, showItems, atRoot, search, onSearch, threeD, onThreeD,
-          browseAll, onBrowseAll, series, onSeries } = props;
-
-  // item detail
-  if (collectionId && itemSelected) {
-    return (
-      <div className={C.wrap}>
-        <ItemDetail collectionId={collectionId} item={props.item} layout="page"
-          onBack={props.onBackToItems} onMap={props.onViewMap} />
-      </div>
-    );
-  }
-
-  // a leaf collection's items
-  if (showItems && collectionId) {
-    const items = props.allItems.filter((it) => it.collId === collectionId);
-    return (
-      <div className={C.wrap}>
-        <Breadcrumb crumbs={props.breadcrumb} />
-        {props.itemsLoading && <span className={C.muted}>loading items…</span>}
-        <ItemList items={items} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
-      </div>
-    );
-  }
-
   // Drop map-layer collections from the by-date list: their datetime is ingest time, not a pub date.
   // App derives the set from catalog structure, so future layer collections are excluded automatically.
-  const layerColls = new Set(props.layerCollectionIds);
+  const layerColls = new Set(layerCollectionIds);
   const globalItems = browseAll && !search.trim() && !threeD
-    ? props.allItems.filter((it) => !layerColls.has(it.collId))
-    : props.allItems;
+    ? allItems.filter((it) => !layerColls.has(it.collId))
+    : allItems;
 
-  // browse level: root catalog (with search-all) OR a sub-catalog's series chooser
   return (
     <>
       {/* The catalog landing gets the same title band as the content pages — it IS the front door,
@@ -629,7 +622,7 @@ export function Browse(props: {
           lead="Geologic maps, hazard layers and publications." />
       )}
     <div className={C.wrap}>
-      {!atRoot && <Breadcrumb crumbs={props.breadcrumb} />}
+      {!atRoot && <Breadcrumb crumbs={breadcrumb} />}
       {atRoot && (
         <div className={C.bar}>
           <input className={C.input} placeholder="Search all collections…" value={search}
@@ -642,22 +635,56 @@ export function Browse(props: {
               every series. Same loads-all-items path as search; the list defaults to date-desc. */}
           <span className={toggle(browseAll)} title="One list of every publication across all series, newest first"
             onClick={() => onBrowseAll(!browseAll)}>All items</span>
-          {props.itemsLoading && <span className={C.muted}>loading items…</span>}
+          {itemsLoading && <span className={C.muted}>loading items…</span>}
         </div>
       )}
       {atRoot && (search.trim() || threeD || browseAll)
-        ? <ItemList items={globalItems} showCollection query={search} force3D={threeD} onOpen={props.onOpenItem} series={series} onSeries={onSeries} />
+        ? <ItemList items={globalItems} showCollection query={search} force3D={threeD} onOpen={onOpenItem} series={series} onSeries={onSeries} />
         : atRoot
           // Two kinds of thing live at the root: layers you add to a map, and documents you read.
           ? ROOT_GROUPS.map(({ group, heading }) => {
-              const cards = props.cards.filter((c) => rootGroupOf(c.id) === group);
-              return cards.length
-                ? <Collections key={group} collections={cards} heading={heading}
-                    onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />
+              const cards_ = cards.filter((c) => rootGroupOf(c.id) === group);
+              return cards_.length
+                ? <Collections key={group} collections={cards_} heading={heading}
+                    onOpen={onOpenCollection} onOpenItem={onOpenCover} />
                 : null;
             })
-          : <Collections collections={props.cards} heading="Series" onOpen={props.onOpenCollection} onOpenItem={props.onOpenCover} />}
+          : <Collections collections={cards} heading="Series" onOpen={onOpenCollection} onOpenItem={onOpenCover} />}
     </div>
     </>
   );
+}
+
+// The /catalog route. Three screens live behind one URL, told apart by the search params the router
+// already carries: ?c= &i= is an item, ?c= is that collection's items, bare is the grid. It reads
+// the view context rather than taking 23 props — the union of what those three screens each need.
+export function Browse() {
+  const c = useViewCtx();
+  const series = c.seriesSel ?? [];
+
+  if (c.collectionId && c.itemUrl) {
+    return (
+      <div className={C.wrap}>
+        <ItemDetail collectionId={c.collectionId} item={c.item.data} layout="page"
+          onBack={() => c.go({ view: "catalog", c: c.collectionUrl, s: c.seriesSel })}
+          onMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl,
+                              l: c.itemUrl ? [idOf(c.itemUrl)] : c.layerIds })} />
+      </div>
+    );
+  }
+
+  if (c.leafColl && c.collectionId) {
+    return <CollectionItems
+      items={c.allItems.filter((it) => it.collId === c.collectionId)}
+      itemsLoading={c.itemsLoading} breadcrumb={c.crumbs} series={series}
+      onOpenItem={c.openItem} onSeries={c.setSeries} />;
+  }
+
+  return <CollectionsGrid
+    cards={c.cardsWithCovers} allItems={c.allItems} itemsLoading={c.itemsLoading}
+    breadcrumb={c.crumbs} atRoot={!c.collectionId} layerCollectionIds={c.layerCollIds}
+    series={series} search={c.search} onSearch={c.setSearch}
+    threeD={c.threeD} onThreeD={c.setThreeD} browseAll={c.browseAll} onBrowseAll={c.setBrowseAll}
+    onOpenCollection={c.openCollection} onOpenItem={c.openItem} onOpenCover={c.openCover}
+    onSeries={c.setSeries} />;
 }

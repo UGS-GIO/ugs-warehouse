@@ -62,12 +62,18 @@ def _cols(rel: dict, which: str) -> list[str]:
 
 
 def _foreign_key(rel: dict) -> dict | None:
-    """A Frictionless Table Schema foreignKey: this asset's `fields` reference `resource.fields`."""
+    """A Frictionless Table Schema foreignKey: this asset's `fields` reference `resource.fields`.
+
+    `resource` alone is a bare topic name; Frictionless resolves it inside a datapackage, which this
+    catalog has no such thing as. `href` names the file so a consumer can resolve the join."""
     src, tgt = _cols(rel, "source"), _cols(rel, "target")
     target = rel.get("targetDomainTopic")
     if not (src and tgt and target):
         return None
-    return {"fields": src, "reference": {"resource": target, "fields": tgt}}
+    return {"fields": src,
+            "reference": {"resource": target,
+                          "href": config.public_url(config.archive_path(target)),
+                          "fields": tgt}}
 
 
 def _related_link(target_stem: str, schema: str, title: str | None = None) -> dict:

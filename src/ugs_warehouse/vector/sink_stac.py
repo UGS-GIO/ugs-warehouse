@@ -131,7 +131,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     item_dt = _publication_datetime(con, view) or datetime.datetime.now(datetime.UTC).isoformat()
     md = metadata or {}
 
-    archive_path = f"{config.ARCHIVE_PREFIX}/{topic.stem}/{topic.stem}.parquet"
+    archive_path = config.archive_path(topic.stem)
     pmtiles_path = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     pmtiles_url = config.public_url(pmtiles_path)
 

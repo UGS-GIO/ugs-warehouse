@@ -92,3 +92,25 @@ def test_collection_validates_with_license_and_providers():
     assert coll["providers"] and coll["providers"][0]["name"] == "Utah Geological Survey"
     assert any(link["rel"] == "license" for link in coll["links"])
     _validate(coll)
+
+
+def test_item_with_foreign_keys_validates():
+    """`ugs:foreign_keys` is a UGS-prefixed custom field, not a declared extension. STAC allows
+    prefixed extras without a schema, so adding `reference.href` (#214) must not break validation."""
+    from ugs_warehouse.vector import related
+
+    fk = related._foreign_key(
+        {"sourceColumn": "quad", "targetDomainTopic": "mapping_quads_24k", "targetColumn": "quad_id"})
+    assert fk["reference"]["href"].endswith("/mapping_quads_24k/mapping_quads_24k.parquet")
+
+    item = stac.build_item(
+        item_id="enmin_ucrc_wells", collection="emp",
+        collection_path="ugs-serving-topics/emp",
+        geometry=stac.bbox_polygon([-114, 37, -109, 42]), bbox=[-114, 37, -109, 42],
+        datetime_iso="2026-01-01T00:00:00Z",
+        properties={"title": "UCRC Wells"},
+        assets={"data": {"href": "https://x/enmin_ucrc_wells.parquet",
+                         "type": "application/vnd.apache.parquet",
+                         "roles": ["data"], "ugs:foreign_keys": [fk]}},
+    )
+    _validate(_drop_private(item))

@@ -41,7 +41,11 @@ export type Link = {
 // ugs:foreign_keys — a UGS-prefixed custom field (FK join detail has no STAC extension). This
 // resource's `fields` reference `reference.resource`'s (a serving-topic stem) `reference.fields`.
 // Value shape mirrors Frictionless Table Schema. Emitted by the warehouse from the schema registry.
-export type ForeignKey = { fields: string[]; reference: { resource: string; fields: string[] } };
+// `href` is optional: topics reingest on their own schedule, so both shapes coexist until all cycle.
+export type ForeignKey = {
+  fields: string[];
+  reference: { resource: string; href?: string; fields: string[] };
+};
 export type Asset = {
   href: string; title?: string; type?: string; roles?: string[];
   "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];

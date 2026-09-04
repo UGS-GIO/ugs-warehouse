@@ -111,6 +111,12 @@ def public_url(object_path: str) -> str:
     return f"{PUBLIC_BASE_URL}/{object_path.lstrip('/')}"
 
 
+def archive_path(stem: str) -> str:
+    """The topic's latest GeoParquet pointer. Flat, so it resolves from the stem alone —
+    unlike the item path, which also needs the target's mart schema."""
+    return f"{ARCHIVE_PREFIX}/{stem}/{stem}.parquet"
+
+
 # Styling source — the neighbor repo `ugs-styles` builds MapLibre GL JSON + an `index.json`
 # manifest, published to OUR bucket and served through the CDN. The warehouse reads the manifest at
 # STAC emit and attaches a `renders` block by item id (docs/STYLING.md). Graceful: unreachable

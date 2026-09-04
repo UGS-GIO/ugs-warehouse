@@ -1,7 +1,7 @@
 import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput } from "@utahdts/utah-design-system-header";
 import { useIsFetching } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
-import { createContext, lazy, Suspense, useContext, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { type CatalogDoc } from "./search-index";
 import utahLogo from "./assets/utah-logo.png";
 import { type CollectionSummary, type CoverRef, type ItemRef } from "./browse";
@@ -11,27 +11,10 @@ import { LegalFooter } from "./legal-footer";
 import { type LayerRow } from "./layer-list";
 import { NavMenu } from "./nav-menu";
 import { PreviewMapProvider } from "./preview-map";
-import { PropertyTable } from "./property-table";
 import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./stac-url-chip";
-import { DiffPanel } from "./diff-panel";
-import { CommentsPanel } from "./comments-panel";
 import { NotifBell } from "./notifications-inbox";
 
-// Heavy content views, code-split out of the main bundle (mermaid/cytoscape/katex, MiniSearch, the
-// markdown renderer) — they load on first open with a Suspense fallback instead of bloating startup.
-export const Architecture = lazy(() => import("./architecture").then((m) => ({ default: m.Architecture })));
-export const ArticleSearch = lazy(() => import("./search").then((m) => ({ default: m.ArticleSearch })));
-export const Guide = lazy(() => import("./guide").then((m) => ({ default: m.Guide })));
-export const ReviewDashboard = lazy(() => import("./review-dashboard").then((m) => ({ default: m.ReviewDashboard })));
-// maplibre is ~1.5MB of the bundle and the catalog, search and doc views never draw a map.
-export const ItemMap = lazy(() => import("./map").then((m) => ({ default: m.ItemMap })));
-// The full-width Discover view — lazy so its MiniSearch index + maplibre stay out of the main bundle.
-export const DiscoveryView = lazy(() => import("./discovery-view").then((m) => ({ default: m.DiscoveryView })));
-// Preview reuses the heavy asset-viewer (deck.gl/duckdb); Developers is light but stays behind the
-// same Suspense boundary. Both lazy so they never touch the main bundle or the landing paint.
-export const PreviewView = lazy(() => import("./preview-view").then((m) => ({ default: m.PreviewView })));
-export const Developers = lazy(() => import("./developers-view").then((m) => ({ default: m.Developers })));
 
 // Unique collection key = the path from the catalog root to the collection folder, so a folder name
 // that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
@@ -111,32 +94,6 @@ const tab = (on: boolean) =>
   "cursor-pointer border-b-2 px-2 py-1 text-sm transition-colors "
   + (on ? "border-primary font-medium text-primary" : "border-transparent text-muted-foreground hover:text-foreground");
 
-const asset = "mr-1.5 mt-0.5 inline-block rounded bg-primary px-2 py-1 text-xs text-primary-foreground no-underline hover:opacity-90";
-
-export function MapDetail({ item, loading }: { item?: StacDoc; loading: boolean }) {
-  if (loading) return <em>Loading item…</em>;
-  if (!item) return <em className="text-muted-foreground">Pick an item to see detail, footprint, and assets.</em>;
-  const p = item.properties ?? {};
-  // Review deploy only: offer a diff of this _review item against its live _current counterpart.
-  const isReview = IS_REVIEW;
-  const geoparquet = Object.entries(item.assets ?? {})
-    .find(([k, a]) => /parquet/i.test(String(a.type ?? "")) || /parquet|geoparquet/i.test(k))?.[1]?.href;
-  return (
-    <>
-      <h2 className="mb-1.5 text-base font-semibold">{String(p.title ?? item.id ?? "")}</h2>
-      <div>
-        {Object.entries(item.assets ?? {}).map(([k, a]) => (
-          <a key={k} className={asset} href={a.href} target="_blank" rel="noopener">{a.title ?? k}</a>
-        ))}
-      </div>
-      {isReview && geoparquet && (
-        <DiffPanel stem={String(item.id ?? "")} reviewParquetUrl={geoparquet} />
-      )}
-      {isReview && item.id && <CommentsPanel itemId={String(item.id)} />}
-      <PropertyTable properties={p} className="mt-2" />
-    </>
-  );
-}
 
 // The IAP user as a Utah-header action item (top-right of the official banner). Display-only — IAP
 // already gated access; the username shows, the full email is the tooltip. Clicking signs out via

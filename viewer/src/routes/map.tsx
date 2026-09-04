@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { idOf, ItemMap, MapDetail, useViewCtx } from "../app";
+import { idOf, useViewCtx } from "../app";
+import { ItemMap } from "../map";
+import { MapDetail } from "../map-detail";
 import { LayerList } from "../layer-list";
 import { MapLegend } from "../map-legend";
 import { MapShell } from "../map-shell";

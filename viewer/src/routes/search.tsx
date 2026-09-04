@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { ArticleSearch, useViewCtx } from "../app";
+import { useViewCtx } from "../app";
+import { ArticleSearch } from "../search";
 
 function Search() {
   const { catalogDocs, go } = useViewCtx();

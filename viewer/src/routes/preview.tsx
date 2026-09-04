@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { idOf, PreviewView, useViewCtx } from "../app";
+import { idOf, useViewCtx } from "../app";
+import { PreviewView } from "../preview-view";
 
 // The selected item full-screen, hosting the SAME Preview as the drawer inside the already-mounted
 // preview map. Back returns to the Discover drawer it was launched from.

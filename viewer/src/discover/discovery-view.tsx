@@ -308,7 +308,10 @@ export function DiscoveryView({
                 highlightBbox={hoverBbox} onHoverFootprint={onMapHover} onBoundsChange={setBounds}
                 coverageDefault />
             </Suspense>
-            <div className="pointer-events-none absolute inset-x-0 top-3 z-10 flex justify-center">
+            {/* Below the map's own controls, not level with them: the geocoder (left-2 top-2) and
+                the basemap/coverage cluster (right-2 top-2) are separately positioned, and centring
+                this on a 2/5-width pane put it on top of the basemap toggle. */}
+            <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex justify-center">
               {area ? (
                 <button type="button" onClick={() => patch({ area: null })}
                   className="pointer-events-auto rounded-full border border-primary bg-primary px-3 py-1 text-xs font-medium text-primary-foreground shadow">

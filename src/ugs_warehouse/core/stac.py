@@ -290,7 +290,8 @@ def _extent(items: list[dict]) -> dict:
 def _collection_doc(collection: str, path: str, item_ids: list[str],
                     extent: dict | None = None, *, title: str | None = None,
                     service: bool | None = None, mappable: int | None = None,
-                    description: str | None = None) -> dict:
+                    description: str | None = None,
+                    item_titles: dict[str, str] | None = None) -> dict:
     """A collection.json at `{path}/collection.json`. `collection` is its STAC id (a series
     code like `DS` when nested, else the path). Root/parent links climb out per path depth;
     the OGC API Features link is added only for flat collections (serving topics — nested
@@ -330,7 +331,9 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             # STAC *item* ids (`hazards_qfaults`), so a per-collection path never existed on any
             # host. The queryable per-layer link lives on the item instead (vector.sink_stac).
             *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections", "type": "application/json", "title": "OGC API Features service"}] if service else []),
-            *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json"}
+            # Titled so a client can list a collection without fetching all N items for names.
+            *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json",
+               **({"title": (item_titles or {}).get(i)} if (item_titles or {}).get(i) else {})}
               for i in sorted(item_ids)],
         ],
     }
@@ -468,6 +471,7 @@ def _root_doc(children: list[dict]) -> dict:
         "type": "Catalog",
         "stac_version": STAC_VERSION,
         "id": config.CATALOG_ID,
+        "title": config.CATALOG_TITLE,
         "description": "UGS warehouse — cloud-native serving catalog across all producers "
                        "(vector serving topics, publications/COGs).",
         "links": links,
@@ -567,8 +571,12 @@ def refresh_catalog() -> None:
             desc = SERIES_DESC.get(cid) if top in PUB_SERIES_CATALOGS else None
             if nested and top in ROLLUP_INDEX_CATALOGS:
                 rollup.setdefault(top, []).extend(items)
+            # From the fetched docs, so an item that failed to fetch just carries no title.
+            item_titles = {it["id"]: it["properties"]["title"] for it in items
+                           if it.get("id") and it.get("properties", {}).get("title")}
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
-                                        mappable=mappable, description=desc),
+                                        mappable=mappable, description=desc,
+                                        item_titles=item_titles),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
             _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
             leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),

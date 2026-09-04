@@ -6,7 +6,6 @@
 // discovery-model.ts into ONE source of truth (both now import from here).
 import type { ItemRef } from "./browse";
 import { validBbox } from "./map-model";
-import { mountHref } from "./mount";
 import {
   type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset,
   type TableColumn, zarrAsset,
@@ -76,16 +75,7 @@ export const hasGeometry = (it: ItemRef): boolean =>
 // The doc id bridging a MiniSearch hit (built by search-index.toSearchDoc) back to its item.
 export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
 
-// A shareable viewer URL that opens the item in the Discover view — the href a cmd/middle-click uses
-// to open a new tab (a plain click is intercepted for in-app nav). `?i=` is the href's item folder,
-// which is exactly what App resolves ?i against.
-export const discoverHref = (it: ItemRef): string =>
-  mountHref("/discover", new URLSearchParams({ c: it.collId, i: it.href.split("/").slice(-2)[0] }));
 
-// The same item on the full catalog page. Below lg that IS the item view — the Discover drawer is a
-// side panel, and a side panel on a phone is a sliver of list next to a cramped column.
-export const catalogHref = (it: ItemRef): string =>
-  mountHref("/catalog", new URLSearchParams({ c: it.collId, i: it.href.split("/").slice(-2)[0] }));
 
 // A row count where the warehouse published one (serving topics), else undefined.
 export const rowCount = (it: ItemRef): number | undefined => {

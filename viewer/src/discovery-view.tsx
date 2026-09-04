@@ -5,7 +5,7 @@
 // — restyled onto the Utah Design System tokens + shared controls (UiSegmented / UiSelect), no new deps.
 // All pure logic lives in ./discovery-model; this file is the React shell + the map/detail wiring.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { Link, useNavigate, useSearch } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import {
@@ -13,7 +13,7 @@ import {
   extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
-import { catalogHref, categoryLabel, collectionLabel, discoverHref } from "./item-view";
+import { categoryLabel, collectionLabel } from "./item-view";
 import type { Footprint } from "./map-model";
 import { type LinkAttrs, ResultCard, ResultRow } from "./result-card";
 import { buildIndex, toSearchDoc } from "./search-index";
@@ -43,30 +43,24 @@ const idOf = (href: string) => href.split("/").slice(-2)[0];
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, onOpenItemPage, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
-  onFullPage, fullPageHref,
+  items, itemsKey, onOpenItem, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
-  onOpenItem: (href: string) => void;
-  onOpenItemPage: (href: string) => void;   // below lg a tap opens the full page, not the drawer
+  onOpenItem: (href: string) => void;   // the map footprint picker; cards navigate via <Link>
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
   selectedItem?: StacDoc;              // its full doc (App resolves it from ?c=/?i=); undefined while loading
   selectedCollectionId?: string;
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
   onExplore?: () => void;              // opens the selected item full-screen in the Preview view
-  onFullPage?: () => void;             // opens the selected item on the full catalog page
-  fullPageHref?: string;               // the same destination as a URL, so the link is cmd/middle-clickable
 }) {
-  const navigate = useNavigate() as unknown as (opts: {
-    replace?: boolean; search: (prev: Record<string, unknown>) => Record<string, unknown>;
-  }) => void;
+  const navigate = useNavigate();
   // The whole filter/sort/layout state lives in the URL (namespaced Discover keys), so a landing tile,
   // a shared link, or the Back button reproduces the view. App still owns view/c/i/l/s; we patch only
   // our own keys. parse is cheap → recomputed each render; the memos below key on the SERIALIZED values
   // (not the arrays, which are fresh each parse) so they don't re-run on unrelated renders.
-  const sp = useSearch({ strict: false }) as Record<string, unknown>;
+  const sp = useSearch({ from: "__root__" });
   const st = parseDiscovery(sp);
   const { q, geometry, sort, layout, density, area } = st;
   const { collections: colls, categories: cats, types, formats } = st;
@@ -77,7 +71,8 @@ export function DiscoveryView({
   // undoes them one at a time; replace for typing + view prefs (layout/density) so they don't pile up.
   const patch = (p: Partial<DiscoveryState>, replace = false) => {
     const next = discoveryPatch({ ...st, ...p });
-    navigate({ replace, search: (prev) => ({ ...prev, ...next }) });
+    // `to: "."` is the current route — a same-route search patch, and it is what types the reducer.
+    navigate({ to: ".", replace, search: (prev) => ({ ...prev, ...next }) });
   };
   const toggleList = (key: "collections" | "categories" | "types" | "formats", value: string) => {
     const cur = st[key];
@@ -154,16 +149,12 @@ export function DiscoveryView({
 
   // Result link: a real <a> (keyboard-focusable + cmd/middle-click opens a new tab), but a plain
   // left-click is intercepted for in-app nav — the same pattern the app's home link uses.
+  // Below lg the drawer would be a cramped column beside a dead sliver of list, so a result goes to
+  // the full item page instead. One descriptor drives both the click and the href.
   const cardLink = (it: ItemRef): LinkAttrs => ({
-    // Below lg the drawer would be a cramped column beside a dead sliver of list, so a result goes
-    // to the full item page instead. The href matches the click so a new tab lands the same place.
-    href: isWide ? discoverHref(it) : catalogHref(it),
+    to: isWide ? "/discover" : "/catalog",
+    search: { c: it.collId, i: it.href.split("/").slice(-2)[0] },
     "data-href": it.href,
-    onClick: (e) => {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-      e.preventDefault();
-      (isWide ? onOpenItem : onOpenItemPage)(it.href);
-    },
     onMouseEnter: () => { hoverSrc.current = "card"; setHoverHref(it.href); },
     onMouseLeave: () => { hoverSrc.current = "card"; setHoverHref(null); },
   });
@@ -344,17 +335,11 @@ export function DiscoveryView({
             <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-2">
               <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Item detail</span>
               <div className="flex items-center gap-1">
-                {/* The drawer is the single-column layout; the two-column page lives on the Catalog
-                    view. A real <a> so cmd/middle-click opens it in a tab, plain click is SPA nav. */}
-                {onFullPage && (
-                  <a href={fullPageHref} onClick={(e) => {
-                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-                    e.preventDefault();
-                    onFullPage();
-                  }} className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
-                    Open full page ↗
-                  </a>
-                )}
+                {/* The drawer is the single-column layout; the two-column page lives on Catalog. */}
+                <Link to="/catalog" search={{ c: selectedCollectionId, i: selectedItem?.id }}
+                  className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+                  Open full page ↗
+                </Link>
                 <button ref={closeRef} type="button" onClick={onCloseItem}
                   className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted">✕ Close</button>
               </div>

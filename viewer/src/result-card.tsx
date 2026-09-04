@@ -3,6 +3,8 @@
 // whole card is a single <a> (keyboard-focusable, cmd/middle-click opens a new tab) whose plain
 // left-click the caller intercepts for in-app nav; a caller that wants map↔card hover sync passes the
 // mouse handlers, and one that doesn't (Landing) omits them.
+import { Link } from "@tanstack/react-router";
+
 import type { ItemRef } from "./browse";
 import { collectionLabel, dateOf, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
 import { thumbnailAsset } from "./stac";
@@ -10,10 +12,12 @@ import { C } from "./ui";
 
 export type Density = "comfortable" | "compact";
 
+// A <Link> descriptor, not an <a>. The router builds the href (basepath applied), does SPA nav on a
+// plain click and leaves modifier/middle-click to the browser — all of which this used to hand-roll.
 export type LinkAttrs = {
-  href: string;
+  to: "/catalog" | "/discover";
+  search: Record<string, unknown>;
   "data-href": string;
-  onClick: (e: React.MouseEvent) => void;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
 };
@@ -38,7 +42,7 @@ export function ResultCard({ it, density, on, link }: CardProps) {
   const sid = seriesLabel(it);
   const compact = density === "compact";
   return (
-    <a {...link}
+    <Link {...link}
       className={`flex cursor-pointer gap-3 rounded-lg border bg-card p-3 text-inherit no-underline transition hover:border-primary hover:shadow-sm ${FOCUS_RING} ${on ? "border-primary ring-1 ring-primary" : "border-border"}`}>
       <div className={`${compact ? "h-12 w-12" : "h-20 w-20"} flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted`}>
         {/* No placeholder text: at 48-80px the id just clips ("geolmap_strat_columns_geol…"), so an
@@ -54,7 +58,7 @@ export function ResultCard({ it, density, on, link }: CardProps) {
         <div className="mt-1 truncate text-xs text-muted-foreground" title={metaLine(it)}>{metaLine(it)}</div>
         {!compact && <div className="mt-1">{formatBadges(it)}</div>}
       </div>
-    </a>
+    </Link>
   );
 }
 
@@ -64,7 +68,7 @@ export function ResultRow({ it, density, on, link }: CardProps) {
   const sid = seriesLabel(it);
   return (
     <li>
-      <a {...link}
+      <Link {...link}
         className={`flex cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING} ${on ? "bg-primary/10" : "hover:bg-muted"}`}>
         <span className="truncate text-sm text-foreground" title={title(it)}>{title(it)}</span>
         {sid && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{sid}</span>}
@@ -74,7 +78,7 @@ export function ResultRow({ it, density, on, link }: CardProps) {
             <span aria-hidden className="text-[10px]">◆</span><span className="sr-only">on the map</span>
           </span>
         )}
-      </a>
+      </Link>
     </li>
   );
 }

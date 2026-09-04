@@ -6,7 +6,7 @@
 import { type FormEvent, useMemo, useState } from "react";
 
 import type { ItemRef } from "./browse";
-import { catalogHref, CATEGORIES, categorize, dateOf, discoverHref } from "./item-view";
+import { CATEGORIES, categorize, dateOf } from "./item-view";
 import { useIsWide } from "./ui/use-breakpoint";
 import { type LinkAttrs, ResultCard } from "./result-card";
 
@@ -37,13 +37,11 @@ function recentlyUpdated(items: ItemRef[]): ItemRef[] {
     .map(({ it }) => it);
 }
 
-export function Landing({ items, itemsKey, loading, onSearch, onOpenItem, onOpenItemPage, onOpenCategory }: {
+export function Landing({ items, itemsKey, loading, onSearch, onOpenCategory }: {
   items: ItemRef[];
   itemsKey: string;                       // App's mapLoadKey — the stable memo key for the item set
   loading: boolean;                       // the catalog crawl is still streaming → counts not final yet
   onSearch: (text: string) => void;       // → /discover?q=…
-  onOpenItem: (href: string) => void;     // → opens the item in Discover
-  onOpenItemPage: (href: string) => void; // → the full item page (below lg; see catalogHref)
   onOpenCategory: (key: string) => void;  // → /discover?category=…
 }) {
   const [text, setText] = useState("");
@@ -56,13 +54,9 @@ export function Landing({ items, itemsKey, loading, onSearch, onOpenItem, onOpen
 
   // A non-hover result link (Landing has no map to sync) that opens the item in Discover.
   const link = (it: ItemRef): LinkAttrs => ({
-    href: isWide ? discoverHref(it) : catalogHref(it),
+    to: isWide ? "/discover" : "/catalog",
+    search: { c: it.collId, i: it.href.split("/").slice(-2)[0] },
     "data-href": it.href,
-    onClick: (e) => {
-      if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
-      e.preventDefault();
-      (isWide ? onOpenItem : onOpenItemPage)(it.href);
-    },
   });
 
   return (

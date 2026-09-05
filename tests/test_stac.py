@@ -514,6 +514,12 @@ def test_pub_href_drops_undefined_and_upgrades_ugspub_to_https():
     assert pubs_sink.href("  ") is None
     assert pubs_sink.href("http://ugspub.nr.utah.gov/publications/ofr/OFR-1.pdf") \
         == "https://ugspub.nr.utah.gov/publications/ofr/OFR-1.pdf"
+    # Any host we run, not just ugspub — a UGS web app was still published over http.
+    assert pubs_sink.href("http://geology.utah.gov/apps/tour/index.html") \
+        == "https://geology.utah.gov/apps/tour/index.html"
+    # A third-party host is left alone: assuming TLS somewhere we do not operate can break a link
+    # that works. `wp.me` is the live example, and it is 404 on both schemes anyway.
+    assert pubs_sink.href("http://wp.me/P5HpmR-1ys") == "http://wp.me/P5HpmR-1ys"
     # A bare filename still resolves against the publications host, and other hosts are left alone.
     assert pubs_sink.href("ofr/OFR-1.pdf") == pubs_sink.UGSPUB + "ofr/OFR-1.pdf"
     assert pubs_sink.href("https://example.org/x.pdf") == "https://example.org/x.pdf"

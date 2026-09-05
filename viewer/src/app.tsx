@@ -11,7 +11,7 @@ import { LegalFooter } from "./shell/legal-footer";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, cogRenderAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 
@@ -59,7 +59,7 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
       styleUrl: defaultStyleUrl(ref.data),
     };
   }
-  const cog = cogAsset(ref.data);
+  const cog = cogRenderAsset(ref.data);
   if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox };
   const raster = rasterTilesAsset(ref.data);
   if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };

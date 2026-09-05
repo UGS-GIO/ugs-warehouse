@@ -48,6 +48,7 @@ export type ForeignKey = {
 };
 export type Asset = {
   href: string; title?: string; type?: string; roles?: string[];
+  "proj:code"?: string;   // per-asset CRS; overrides the item's (a reprojected COG carries its own)
   "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];
 };
 export type StacDoc = {
@@ -151,13 +152,32 @@ export const esriVectorTileUrl = (id: string, render?: string, renders?: string[
   return `${TILES_BASE}/rest/services/${encodeURIComponent(id)}${seg}/VectorTileServer`;
 };
 
-// The Cloud-Optimized GeoTIFF asset (range-readable, rendered client-side via cog://).
-export const cogAsset = (d: StacDoc | undefined): Asset | undefined =>
-  Object.values(d?.assets ?? {}).find(
-    (a) => a.type?.includes("profile=cloud-optimized")
-      || a.roles?.includes("cloud-optimized")
-      || a.href.endsWith(".cog.tif"),
-  );
+const isCog = (a: Asset) =>
+  a.type?.includes("profile=cloud-optimized")
+  || a.roles?.includes("cloud-optimized")
+  || a.href.endsWith(".cog.tif");
+
+// The Cloud-Optimized GeoTIFF asset. An item may carry SEVERAL: the canonical raster in its source
+// projection plus a reprojected derivative. `visual` marks the one meant to be drawn, so it wins —
+// taking whichever came first in the assets object picked the native-CRS copy and the map threw
+// "COG projection EPSG:26912 is not supported" (warehouse#84).
+export const cogAsset = (d: StacDoc | undefined): Asset | undefined => {
+  const cogs = Object.values(d?.assets ?? {}).filter(isCog);
+  return cogs.find((a) => a.roles?.includes("visual")) ?? cogs[0];
+};
+
+// The COG this client can actually paint over a web-mercator basemap: the `visual` derivative, or a
+// lone COG that is already web mercator (or does not say, which is how single-CRS items read).
+// Undefined means the item has raster data but no render path — the map draws nothing, which beats
+// throwing on a projection it cannot reproject.
+export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined => {
+  const cogs = Object.values(d?.assets ?? {}).filter(isCog);
+  const visual = cogs.find((a) => a.roles?.includes("visual"));
+  if (visual) return visual;
+  const solo = cogs.length === 1 ? cogs[0] : undefined;
+  const crs = solo?.["proj:code"] ?? (d?.properties as Record<string, unknown> | undefined)?.["proj:code"];
+  return solo && (crs == null || crs === "EPSG:3857") ? solo : undefined;
+};
 
 // A RASTER PMTiles asset (the per-scale geologic-map mosaics) — rendered as raster tiles via the
 // pmtiles:// protocol. Distinguished from VECTOR PMTiles, which are declared as a web-map LINK

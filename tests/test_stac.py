@@ -520,3 +520,15 @@ def test_pub_media_types_name_the_format():
     # A query string never made it into the extension, and an unknown one still falls back.
     assert pubs_sink.media_type("x/y.pdf?v=2") == "application/pdf"
     assert pubs_sink.media_type("https://www.youtube.com/watch?v=abc") == "application/octet-stream"
+
+
+def test_cog_assets_keep_the_cloud_optimized_media_type():
+    """`.tif` maps to image/tiff for the publisher's scans. A COG we produced sets its type on the
+    asset directly, so the mapping must not reach it — the profile parameter is what a client reads
+    to know it can range-request the file."""
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item({"series_id": "M-100", "series": "M"}, [], has_cog=True)
+
+    assert item["assets"]["cog"]["type"] == pubs_sink.COG_MIME
+    assert "cloud-optimized" in item["assets"]["cog"]["type"]

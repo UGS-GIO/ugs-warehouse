@@ -36,6 +36,10 @@ GUARDED = {
     "PTL-TMP-002",  # RFC 3339 datetimes, start before end
     "PTL-AST-001",  # every asset has a media type and a role
     "PTL-AST-002",  # absolute asset hrefs use https (#249)
+    "PTL-FIL-001",  # README.md + AGENTS.md beside every catalog and collection
+    "PTL-FIL-002",  # AGENTS.md linked rel:"agents"
+    "PTL-FIL-003",  # README.md linked rel:"describedby"
+    "PTL-FIL-004",  # the README is non-empty and carries a title heading
     "PTL-LIC-001",  # an SPDX license on every collection
     "PTL-LIC-003",  # never the deprecated "proprietary"
     "PTL-PRV-001",  # at least one producer

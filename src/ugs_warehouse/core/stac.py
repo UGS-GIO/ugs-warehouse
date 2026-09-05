@@ -21,7 +21,7 @@ import json
 import re
 import sys
 
-from . import config, gcs, iso, item_mirror, styles
+from . import catalog_docs, config, gcs, iso, item_mirror, styles
 
 PGF_BASE_URL = config.PGF_BASE_URL
 
@@ -29,6 +29,9 @@ PGF_BASE_URL = config.PGF_BASE_URL
 SERVING_TOPICS_CATALOG = "ugs-serving-topics"
 # Raster scenes nest under this catalog, one collection per layer (see raster.identity).
 RASTER_CATALOG = "ugs-rasters"
+# Root catalog blurb, shared by catalog.json and the README beside it.
+ROOT_DESCRIPTION = ("UGS warehouse — cloud-native serving catalog across all producers "
+                    "(vector serving topics, publications/COGs).")
 
 STAC_VERSION = "1.1.0"  # 1.1 promotes `bands` + data_type/nodata to common metadata (no raster ext)
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
@@ -372,6 +375,9 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             # of N item.json fetches; the per-item docs stay the source of truth for detail).
             {"rel": "items", "href": "./items.json", "type": "application/json", "title": "Items index"},
             {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
+            # Portolan requires both files beside every node, linked from the JSON. refresh_catalog
+            # writes them; a link without its file is a broken link, so the two move together.
+            *catalog_docs.markdown_links(),
             # Service ROOT, not `/collections/{collection}`: featureserv names its collections after
             # STAC *item* ids (`hazards_qfaults`), so a per-collection path never existed on any
             # host. The queryable per-layer link lives on the item instead (vector.sink_stac).
@@ -458,6 +464,7 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
             {"rel": "root", "href": "../catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./catalog.json", "type": "application/json"},
+            *catalog_docs.markdown_links(),
             *([{"rel": "items", "href": "./items.json", "type": "application/json",
                 "title": "Items index (all child collections)"}] if items_index else []),
             *[_child_link(f"./{c['id']}/collection.json", c.get("title"), c.get("count"), c.get("mappable"))
@@ -528,6 +535,7 @@ def _root_doc(children: list[dict]) -> dict:
     links = [
         {"rel": "root", "href": "./catalog.json", "type": "application/json"},
         {"rel": "self", "href": "./catalog.json", "type": "application/json"},
+        *catalog_docs.markdown_links(),
         *[_child_link(c["href"], c.get("title"), c.get("count"), c.get("mappable"))
           for c in sorted(children, key=lambda c: c["href"])],
     ]
@@ -543,10 +551,28 @@ def _root_doc(children: list[dict]) -> dict:
         "stac_version": STAC_VERSION,
         "id": config.CATALOG_ID,
         "title": config.CATALOG_TITLE,
-        "description": "UGS warehouse — cloud-native serving catalog across all producers "
-                       "(vector serving topics, publications/COGs).",
+        "description": ROOT_DESCRIPTION,
         "links": links,
     }
+
+
+def _write_markdown(path: str, *, title: str, description: str, kind: str, children: int,
+                   extent: dict | None = None, items: list[dict] | None = None) -> None:
+    """Write README.md + AGENTS.md beside a catalog.json or collection.json.
+
+    Both are regenerated on every refresh from the same values as the JSON, so the prose cannot
+    drift from the metadata it describes. `path` is the layout path, empty for the root.
+    """
+    prefix = f"{config.STAC_PREFIX}/{path}" if path else config.STAC_PREFIX
+    for name, body in (
+        (catalog_docs.README_NAME, catalog_docs.readme(
+            title=title, description=description, kind=kind, children=children,
+            extent=extent, items=items)),
+        (catalog_docs.AGENTS_NAME, catalog_docs.agents(
+            title=title, kind=kind, path=path, children=children, items=items)),
+    ):
+        gcs.put_bytes(body.encode(), f"{prefix}/{name}",
+                      content_type=catalog_docs.MARKDOWN_MIME, cache_control=gcs.CACHE_CATALOG)
 
 
 def _write_json(doc: dict, object_path: str) -> None:
@@ -655,6 +681,10 @@ def refresh_catalog() -> None:
                                         assets=_collection_assets(path, items, mirror)),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
             _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
+            _write_markdown(path, title=title or prettify(cid),
+                            description=desc or f"UGS warehouse — {title or cid}.",
+                            kind="collection", children=len(item_ids),
+                            extent=_extent(items), items=items)
             leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),
                           "mappable": mappable}
 
@@ -674,6 +704,9 @@ def refresh_catalog() -> None:
                 _write_json(_index_doc(top, rolled, rollup=True), f"{config.STAC_PREFIX}/{top}/items.json")
             _write_json(_subcatalog_doc(top, kids, title=ptitle, items_index=rolled is not None),
                         f"{config.STAC_PREFIX}/{top}/catalog.json")
+            _write_markdown(top, title=ptitle,
+                            description=f"UGS warehouse — {ptitle}, by data series.",
+                            kind="catalog", children=len(kids), items=rolled)
             root_children.append({"href": f"./{top}/catalog.json", "title": ptitle,
                                   "count": sum(k["count"] for k in kids),
                                   "mappable": sum(k["mappable"] for k in kids)})
@@ -682,6 +715,8 @@ def refresh_catalog() -> None:
                                   "title": leaf[top]["title"], "count": leaf[top]["count"],
                                   "mappable": leaf[top]["mappable"]})
     _write_json(_root_doc(root_children), f"{config.STAC_PREFIX}/catalog.json")
+    _write_markdown("", title=config.CATALOG_TITLE, description=ROOT_DESCRIPTION,
+                    kind="catalog", children=len(root_children))
 
     n = sum(len(v) for v in groups.values())
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "

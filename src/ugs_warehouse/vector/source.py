@@ -57,6 +57,26 @@ def _describe(con: duckdb.DuckDBPyConnection, topic: Topic) -> list[tuple[str, s
     return [(r[0], r[1]) for r in rows]
 
 
+# Columns whose value marks a row as not for publication, and the values that mean it. Detected by
+# presence, so a table that gains one is filtered without anyone remembering to configure it.
+_PRIVACY_COLUMNS = ("confidential", "privacystatus", "privacy_status", "visibility")
+_PRIVATE_VALUES = ("yes", "y", "true", "1", "confidential", "private", "restricted")
+
+
+def _privacy_predicate(cols: list[tuple[str, str]]) -> tuple[str, str] | None:
+    """(column, SQL keeping only publishable rows), or None when the table marks no row private.
+
+    Everything the warehouse publishes — GeoParquet, PMTiles, and the OGC API, which serves views
+    over that same parquet — comes from this scan, so excluding a row here removes it from all
+    three. dataELT#666 and #35 are both rows the source flagged and we published anyway.
+    """
+    for name, _ in cols:
+        if name.lower() in _PRIVACY_COLUMNS:
+            vals = ", ".join(f"'{v}'" for v in _PRIVATE_VALUES)
+            return name, f"lower(coalesce(\"{name}\"::text, '')) NOT IN ({vals})"
+    return None
+
+
 def _geom_column(cols: list[tuple[str, str]]) -> str:
     for name, dtype in cols:
         if "GEOMETRY" in (dtype or "").upper():
@@ -68,10 +88,13 @@ def _geom_column(cols: list[tuple[str, str]]) -> str:
     raise RuntimeError("no GEOMETRY column found")
 
 
-def _scan_chunks(con: duckdb.DuckDBPyConnection, rel: str, select_list: str) -> list[str]:
+def _scan_chunks(con: duckdb.DuckDBPyConnection, rel: str, select_list: str,
+                 keep: str | None = None) -> list[str]:
     """Partition the table into ctid page ranges — disjoint, index-free, and no ordering needed
     (feature_id is assigned later from its own sort). Falls back to one scan if sizing fails."""
     def scan(where: str = "") -> str:
+        if keep:
+            where = f"{where} AND {keep}" if where else f"WHERE {keep}"
         pg_sql = f"SELECT {select_list} FROM {rel} {where}"
         return f"(SELECT * FROM postgres_query('{PG_ALIAS}', $pgq${pg_sql}$pgq$))"
 
@@ -137,7 +160,15 @@ def stream_transformed(topic: Topic) -> tuple[duckdb.DuckDBPyConnection, str]:
         )
         # postgres_query subquery as the transform source; $pgq$ dollar-quote avoids escaping.
         rel = f'"{topic.schema}"."{topic.layer}"'
-        return con, transform.materialize(con, _scan_chunks(con, rel, select_list))
+        keep = None
+        if privacy := _privacy_predicate(cols):
+            col, keep = privacy
+            held = con.execute(
+                "SELECT * FROM postgres_query(?, ?)",
+                [PG_ALIAS, f"SELECT count(*) FROM {rel} WHERE NOT ({keep})"]).fetchone()[0]
+            print(f"[{topic.fqn}] WITHHELD {held} row(s) marked private by \"{col}\" — "
+                  f"excluded from parquet, PMTiles and the OGC API")
+        return con, transform.materialize(con, _scan_chunks(con, rel, select_list, keep))
     except BaseException:
         con.close()
         raise

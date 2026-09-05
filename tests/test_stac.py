@@ -666,3 +666,51 @@ def test_a_mirror_is_not_written_for_items_without_geometry(monkeypatch):
     aspatial = [{"id": "x", "collection": "c", "geometry": None, "properties": {}}]
     assert item_mirror.write("ugs-rasters/none", aspatial) is None
     assert item_mirror.asset("ugs-rasters/none", None) == {}
+
+
+def test_every_node_gets_a_readme_and_agents_file(monkeypatch):
+    """PTL-FIL-001/002/003: both files beside every catalog and collection, and linked from the
+    JSON. The link and the file are written by the same refresh — a link without its file is a
+    broken link, which is what `refresh_catalog` rebuilding the links from scratch would cause."""
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    stac.write_item(stac.build_item(
+        item_id="DS-8", collection="DS", collection_path="ugs-publications/DS",
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
+        datetime_iso="2026-01-01T00:00:00Z", properties={"title": "A publication"},
+        assets={"data": {"href": "https://x/a.parquet", "type": config.PARQUET_MIME,
+                         "roles": ["data"]}}))
+    stac.refresh_catalog()
+    p = config.STAC_PREFIX
+
+    for node in ("", "/ugs-publications", "/ugs-publications/DS"):
+        assert f"{p}{node}/README.md" in store, node
+        assert f"{p}{node}/AGENTS.md" in store, node
+
+    coll = json.loads(store[f"{p}/ugs-publications/DS/collection.json"])
+    rels = {lk["rel"]: lk for lk in coll["links"]}
+    assert rels["describedby"]["href"] == "./README.md"
+    assert rels["describedby"]["type"] == "text/markdown"
+    assert rels["agents"]["href"] == "./AGENTS.md"
+
+
+def test_the_readme_carries_what_the_rule_asks_for(monkeypatch):
+    """PTL-FIL-004/005: a title heading, and the license and provenance in the prose rather than
+    only in the JSON."""
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    stac.write_item(stac.build_item(
+        item_id="t", collection="hazards", collection_path="ugs-serving-topics/hazards",
+        geometry=stac.bbox_polygon([-114, 37, -109, 42]), bbox=[-114, 37, -109, 42],
+        datetime_iso="2026-01-01T00:00:00Z", properties={"title": "Quaternary Faults"},
+        assets={"pmtiles": {"href": "https://x/t.pmtiles", "type": config.PMTILES_MIME,
+                            "roles": ["visual"]}}))
+    stac.refresh_catalog()
+
+    md = store[f"{config.STAC_PREFIX}/ugs-serving-topics/hazards/README.md"].decode()
+    assert md.startswith("# ")
+    assert config.DATA_LICENSE in md
+    assert "Utah Geological Survey" in md
+    # Derived from the assets the items actually carry, so the advice cannot describe a format
+    # this collection does not publish.
+    assert "PMTiles" in md and "GeoParquet" not in md

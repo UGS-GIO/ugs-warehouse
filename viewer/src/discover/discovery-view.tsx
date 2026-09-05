@@ -285,12 +285,15 @@ export function DiscoveryView({
               Survey Notes articles · {articleHits.length}
             </ScopeChip>
           )}
-          {/* Selecting it is what starts the search: it downloads a DuckDB query engine, so it has
-              to be a deliberate act rather than something every keystroke pays for. */}
+          {/* Selecting it is what starts the search, and it is a ~35MB DuckDB-WASM download on first
+              use. The size goes ON the chip: a user deciding whether to click deserves the cost, not
+              a tooltip. It is cached afterwards, hence "first use" rather than per search. */}
           <ScopeChip on={scope === "pubtext"} onClick={() => { setScope("pubtext"); setPubText(true); }}
-            title="Search inside every publication's full text (~7000 docs; loads a query engine on first use)">
+            title="Searches inside every publication's full text (~7000 docs). First use downloads a
+                   ~35MB query engine, then it is cached; the index itself is read in ranges, not downloaded.">
             {pubFts.data ? `Publication text · ${pubFts.data.length}`
-              : pubFts.isLoading ? "Publication text · searching…" : "Search publication text"}
+              : pubFts.isLoading ? "Publication text · searching…"
+                : pubText ? "Publication text · loading engine…" : "Search publication text (~35MB)"}
           </ScopeChip>
         </div>
       )}

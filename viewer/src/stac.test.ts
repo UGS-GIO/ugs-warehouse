@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { cogAsset, cogRenderAsset, hasItemsIndex } from "./stac";
+import { cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 
@@ -53,5 +53,21 @@ describe("cog asset selection", () => {
     expect(cogRenderAsset(native)).toBeUndefined();
     // It is still a raster item for classification purposes.
     expect(cogAsset(native)?.href).toBe("https://x/n.cog.tif");
+  });
+});
+
+
+describe("isDrawableCog", () => {
+  it("is what decides the default tab and whether a preview mounts", () => {
+    const native = twoCogs.assets.cog;
+    const merc = twoCogs.assets.visual;
+    // The item says EPSG:26912; the derivative overrides it on the asset.
+    expect(isDrawableCog(merc, twoCogs)).toBe(true);
+    expect(isDrawableCog(native, twoCogs)).toBe(false);
+  });
+
+  it("treats an item that states no projection as drawable", () => {
+    const plain = { assets: { cog: { href: "https://x/p.cog.tif", type: COG, roles: ["data"] } } };
+    expect(isDrawableCog(plain.assets.cog, plain)).toBe(true);
   });
 });

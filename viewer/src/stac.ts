@@ -166,18 +166,20 @@ export const cogAsset = (d: StacDoc | undefined): Asset | undefined => {
   return cogs.find((a) => a.roles?.includes("visual")) ?? cogs[0];
 };
 
-// The COG this client can actually paint over a web-mercator basemap: the `visual` derivative, or a
-// lone COG that is already web mercator (or does not say, which is how single-CRS items read).
-// Undefined means the item has raster data but no render path — the map draws nothing, which beats
-// throwing on a projection it cannot reproject.
-export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined => {
-  const cogs = Object.values(d?.assets ?? {}).filter(isCog);
-  const visual = cogs.find((a) => a.roles?.includes("visual"));
-  if (visual) return visual;
-  const solo = cogs.length === 1 ? cogs[0] : undefined;
-  const crs = solo?.["proj:code"] ?? (d?.properties as Record<string, unknown> | undefined)?.["proj:code"];
-  return solo && (crs == null || crs === "EPSG:3857") ? solo : undefined;
+// Can THIS client paint this COG over a web-mercator basemap? Only the `visual` derivative, or a
+// COG that is already web mercator (or states no CRS, which is how a single-projection item reads).
+// The renderer cannot reproject: handed a native-CRS raster it throws rather than drawing.
+export const isDrawableCog = (a: Asset, d?: StacDoc): boolean => {
+  if (!isCog(a)) return false;
+  if (a.roles?.includes("visual")) return true;
+  const crs = a["proj:code"] ?? (d?.properties as Record<string, unknown> | undefined)?.["proj:code"];
+  return crs == null || crs === "EPSG:3857";
 };
+
+// The COG to draw, or undefined when the item has raster data but no render path — drawing nothing
+// beats throwing on a projection this client cannot reproject.
+export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined =>
+  Object.values(d?.assets ?? {}).find((a) => isDrawableCog(a, d));
 
 // A RASTER PMTiles asset (the per-scale geologic-map mosaics) — rendered as raster tiles via the
 // pmtiles:// protocol. Distinguished from VECTOR PMTiles, which are declared as a web-map LINK

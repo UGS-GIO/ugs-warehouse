@@ -4,7 +4,7 @@ import { lazy, Suspense, useMemo, useState } from "react";
 
 import { DataExplorer } from "@/data/data-explorer";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
-import { type Asset, type AssetKind, assetKind, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
+import { type Asset, type AssetKind, assetKind, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
   summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
 import { ThreeDViewer } from "@/data/three-d-viewer";
 import { C, toggle } from "@/ui/ui";
@@ -97,7 +97,17 @@ function TextPreview({ href }: { href: string }) {
 // ---- Interactive 3D Fence Diagram Viewer (deck.gl SolidPolygon/Path layers over maplibre 3D) ----
 function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item: StacDoc }) {
   switch (kind) {
-    case "cog": return <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />;
+    case "cog":
+      // A COG in the source projection has no preview here: the renderer cannot reproject, and
+      // mounting it throws. Say so, and leave the download to the asset link.
+      return isDrawableCog(asset, item)
+        ? <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />
+        : (
+          <p className="mt-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
+            No preview: this is the source raster, in its own projection. The Web Mercator copy on
+            this item previews here; this one is for download and desktop GIS.
+          </p>
+        );
     case "zarr":
       return (
         <Suspense fallback={<div className="mt-2 h-96 w-full animate-pulse rounded-md border border-border bg-muted" />}>
@@ -165,7 +175,11 @@ function AssetViewer({ item }: { item: StacDoc }) {
     .filter(([, a]) => !a.roles?.includes("thumbnail"))
     .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
     .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
-      || KIND_RANK[x.kind] - KIND_RANK[y.kind]), [item.assets]);
+      || KIND_RANK[x.kind] - KIND_RANK[y.kind]
+      // A raster item carries the canonical COG in its source projection AND a web-mercator
+      // derivative. Both are kind "cog", so a stable sort left whichever came first as the default
+      // tab — the native one, which this client cannot draw (warehouse#84).
+      || Number(isDrawableCog(y.asset, item)) - Number(isDrawableCog(x.asset, item))), [item]);
   const tabs = entries.filter((e) => e.kind !== "other");
   const others = entries.filter((e) => e.kind === "other");
   // No reset-on-item-change effect: `active` below falls back to the first tab whenever the

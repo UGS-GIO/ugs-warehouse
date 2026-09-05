@@ -120,7 +120,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
           *, title: str | None = None, description: str | None = None,
           metadata: dict | None = None, bbox: list[float] | None = None,
           row_count: int | None = None, related: dict | None = None,
-          content_hash: str | None = None) -> None:
+          content_hash: str | None = None,
+          file_meta: dict[str, gcs.FileMeta] | None = None) -> None:
     rel = related or {}
     rel_assets = rel.get("assets") or {}
     rel_links = rel.get("links") or []
@@ -209,6 +210,14 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     if gcs.exists(thumb_path):
         assets["thumbnail"] = {"href": config.public_url(thumb_path), "type": "image/png",
                                "roles": ["thumbnail"], "title": "Styled preview"}
+    # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
+    # sink, the thumbnail another job renders) keeps what the published item already carries.
+    carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
+    for key, asset in assets.items():
+        if "file:size" in asset:      # a related table stamps its own — it did the upload
+            continue
+        asset.update(stac.file_fields((file_meta or {}).get(key)) or carried.get(key, {}))
+
     # Table extension is in play iff any asset describes its columns.
     exts = [stac.WEB_MAP_LINKS_EXT]
     if any("table:columns" in a for a in assets.values()):

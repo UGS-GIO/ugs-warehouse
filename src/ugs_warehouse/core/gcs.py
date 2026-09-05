@@ -3,10 +3,16 @@
 Cache-Control belongs here so updates show through the CDN without manual invalidation:
 mutable objects (catalog.json, "latest" pointers) get `no-cache` so the CDN revalidates;
 immutable/dated artifacts (a dated archive, a content-addressed COG) cache long.
+
+Every write returns a `FileMeta` — the size and sha256 the caller needs for the STAC `file`
+extension (`file:size` / `file:checksum`). Computed from the bytes as they are written, so no
+object is read back to describe it.
 """
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
+from typing import NamedTuple
 
 import obstore as obs
 from google.cloud import storage as gcloud_storage
@@ -22,6 +28,34 @@ CACHE_IMMUTABLE = "public, max-age=31536000, immutable"   # dated/content-addres
 # refreshes in the background. Edits still propagate within ~max-age; operators reading the bucket
 # directly (ops console) see changes immediately regardless.
 CACHE_CATALOG = "public, max-age=60, stale-while-revalidate=600"
+
+
+# multihash prefix for a sha2-256 digest: 0x12 names the function, 0x20 its 32-byte length.
+# STAC's file extension requires multihash encoding, not a bare hex digest.
+_MULTIHASH_SHA2_256 = "1220"
+_HASH_CHUNK = 1 << 20  # stream the file past the hasher — a COG never lands in memory
+
+
+class FileMeta(NamedTuple):
+    """What a write knows about the bytes it wrote. `checksum` is a multihash-encoded sha256,
+    or None when the bytes never passed through this process (a server-side copy)."""
+
+    size: int
+    checksum: str | None = None
+
+
+def multihash_sha256(digest: bytes) -> str:
+    return _MULTIHASH_SHA2_256 + digest.hex()
+
+
+def _file_meta(local_path: str) -> FileMeta:
+    h = hashlib.sha256()
+    size = 0
+    with open(local_path, "rb") as fh:
+        while chunk := fh.read(_HASH_CHUNK):
+            h.update(chunk)
+            size += len(chunk)
+    return FileMeta(size, multihash_sha256(h.digest()))
 
 
 _cached_store: GCSStore | None = None
@@ -53,16 +87,18 @@ def _attrs(content_type: str, cache_control: str | None) -> dict[str, str]:
 
 
 def upload(local_path: str, object_path: str, *, content_type: str,
-           cache_control: str | None = None) -> None:
+           cache_control: str | None = None) -> FileMeta:
     """Upload a local file to `gs://{BUCKET}/{object_path}`."""
     obs.put(_store(), object_path, Path(local_path),
             attributes=_attrs(content_type, cache_control))
+    return _file_meta(local_path)
 
 
 def put_bytes(data: bytes, object_path: str, *, content_type: str,
-              cache_control: str | None = None) -> None:
+              cache_control: str | None = None) -> FileMeta:
     """Write bytes to `gs://{BUCKET}/{object_path}`."""
     obs.put(_store(), object_path, data, attributes=_attrs(content_type, cache_control))
+    return FileMeta(len(data), multihash_sha256(hashlib.sha256(data).digest()))
 
 
 def get_bytes(object_path: str) -> bytes:
@@ -71,7 +107,7 @@ def get_bytes(object_path: str) -> bytes:
 
 
 def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,
-                  cache_control: str | None = None) -> None:
+                  cache_control: str | None = None) -> FileMeta:
     """Copy an object from another bucket (`gs://<bucket>/<key>`) into
     `gs://{BUCKET}/{dest_path}`. Used to promote a staged COG from the ingest bucket
     (`gs://stagedrasters/...`) to the public bucket. Needs read on the source bucket.
@@ -84,6 +120,9 @@ def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,
     CHANGED 2026-07-27: previously buffered the whole object in memory (obstore get + put).
     That OOM-killed ugs-warehouse-service on its first live raster promote, taking down
     co-tenant tabular-ingest traffic on the same instance with it — see ugs-ingest#183.
+
+    Returns size only. The rewrite already counts the bytes, so the size is free; a sha256
+    would cost a download of the whole COG, which is the memory the rewrite exists to avoid.
     """
     if not src_uri.startswith("gs://"):
         raise ValueError(f"expected a gs:// URI, got {src_uri!r}")
@@ -110,6 +149,7 @@ def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,
     if total and done != total:
         raise OSError(f"incomplete rewrite {src_uri} -> {dest_path}: {done}/{total} bytes")
     print(f"[gcs] rewrote {src_uri} -> gs://{config.BUCKET}/{dest_path} ({total} bytes)")
+    return FileMeta(total or done)
 
 
 def exists(object_path: str) -> bool:

@@ -53,3 +53,21 @@ describe("evictionVictim", () => {
     expect(evictionVictim(reg(), new Map([["q1", 1], ["q2", 1], ["q3", 1]]))).toBeUndefined();
   });
 });
+
+// ~35MB of engine: our build only, so an outage elsewhere cannot break export.
+describe("duckdb-wasm is self-hosted", () => {
+  it("no source file selects the jsDelivr bundle", async () => {
+    const { readFileSync, readdirSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const walk = (dir: string): string[] =>
+      readdirSync(dir, { withFileTypes: true }).flatMap((e) =>
+        e.isDirectory() ? walk(join(dir, e.name))
+          : /\.(ts|tsx)$/.test(e.name) ? [join(dir, e.name)] : []);
+    // Usage, not the word in a comment.
+    const offenders = walk("src")
+      .filter((f) => !f.endsWith("download.test.ts"))
+      .filter((f) => /getJsDelivrBundles\s*\(|jsdelivr\.net/i.test(readFileSync(f, "utf8")));
+
+    expect(offenders).toEqual([]);
+  });
+});

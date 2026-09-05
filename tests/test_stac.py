@@ -443,3 +443,34 @@ def test_collection_doc_titles_its_item_links():
     assert items["./qfaults/qfaults.json"]["title"] == "Quaternary Faults"
     # A failed fetch has no title: emit the link anyway, without an empty title attribute.
     assert "title" not in items["./landslides/landslides.json"]
+
+
+def test_pub_keywords_are_a_list_and_reach_the_iso_record():
+    """`keywords` is a list in STAC. The source hands over one `;`-separated blob, and publishing
+    that string made core/iso.py iterate it per character: every pub's ISO record carried a
+    <gmd:keyword> for each letter (the same fault #64 fixed on the vector path)."""
+    raw = "Geology; Summit County; Maps\nGeology; Tooele, Utah; Maps"
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS",
+                                     "keywords": raw}, [])
+
+    # Deduped, and a comma inside a heading stays inside it.
+    assert item["properties"]["keywords"] == ["Geology", "Summit County", "Maps", "Tooele, Utah"]
+    record = iso.stac_to_iso19139(item)
+    assert "<gmd:keyword><gco:CharacterString>Summit County</gco:CharacterString></gmd:keyword>" in record
+    assert "<gco:CharacterString>G</gco:CharacterString>" not in record
+
+
+def test_pub_item_omits_the_fields_the_source_left_empty():
+    """STAC requires a non-empty description, and an empty string says nothing an absent key does
+    not. A pub with no citation and no subjects must carry neither field."""
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS",
+                                     "keywords": "  ; \n", "full_citation": ""}, [])
+
+    props = item["properties"]
+    for absent in ("description", "keywords", "ugs:scale", "ugs:author"):
+        assert absent not in props, absent
+    assert props["ugs:series"] == "DS"   # a value the source did give still lands

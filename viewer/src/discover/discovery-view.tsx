@@ -121,6 +121,8 @@ export function DiscoveryView({
   // BM25 over every publication's full text (~7000 docs). Opt-in: it downloads a query engine on
   // first use, so it stays off until someone ticks it rather than firing on every keystroke.
   const [pubText, setPubText] = useState(false);
+  // Which result kind the chips are showing. "all" stacks them; the rest isolate one.
+  const [scope, setScope] = useState<"all" | "items" | "articles" | "pubtext">("all");
   const pubFts = useQuery({
     queryKey: ["pub-fts", q.trim()],
     enabled: pubText && q.trim().length >= 2,
@@ -228,13 +230,6 @@ export function DiscoveryView({
         <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
           placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
           className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
-        {/* Off by default: ticking it downloads a DuckDB query engine, so it is a deliberate act
-            rather than something every keystroke pays for. */}
-        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
-          title="Search inside every publication's text (~7000 docs; loads a query engine on first use)">
-          <input type="checkbox" checked={pubText} onChange={(e) => setPubText(e.target.checked)} />
-          Publication text
-        </label>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
         </span>
@@ -264,6 +259,31 @@ export function DiscoveryView({
           )}
         </div>
       </div>
+
+      {/* Result kinds, named with their counts. Without this the article and publication groups sat
+          below a screenful of cards with nothing saying they existed, and the opt-in engine was a
+          bare checkbox beside the item count — which read as that count's label. */}
+      {q.trim().length >= 2 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5 text-xs">
+          <span className="text-muted-foreground">Showing</span>
+          <ScopeChip on={scope === "all"} onClick={() => setScope("all")}>Everything</ScopeChip>
+          <ScopeChip on={scope === "items"} onClick={() => setScope("items")}>
+            Layers &amp; publications · {results.length}
+          </ScopeChip>
+          {articleHits.length > 0 && (
+            <ScopeChip on={scope === "articles"} onClick={() => setScope("articles")}>
+              Survey Notes articles · {articleHits.length}
+            </ScopeChip>
+          )}
+          {/* Selecting it is what starts the search: it downloads a DuckDB query engine, so it has
+              to be a deliberate act rather than something every keystroke pays for. */}
+          <ScopeChip on={scope === "pubtext"} onClick={() => { setScope("pubtext"); setPubText(true); }}
+            title="Search inside every publication's full text (~7000 docs; loads a query engine on first use)">
+            {pubFts.data ? `Publication text · ${pubFts.data.length}`
+              : pubFts.isLoading ? "Publication text · searching…" : "Search publication text"}
+          </ScopeChip>
+        </div>
+      )}
 
       {/* ── Main split: facet rail · results · map ────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1">
@@ -307,7 +327,9 @@ export function DiscoveryView({
               </button>
             </div>
           )}
-          {withData.length === 0 ? (
+          {/* An isolating chip hides the item results entirely — not just their heading. */}
+          {scope === "articles" || scope === "pubtext" ? null
+            : withData.length === 0 ? (
             <p className="px-1 py-16 text-center text-sm text-muted-foreground">Loading the catalog…</p>
           ) : shown.length === 0 ? (
             <div className="mx-auto mt-10 max-w-sm rounded-lg border border-dashed border-border p-8 text-center">
@@ -316,7 +338,14 @@ export function DiscoveryView({
                 <button type="button" onClick={resetAll} className="mt-2 text-xs text-primary hover:underline">Clear all filters</button>
               )}
             </div>
-          ) : layout === "gallery" ? (
+          ) : (
+            <>
+            {scope === "all" && q.trim().length >= 2 && (articleHits.length > 0 || pubText) && (
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Layers &amp; publications · {results.length}
+              </h2>
+            )}
+            {layout === "gallery" ? (
             <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr))]">
               {shown.map((it) => (
                 <ResultCard key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)} />
@@ -328,8 +357,10 @@ export function DiscoveryView({
                 <ResultRow key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)} />
               ))}
             </ul>
+            )}
+            </>
           )}
-          {results.length > shown.length && (
+          {results.length > shown.length && scope !== "articles" && scope !== "pubtext" && (
             <div className="mt-3 flex justify-center">
               <button type="button" onClick={() => setVisible((v) => v + PAGE)}
                 className="rounded-md border border-border bg-card px-4 py-1.5 text-sm text-foreground hover:border-primary">
@@ -342,7 +373,20 @@ export function DiscoveryView({
           {/* Articles are their OWN group, not merged into the cards above: a Survey Notes article
               has no collection, geometry or date, so the facets, sort and map beside it do not
               apply to one. Same query, second corpus. */}
-          {pubText && q.trim().length >= 2 && (
+          {articleHits.length > 0 && scope !== "items" && scope !== "pubtext" && (
+            <section className="mt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Survey Notes articles · {articleHits.length}
+              </h2>
+              <ol className="mt-1 divide-y divide-border">
+                {articleHits.map((r) => (
+                  <ArticleHit key={r.id} r={r} q={q} openPub={openPub} />
+                ))}
+              </ol>
+            </section>
+          )}
+
+          {pubText && q.trim().length >= 2 && scope !== "items" && scope !== "articles" && (
             <section className="mt-6">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                 Publication full text{pubFts.data ? ` · ${pubFts.data.length}` : ""}
@@ -362,19 +406,6 @@ export function DiscoveryView({
                       <button className="text-primary hover:underline" onClick={() => openPub(r.id)}>Catalog page</button>
                     </div>
                   </li>
-                ))}
-              </ol>
-            </section>
-          )}
-
-          {articleHits.length > 0 && (
-            <section className="mt-6">
-              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-                Survey Notes articles · {articleHits.length}
-              </h2>
-              <ol className="mt-1 divide-y divide-border">
-                {articleHits.map((r) => (
-                  <ArticleHit key={r.id} r={r} q={q} openPub={openPub} />
                 ))}
               </ol>
             </section>
@@ -440,6 +471,20 @@ export function DiscoveryView({
         </>
       )}
     </div>
+  );
+}
+
+// A result-kind chip: what the query found, and how to see only that.
+function ScopeChip({ on, onClick, title, children }: {
+  on: boolean; onClick: () => void; title?: string; children: React.ReactNode;
+}) {
+  return (
+    <button type="button" onClick={onClick} title={title}
+      className={`rounded-full border px-2.5 py-0.5 ${on
+        ? "border-primary bg-primary text-primary-foreground"
+        : "border-border bg-card text-muted-foreground hover:border-primary hover:text-foreground"}`}>
+      {children}
+    </button>
   );
 }
 

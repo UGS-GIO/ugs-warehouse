@@ -104,18 +104,24 @@ def media_type(url: str) -> str:
     return MEDIA.get(os.path.splitext(url.split("?")[0])[1].lower(), "application/octet-stream")
 
 
+# Hosts we run, which all serve https. An http URL on one of them is upgraded; a third-party host
+# is left exactly as the source gave it, since assuming TLS somewhere we do not operate would turn
+# a working link into a broken one.
+UGS_HOSTS = ("ugspub.nr.utah.gov", "geology.utah.gov", "maps-assets.geology.utah.gov")
+
+
 def href(u: str | None) -> str | None:
     """The source's file reference as a URL, or None when it does not name a file.
 
     `undefined` is a JavaScript accident that reached the publications database as text. It
-    resolved to `…/publications/undefined`, an asset that 404s by construction. `http` is
-    upgraded because ugspub answers 303 to the https URL anyway, and a browser cannot fetch a
-    plaintext asset from a page served over https.
+    resolved to `…/publications/undefined`, an asset that 404s by construction. `http` is upgraded
+    on our own hosts: they answer the https URL, and a browser cannot fetch a plaintext asset from
+    a page served over https.
     """
     u = (u or "").strip()
     if not u or u.lower() == "undefined":
         return None
-    if u.startswith("http://ugspub.nr.utah.gov"):
+    if u.startswith("http://") and u[len("http://"):].split("/")[0] in UGS_HOSTS:
         return "https://" + u[len("http://"):]
     return u if u.startswith("http") else UGSPUB + u.lstrip("/")
 

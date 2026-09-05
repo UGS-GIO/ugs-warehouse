@@ -2,6 +2,8 @@
 import json
 from unittest.mock import patch
 
+import pytest
+
 from ugs_warehouse.core import config, iso, stac
 from ugs_warehouse.pubs import identity
 from ugs_warehouse.pubs import sink_stac as pubs_sink
@@ -297,6 +299,15 @@ def test_local_catalog_index_entries_match_production():
 
 def _mem_gcs(monkeypatch):
     store: dict[str, bytes] = {}
+
+    def _upload(local: str, path: str, **k):
+        # item_mirror uploads a real file; keep the bytes so a test can read the mirror back.
+        with open(local, "rb") as fh:
+            body = fh.read()
+        store[path] = body
+        return stac.gcs.FileMeta(len(body), "1220" + "ee" * 32)
+
+    monkeypatch.setattr(stac.gcs, "upload", _upload)
     monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **k: store.__setitem__(p, b))
     monkeypatch.setattr(stac.gcs, "get_bytes", lambda p: store[p])
     monkeypatch.setattr(stac.gcs, "list_paths", lambda pre: [k for k in store if k.startswith(pre)])
@@ -590,4 +601,68 @@ def test_a_raster_collection_with_no_scene_thumbnails_omits_the_key(monkeypatch)
     stac.refresh_catalog()
 
     coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-rasters/slope/collection.json"])
-    assert "assets" not in coll
+    # No scene thumbnail to borrow, but the mirror is derived from the items themselves.
+    assert "thumbnail" not in coll["assets"]
+    assert coll["assets"]["items"]["roles"] == ["collection-mirror"]
+
+
+def test_raster_collection_publishes_an_item_mirror(monkeypatch):
+    """PTL-MIR-001. One range request answers what one HTTP fetch per scene answered before, and
+    the mirror is rebuilt from the same items the collection doc is, so the two cannot drift."""
+    duckdb = pytest.importorskip("duckdb")
+    try:
+        con = duckdb.connect()
+        con.execute("INSTALL spatial; LOAD spatial;")
+        con.close()
+    except duckdb.Error as e:
+        pytest.skip(f"spatial extension unavailable: {e}")
+
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    for iid, dt, bbox in (("scene_a", "2023-01-01T00:00:00Z", [-114.0, 37.0, -113.0, 38.0]),
+                          ("scene_b", "2024-01-01T00:00:00Z", [-112.0, 40.0, -111.0, 41.0])):
+        stac.write_item(stac.build_item(
+            item_id=iid, collection="geolmap_24k_series",
+            collection_path="ugs-rasters/geolmap_24k_series",
+            geometry=stac.bbox_polygon(bbox), bbox=bbox, datetime_iso=dt,
+            properties={"title": iid.title()},
+            assets={"cog": {"href": f"https://x/{iid}.tif", "type": config.COG_MIME,
+                            "roles": ["data", "visual"]}}))
+    stac.refresh_catalog()
+
+    path = f"{config.STAC_PREFIX}/ugs-rasters/geolmap_24k_series/items.parquet"
+    assert path in store, "no items.parquet written"
+
+    coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-rasters/geolmap_24k_series/collection.json"])
+    mirror = coll["assets"]["items"]
+    assert mirror["type"] == config.PARQUET_MIME
+    assert mirror["roles"] == ["collection-mirror"]
+    assert mirror["href"].endswith("/ugs-rasters/geolmap_24k_series/items.parquet")
+    # The registration is the whole requirement; the spec defines no rel:"items" link for it.
+    assert mirror["file:size"] > 0
+
+    # One row per item, carrying the fields a client filters on.
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp:
+        local = f"{tmp}/items.parquet"
+        with open(local, "wb") as fh:
+            fh.write(store[path])
+        con = duckdb.connect()
+        con.execute("LOAD spatial;")
+        rows = con.execute(
+            f"SELECT id, bbox.xmin, properties.datetime, ST_GeometryType(geometry) FROM '{local}' ORDER BY id"
+        ).fetchall()
+        con.close()
+
+    assert [r[0] for r in rows] == ["scene_a", "scene_b"]
+    assert rows[0][1] == -114.0                    # bbox struct, not the raw array
+    assert rows[0][3] == "POLYGON"                 # geometry hydrated, queryable
+
+
+def test_a_mirror_is_not_written_for_items_without_geometry(monkeypatch):
+    """A row that cannot be queried spatially is worse than an absent one."""
+    from ugs_warehouse.core import item_mirror
+
+    aspatial = [{"id": "x", "collection": "c", "geometry": None, "properties": {}}]
+    assert item_mirror.write("ugs-rasters/none", aspatial) is None
+    assert item_mirror.asset("ugs-rasters/none", None) == {}

@@ -101,6 +101,7 @@ def captured_item(monkeypatch):
     seen: dict = {}
     monkeypatch.setattr(sink_stac.stac, "manual_override", lambda _id: {})
     monkeypatch.setattr(sink_stac.stac, "prior_property", lambda *_a: None)
+    monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: {})
     monkeypatch.setattr(sink_stac.gcs, "exists", lambda _p: False)
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: seen.update(k) or {"assets": k["assets"]})

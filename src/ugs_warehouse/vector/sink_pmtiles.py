@@ -79,7 +79,7 @@ def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> Non
     con.execute(f"COPY (SELECT * FROM {view}) TO '{path}' (FORMAT GDAL, DRIVER 'GeoJSONSeq')")
 
 
-def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> None:
+def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> gcs.FileMeta:
     """tippecanoe over a GeoJSONSeq file → PMTiles → GCS (latest pointer). Output sits next to the
     input so callers control the temp dir. `id_attr` (always `feature_id`) is promoted to the native
     MVT feature id so the viewer can join a clicked map feature to its GeoParquet table row — both
@@ -113,15 +113,16 @@ def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> None:
         ) from e
     gcs_object = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     # pmtiles is a "latest" pointer, overwritten each ingest -> revalidate via CDN.
-    gcs.upload(pmtiles, gcs_object, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
+    meta = gcs.upload(pmtiles, gcs_object, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
     print(f"[{topic.fqn}] pmtiles: {config.public_url(gcs_object)}")
+    return meta
 
 
-def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
+def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:
     """Build + upload PMTiles for the transformed view. DuckDB streams the GeoJSONSeq export and
     tippecanoe streams its input → bounded memory regardless of table size."""
     with tempfile.TemporaryDirectory() as tmp:
         geojsonl = os.path.join(tmp, f"{topic.stem}.geojsonl")
         _write_geojsonl(con, view, geojsonl)
         # MVT id is always feature_id (viewer map→table join); ugs_key rides along as a property.
-        _tile_and_upload(topic, geojsonl, introspect.FEATURE_ID)
+        return _tile_and_upload(topic, geojsonl, introspect.FEATURE_ID)

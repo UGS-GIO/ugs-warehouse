@@ -186,15 +186,15 @@ def thumb_one(item: dict, force: bool = False) -> str:
     flat_stray = f"{config.STAC_PREFIX}/{coll_path}/{stem}.json"  # legacy mis-write to clean up
     thumb_href = config.public_url(png_obj)
 
-    def ensure_stac_thumbnail() -> None:
+    def ensure_stac_thumbnail(meta: gcs.FileMeta | None = None) -> None:
         assets = item.setdefault("assets", {})
-        if "thumbnail" not in assets or assets["thumbnail"].get("href") != thumb_href:
-            assets["thumbnail"] = {
-                "href": thumb_href,
-                "type": "image/png",
-                "roles": ["thumbnail"],
-                "title": "Styled preview",
-            }
+        current = assets.get("thumbnail") or {}
+        # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
+        # the file:size/file:checksum an earlier render stamped instead of dropping them.
+        want = {**current, "href": thumb_href, "type": "image/png", "roles": ["thumbnail"],
+                "title": "Styled preview", **stac.file_fields(meta)}
+        if current != want:
+            assets["thumbnail"] = want
             hlog(f"stamping thumbnail asset on STAC item JSON -> {stac_path}", step="stac")
             gcs.put_bytes(
                 json.dumps(item, indent=2).encode("utf-8"),
@@ -231,10 +231,10 @@ def thumb_one(item: dict, force: bool = False) -> str:
             hlog("FAIL no PNG produced", step="render", level="ERROR", category="attention", err=True)
             return "fail:nopng"
 
-        gcs.upload(out, png_obj, content_type="image/png", cache_control=gcs.CACHE_MUTABLE)
+        meta = gcs.upload(out, png_obj, content_type="image/png", cache_control=gcs.CACHE_MUTABLE)
         gcs.put_bytes(want_hash.encode(), sha_obj, content_type="text/plain", cache_control=gcs.CACHE_MUTABLE)
         hlog(f"OK thumbnail → {png_obj}", step="result", category="ok")
-        ensure_stac_thumbnail()
+        ensure_stac_thumbnail(meta)
         return "ok"
     finally:
         import shutil

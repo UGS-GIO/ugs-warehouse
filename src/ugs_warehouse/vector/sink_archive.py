@@ -44,21 +44,22 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
     )
 
 
-def _upload(topic: Topic, local: str) -> None:
+def _upload(topic: Topic, local: str) -> gcs.FileMeta:
     """Upload a finished GeoParquet as the latest pointer + a dated immutable snapshot."""
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
     base = f"{config.ARCHIVE_PREFIX}/{topic.stem}"
     latest = f"{base}/{topic.stem}.parquet"
     dated = f"{base}/{topic.stem}_{stamp}.parquet"
-    gcs.upload(local, latest, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+    meta = gcs.upload(local, latest, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
     gcs.upload(local, dated, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
     print(f"[{topic.fqn}] archive: {config.public_url(latest)} (+ dated {stamp})")
+    return meta  # same bytes both times; the item cites the latest pointer
 
 
-def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> None:
+def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:
     """Write `{stem}.parquet` (latest) + dated archive to GCS. DuckDB streams the COPY (with the
     global hilbert sort) under the memory cap → bounded memory regardless of table size."""
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, f"{topic.stem}.parquet")
         _copy_geoparquet(con, view, local)
-        _upload(topic, local)
+        return _upload(topic, local)

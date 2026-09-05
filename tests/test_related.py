@@ -113,6 +113,7 @@ def test_sink_stac_links_the_topics_features_collection(monkeypatch):
     # business touching, which is minutes of backoff, not a failure.
     monkeypatch.setattr(sink_stac.stac, "manual_override", lambda iid: {})
     monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
+    monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: {})
     monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: False)
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
@@ -137,6 +138,7 @@ def test_sink_stac_wires_related(monkeypatch):
     # in retry backoff before falling back to their defaults.
     monkeypatch.setattr(sink_stac.stac, "manual_override", lambda iid: {})
     monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
+    monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: {})
     monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: False)
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
@@ -178,6 +180,7 @@ def test_sink_stac_ducklake_review_only(monkeypatch):
     # in retry backoff before falling back to their defaults.
     monkeypatch.setattr(sink_stac.stac, "manual_override", lambda iid: {})
     monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
+    monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: {})
     monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: False)
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})

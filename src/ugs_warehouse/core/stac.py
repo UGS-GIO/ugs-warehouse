@@ -40,6 +40,9 @@ CLASSIFICATION_EXT = "https://stac-extensions.github.io/classification/v2.0.0/sc
 # alternate-assets: a second location for the SAME bytes (`alternate`), used where we mirror a file
 # and keep the publisher's own copy addressable alongside our CDN href.
 ALTERNATE_ASSETS_EXT = "https://stac-extensions.github.io/alternate-assets/v1.2.0/schema.json"
+# file: `file:size` + `file:checksum` on the assets we write — a consumer budgets the fetch and
+# verifies what it got. Declared only when an asset actually carries one (see `file_fields`).
+FILE_EXT = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
 
 
 # ---------------------------------------------------------------- helpers
@@ -73,6 +76,17 @@ def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
 
 # ---------------------------------------------------------------- items
 
+def file_fields(meta: gcs.FileMeta | None) -> dict:
+    """`{file:size, file:checksum}` for an asset dict, from what the write reported.
+
+    Omits the checksum when the writer couldn't compute one (a server-side copy). The STAC
+    file extension makes both SHOULD, and an absent value beats a fabricated one.
+    """
+    if meta is None:
+        return {}
+    return {"file:size": meta.size, **({"file:checksum": meta.checksum} if meta.checksum else {})}
+
+
 def build_item(*, item_id: str, collection: str, geometry: dict | None,
                bbox: list[float] | None, datetime_iso: str | None,
                properties: dict, assets: dict,
@@ -99,6 +113,10 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
     ]
     props = {"datetime": datetime_iso, **properties}
     exts = list(stac_extensions or [])
+    # Declared from what the assets carry, not by the caller: every producer stamps file fields
+    # through `file_fields`, and an asset with none (an off-warehouse href) must not force the ext.
+    if any("file:size" in a or "file:checksum" in a for a in assets.values()) and FILE_EXT not in exts:
+        exts.append(FILE_EXT)
     if proj_epsg is not None:
         # projection ext v2.0.0: `proj:code` ("EPSG:4326") replaces the deprecated `proj:epsg`.
         props["proj:code"] = f"EPSG:{proj_epsg}"
@@ -176,6 +194,26 @@ def prior_property(collection_path: str, item_id: str, prop: str):
         return (item.get("properties") or {}).get(prop)
     except Exception:  # noqa: BLE001 — first ingest / missing / unreadable → no prior value
         return None
+
+
+def prior_file_fields(collection_path: str, item_id: str) -> dict[str, dict]:
+    """`{asset_key: {file:size, file:checksum}}` from the currently-published item, or `{}`.
+
+    A `--skip-unchanged` run rewrites the item without running the data sinks, so it has no
+    write to take the fields from. The artifacts are unchanged — that is what the run
+    established — so the published values still describe them. Carrying them forward keeps an
+    unchanged topic from losing the fields the last full ingest stamped.
+    """
+    try:
+        item = json.loads(gcs.get_bytes(item_object_path(collection_path, item_id)))
+    except Exception:  # noqa: BLE001 — first ingest / missing / unreadable → nothing to carry
+        return {}
+    out = {}
+    for key, asset in (item.get("assets") or {}).items():
+        fields = {k: asset[k] for k in ("file:size", "file:checksum") if k in asset}
+        if fields:
+            out[key] = fields
+    return out
 
 
 def attach_iso(item: dict) -> str:

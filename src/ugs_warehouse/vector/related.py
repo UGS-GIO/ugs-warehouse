@@ -139,7 +139,7 @@ def _materialize_child(con, child_topic: str, schema: str, display: str | None,
                 f'COPY (SELECT * FROM {source.PG_ALIAS}."{schema}"."{table}") '
                 f"TO '{local}' (FORMAT PARQUET, COMPRESSION ZSTD)"
             )
-            gcs.upload(local, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+            meta = gcs.upload(local, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
     except Exception as e:  # noqa: BLE001 — related data is best-effort; never sink the parent
         print(f"[{parent_stem}] related '{child_topic}' ({schema}.{table}) SKIP: {e}")
         return None
@@ -148,6 +148,7 @@ def _materialize_child(con, child_topic: str, schema: str, display: str | None,
         "type": PARQUET_MIME,
         "roles": ["data", "related"],
         "title": display or stac.prettify(child_topic),
+        **stac.file_fields(meta),
     }
     fk = _foreign_key(rel)
     if fk:

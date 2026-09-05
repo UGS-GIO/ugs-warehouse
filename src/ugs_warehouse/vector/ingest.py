@@ -20,7 +20,7 @@ import sys
 import traceback
 from types import ModuleType
 
-from ..core import stac
+from ..core import gcs, stac
 from . import (
     fingerprint,
     related,
@@ -100,15 +100,26 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     # reads the view and derives its asset hrefs from config, so it does not depend on the skipped
     # sinks having run — on an unchanged topic those artifacts are already published, which is
     # exactly what `is_unchanged` (which also verifies the PMTiles) established.
+    # Size + checksum come from the writes themselves, keyed by the asset that cites them. A sink
+    # that was skipped (or failed) leaves its key absent, and the STAC sink carries forward what
+    # the published item already says.
+    written: dict[str, gcs.FileMeta] = {}
+
+    def _archive() -> None:
+        written["data"] = sink_archive.write(topic, con, view)
+
+    def _pmtiles() -> None:
+        written["pmtiles"] = sink_pmtiles.build(topic, con, view)
+
     data_sinks = [] if unchanged else [
         ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
-        ("archive",  lambda: sink_archive.write(topic, con, view)),
-        ("pmtiles",  lambda: sink_pmtiles.build(topic, con, view)),
+        ("archive",  _archive),
+        ("pmtiles",  _pmtiles),
     ]
     for name, fn in [
         *data_sinks,
         ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related=related_info,
-                                             content_hash=fp)),
+                                             content_hash=fp, file_meta=written)),
     ]:
         try:
             fn()

@@ -57,10 +57,32 @@ def raster_from_record(record: dict) -> Raster:
     )
 
 
+# STAC types `data_type` as a closed enum of pixel types, with `other` as the escape hatch. The
+# producer sends what the raster means rather than how it is stored ("categorical"), which is a
+# useful thing to say and not a value this field can hold — both raster items failed pystac and
+# rashid on it (#255). The reserved name gets a legal value; the producer's word survives beside it.
+_STAC_DATA_TYPES = {
+    "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64",
+    "float16", "float32", "float64", "cint16", "cint32", "cfloat32", "cfloat64", "other",
+}
+
+
 def _properties(record: dict) -> dict:
-    """STAC properties from the record, dropping empty values (e.g. null `units`)."""
-    return {stac_key: record[col] for col, stac_key in _PROP_MAP.items()
-            if record.get(col) not in (None, "")}
+    """STAC properties from the record, dropping empty values (e.g. null `units`).
+
+    Values arrive from the promote message and are published as-is, so a reserved STAC name has to
+    be checked here: an upstream value outside its enum makes the item fail validation for every
+    consumer, with no warehouse code being wrong.
+    """
+    props = {stac_key: record[col] for col, stac_key in _PROP_MAP.items()
+             if record.get(col) not in (None, "")}
+    declared = props.get("data_type")
+    if declared is not None and declared not in _STAC_DATA_TYPES:
+        props["data_type"] = "other"
+        props["ugs:data_type"] = declared
+        print(f"[{record.get('item_id')}] data_type {declared!r} is not a STAC pixel type; "
+              f"published as 'other' with the original on ugs:data_type")
+    return props
 
 
 def stac_item_from_record(record: dict) -> dict:

@@ -21,7 +21,7 @@ import json
 import re
 import sys
 
-from . import config, gcs, iso, styles
+from . import config, gcs, iso, item_mirror, styles
 
 PGF_BASE_URL = config.PGF_BASE_URL
 
@@ -385,7 +385,7 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
     return doc
 
 
-def _collection_assets(path: str, items: list[dict]) -> dict:
+def _collection_assets(path: str, items: list[dict], mirror: object | None = None) -> dict:
     """Collection-level assets derived from the collection's own items.
 
     Portolan requires a thumbnail on a geospatial collection (PTL-VIZ-001), and a collection whose
@@ -399,14 +399,16 @@ def _collection_assets(path: str, items: list[dict]) -> dict:
     """
     if not path.startswith(f"{RASTER_CATALOG}/"):
         return {}
+    mirror_asset = item_mirror.asset(path, mirror)
     with_thumbs = [it for it in items if (it.get("assets") or {}).get("thumbnail", {}).get("href")]
     if not with_thumbs:
-        return {}
+        return mirror_asset
     newest = max(with_thumbs, key=lambda it: (it.get("properties", {}).get("datetime") or "", it["id"]))
     thumb = newest["assets"]["thumbnail"]
     title = newest.get("properties", {}).get("title") or prettify(newest["id"])
     return {"thumbnail": {"href": thumb["href"], "type": thumb.get("type", "image/png"),
-                          "roles": ["thumbnail"], "title": f"Preview: {title}"}}
+                          "roles": ["thumbnail"], "title": f"Preview: {title}"},
+            **item_mirror.asset(path, mirror)}
 
 
 def _is_mappable(item: dict) -> bool:
@@ -643,10 +645,14 @@ def refresh_catalog() -> None:
             # From the fetched docs, so an item that failed to fetch just carries no title.
             item_titles = {it["id"]: it["properties"]["title"] for it in items
                            if it.get("id") and it.get("properties", {}).get("title")}
+            # The mirror is derived from these same items, so it is rebuilt whenever the
+            # collection is — the two cannot drift. Raster collections only, for now (#259).
+            mirror = (item_mirror.write(path, items)
+                      if path.startswith(f"{RASTER_CATALOG}/") else None)
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
                                         mappable=mappable, description=desc,
                                         item_titles=item_titles,
-                                        assets=_collection_assets(path, items)),
+                                        assets=_collection_assets(path, items, mirror)),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
             _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
             leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),

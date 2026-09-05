@@ -22,10 +22,18 @@ UGSPUB = identity.UGSPUB
 LANDING = "https://geology.utah.gov/publication-details/?pub="
 UGS_NAMES = {"UGS", "UGMS", "UTAH GEOLOGICAL SURVEY", "UTAH GEOLOGICAL AND MINERAL SURVEY"}
 
+# A client picks a viewer, a downloader or nothing at all from the media type, so an unmapped
+# extension falling back to `application/octet-stream` costs the reader the file. `.tif` here is
+# the publisher's plain scan; a COG we produced carries COG_MIME, set on the asset directly.
 MEDIA = {".pdf": "application/pdf", ".zip": "application/zip",
-         ".xlsx": "application/vnd.ms-excel", ".xls": "application/vnd.ms-excel",
+         ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+         ".xls": "application/vnd.ms-excel",
          ".csv": "text/csv", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-         ".png": "image/png", ".txt": "text/plain"}
+         ".png": "image/png", ".txt": "text/plain",
+         ".tif": "image/tiff", ".tiff": "image/tiff",
+         ".html": "text/html", ".htm": "text/html",
+         ".kmz": "application/vnd.google-earth.kmz",
+         ".kml": "application/vnd.google-earth.kml+xml"}
 COG_MIME = config.COG_MIME
 PARQUET_MIME = config.PARQUET_MIME
 # Everything outside RFC 3986's unreserved set needs escaping in a path segment. See `item_id_for`.

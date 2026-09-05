@@ -505,3 +505,30 @@ def test_pub_href_drops_undefined_and_upgrades_ugspub_to_https():
     # A bare filename still resolves against the publications host, and other hosts are left alone.
     assert pubs_sink.href("ofr/OFR-1.pdf") == pubs_sink.UGSPUB + "ofr/OFR-1.pdf"
     assert pubs_sink.href("https://example.org/x.pdf") == "https://example.org/x.pdf"
+
+
+def test_pub_media_types_name_the_format():
+    """An unmapped extension falls back to application/octet-stream, which tells a client nothing.
+    353 mining-district scans and every spreadsheet were published that way."""
+    assert pubs_sink.media_type("https://ugspub.nr.utah.gov/publications/uranium_data/MD01037.tif") == "image/tiff"
+    assert pubs_sink.media_type("x/y.kmz") == "application/vnd.google-earth.kmz"
+    assert pubs_sink.media_type("x/y.htm") == "text/html"
+    # .xlsx claimed the .xls type, which is a different format with a different reader.
+    assert pubs_sink.media_type("x/y.xlsx") == \
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    assert pubs_sink.media_type("x/y.xls") == "application/vnd.ms-excel"
+    # A query string never made it into the extension, and an unknown one still falls back.
+    assert pubs_sink.media_type("x/y.pdf?v=2") == "application/pdf"
+    assert pubs_sink.media_type("https://www.youtube.com/watch?v=abc") == "application/octet-stream"
+
+
+def test_cog_assets_keep_the_cloud_optimized_media_type():
+    """`.tif` maps to image/tiff for the publisher's scans. A COG we produced sets its type on the
+    asset directly, so the mapping must not reach it — the profile parameter is what a client reads
+    to know it can range-request the file."""
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item({"series_id": "M-100", "series": "M"}, [], has_cog=True)
+
+    assert item["assets"]["cog"]["type"] == pubs_sink.COG_MIME
+    assert "cloud-optimized" in item["assets"]["cog"]["type"]

@@ -10,6 +10,7 @@
 //     write these correctly (incl. Esri .gdb — OpenFileGDB write, GDAL ≥ 3.6). gdal3.js
 //     is ~40 MB (wasm+data), so it's dynamically imported only when one is requested.
 
+import { newDuckDb } from "./duckdb";
 import type { ExportFormat } from "./export-formats";
 
 export type { ExportFormat };
@@ -23,21 +24,10 @@ const GEOM_NAMES = ["geom", "geometry", "wkb_geometry"];
 type DB = import("@duckdb/duckdb-wasm").AsyncDuckDB;
 let dbPromise: Promise<DB> | null = null;
 
-/** Lazily boot one shared DuckDB-WASM instance (jsDelivr bundle + worker). */
+/** One shared DuckDB-WASM instance, on the self-hosted bundle (see data/duckdb.ts). */
 async function getDB(): Promise<DB> {
   if (dbPromise) return dbPromise;
-  dbPromise = (async () => {
-    const duckdb = await import("@duckdb/duckdb-wasm");
-    const bundle = await duckdb.selectBundle(duckdb.getJsDelivrBundles());
-    const workerUrl = URL.createObjectURL(
-      new Blob([`importScripts("${bundle.mainWorker}");`], { type: "text/javascript" }),
-    );
-    const worker = new Worker(workerUrl);
-    const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(duckdb.LogLevel.WARNING), worker);
-    await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
-    URL.revokeObjectURL(workerUrl);
-    return db;
-  })();
+  dbPromise = newDuckDb();
   return dbPromise;
 }
 

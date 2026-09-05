@@ -18,9 +18,15 @@ const BUNDLES = {
   eh: { mainModule: ehWasm, mainWorker: ehWorker },
 };
 
-// DuckDB extensions (fts/vss) autoload from the duckdb-wasm extension repository. `?extrepo=` (or a
-// future vendored default) points it at our CDN mirror so even the extension wasm is self-hosted.
-const EXT_REPO = new URLSearchParams(location.search).get("extrepo") || "";
+// `?extrepo=` points extension autoload at our CDN mirror. Lazy: module scope `location` breaks
+// every non-DOM import.
+const extRepo = () =>
+  (typeof location === "undefined" ? "" : new URLSearchParams(location.search).get("extrepo")) || "";
+
+/** Boot an engine on the self-hosted bundle — one cache entry across search, diff and export. */
+export async function newDuckDb(): Promise<import("@duckdb/duckdb-wasm").AsyncDuckDB> {
+  return newDb(await import("@duckdb/duckdb-wasm"));
+}
 
 async function newDb(duckdb: typeof import("@duckdb/duckdb-wasm")) {
   const bundle = await duckdb.selectBundle(BUNDLES);
@@ -38,7 +44,8 @@ export async function attach(dbUrl: string, alias: string, ext: "fts"): Promise<
   const db = await newDb(duckdb);
   const conn = await db.connect();
   await db.registerFileURL(`${alias}.duckdb`, dbUrl, duckdb.DuckDBDataProtocol.HTTP, false);
-  if (EXT_REPO) await conn.query(`SET custom_extension_repository='${EXT_REPO.replace(/'/g, "''")}'`);
+  const repo = extRepo();
+  if (repo) await conn.query(`SET custom_extension_repository='${repo.replace(/'/g, "''")}'`);
   await conn.query(`INSTALL ${ext}; LOAD ${ext};`);
   await conn.query(`ATTACH '${alias}.duckdb' AS ${alias} (READ_ONLY)`);
   await conn.query(`USE ${alias}`);   // so the extension's macros resolve against the attached db

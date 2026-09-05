@@ -105,6 +105,18 @@ def promote(record: dict) -> str:
     file_meta = {"cog": gcs.copy_from_uri(staged_cog, raster.cog_object_path,
                                           content_type=config.COG_MIME,
                                           cache_control=gcs.CACHE_IMMUTABLE)}
+    # The web-mercator derivative ingest stages beside the canonical COG (#84). It is what a web map
+    # can actually draw, so the item advertises `visual` only when this copy lands — a `visual` the
+    # client cannot reproject is worse than none, which is the error the viewer was throwing.
+    if staged_cog.endswith(".cog.tif"):
+        try:
+            file_meta["visual"] = gcs.copy_from_uri(
+                staged_cog[:-len(".cog.tif")] + "_3857.cog.tif",
+                raster.webmercator_cog_object_path,
+                content_type=config.COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+        except Exception as e:  # noqa: BLE001 — not staged yet → item keeps the native COG as data only
+            print(f"[{raster.item_id}] no web-mercator COG staged ({e}); item advertises no visual asset")
+
     # Thumbnail source isn't a distinct contract column — derive the staged sibling. Best-effort so
     # a missing thumb doesn't fail the promote; if it doesn't land, the item still advertises it.
     # TODO(marshall): confirm a `staged_thumb_uri` column vs the `.cog.tif`->`.thumb.png` sibling.
@@ -118,7 +130,8 @@ def promote(record: dict) -> str:
     return sink_stac.write(
         raster, bbox=record["bbox"], geometry=record.get("geometry"),
         properties=_properties(record), has_thumbnail=bool(record.get("has_thumbnail")),
-        proj_epsg=record.get("epsg"), file_meta=file_meta,
+        proj_epsg=record.get("epsg"), has_webmercator="visual" in file_meta,
+        file_meta=file_meta,
     )
 
 

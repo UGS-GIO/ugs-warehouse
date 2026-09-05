@@ -20,6 +20,7 @@ import { useQuery } from "@tanstack/react-query";
 
 import { ArticleHit, useCorpus } from "./article-search";
 import { searchPubs } from "./ftsearch";
+import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { buildIndex, type Hit, toSearchDoc } from "./search-index";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
@@ -96,8 +97,8 @@ export function DiscoveryView({
   // items array is rebuilt every render, so rebuilding the index each keystroke would re-index
   // thousands of docs. Matches App's own mapLoadKey memo pattern.
   const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const index = useMemo(
-    () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))).index,
+  const { index, docs: itemDocs } = useMemo(
+    () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))),
     [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
   // Survey Notes articles, in a SECOND index. Not merged into the item index: an article has no
@@ -130,11 +131,17 @@ export function DiscoveryView({
     queryFn: () => searchPubs(q.trim()),
   });
 
+  // "exact phrase", -exclude and series:GQ — the same parser the publication BM25 path uses, so one
+  // box speaks one language across all three corpora.
+  const query = useMemo(() => parseQuery(q), [q]);
+
   const articleHits = useMemo(() => {
-    const query = q.trim();
-    if (!articleIndex || query.length < 2) return [];
-    return (articleIndex.search(query) as unknown as Hit[]).slice(0, 20);
-  }, [articleIndex, q]);
+    if (!articleIndex || (q.trim().length < 2 && isEmptyQuery(query))) return [];
+    const base = baseTerms(query);
+    if (!base) return [];   // a field-only query addresses catalog metadata, not article prose
+    return (articleIndex.search(base) as unknown as Hit[])
+      .filter((h) => matchesQuery(query, h as SearchDoc)).slice(0, 20);
+  }, [articleIndex, q, query]);
 
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
@@ -145,14 +152,17 @@ export function DiscoveryView({
 
   // Text narrows first (score-ordered via the shared index); facets/area/sort are pure and cheap.
   const queried = useMemo(() => {
-    const query = q.trim();
-    if (query.length < 2) return withData;
-    const order = new Map((index.search(query) as unknown as { id: string }[]).map((h, i) => [h.id, i]));
+    if (q.trim().length < 2 && isEmptyQuery(query)) return withData;
+    // Bare/phrase words narrow via MiniSearch; a field- or exclude-only query has no keyword to
+    // hand it, so scan the flat doc list instead.
+    const base = baseTerms(query);
+    const hits = base ? (index.search(base) as unknown as Hit[]) : itemDocs;
+    const order = new Map(hits.filter((h) => matchesQuery(query, h as SearchDoc)).map((h, i) => [h.id, i]));
     return withData
       .filter((it) => order.has(docIdOf(it)))
       .sort((a, b) => (order.get(docIdOf(a)) ?? 0) - (order.get(docIdOf(b)) ?? 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsKey, q, index]);
+  }, [itemsKey, q, query, index, itemDocs]);
 
   // Facet counts over the search-narrowed set: they respond to the query (the primary narrowing) but
   // stay stable as you toggle facets — the rail reads as a table of contents, not a jumping wall.

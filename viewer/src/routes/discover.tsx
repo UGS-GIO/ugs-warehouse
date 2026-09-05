@@ -11,6 +11,7 @@ return <DiscoveryView
   items={c.mapItems}
   itemsKey={c.mapLoadKey}
   onOpenItem={c.openItem}
+  onOpenPub={(collId, itemId) => c.go({ view: "catalog", c: collId, i: itemId })}
   itemSelected={Boolean(c.itemUrl)}
   selectedItem={c.item.data}
   selectedCollectionId={c.collectionId}

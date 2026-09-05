@@ -13,10 +13,15 @@ import {
   extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
-import { categoryLabel, collectionLabel } from "@/catalog/item-view";
+import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
 import type { Footprint } from "@/map/map-model";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
-import { buildIndex, toSearchDoc } from "./search-index";
+import { useQuery } from "@tanstack/react-query";
+
+import { ArticleHit, useCorpus } from "./article-search";
+import { searchPubs } from "./ftsearch";
+import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
+import { buildIndex, type Hit, toSearchDoc } from "./search-index";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -43,11 +48,12 @@ const idOf = (href: string) => href.split("/").slice(-2)[0];
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
   onOpenItem: (href: string) => void;   // the map footprint picker; cards navigate via <Link>
+  onOpenPub: (collId: string, itemId: string) => void;  // an article cites a pub by series id
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
   selectedItem?: StacDoc;              // its full doc (App resolves it from ?c=/?i=); undefined while loading
   selectedCollectionId?: string;
@@ -91,10 +97,52 @@ export function DiscoveryView({
   // items array is rebuilt every render, so rebuilding the index each keystroke would re-index
   // thousands of docs. Matches App's own mapLoadKey memo pattern.
   const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const index = useMemo(
-    () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))).index,
+  const { index, docs: itemDocs } = useMemo(
+    () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))),
     [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // Survey Notes articles, in a SECOND index. Not merged into the item index: an article has no
+  // collection, geometry or date, so it cannot ride the ItemRef pipeline the facets/map/sort use.
+  // Lazy — nothing fetches the corpus until someone actually types.
+  const corpus = useCorpus(q.trim().length >= 2);
+  const articleIndex = useMemo(
+    () => (corpus.data?.length ? buildIndex(corpus.data, []).index : null),
+    [corpus.data],
+  );
+  // "DS-9" -> its collection, from the loaded items; the series prefix is the fallback for a pub
+  // that has not streamed in yet.
+  const collOfPub = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of withData) m.set(itemIdOf(it).toUpperCase(), it.collId);
+    return m;
+  }, [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openPub = (sid: string) =>
+    onOpenPub(collOfPub.get(sid.toUpperCase()) ?? (sid.match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? sid), sid);
+
+  // BM25 over every publication's full text (~7000 docs). Opt-in: it downloads a query engine on
+  // first use, so it stays off until someone ticks it rather than firing on every keystroke.
+  const [pubText, setPubText] = useState(false);
+  // Which result kind the chips are showing. "all" stacks them; the rest isolate one.
+  const [scope, setScope] = useState<"all" | "items" | "articles" | "pubtext">("all");
+  const pubFts = useQuery({
+    queryKey: ["pub-fts", q.trim()],
+    enabled: pubText && q.trim().length >= 2,
+    staleTime: Infinity, retry: false,
+    queryFn: () => searchPubs(q.trim()),
+  });
+
+  // "exact phrase", -exclude and series:GQ — the same parser the publication BM25 path uses, so one
+  // box speaks one language across all three corpora.
+  const query = useMemo(() => parseQuery(q), [q]);
+
+  const articleHits = useMemo(() => {
+    if (!articleIndex || (q.trim().length < 2 && isEmptyQuery(query))) return [];
+    const base = baseTerms(query);
+    if (!base) return [];   // a field-only query addresses catalog metadata, not article prose
+    return (articleIndex.search(base) as unknown as Hit[])
+      .filter((h) => matchesQuery(query, h as SearchDoc)).slice(0, 20);
+  }, [articleIndex, q, query]);
+
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
     const m = new Map<string, number[] | undefined>();
@@ -104,14 +152,17 @@ export function DiscoveryView({
 
   // Text narrows first (score-ordered via the shared index); facets/area/sort are pure and cheap.
   const queried = useMemo(() => {
-    const query = q.trim();
-    if (query.length < 2) return withData;
-    const order = new Map((index.search(query) as unknown as { id: string }[]).map((h, i) => [h.id, i]));
+    if (q.trim().length < 2 && isEmptyQuery(query)) return withData;
+    // Bare/phrase words narrow via MiniSearch; a field- or exclude-only query has no keyword to
+    // hand it, so scan the flat doc list instead.
+    const base = baseTerms(query);
+    const hits = base ? (index.search(base) as unknown as Hit[]) : itemDocs;
+    const order = new Map(hits.filter((h) => matchesQuery(query, h as SearchDoc)).map((h, i) => [h.id, i]));
     return withData
       .filter((it) => order.has(docIdOf(it)))
       .sort((a, b) => (order.get(docIdOf(a)) ?? 0) - (order.get(docIdOf(b)) ?? 0));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsKey, q, index]);
+  }, [itemsKey, q, query, index, itemDocs]);
 
   // Facet counts over the search-narrowed set: they respond to the query (the primary narrowing) but
   // stay stable as you toggle facets — the rail reads as a table of contents, not a jumping wall.
@@ -187,7 +238,7 @@ export function DiscoveryView({
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
         <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
-          placeholder="Search every layer & publication…" aria-label="Search the catalog"
+          placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
           className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
@@ -218,6 +269,34 @@ export function DiscoveryView({
           )}
         </div>
       </div>
+
+      {/* Result kinds, named with their counts. Without this the article and publication groups sat
+          below a screenful of cards with nothing saying they existed, and the opt-in engine was a
+          bare checkbox beside the item count — which read as that count's label. */}
+      {q.trim().length >= 2 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5 text-xs">
+          <span className="text-muted-foreground">Showing</span>
+          <ScopeChip on={scope === "all"} onClick={() => setScope("all")}>Everything</ScopeChip>
+          <ScopeChip on={scope === "items"} onClick={() => setScope("items")}>
+            Layers &amp; publications · {results.length}
+          </ScopeChip>
+          {articleHits.length > 0 && (
+            <ScopeChip on={scope === "articles"} onClick={() => setScope("articles")}>
+              Survey Notes articles · {articleHits.length}
+            </ScopeChip>
+          )}
+          {/* Selecting it is what starts the search, and it is a ~35MB DuckDB-WASM download on first
+              use. The size goes ON the chip: a user deciding whether to click deserves the cost, not
+              a tooltip. It is cached afterwards, hence "first use" rather than per search. */}
+          <ScopeChip on={scope === "pubtext"} onClick={() => { setScope("pubtext"); setPubText(true); }}
+            title="Searches inside every publication's full text (~7000 docs). First use downloads a
+                   ~35MB query engine, then it is cached; the index itself is read in ranges, not downloaded.">
+            {pubFts.data ? `Publication text · ${pubFts.data.length}`
+              : pubFts.isLoading ? "Publication text · searching…"
+                : pubText ? "Publication text · loading engine…" : "Search publication text (~35MB)"}
+          </ScopeChip>
+        </div>
+      )}
 
       {/* ── Main split: facet rail · results · map ────────────────────────────────────────────── */}
       <div className="flex min-h-0 flex-1">
@@ -261,7 +340,9 @@ export function DiscoveryView({
               </button>
             </div>
           )}
-          {withData.length === 0 ? (
+          {/* An isolating chip hides the item results entirely — not just their heading. */}
+          {scope === "articles" || scope === "pubtext" ? null
+            : withData.length === 0 ? (
             <p className="px-1 py-16 text-center text-sm text-muted-foreground">Loading the catalog…</p>
           ) : shown.length === 0 ? (
             <div className="mx-auto mt-10 max-w-sm rounded-lg border border-dashed border-border p-8 text-center">
@@ -270,7 +351,14 @@ export function DiscoveryView({
                 <button type="button" onClick={resetAll} className="mt-2 text-xs text-primary hover:underline">Clear all filters</button>
               )}
             </div>
-          ) : layout === "gallery" ? (
+          ) : (
+            <>
+            {scope === "all" && q.trim().length >= 2 && (articleHits.length > 0 || pubText) && (
+              <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Layers &amp; publications · {results.length}
+              </h2>
+            )}
+            {layout === "gallery" ? (
             <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr))]">
               {shown.map((it) => (
                 <ResultCard key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)} />
@@ -282,8 +370,10 @@ export function DiscoveryView({
                 <ResultRow key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)} />
               ))}
             </ul>
+            )}
+            </>
           )}
-          {results.length > shown.length && (
+          {results.length > shown.length && scope !== "articles" && scope !== "pubtext" && (
             <div className="mt-3 flex justify-center">
               <button type="button" onClick={() => setVisible((v) => v + PAGE)}
                 className="rounded-md border border-border bg-card px-4 py-1.5 text-sm text-foreground hover:border-primary">
@@ -291,6 +381,47 @@ export function DiscoveryView({
                 <span className="ml-1 text-xs text-muted-foreground">({results.length - shown.length} of {results.length} remaining)</span>
               </button>
             </div>
+          )}
+
+          {/* Articles are their OWN group, not merged into the cards above: a Survey Notes article
+              has no collection, geometry or date, so the facets, sort and map beside it do not
+              apply to one. Same query, second corpus. */}
+          {articleHits.length > 0 && scope !== "items" && scope !== "pubtext" && (
+            <section className="mt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Survey Notes articles · {articleHits.length}
+              </h2>
+              <ol className="mt-1 divide-y divide-border">
+                {articleHits.map((r) => (
+                  <ArticleHit key={r.id} r={r} q={q} openPub={openPub} />
+                ))}
+              </ol>
+            </section>
+          )}
+
+          {pubText && q.trim().length >= 2 && scope !== "items" && scope !== "articles" && (
+            <section className="mt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Publication full text{pubFts.data ? ` · ${pubFts.data.length}` : ""}
+              </h2>
+              {pubFts.isLoading && <p className="mt-1 text-xs text-muted-foreground">Loading the query engine + searching…</p>}
+              {pubFts.isError && <p className="mt-1 text-xs text-muted-foreground">Full-text index not available yet (built by the FTS job on reingest).</p>}
+              <ol className="mt-1 divide-y divide-border">
+                {(pubFts.data ?? []).map((r) => (
+                  <li key={r.id} className="py-2">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      {r.series && <span className="rounded bg-muted px-1.5 text-xs uppercase text-muted-foreground">{r.series}</span>}
+                      <span className="font-medium text-foreground">{r.title}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{r.id}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
+                      {r.pdf && <a href={r.pdf} target="_blank" rel="noopener" className="text-primary hover:underline">Open PDF ↗</a>}
+                      <button className="text-primary hover:underline" onClick={() => openPub(r.id)}>Catalog page</button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </section>
           )}
         </div>
 
@@ -353,6 +484,20 @@ export function DiscoveryView({
         </>
       )}
     </div>
+  );
+}
+
+// A result-kind chip: what the query found, and how to see only that.
+function ScopeChip({ on, onClick, title, children }: {
+  on: boolean; onClick: () => void; title?: string; children: React.ReactNode;
+}) {
+  return (
+    <button type="button" onClick={onClick} title={title}
+      className={`rounded-full border px-2.5 py-0.5 ${on
+        ? "border-primary bg-primary text-primary-foreground"
+        : "border-border bg-card text-muted-foreground hover:border-primary hover:text-foreground"}`}>
+      {children}
+    </button>
   );
 }
 

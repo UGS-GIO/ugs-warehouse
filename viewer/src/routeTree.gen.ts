@@ -18,7 +18,6 @@ import { Route as GuideRouteImport } from './routes/guide'
 import { Route as MapRouteImport } from './routes/map'
 import { Route as PreviewRouteImport } from './routes/preview'
 import { Route as ReviewRouteImport } from './routes/review'
-import { Route as SearchRouteImport } from './routes/search'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -65,11 +64,6 @@ const ReviewRoute = ReviewRouteImport.update({
   path: '/review',
   getParentRoute: () => rootRouteImport,
 } as any)
-const SearchRoute = SearchRouteImport.update({
-  id: '/search',
-  path: '/search',
-  getParentRoute: () => rootRouteImport,
-} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -81,7 +75,6 @@ export interface FileRoutesByFullPath {
   '/map': typeof MapRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
-  '/search': typeof SearchRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -93,7 +86,6 @@ export interface FileRoutesByTo {
   '/map': typeof MapRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
-  '/search': typeof SearchRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -106,7 +98,6 @@ export interface FileRoutesById {
   '/map': typeof MapRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
-  '/search': typeof SearchRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -120,7 +111,6 @@ export interface FileRouteTypes {
     | '/map'
     | '/preview'
     | '/review'
-    | '/search'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -132,7 +122,6 @@ export interface FileRouteTypes {
     | '/map'
     | '/preview'
     | '/review'
-    | '/search'
   id:
     | '__root__'
     | '/'
@@ -144,7 +133,6 @@ export interface FileRouteTypes {
     | '/map'
     | '/preview'
     | '/review'
-    | '/search'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -157,7 +145,6 @@ export interface RootRouteChildren {
   MapRoute: typeof MapRoute
   PreviewRoute: typeof PreviewRoute
   ReviewRoute: typeof ReviewRoute
-  SearchRoute: typeof SearchRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -225,13 +212,6 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReviewRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/search': {
-      id: '/search'
-      path: '/search'
-      fullPath: '/search'
-      preLoaderRoute: typeof SearchRouteImport
-      parentRoute: typeof rootRouteImport
-    }
   }
 }
 
@@ -245,7 +225,6 @@ const rootRouteChildren: RootRouteChildren = {
   MapRoute: MapRoute,
   PreviewRoute: PreviewRoute,
   ReviewRoute: ReviewRoute,
-  SearchRoute: SearchRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

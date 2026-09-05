@@ -53,6 +53,16 @@ def pub_type_of(p: dict) -> str:
     return (p.get("series") or "").strip() or "Other"
 
 
+def keywords_of(raw: str | None) -> list[str]:
+    """The source's subject string as the list STAC requires.
+
+    The upstream value is one blob per publication: subject strings on their own lines, each a
+    `;`-separated heading like `Geology; Summit County; Maps`. Commas are NOT separators — they sit
+    inside a heading (`Tooele, Utah`) — so splitting on one would cut a keyword in half.
+    """
+    return list(dict.fromkeys(k.strip() for k in re.split(r"[;\n\r]", raw or "") if k.strip()))
+
+
 def series_code(sid: str) -> str:
     """Data-series code = alpha prefix of the series id (DS-8 → DS). The nesting key under
     ugs-publications. Numeric/prefixless ids bucket as OTHER."""
@@ -216,11 +226,14 @@ def build_item(p: dict, attachments: list[dict], *,
         properties={
             "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop
             "title": title,
-            "description": desc,
+            # STAC gives `description` a minimum length, so a pub with no citation omits the field
+            # rather than publishing "". Same for the UGS-prefixed strings below: an empty value
+            # says nothing that an absent key does not.
+            **({"description": desc} if desc else {}),
             "ugs:pub_type": pub_type_of(p),
-            "ugs:series": (p.get("series") or "").strip(),
-            "ugs:scale": (p.get("pub_scale") or "").strip(),
-            "ugs:author": (p.get("pub_author") or "").strip(),
+            **({"ugs:series": s} if (s := (p.get("series") or "").strip()) else {}),
+            **({"ugs:scale": sc} if (sc := (p.get("pub_scale") or "").strip()) else {}),
+            **({"ugs:author": au} if (au := (p.get("pub_author") or "").strip()) else {}),
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
             # ISO topic category. AUTHORED, not defaulted: a UGS publication is our own product, so
             # asserting the category is a statement about our own work — unlike a serving topic,
@@ -228,7 +241,7 @@ def build_item(p: dict, attachments: list[dict], *,
             # instead (#53). Pubs have no schema_registry row, so this is the only place to say it.
             "ugs:topic_category": "geoscientificInformation",
             "ugs:footprint_source": fp_source,
-            "keywords": (p.get("keywords") or "").strip(),
+            **({"keywords": kw} if (kw := keywords_of(p.get("keywords"))) else {}),
             # County derived from the pub's lat/lon via the vendored SGID boundaries (point-in-polygon).
             # Only present for pubs that carry coordinates; empty values are dropped by the index.
             **({"ugs:county": cty} if (cty := counties.county_of_pub(p)) else {}),

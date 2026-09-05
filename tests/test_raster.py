@@ -141,3 +141,67 @@ def test_fetch_record_rejects_malformed_item_id():
     for bad in ("", "a'; DROP TABLE x;--", "UPPER", "has space", "semi;colon"):
         with pytest.raises(ValueError):
             source.fetch_record(bad)
+
+
+def test_build_item_carries_the_size_the_copy_reported(monkeypatch):
+    """A promote copies server-side, so core.gcs reports a size and no checksum. Publishing the
+    size still lets a consumer budget the fetch; a fabricated digest would be worse than none."""
+    from ugs_warehouse.core import gcs as core_gcs
+
+    item = sink_stac.build_item(
+        _raster(), bbox=[-114, 37, -109, 42], geometry=None, has_thumbnail=True,
+        file_meta={"cog": core_gcs.FileMeta(1048576), "thumbnail": core_gcs.FileMeta(2048)})
+
+    assert item["assets"]["cog"]["file:size"] == 1048576
+    assert "file:checksum" not in item["assets"]["cog"]
+    assert item["assets"]["thumbnail"]["file:size"] == 2048
+    # Declared off what the assets carry, not by the caller.
+    from ugs_warehouse.core import stac as core_stac
+    assert core_stac.FILE_EXT in item["stac_extensions"]
+
+
+def test_build_item_without_copies_declares_no_file_extension():
+    """`stac_item_from_record` builds an item with no promote behind it — it must not claim
+    file fields it does not have."""
+    item = sink_stac.build_item(_raster(), bbox=[-114, 37, -109, 42], geometry=None,
+                                has_thumbnail=True)
+
+    from ugs_warehouse.core import stac as core_stac
+    assert "file:size" not in item["assets"]["cog"]
+    assert core_stac.FILE_EXT not in item.get("stac_extensions", [])
+
+
+def test_promote_hands_the_write_what_each_copy_reported(monkeypatch):
+    from ugs_warehouse.core import gcs as core_gcs
+
+    sizes = {"cog/slope/slope_OFR123_20260601.cog.tif": 1048576,
+             "cog/slope/slope_OFR123_20260601.thumb.png": 2048}
+    monkeypatch.setattr(consume.gcs, "copy_from_uri",
+                        lambda src, dest, **kw: core_gcs.FileMeta(sizes[dest]))
+    seen = {}
+    monkeypatch.setattr(consume.sink_stac, "write",
+                        lambda r, **kw: seen.update(kw) or "ok")
+
+    consume.promote(_record())
+
+    assert seen["file_meta"] == {"cog": core_gcs.FileMeta(1048576),
+                                 "thumbnail": core_gcs.FileMeta(2048)}
+
+
+def test_promote_reports_the_cog_alone_when_the_thumb_copy_fails(monkeypatch):
+    """The thumbnail copy is best-effort — a staged thumb that is not there must not cost the COG
+    its size, nor stamp a size for a thumbnail nobody copied."""
+    from ugs_warehouse.core import gcs as core_gcs
+
+    def copy(src, dest, **kw):
+        if dest.endswith(".thumb.png"):
+            raise FileNotFoundError(dest)
+        return core_gcs.FileMeta(4096)
+
+    monkeypatch.setattr(consume.gcs, "copy_from_uri", copy)
+    seen = {}
+    monkeypatch.setattr(consume.sink_stac, "write", lambda r, **kw: seen.update(kw) or "ok")
+
+    consume.promote(_record())
+
+    assert seen["file_meta"] == {"cog": core_gcs.FileMeta(4096)}

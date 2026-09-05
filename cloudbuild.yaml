@@ -427,8 +427,8 @@ steps:
       - --args=-m,ugs_warehouse.pubs.ingest
       - --task-timeout=1800
       - --max-retries=1
-      - --cpu=1
-      - --memory=2Gi
+      - --cpu=4
+      - --memory=4Gi
 
   # Cover thumbnails — render each pub's PDF first page → PNG in GCS (poppler/pdftoppm). Covers ALL
   # pubs incl. non-spatial (Survey Notes, reports). Sharded + skip-existing like the COG harvest;

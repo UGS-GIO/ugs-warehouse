@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import urllib.parse
 
 from ..core import config, stac
 from . import counties, identity, topic
@@ -27,6 +28,8 @@ MEDIA = {".pdf": "application/pdf", ".zip": "application/zip",
          ".png": "image/png", ".txt": "text/plain"}
 COG_MIME = config.COG_MIME
 PARQUET_MIME = config.PARQUET_MIME
+# Everything outside RFC 3986's unreserved set needs escaping in a path segment. See `item_id_for`.
+_UNSAFE_IN_PATH = re.compile(r"[^A-Za-z0-9._~-]+")
 
 # series_id alpha prefix -> canonical pub type (the free-text `series` field is dirty).
 PREFIX_TYPE = {
@@ -70,6 +73,18 @@ def series_code(sid: str) -> str:
     return m.group(1).upper() if m else "OTHER"
 
 
+def item_id_for(sid: str) -> str:
+    """The published item id: the source's series id, made safe to sit in a URI path.
+
+    The id is also a directory name and the last segment of every link that reaches the item, so a
+    space in it (`Geologic map of Utah`, `557.92 UT1CO`) put a raw space in the item's own `self`
+    link, in its collection's `item` link and in the ISO sidecar URL. A browser re-encodes those
+    silently; a strict client rejects them, which is what a static catalog is read by. The exact
+    source string stays on the item as `ugs:series_id`.
+    """
+    return _UNSAFE_IN_PATH.sub("-", (sid or "").strip())
+
+
 def issue_volume(sid: str) -> int | None:
     """Survey Notes volume from the id: SNT-{volume}-{issue} → volume (SNT-58-2 → 58, SNT-22-1-2 → 22).
     Lets the viewer group issues under their volume. None for non-SNT or unparseable ids."""
@@ -82,9 +97,18 @@ def media_type(url: str) -> str:
 
 
 def href(u: str | None) -> str | None:
+    """The source's file reference as a URL, or None when it does not name a file.
+
+    `undefined` is a JavaScript accident that reached the publications database as text. It
+    resolved to `…/publications/undefined`, an asset that 404s by construction. `http` is
+    upgraded because ugspub answers 303 to the https URL anyway, and a browser cannot fetch a
+    plaintext asset from a page served over https.
+    """
     u = (u or "").strip()
-    if not u:
+    if not u or u.lower() == "undefined":
         return None
+    if u.startswith("http://ugspub.nr.utah.gov"):
+        return "https://" + u[len("http://"):]
     return u if u.startswith("http") else UGSPUB + u.lstrip("/")
 
 
@@ -126,6 +150,7 @@ def build_item(p: dict, attachments: list[dict], *,
     Source files in it are served from our CDN; the rest stay linked to the publisher's host.
     """
     sid = (p.get("series_id") or "").strip()
+    item_id = item_id_for(sid)
     yr = (p.get("pub_year") or "").strip()
     dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
 
@@ -193,10 +218,13 @@ def build_item(p: dict, attachments: list[dict], *,
                                 "type": "model/gltf-binary", "roles": ["data", "visual"],
                                 "title": "3D fence mesh (glTF)"}
 
-    extra_links = [{"rel": "via", "href": f"{LANDING}{sid}", "type": "text/html",
+    # The series id goes into a URL here, so it is escaped: the landing page takes it as a query
+    # value and the DOI as a path suffix, and an id with a space in it made both unresolvable.
+    quoted_sid = urllib.parse.quote(sid, safe="")
+    extra_links = [{"rel": "via", "href": f"{LANDING}{quoted_sid}", "type": "text/html",
                     "title": "UGS publication landing page"}]
     if has_ugs_doi(p.get("pub_publisher")):
-        extra_links.append({"rel": "cite-as", "href": f"https://doi.org/10.34191/{sid}"})
+        extra_links.append({"rel": "cite-as", "href": f"https://doi.org/10.34191/{quoted_sid}"})
 
     # No web-map-links here: that extension's rels are [xyz, wms, wmts, tilejson, pmtiles, 3d-tiles]
     # — it has no `cog`, and declaring it forces one of those (which a raster pub lacks). The COG is
@@ -217,10 +245,10 @@ def build_item(p: dict, attachments: list[dict], *,
     # with no citation keeps the published description instead of blanking it.
     ov = override or {}
     desc = ov.get("description") or (p.get("full_citation") or "").strip() \
-        or (stac.prior_property(f"{group}/{code}", sid, "description") or "")
+        or (stac.prior_property(f"{group}/{code}", item_id, "description") or "")
     title = ov.get("title") or (p.get("pub_name") or "").strip() or stac.prettify(sid)
     return stac.build_item(
-        item_id=sid, collection=code,
+        item_id=item_id, collection=code,
         collection_path=f"{group}/{code}",
         geometry=geom, bbox=bbox, datetime_iso=dt,
         properties={

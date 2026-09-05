@@ -27,6 +27,8 @@ PGF_BASE_URL = config.PGF_BASE_URL
 
 # Vector topics nest under this catalog, one collection per mart schema (see vector.sink_stac).
 SERVING_TOPICS_CATALOG = "ugs-serving-topics"
+# Raster scenes nest under this catalog, one collection per layer (see raster.identity).
+RASTER_CATALOG = "ugs-rasters"
 
 STAC_VERSION = "1.1.0"  # 1.1 promotes `bands` + data_type/nodata to common metadata (no raster ext)
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
@@ -329,7 +331,8 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
                     extent: dict | None = None, *, title: str | None = None,
                     service: bool | None = None, mappable: int | None = None,
                     description: str | None = None,
-                    item_titles: dict[str, str] | None = None) -> dict:
+                    item_titles: dict[str, str] | None = None,
+                    assets: dict | None = None) -> dict:
     """A collection.json at `{path}/collection.json`. `collection` is its STAC id (a series
     code like `DS` when nested, else the path). Root/parent links climb out per path depth;
     the OGC API Features link is added only for flat collections (serving topics — nested
@@ -357,6 +360,10 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
         # fails strict validation. A prefixed top-level field is spec-legal (additionalProperties).
         "ugs:item_count": len(item_ids),
         **({"ugs:mappable_count": mappable} if mappable is not None else {}),
+        # Collection-level assets. STAC allows them and Portolan requires some of them (a
+        # thumbnail on a geospatial collection); a collection with nothing to carry omits the key
+        # rather than publishing an empty object.
+        **({"assets": assets} if assets else {}),
         "links": [
             {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
@@ -376,6 +383,30 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
         ],
     }
     return doc
+
+
+def _collection_assets(path: str, items: list[dict]) -> dict:
+    """Collection-level assets derived from the collection's own items.
+
+    Portolan requires a thumbnail on a geospatial collection (PTL-VIZ-001), and a collection whose
+    items are scenes of ONE dataset can borrow a scene's. Restricted to raster collections on
+    purpose: a serving-topic collection is a dbt schema holding unrelated layers, so one layer's
+    preview would misrepresent the other eleven. That is the grain question (#257), not something a
+    thumbnail should paper over.
+
+    The scene is the most recent one that has a thumbnail, ties broken by id, so the preview tracks
+    what was published last instead of whichever item happened to sort first.
+    """
+    if not path.startswith(f"{RASTER_CATALOG}/"):
+        return {}
+    with_thumbs = [it for it in items if (it.get("assets") or {}).get("thumbnail", {}).get("href")]
+    if not with_thumbs:
+        return {}
+    newest = max(with_thumbs, key=lambda it: (it.get("properties", {}).get("datetime") or "", it["id"]))
+    thumb = newest["assets"]["thumbnail"]
+    title = newest.get("properties", {}).get("title") or prettify(newest["id"])
+    return {"thumbnail": {"href": thumb["href"], "type": thumb.get("type", "image/png"),
+                          "roles": ["thumbnail"], "title": f"Preview: {title}"}}
 
 
 def _is_mappable(item: dict) -> bool:
@@ -614,7 +645,8 @@ def refresh_catalog() -> None:
                            if it.get("id") and it.get("properties", {}).get("title")}
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
                                         mappable=mappable, description=desc,
-                                        item_titles=item_titles),
+                                        item_titles=item_titles,
+                                        assets=_collection_assets(path, items)),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
             _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
             leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),

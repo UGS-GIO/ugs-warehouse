@@ -1,4 +1,5 @@
 """Shared STAC builders — the collections-layout catalog (derive-from-truth refresh)."""
+import json
 from unittest.mock import patch
 
 from ugs_warehouse.core import config, iso, stac
@@ -532,3 +533,61 @@ def test_cog_assets_keep_the_cloud_optimized_media_type():
 
     assert item["assets"]["cog"]["type"] == pubs_sink.COG_MIME
     assert "cloud-optimized" in item["assets"]["cog"]["type"]
+
+
+def test_raster_collection_borrows_its_newest_scene_thumbnail(monkeypatch):
+    """PTL-VIZ-001 wants a thumbnail on a geospatial collection. A raster collection's items are
+    scenes of one dataset, so a scene's preview represents it; the newest one, so the preview
+    tracks what was published last rather than whichever id sorts first."""
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    for iid, dt in (("browns_hole_2023", "2023-01-01T00:00:00Z"),
+                    ("fort_douglas_2024", "2024-01-01T00:00:00Z")):
+        stac.write_item(stac.build_item(
+            item_id=iid, collection="geolmap_24k_series",
+            collection_path="ugs-rasters/geolmap_24k_series",
+            geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3], datetime_iso=dt,
+            properties={"title": f"Map {iid}"},
+            assets={"cog": {"href": f"https://x/{iid}.tif", "type": config.COG_MIME,
+                            "roles": ["data", "visual"]},
+                    "thumbnail": {"href": f"https://x/{iid}.png", "type": "image/png",
+                                  "roles": ["thumbnail"]}}))
+    stac.refresh_catalog()
+
+    coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-rasters/geolmap_24k_series/collection.json"])
+    assert coll["assets"]["thumbnail"]["href"] == "https://x/fort_douglas_2024.png"
+    assert coll["assets"]["thumbnail"]["roles"] == ["thumbnail"]
+    # Named for the scene it came from, so nobody mistakes it for a rendering of the whole series.
+    assert coll["assets"]["thumbnail"]["title"] == "Preview: Map fort_douglas_2024"
+
+
+def test_a_serving_topic_collection_borrows_no_thumbnail(monkeypatch):
+    """A dbt schema holds unrelated layers. One layer's preview would misrepresent the rest, so the
+    rule stops at raster collections — see #257."""
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    stac.write_item(stac.build_item(
+        item_id="hazards_qfaults", collection="hazards",
+        collection_path="ugs-serving-topics/hazards",
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
+        datetime_iso="2026-01-01T00:00:00Z", properties={"title": "Quaternary Faults"},
+        assets={"thumbnail": {"href": "https://x/q.png", "type": "image/png",
+                              "roles": ["thumbnail"]}}))
+    stac.refresh_catalog()
+
+    coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-serving-topics/hazards/collection.json"])
+    assert "assets" not in coll
+
+
+def test_a_raster_collection_with_no_scene_thumbnails_omits_the_key(monkeypatch):
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    stac.write_item(stac.build_item(
+        item_id="bare_scene", collection="slope", collection_path="ugs-rasters/slope",
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
+        datetime_iso="2026-01-01T00:00:00Z", properties={},
+        assets={"cog": {"href": "https://x/b.tif", "type": config.COG_MIME, "roles": ["data"]}}))
+    stac.refresh_catalog()
+
+    coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-rasters/slope/collection.json"])
+    assert "assets" not in coll

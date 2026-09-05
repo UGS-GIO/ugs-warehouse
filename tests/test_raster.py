@@ -41,7 +41,10 @@ def test_build_item_cog_asset_no_webmap_link():
     # The COG is advertised by its cloud-optimized ASSET (not a web-map-links `cog` link, which
     # isn't a valid web-map-links rel — see raster.sink_stac). STAC Browser/viewer render the asset.
     assert "cloud-optimized" in item["assets"]["cog"]["type"]
-    assert "visual" in item["assets"]["cog"]["roles"]
+    # The canonical COG is in the source CRS, so it is data and NOT visual — a client that drew it
+    # over a web-mercator basemap threw rather than rendering (#84).
+    assert item["assets"]["cog"]["roles"] == ["data"]
+    assert "visual" not in item["assets"]
     assert item["assets"]["thumbnail"]["roles"] == ["thumbnail"]
     assert item["geometry"]["type"] == "Polygon"  # derived from bbox
     assert not any(link["rel"] == "cog" for link in item["links"])
@@ -90,7 +93,8 @@ def test_promote_skips_thumb_when_absent(monkeypatch):
                         lambda src, dest, **kw: copies.append(dest))
     monkeypatch.setattr(consume.sink_stac, "write", lambda r, **kw: "ok")
     consume.promote(_record(has_thumbnail=False))
-    assert copies == ["cog/slope/slope_OFR123_20260601.cog.tif"]  # no thumb copy
+    assert copies == ["cog/slope/slope_OFR123_20260601.cog.tif",
+                      "cog/slope/slope_OFR123_20260601_3857.cog.tif"]  # no thumb copy
 
 
 # ---- fetch/alias layer: raw.raster_catalog row -> contract record (pure; DB fetch runs on deploy) ----
@@ -194,7 +198,7 @@ def test_promote_reports_the_cog_alone_when_the_thumb_copy_fails(monkeypatch):
     from ugs_warehouse.core import gcs as core_gcs
 
     def copy(src, dest, **kw):
-        if dest.endswith(".thumb.png"):
+        if not dest.endswith(".cog.tif") or dest.endswith("_3857.cog.tif"):
             raise FileNotFoundError(dest)
         return core_gcs.FileMeta(4096)
 
@@ -205,3 +209,45 @@ def test_promote_reports_the_cog_alone_when_the_thumb_copy_fails(monkeypatch):
     consume.promote(_record())
 
     assert seen["file_meta"] == {"cog": core_gcs.FileMeta(4096)}
+
+
+def test_the_visual_asset_is_the_web_mercator_copy(monkeypatch):
+    """#84: the viewer takes `visual` at its word. Pointing it at the native-CRS COG made it throw
+    'projection EPSG:26912 is not supported', so the role belongs to the reprojected derivative."""
+    from ugs_warehouse.core import gcs as core_gcs
+
+    monkeypatch.setattr(consume.gcs, "copy_from_uri",
+                        lambda src, dest, **kw: core_gcs.FileMeta(1024))
+    seen = {}
+    monkeypatch.setattr(consume.sink_stac, "write", lambda r, **kw: seen.update(kw) or "ok")
+    consume.promote(_record(epsg=26912))
+
+    item = sink_stac.build_item(_raster(), bbox=[-114, 37, -109, 42], geometry=None,
+                                proj_epsg=26912, has_webmercator=True,
+                                file_meta=seen["file_meta"])
+
+    assert item["assets"]["cog"]["roles"] == ["data"]
+    assert item["assets"]["visual"]["roles"] == ["visual"]
+    assert item["assets"]["visual"]["proj:code"] == "EPSG:3857"
+    assert item["assets"]["visual"]["href"].endswith("_3857.cog.tif")
+    # The item-level CRS still describes the canonical raster; the asset overrides it.
+    assert item["properties"]["proj:code"] == "EPSG:26912"
+
+
+def test_no_staged_derivative_means_no_visual_claim(monkeypatch):
+    """Nothing renderable is published, so nothing renderable is advertised. A `visual` a client
+    cannot draw is worse than an absent one — that is what produced the live error."""
+    from ugs_warehouse.core import gcs as core_gcs
+
+    def copy(src, dest, **kw):
+        if dest.endswith("_3857.cog.tif"):
+            raise FileNotFoundError(dest)
+        return core_gcs.FileMeta(2048)
+
+    monkeypatch.setattr(consume.gcs, "copy_from_uri", copy)
+    seen = {}
+    monkeypatch.setattr(consume.sink_stac, "write", lambda r, **kw: seen.update(kw) or "ok")
+    consume.promote(_record())
+
+    assert "visual" not in seen["file_meta"]
+    assert seen["has_webmercator"] is False

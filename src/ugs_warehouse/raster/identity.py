@@ -47,5 +47,10 @@ class Raster:
         return f"{COG_PREFIX}/{self.layer}/{self.item_id}.cog.tif"
 
     @property
+    def webmercator_cog_object_path(self) -> str:
+        """`cog/<layer>/<item_id>_3857.cog.tif` — the derivative a web map can actually draw."""
+        return f"{COG_PREFIX}/{self.layer}/{self.item_id}_3857.cog.tif"
+
+    @property
     def thumb_object_path(self) -> str:
         return f"{COG_PREFIX}/{self.layer}/{self.item_id}.thumb.png"

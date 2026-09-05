@@ -32,12 +32,12 @@ export const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id =
 
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "search" | "developers" | "preview" | "review";
+export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review";
 // `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
 // route tree — a computed `/${view}` string would not, which is what the old cast papered over.
 const VIEW_PATH = {
   landing: "/", catalog: "/catalog", map: "/map", discover: "/discover", arch: "/arch",
-  guide: "/guide", search: "/search", developers: "/developers", preview: "/preview",
+  guide: "/guide", developers: "/developers", preview: "/preview",
   review: "/review",
 } satisfies Record<View, string>;
 const isView = (v: string): v is View => v !== "landing" && v in VIEW_PATH;
@@ -80,7 +80,6 @@ const PRIMARY_VIEWS: { id: View; label: string }[] = [
   { id: "discover", label: "Discover" },
   { id: "map", label: "Map" },
   { id: "catalog", label: "Catalog" },
-  { id: "search", label: "Search" },
 ];
 // Secondary views — always in the NavMenu overflow (desktop + mobile) so the tab row never overflows.
 const OVERFLOW_VIEWS: { id: View; label: string }[] = [

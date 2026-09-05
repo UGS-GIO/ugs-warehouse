@@ -13,10 +13,14 @@ import {
   extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
-import { categoryLabel, collectionLabel } from "@/catalog/item-view";
+import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
 import type { Footprint } from "@/map/map-model";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
-import { buildIndex, toSearchDoc } from "./search-index";
+import { useQuery } from "@tanstack/react-query";
+
+import { ArticleHit, useCorpus } from "./article-search";
+import { searchPubs } from "./ftsearch";
+import { buildIndex, type Hit, toSearchDoc } from "./search-index";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -43,11 +47,12 @@ const idOf = (href: string) => href.split("/").slice(-2)[0];
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
   onOpenItem: (href: string) => void;   // the map footprint picker; cards navigate via <Link>
+  onOpenPub: (collId: string, itemId: string) => void;  // an article cites a pub by series id
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
   selectedItem?: StacDoc;              // its full doc (App resolves it from ?c=/?i=); undefined while loading
   selectedCollectionId?: string;
@@ -95,6 +100,40 @@ export function DiscoveryView({
     () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))).index,
     [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // Survey Notes articles, in a SECOND index. Not merged into the item index: an article has no
+  // collection, geometry or date, so it cannot ride the ItemRef pipeline the facets/map/sort use.
+  // Lazy — nothing fetches the corpus until someone actually types.
+  const corpus = useCorpus(q.trim().length >= 2);
+  const articleIndex = useMemo(
+    () => (corpus.data?.length ? buildIndex(corpus.data, []).index : null),
+    [corpus.data],
+  );
+  // "DS-9" -> its collection, from the loaded items; the series prefix is the fallback for a pub
+  // that has not streamed in yet.
+  const collOfPub = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const it of withData) m.set(itemIdOf(it).toUpperCase(), it.collId);
+    return m;
+  }, [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const openPub = (sid: string) =>
+    onOpenPub(collOfPub.get(sid.toUpperCase()) ?? (sid.match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? sid), sid);
+
+  // BM25 over every publication's full text (~7000 docs). Opt-in: it downloads a query engine on
+  // first use, so it stays off until someone ticks it rather than firing on every keystroke.
+  const [pubText, setPubText] = useState(false);
+  const pubFts = useQuery({
+    queryKey: ["pub-fts", q.trim()],
+    enabled: pubText && q.trim().length >= 2,
+    staleTime: Infinity, retry: false,
+    queryFn: () => searchPubs(q.trim()),
+  });
+
+  const articleHits = useMemo(() => {
+    const query = q.trim();
+    if (!articleIndex || query.length < 2) return [];
+    return (articleIndex.search(query) as unknown as Hit[]).slice(0, 20);
+  }, [articleIndex, q]);
+
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
     const m = new Map<string, number[] | undefined>();
@@ -187,8 +226,15 @@ export function DiscoveryView({
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
         <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
-          placeholder="Search every layer & publication…" aria-label="Search the catalog"
+          placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
           className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
+        {/* Off by default: ticking it downloads a DuckDB query engine, so it is a deliberate act
+            rather than something every keystroke pays for. */}
+        <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-xs text-muted-foreground"
+          title="Search inside every publication's text (~7000 docs; loads a query engine on first use)">
+          <input type="checkbox" checked={pubText} onChange={(e) => setPubText(e.target.checked)} />
+          Publication text
+        </label>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
         </span>
@@ -291,6 +337,47 @@ export function DiscoveryView({
                 <span className="ml-1 text-xs text-muted-foreground">({results.length - shown.length} of {results.length} remaining)</span>
               </button>
             </div>
+          )}
+
+          {/* Articles are their OWN group, not merged into the cards above: a Survey Notes article
+              has no collection, geometry or date, so the facets, sort and map beside it do not
+              apply to one. Same query, second corpus. */}
+          {pubText && q.trim().length >= 2 && (
+            <section className="mt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Publication full text{pubFts.data ? ` · ${pubFts.data.length}` : ""}
+              </h2>
+              {pubFts.isLoading && <p className="mt-1 text-xs text-muted-foreground">Loading the query engine + searching…</p>}
+              {pubFts.isError && <p className="mt-1 text-xs text-muted-foreground">Full-text index not available yet (built by the FTS job on reingest).</p>}
+              <ol className="mt-1 divide-y divide-border">
+                {(pubFts.data ?? []).map((r) => (
+                  <li key={r.id} className="py-2">
+                    <div className="flex flex-wrap items-baseline gap-x-2">
+                      {r.series && <span className="rounded bg-muted px-1.5 text-xs uppercase text-muted-foreground">{r.series}</span>}
+                      <span className="font-medium text-foreground">{r.title}</span>
+                      <span className="font-mono text-xs text-muted-foreground">{r.id}</span>
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 text-xs">
+                      {r.pdf && <a href={r.pdf} target="_blank" rel="noopener" className="text-primary hover:underline">Open PDF ↗</a>}
+                      <button className="text-primary hover:underline" onClick={() => openPub(r.id)}>Catalog page</button>
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          )}
+
+          {articleHits.length > 0 && (
+            <section className="mt-6">
+              <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
+                Survey Notes articles · {articleHits.length}
+              </h2>
+              <ol className="mt-1 divide-y divide-border">
+                {articleHits.map((r) => (
+                  <ArticleHit key={r.id} r={r} q={q} openPub={openPub} />
+                ))}
+              </ol>
+            </section>
           )}
         </div>
 

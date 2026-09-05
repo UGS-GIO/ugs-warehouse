@@ -251,3 +251,20 @@ def test_no_staged_derivative_means_no_visual_claim(monkeypatch):
 
     assert "visual" not in seen["file_meta"]
     assert seen["has_webmercator"] is False
+
+
+def test_a_data_type_outside_the_stac_enum_is_moved_aside():
+    """`data_type` is a closed enum of pixel types. The producer sends what the raster means, not
+    how it is stored, and "categorical" made both raster items fail pystac and rashid (#255).
+    Properties arrive from the promote message and are published unread, so the check belongs here."""
+    props = consume._properties(_record(data_type="categorical"))
+
+    assert props["data_type"] == "other"        # the escape hatch the enum provides
+    assert props["ugs:data_type"] == "categorical"   # the producer's word, kept where it is legal
+
+
+def test_a_real_pixel_type_is_left_alone():
+    props = consume._properties(_record(data_type="float32"))
+
+    assert props["data_type"] == "float32"
+    assert "ugs:data_type" not in props

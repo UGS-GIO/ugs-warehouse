@@ -474,3 +474,34 @@ def test_pub_item_omits_the_fields_the_source_left_empty():
     for absent in ("description", "keywords", "ugs:scale", "ugs:author"):
         assert absent not in props, absent
     assert props["ugs:series"] == "DS"   # a value the source did give still lands
+
+
+def test_pub_item_id_is_safe_in_a_path():
+    """The id is a directory name and the tail of every link to the item, so a space in it made
+    the item's own self link, its collection's item link and the ISO href unresolvable."""
+    assert pubs_sink.item_id_for("Geologic map of Utah") == "Geologic-map-of-Utah"
+    assert pubs_sink.item_id_for("557.92 UT1CO") == "557.92-UT1CO"
+    # Already safe ids are untouched, trailing punctuation included: `~` and `-` are unreserved.
+    assert pubs_sink.item_id_for("OF-70-234~2") == "OF-70-234~2"
+    assert pubs_sink.item_id_for("PI-") == "PI-"
+
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item({"series_id": "Geologic map of Utah", "series": "GEOLOGIC"}, [])
+
+    assert item["id"] == "Geologic-map-of-Utah"
+    assert item["properties"]["ugs:series_id"] == "Geologic map of Utah"  # the source string survives
+    assert all(" " not in lk["href"] for lk in item["links"])
+
+
+def test_pub_href_drops_undefined_and_upgrades_ugspub_to_https():
+    """`undefined` reached the database as text and resolved to an asset that 404s by
+    construction. ugspub answers 303 to https, and a page served over https cannot fetch a
+    plaintext asset."""
+    assert pubs_sink.href("undefined") is None
+    assert pubs_sink.href("  ") is None
+    assert pubs_sink.href("http://ugspub.nr.utah.gov/publications/ofr/OFR-1.pdf") \
+        == "https://ugspub.nr.utah.gov/publications/ofr/OFR-1.pdf"
+    # A bare filename still resolves against the publications host, and other hosts are left alone.
+    assert pubs_sink.href("ofr/OFR-1.pdf") == pubs_sink.UGSPUB + "ofr/OFR-1.pdf"
+    assert pubs_sink.href("https://example.org/x.pdf") == "https://example.org/x.pdf"

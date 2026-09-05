@@ -8,7 +8,7 @@ it would force one of those. An optional thumbnail asset is added when present.
 """
 from __future__ import annotations
 
-from ..core import config, stac
+from ..core import config, gcs, stac
 from .identity import Raster
 
 COG_MIME = config.COG_MIME
@@ -16,15 +16,20 @@ COG_MIME = config.COG_MIME
 
 def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None,
                properties: dict | None = None, has_thumbnail: bool = False,
-               proj_epsg: int | None = None) -> dict:
+               proj_epsg: int | None = None,
+               file_meta: dict[str, gcs.FileMeta] | None = None) -> dict:
+    """`file_meta` is what the promote's copies reported, keyed by asset. Both arrive through a
+    server-side rewrite, so they carry a size and no checksum — see core.gcs.copy_from_uri."""
+    meta = file_meta or {}
     cog_url = config.public_url(raster.cog_object_path)
     assets = {
         "cog": {"href": cog_url, "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
-                "roles": ["data", "visual"]},
+                "roles": ["data", "visual"], **stac.file_fields(meta.get("cog"))},
     }
     if has_thumbnail:
         assets["thumbnail"] = {"href": config.public_url(raster.thumb_object_path),
-                               "type": "image/png", "roles": ["thumbnail"]}
+                               "type": "image/png", "roles": ["thumbnail"],
+                               **stac.file_fields(meta.get("thumbnail"))}
 
     return stac.build_item(
         item_id=raster.item_id,
@@ -41,11 +46,12 @@ def build_item(raster: Raster, *, bbox: list[float], geometry: dict | None,
 
 def write(raster: Raster, *, bbox: list[float], geometry: dict | None = None,
           properties: dict | None = None, has_thumbnail: bool = False,
-          proj_epsg: int | None = None) -> str:
+          proj_epsg: int | None = None,
+          file_meta: dict[str, gcs.FileMeta] | None = None) -> str:
     """Build + upload the item JSON. Caller runs `core.stac.refresh_catalog()` after."""
     item = build_item(
         raster, bbox=bbox, geometry=geometry, properties=properties,
-        has_thumbnail=has_thumbnail, proj_epsg=proj_epsg,
+        has_thumbnail=has_thumbnail, proj_epsg=proj_epsg, file_meta=file_meta,
     )
     stac.attach_renders(item)  # ugs-styles colormap/rescale -> render extension (graceful if none)
     return stac.write_item(item)

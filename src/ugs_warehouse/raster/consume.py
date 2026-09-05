@@ -101,22 +101,24 @@ def promote(record: dict) -> str:
     """
     raster = raster_from_record(record)
     staged_cog = _staged_source(record["staged_cog_uri"])
-    gcs.copy_from_uri(staged_cog, raster.cog_object_path,
-                      content_type=config.COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+    # Both copies are server-side rewrites, so each reports a size and no checksum (core.gcs).
+    file_meta = {"cog": gcs.copy_from_uri(staged_cog, raster.cog_object_path,
+                                          content_type=config.COG_MIME,
+                                          cache_control=gcs.CACHE_IMMUTABLE)}
     # Thumbnail source isn't a distinct contract column — derive the staged sibling. Best-effort so
     # a missing thumb doesn't fail the promote; if it doesn't land, the item still advertises it.
     # TODO(marshall): confirm a `staged_thumb_uri` column vs the `.cog.tif`->`.thumb.png` sibling.
     if record.get("has_thumbnail") and staged_cog.endswith(".cog.tif"):
         try:
-            gcs.copy_from_uri(staged_cog[:-len(".cog.tif")] + ".thumb.png",
-                              raster.thumb_object_path,
-                              content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
+            file_meta["thumbnail"] = gcs.copy_from_uri(
+                staged_cog[:-len(".cog.tif")] + ".thumb.png", raster.thumb_object_path,
+                content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
         except Exception:  # noqa: BLE001 — no staged thumb → skip, item asset href just 404s until fixed
             pass
     return sink_stac.write(
         raster, bbox=record["bbox"], geometry=record.get("geometry"),
         properties=_properties(record), has_thumbnail=bool(record.get("has_thumbnail")),
-        proj_epsg=record.get("epsg"),
+        proj_epsg=record.get("epsg"), file_meta=file_meta,
     )
 
 

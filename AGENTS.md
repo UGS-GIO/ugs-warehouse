@@ -133,3 +133,25 @@ Gotchas: `USE pubs` before doc-level BM25 (else `pubs.fts_main_docs...` breaks o
 - Target geometry is **EPSG:4326**; `transform.TARGET_SRS` / `H3_RESOLUTION` single source of truth.
 - dbt convention: geometry column named `geom`; `_current` is table suffix.
 - Coordinate change touching `_current` contract with marshallrobinson — neighbor repos (`dataELT`, `ugs-ingest`, `ugs-map-viewer`) read-only here.
+
+## Writing style for chat replies
+
+Clinton's standing preference. Applies to every response in this repo, not just
+documents. Violating it is a defect, same as broken code.
+
+Do not:
+- Open with a bolded verdict, a "Short answer:", or a "TL;DR:" the user did not ask for.
+- Write one-sentence paragraphs stacked for rhythm. Use normal paragraphs.
+- Bold the first phrase of a line as a pseudo-heading. Bold is for rare emphasis.
+- Use em dashes. Use a comma, a full stop, or brackets.
+- Build tables for anything that is not genuinely a comparison across columns.
+- Use three-part lists as a rhetorical tic ("smaller, faster, cheaper").
+- Close with "Want me to X?" or an offer the user did not invite. Stop when done.
+- Restate the question before answering it.
+- Add a summary paragraph at the end that repeats what was already said.
+
+Do:
+- Answer first, in plain sentences, the way a colleague would in Slack.
+- Keep it short. Length is not thoroughness.
+- Say "I don't know" or "I was wrong" without ceremony and move on.
+- Give one recommendation, not a survey of options.

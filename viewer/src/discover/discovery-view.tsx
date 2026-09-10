@@ -16,6 +16,7 @@ import {
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
 import type { Footprint } from "@/map/map-model";
 import { AddToMapButton } from "@/map/add-to-map-button";
+import { OpenMapPill } from "./open-map-pill";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
 import { useQuery } from "@tanstack/react-query";
 
@@ -236,6 +237,9 @@ export function DiscoveryView({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      {/* Added layers accumulate into ?l= but Discovery's map only draws footprints — this is the
+          only feedback that a card's "+ Add to map" did anything, plus the way to the Map view. */}
+      <OpenMapPill />
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
         <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}

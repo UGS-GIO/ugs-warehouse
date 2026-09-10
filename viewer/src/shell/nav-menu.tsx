@@ -110,7 +110,9 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
             <div className={HEADING}>Theme</div>
             <Menu.RadioGroup value={theme} onValueChange={(value) => pick(value as Theme)}>
               {THEMES.map((t) => (
-                <Menu.RadioItem key={t.value} value={t.value} className={ITEM}>
+                // RadioItem keeps the menu open by default (for multi-pick groups); picking a
+                // theme is one choice, and the result is visible behind the menu.
+                <Menu.RadioItem key={t.value} value={t.value} className={ITEM} closeOnClick>
                   <span aria-hidden className="w-4 text-center">{t.icon}</span>
                   <span className="flex-1">{t.label}</span>
                   <Menu.RadioItemIndicator className="text-primary">✓</Menu.RadioItemIndicator>

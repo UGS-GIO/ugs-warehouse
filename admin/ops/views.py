@@ -97,11 +97,13 @@ def retire_preview_logs(request):
     """The preview's log lines, scoped to the execution the preview started."""
     execution = request.GET.get("execution", "")
     state = next((e["state"] for e in jobs.recent("retire") if e["name"] == execution), "")
+    log = jobs.logs("retire", execution=execution)
     return render(request, "ops/_retire_logs.html", {
-        "topic": request.GET.get("topic", ""), "execution": execution,
-        "log": jobs.logs("retire", execution=execution),
-        # Polling stops once the run is over — the preview is a finished document, not a tail.
-        "state": state, "done": state in ("succeeded", "failed"),
+        "topic": request.GET.get("topic", ""), "execution": execution, "log": log,
+        # Polling stops once the run is over — the preview is a finished document, not a tail. A
+        # console in dry-run started nothing, so there is nothing to wait for either.
+        "state": "console dry-run" if log.get("dry_run") else state,
+        "done": state in ("succeeded", "failed") or bool(log.get("dry_run")),
     })
 
 

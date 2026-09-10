@@ -181,6 +181,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     # declared in stac_extensions since there's no resolvable schema). Shape mirrors Frictionless.
     data_asset = {"href": config.public_url(archive_path), "type": PARQUET_MIME,
                   "roles": ["data"], "title": "GeoParquet archive (native geometry)",
+                  "description": stac.USAGE_DATA,
                   "table:columns": _table_columns(con, view)}
     if rel_fks:
         data_asset["ugs:foreign_keys"] = rel_fks
@@ -188,7 +189,8 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     assets = {
         "data": data_asset,
         "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
-                    "roles": ["visual"], "title": "PMTiles vector tiles"},
+                    "roles": ["visual"], "title": "PMTiles vector tiles",
+                    "description": stac.USAGE_PMTILES},
         # Aspatial related tables (e.g. UCRC boxes/photos/attachments) materialised as Parquet,
         # each carrying its own `ugs:foreign_keys` (child → this topic) + `table:columns`.
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.
@@ -202,14 +204,16 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     if config.IS_REVIEW_CATALOG:
         ducklake_uri = f"{ducklake.DATA_PATH.rstrip('/')}/{topic.schema}/{topic.stem}"
         assets["ducklake"] = {"href": ducklake_uri, "type": "application/x-ducklake-table",
-                              "roles": ["data"], "title": "DuckLake table (native geometry)"}
+                              "roles": ["data"], "title": "DuckLake table (native geometry)",
+                              "description": stac.USAGE_DUCKLAKE}
     # Rendered preview PNG (styled PMTiles → image), written independently by the ugs-topics-thumbs
     # job. Presence-driven, exactly like the pubs cover/thumbnail: stamp the asset iff the PNG exists,
     # so the catalog shows a real styled preview for topics that have one (sand placeholder otherwise).
     thumb_path = f"{config.THUMBS_PREFIX}/{topic.stem}/{topic.stem}.png"
     if gcs.exists(thumb_path):
         assets["thumbnail"] = {"href": config.public_url(thumb_path), "type": "image/png",
-                               "roles": ["thumbnail"], "title": "Styled preview"}
+                               "roles": ["thumbnail"], "title": "Styled preview",
+                               "description": stac.USAGE_THUMBNAIL}
     # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
     # sink, the thumbnail another job renders) keeps what the published item already carries.
     carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)
@@ -234,7 +238,10 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         # queryable OGC API Features endpoint is addressable here and nowhere else in the catalog.
         extra_links=[stac.pmtiles_link(pmtiles_url, [topic.stem]),
                      {"rel": "service", "href": f"{config.PGF_BASE_URL}/collections/{topic.stem}",
-                      "type": "application/json", "title": "OGC API Features collection"},
+                      "type": "application/json",
+                      # STAC links carry no `roles`; the title is what tells a consumer this is the
+                      # live query/attribute endpoint (vs the display + download assets) (#280).
+                      "title": "OGC API Features — query features / attributes"},
                      *rel_links],
         stac_extensions=exts,
         proj_epsg=4326,  # transform reprojects every topic to 4326

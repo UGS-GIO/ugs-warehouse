@@ -25,12 +25,14 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields }: {
+export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
   rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
   summaryFields?: readonly string[];   // item's `ugs:summary_fields` — leads the record cards
+  presetFilter?: ColFilter;  // exact-match filter ANDed ahead of the user's own filters (e.g. clicked feature's FK)
+  onClearPreset?: () => void;  // clears presetFilter — wired to the chip's ✕
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
   // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
@@ -70,12 +72,13 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // screen while the next one loads, so paging does not blank the table between fetches.
   const { data: page, error, isFetching: loading } = useQuery({
     queryKey: ["parquet-page", href, pageIndex, pageSize, showAll,
-               sort?.id, sort?.desc, applied.search, filterKey],
+               sort?.id, sort?.desc, applied.search, filterKey, JSON.stringify(presetFilter)],
     queryFn: async () => {
       const { queryParquet } = await import("./download");
       return queryParquet(href, {
         limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
-        orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
+        orderBy: sort?.id, desc: sort?.desc, search: applied.search,
+        filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
       });
     },
     placeholderData: keepPreviousData,
@@ -108,6 +111,9 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     return () => clearTimeout(t);
   }, [search, draft]);
 
+  // A newly clicked feature (or the preset clearing) should land on page 1, not wherever the
+  // user had paged to for the previous feature.
+  useEffect(() => setPageIndex(0), [JSON.stringify(presetFilter)]);
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
     () => (page?.columns ?? []).map((c) => ({
@@ -222,6 +228,12 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
               {showColFilters ? "Hide column filters" : "Filter columns"}
             </button>
             {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
+            {presetFilter && (
+              <span className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                Showing rows for the clicked feature
+                <button type="button" onClick={onClearPreset} aria-label="Clear feature filter" className="hover:opacity-80">✕</button>
+              </span>
+            )}
           </>
         )}
       </div>

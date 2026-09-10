@@ -1,0 +1,62 @@
+diff --git a/internal/data/catalog_db.go b/internal/data/catalog_db.go
+index 8487bba..b1c3079 100644
+--- a/internal/data/catalog_db.go
++++ b/internal/data/catalog_db.go
+@@ -16,13 +16,14 @@ package data
+ import (
+ 	"context"
+ 	"database/sql"
++	"database/sql/driver"
+ 	"encoding/json"
+ 	"fmt"
+ 	"sort"
+ 	"strings"
+ 	"time"
+ 
+-	_ "github.com/duckdb/duckdb-go/v2"
++	duckdb "github.com/duckdb/duckdb-go/v2"
+ 	log "github.com/sirupsen/logrus"
+ 	"github.com/tobilg/duckdb_featureserv/internal/conf"
+ )
+@@ -87,10 +88,40 @@ func dbConnect() *sql.DB {
+ 		log.Fatal("Blank DuckDB path is disallowed for security reasons")
+ 	}
+ 
+-	db, err := sql.Open("duckdb", dbPath)
++	// Bound DuckDB so that concurrent heavy Features queries cannot collectively exhaust the
++	// container. Left at defaults, DuckDB sizes memory_limit to ~80% of the container and runs each
++	// query multi-threaded; under Cloud Run request concurrency, N such queries share one (cached)
++	// DuckDB instance and OOM it -- "1.5 GiB/1.5 GiB used" on a 2Gi box -- returning a 503 that also
++	// kills whatever requests were in flight on the same instance (ALL-5869). memory_limit is set
++	// deliberately BELOW the container: featureserv ALSO buffers each whole response in Go heap
++	// (~2.5 copies live at the marshal peak), and that buffering -- not DuckDB -- is the half that
++	// scales with request concurrency, so DuckDB must leave it room or the container OOMs instead of
++	// DuckDB cleanly erroring one oversized query. threads=1 stops a query's parallel operators from
++	// spiking memory (cpu=1 already implies this -- pinned against a future cpu bump);
++	// preserve_insertion_order=false lets large scans stream rather than buffer to keep a row order no
++	// GeoJSON client relies on. Applied via connInitFn so every connection in the database/sql pool
++	// gets them -- a bare db.Exec("SET ...") would land on one arbitrary pooled connection.
++	//
++	// This value is coupled to --memory and --concurrency in cloudbuild.yaml but is NOT machine-checked
++	// (check_limits.py gates only --memory vs Paging.LimitMax). Keep memory_limit below --memory with
++	// headroom for Go response buffering at the concurrency cap; measure under parallel load before
++	// trusting a new (memory, concurrency, limit) triple.
++	connector, err := duckdb.NewConnector(dbPath, func(execer driver.ExecerContext) error {
++		for _, pragma := range []string{
++			"SET memory_limit='2500MB'",
++			"SET threads=1",
++			"SET preserve_insertion_order=false",
++		} {
++			if _, err := execer.ExecContext(context.Background(), pragma, nil); err != nil {
++				return err
++			}
++		}
++		return nil
++	})
+ 	if err != nil {
+ 		log.Fatal(err)
+ 	}
++	db := sql.OpenDB(connector)
+ 
+ 	// Test the connection
+ 	err = db.Ping()

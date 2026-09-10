@@ -35,7 +35,9 @@ substitutions:
   # featureserv buffers whole responses, so this and Paging.LimitMax in
   # featureserv/duckdb_featureserv.toml are one decision. Passed to the image build as well as the
   # deploy so check_limits.py can refuse an unmeasured pairing rather than let it OOM in prod.
-  _FEATURES_MEMORY: 2Gi
+  # 4Gi (was 2Gi): headroom for parallel-view load once concurrency was capped and DuckDB's own
+  # memory bounded (ALL-5869). (4Gi, LimitMax 100000) is covered by the measured (2Gi, 100000) pair.
+  _FEATURES_MEMORY: 4Gi
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
@@ -733,11 +735,27 @@ steps:
       - --port=9000
       - --cpu=1
       # Set via _FEATURES_MEMORY so the image build sees the same number and check_limits.py can
-      # gate the (memory, LimitMax) pairing. 512Mi OOM-killed the container mid-response for a client
-      # paging a large collection; 1Gi survives paging but not a single full pull; 2Gi covers both
-      # (84,756 features / 122MB). Scale-to-zero means it is only billed while serving. ALL-5410.
+      # gate the (memory, LimitMax) pairing. History: 512Mi OOM-killed mid-response when paging a
+      # large collection; 1Gi survives paging but not a single full pull; 2Gi covered both (84,756
+      # features / 122MB, ALL-5410). Raised to 4Gi for headroom under parallel-view load once
+      # concurrency was capped and DuckDB's memory bounded (ALL-5869). Scale-to-zero: billed while serving.
       - --memory=${_FEATURES_MEMORY}
       - --timeout=120
+      # Cap per-instance request concurrency. duckdb_featureserv shares one in-process DuckDB across
+      # every in-flight request AND buffers each whole response in Go heap, so heavy Features queries
+      # (50-84MB GeoJSON each) collectively exhausted the instance under Cloud Run's default 80 --
+      # DuckDB OOM -> 500/503, taking in-flight requests down with it (ALL-5869). 4 bounds both the
+      # DuckDB pressure and the Go response-buffering that scales with concurrency (~2.5 heap copies
+      # per response); the DuckDB memory pragmas in the featureserv patch (catalog_db.go) back it up.
+      # Scale-to-zero, so more-but-smaller instances still only bill while serving; the tradeoff is
+      # more cold starts (each re-derives the collection list ~20s). Raise toward 8 only after a
+      # parallel-load test confirms 4Gi holds -- check_limits.py does not cover concurrency.
+      - --concurrency=4
+      # Bound blast radius: --allow-unauthenticated + 4Gi/instance makes an unbounded fan-out a real
+      # cost exposure. 50 sits far above this endpoint's real concurrency (50x4 = 200 in-flight) while
+      # halving the worst case vs Cloud Run's default 100. Hitting it returns a clean 429, not an OOM.
+      # Tune down for a tighter bound.
+      - --max-instances=50
 
   # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).
   # Memory is small: it holds PMTiles directories, never tile data. Behind the CDN this only

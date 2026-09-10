@@ -3,6 +3,7 @@
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useQuery } from "@tanstack/react-query";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
@@ -12,7 +13,7 @@ import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { CommentsPanel } from "@/review/comments-panel";
 import { boundsOf, type FocusSel, validBbox } from "./map-model";
-import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, useLiveLegend, useStyleLayers } from "@/stac";
+import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, relatedJoins, type RelatedJoin, type StacDoc, useLiveLegend, useStyleLayers } from "@/stac";
 import { bboxPolygon, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { usePerItem } from "@/lib/use-per-item";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
@@ -53,11 +54,63 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
   }
 }
 
+// One related (aspatial child) join for the clicked feature's popup: 0 rows → hide, 1 row → inline
+// its fields, many → a button handing off to the page's Related panel (onOpen).
+function PopupRelatedRow({ join, value, onOpen }: {
+  join: RelatedJoin; value: unknown; onOpen?: (relatedKey: string, value: string) => void;
+}) {
+  const v = value == null || value === "" ? undefined : String(value);
+  const { data, isFetching } = useQuery({
+    enabled: v !== undefined,
+    queryKey: ["popup-related", join.href, join.childField, v],
+    queryFn: async () => {
+      const { queryParquet } = await import("@/data/download");
+      return queryParquet(join.href, { limit: 6, offset: 0, filters: [{ col: join.childField, kind: "exact", value: v! }] });
+    },
+    staleTime: 30_000,
+  });
+  if (v === undefined) return null;
+  const total = data?.total ?? 0;
+  if (isFetching && !data) return <div className="py-0.5 text-xs text-gray-500">{join.title}…</div>;
+  if (total === 0) return null;                         // this feature has no related rows — hide
+  if (total === 1) {                                    // 1:1 → inline the row's fields (minus the join id)
+    const row = data!.rows[0];
+    return (
+      <div className="py-0.5">
+        <div className="text-[11px] font-semibold text-gray-700">{join.title}</div>
+        {Object.entries(row).filter(([k, val]) => k !== join.childField && val != null && val !== "").slice(0, 6)
+          .map(([k, val]) => <div key={k} className="text-xs"><span className="text-gray-500">{k}:</span> {String(val)}</div>)}
+      </div>
+    );
+  }
+  return (                                              // 1:many → hand off to the panel
+    <button type="button" onClick={() => onOpen?.(join.key, v)}
+      className="block w-full text-left text-xs font-medium text-primary hover:underline">
+      {total} related in {join.title} →
+    </button>
+  );
+}
+
+// The clicked feature's full "Related" block: one PopupRelatedRow per FK-carrying related asset.
+function PopupRelated({ item, props, onOpen }: {
+  item: StacDoc; props: Record<string, unknown>; onOpen?: (relatedKey: string, value: string) => void;
+}) {
+  const joins = relatedJoins(item);
+  if (!joins.length) return null;
+  return (
+    <div className="mt-2 border-t border-gray-200 pt-1.5">
+      <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Related</div>
+      {joins.map((j) => <PopupRelatedRow key={j.key} join={j} value={props[j.parentField]} onOpen={onOpen} />)}
+    </div>
+  );
+}
+
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel, onFeatureRelated }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number) => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
+  onFeatureRelated?: (relatedKey: string, value: string) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
@@ -282,6 +335,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
                     ))}
                   </tbody>
                 </table>
+                {item && <PopupRelated item={item} props={popup.props} onOpen={onFeatureRelated} />}
                 {IS_REVIEW && popup.props[pkCol] != null && (
                   <button
                     className="mt-1.5 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-500/20"

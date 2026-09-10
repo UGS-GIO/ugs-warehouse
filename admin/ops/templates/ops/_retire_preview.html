@@ -1,0 +1,36 @@
+{% comment %}Step 1 — the dry-run started. Its logs ARE the preview, so they load scoped to this
+execution, and the confirmation form sits underneath, unusable until the topic is typed back.{% endcomment %}
+<div class="rounded-lg border border-red-200 bg-red-50 p-3">
+  <div class="flex items-center justify-between">
+    <div class="font-medium text-sm">Retire <span class="font-mono">{{ topic }}</span></div>
+    <button class="text-xs text-slate-500 hover:text-slate-800"
+            onclick="document.getElementById('retire-panel').innerHTML = ''">✕ cancel</button>
+  </div>
+  <div class="mt-1 text-xs {% if result.ok %}text-slate-600{% else %}text-red-700{% endif %}">{{ result.message }}</div>
+
+  {% if result.ok %}
+  <div class="mt-2" hx-get="{% url 'ops:retire_preview_logs' %}?topic={{ topic|urlencode }}&execution={{ execution|urlencode }}"
+       hx-trigger="load delay:3s" hx-swap="outerHTML">
+    <div class="text-xs text-slate-500">starting the dry-run…</div>
+  </div>
+
+  <form class="mt-3 border-t border-red-200 pt-3" hx-post="{% url 'ops:retire_execute' %}"
+        hx-target="#retire-panel" hx-swap="innerHTML">
+    <input type="hidden" name="topic" value="{{ topic }}">
+    <label class="block text-xs text-slate-600">
+      Read the preview, then type <span class="font-mono font-medium">{{ topic }}</span> to enable the button.
+      <input type="text" name="confirm" autocomplete="off" spellcheck="false"
+             class="mt-1 w-full sm:w-96 rounded border border-slate-300 px-3 py-1.5 text-sm font-mono focus:border-slate-500 focus:outline-none"
+             oninput="document.getElementById('retire-go').disabled = this.value.trim() !== '{{ topic }}'">
+    </label>
+    <label class="mt-2 flex items-center gap-1.5 text-xs text-slate-600 cursor-pointer">
+      <input type="checkbox" name="purge_overrides" value="1" class="rounded border-slate-300">
+      Also delete the hand-authored metadata override (kept by default — a re-ingest recovers it)
+    </label>
+    <button id="retire-go" type="submit" disabled
+            class="mt-2 rounded bg-red-700 text-white text-sm px-3 py-1 hover:bg-red-800 disabled:opacity-40 disabled:hover:bg-red-700">
+      Retire {{ topic }}
+    </button>
+  </form>
+  {% endif %}
+</div>

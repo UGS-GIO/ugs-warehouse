@@ -73,6 +73,60 @@ def run_maintain(request, mode):
 
 
 @admin_required
+def retire_page(request):
+    """Retire a serving topic — the two-step page. Deliberately not a Run-tab button: this one
+    deletes published data, so it gets a dry-run preview and a typed confirmation first."""
+    topics = [t for t in stac.serving_topics() if t.get("fqn")]
+    return render(request, "ops/retire.html", {"topics": topics, "dry_run": settings.JOBS_DRY_RUN})
+
+
+@admin_required
+@require_POST
+def retire_preview(request):
+    """Step 1 — start a `--dry-run` execution. Its output IS the preview, so the panel polls for
+    that one execution's logs (a job-wide tail would show the last operator's run instead)."""
+    topic = request.POST.get("topic", "")
+    result = jobs.run_retire(topic, dry_run=True, requested_by=request.iap_email)
+    return render(request, "ops/_retire_preview.html", {
+        "topic": topic, "result": result, "execution": result.get("execution", ""),
+    })
+
+
+@admin_required
+def retire_preview_logs(request):
+    """The preview's log lines, scoped to the execution the preview started."""
+    execution = request.GET.get("execution", "")
+    state = next((e["state"] for e in jobs.recent("retire") if e["name"] == execution), "")
+    return render(request, "ops/_retire_logs.html", {
+        "topic": request.GET.get("topic", ""), "execution": execution,
+        "log": jobs.logs("retire", execution=execution),
+        # Polling stops once the run is over — the preview is a finished document, not a tail.
+        "state": state, "done": state in ("succeeded", "failed"),
+    })
+
+
+@admin_required
+@require_POST
+def retire_execute(request):
+    """Step 2 — retire for real, once the operator has typed the topic back.
+
+    The check is here, not in the template: a disabled button is a hint, not a control, and this
+    endpoint is reachable without it.
+    """
+    topic = request.POST.get("topic", "")
+    if request.POST.get("confirm", "").strip() != topic:
+        return render(request, "ops/_retire_result.html", {
+            "topic": topic,
+            "result": {"ok": False, "message": f"type {topic} exactly to confirm — nothing was run"},
+        })
+    result = jobs.run_retire(topic, dry_run=False,
+                             purge_overrides=bool(request.POST.get("purge_overrides")),
+                             requested_by=request.iap_email)
+    print(f"[ops] retire {topic} requested by {request.iap_email or 'unknown'}: {result['message']}")
+    return render(request, "ops/_retire_result.html", {"topic": topic, "result": result})
+
+
+@admin_required
 def attention(request):
     return render(request, "ops/_attention.html", {"att": jobs.attention_pubs()})
 

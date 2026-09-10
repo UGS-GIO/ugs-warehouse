@@ -21,6 +21,7 @@ tombstone: absent from GCS is absent from the catalog.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -80,6 +81,11 @@ def retire(topic: Topic, *, dry_run: bool = False, assume_yes: bool = False,
     stem = topic.stem
     tag = " (dry-run)" if dry_run else ""
     print(f"[retire] {topic.fqn} -> stem {stem!r}{tag}")
+    # Set by the ops console from the operator's IAP identity. The run's own log stream is the audit
+    # record — the console has no durable store to write one to.
+    requested_by = os.environ.get("RETIRE_REQUESTED_BY")
+    if requested_by:
+        print(f"[retire] requested by {requested_by}")
 
     refs = references(stem)
     if refs:

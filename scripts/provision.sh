@@ -220,7 +220,7 @@ ALERT_NAME="Warehouse job execution failed"
 ALERT_API="https://monitoring.googleapis.com/v3/projects/${PROJECT}/alertPolicies"
 ALERT_TOKEN=$(gcloud auth print-access-token)
 # Quotes are pre-escaped: this is interpolated INTO a JSON string below.
-WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\")'
+WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\", \"ugs-warehouse-retire\")'
 
 echo "→ alert policy: ${ALERT_NAME}"
 if curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200" \

@@ -41,6 +41,7 @@ exclude_docs: |
   INTEGRATION_GEOLMAP.md
   THREED_PIPELINE.md
   REVIEW_FEDERATION.md
+  RETIRE.md
 
 plugins:
   - search

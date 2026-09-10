@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex } from "./stac";
+import { assetUsages, cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 
@@ -56,6 +56,30 @@ describe("cog asset selection", () => {
   });
 });
 
+
+// The warehouse stamps a per-asset usage `description` (display vs query vs download) so a
+// consumer picks the right endpoint without hardcoding asset keys (warehouse#280). This surfaces
+// them for a listing; it does not change how anything is rendered.
+describe("assetUsages", () => {
+  it("pairs each asset that has a usage description with its key", () => {
+    const doc = {
+      assets: {
+        data: { href: "https://x/a.parquet", type: "application/vnd.apache.parquet", roles: ["data"], description: "GeoParquet — download" },
+        pmtiles: { href: "https://x/a.pmtiles", type: "application/vnd.pmtiles", roles: ["visual"], description: "Vector tiles — display" },
+        thumbnail: { href: "https://x/t.png", type: "image/png", roles: ["thumbnail"] },
+      },
+    };
+    const byKey = Object.fromEntries(assetUsages(doc).map((u) => [u.key, u.usage]));
+    expect(byKey.data).toContain("download");
+    expect(byKey.pmtiles).toContain("display");
+    // An asset with no description is omitted rather than surfaced with an empty hint.
+    expect(byKey.thumbnail).toBeUndefined();
+  });
+
+  it("is empty when the doc has no assets", () => {
+    expect(assetUsages(undefined)).toEqual([]);
+  });
+});
 
 describe("isDrawableCog", () => {
   it("is what decides the default tab and whether a preview mounts", () => {

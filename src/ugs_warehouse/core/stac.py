@@ -52,6 +52,26 @@ ALTERNATE_ASSETS_EXT = "https://stac-extensions.github.io/alternate-assets/v1.2.
 # verifies what it got. Declared only when an asset actually carries one (see `file_fields`).
 FILE_EXT = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
 
+# Per-asset usage hints — the human half of "which asset is for what" (display / query / download).
+# The machine half already rides the standard STAC `roles` (visual = display, data = download,
+# style), so these are ONLY the `description` a person or agent reads to pick an endpoint without
+# guessing (#280). One home for the wording so the two producers that stamp them can't drift; kept
+# short (a label, not a how-to — the runnable how-to lives once in the collection AGENTS.md).
+USAGE_DATA = "GeoParquet — full dataset; download, or read in place with DuckDB for analysis"
+USAGE_PMTILES = "Vector tiles — web-map display"
+USAGE_DUCKLAKE = "DuckLake table — versioned SQL analysis (review catalog only)"
+USAGE_THUMBNAIL = "Styled preview image"
+USAGE_STYLE = "MapLibre GL style — how to draw this layer"
+USAGE_METADATA = "ISO 19139 metadata (ISO 19115 content model)"
+
+
+def has_feature_service(collection_path: str) -> bool:
+    """True when the collection at `collection_path` is served live by OGC API Features
+    (duckdb_featureserv) — the flat collections and the serving-topic schemas. Single source for the
+    collection's `rel:service` link (`_collection_doc`) and the AGENTS.md query-endpoint note
+    (`catalog_docs.agents`), so the link and the prose that describes it can't disagree."""
+    return "/" not in collection_path or collection_path.startswith(f"{SERVING_TOPICS_CATALOG}/")
+
 
 # ---------------------------------------------------------------- helpers
 
@@ -75,8 +95,13 @@ def prettify(stem: str) -> str:
 
 
 def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
-    """A web-map-links `pmtiles` link so STAC Browser draws the vector layer."""
-    link = {"rel": "pmtiles", "href": href, "type": "application/vnd.pmtiles"}
+    """A web-map-links `pmtiles` link so STAC Browser draws the vector layer.
+
+    Titled for its purpose: STAC links carry no `roles`, so the human `title` is where a consumer
+    learns this endpoint is the fast display path — as opposed to the OGC API Features query link
+    and the GeoParquet download asset (#280)."""
+    link = {"rel": "pmtiles", "href": href, "type": "application/vnd.pmtiles",
+            "title": USAGE_PMTILES}
     if layers:
         link["pmtiles:layers"] = layers
     return link
@@ -242,7 +267,11 @@ def attach_iso(item: dict) -> str:
                   content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
     item.setdefault("assets", {})["metadata"] = {
         "href": config.public_url(path), "type": "application/xml",
-        "roles": ["metadata"], "title": "ISO 19139 metadata",
+        # `iso-19115` is the STAC + Portolan standard role for an ISO metadata file; our sidecar is
+        # ISO 19139, the XML encoding of the 19115 content model, so it earns that role alongside the
+        # generic `metadata`.
+        "roles": ["metadata", "iso-19115"], "title": "ISO 19139 metadata",
+        "description": USAGE_METADATA,
     }
     return path
 
@@ -265,7 +294,11 @@ def attach_renders(item: dict) -> None:
         return
     item.setdefault("properties", {})["ugs:renders"] = renders
     if style_asset:
-        item.setdefault("assets", {}).setdefault("style", style_asset)
+        # A usage `description` alongside the standard `style` role, so the item alone says the
+        # style asset is the "how to draw it" endpoint (#280). Preserve one the styles module set;
+        # don't mutate its dict (renders_for may hand back a shared/cached asset).
+        item.setdefault("assets", {}).setdefault(
+            "style", {**style_asset, "description": style_asset.get("description") or USAGE_STYLE})
 
 
 def attach_classification(item: dict) -> None:
@@ -348,7 +381,7 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
         # Flat collections, plus the nested serving-topic schemas — those are precisely the
         # collections whose items featureserv binds, and they'd otherwise be the only ones with
         # no pointer to the service that serves them.
-        service = depth == 1 or path.startswith(f"{SERVING_TOPICS_CATALOG}/")
+        service = has_feature_service(path)
     doc = {
         "type": "Collection",
         "stac_version": STAC_VERSION,
@@ -563,11 +596,14 @@ def _root_doc(children: list[dict]) -> dict:
 
 
 def _write_markdown(path: str, *, title: str, description: str, kind: str, children: int,
-                   extent: dict | None = None, items: list[dict] | None = None) -> None:
+                   extent: dict | None = None, items: list[dict] | None = None,
+                   service: bool = False) -> None:
     """Write README.md + AGENTS.md beside a catalog.json or collection.json.
 
     Both are regenerated on every refresh from the same values as the JSON, so the prose cannot
-    drift from the metadata it describes. `path` is the layout path, empty for the root.
+    drift from the metadata it describes. `path` is the layout path, empty for the root. `service`
+    marks a node whose items are served live by OGC API Features — the AGENTS.md then names that
+    query endpoint instead of denying one exists (see `catalog_docs.agents`).
     """
     prefix = f"{config.STAC_PREFIX}/{path}" if path else config.STAC_PREFIX
     for name, body in (
@@ -575,7 +611,7 @@ def _write_markdown(path: str, *, title: str, description: str, kind: str, child
             title=title, description=description, kind=kind, children=children,
             extent=extent, items=items)),
         (catalog_docs.AGENTS_NAME, catalog_docs.agents(
-            title=title, kind=kind, path=path, children=children, items=items)),
+            title=title, kind=kind, path=path, children=children, items=items, service=service)),
     ):
         gcs.put_bytes(body.encode(), f"{prefix}/{name}",
                       content_type=catalog_docs.MARKDOWN_MIME, cache_control=gcs.CACHE_CATALOG)
@@ -690,7 +726,8 @@ def refresh_catalog() -> None:
             _write_markdown(path, title=title or prettify(cid),
                             description=desc or f"UGS warehouse — {title or cid}.",
                             kind="collection", children=len(item_ids),
-                            extent=_extent(items), items=items)
+                            extent=_extent(items), items=items,
+                            service=has_feature_service(path))
             leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),
                           "mappable": mappable}
 
@@ -712,7 +749,10 @@ def refresh_catalog() -> None:
                         f"{config.STAC_PREFIX}/{top}/catalog.json")
             _write_markdown(top, title=ptitle,
                             description=f"UGS warehouse — {ptitle}, by data series.",
-                            kind="catalog", children=len(kids), items=rolled)
+                            kind="catalog", children=len(kids), items=rolled,
+                            # The serving-topics sub-catalog's children are all featureserv-served;
+                            # its AGENTS.md should name the query endpoint too (pubs series aren't).
+                            service=top == SERVING_TOPICS_CATALOG)
             root_children.append({"href": f"./{top}/catalog.json", "title": ptitle,
                                   "count": sum(k["count"] for k in kids),
                                   "mappable": sum(k["mappable"] for k in kids)})

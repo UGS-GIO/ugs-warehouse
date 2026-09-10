@@ -328,13 +328,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
                 />
               ))
             ) : (
-              // Explicit `source` — react-map-gl doesn't inject it for Layers inside a Fragment,
-              // so without it maplibre throws "missing required property source".
-              <>
-                <Layer id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
-                <Layer id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
-                <Layer id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
-              </>
+              // An array, NOT a fragment: Source clones each child to inject `source`, and cloning a
+              // fragment puts the prop on the fragment (three React warnings per layer, and no
+              // source on the layers). Explicit `source` for the same reason — don't rely on inject.
+              [
+                <Layer key="fill" id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />,
+                <Layer key="line" id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />,
+                <Layer key="circle" id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />,
+              ]
             )}
           </Source>
         );

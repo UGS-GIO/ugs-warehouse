@@ -1,5 +1,5 @@
 diff --git a/internal/data/catalog_db.go b/internal/data/catalog_db.go
-index 8487bba..b1c3079 100644
+index 8487bba..67aa998 100644
 --- a/internal/data/catalog_db.go
 +++ b/internal/data/catalog_db.go
 @@ -16,13 +16,14 @@ package data
@@ -43,7 +43,7 @@ index 8487bba..b1c3079 100644
 +	// trusting a new (memory, concurrency, limit) triple.
 +	connector, err := duckdb.NewConnector(dbPath, func(execer driver.ExecerContext) error {
 +		for _, pragma := range []string{
-+			"SET memory_limit='2500MB'",
++			"SET memory_limit='3GB'",
 +			"SET threads=1",
 +			"SET preserve_insertion_order=false",
 +		} {

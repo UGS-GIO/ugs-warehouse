@@ -33,6 +33,9 @@ RASTER_CATALOG = "ugs-rasters"
 ROOT_DESCRIPTION = ("UGS warehouse — cloud-native serving catalog across all producers "
                     "(vector serving topics, publications/COGs).")
 
+# Link rel for our compact items.json index. Deliberately not "items" — see _collection_doc.
+INDEX_REL = "ugs-items-index"
+
 STAC_VERSION = "1.1.0"  # 1.1 promotes `bands` + data_type/nodata to common metadata (no raster ext)
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
@@ -373,7 +376,10 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             {"rel": "self", "href": "./collection.json", "type": "application/json"},
             # Compact items index — one fetch for the whole list (viewers read this instead
             # of N item.json fetches; the per-item docs stay the source of truth for detail).
-            {"rel": "items", "href": "./items.json", "type": "application/json", "title": "Items index"},
+            # NOT rel:"items": STAC API reserves that for an ItemCollection endpoint, and a
+            # standard client (STAC Browser) that follows it here fails the whole collection
+            # with "not a valid list of STAC Items". Those clients use the rel:"item" links below.
+            {"rel": INDEX_REL, "href": "./items.json", "type": "application/json", "title": "Items index"},
             {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
             # Portolan requires both files beside every node, linked from the JSON. refresh_catalog
             # writes them; a link without its file is a broken link, so the two move together.
@@ -465,7 +471,7 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./catalog.json", "type": "application/json"},
             *catalog_docs.markdown_links(),
-            *([{"rel": "items", "href": "./items.json", "type": "application/json",
+            *([{"rel": INDEX_REL, "href": "./items.json", "type": "application/json",
                 "title": "Items index (all child collections)"}] if items_index else []),
             *[_child_link(f"./{c['id']}/collection.json", c.get("title"), c.get("count"), c.get("mappable"))
               for c in sorted(children, key=lambda c: c["id"])],

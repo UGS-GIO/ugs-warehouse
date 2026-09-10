@@ -220,10 +220,20 @@ def test_group_items_nested_serving_topic_paths():
 
 def test_subcatalog_items_index_link_is_opt_in():
     kids = [{"id": "hazards", "title": "Geologic Hazards", "count": 1}]
-    assert not any(lnk["rel"] == "items"
+    assert not any(lnk["rel"] == stac.INDEX_REL
                    for lnk in stac._subcatalog_doc("ugs-publications", kids)["links"])
     rolled = stac._subcatalog_doc("ugs-serving-topics", kids, items_index=True)
-    assert any(lnk["rel"] == "items" and lnk["href"] == "./items.json" for lnk in rolled["links"])
+    assert any(lnk["rel"] == stac.INDEX_REL and lnk["href"] == "./items.json"
+               for lnk in rolled["links"])
+
+
+def test_index_link_never_uses_the_reserved_items_rel():
+    """rel:"items" means an ItemCollection endpoint; ours is a compact custom index, and a
+    standard client that follows it there rejects the whole collection."""
+    docs = [stac._subcatalog_doc("ugs-serving-topics", [{"id": "hazards", "count": 1}], items_index=True),
+            stac._collection_doc("hazards", "ugs-serving-topics/hazards", ["hazards_qfaults"])]
+    for doc in docs:
+        assert not any(lnk["rel"] == "items" for lnk in doc["links"])
 
 
 def _related_item() -> dict:

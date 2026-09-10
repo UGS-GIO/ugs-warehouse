@@ -5,7 +5,8 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
+import { MapControl } from "./map-control";
+import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
@@ -194,9 +195,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
           maxPitch={85}
           terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
         >
-          <NavigationControl position="top-right" showCompass={false} />
-
-          <div className="absolute top-2.5 right-12 z-10">
+          <MapControl position="top-right">
             <button
               onClick={() => {
                 const next = !showDem;
@@ -205,7 +204,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
               }}
               className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
                 showDem ? "bg-primary text-primary-foreground border-primary"
-                  : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-muted"}`}
+                  : "bg-card/90 backdrop-blur-sm text-foreground border-border hover:bg-hover"}`}
               title="Toggle 3D Topography"
             >
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
@@ -213,11 +212,17 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
               </svg>
               <span>3D Terrain</span>
             </button>
-          </div>
+          </MapControl>
+
+          <NavigationControl position="top-right" showCompass={false} />
+          <GeolocateControl position="top-right" trackUserLocation
+            positionOptions={{ enableHighAccuracy: true }} />
 
           {gate && gateDirection && (
-            <ZoomGateNotice gate={gate} dir={gateDirection}
-              onZoom={() => mapRef.current?.getMap().easeTo({ zoom: gateZoom(gate, gateDirection), duration: 600 })} />
+            <MapControl position="bottom-left">
+              <ZoomGateNotice gate={gate} dir={gateDirection}
+                onZoom={() => mapRef.current?.getMap().easeTo({ zoom: gateZoom(gate, gateDirection), duration: 600 })} />
+            </MapControl>
           )}
 
           {showDem && (

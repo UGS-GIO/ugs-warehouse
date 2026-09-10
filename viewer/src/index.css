@@ -16,6 +16,8 @@
   --secondary-foreground: 0 0% 20%;
   --muted: 0 0% 96%;
   --muted-foreground: 0 0% 38%;      /* Utah gray-medium #616161 */
+  --hover: 0 0% 93%;                 /* hover fill — its own token because the gap that reads on a
+                                        white card is far too small to read on a dark one */
   --accent: 41 54% 47%;              /* Utah gold */
   --accent-foreground: 0 0% 100%;
   --destructive: 0 100% 36%;         /* Utah danger #ba0000 */
@@ -35,6 +37,7 @@
   --secondary-foreground: 0 0% 96%;
   --muted: 0 0% 20%;
   --muted-foreground: 0 0% 68%;
+  --hover: 0 0% 32%;
   --accent: 41 50% 52%;
   --accent-foreground: 0 0% 10%;
   --destructive: 0 72% 60%;
@@ -54,6 +57,7 @@
   --color-secondary: hsl(var(--secondary));
   --color-secondary-foreground: hsl(var(--secondary-foreground));
   --color-muted: hsl(var(--muted));
+  --color-hover: hsl(var(--hover));
   --color-muted-foreground: hsl(var(--muted-foreground));
   --color-accent: hsl(var(--accent));
   --color-accent-foreground: hsl(var(--accent-foreground));
@@ -190,3 +194,27 @@ div.utds-footer.utah-design-system { display: none !important; }
   .review-report .no-print { display: none !important; }
   @page { margin: 1.5cm; }
 }
+
+/* Our own UI inside a maplibre corner container (see map-control.tsx). It deliberately does NOT
+   carry maplibre's `maplibregl-ctrl` class: that class would hand every button in our controls
+   maplibre's chrome — including a blanket `button:hover` wash that outranks the app's own hover
+   styles. So restate the four things the class is actually needed for, and nothing else. */
+.ugs-ctrl { clear: both; pointer-events: auto; transform: translate(0); }
+.maplibregl-ctrl-top-left .ugs-ctrl { float: left; margin: 10px 0 0 10px; }
+.maplibregl-ctrl-top-right .ugs-ctrl { float: right; margin: 10px 10px 0 0; }
+.maplibregl-ctrl-bottom-left .ugs-ctrl { float: left; margin: 0 0 10px 10px; }
+.maplibregl-ctrl-bottom-right .ugs-ctrl { float: right; margin: 0 10px 10px 0; }
+
+/* maplibre's own controls (geolocate, zoom) sit next to ours, so give them the same card look the
+   search box and basemap switch use. Its icons are inline SVG, so a dark theme inverts them.
+   Doubled class: maplibre's stylesheet is a module import, so it lands after this file and a
+   single-class rule would lose the tie. Its hover is a 5% black wash — invisible on a dark card. */
+.maplibregl-ctrl.maplibregl-ctrl-group {
+  background: color-mix(in oklab, var(--color-card) 95%, transparent);
+  border: 1px solid var(--color-border);
+  border-radius: 0.375rem;
+  box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+}
+.maplibregl-ctrl.maplibregl-ctrl-group button + button { border-top-color: var(--color-border); }
+.maplibregl-ctrl.maplibregl-ctrl-group button:not(:disabled):hover { background-color: var(--color-hover); }
+.dark .maplibregl-ctrl.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1); }

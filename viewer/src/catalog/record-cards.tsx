@@ -68,7 +68,7 @@ export function RecordCards({ rows, onPick, highlight, summaryFields = [] }: {
             )}
             {onPick && (
               <button type="button" onClick={() => onPick(r)}
-                className="mt-2 rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-muted">
+                className="mt-2 rounded border border-border px-2 py-1 text-xs text-foreground hover:bg-hover">
                 Zoom to feature
               </button>
             )}

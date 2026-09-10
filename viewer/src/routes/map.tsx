@@ -22,6 +22,7 @@ return <MapShell
       openId={c.itemUrl ? idOf(c.itemUrl) : undefined}
       colorOf={(id: string) => colorFor(c.activeLayers.findIndex((l) => l.id === id))}
       onToggle={c.toggleLayer}
+      onToggleMany={c.toggleLayers}
       onOpen={c.openItem}
       // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
       legend={<MapLegend layers={c.activeLayers.flatMap((l, i) => (l.cogHref || l.rasterPmHref ? []

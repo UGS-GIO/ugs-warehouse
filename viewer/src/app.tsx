@@ -414,6 +414,13 @@ function useViewState() {
     if (set.has(id)) set.delete(id); else set.add(id);
     go({ view, c: collectionUrl, i: itemUrl, l: [...set], s: seriesSel });
   };
+  // A whole group at once (a series, a mart schema, or the active set). One navigation, not N:
+  // toggleLayer reads `layerIds` from the URL, so a loop over it would drop all but the last id.
+  const toggleLayers = (ids: string[], on: boolean) => {
+    const set = new Set(layerIds ?? []);
+    for (const id of ids) { if (on) set.add(id); else set.delete(id); }
+    go({ view, c: collectionUrl, i: itemUrl, l: [...set], s: seriesSel });
+  };
 
   // Breadcrumb trail: Catalog [ / Publications] [ / DS] [ / item]. Each crumb but the last
   // is clickable. parentOfLeaf is the sub-catalog a series collection hangs under (if any).
@@ -463,7 +470,7 @@ function useViewState() {
     rootChildren, cardsWithCovers, allItems, itemsLoading, leafColl, crumbs,
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
     layerCollIds, setSeries,
-    revealInfo, activeLayers, footprints, layerRows, idsForMap, toggleLayer, styleCache,
+    revealInfo, activeLayers, footprints, layerRows, idsForMap, toggleLayer, toggleLayers, styleCache,
   };
 }
 

@@ -140,7 +140,7 @@ export function ZoomGateNotice({ gate, dir, subject, onZoom }: {
   gate: Gate; dir: GateDir; subject?: string; onZoom: () => void;
 }) {
   return (
-    <div className="absolute bottom-2 left-2 z-10 flex max-w-[24rem] items-center gap-2 rounded-md border border-border bg-card/95 px-2.5 py-1.5 text-xs shadow backdrop-blur-sm">
+    <div className="flex max-w-[24rem] items-center gap-2 rounded-md border border-border bg-card/95 px-2.5 py-1.5 text-xs shadow backdrop-blur-sm">
       <span className="text-foreground">
         {dir === "in" ? `Hidden below zoom ${Math.ceil(gate.min)}` : "Hidden at this zoom"}
         {subject && <span className="text-muted-foreground"> · {subject}</span>}

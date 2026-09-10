@@ -70,7 +70,7 @@ export function DataTable<T>({ table, onRowClick }: {
       </thead>
       <tbody>
         {table.getRowModel().rows.map((r) => (
-          <tr key={r.id} className={onRowClick ? "cursor-pointer hover:bg-muted" : undefined}
+          <tr key={r.id} className={onRowClick ? "cursor-pointer hover:bg-hover" : undefined}
             onClick={onRowClick ? () => onRowClick(r.original) : undefined}>
             {r.getVisibleCells().map((c) => (
               <td key={c.id} className={C.td}>{flexRender(c.column.columnDef.cell, c.getContext())}</td>

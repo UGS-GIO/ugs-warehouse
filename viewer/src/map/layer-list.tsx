@@ -19,8 +19,8 @@ const SECTIONS = [
 ];
 
 /** One collapsible level. Open/closed lives in the caller's set so both levels share one store. */
-function Fold({ id, label, indent, forceOpen, closed, setClosed, children }: {
-  id: string; label: ReactNode; indent?: boolean; forceOpen: boolean;
+function Fold({ id, label, action, indent, forceOpen, closed, setClosed, children }: {
+  id: string; label: ReactNode; action?: ReactNode; indent?: boolean; forceOpen: boolean;
   closed: Set<string>; setClosed: (fn: (prev: Set<string>) => Set<string>) => void;
   children: ReactNode;
 }) {
@@ -34,20 +34,25 @@ function Fold({ id, label, indent, forceOpen, closed, setClosed, children }: {
           return next;
         });
       }}>
-      <summary className="sticky top-0 z-10 cursor-pointer list-none bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
-        <span className="inline-block w-3 transition-transform [details[open]>summary_&]:rotate-90">▸</span>
-        {label}
+      <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+        <span className="inline-block w-3 shrink-0 transition-transform [details[open]>summary_&]:rotate-90">▸</span>
+        <span className="min-w-0 truncate">{label}</span>
+        {action && <span className="ml-auto pl-2">{action}</span>}
       </summary>
       {children}
     </details>
   );
 }
 
-export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, legend }: {
+const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal hover:bg-hover";
+
+export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend }: {
   rows: LayerRow[];
   activeIds: string[];
   colorOf: (id: string) => string | undefined;
   onToggle: (id: string) => void;
+  // Whole group on/off — a publication series or a mart schema is what people actually want drawn.
+  onToggleMany: (ids: string[], on: boolean) => void;
   onOpen: (href: string) => void;
   openId?: string;
   legend?: ReactNode;   // what the active layers mean — belongs with them, not after the whole list
@@ -68,7 +73,7 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
     .filter((s) => s.items.length);
 
   const Row = ({ r, on }: { r: LayerRow; on: boolean }) => (
-    <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-muted ${r.id === openId ? "bg-muted" : ""}`}>
+    <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-hover ${r.id === openId ? "bg-muted" : ""}`}>
       <button type="button" onClick={() => onToggle(r.id)} aria-pressed={on}
         className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <span className="h-3 w-3 shrink-0 rounded-sm border border-muted-foreground/50"
@@ -94,8 +99,12 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
 
       {active.length > 0 && (
         <div>
-          <div className="px-1.5 pb-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="flex items-center px-1.5 pb-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             On the map · {active.length}
+            <button type="button" className={`${BULK_CLASS} ml-auto`} title="Turn every layer off"
+              onClick={() => onToggleMany(active.map((r) => r.id), false)}>
+              Clear
+            </button>
           </div>
           {active.map((r) => <Row key={r.id} r={r} on />)}
           {legend}
@@ -109,7 +118,16 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onOpen, openId, 
           label={<>{s.key} <span className="font-normal normal-case">· {s.items.length}</span></>}>
           {groupsOf(s.items).map(({ g, items }) => (
             <Fold key={g} id={`${s.key}/${g}`} closed={closed} setClosed={setClosed} forceOpen={Boolean(q)}
-              label={<>{g} <span className="font-normal normal-case">· {items.length}</span></>} indent>
+              label={<>{g} <span className="font-normal normal-case">· {items.length}</span></>} indent
+              // The group's own rows only: what's already on sits in the pinned set above, so
+              // "All" here never re-adds it and never silently turns anything off.
+              action={
+                <button type="button" className={BULK_CLASS}
+                  title={`Draw all ${items.length} layers in ${g}`}
+                  onClick={(e) => { e.preventDefault(); onToggleMany(items.map((r) => r.id), true); }}>
+                  All
+                </button>
+              }>
               {items.map((r) => <Row key={r.id} r={r} on={false} />)}
             </Fold>
           ))}

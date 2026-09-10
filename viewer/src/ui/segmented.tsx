@@ -26,7 +26,7 @@ export function UiSegmented<T extends string>({ value, onValueChange, items, cla
         <Toggle
           key={it.value}
           value={it.value}
-          className="cursor-pointer select-none px-2 py-1 text-foreground hover:bg-muted data-[pressed]:bg-primary data-[pressed]:text-primary-foreground"
+          className="cursor-pointer select-none px-2 py-1 text-foreground hover:bg-hover data-[pressed]:bg-primary data-[pressed]:text-primary-foreground"
         >
           {it.label}
         </Toggle>

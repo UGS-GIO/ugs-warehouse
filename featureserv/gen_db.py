@@ -79,7 +79,9 @@ def _collection_layers(curl: str, coll: dict, deadline: float | None = None) -> 
     assets — instead of the `item` links, which cost a GET each (~34 catalog-wide round trips vs
     ~9 at current size). Falls back to the per-item docs if the index is missing or unreadable.
     """
-    idx = next((lnk for lnk in coll.get("links", []) if lnk.get("rel") == "items"), None)
+    # "items" is the pre-2026-09 rel, still live in the published catalog until the next reingest.
+    idx = next((lnk for lnk in coll.get("links", [])
+                if lnk.get("rel") in ("ugs-items-index", "items")), None)
     if idx:
         try:
             doc = _get(urljoin(curl, idx["href"]), deadline)

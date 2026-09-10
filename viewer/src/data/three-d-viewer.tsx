@@ -450,7 +450,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
               .filter((l) => !search || l.unit.toLowerCase().includes(search.toLowerCase()) || l.label.toLowerCase().includes(search.toLowerCase()))
               .map((l) => (
                 <div key={l.unit} onMouseEnter={() => setHovered(l.unit)} onMouseLeave={() => setHovered(null)}
-                  className={`flex items-start gap-2.5 p-1.5 rounded border text-xs cursor-default transition ${hovered === l.unit ? "border-primary bg-primary/5 font-medium" : "border-transparent hover:bg-muted"}`}>
+                  className={`flex items-start gap-2.5 p-1.5 rounded border text-xs cursor-default transition ${hovered === l.unit ? "border-primary bg-primary/5 font-medium" : "border-transparent hover:bg-hover"}`}>
                   <span className="inline-block w-4 h-4 rounded border border-black/10 shrink-0" style={{ backgroundColor: colorOf(l.unit) }} />
                   <div className="flex-1 leading-snug">
                     <span className="font-bold font-mono mr-1.5">{l.label}</span>

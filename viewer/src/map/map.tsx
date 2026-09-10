@@ -2,8 +2,9 @@ import { Toggle } from "@base-ui/react/toggle";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
+import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { UiSegmented } from "@/ui/segmented";
@@ -228,24 +229,33 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
       onClick={onClick}
     >
-      <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
-      <div className="absolute right-2 top-2 z-10 flex gap-1 text-xs">
+      <MapControl position="top-left">
+        <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
+      </MapControl>
+
+      {/* Added before the geolocate control, so it sits above it in the same corner. */}
+      <MapControl position="top-right" className="flex gap-1 text-xs">
         <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
           className="bg-card/95 shadow" />
         {footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"
-            className="cursor-pointer select-none rounded-md border border-input bg-card/95 px-2 py-1 text-foreground shadow hover:bg-muted data-[pressed]:bg-primary data-[pressed]:text-primary-foreground">
+            className="cursor-pointer select-none rounded-md border border-input bg-card/95 px-2 py-1 text-foreground shadow hover:bg-hover data-[pressed]:bg-primary data-[pressed]:text-primary-foreground">
             Coverage · {footprints.length}
           </Toggle>
         )}
-      </div>
+      </MapControl>
+
+      <GeolocateControl position="top-right" trackUserLocation
+        positionOptions={{ enableHighAccuracy: true }} />
 
       {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
           them all. */}
       {hidden && (
-        <ZoomGateNotice gate={hidden.gate} dir={hiddenDir} subject={hidden.subject}
-          onZoom={() => easeZoomTo(gateZoom(hidden.gate, hiddenDir))} />
+        <MapControl position="bottom-left">
+          <ZoomGateNotice gate={hidden.gate} dir={hiddenDir} subject={hidden.subject}
+            onZoom={() => easeZoomTo(gateZoom(hidden.gate, hiddenDir))} />
+        </MapControl>
       )}
 
       {/* Coverage overlay — all item footprints as clickable rectangles, beneath the data layers so
@@ -318,13 +328,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
                 />
               ))
             ) : (
-              // Explicit `source` — react-map-gl doesn't inject it for Layers inside a Fragment,
-              // so without it maplibre throws "missing required property source".
-              <>
-                <Layer id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />
-                <Layer id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />
-                <Layer id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />
-              </>
+              // An array, NOT a fragment: Source clones each child to inject `source`, and cloning a
+              // fragment puts the prop on the fragment (three React warnings per layer, and no
+              // source on the layers). Explicit `source` for the same reason — don't rely on inject.
+              [
+                <Layer key="fill" id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />,
+                <Layer key="line" id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />,
+                <Layer key="circle" id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />,
+              ]
             )}
           </Source>
         );
@@ -372,7 +383,7 @@ function Geocoder({ onPick }: { onPick: (b: [number, number, number, number]) =>
   };
 
   return (
-    <form onSubmit={search} className="absolute left-2 top-2 z-10 flex items-center gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
+    <form onSubmit={search} className="flex items-center gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
       <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search place…"
         className="w-24 sm:w-40 rounded bg-transparent px-1.5 py-0.5 text-foreground placeholder:text-muted-foreground focus:outline-none" />
       <button type="submit" disabled={busy} className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50">

@@ -19,6 +19,7 @@ substitutions:
   _JOB: ugs-warehouse-ingest              # Cloud Run job (batch --all reingest). Distinct resource from the Pub/Sub topic of the same name below.
   _REVIEW_JOB: ugs-warehouse-ingest-review # Cloud Run job: same ingest over `_review` serving tables → writes the gated catalog under review/ (pre-release; promote _review→_current to publish)
   _MAINTAIN_JOB: ugs-warehouse-ducklake-maintain # Cloud Run job: DuckLake housekeeping (expire snapshots + compact small files + GC orphaned parquet). Run daily.
+  _RETIRE_JOB: ugs-warehouse-retire        # Cloud Run job: retire ONE serving topic (drop its DuckLake table + delete its artifacts). Operator-driven, never scheduled.
   _PUBS_JOB: ugs-pubs-ingest              # Cloud Run job: rebuild the ugs-publications STAC collection from pub metadata (no COG re-harvest)
   _PUBTHUMB_JOB: ugs-pubs-thumbs          # Cloud Run job: render PDF first-page cover thumbnails for every pub (poppler)
   _PIPELINE_JOB: ugs-pubs-pipeline        # Cloud Run job: orchestrator — loops thumbs then runs pubs-ingest (one-click "full refresh")
@@ -377,6 +378,38 @@ steps:
       # 2Gi was sized for the old no-op merge; real compaction rewrites whole tables.
       - --cpu=4
       - --memory=8Gi
+
+  # Retire one serving topic. Same image + DSN setup as the ingest job (RUN_MODULE swaps the CLI),
+  # and it needs the same identity: DuckLake catalog + delete on every artifact prefix in the bucket.
+  #
+  # Its own job rather than an arg override on the maintenance job, even though the entrypoint would
+  # allow that: the ops console filters logs and lists executions BY JOB NAME, so sharing one would
+  # file every retirement under "DuckLake maintenance" and lose the only audit trail there is
+  # (the console has no durable store — see admin/config/settings.py).
+  #
+  # Never scheduled, and no args here: every execution comes from the console (or a hand-run
+  # `gcloud run jobs execute`) with --topic supplied as a container override.
+  - id: deploy-retire-job
+    waitFor: [push-warehouse]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_RETIRE_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=DB_PASS=${_SECRET}:latest
+      - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.retire@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}
+      - --command=scripts/cloudrun_entrypoint.sh
+      # One topic: a listing, a table drop and a few hundred deletes. Nothing like a compaction.
+      - --task-timeout=1800
+      - --max-retries=0
+      - --cpu=1
+      - --memory=2Gi
 
   - id: deploy-harvest-job
     waitFor: [push-harvest]

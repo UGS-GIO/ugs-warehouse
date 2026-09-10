@@ -13,6 +13,19 @@ the topic. It writes nothing, refreshes nothing, and does not prompt.
 
 Needs `DUCKLAKE_CATALOG_DSN` (mapping-db) and write access to `WAREHOUSE_BUCKET`.
 
+## From the ops console
+
+The Data tab links to **Retire a topic**, which runs the same CLI as a Cloud Run job
+(`ugs-warehouse-retire`) so the operator needs neither a `cloud_sql_proxy` nor bucket credentials.
+
+Step 1 starts a `--dry-run` and shows that execution's output. Step 2 needs the topic typed back
+before the button works, and the view re-checks it, because a disabled button is not a control.
+The operator's IAP email rides along as `RETIRE_REQUESTED_BY` and the CLI prints it, so the run's
+own log stream carries who asked — the console stores nothing (its SQLite is ephemeral).
+
+The job exists on its own rather than as an argument override on the maintenance job, so that
+retirements keep their own execution history and log stream in the console.
+
 ## What it does, in order
 
 1. **Reference scan, then a typed confirmation.** `git grep` for the topic stem (tests excluded)

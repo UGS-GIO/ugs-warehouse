@@ -45,7 +45,13 @@ const BASEMAPS = {
 type BasemapId = keyof typeof BASEMAPS;
 const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
 
-type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown>; href?: string };
+type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown>; href?: string; related?: RelatedTablesInfo };
+
+// The related tables a clicked layer offers — names + the full-item href to resolve joins on open.
+// Named from the compact index (cheap); the join columns are read from the full item only on open.
+export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string }[] };
+// What "open a related table" hands back up to the map route (which renders it in the Info panel).
+export type OpenRelated = { itemHref: string; relatedKey: string; title: string; props: Record<string, unknown> };
 
 // Union of bboxes → [w,s,e,n], or null.
 function unionBbox(bs: number[][]): [number, number, number, number] | null {
@@ -72,9 +78,13 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
 }
 
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
-  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false }: {
+  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onOpenRelated }: {
   item?: StacDoc; layers: ActiveLayer[];
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
+  // Related-table popup affordances: `relatedFor` maps a clicked layer id → its related tables
+  // (named from the index by the caller), `onOpenRelated` surfaces one in the Info panel. Both optional.
+  relatedFor?: (layerId: string) => RelatedTablesInfo | undefined;
+  onOpenRelated?: (r: OpenRelated) => void;
   // Discovery sync (all optional — the map works standalone without them): a footprint to emphasize
   // (a hovered discovery card), a callback when a coverage footprint is hovered on the map (→ the
   // card list highlights it), and the viewport bounds after load/move (→ "Search this area").
@@ -210,7 +220,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       return;
     }
     const l = layerByMapId[f.layer.id];
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: l?.title ?? "", props: f.properties ?? {} });
+    // Resolve the related tables ONCE here, not on every popup render (ItemMap re-renders on hover/move).
+    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: l?.title ?? "", props: f.properties ?? {},
+               related: l?.id ? relatedFor?.(l.id) : undefined });
   };
 
   return (
@@ -350,7 +362,11 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
               Open item →
             </button>
           ) : (
-            <FeatureProps props={popup.props} />
+            <>
+              <FeatureProps props={popup.props} />
+              <RelatedLinks info={popup.related} props={popup.props}
+                onOpen={(r) => { onOpenRelated?.(r); setPopup(null); }} />
+            </>
           )}
         </Popup>
       )}
@@ -408,5 +424,25 @@ function FeatureProps({ props }: { props: Record<string, unknown> }) {
         ))}
       </tbody>
     </table>
+  );
+}
+
+// Related-table affordances under the feature props. Names come straight from the index (no fetch on
+// click); the join columns, COUNT, and rows load only when one is opened, in the Info panel.
+function RelatedLinks({ info, props, onOpen }: {
+  info?: RelatedTablesInfo; props: Record<string, unknown>; onOpen: (r: OpenRelated) => void;
+}) {
+  if (!info?.tables.length) return null;
+  return (
+    <div className="mt-2 border-t border-gray-200 pt-1.5">
+      <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Related tables</div>
+      {info.tables.map((t) => (
+        <button key={t.key} type="button"
+          onClick={() => onOpen({ itemHref: info.itemHref, relatedKey: t.key, title: t.title, props })}
+          className="block w-full text-left text-xs font-medium text-primary hover:underline">
+          {t.title} →
+        </button>
+      ))}
+    </div>
   );
 }

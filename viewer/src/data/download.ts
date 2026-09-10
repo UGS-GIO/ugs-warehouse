@@ -123,7 +123,9 @@ export type ColType = "number" | "text";
 // Per-column filter: numeric columns get a range (min/max), everything else a substring match.
 export type ColFilter =
   | { col: string; kind: "number"; min?: number; max?: number }
-  | { col: string; kind: "text"; contains: string };
+  | { col: string; kind: "text"; contains: string }
+  // Exact equality — the related-table join (child.fk = the clicked feature's key value).
+  | { col: string; kind: "exact"; value: string };
 
 export interface PageOpts {
   limit: number;
@@ -190,7 +192,7 @@ const buildOrder = (columns: string[], opts: PageOpts, hasId: boolean): string =
 };
 
 // One SQL predicate from a per-column filter (empty string = no constraint).
-function filterClause(f: ColFilter): string {
+export function filterClause(f: ColFilter): string {
   const c = ident(f.col);
   if (f.kind === "number") {
     const parts: string[] = [];
@@ -198,6 +200,8 @@ function filterClause(f: ColFilter): string {
     if (Number.isFinite(f.max)) parts.push(`${c} <= ${f.max}`);
     return parts.join(" AND ");
   }
+  // Compare as text so the join works whether the key column is numeric or string.
+  if (f.kind === "exact") return `CAST(${c} AS VARCHAR) = ${lit(f.value)}`;
   const t = f.contains.trim();
   return t ? `CAST(${c} AS VARCHAR) ILIKE ${lit(`%${t}%`)}` : "";
 }

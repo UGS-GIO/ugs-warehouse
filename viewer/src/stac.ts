@@ -95,6 +95,18 @@ export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
     .filter((a) => !a.roles?.includes("related"))
     .flatMap((a) => a["ugs:foreign_keys"] ?? []);
 
+// Click-join descriptors for a clicked feature of THIS layer: each related (aspatial child) asset
+// carrying an FK back to this layer, flattened to the single-column equality we can run — the
+// related row's childField = the clicked feature's parentField value. Composite (multi-column) keys
+// are skipped: a partial join would return wrong rows, so surface nothing rather than bad data.
+export type RelatedJoin = { key: string; title: string; href: string; childField: string; parentField: string };
+export const relatedJoins = (d: StacDoc | undefined): RelatedJoin[] =>
+  relatedAssets(d).flatMap(({ key, asset }) =>
+    (asset["ugs:foreign_keys"] ?? [])
+      .filter((fk) => fk.fields.length === 1 && fk.reference.fields.length === 1)
+      .map((fk) => ({ key, title: asset.title ?? key, href: asset.href,
+                      childField: fk.fields[0], parentField: fk.reference.fields[0] })));
+
 // Per-asset usage hint (STAC `description`) — the warehouse's "display vs query vs download"
 // guidance, stamped in core/stac so one item says which asset/endpoint to use (#280). Returns only
 // the assets that carry a hint, paired with their key; a listing can render these. Rendering and

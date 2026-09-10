@@ -333,7 +333,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
               const hl = nfid != null && nfid === highlightId;
               return (
                 <tr key={r.id} data-index={vi.index} ref={rowVirt.measureElement}
-                  className={`${hl ? "bg-amber-100 dark:bg-amber-900/40" : ""} ${clickable ? "cursor-pointer hover:bg-muted" : ""}`.trim() || undefined}
+                  className={`${hl ? "bg-amber-100 dark:bg-amber-900/40" : ""} ${clickable ? "cursor-pointer hover:bg-hover" : ""}`.trim() || undefined}
                   title={clickable ? "Zoom to feature on map" : undefined}
                   onClick={clickable ? () => { pick(r.index, bbox!); if (nfid != null) setHighlightId(nfid); } : undefined}>
                   {review && (

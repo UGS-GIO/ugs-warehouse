@@ -81,7 +81,7 @@ export function ResultRow({ it, density, on, link }: CardProps) {
   return (
     <li>
       <Link {...link}
-        className={`flex cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING} ${on ? "bg-primary/10" : "hover:bg-muted"}`}>
+        className={`flex cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING} ${on ? "bg-primary/10" : "hover:bg-hover"}`}>
         <span className="truncate text-sm text-foreground" title={title(it)}>{title(it)}</span>
         {sid && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{sid}</span>}
         {!compact && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{collectionLabel(it.collId)}</span>}

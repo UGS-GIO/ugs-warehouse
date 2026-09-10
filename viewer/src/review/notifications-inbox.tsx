@@ -74,7 +74,7 @@ export function NotificationsInbox({ onOpen }: { onOpen: (itemId: string) => voi
           <li key={n.id}>
             <button
               onClick={() => { if (!n.seen_at) seen.mutate([n.id]); if (n.item_ids?.[0]) onOpen(n.item_ids[0]); }}
-              className={`block w-full rounded px-2 py-1 text-left text-xs hover:bg-muted ${n.seen_at ? "opacity-60" : "font-medium"}`}>
+              className={`block w-full rounded px-2 py-1 text-left text-xs hover:bg-hover ${n.seen_at ? "opacity-60" : "font-medium"}`}>
               <span className="text-foreground">{label(n)}</span>
               <span className="ml-1 text-muted-foreground">— {n.body.slice(0, 80)}{n.body.length > 80 ? "…" : ""}</span>
               <span className="ml-1 whitespace-nowrap text-xs text-muted-foreground">{new Date(n.created_at).toLocaleString()}</span>

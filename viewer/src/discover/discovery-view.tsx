@@ -263,7 +263,7 @@ export function DiscoveryView({
               title={showMap ? "Hide the map" : "Show the map"}
               className={`shrink-0 rounded-md border px-2.5 py-1 text-sm ${showMap
                 ? "border-primary bg-primary text-primary-foreground"
-                : "border-input bg-card text-foreground hover:bg-muted"}`}>
+                : "border-input bg-card text-foreground hover:bg-hover"}`}>
               Map
             </button>
           )}
@@ -445,7 +445,7 @@ export function DiscoveryView({
               ) : (
                 <button type="button" onClick={() => bounds && patch({ area: bounds })} disabled={!bounds}
                   title="Limit results to what's in the current map view"
-                  className="pointer-events-auto rounded-full border border-border bg-card/95 px-3 py-1 text-xs font-medium text-foreground shadow hover:bg-muted disabled:opacity-50">
+                  className="pointer-events-auto rounded-full border border-border bg-card/95 px-3 py-1 text-xs font-medium text-foreground shadow hover:bg-hover disabled:opacity-50">
                   Search this area
                 </button>
               )}
@@ -469,11 +469,11 @@ export function DiscoveryView({
               <div className="flex items-center gap-1">
                 {/* The drawer is the single-column layout; the two-column page lives on Catalog. */}
                 <Link to="/catalog" search={{ c: selectedCollectionId, i: selectedItem?.id }}
-                  className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground">
+                  className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-hover hover:text-foreground">
                   Open full page ↗
                 </Link>
                 <button ref={closeRef} type="button" onClick={onCloseItem}
-                  className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted">✕ Close</button>
+                  className="rounded px-2 py-1 text-sm text-muted-foreground hover:bg-hover">✕ Close</button>
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
@@ -527,7 +527,7 @@ function FacetSection({ label, facets, selected, onToggle }: {
               <li key={f.key}>
                 <button type="button" onClick={() => onToggle(f.key)} title={f.key} aria-pressed={on}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
-                    ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-muted"}`}>
+                    ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
                   <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded border text-[10px] leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "✓" : ""}</span>
                   <span className="min-w-0 flex-1 truncate" title={f.label}>{f.label}</span>
@@ -572,7 +572,7 @@ function GeometrySection({ facets, value, onChange }: {
                 <button type="button" role="radio" aria-checked={on}
                   onClick={() => onChange(on ? "all" : (f.key as FacetSelection["geometry"]))}
                   className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-sm ${on
-                    ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-muted"}`}>
+                    ? "bg-muted font-medium text-foreground" : "text-foreground hover:bg-hover"}`}>
                   <span aria-hidden className={`grid h-4 w-4 shrink-0 place-items-center rounded-full border text-[10px] leading-none ${on
                     ? "border-primary bg-primary text-primary-foreground" : "border-border bg-card"}`}>{on ? "●" : ""}</span>
                   <span className="min-w-0 flex-1 truncate">{f.label}</span>

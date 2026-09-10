@@ -101,7 +101,16 @@ export type Footprint = { href: string; id: string; title: string; bbox: number[
 
 // Distinct colors cycled per active layer.
 export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
-export const colorFor = (i: number) => LAYER_COLORS[i % LAYER_COLORS.length];
+
+// A layer's swatch color keyed to its id, not its position in the active set — so dragging a layer
+// up or down the draw order never swaps two layers' colors under the user. A small deterministic
+// string hash picks the palette slot; with few active layers at once, collisions are rare and the
+// legend labels each color anyway.
+export const colorForId = (id: string): string => {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return LAYER_COLORS[Math.abs(h) % LAYER_COLORS.length];
+};
 
 // The `l` search param. Three states, and collapsing two of them is why the last layer could not
 // be turned off: absent = no choice yet (the open item draws), `none` = every layer off, else a
@@ -113,3 +122,14 @@ export const parseLayerParam = (l?: string): string[] | undefined =>
 
 export const layerParam = (ids?: string[]): string | undefined =>
   ids ? (ids.length ? ids.join(",") : NO_LAYERS) : undefined;
+
+// Move the active layer at `from` to `to` (drag-reorder the draw order), the rest shifting to fill.
+// Returns a NEW array and never mutates the input; an out-of-range index leaves the order untouched,
+// so a stray drag event can't corrupt the ?l= set.
+export const reorderLayers = (ids: string[], from: number, to: number): string[] => {
+  if (from < 0 || to < 0 || from >= ids.length || to >= ids.length) return ids.slice();
+  const next = ids.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+};

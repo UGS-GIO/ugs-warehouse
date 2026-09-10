@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, clampSize, DETENTS, hasFootprint, layerParam, mapKindOf, nearestDetent, nextPick,
-  NO_LAYERS, parseLayerParam, validBbox } from "./map-model";
+import { boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam, mapKindOf,
+  nearestDetent, nextPick, NO_LAYERS, parseLayerParam, reorderLayers, validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
 
 describe("validBbox", () => {
@@ -145,5 +145,47 @@ describe("the `l` layer param", () => {
 
   it("ignores empty segments from a hand-edited url", () => {
     expect(parseLayerParam("a,,b,")).toEqual(["a", "b"]);
+  });
+});
+
+describe("reorderLayers", () => {
+  it("moves a layer down the draw order", () => {
+    expect(reorderLayers(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
+  });
+
+  it("moves a layer up the draw order", () => {
+    expect(reorderLayers(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
+  });
+
+  it("is a no-op when the layer doesn't move", () => {
+    expect(reorderLayers(["a", "b", "c"], 1, 1)).toEqual(["a", "b", "c"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const ids = ["a", "b", "c"];
+    reorderLayers(ids, 0, 2);
+    expect(ids).toEqual(["a", "b", "c"]);
+  });
+
+  it("returns the order unchanged for an out-of-range index (a bad drag can't corrupt ?l=)", () => {
+    expect(reorderLayers(["a", "b", "c"], -1, 1)).toEqual(["a", "b", "c"]);
+    expect(reorderLayers(["a", "b", "c"], 1, 9)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("colorForId", () => {
+  it("gives a layer the same color every time, regardless of active-set order (drag can't recolor it)", () => {
+    expect(colorForId("hazards_qfaults")).toBe(colorForId("hazards_qfaults"));
+  });
+
+  it("only ever returns a palette color", () => {
+    for (const id of ["a", "hazards_qfaults", "geolmap_500k", "wells_spatial"]) {
+      expect(LAYER_COLORS).toContain(colorForId(id));
+    }
+  });
+
+  it("spreads distinct ids across the palette rather than collapsing to one color", () => {
+    const ids = ["a", "b", "c", "d", "hazards_qfaults", "geolmap_500k", "wells_spatial", "landslides"];
+    expect(new Set(ids.map(colorForId)).size).toBeGreaterThan(1);
   });
 });

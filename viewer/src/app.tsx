@@ -421,6 +421,15 @@ function useViewState() {
     for (const id of ids) { if (on) set.add(id); else set.delete(id); }
     go({ view, c: collectionUrl, i: itemUrl, l: [...set], s: seriesSel });
   };
+  // "+ Add to map" from a discovery/browse card or the item detail: accumulate into ?l= (never
+  // replace), so pulling in a layer while browsing keeps the ones already drawn. `isActive` reads
+  // the explicit set the add/remove controls manage; the implicit open-item fallback stays a
+  // map-view rendering nicety, unaffected here.
+  const addLayer = (id: string) => toggleLayers([id], true);
+  const removeLayer = (id: string) => toggleLayers([id], false);
+  const isActive = (id: string) => (layerIds ?? []).includes(id);
+  // Commit a dragged draw-order back to ?l= (the whole active set stays shareable in the URL).
+  const setLayerOrder = (ids: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: ids, s: seriesSel });
 
   // Breadcrumb trail: Catalog [ / Publications] [ / DS] [ / item]. Each crumb but the last
   // is clickable. parentOfLeaf is the sub-catalog a series collection hangs under (if any).
@@ -471,6 +480,7 @@ function useViewState() {
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
     layerCollIds, setSeries,
     revealInfo, activeLayers, footprints, layerRows, idsForMap, toggleLayer, toggleLayers, styleCache,
+    addLayer, removeLayer, isActive, setLayerOrder,
   };
 }
 

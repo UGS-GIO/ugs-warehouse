@@ -8,7 +8,7 @@ import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { UiSegmented } from "@/ui/segmented";
-import { type ActiveLayer, colorFor, type Footprint, validBbox } from "./map-model";
+import { type ActiveLayer, colorForId, type Footprint, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -287,7 +287,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         <Suspense fallback={null}><ZarrOverlay specs={zarrSpecs} /></Suspense>
       )}
 
-      {layers.map((l, i) => {
+      {layers.map((l) => {
         const s = slugOf(l.id);
         if (l.zarr) return null;   // drawn by the deck overlay above
         // Raster PMTiles mosaic — the per-scale geologic-map tiles, served via the already-registered
@@ -309,7 +309,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
             </Source>
           );
         }
-        const c = colorFor(i);  // color rotates by position — fine to stay index-based
+        const c = colorForId(l.id);  // keyed to id → matches the legend/tray swatch and survives reorder
         const styleLayers = styleCache[l.id];
         const pmHref = l.pmHref!;
         const pmLayer = l.pmLayer!;

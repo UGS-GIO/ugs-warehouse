@@ -67,12 +67,13 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
 
   const sort = sorting[0];
   const filterKey = JSON.stringify(applied.filters);
+  const presetKey = JSON.stringify(presetFilter);
   // The query key IS the dependency list, so a stale response can no longer land after a newer one
   // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
   // screen while the next one loads, so paging does not blank the table between fetches.
   const { data: page, error, isFetching: loading } = useQuery({
     queryKey: ["parquet-page", href, pageIndex, pageSize, showAll,
-               sort?.id, sort?.desc, applied.search, filterKey, JSON.stringify(presetFilter)],
+               sort?.id, sort?.desc, applied.search, filterKey, presetKey],
     queryFn: async () => {
       const { queryParquet } = await import("./download");
       return queryParquet(href, {
@@ -113,7 +114,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
 
   // A newly clicked feature (or the preset clearing) should land on page 1, not wherever the
   // user had paged to for the previous feature.
-  useEffect(() => setPageIndex(0), [JSON.stringify(presetFilter)]);
+  useEffect(() => setPageIndex(0), [presetKey]);
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
     () => (page?.columns ?? []).map((c) => ({

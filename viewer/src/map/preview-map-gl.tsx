@@ -78,8 +78,8 @@ function PopupRelatedRow({ join, value, onOpen }: {
     return (
       <div className="py-0.5">
         <div className="text-[11px] font-semibold text-gray-700">{join.title}</div>
-        {Object.entries(row).filter(([k, val]) => k !== join.childField && val != null && val !== "").slice(0, 6)
-          .map(([k, val]) => <div key={k} className="text-xs"><span className="text-gray-500">{k}:</span> {String(val)}</div>)}
+        {data!.columns.filter((k) => k !== join.childField && row[k] != null && row[k] !== "").slice(0, 6)
+          .map((k) => <div key={k} className="text-xs"><span className="text-gray-500">{k}:</span> {String(row[k])}</div>)}
       </div>
     );
   }
@@ -100,7 +100,7 @@ function PopupRelated({ item, props, onOpen }: {
   return (
     <div className="mt-2 border-t border-gray-200 pt-1.5">
       <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Related</div>
-      {joins.map((j) => <PopupRelatedRow key={j.key} join={j} value={props[j.parentField]} onOpen={onOpen} />)}
+      {joins.map((j) => <PopupRelatedRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpen} />)}
     </div>
   );
 }

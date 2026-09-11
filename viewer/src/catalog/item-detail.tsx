@@ -1,7 +1,7 @@
 // Item detail: two layouts share one component. `page` = the full-width catalog/browse detail (a
 // 2/3 · 1/3 grid); `drawer` = the single-column stack that fits the 560px Discover result drawer. Both
 // reuse the same capability panels (Preview, Downloads, Endpoints, Related, Review, schema, STAC JSON).
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { ItemRef } from "./browse";
 import { CommentsPanel } from "@/review/comments-panel";
@@ -19,7 +19,8 @@ import { SchemaTable } from "./schema-table";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { type Asset, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
-  relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+  relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
 
 const relatedViewerHref = (stacHref: string): string => {
@@ -35,6 +36,16 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   // additionally offer a thumbnail Gallery. Both use a Set so multiple stay open.
   const [openTables, setOpenTables] = useState<Set<string>>(new Set());
   const [openGalleries, setOpenGalleries] = useState<Set<string>>(new Set());
+  const { featureRelated, clearRelated } = usePreviewMap();
+  const sectionRef = useRef<HTMLDivElement>(null);
+  // A map-feature click (wired via the preview-map context) auto-opens its related table and
+  // scrolls this section into view, so the click's result is visible without manual scrolling.
+  useEffect(() => {
+    if (!featureRelated) return;
+    setOpenTables((prev) => new Set(prev).add(featureRelated.relatedKey));
+    const t = setTimeout(() => sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+    return () => clearTimeout(t);
+  }, [featureRelated]);
   const toggleIn = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (key: string) =>
     set((prev) => {
       const next = new Set(prev);
@@ -46,7 +57,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
   if (!links.length && !tables.length && !fks.length) return null;
   return (
-    <section className="mt-4 rounded-md border border-border p-3">
+    <section ref={sectionRef} className="mt-4 rounded-md border border-border p-3">
       <h3 className="text-sm font-semibold">Related</h3>
       {links.length > 0 && (
         <div className="mt-1.5">
@@ -98,7 +109,13 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                 </div>
                 {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
                     range-read (never downloads the whole file). No geometry → a plain data table. */}
-                {openTables.has(key) && <DataExplorer key={asset.href} href={asset.href} />}
+                {openTables.has(key) && (() => {
+                  const childField = relatedJoins(item).find((j) => j.key === key)?.childField;
+                  const preset = featureRelated?.relatedKey === key && childField
+                    ? { col: childField, kind: "exact" as const, value: featureRelated.value }
+                    : undefined;
+                  return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={clearRelated} />;
+                })()}
                 {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
               </li>
             ))}

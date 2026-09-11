@@ -19,6 +19,9 @@ type Ctx = {
   setFocus: (f: FocusSel | null) => void;
   pick: MapPick | null;
   onFeatureClick: (id: number) => void;
+  featureRelated: { relatedKey: string; value: string } | null;
+  openRelated: (relatedKey: string, value: string) => void;
+  clearRelated: () => void;
   // Which `ugs:renders` entry the "Symbolize by" picker is on, so the endpoints panel can hand out
   // the style/ArcGIS URL for the symbology you are looking at rather than the first one.
   render: string;
@@ -41,6 +44,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   // Scoped to the shown item — a stale fly/highlight would mislead.
   const [focus, setFocus] = usePerItem<FocusSel | null>(itemId, null);
   const [pick, setPick] = usePerItem<MapPick | null>(itemId, null);
+  const [featureRelated, setFeatureRelated] = usePerItem<{ relatedKey: string; value: string } | null>(itemId, null);
 
   // Owned here, not mirrored up out of the map: the endpoints panel hands out the URL for the
   // symbology on screen, so both need the same copy.
@@ -51,10 +55,12 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const setSpec = useCallback((s: PreviewSpec) => { setSpecState(s); if (s) setArmed(true); }, []);
   const registerSlot = useCallback((el: HTMLElement | null) => setSlotEl(el), []);
   const onFeatureClick = useCallback((id: number) => setPick((p) => nextPick(p, id)), [setPick]);
+  const openRelated = useCallback((relatedKey: string, value: string) => setFeatureRelated({ relatedKey, value }), [setFeatureRelated]);
+  const clearRelated = useCallback(() => setFeatureRelated(null), [setFeatureRelated]);
 
   const ctx = useMemo<Ctx>(
-    () => ({ setSpec, registerSlot, focus, setFocus, pick, onFeatureClick, render }),
-    [setSpec, focus, setFocus, pick, registerSlot, onFeatureClick, render],
+    () => ({ setSpec, registerSlot, focus, setFocus, pick, onFeatureClick, featureRelated, openRelated, clearRelated, render }),
+    [setSpec, focus, setFocus, pick, registerSlot, onFeatureClick, featureRelated, openRelated, clearRelated, render],
   );
 
   return (
@@ -63,7 +69,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
       {armed && (
         <Suspense fallback={null}>
           <PreviewMapGL spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick}
-            renders={renders} sel={render} onSel={setChosen} />
+            onFeatureRelated={openRelated} renders={renders} sel={render} onSel={setChosen} />
         </Suspense>
       )}
     </PreviewMapCtx.Provider>

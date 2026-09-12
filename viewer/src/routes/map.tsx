@@ -1,5 +1,4 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
 
 import { idOf, useViewCtx } from "@/app";
 import { FeatureDetail, ItemMap, type OpenRelated, type RelatedTablesInfo, type SelectedFeature } from "@/map/map";
@@ -10,19 +9,23 @@ import { RelatedTable } from "@/map/related-table";
 import { MapShell } from "@/map/map-shell";
 import { colorForId } from "@/map/map-model";
 import { relatedAssets } from "@/stac";
+import { usePerItem } from "@/lib/use-per-item";
+
+// The Info dock shows one of three things, and they are strictly nested: a related table is only
+// reachable from a selected feature. A union (rather than two independent related/selectedFeature
+// states) makes "related with no feature" unrepresentable and drops the paired setRelated(null) every
+// feature click used to need. No floating feature popup anywhere — stakeholder requirement.
+type Dock =
+  | { kind: "item" }
+  | { kind: "feature"; feature: SelectedFeature }
+  | { kind: "related"; feature: SelectedFeature; related: OpenRelated };
+const DOCK_ITEM: Dock = { kind: "item" };
 
 function MapView() {
   const c = useViewCtx();
-  // A related table opened from a docked feature — shown in the Info dock/sheet in place of the item
-  // detail until closed. Scoped to the map screen; the shareable URL still holds the layer set.
-  const [related, setRelated] = useState<OpenRelated | null>(null);
-  // A clicked data feature, docked in the Info panel instead of a floating popup (no floating feature
-  // popup anywhere — stakeholder requirement).
-  const [selectedFeature, setSelectedFeature] = useState<SelectedFeature | null>(null);
-  // Drop a stale related view / feature selection when the open item changes (e.g. clicking a
-  // footprint opens a new item) — otherwise the dock keeps showing the previous feature's rows or
-  // detail over a changed selection.
-  useEffect(() => { setRelated(null); setSelectedFeature(null); }, [c.itemUrl]);
+  // Scoped to the open item (usePerItem): opening a footprint changes the item and the dock reads
+  // back as `item` in the same render — no reset effect, so no frame where a stale feature shows.
+  const [dock, setDock] = usePerItem<Dock>(c.itemUrl ?? "", DOCK_ITEM);
 
   // A clicked layer's related tables, named from the compact index (its asset summaries carry the
   // related entries). The FK join columns are stripped from the index by design, so RelatedTable
@@ -37,15 +40,15 @@ function MapView() {
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       relatedFor={relatedFor}
-      onSelectFeature={(f) => { setSelectedFeature(f); setRelated(null); if (f) c.revealInfo.current?.(); }} />}
-    info={related
-      ? <RelatedTable key={`${related.itemHref}::${related.relatedKey}`}
-          itemHref={related.itemHref} relatedKey={related.relatedKey} title={related.title}
-          props={related.props} onClose={() => setRelated(null)} />
-      : selectedFeature
-      ? <FeatureDetail feature={selectedFeature}
-          onOpenRelated={(r) => { setRelated(r); c.revealInfo.current?.(); }}
-          onClose={() => setSelectedFeature(null)} />
+      onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
+    info={dock.kind === "related"
+      ? <RelatedTable key={`${dock.related.itemHref}::${dock.related.relatedKey}`}
+          itemHref={dock.related.itemHref} relatedKey={dock.related.relatedKey} title={dock.related.title}
+          props={dock.related.props} onClose={() => setDock({ kind: "feature", feature: dock.feature })} />
+      : dock.kind === "feature"
+      ? <FeatureDetail feature={dock.feature}
+          onOpenRelated={(r) => { setDock({ kind: "related", feature: dock.feature, related: r }); c.revealInfo.current?.(); }}
+          onClose={() => setDock(DOCK_ITEM)} />
       : <MapDetail item={c.item.data} loading={c.item.isLoading} />}
     layers={<>
       {c.catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}

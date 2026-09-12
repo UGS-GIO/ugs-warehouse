@@ -7,6 +7,7 @@ import { ensureCogProtocol } from "./cog";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
+import { usePerItem } from "@/lib/use-per-item";
 import { UiSegmented } from "@/ui/segmented";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
@@ -108,7 +109,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // The selected feature's geometry, highlighted on the map so switching the dock (e.g. to open a
   // related table) doesn't lose your place. From the click event's own geometry — tile-clipped for
   // very large polygons, but accurate enough for a highlight.
-  const [hlGeom, setHlGeom] = useState<GeoJSON.Geometry | null>(null);
+  // Scoped to the shown item: a new item reads back as null in the same render (no reset-effect
+  // frame where the old item's highlight would paint). See lib/use-per-item.ts.
+  const [hlGeom, setHlGeom] = usePerItem<GeoJSON.Geometry | null>(item?.id ?? "", null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
@@ -180,9 +183,6 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
     const [w, s, e, n] = fitBox;
     mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
   }, [fitKey]);
-
-  // A new item means the old selection no longer applies.
-  useEffect(() => setHlGeom(null), [item?.id]);
 
   // Bound GL style `layers` per overlay (id→layers for those that resolved), via TanStack Query.
   const styleCache = useStyleLayersFor(layers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));

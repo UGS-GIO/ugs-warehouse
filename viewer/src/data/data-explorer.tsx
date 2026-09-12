@@ -2,6 +2,7 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { usePerItem } from "@/lib/use-per-item";
 
 import { CommentsPanel } from "@/review/comments-panel";
 import type { ColFilter } from "./download";
@@ -48,7 +49,6 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     if (next.has(pk)) next.delete(pk); else next.add(pk);
     return next;
   });
-  const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZE);
   const [showAll, setShowAll] = useState(false);  // "All" rows in one virtualized page
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -69,6 +69,10 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const sort = sorting[0];
   const filterKey = JSON.stringify(applied.filters);
   const presetKey = JSON.stringify(presetFilter);
+  // Page is scoped to the active preset: a new clicked-feature preset reads back as page 0 in the
+  // same render, so the parquet-page query fires once at offset 0. A reset effect landed the query
+  // at the stale page first and re-fired at 0 — two parquet range-reads per feature click.
+  const [pageIndex, setPageIndex] = usePerItem(presetKey, 0);
   // The query key IS the dependency list, so a stale response can no longer land after a newer one
   // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
   // screen while the next one loads, so paging does not blank the table between fetches.
@@ -111,11 +115,12 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
       setPageIndex(0);
     }, 300);
     return () => clearTimeout(t);
+    // setPageIndex omitted deliberately. It's now a usePerItem callback whose identity tracks
+    // presetKey, so listing it would re-arm this 300ms debounce on every feature/preset change and,
+    // 300ms later, snap a just-paged table back to page 1. presetKey changes already reset the page
+    // synchronously via usePerItem — same ref-vs-dep reasoning as the typesRef note above.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, draft]);
-
-  // A newly clicked feature (or the preset clearing) should land on page 1, not wherever the
-  // user had paged to for the previous feature.
-  useEffect(() => setPageIndex(0), [presetKey]);
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
     () => (page?.columns ?? []).map((c) => ({

@@ -37,6 +37,15 @@ export function usePreviewMap(): Ctx {
   return c;
 }
 
+// Internal selection shape. `related` is nested under `feature` — a related table is only reachable
+// from a selected feature — so the context exposes it as the derived `selectedFeature` +
+// `featureRelated` pair, but holds it as one value: impossible states (related with no feature) are
+// unrepresentable, and selecting a new feature drops any open related table by construction.
+type Sel = {
+  feature: { props: Record<string, unknown>; fid: number | null };
+  related: { relatedKey: string; value: string } | null;
+} | null;
+
 export function PreviewMapProvider({ children }: { children: React.ReactNode }) {
   const [spec, setSpecState] = useState<PreviewSpec>(null);
   const [slotEl, setSlotEl] = useState<HTMLElement | null>(null);
@@ -47,8 +56,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   // Scoped to the shown item — a stale fly/highlight would mislead.
   const [focus, setFocus] = usePerItem<FocusSel | null>(itemId, null);
   const [pick, setPick] = usePerItem<MapPick | null>(itemId, null);
-  const [featureRelated, setFeatureRelated] = usePerItem<{ relatedKey: string; value: string } | null>(itemId, null);
-  const [selectedFeature, setSelectedFeature] = usePerItem<{ props: Record<string, unknown>; fid: number | null } | null>(itemId, null);
+  const [sel, setSel] = usePerItem<Sel>(itemId, null);
 
   // Owned here, not mirrored up out of the map: the endpoints panel hands out the URL for the
   // symbology on screen, so both need the same copy.
@@ -59,19 +67,20 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const setSpec = useCallback((s: PreviewSpec) => { setSpecState(s); if (s) setArmed(true); }, []);
   const registerSlot = useCallback((el: HTMLElement | null) => setSlotEl(el), []);
   const onFeatureClick = useCallback((id: number) => setPick((p) => nextPick(p, id)), [setPick]);
-  const openRelated = useCallback((relatedKey: string, value: string) => setFeatureRelated({ relatedKey, value }), [setFeatureRelated]);
-  const clearRelated = useCallback(() => setFeatureRelated(null), [setFeatureRelated]);
-  const selectFeature = useCallback((props: Record<string, unknown>, fid: number | null) => setSelectedFeature({ props, fid }), [setSelectedFeature]);
-  const clearSelection = useCallback(() => setSelectedFeature(null), [setSelectedFeature]);
+  const selectFeature = useCallback((props: Record<string, unknown>, fid: number | null) => setSel({ feature: { props, fid }, related: null }), [setSel]);
+  const clearSelection = useCallback(() => setSel(null), [setSel]);
+  const openRelated = useCallback((relatedKey: string, value: string) => setSel((s) => (s ? { ...s, related: { relatedKey, value } } : s)), [setSel]);
+  const clearRelated = useCallback(() => setSel((s) => (s ? { ...s, related: null } : s)), [setSel]);
 
   const ctx = useMemo<Ctx>(
     () => ({
-      setSpec, registerSlot, focus, setFocus, pick, onFeatureClick, featureRelated, openRelated, clearRelated,
-      selectedFeature, selectFeature, clearSelection, render,
+      setSpec, registerSlot, focus, setFocus, pick, onFeatureClick,
+      featureRelated: sel?.related ?? null, openRelated, clearRelated,
+      selectedFeature: sel?.feature ?? null, selectFeature, clearSelection, render,
     }),
     [
-      setSpec, focus, setFocus, pick, registerSlot, onFeatureClick, featureRelated, openRelated, clearRelated,
-      selectedFeature, selectFeature, clearSelection, render,
+      setSpec, focus, setFocus, pick, registerSlot, onFeatureClick, sel, openRelated, clearRelated,
+      selectFeature, clearSelection, render,
     ],
   );
 

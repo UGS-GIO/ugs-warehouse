@@ -40,11 +40,20 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const [openGalleries, setOpenGalleries] = useState<Set<string>>(new Set());
   const { featureRelated, clearRelated } = usePreviewMap();
   const sectionRef = useRef<HTMLDivElement>(null);
-  // A map-feature click (wired via the preview-map context) auto-opens its related table and
-  // scrolls this section into view, so the click's result is visible without manual scrolling.
+  // A map-feature click (via the preview-map context) auto-opens its related table — DERIVED, not an
+  // effect that mutates `openTables`: deriving keeps the open set and the context from disagreeing,
+  // and stops a remount (page↔drawer layout switch) from reopening a table on its own.
+  const isOpen = (key: string) => openTables.has(key) || featureRelated?.relatedKey === key;
+  // Scroll here only on a genuinely NEW feature-related selection — not when the panel remounts with
+  // one already held (the old effect fired on mount, jumping the viewport with no click behind it).
+  // Seeding the marker from the mount value makes a carried-in selection a no-op; a later click is a
+  // real change. Scrolling is the one legitimate effect here.
+  const scrolledFor = useRef(featureRelated ? `${featureRelated.relatedKey}:${featureRelated.value}` : null);
   useEffect(() => {
     if (!featureRelated) return;
-    setOpenTables((prev) => new Set(prev).add(featureRelated.relatedKey));
+    const key = `${featureRelated.relatedKey}:${featureRelated.value}`;
+    if (scrolledFor.current === key) return;
+    scrolledFor.current = key;
     const t = setTimeout(() => sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
     return () => clearTimeout(t);
   }, [featureRelated]);
@@ -97,7 +106,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                   <span className="font-medium">{asset.title ?? key}</span>
                   <button className="text-primary hover:underline"
                     onClick={() => toggleTable(key)}>
-                    {openTables.has(key) ? "Hide" : "View"}
+                    {isOpen(key) ? "Hide" : "View"}
                   </button>
                   {isPhotos(key, asset) && (
                     <button className="text-primary hover:underline" onClick={() => toggleGallery(key)}>
@@ -111,12 +120,17 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                 </div>
                 {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
                     range-read (never downloads the whole file). No geometry → a plain data table. */}
-                {openTables.has(key) && (() => {
+                {isOpen(key) && (() => {
                   const childField = relatedJoins(item).find((j) => j.key === key)?.childField;
                   const preset = featureRelated?.relatedKey === key && childField
                     ? { col: childField, kind: "exact" as const, value: featureRelated.value }
                     : undefined;
-                  return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={clearRelated} />;
+                  // Clearing the preset widens the table in place — it must NOT close. When the table
+                  // was auto-opened purely by the feature click (not in `openTables`), record it as
+                  // open here first, then clear the context, so `isOpen` stays true after the preset
+                  // drops. This is a user action, not an effect, so it can't reopen on remount.
+                  const onClearPreset = () => { setOpenTables((prev) => new Set(prev).add(key)); clearRelated(); };
+                  return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={onClearPreset} />;
                 })()}
                 {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
               </li>
@@ -134,10 +148,14 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
   const { selectedFeature, clearSelection, openRelated } = usePreviewMap();
   const ref = useRef<HTMLDivElement>(null);
   // The card only mounts below the map once a feature is clicked; on a tall preview it lands below
-  // the fold, so pull it into view on each new selection (mirrors RelatedPanel). `nearest` keeps as
-  // much of the map — and the highlighted feature — in view as possible.
+  // the fold, so pull it into view on a new selection. `nearest` keeps as much of the map — and the
+  // highlighted feature — in view as possible. Gate on a genuinely new selection (same reason as
+  // RelatedPanel): `selectedFeature` keeps its identity across a remount and across opening a related
+  // table, so seed the marker from the mount value and only scroll when the reference changes.
+  const scrolledFor = useRef(selectedFeature);
   useEffect(() => {
-    if (!selectedFeature) return;
+    if (!selectedFeature || scrolledFor.current === selectedFeature) return;
+    scrolledFor.current = selectedFeature;
     const t = setTimeout(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
     return () => clearTimeout(t);
   }, [selectedFeature]);

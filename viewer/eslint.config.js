@@ -31,4 +31,17 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
+  {
+    // Routes are the URL layer: search params + queries, not effects. Scoped reset-on-key state goes
+    // through usePerItem, fetched state through TanStack Query, shareable state through router search
+    // params. Effects here kept reappearing as reset-on-change anti-patterns (PR #301 review), so ban
+    // them outright rather than re-litigating each one.
+    files: ["src/routes/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": ["error", {
+        selector: "CallExpression[callee.name='useEffect']",
+        message: "No useEffect in routes/: use usePerItem for scoped reset state, TanStack Query for fetched state, and router search params for shareable state.",
+      }],
+    },
+  },
 );

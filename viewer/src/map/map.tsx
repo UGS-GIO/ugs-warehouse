@@ -99,6 +99,10 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
+  // The selected feature's geometry, highlighted on the map so the popup closing (e.g. to open a
+  // related table) doesn't lose your place. From the click event's own geometry — tile-clipped for
+  // very large polygons, but accurate enough for a highlight.
+  const [hlGeom, setHlGeom] = useState<GeoJSON.Geometry | null>(null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
@@ -171,6 +175,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
     mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
   }, [fitKey]);
 
+  // A new item means the old selection no longer applies.
+  useEffect(() => setHlGeom(null), [item?.id]);
+
   // Bound GL style `layers` per overlay (id→layers for those that resolved), via TanStack Query.
   const styleCache = useStyleLayersFor(layers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
 
@@ -212,17 +219,19 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
   const onClick = (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
-    if (!f) return setPopup(null);
+    if (!f) { setPopup(null); setHlGeom(null); return; }
     if (f.layer.id === "coverage-fill") {
       // A footprint: popup its title + a link to open the item (don't yank the user off the map).
       setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: String(f.properties?.title ?? ""),
                  props: {}, href: f.properties?.href ? String(f.properties.href) : undefined });
+      setHlGeom(null);   // a footprint isn't a data feature — nothing to highlight
       return;
     }
     const l = layerByMapId[f.layer.id];
     // Resolve the related tables ONCE here, not on every popup render (ItemMap re-renders on hover/move).
     setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: l?.title ?? "", props: f.properties ?? {},
                related: l?.id ? relatedFor?.(l.id) : undefined });
+    setHlGeom((f.geometry as GeoJSON.Geometry) ?? null);
   };
 
   return (
@@ -292,6 +301,16 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       {item?.geometry && (
         <Source id="footprint" type="geojson" data={{ type: "Feature", properties: {}, geometry: item.geometry }}>
           <Layer id="fp-line" type="line" paint={{ "line-color": "#888", "line-width": 1, "line-dasharray": [2, 2] }} />
+        </Source>
+      )}
+
+      {/* Selected-feature highlight — marks which feature the open popup belongs to, and survives the
+          popup closing (e.g. to open a related table) so you don't lose your place. Non-interactive. */}
+      {hlGeom && (
+        <Source id="feat-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
+          <Layer id="feat-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
+          <Layer id="feat-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
+          <Layer id="feat-hl-pt" type="circle" filter={["in", ["geometry-type"], ["literal", ["Point", "MultiPoint"]]]} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
         </Source>
       )}
 

@@ -304,16 +304,6 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Source>
       )}
 
-      {/* Selected-feature highlight — marks which feature the open popup belongs to, and survives the
-          popup closing (e.g. to open a related table) so you don't lose your place. Non-interactive. */}
-      {hlGeom && (
-        <Source id="feat-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
-          <Layer id="feat-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
-          <Layer id="feat-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
-          <Layer id="feat-hl-pt" type="circle" filter={["in", ["geometry-type"], ["literal", ["Point", "MultiPoint"]]]} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
-        </Source>
-      )}
-
       {zarrSpecs.length > 0 && (
         <Suspense fallback={null}><ZarrOverlay specs={zarrSpecs} /></Suspense>
       )}
@@ -371,6 +361,16 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
           </Source>
         );
       })}
+
+      {/* Selected-feature highlight — marks which feature the open popup belongs to, and survives the
+          popup closing (e.g. to open a related table) so you don't lose your place. Non-interactive. */}
+      {hlGeom && (
+        <Source id="feat-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
+          <Layer id="feat-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
+          <Layer id="feat-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
+          <Layer id="feat-hl-pt" type="circle" filter={["in", ["geometry-type"], ["literal", ["Point", "MultiPoint"]]]} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
+        </Source>
+      )}
 
       {popup && (
         <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">

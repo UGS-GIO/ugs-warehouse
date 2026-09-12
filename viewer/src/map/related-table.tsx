@@ -46,7 +46,7 @@ export function RelatedTable({ itemHref, relatedKey, title, props, onClose }: {
     : undefined;
 
   return (
-    <div className="flex min-h-0 flex-col gap-2">
+    <div className="flex h-full min-h-0 flex-col gap-2">
       <div className="flex items-center gap-2">
         <button type="button" onClick={onClose} aria-label="Back to item detail" title="Back to item detail"
           className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground"><span aria-hidden>←</span></button>

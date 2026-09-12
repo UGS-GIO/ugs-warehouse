@@ -13,7 +13,7 @@ function PeekRow({ join, value, onOpen }: {
   join: RelatedJoin; value: unknown; onOpen?: (relatedKey: string, value: string) => void;
 }) {
   const v = value == null || value === "" ? undefined : String(value);
-  const { data, isFetching } = useQuery({
+  const { data, isFetching, error } = useQuery({
     enabled: v !== undefined,
     queryKey: ["feature-card-related", join.href, join.childField, v],
     queryFn: async () => {
@@ -25,6 +25,7 @@ function PeekRow({ join, value, onOpen }: {
   if (v === undefined) return null;
   const total = data?.total ?? 0;
   if (isFetching && !data) return <div className="py-0.5 text-xs text-muted-foreground">{join.title}…</div>;
+  if (error) return <div className="py-0.5 text-xs text-destructive">{join.title}: couldn't load</div>;
   if (total === 0) return null;
   if (total === 1) {
     const row = data!.rows[0];
@@ -81,7 +82,7 @@ export function FeatureCard({ item, props, onOpenRelated, onClear }: {
   const joins = relatedJoins(item);
   const summary = summaryFieldsOf(item);
   const idFields = (summary.length ? summary : Object.keys(props)).filter((k) => props[k] != null && props[k] !== "").slice(0, 5);
-  const title = String(props[summary[0]] ?? props[idFields[0]] ?? item.properties?.title ?? "Feature");
+  const title = String(props[summary[0]] || props[idFields[0]] || item.properties?.title || "Feature");
   return (
     <section className="mt-3 rounded-md border border-border bg-card p-3">
       <div className="mb-1.5 flex items-center justify-between">
@@ -91,7 +92,7 @@ export function FeatureCard({ item, props, onOpenRelated, onClear }: {
       <div className="text-sm font-semibold">{title}</div>
       <div className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
         {idFields.map((k) => (
-          <div key={k} className="contents"><div className="text-muted-foreground">{k}</div><div>{String(props[k])}</div></div>
+          <div key={k} className="contents"><div className="text-muted-foreground">{k}</div><div className="break-words min-w-0">{String(props[k])}</div></div>
         ))}
       </div>
       {joins.length > 0 && (

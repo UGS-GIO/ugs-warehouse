@@ -473,8 +473,8 @@ function FeatureProps({ props }: { props: Record<string, unknown> }) {
       <tbody>
         {rows.map(([k, v]) => (
           <tr key={k}>
-            <td className="pr-2 align-top font-medium text-gray-600">{k}</td>
-            <td className="align-top text-gray-900">{String(v)}</td>
+            <td className="pr-2 align-top font-medium text-muted-foreground">{k}</td>
+            <td className="align-top text-foreground">{String(v)}</td>
           </tr>
         ))}
       </tbody>
@@ -489,8 +489,8 @@ function RelatedLinks({ info, props, onOpen }: {
 }) {
   if (!info?.tables.length) return null;
   return (
-    <div className="mt-2 border-t border-gray-200 pt-1.5">
-      <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-gray-500">Related tables</div>
+    <div className="mt-2 border-t border-border pt-1.5">
+      <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
       {info.tables.map((t) => (
         <button key={t.key} type="button"
           onClick={() => onOpen({ itemHref: info.itemHref, relatedKey: t.key, title: t.title, props })}

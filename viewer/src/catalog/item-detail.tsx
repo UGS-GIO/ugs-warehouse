@@ -132,8 +132,17 @@ function RelatedPanel({ item }: { item: StacDoc }) {
 // preview-map context so both layouts share the same behavior without lifting state up further.
 function SelectedFeatureCard({ item }: { item: StacDoc }) {
   const { selectedFeature, clearSelection, openRelated } = usePreviewMap();
+  const ref = useRef<HTMLDivElement>(null);
+  // The card only mounts below the map once a feature is clicked; on a tall preview it lands below
+  // the fold, so pull it into view on each new selection (mirrors RelatedPanel). `nearest` keeps as
+  // much of the map — and the highlighted feature — in view as possible.
+  useEffect(() => {
+    if (!selectedFeature) return;
+    const t = setTimeout(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
+    return () => clearTimeout(t);
+  }, [selectedFeature]);
   if (!selectedFeature) return null;
-  return <FeatureCard item={item} props={selectedFeature.props} onOpenRelated={openRelated} onClear={clearSelection} />;
+  return <div ref={ref}><FeatureCard item={item} props={selectedFeature.props} onOpenRelated={openRelated} onClear={clearSelection} /></div>;
 }
 
 // "In this issue" — the Survey Notes table of contents (warehouse parses it from the PDF). Each

@@ -228,16 +228,21 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
     if (!f) { setPopup(null); onSelectFeature?.(null); setHlGeom(null); return; }
     if (f.layer.id === "coverage-fill") {
       // A footprint: popup its title + a link to open the item (don't yank the user off the map).
+      // Clear any docked FeatureDetail too — a footprint popup and a docked feature must never
+      // coexist (that's the floating-popup-beside-the-dock drift this redesign removes).
       setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: String(f.properties?.title ?? ""),
                  href: f.properties?.href ? String(f.properties.href) : undefined });
+      onSelectFeature?.(null);
       setHlGeom(null);   // a footprint isn't a data feature — nothing to highlight
       return;
     }
     const l = layerByMapId[f.layer.id];
     // Resolve the related tables ONCE here, not on every dock render (ItemMap re-renders on hover/move).
-    // Lifted to the route, which docks the detail — no floating feature popup.
+    // Lifted to the route, which docks the detail — no floating feature popup. Close any open
+    // footprint popup too, for the same reason as above.
     onSelectFeature?.({ title: l?.title ?? "", props: f.properties ?? {},
                          related: l?.id ? relatedFor?.(l.id) : undefined });
+    setPopup(null);
     setHlGeom((f.geometry as GeoJSON.Geometry) ?? null);
   };
 

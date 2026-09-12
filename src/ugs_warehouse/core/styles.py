@@ -89,6 +89,12 @@ def _entry_key(entry: dict) -> str:
     return str(entry.get("itemId") or entry.get("layer") or "")
 
 
+def entry_for(item_id: str) -> dict | None:
+    """The manifest entry bound to `item_id`, or None. The manifest belongs to ugs-styles and is
+    read-only here, so a caller retiring an item can only report the binding, not remove it."""
+    return next((e for e in _manifest() if _entry_key(e) == item_id), None)
+
+
 def _style_url(entry: dict) -> str:
     return f"{config.STYLES_CDN_BASE}/{str(entry.get('path') or '').lstrip('/')}"
 

@@ -182,6 +182,40 @@ in `check_limits.py`. The failure message spells out the commands.
 Streaming the response instead of buffering would make memory roughly constant and retire this whole
 coupling. That is an upstream change.
 
+### Concurrent load and DuckDB memory (ALL-5869)
+
+The table above is single-client. There is a second, separate pressure: **many clients at once.** A
+GIS client (AGOL / ArcGIS Pro / QGIS) renders one view as ~12 parallel `bbox` requests, and on heavy
+polygon layers each response is 50–133MB (a full-extent pull is ~133MB). featureserv shares **one in-process DuckDB instance** across
+every in-flight request, so under Cloud Run's default concurrency of 80 those queries collectively
+exhausted DuckDB's own memory (`Out of Memory Error … 1.5 GiB/1.5 GiB used`) — a 500/503 storm on a
+layer that serves fine one request at a time. The fix is three coupled knobs, validated by a pre-merge
+load test on a `--no-traffic` tagged revision:
+
+- **`--concurrency=4`** (`cloudbuild.yaml`) — caps how many heavy requests share an instance. Biggest
+  lever, and it bounds *both* pressures: the shared DuckDB **and** the Go-side response buffering,
+  which is the half that actually scales with concurrency (featureserv holds ~2.5 heap copies of each
+  50–84MB response at the marshal peak). Tradeoff: more cold starts on this scale-to-zero service,
+  each re-deriving the collection list (~20s), since a burst fans out across more instances.
+- **`--cpu=2 --memory=8Gi`** — 4Gi was NOT enough: the load test showed 4 concurrent *full-layer* pulls
+  (133MB each) OOM-kill a 4Gi container, and an OOM mid-stream silently truncates a 200. The wall is
+  the Go buffering (4 × 133MB × ~2.5 copies), which the DuckDB limit can't govern; 8Gi holds it. cpu=2
+  is required for 8Gi (Cloud Run caps 1 vCPU at 4Gi).
+- **DuckDB pragmas** on every pooled connection (`patches/0002-duckdb-memory-limits.patch`, applied in
+  `catalog_db.go` `dbConnect`): `memory_limit='3GB'` caps DuckDB *below* the container (leaving the
+  rest of the 8Gi for that Go buffering) so a runaway query errors cleanly rather than OOM-killing the
+  whole process; `threads=1` stops one query's parallel operators from spiking;
+  `preserve_insertion_order=false` lets large scans stream rather than
+  buffer a row order no GeoJSON client relies on. Set via the driver's `connInitFn` — a bare
+  `db.Exec("SET …")` would land on one arbitrary connection in the pool.
+
+`memory_limit`, `--memory`, and `--concurrency` are now three coupled numbers, and **only** the
+`--memory`×`LimitMax` pairing is machine-checked (`check_limits.py`) — and that check is
+**sequential-load only**. Keep `memory_limit` below `--memory` with headroom for Go buffering at the
+concurrency cap, and measure a new (memory, concurrency, limit) triple under a real parallel burst
+before trusting it. Gating the DuckDB limit against the container the way `LimitMax` is gated is a
+tracked follow-up.
+
 ## Notes / upgrade path
 
 - **The db is a mirror of the catalog, not a live query against it.** Boot regen shrinks the staleness

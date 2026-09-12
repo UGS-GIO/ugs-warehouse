@@ -62,3 +62,6 @@ infra/.terraform.lock.hcl
 
 # Firebase Hosting deploy cache
 .firebase/
+
+# Claude Code worktrees
+.claude/worktrees/

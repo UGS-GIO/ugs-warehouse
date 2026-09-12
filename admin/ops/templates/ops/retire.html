@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Retire a topic{% endblock %}
+{% block content %}
+<h1 class="text-xl font-bold mb-1">Retire a serving topic</h1>
+<p class="text-sm text-slate-500 mb-4">
+  Drops the topic's DuckLake table and deletes its GeoParquet, PMTiles, thumbnails and STAC item,
+  then refreshes the catalog. <span class="font-medium text-slate-700">There is no undo</span> — the
+  catalog is derived from the objects, so a retired topic is gone from every consumer at once.
+  Preview first: the dry-run lists exactly what would go.
+  {% if dry_run %}<span class="text-amber-700">Console is in dry-run — nothing will actually execute.</span>{% endif %}
+</p>
+
+{# Panel above the list: the preview and confirmation both land here. #}
+<div id="retire-panel" class="mb-4 empty:hidden"></div>
+
+<div class="overflow-x-auto">
+  <table class="w-full text-sm border-collapse">
+    <thead><tr class="text-left text-xs text-slate-500">
+      <th class="py-1">Topic</th><th>Serving table</th><th>Rows</th><th></th></tr></thead>
+    <tbody>
+      {% for t in topics %}
+      <tr class="border-t border-slate-100">
+        <td class="py-1 pr-3 font-mono whitespace-nowrap">{{ t.id }}</td>
+        <td class="pr-3 font-mono text-slate-500 whitespace-nowrap">{{ t.fqn }}</td>
+        <td class="pr-3 text-slate-500">{{ t.rows|default:"" }}</td>
+        <td><button class="text-xs font-medium text-red-700 hover:underline"
+              hx-post="{% url 'ops:retire_preview' %}" hx-vals='{"topic": "{{ t.fqn }}"}'
+              hx-target="#retire-panel" hx-swap="innerHTML show:top"
+              hx-disabled-elt="this">Preview retire ▸</button></td>
+      </tr>
+      {% empty %}
+      <tr><td colspan="4" class="py-3 text-slate-400">No serving topics in the catalog.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

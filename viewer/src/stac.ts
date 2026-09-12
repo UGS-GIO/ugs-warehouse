@@ -48,6 +48,7 @@ export type ForeignKey = {
 };
 export type Asset = {
   href: string; title?: string; type?: string; roles?: string[];
+  description?: string;   // one-line usage hint (display / query / download) stamped by core/stac (#280)
   "proj:code"?: string;   // per-asset CRS; overrides the item's (a reprojected COG carries its own)
   "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];
 };
@@ -93,6 +94,15 @@ export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
   Object.values(d?.assets ?? {})
     .filter((a) => !a.roles?.includes("related"))
     .flatMap((a) => a["ugs:foreign_keys"] ?? []);
+
+// Per-asset usage hint (STAC `description`) — the warehouse's "display vs query vs download"
+// guidance, stamped in core/stac so one item says which asset/endpoint to use (#280). Returns only
+// the assets that carry a hint, paired with their key; a listing can render these. Rendering and
+// asset selection elsewhere are unchanged — this only surfaces the metadata.
+export const assetUsages = (d: StacDoc | undefined): { key: string; asset: Asset; usage: string }[] =>
+  Object.entries(d?.assets ?? {})
+    .filter(([, a]) => Boolean(a.description))
+    .map(([key, asset]) => ({ key, asset, usage: asset.description as string }));
 
 // Survey Notes "In this issue": [{title, page}] parsed from the issue PDF's table of contents
 // (warehouse, ugs:contents) — page is null for "back cover". Undefined when the item carries none.

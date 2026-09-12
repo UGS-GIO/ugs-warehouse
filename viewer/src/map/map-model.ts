@@ -95,6 +95,15 @@ export type ActiveLayer = {
   zarr?: { href: string; variable: string; pinDims: string[] };
 };
 
+// Geometry gates for the unstyled fallback render — without them its circle layer puts a dot on
+// every polygon and line VERTEX. Multi- names are for GeoJSON sources; tiles use the singular.
+type GeomFilter = ["match", ["geometry-type"], string[], true, false];
+export const GEOM_FILTER: Record<"fill" | "line" | "point", GeomFilter> = {
+  fill: ["match", ["geometry-type"], ["Polygon", "MultiPolygon"], true, false],
+  line: ["match", ["geometry-type"], ["LineString", "MultiLineString", "Polygon", "MultiPolygon"], true, false],
+  point: ["match", ["geometry-type"], ["Point", "MultiPoint"], true, false],
+};
+
 // A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
 // to open it on click. Aspatial items (no bbox) are filtered out by the caller.
 export type Footprint = { href: string; id: string; title: string; bbox: number[] };

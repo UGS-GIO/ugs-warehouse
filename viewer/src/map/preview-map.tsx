@@ -81,7 +81,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
       {armed && (
         <Suspense fallback={null}>
           <PreviewMapGL spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick}
-            onFeatureRelated={openRelated} renders={renders} sel={render} onSel={setChosen} />
+            onFeatureSelect={selectFeature} onClearSelection={clearSelection} renders={renders} sel={render} onSel={setChosen} />
         </Suspense>
       )}
     </PreviewMapCtx.Provider>

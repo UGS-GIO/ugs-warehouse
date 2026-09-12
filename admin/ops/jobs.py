@@ -102,6 +102,12 @@ JOBS: dict[str, Job] = {j.key: j for j in [
     Job("graph", "ugs-pubs-graph", "Build knowledge graph",
         "Rebuild the publications knowledge graph (nodes/edges Parquet) — citation + co-author + "
         "semantic edges. Reads pub metadata + embeddings; safe to re-run."),
+    # Deliberately absent from STAGES: retirement is per-topic and irreversible, so it gets the
+    # two-step page (ops:retire), not a Run button. Being in JOBS is what puts its executions in the
+    # Watch feed and gives it its own log stream — the audit trail.
+    Job("retire", "ugs-warehouse-retire", "Retire a topic",
+        "Drop a topic's DuckLake table and delete its parquet, PMTiles, thumbnails and STAC item, "
+        "then refresh the catalog. Irreversible.", danger=True),
 ]}
 
 
@@ -210,6 +216,53 @@ def run_maintain(mode: str) -> dict:
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 
 
+# The retire job shares the ingest image + entrypoint (`python -m $RUN_MODULE "$@"`), so the topic
+# arrives as CLI args. `--yes` skips the CLI's own typed confirmation, which the console has already
+# taken from the operator — see views.retire_execute, which re-checks it server-side.
+RETIRE_MODULE = "ugs_warehouse.vector.retire"
+
+
+def retire_args(topic: str, *, dry_run: bool, purge_overrides: bool = False) -> list[str]:
+    args = ["--topic", topic, "--dry-run"] if dry_run else ["--topic", topic, "--yes"]
+    if purge_overrides and not dry_run:
+        args.append("--purge-overrides")
+    return args
+
+
+def run_retire(topic: str, *, dry_run: bool, purge_overrides: bool = False,
+               requested_by: str = "") -> dict:
+    """Retire one serving topic, or preview it with --dry-run. {ok, execution|message}.
+
+    The operator's IAP email rides along as an env var so it lands in the run's OWN logs. There is
+    nowhere durable to write an audit row — the console's SQLite is ephemeral (settings.py) — so the
+    execution and its log stream are the record.
+    """
+    job = JOBS["retire"]
+    try:
+        from ugs_warehouse.vector.topics import Topic
+        Topic.parse(topic)  # rejects a non-identifier or a non-`_current` table before dispatch
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+
+    args = retire_args(topic, dry_run=dry_run, purge_overrides=purge_overrides)
+    what = f"{job.name} {' '.join(args)}"
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "message": f"DRY-RUN: would execute {what}", "dry_run": True}
+    try:
+        from google.cloud import run_v2
+        client = run_v2.JobsClient()
+        env = [run_v2.EnvVar(name="RETIRE_REQUESTED_BY", value=requested_by)] if requested_by else []
+        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=args, env=env)
+        req = run_v2.RunJobRequest(
+            name=_job_path(job),
+            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
+        op = client.run_job(request=req)
+        exec_name = (op.metadata.name if op.metadata else "") or ""
+        return {"ok": True, "message": f"started {what}", "execution": exec_name.split("/")[-1]}
+    except Exception as e:  # noqa: BLE001 — surface the error to the operator
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
 MOSAIC_MODULE = "ugs_warehouse.pubs.geolmap_mosaics"
 
 
@@ -268,8 +321,11 @@ def recent(key: str, limit: int = 5) -> list[dict]:
         return []
 
 
-def logs(key: str, limit: int = 80) -> dict:
+def logs(key: str, limit: int = 80, execution: str = "") -> dict:
     """Recent Cloud Logging lines for a job (near-live; newest fetched, returned chronological).
+
+    `execution` narrows to one run. A job whose output IS the answer — a retire dry-run preview —
+    must not render the previous operator's run while its own is still starting.
 
     Needs `roles/logging.viewer` on the runtime SA. Returns {ok, lines, message?} so the view can
     show *why* it's empty instead of a silent blank — the whole point is process visibility.
@@ -283,6 +339,8 @@ def logs(key: str, limit: int = 80) -> dict:
     try:
         client = _logging_client()
         flt = f'resource.type="cloud_run_job" resource.labels.job_name="{job.name}"'
+        if execution:
+            flt += f' labels."run.googleapis.com/execution_name"="{execution}"'
         lines = []
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
                                      page_size=limit, max_results=limit):

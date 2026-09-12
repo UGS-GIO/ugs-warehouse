@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -23,12 +24,17 @@ from pathlib import Path
 # directly because it pulls in core/gcs -> obstore, which isn't in the local env.
 STAC_VERSION = "1.0.0"
 CATALOG_ID = "ugs-warehouse"
-PGF_BASE_URL = "https://api.geology.utah.gov"
+# Mirror core/config.PGF_BASE_URL (default + env override) so the local catalog's OGC API Features
+# link matches what prod publishes. The old `api.geology.utah.gov` here was the NXDOMAIN placeholder
+# prod already moved off of (UGS-GIO/ugs-warehouse#289).
+PGF_BASE_URL = os.environ.get(
+    "PGF_BASE_URL", "https://ugs-warehouse-features-xedvkyurga-uc.a.run.app").rstrip("/")
 
 
 def _collection_doc(path: str, item_ids: list[str]) -> dict:
     """`path` is the layout path — one segment (flat) or two (`ugs-serving-topics/hazards`).
-    Root/parent links climb out per depth; the OGC API Features link is flat-only, as in core."""
+    Root/parent links climb out per depth; the OGC API Features service link is added on the same
+    nodes core does (flat + serving-topic schemas)."""
     depth = path.count("/") + 1
     collection = path.split("/")[-1]
     return {
@@ -43,8 +49,11 @@ def _collection_doc(path: str, item_ids: list[str]) -> dict:
             {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./collection.json", "type": "application/json"},
-            *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections/{collection}",
-                "type": "application/json", "title": "OGC API Features endpoint"}] if depth == 1 else []),
+            # Match core/stac `_collection_doc`: the service ROOT (featureserv keys collections by
+            # STAC item id, so `/collections/<collection>` 404s), on flat + serving-topic collections.
+            *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections",
+                "type": "application/json", "title": "OGC API Features service"}]
+              if depth == 1 or path.startswith(f"{TOPICS}/") else []),
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json"}
               for i in sorted(item_ids)],
         ],

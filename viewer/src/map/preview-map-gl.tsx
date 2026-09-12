@@ -10,7 +10,7 @@ import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMo
 import { ensureCogProtocol } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { boundsOf, type FocusSel, validBbox } from "./map-model";
+import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
 import { bboxPolygon, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
@@ -23,11 +23,11 @@ const POSITRON = "https://tiles.openfreemap.org/styles/positron";
 // Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders, not
 // faux cartography. fill/line/circle all added so any geometry type shows.
 const NEUTRAL_LAYERS = [
-  { type: "fill", filter: ["==", ["geometry-type"], "Polygon"],
+  { type: "fill", filter: GEOM_FILTER.fill,
     paint: { "fill-color": "#6b7280", "fill-opacity": 0.15, "fill-outline-color": "#374151" } },
-  { type: "line", filter: ["match", ["geometry-type"], ["LineString", "Polygon"], true, false],
+  { type: "line", filter: GEOM_FILTER.line,
     paint: { "line-color": "#374151", "line-width": 1.1 } },
-  { type: "circle", filter: ["==", ["geometry-type"], "Point"],
+  { type: "circle", filter: GEOM_FILTER.point,
     paint: { "circle-color": "#374151", "circle-radius": 3.5, "circle-opacity": 0.85 } },
 ];
 
@@ -241,7 +241,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
               <Layer id="pm-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
               <Layer id="pm-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
               {/* Point-only — an unfiltered circle layer draws a dot on every polygon/line vertex. */}
-              <Layer id="pm-hl-pt" type="circle" filter={["in", ["geometry-type"], ["literal", ["Point", "MultiPoint"]]]} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
+              <Layer id="pm-hl-pt" type="circle" filter={GEOM_FILTER.point} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
             </Source>
           )}
 

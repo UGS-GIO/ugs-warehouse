@@ -107,8 +107,11 @@ def _serving_topics() -> list[dict]:
     rows = []
     for it in idx.get("items", []):
         props = it.get("properties") or {}
+        schema, layer = props.get("ugs:dbt_schema"), props.get("ugs:layer")
         rows.append({"id": it["id"], "styled": bool(props.get("renders")),
-                     "rows": props.get("ugs:row_count")})
+                     "rows": props.get("ugs:row_count"),
+                     # The retire CLI addresses the serving TABLE, not the item id.
+                     "fqn": f"{schema}.{layer}" if schema and layer else ""})
     rows.sort(key=lambda r: r["id"])
     return rows
 

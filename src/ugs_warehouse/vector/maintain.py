@@ -253,6 +253,77 @@ def drop_dangling_tables(con: duckdb.DuckDBPyConnection, cat: str, targets: list
     return dropped
 
 
+def table_data_files(con: duckdb.DuckDBPyConnection, cat: str, schema: str, table: str) -> list[str]:
+    """Data files the catalog currently references for one table, as the catalog spells them."""
+    return [r[0] for r in con.execute(
+        f"SELECT data_file FROM ducklake_list_files('{cat}', '{table}', schema => '{schema}')"
+    ).fetchall() if r[0]]
+
+
+def _delete_data_files(data_files: list[str], *, batch_size: int = 1000) -> int:
+    """Delete data files by catalog path, on gs:// or a local data path (tests, local dev)."""
+    parts = _data_path_parts()
+    if parts is None:
+        deleted = 0
+        for data_file in data_files:
+            path = data_file if os.path.isabs(data_file) else os.path.join(ducklake.DATA_PATH, data_file)
+            try:
+                os.remove(path)
+            except OSError:  # noqa: PERF203 — already gone is the same end state
+                continue
+            deleted += 1
+        return deleted
+
+    bucket, prefix = parts
+    import obstore as obs
+    from obstore.store import GCSStore
+    store = GCSStore(bucket=bucket)
+    paths = [_as_object_path(f, bucket, prefix) for f in data_files]
+    for i in range(0, len(paths), batch_size):
+        obs.delete(store, paths[i:i + batch_size])
+    return len(paths)
+
+
+def drop_table(con: duckdb.DuckDBPyConnection, cat: str, target: str, *,
+               dry_run: bool = False) -> list[str]:
+    """Drop a LIVE DuckLake table and delete the parquet it referenced. Returns those files.
+
+    The mirror of `drop_dangling_tables`, which refuses while any of the table's files still exist
+    and so can never retire a topic that is actually serving.
+
+    Files are read before the drop, because `ducklake_list_files` cannot see a dropped table, and
+    deleted directly rather than through `sweep_orphans`: the sweep lists the entire data path and
+    honours ORPHAN_GRACE_DAYS, a guard that exists to protect a concurrent ingest's uncommitted
+    writes — running it at zero grace to collect one topic would put every other topic at risk.
+    Parquet superseded *before* the drop keeps its snapshot reference and goes on the nightly run.
+    """
+    schema, _, table = target.partition(".")
+    if not schema or not table:
+        raise SystemExit(f"drop_table expects SCHEMA.TABLE, got {target!r}")
+
+    exists = con.execute(
+        "SELECT 1 FROM information_schema.tables "
+        "WHERE table_catalog = ? AND table_schema = ? AND table_name = ?",
+        [cat, schema, table],
+    ).fetchone()
+    if not exists:
+        print(f"[maintain] drop_table: {target} is not in the catalog — nothing to drop")
+        return []
+
+    files = table_data_files(con, cat, schema, table)
+    print(f"[maintain] drop_table: {target}, {len(files):,} referenced file(s)"
+          f"{' (dry-run, nothing dropped)' if dry_run else ''}")
+    if dry_run:
+        for path in files[:5]:
+            print(f"           would delete {path}")
+        return files
+
+    con.execute(f"DROP TABLE {cat}.{_q(schema)}.{_q(table)}")
+    deleted = _delete_data_files(files)
+    print(f"[maintain] drop_table: dropped {target}, deleted {deleted:,} file(s)")
+    return files
+
+
 def _q(name: str) -> str:
     """Double-quote a DuckDB identifier."""
     return '"' + name.replace('"', '""') + '"'

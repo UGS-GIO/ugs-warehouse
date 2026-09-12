@@ -1,0 +1,27 @@
+{% comment %}The dry-run's output, scoped to one execution. Polls until that run ends, then stops —
+the preview is a finished document, not a live tail.{% endcomment %}
+<div class="rounded-lg border border-slate-700 bg-slate-900 text-slate-100"
+     {% if not done %}hx-get="{% url 'ops:retire_preview_logs' %}?topic={{ topic|urlencode }}&execution={{ execution|urlencode }}"
+     hx-trigger="every 5s" hx-swap="outerHTML"{% endif %}>
+  <div class="flex items-center justify-between px-3 py-1.5 border-b border-slate-700 text-xs">
+    <div class="flex items-center gap-2">
+      {% if not done %}<span class="inline-block h-2 w-2 rounded-full bg-amber-400 animate-pulse"></span>{% endif %}
+      <span class="font-medium">dry-run preview</span>
+      <span class="text-slate-400">{{ state|default:"starting" }}</span>
+    </div>
+    <span class="font-mono text-slate-500">{{ execution }}</span>
+  </div>
+  <div class="max-h-96 overflow-auto px-3 py-2 font-mono text-[11px] leading-relaxed">
+    {% if log.dry_run %}
+      <div class="text-amber-300">{{ log.message }}</div>
+    {% elif not log.ok %}
+      <div class="text-red-400">⚠ {{ log.message }}</div>
+    {% elif not log.lines %}
+      <div class="text-slate-400">No output yet — the job takes a few seconds to start and attach to DuckLake.</div>
+    {% else %}
+      {% for ln in log.lines %}
+      <div class="whitespace-pre-wrap {% if ln.severity == 'ERROR' %}text-red-400{% elif ln.severity == 'WARNING' %}text-amber-300{% else %}text-slate-200{% endif %}">{{ ln.text }}</div>
+      {% endfor %}
+    {% endif %}
+  </div>
+</div>

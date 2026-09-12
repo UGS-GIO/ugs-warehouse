@@ -307,6 +307,25 @@ def test_local_catalog_index_entries_match_production():
         assert local._index_entry(item, rollup=rollup) == stac._index_entry(item, rollup=rollup)
 
 
+def test_local_catalog_collection_service_link_matches_production():
+    """gen_local_catalog inlines a simplified `_collection_doc`; the OGC API Features service link
+    it writes must still match production's, or the local dev catalog advertises a link that 404s
+    (featureserv keys collections by item id, so `/collections/<collection>` never existed) or points
+    at a dead host. The whole-doc can differ (simplified), but the service link is the same shape as
+    prod: `/collections` root, "OGC API Features service", and present on the SAME nodes
+    (flat + serving-topic schemas). Guards the divergence UGS-GIO/ugs-warehouse#289 fixes."""
+    local = _gen_local_catalog()
+
+    def service(doc: dict) -> list[dict]:
+        return [{k: lk.get(k) for k in ("rel", "href", "type", "title")}
+                for lk in doc["links"] if lk["rel"] == "service"]
+
+    for path in ("ugs-geologic-maps", "ugs-serving-topics/hazards", "ugs-publications/DS"):
+        cid = path.split("/")[-1]
+        assert service(local._collection_doc(path, ["x"])) \
+            == service(stac._collection_doc(cid, path, ["x"])), path
+
+
 def _mem_gcs(monkeypatch):
     store: dict[str, bytes] = {}
 

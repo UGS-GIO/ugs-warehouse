@@ -10,6 +10,13 @@ it "clears the largest topic", with no reference to the 512Mi the service was ac
 
 This refuses to build a (memory, LimitMax) pair that nobody has measured.
 
+Scope caveat: every VALIDATED pair below was measured under SEQUENTIAL load (single full pulls and
+unpaced paging). This gate does NOT model concurrent requests, and passing it is NOT evidence a
+(memory, LimitMax) pair survives parallel client load. The concurrent-load failure mode (ALL-5869 --
+one in-process DuckDB plus Go whole-response buffering, shared across in-flight requests) is bounded
+elsewhere: Cloud Run --concurrency and the DuckDB memory_limit pragma in featureserv, neither of which
+this file sees. Do not read a monotonicity pass here as "safe under concurrency."
+
 It deliberately does NOT try to predict memory from feature counts. The measurements we have do not
 fit one multiplier: a single full 84,756-feature pull is a 122MB response that 2Gi serves happily
 and 1Gi cannot, while *paged* 20k requests -- ~29MB each -- OOM at 512Mi despite being far smaller,

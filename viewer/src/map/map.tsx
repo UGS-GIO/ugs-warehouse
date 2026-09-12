@@ -8,7 +8,7 @@ import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { UiSegmented } from "@/ui/segmented";
-import { type ActiveLayer, colorFor, type Footprint, validBbox } from "./map-model";
+import { type ActiveLayer, colorFor, type Footprint, GEOM_FILTER, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -353,9 +353,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
               // fragment puts the prop on the fragment (three React warnings per layer, and no
               // source on the layers). Explicit `source` for the same reason — don't rely on inject.
               [
-                <Layer key="fill" id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />,
-                <Layer key="line" id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} paint={{ "line-color": c, "line-width": 1.2 }} />,
-                <Layer key="circle" id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />,
+                <Layer key="fill" id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} filter={GEOM_FILTER.fill} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />,
+                <Layer key="line" id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} filter={GEOM_FILTER.line} paint={{ "line-color": c, "line-width": 1.2 }} />,
+                <Layer key="circle" id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} filter={GEOM_FILTER.point} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />,
               ]
             )}
           </Source>

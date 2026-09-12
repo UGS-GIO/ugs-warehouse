@@ -7,7 +7,7 @@
 // index strips ugs:foreign_keys by design — core/stac.py). So opening follows the item's `self`:
 // fetch the full item (cached, shared with item-detail), resolve the join, then hand the child
 // table's href + an exact-match preset to DataExplorer.
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { DataExplorer } from "@/data/data-explorer";
 import type { ColFilter } from "@/data/download";
@@ -20,21 +20,28 @@ export function RelatedTable({ itemHref, relatedKey, title, props, onClose }: {
   props: Record<string, unknown>;   // the clicked feature's tile properties — the join-value source
   onClose: () => void;
 }) {
-  // "Show all rows" escape hatch: clearing the explorer's preset chip widens to the whole related
-  // table without leaving this view. The ← button below stays the primary way back to item detail.
-  const [showAll, setShowAll] = useState(false);
+  // "Ignore the feature preset" escape hatch: clearing the explorer's preset chip widens to the
+  // whole related table without leaving this view. The ← button below stays the primary way back
+  // to item detail. Named distinctly from DataExplorer's own `showAll` (which means "one page with
+  // every row" — an unrelated axis).
+  const [ignorePreset, setIgnorePreset] = useState(false);
 
   const item = useStac(itemHref);
   const join = relatedJoins(item.data).find((j) => j.key === relatedKey);
   const rawValue = join ? props[join.parentField] : undefined;
   const value = rawValue == null || rawValue === "" ? undefined : String(rawValue);
 
+  // The call site keys `RelatedTable` per layer/related-table, not per clicked feature (desktop
+  // keeps the map + dock live across feature clicks) — so a genuinely different feature/table must
+  // re-scope explicitly rather than inheriting a stale "ignore preset" from the previous one.
+  useEffect(() => setIgnorePreset(false), [join?.href, value]);
+
   const err = item.error ? "Couldn’t load the layer’s metadata." : undefined;
   const busy = item.isLoading;
   // Item loaded but the feature can't be joined (no such FK / no key value on the feature): nothing
   // to scope the query to.
   const noJoin = !busy && !err && (!join || value === undefined);
-  const preset: ColFilter | undefined = join && value !== undefined && !showAll
+  const preset: ColFilter | undefined = join && value !== undefined && !ignorePreset
     ? { col: join.childField, kind: "exact", value }
     : undefined;
 
@@ -50,9 +57,9 @@ export function RelatedTable({ itemHref, relatedKey, title, props, onClose }: {
       {err && <p className="rounded border border-destructive/40 bg-destructive/10 px-2 py-1 text-xs text-destructive">{err}</p>}
       {noJoin && <p className="px-1 text-sm text-muted-foreground">No related rows for this feature.</p>}
 
-      {join && value !== undefined && (
+      {!err && join && value !== undefined && (
         <DataExplorer key={`${join.href}:${value}`} href={join.href} fill
-          presetFilter={preset} onClearPreset={() => setShowAll(true)} />
+          presetFilter={preset} onClearPreset={() => setIgnorePreset(true)} />
       )}
     </div>
   );

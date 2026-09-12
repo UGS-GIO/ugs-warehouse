@@ -11,7 +11,7 @@ import { LegalFooter } from "./shell/legal-footer";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, childLinks, cogAsset, cogRenderAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, childLinks, cogRenderAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 
@@ -74,6 +74,13 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   }
   return null;
 }
+
+// "Does this doc draw as a map layer?" — reuses toLayer's exact gate (the probe href/collId don't
+// affect the answer), so the layer list and the Add-to-map button agree with what the map can
+// actually render (e.g. a native-CRS COG that toLayer rejects isn't offered as a layer) and can't
+// drift from toLayer.
+const drawsAsLayer = (data: StacDoc | undefined): boolean =>
+  !!data && toLayer({ collId: "", href: "layer/probe", data }) !== null;
 
 // Primary tabs: the desktop tab row + the mobile menu's "Views". Discover leads (it's the star).
 const PRIMARY_VIEWS: { id: View; label: string }[] = [
@@ -343,7 +350,7 @@ function useViewState() {
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
   const layerRows: LayerRow[] = useMemo(() => mapItems
-    .filter((r) => r.data && (pmtilesLink(r.data) || cogAsset(r.data) || rasterTilesAsset(r.data) || zarrAsset(r.data)))
+    .filter((r) => drawsAsLayer(r.data))
     // A datacube is a data layer whatever catalog it came from — the sub-catalog allowlist only
     // knows our own ids, so a federated cube would otherwise file under publication plates.
     .map((r) => ({ id: idOf(r.href), href: r.href, title: String(r.data?.properties?.title ?? idOf(r.href)),
@@ -409,18 +416,35 @@ function useViewState() {
       },
     });
   const setSeries = (codes: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: layerIds, s: codes });
+  // Turning a layer ON puts it at the FRONT of the draw order (tray top row = drawn on top); OFF
+  // drops it in place. Front-on-add keeps "add to map" coherent with top=front stacking — a newly
+  // added layer lands on top, not hidden behind what's already there. The `new Set` also dedupes,
+  // so a duplicate id from a hand-edited ?l= self-heals instead of double-mounting a source.
   const toggleLayer = (id: string) => {
-    const set = new Set(layerIds ?? []);
-    if (set.has(id)) set.delete(id); else set.add(id);
-    go({ view, c: collectionUrl, i: itemUrl, l: [...set], s: seriesSel });
+    const cur = layerIds ?? [];
+    const next = cur.includes(id) ? cur.filter((x) => x !== id) : [id, ...cur];
+    go({ view, c: collectionUrl, i: itemUrl, l: [...new Set(next)], s: seriesSel });
   };
-  // A whole group at once (a series, a mart schema, or the active set). One navigation, not N:
+  // A whole group at once (a series, a mart schema, or the active set) in ONE navigation, not N:
   // toggleLayer reads `layerIds` from the URL, so a loop over it would drop all but the last id.
+  // Adds land at the front too, keeping the batch's own order; removes just drop out. `new Set`
+  // dedupes (a self-duplicated batch or a hand-edited ?l= can't double-mount a source).
   const toggleLayers = (ids: string[], on: boolean) => {
-    const set = new Set(layerIds ?? []);
-    for (const id of ids) { if (on) set.add(id); else set.delete(id); }
-    go({ view, c: collectionUrl, i: itemUrl, l: [...set], s: seriesSel });
+    const cur = layerIds ?? [];
+    let next: string[];
+    if (on) next = [...ids.filter((id) => !cur.includes(id)), ...cur];
+    else { const rm = new Set(ids); next = cur.filter((id) => !rm.has(id)); }
+    go({ view, c: collectionUrl, i: itemUrl, l: [...new Set(next)], s: seriesSel });
   };
+  // "+ Add to map" from a discovery/browse card or the item detail: accumulate into ?l= (never
+  // replace), so pulling in a layer while browsing keeps the ones already drawn. `isActive` reads
+  // the explicit set the add/remove controls manage; the implicit open-item fallback stays a
+  // map-view rendering nicety, unaffected here.
+  const addLayer = (id: string) => toggleLayers([id], true);
+  const removeLayer = (id: string) => toggleLayers([id], false);
+  const isActive = (id: string) => (layerIds ?? []).includes(id);
+  // Commit a dragged draw-order back to ?l= (the whole active set stays shareable in the URL).
+  const setLayerOrder = (ids: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: ids, s: seriesSel });
 
   // Breadcrumb trail: Catalog [ / Publications] [ / DS] [ / item]. Each crumb but the last
   // is clickable. parentOfLeaf is the sub-catalog a series collection hangs under (if any).
@@ -462,6 +486,12 @@ function useViewState() {
   // Same cached queries the map itself reads (TanStack dedupes by key) — the legend needs the bound
   // style layers, and the drawer renders outside the map component.
   const styleCache = useStyleLayersFor(activeLayers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
+  // "Is this item a resolvable map layer?" — the gate the Add-to-map button self-checks. `layerRows`
+  // only covers the map/discover/landing set (mapColls), so on the item page (catalog view, where
+  // mapColls is empty) it's empty. Also treat the OPEN item as a layer when its own loaded doc draws
+  // as one — otherwise the item-detail Add-to-map button is permanently hidden there.
+  const isLayerId = (id: string) =>
+    layerRows.some((r) => r.id === id) || (!!itemUrl && idOf(itemUrl) === id && drawsAsLayer(item.data));
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
     catalogDocs, mapItems, mapLoadKey, mapItemsLoading,
@@ -471,6 +501,7 @@ function useViewState() {
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
     layerCollIds, setSeries,
     revealInfo, activeLayers, footprints, layerRows, idsForMap, toggleLayer, toggleLayers, styleCache,
+    addLayer, removeLayer, isActive, isLayerId, setLayerOrder,
   };
 }
 

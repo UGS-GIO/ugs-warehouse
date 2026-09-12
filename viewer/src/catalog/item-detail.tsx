@@ -4,6 +4,7 @@
 import { type ReactNode, useEffect, useRef, useState } from "react";
 
 import type { ItemRef } from "./browse";
+import { AddToMapButton } from "@/map/add-to-map-button";
 import { CommentsPanel } from "@/review/comments-panel";
 import { DataExplorer } from "@/data/data-explorer";
 import { PhotoGallery } from "./photo-gallery";
@@ -271,6 +272,10 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
           View on map ›
         </button>
       )}
+      {/* "View on map" isolates this item; "+ Add to map" accumulates it into the active set without
+          leaving. No layerId: this panel always shows the OPEN item, so the button targets it.
+          Self-gates: renders only when that item is a real map layer. */}
+      <AddToMapButton />
       {onExplore && (
         <button onClick={onExplore} className="inline-block rounded border border-border px-2.5 py-1 text-xs text-foreground hover:border-primary">
           Explore ⤢

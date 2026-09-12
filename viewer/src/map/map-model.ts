@@ -108,9 +108,25 @@ export const GEOM_FILTER: Record<"fill" | "line" | "point", GeomFilter> = {
 // to open it on click. Aspatial items (no bbox) are filtered out by the caller.
 export type Footprint = { href: string; id: string; title: string; bbox: number[] };
 
-// Distinct colors cycled per active layer.
-export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
-export const colorFor = (i: number) => LAYER_COLORS[i % LAYER_COLORS.length];
+// Distinct, saturated, mid-dark colors that read on the light, dark, and satellite basemaps. Cycled
+// per active layer by colorForId. Kept larger than a handful of layers to hold down repeats.
+export const LAYER_COLORS = [
+  "#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2",
+  "#be185d", "#65a30d", "#ca8a04", "#4338ca", "#a21caf", "#0f766e",
+];
+
+// A layer's swatch color, keyed to its id — NOT its position in the active set — so toggling a layer
+// or dragging it up/down the draw order never recolors it or its neighbours (that stability is the
+// point; an index-based color would reshuffle on every reorder). A deterministic string hash picks a
+// palette slot. Colors are stable but NOT guaranteed unique: two ids can land on the same slot, more
+// often the more layers are on at once, so the legend labels each layer to disambiguate. A fully
+// collision-free scheme would trade off either the curated palette (generated hues) or that per-id
+// stability (assigning distinct colors across the active set, which recolors on add/remove).
+export const colorForId = (id: string): string => {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return LAYER_COLORS[Math.abs(h) % LAYER_COLORS.length];
+};
 
 // The `l` search param. Three states, and collapsing two of them is why the last layer could not
 // be turned off: absent = no choice yet (the open item draws), `none` = every layer off, else a
@@ -122,3 +138,43 @@ export const parseLayerParam = (l?: string): string[] | undefined =>
 
 export const layerParam = (ids?: string[]): string | undefined =>
   ids ? (ids.length ? ids.join(",") : NO_LAYERS) : undefined;
+
+// Move the active layer at `from` to `to` (drag-reorder the draw order), the rest shifting to fill.
+// Returns a NEW array and never mutates the input; an out-of-range index leaves the order untouched,
+// so a stray drag event can't corrupt the ?l= set.
+export const reorderLayers = (ids: string[], from: number, to: number): string[] => {
+  if (from < 0 || to < 0 || from >= ids.length || to >= ids.length) return ids.slice();
+  const next = ids.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+};
+
+// Map/source/layer ids are keyed by a STABLE slug of the layer id, never the array index: index-based
+// ids shift when a layer toggles off and maplibre throws "source id changed" on the rename. Shared by
+// the map render and the reorder reconcile so their ids can't drift.
+export const slugOf = (id: string): string => id.replace(/[^a-zA-Z0-9_]/g, "_");
+
+// The GL layer ids each active layer draws, in bottom→top draw order, matching what map.tsx renders:
+// a raster PMTiles mosaic → one `rpm-<slug>-raster`; a COG → one `cog-<slug>-raster` (only once its
+// protocol is ready); a vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
+// the unstyled fallback `pm-<slug>-fill/line/circle`; a zarr datacube → none (a deck.gl overlay draws
+// it, outside maplibre's layer stack). Flattened across `layers` in order, so the reorder reconcile
+// can walk the list and moveLayer each. Pure so it's unit-tested against the render.
+export function orderedSublayerIds(
+  layers: ActiveLayer[],
+  opts: { styledCount: (id: string) => number | undefined; cogReady: boolean },
+): string[] {
+  return layers.flatMap((l) => {
+    const s = slugOf(l.id);
+    if (l.zarr) return [];
+    if (l.rasterPmHref) return [`rpm-${s}-raster`];
+    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`] : [];
+    const n = opts.styledCount(l.id);
+    // map.tsx renders `styleLayers ? styleLayers.map(...) : fallback` — a resolved-but-empty style
+    // ([]) is truthy there and draws nothing, so mirror it with `n != null` (0 → no ids), not `n > 0`.
+    return n != null
+      ? Array.from({ length: n }, (_, li) => `pm-${s}-${li}`)
+      : [`pm-${s}-fill`, `pm-${s}-line`, `pm-${s}-circle`];
+  });
+}

@@ -6,7 +6,7 @@ import { MapDetail } from "@/map/map-detail";
 import { LayerList } from "@/map/layer-list";
 import { MapLegend } from "@/map/map-legend";
 import { MapShell } from "@/map/map-shell";
-import { colorFor } from "@/map/map-model";
+import { colorForId } from "@/map/map-model";
 
 function MapView() {
 const c = useViewCtx();
@@ -20,13 +20,14 @@ return <MapShell
       rows={c.layerRows}
       activeIds={c.idsForMap}
       openId={c.itemUrl ? idOf(c.itemUrl) : undefined}
-      colorOf={(id: string) => colorFor(c.activeLayers.findIndex((l) => l.id === id))}
+      colorOf={colorForId}
       onToggle={c.toggleLayer}
       onToggleMany={c.toggleLayers}
+      onReorder={c.setLayerOrder}
       onOpen={c.openItem}
       // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
-      legend={<MapLegend layers={c.activeLayers.flatMap((l, i) => (l.cogHref || l.rasterPmHref ? []
-        : [{ id: l.id, title: l.title, color: colorFor(i), styleLayers: c.styleCache[l.id] }]))} />} />
+      legend={<MapLegend layers={c.activeLayers.flatMap((l) => (l.cogHref || l.rasterPmHref ? []
+        : [{ id: l.id, title: l.title, color: colorForId(l.id), styleLayers: c.styleCache[l.id] }]))} />} />
   </>} />;
 }
 

@@ -8,7 +8,7 @@ import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { UiSegmented } from "@/ui/segmented";
-import { type ActiveLayer, colorFor, type Footprint, GEOM_FILTER, validBbox } from "./map-model";
+import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -164,10 +164,38 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // Bound GL style `layers` per overlay (id→layers for those that resolved), via TanStack Query.
   const styleCache = useStyleLayersFor(layers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
 
-  // Source/layer ids are keyed by a STABLE slug of the layer id — NOT the array index. Index-based
-  // ids change when a layer is unchecked (the array shifts), and react-map-gl throws "source id
-  // changed" (you can't rename a mounted maplibre source) → the page crashes. Slugs stay constant.
-  const slugOf = (id: string) => id.replace(/[^a-zA-Z0-9_]/g, "_");
+  // Restack the canvas to match the tray order. react-map-gl only calls moveLayer when a <Layer>'s
+  // beforeId prop changes, and we pass none — so a drag-reorder rewrites ?l= and re-renders the
+  // layers in the new order but never restacks the drawn features. Reconcile imperatively:
+  // moveLayer(id) with no `before` sends a layer to the top, so walking the desired stack bottom→top
+  // lands each above the last and the final order matches the tray. We deliberately avoid a computed
+  // beforeId — maplibre's moveLayer splices the layer OUT of the draw order before checking the
+  // before-target exists, so a beforeId pointing at a not-yet-loaded layer during an async window can
+  // drop a layer with no retry. Tray top row = front (drawn on top), so reverse to get bottom→top.
+  const orderKey = layers.map((l) => l.id).join(",");
+  const styledKey = layers.map((l) => styleCache[l.id]?.length ?? 0).join(",");
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    const reconcile = () => {
+      if (!map.isStyleLoaded()) return;
+      const desired = orderedSublayerIds([...layers].reverse(), {
+        styledCount: (id) => styleCache[id]?.length,
+        cogReady,
+      }).filter((id) => map.getLayer(id));
+      // `idle` fires on every pan/zoom — skip the moveLayer churn when the stack is already correct.
+      const current = map.getStyle().layers.map((l) => l.id).filter((id) => desired.includes(id));
+      if (current.length === desired.length && current.every((id, i) => id === desired[i])) return;
+      for (const id of desired) map.moveLayer(id);
+    };
+    reconcile();
+    map.on("idle", reconcile);
+    return () => { map.off("idle", reconcile); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderKey, styledKey, cogReady, mapLoaded]);
+
+  // Source/layer ids use slugOf(id) (imported) — a stable slug, never the array index, so unchecking
+  // a layer can't rename a mounted source (maplibre throws "source id changed" and takes the map down).
   const layerByMapId: Record<string, ActiveLayer> = {};
   const interactiveIds = layers.flatMap((l) => {
     const s = slugOf(l.id);
@@ -287,7 +315,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         <Suspense fallback={null}><ZarrOverlay specs={zarrSpecs} /></Suspense>
       )}
 
-      {layers.map((l, i) => {
+      {layers.map((l) => {
         const s = slugOf(l.id);
         if (l.zarr) return null;   // drawn by the deck overlay above
         // Raster PMTiles mosaic — the per-scale geologic-map tiles, served via the already-registered
@@ -309,7 +337,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
             </Source>
           );
         }
-        const c = colorFor(i);  // color rotates by position — fine to stay index-based
+        const c = colorForId(l.id);  // keyed to id → matches the legend/tray swatch and survives reorder
         const styleLayers = styleCache[l.id];
         const pmHref = l.pmHref!;
         const pmLayer = l.pmLayer!;

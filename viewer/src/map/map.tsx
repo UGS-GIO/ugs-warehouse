@@ -45,13 +45,18 @@ const BASEMAPS = {
 type BasemapId = keyof typeof BASEMAPS;
 const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
 
-type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown>; href?: string; related?: RelatedTablesInfo };
+// The footprint "Open item →" popup is the only popup left on the map — a data-feature click docks
+// its detail instead (see SelectedFeature/onSelectFeature below), so this never carries feature props.
+type PopupInfo = { lng: number; lat: number; title: string; href?: string };
 
 // The related tables a clicked layer offers — names + the full-item href to resolve joins on open.
 // Named from the compact index (cheap); the join columns are read from the full item only on open.
 export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string }[] };
 // What "open a related table" hands back up to the map route (which renders it in the Info panel).
 export type OpenRelated = { itemHref: string; relatedKey: string; title: string; props: Record<string, unknown> };
+// A clicked data feature's detail, lifted to the route so it can be docked (no floating feature
+// popup anywhere — the stakeholder-mandated pattern this replaces).
+export type SelectedFeature = { title: string; props: Record<string, unknown>; related?: RelatedTablesInfo };
 
 // Union of bboxes → [w,s,e,n], or null.
 function unionBbox(bs: number[][]): [number, number, number, number] | null {
@@ -78,13 +83,14 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
 }
 
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
-  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onOpenRelated }: {
+  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature }: {
   item?: StacDoc; layers: ActiveLayer[];
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
-  // Related-table popup affordances: `relatedFor` maps a clicked layer id → its related tables
-  // (named from the index by the caller), `onOpenRelated` surfaces one in the Info panel. Both optional.
+  // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
+  // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
+  // which docks its detail — there is no floating feature popup. Both optional.
   relatedFor?: (layerId: string) => RelatedTablesInfo | undefined;
-  onOpenRelated?: (r: OpenRelated) => void;
+  onSelectFeature?: (f: SelectedFeature | null) => void;
   // Discovery sync (all optional — the map works standalone without them): a footprint to emphasize
   // (a hovered discovery card), a callback when a coverage footprint is hovered on the map (→ the
   // card list highlights it), and the viewport bounds after load/move (→ "Search this area").
@@ -99,7 +105,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
-  // The selected feature's geometry, highlighted on the map so the popup closing (e.g. to open a
+  // The selected feature's geometry, highlighted on the map so switching the dock (e.g. to open a
   // related table) doesn't lose your place. From the click event's own geometry — tile-clipped for
   // very large polygons, but accurate enough for a highlight.
   const [hlGeom, setHlGeom] = useState<GeoJSON.Geometry | null>(null);
@@ -219,18 +225,19 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
   const onClick = (e: MapLayerMouseEvent) => {
     const f = e.features?.[0];
-    if (!f) { setPopup(null); setHlGeom(null); return; }
+    if (!f) { setPopup(null); onSelectFeature?.(null); setHlGeom(null); return; }
     if (f.layer.id === "coverage-fill") {
       // A footprint: popup its title + a link to open the item (don't yank the user off the map).
       setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: String(f.properties?.title ?? ""),
-                 props: {}, href: f.properties?.href ? String(f.properties.href) : undefined });
+                 href: f.properties?.href ? String(f.properties.href) : undefined });
       setHlGeom(null);   // a footprint isn't a data feature — nothing to highlight
       return;
     }
     const l = layerByMapId[f.layer.id];
-    // Resolve the related tables ONCE here, not on every popup render (ItemMap re-renders on hover/move).
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: l?.title ?? "", props: f.properties ?? {},
-               related: l?.id ? relatedFor?.(l.id) : undefined });
+    // Resolve the related tables ONCE here, not on every dock render (ItemMap re-renders on hover/move).
+    // Lifted to the route, which docks the detail — no floating feature popup.
+    onSelectFeature?.({ title: l?.title ?? "", props: f.properties ?? {},
+                         related: l?.id ? relatedFor?.(l.id) : undefined });
     setHlGeom((f.geometry as GeoJSON.Geometry) ?? null);
   };
 
@@ -362,8 +369,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         );
       })}
 
-      {/* Selected-feature highlight — marks which feature the open popup belongs to, and survives the
-          popup closing (e.g. to open a related table) so you don't lose your place. Non-interactive. */}
+      {/* Selected-feature highlight — marks which feature is docked, and survives switching the dock
+          (e.g. to open a related table) so you don't lose your place. Non-interactive. */}
       {hlGeom && (
         <Source id="feat-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
           <Layer id="feat-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
@@ -372,20 +379,16 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Source>
       )}
 
+      {/* Footprint discovery affordance only — a data-feature click docks its detail (onSelectFeature
+          above) instead of popping up. */}
       {popup && (
         <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
           {popup.title && <div className="mb-1 text-xs font-semibold text-gray-900">{popup.title}</div>}
-          {popup.href ? (
+          {popup.href && (
             <button onClick={() => { onPickFootprint?.(popup.href!); setPopup(null); }}
               className="text-xs font-medium text-primary underline underline-offset-2 hover:opacity-80">
               Open item →
             </button>
-          ) : (
-            <>
-              <FeatureProps props={popup.props} />
-              <RelatedLinks info={popup.related} props={popup.props}
-                onOpen={(r) => { onOpenRelated?.(r); setPopup(null); }} />
-            </>
           )}
         </Popup>
       )}
@@ -462,6 +465,27 @@ function RelatedLinks({ info, props, onOpen }: {
           {t.title} →
         </button>
       ))}
+    </div>
+  );
+}
+
+// Docked feature detail — a clicked data feature's props + related-table launchers, rendered in the
+// Info dock (in the dock's overflow-auto slot, so no fixed height needed). Replaces the old floating
+// feature popup entirely; the footprint "Open item →" popup above is a separate, unrelated affordance.
+export function FeatureDetail({ feature, onOpenRelated, onClose }: {
+  feature: SelectedFeature; onOpenRelated: (r: OpenRelated) => void; onClose: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2 flex items-center gap-2">
+        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={feature.title}>
+          {feature.title || "Feature"}
+        </h3>
+        <button type="button" onClick={onClose} aria-label="Close feature detail" title="Close feature detail"
+          className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground"><span aria-hidden>✕</span></button>
+      </div>
+      <FeatureProps props={feature.props} />
+      <RelatedLinks info={feature.related} props={feature.props} onOpen={onOpenRelated} />
     </div>
   );
 }

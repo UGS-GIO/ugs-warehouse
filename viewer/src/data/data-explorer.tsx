@@ -25,7 +25,7 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset }: {
+export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
@@ -33,6 +33,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   summaryFields?: readonly string[];   // item's `ugs:summary_fields` — leads the record cards
   presetFilter?: ColFilter;  // exact-match filter ANDed ahead of the user's own filters (e.g. clicked feature's FK)
   onClearPreset?: () => void;  // clears presetFilter — wired to the chip's ✕
+  fill?: boolean;  // fill the parent's height (docked contexts) instead of the fixed h-112
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
   // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
@@ -205,7 +206,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   }, [mapPick?.nonce]);
 
   return (
-    <div className="mt-2">
+    <div className={fill ? "mt-2 flex min-h-0 flex-1 flex-col" : "mt-2"}>
       {/* One header line that says what this is and how big it is — the row count used to float
           mid-toolbar and the disclosure was a bare chevron on its own line. */}
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
@@ -275,7 +276,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           } : undefined}
         />
       )}
-      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-xs ${collapsed || asCards ? "hidden" : "h-112 min-h-40"}`}>
+      <div ref={scrollRef} className={`max-w-full overflow-auto rounded-md border border-border text-xs ${collapsed || asCards ? "hidden" : fill ? "h-full min-h-40" : "h-112 min-h-40 resize-y"}`}>
         <table className="w-auto min-w-full border-collapse">
           <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((hg) => (

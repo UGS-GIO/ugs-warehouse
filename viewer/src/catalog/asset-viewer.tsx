@@ -1,8 +1,9 @@
 // Per-asset preview: picks a viewer by asset kind (map, datacube, 3D, PDF, table, image, text).
 import { useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 
 import { DataExplorer } from "@/data/data-explorer";
+import { FeatureCard } from "@/map/feature-card";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
 import { type Asset, type AssetKind, assetKind, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
   summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
@@ -51,10 +52,28 @@ function RasterMosaicPreview({ item }: { item: StacDoc }) {
   return <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href } : null} />;
 }
 
+// A clicked map feature's detail, rendered directly under the preview map (above the fields/table) so
+// it is in view the moment you click — not below a long data table. `nearest` keeps the map and the
+// highlighted feature visible; gate on a genuinely new selection so a remount, or opening a related
+// table, doesn't re-scroll. usePreviewMap gives the selection wired from the shared map.
+function SelectedFeatureCard({ item }: { item: StacDoc }) {
+  const { selectedFeature, clearSelection, openRelated } = usePreviewMap();
+  const ref = useRef<HTMLDivElement>(null);
+  const scrolledFor = useRef(selectedFeature);
+  useEffect(() => {
+    if (!selectedFeature || scrolledFor.current === selectedFeature) return;
+    scrolledFor.current = selectedFeature;
+    const t = setTimeout(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
+    return () => clearTimeout(t);
+  }, [selectedFeature]);
+  if (!selectedFeature) return null;
+  return <div ref={ref}><FeatureCard item={item} props={selectedFeature.props} onOpenRelated={openRelated} onClear={clearSelection} /></div>;
+}
+
 // Vector asset preview: the item's PMTiles on the shared persistent map + full dataset explorer,
-// linked — click a table row → map flies to that feature; click a map feature → table pages to it.
-// The map instance lives in PreviewMapProvider (mounted once); this publishes the vector spec and
-// wires the table↔map state (focus/pick) through the provider.
+// linked — click a table row → map flies to that feature; click a map feature → table pages to it,
+// and its detail docks in the card directly below the map. The map instance lives in
+// PreviewMapProvider (mounted once); this publishes the vector spec and wires the table↔map state.
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const pm = pmtilesLink(item);
@@ -65,6 +84,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
   return (
     <>
       <PreviewMapSlot spec={spec} />
+      <SelectedFeatureCard item={item} />
       <FieldsPanel item={item} />
       {pq && <DataExplorer key={pq.href} href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
         rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}

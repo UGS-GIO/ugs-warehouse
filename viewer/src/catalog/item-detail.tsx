@@ -10,7 +10,6 @@ import { DataExplorer } from "@/data/data-explorer";
 import { PhotoGallery } from "./photo-gallery";
 
 import { DiffPanel } from "@/review/diff-panel";
-import { FeatureCard } from "@/map/feature-card";
 import { Preview } from "./asset-viewer";
 import { EndpointsPanel } from "./endpoints-panel";
 import { DownloadsPanel } from "./downloads-panel";
@@ -140,27 +139,6 @@ function RelatedPanel({ item }: { item: StacDoc }) {
       )}
     </section>
   );
-}
-
-// The clicked map feature's card, rendered inline below Preview — reads the selection out of the
-// preview-map context so both layouts share the same behavior without lifting state up further.
-function SelectedFeatureCard({ item }: { item: StacDoc }) {
-  const { selectedFeature, clearSelection, openRelated } = usePreviewMap();
-  const ref = useRef<HTMLDivElement>(null);
-  // The card only mounts below the map once a feature is clicked; on a tall preview it lands below
-  // the fold, so pull it into view on a new selection. `nearest` keeps as much of the map — and the
-  // highlighted feature — in view as possible. Gate on a genuinely new selection (same reason as
-  // RelatedPanel): `selectedFeature` keeps its identity across a remount and across opening a related
-  // table, so seed the marker from the mount value and only scroll when the reference changes.
-  const scrolledFor = useRef(selectedFeature);
-  useEffect(() => {
-    if (!selectedFeature || scrolledFor.current === selectedFeature) return;
-    scrolledFor.current = selectedFeature;
-    const t = setTimeout(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
-    return () => clearTimeout(t);
-  }, [selectedFeature]);
-  if (!selectedFeature) return null;
-  return <div ref={ref}><FeatureCard item={item} props={selectedFeature.props} onOpenRelated={openRelated} onClear={clearSelection} /></div>;
 }
 
 // "In this issue" — the Survey Notes table of contents (warehouse parses it from the PDF). Each
@@ -361,7 +339,6 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
           <div className="min-w-0 space-y-6 lg:col-span-2">
             {actions}
             <Preview item={item} />
-            <SelectedFeatureCard item={item} />
             <IssueContents item={item} />
             <Section title="Data schema"><SchemaTable columns={tableColumns(item)} /></Section>
             <RelatedPanel item={item} />
@@ -400,7 +377,6 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
         <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
       </div>
       <Preview item={item} />
-      <SelectedFeatureCard item={item} />
       {/* Below the map/table, not above it: the description is context for what you are looking at,
           and putting prose between the title and the data pushed the data down the page. */}
       {typeof p.description === "string" && (

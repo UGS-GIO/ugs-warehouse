@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam, mapKindOf,
-  nearestDetent, nextPick, NO_LAYERS, parseLayerParam, reorderLayers, validBbox } from "./map-model";
+import { type ActiveLayer, boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam,
+  mapKindOf, nearestDetent, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
+  validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
 
 describe("validBbox", () => {
@@ -187,5 +188,46 @@ describe("colorForId", () => {
   it("spreads distinct ids across the palette rather than collapsing to one color", () => {
     const ids = ["a", "b", "c", "d", "hazards_qfaults", "geolmap_500k", "wells_spatial", "landslides"];
     expect(new Set(ids.map(colorForId)).size).toBeGreaterThan(1);
+  });
+});
+
+describe("orderedSublayerIds", () => {
+  const L = (id: string, extra: Partial<ActiveLayer> = {}): ActiveLayer => ({ id, title: id, ...extra });
+  const styled = (counts: Record<string, number>) => (id: string) => counts[id];
+
+  it("gives an unstyled vector layer its fill/line/circle fallback ids", () => {
+    expect(orderedSublayerIds([L("qfaults")], { styledCount: () => undefined, cogReady: false }))
+      .toEqual(["pm-qfaults-fill", "pm-qfaults-line", "pm-qfaults-circle"]);
+  });
+
+  it("gives a styled vector layer one id per resolved style layer, in order", () => {
+    expect(orderedSublayerIds([L("qfaults")], { styledCount: styled({ qfaults: 3 }), cogReady: false }))
+      .toEqual(["pm-qfaults-0", "pm-qfaults-1", "pm-qfaults-2"]);
+  });
+
+  it("renders no ids for a resolved-but-empty style (map.tsx draws nothing there — not the fallback)", () => {
+    expect(orderedSublayerIds([L("qfaults")], { styledCount: styled({ qfaults: 0 }), cogReady: false }))
+      .toEqual([]);
+  });
+
+  it("maps a raster PMTiles mosaic and a ready COG to their single raster id", () => {
+    expect(orderedSublayerIds([L("geo", { rasterPmHref: "x" })], { styledCount: () => undefined, cogReady: false }))
+      .toEqual(["rpm-geo-raster"]);
+    expect(orderedSublayerIds([L("dem", { cogHref: "x" })], { styledCount: () => undefined, cogReady: true }))
+      .toEqual(["cog-dem-raster"]);
+  });
+
+  it("omits a COG until its protocol is ready, and a zarr datacube always (the deck overlay draws it)", () => {
+    expect(orderedSublayerIds([L("dem", { cogHref: "x" })], { styledCount: () => undefined, cogReady: false }))
+      .toEqual([]);
+    expect(orderedSublayerIds([L("cube", { zarr: { href: "x", variable: "v", pinDims: [] } })],
+      { styledCount: () => undefined, cogReady: true })).toEqual([]);
+  });
+
+  it("flattens across layers in the given order, and slugs ids that aren't source-id-safe", () => {
+    expect(orderedSublayerIds([L("a.b:c", { rasterPmHref: "x" }), L("qfaults")],
+      { styledCount: () => undefined, cogReady: false }))
+      .toEqual(["rpm-a_b_c-raster", "pm-qfaults-fill", "pm-qfaults-line", "pm-qfaults-circle"]);
+    expect(slugOf("a.b:c")).toBe("a_b_c");
   });
 });

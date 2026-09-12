@@ -18,7 +18,7 @@ export function AddToMapButton({ layerId, compact = false }: {
 }) {
   const c = useViewCtx();
   const id = layerId ?? (c.itemUrl ? idOf(c.itemUrl) : undefined);
-  const isLayer = Boolean(id && c.layerRows.some((r) => r.id === id));
+  const isLayer = Boolean(id && c.isLayerId(id));
   if (!id || !isLayer) return null;
 
   const on = c.isActive(id);

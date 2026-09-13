@@ -1,7 +1,8 @@
 // Per-asset preview: picks a viewer by asset kind (map, datacube, 3D, PDF, table, image, text).
 import { useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 
+import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
 import { FeatureCard } from "@/map/feature-card";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
@@ -57,13 +58,8 @@ function RasterMosaicPreview({ item }: { item: StacDoc }) {
 function SelectedFeatureCard({ item }: { item: StacDoc }) {
   const { selectedFeature, clearSelection, openRelated } = usePreviewMap();
   const ref = useRef<HTMLDivElement>(null);
-  const scrolledFor = useRef(selectedFeature);
-  useEffect(() => {
-    if (!selectedFeature || scrolledFor.current === selectedFeature) return;
-    scrolledFor.current = selectedFeature;
-    const t = setTimeout(() => ref.current?.scrollIntoView({ behavior: "smooth", block: "nearest" }), 0);
-    return () => clearTimeout(t);
-  }, [selectedFeature]);
+  // `selectFeature` builds a new object per click, so clicking the same feature twice re-scrolls.
+  useScrollOnNew(selectedFeature, ref);
   if (!selectedFeature) return null;
   return <div ref={ref}><FeatureCard item={item} props={selectedFeature.props} onOpenRelated={openRelated} onClear={clearSelection} /></div>;
 }

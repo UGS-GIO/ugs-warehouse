@@ -1,9 +1,10 @@
 // Item detail: two layouts share one component. `page` = the full-width catalog/browse detail (a
 // 2/3 · 1/3 grid); `drawer` = the single-column stack that fits the 560px Discover result drawer. Both
 // reuse the same capability panels (Preview, Downloads, Endpoints, Related, Review, schema, STAC JSON).
-import { type ReactNode, useEffect, useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import type { ItemRef } from "./browse";
+import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { AddToMapButton } from "@/map/add-to-map-button";
 import { CommentsPanel } from "@/review/comments-panel";
 import { DataExplorer } from "@/data/data-explorer";
@@ -43,17 +44,10 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   // effect that mutates `openTables`: deriving keeps the open set and the context from disagreeing,
   // and stops a remount (page↔drawer layout switch) from reopening a table on its own.
   const isOpen = (key: string) => openTables.has(key) || featureRelated?.relatedKey === key;
-  // Only a NEW selection scrolls: seeded from the mount value, so a carried-in selection can't jump
-  // the viewport with no click behind it.
-  const scrolledFor = useRef(featureRelated ? `${featureRelated.relatedKey}:${featureRelated.value}` : null);
-  useEffect(() => {
-    if (!featureRelated) return;
-    const key = `${featureRelated.relatedKey}:${featureRelated.value}`;
-    if (scrolledFor.current === key) return;
-    scrolledFor.current = key;
-    const t = setTimeout(() => sectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
-    return () => clearTimeout(t);
-  }, [featureRelated]);
+  // `block: "start"` here, not "nearest": the section expands as this renders, so put its heading at
+  // the top rather than scrolling the minimum distance to a box that is still growing.
+  useScrollOnNew(featureRelated && `${featureRelated.relatedKey}:${featureRelated.value}`,
+                 sectionRef, { behavior: "smooth", block: "start" });
   const toggleIn = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (key: string) =>
     set((prev) => {
       const next = new Set(prev);

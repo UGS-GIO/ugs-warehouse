@@ -2,6 +2,7 @@ import { type ActionItem, loadHeader, setUtahHeaderSettings, type SettingsInput 
 import { useIsFetching } from "@tanstack/react-query";
 import { Link, Outlet, useNavigate, useRouterState, useSearch } from "@tanstack/react-router";
 import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { indexRowsKey, useKeyedMemo } from "./lib/keyed-memo";
 import { type CatalogDoc } from "./discover/search-index";
 import utahLogo from "./assets/utah-logo.png";
 import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/browse";
@@ -264,7 +265,8 @@ function useViewState() {
   // Shares the ["index", href] cache with the item-list fetch above, so overlapping leaves load once.
   const coverColls = leafColl ? [] : leafColls;
   const coverIdx = useIndexes(coverColls.map((c) => ({ id: c.id, href: c.href })));
-  const coversByColl = useMemo(() => {
+  const coverKey = indexRowsKey(coverIdx);
+  const coversByColl = useKeyedMemo(coverKey, () => {
     const out: Record<string, CoverRef[]> = {};
     for (const r of coverIdx) {
       const date = (d: StacDoc) => String((d.properties as Record<string, unknown> | undefined)?.datetime ?? "");
@@ -280,12 +282,11 @@ function useViewState() {
         }));
     }
     return out;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coverIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")]);
+  });
 
   // Every catalog item flattened for the Search view (title + id + keywords + topic), so search
   // covers all pubs + map layers, not just Survey Notes. Same indexes the cover strips load.
-  const catalogDocs = useMemo<CatalogDoc[]>(() =>
+  const catalogDocs = useKeyedMemo<CatalogDoc[]>(coverKey, () =>
     coverIdx.flatMap((r) => (r.index?.items ?? []).map((d) => {
       const p = (d.properties ?? {}) as Record<string, unknown>;
       return {
@@ -294,9 +295,7 @@ function useViewState() {
         keywords: String(p.keywords ?? ""),
         meta: [p["ugs:series"], p["ugs:topic"], p["ugs:pub_type"]].filter(Boolean).join(" · "),
       };
-    })),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [coverIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")]);
+    })));
 
   // Attach covers to each card: a leaf uses its own; a sub-catalog (Publications) merges its series'
   // covers and re-sorts newest-first across all of them.
@@ -343,22 +342,19 @@ function useViewState() {
   ];
   // How much of the map's data has loaded. The fallback count is what federated layers depend on:
   // they arrive only that way, and always after the indexes.
-  const mapLoadKey = mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
-    + `|fb:${mapFbDocs.docs.filter((d) => d?.data).length}`;
+  const mapLoadKey = `${indexRowsKey(mapIdx)}|fb:${mapFbDocs.docs.filter((d) => d?.data).length}`;
   // Still-streaming signal for the Landing tiles/recent strip, so counts aren't shown mid-crawl.
   const mapItemsLoading = mapColls.length > 0 && (mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
-  const layerRows: LayerRow[] = useMemo(() => mapItems
+  const layerRows: LayerRow[] = useKeyedMemo(mapLoadKey, () => mapItems
     .filter((r) => drawsAsLayer(r.data))
     // A datacube is a data layer whatever catalog it came from — the sub-catalog allowlist only
     // knows our own ids, so a federated cube would otherwise file under publication plates.
     .map((r) => ({ id: idOf(r.href), href: r.href, title: String(r.data?.properties?.title ?? idOf(r.href)),
                    group: collTitle(r.collId), layer: layerCollIds.includes(r.collId) || !!zarrAsset(r.data) }))
     .sort((a, b) => Number(b.layer) - Number(a.layer)
-                    || a.group.localeCompare(b.group) || a.title.localeCompare(b.title)),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mapLoadKey]);
+                    || a.group.localeCompare(b.group) || a.title.localeCompare(b.title)));
 
   // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
   // an absolute href: construct from the open leaf, else look it up among loaded items.

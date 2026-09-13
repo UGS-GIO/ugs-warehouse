@@ -3,10 +3,11 @@
 // from the item set App has ALREADY loaded (the same mapItems the Map/Discover views use) — no new
 // fetch — memoized on App's stable mapLoadKey, never the array identity, so it never re-indexes the
 // ~7.6k docs on an unrelated render. Mirrors ugs-data-catalog/src/routes/index.tsx onto UDS tokens.
-import { type FormEvent, useMemo, useState } from "react";
+import { type FormEvent, useState } from "react";
 
 import type { ItemRef } from "@/catalog/browse";
 import { CATEGORIES, categorize, dateOf } from "@/catalog/item-view";
+import { useKeyedMemo } from "@/lib/keyed-memo";
 import { useIsWide } from "@/ui/use-breakpoint";
 import { itemLink, type LinkAttrs, ResultCard } from "@/catalog/result-card";
 
@@ -46,9 +47,9 @@ export function Landing({ items, itemsKey, loading, onSearch, onOpenCategory }: 
 }) {
   const [text, setText] = useState("");
   const isWide = useIsWide();   // below lg a result opens the full page, not Discover's side drawer
-  const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const recent = useMemo(() => recentlyUpdated(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const withData = useKeyedMemo(itemsKey, () => items.filter((it) => it.data));
+  const tiles = useKeyedMemo(itemsKey, () => categoryTiles(withData));
+  const recent = useKeyedMemo(itemsKey, () => recentlyUpdated(withData));
 
   const onSubmit = (e: FormEvent) => { e.preventDefault(); onSearch(text.trim()); };
 

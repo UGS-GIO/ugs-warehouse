@@ -14,6 +14,8 @@ import {
   type SortKey, SORTS,
 } from "./discovery-model";
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
+import { useKeyedMemo } from "@/lib/keyed-memo";
+import { usePerItem } from "@/lib/use-per-item";
 import type { Footprint } from "@/map/map-model";
 import { AddToMapButton } from "@/map/add-to-map-button";
 import { OpenMapPill } from "./open-map-pill";
@@ -92,17 +94,14 @@ export function DiscoveryView({
   const [showMap, setShowMap] = useState(true);
   const [hoverHref, setHoverHref] = useState<string | null>(null);
   const [bounds, setBounds] = useState<[number, number, number, number] | null>(null); // live viewport
-  const [visible, setVisible] = useState(PAGE);
   const isWide = useIsWide(); // only MOUNT the map pane at ≥lg — keeps maplibre off phones/tablets
 
   // Heavy bits memoized on the stable items key (App's mapLoadKey), not the array identity — the
   // items array is rebuilt every render, so rebuilding the index each keystroke would re-index
   // thousands of docs. Matches App's own mapLoadKey memo pattern.
-  const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const { index, docs: itemDocs } = useMemo(
-    () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))),
-    [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
-  );
+  const withData = useKeyedMemo(itemsKey, () => items.filter((it) => it.data));
+  const { index, docs: itemDocs } = useKeyedMemo(itemsKey,
+    () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))));
   // Survey Notes articles, in a SECOND index. Not merged into the item index: an article has no
   // collection, geometry or date, so it cannot ride the ItemRef pipeline the facets/map/sort use.
   // Lazy — nothing fetches the corpus until someone actually types.
@@ -113,11 +112,11 @@ export function DiscoveryView({
   );
   // "DS-9" -> its collection, from the loaded items; the series prefix is the fallback for a pub
   // that has not streamed in yet.
-  const collOfPub = useMemo(() => {
+  const collOfPub = useKeyedMemo(itemsKey, () => {
     const m = new Map<string, string>();
     for (const it of withData) m.set(itemIdOf(it).toUpperCase(), it.collId);
     return m;
-  }, [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  });
   const openPub = (sid: string) =>
     onOpenPub(collOfPub.get(sid.toUpperCase()) ?? (sid.match(/^[A-Za-z]+/)?.[0]?.toUpperCase() ?? sid), sid);
 
@@ -146,11 +145,11 @@ export function DiscoveryView({
   }, [articleIndex, q, query]);
 
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
-  const bboxByHref = useMemo(() => {
+  const bboxByHref = useKeyedMemo(itemsKey, () => {
     const m = new Map<string, number[] | undefined>();
     for (const it of withData) m.set(it.href, it.data?.bbox);
     return m;
-  }, [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  });
 
   // Text narrows first (score-ordered via the shared index); facets/area/sort are pure and cheap.
   const queried = useMemo(() => {
@@ -163,23 +162,21 @@ export function DiscoveryView({
     return withData
       .filter((it) => order.has(docIdOf(it)))
       .sort((a, b) => (order.get(docIdOf(a)) ?? 0) - (order.get(docIdOf(b)) ?? 0));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [itemsKey, q, query, index, itemDocs]);
+  }, [q, query, index, itemDocs, withData]);
 
   // Facet counts over the search-narrowed set: they respond to the query (the primary narrowing) but
   // stay stable as you toggle facets — the rail reads as a table of contents, not a jumping wall.
   const facets = useMemo(() => extractFacets(queried), [queried]);
 
-  const results = useMemo(() => {
+  const workingSetKey = [itemsKey, q, collsK, catsK, typesK, formatsK, geometry, areaK, sort].join("|");
+  const results = useKeyedMemo(workingSetKey, () => {
     let base = applyFacets(queried, { collections: colls, categories: cats, types, formats, geometry });
     if (area) base = filterByViewport(base, area);
     return sortItems(base, sort);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queried, collsK, catsK, typesK, formatsK, geometry, areaK, sort]);
-
-  // Reset paging whenever the working set changes (new query/filter/sort) — reference parity. The
-  // listed keys are all serialized primitives (none referenced in the body), so no disable is needed.
-  useEffect(() => setVisible(PAGE), [q, collsK, catsK, typesK, formatsK, geometry, areaK, sort, itemsKey]);
+  });
+  // Paging is scoped to the working set, so a new query/filter/sort reads back as the first page in
+  // the same render — `shown` below can never slice a new result set with the old page size.
+  const [visible, setVisible] = usePerItem(workingSetKey, PAGE);
   const shown = results.slice(0, visible);
 
   // Every result's footprint → the map's coverage overlay (synced to the card set as filters narrow).

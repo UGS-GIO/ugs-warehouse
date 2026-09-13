@@ -209,6 +209,34 @@ export function filterClause(f: ColFilter): string {
 /** Server-side-style paged/sorted/filtered query over a remote GeoParquet, run entirely in
  *  DuckDB-WASM via HTTP range reads. Backs the in-page dataset explorer: COUNT(*) gives the
  *  total for pagination, then LIMIT/OFFSET/ORDER BY/WHERE fetch one page. Geometry excluded. */
+/** Displayed column → filter kind, from the schema alone — no page needed. */
+export async function columnTypes(parquetUrl: string): Promise<Record<string, ColType>> {
+  const db = await getDB();
+  const conn = await db.connect();
+  let borrowed: string | undefined;
+  try {
+    const src = borrowed = await registerUrl(parquetUrl);
+    const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${src}');`);
+    return typesOf(desc.toArray());
+  } finally {
+    if (borrowed !== undefined) release(borrowed);
+    await conn.close();
+  }
+}
+
+function typesOf(descRows: { column_name?: unknown; column_type?: unknown }[]): Record<string, ColType> {
+  const allCols = descRows.map((r) => String(r.column_name));
+  const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
+  const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
+  const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
+  const types: Record<string, ColType> = {};
+  for (const r of descRows) {
+    const name = String(r.column_name);
+    if (!hidden.has(name)) types[name] = colType(String(r.column_type ?? ""));
+  }
+  return types;
+}
+
 export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<Page> {
   const db = await getDB();
   const conn = await db.connect();
@@ -227,11 +255,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const rowHidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : [])]);
     const colHidden = new Set([...rowHidden, ID_COL]);
     const columns = allCols.filter((c) => !colHidden.has(c));
-    const types: Record<string, ColType> = {};
-    for (const r of descRows) {
-      const name = String(r.column_name);
-      if (!colHidden.has(name)) types[name] = colType(String(r.column_type ?? ""));
-    }
+    const types = typesOf(descRows);
 
     // WHERE = global free-text (OR across all columns) AND each per-column filter.
     const where = buildWhere(columns, opts);

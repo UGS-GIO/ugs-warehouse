@@ -146,9 +146,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // COG (raster) layers need the cog:// protocol registered before their Source mounts. Register
   // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.
   const hasCog = layers.some((l) => l.cogHref);
-  // Registering the cog:// protocol is a one-time async import. As a query it needs no ready flag and
-  // no liveness guard: the cache holds the resolved state, so a late resolve can't set state on an
-  // unmounted map, and every map that mounts later reads it as already done.
+  // One-time async import, cached — hence no ready flag and no late-resolve guard.
   const { isSuccess: cogReady } = useQuery({
     queryKey: ["cog-protocol"],
     queryFn: async () => { await ensureCogProtocol(); return true as const; },

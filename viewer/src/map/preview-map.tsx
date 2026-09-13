@@ -104,9 +104,7 @@ export function PreviewMapSlot({ spec }: { spec: PreviewSpec }) {
 
   // Publish spec on change. Kept in an effect so render stays pure.
   useEffect(() => { setSpec(spec); }, [spec, setSpec]);
-  // Register/clear the portal target from the ref itself: React 19 runs a ref callback's returned
-  // cleanup on unmount, which is what the mount/unmount effect was doing, minus the extra ref and a
-  // second pass over the same DOM node. Stable identity — both callbacks are `useCallback([])`.
+  // React 19 runs a ref callback's cleanup on unmount, so no mount/unmount effect is needed.
   const slotRef = useCallback((el: HTMLDivElement | null) => {
     registerSlot(el);
     return () => { registerSlot(null); setSpec(null); };

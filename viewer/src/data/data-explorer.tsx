@@ -27,9 +27,7 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
-// Typed per-column inputs → SQL-ready filters. Numeric columns become a range (min/max), everything
-// else a substring match; a column with no type yet filters as text. Pure, so the caller can derive
-// it during render instead of writing state from a timeout.
+// Typed per-column inputs → SQL-ready filters: numeric → range, anything else → substring.
 function buildFilters(draft: Record<string, { min?: string; max?: string; text?: string }>,
                       types: Record<string, ColType> | undefined): ColFilter[] {
   const filters: ColFilter[] = [];
@@ -81,30 +79,25 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [search, setSearch] = useState("");
   // feature_id of the row picked from the map (or a table click) — highlighted in the table.
   const [highlightId, setHighlightId] = useState<number | null>(null);
-  // Raw per-column filter inputs (strings, as typed) → debounced, then DERIVED into `applied`
-  // (SQL-ready). Derived rather than written from inside the timeout: that shape needed a
-  // setPageIndex in the same closure, and with it an exhaustive-deps disable to keep paging from
-  // snapping back to page 1.
   const [draft, setDraft] = useState<Record<string, { min?: string; max?: string; text?: string }>>({});
   const [colFilters, setColFilters] = useState(false);
   const settledSearch = useDebounced(search);
   const settledDraft = useDebounced(draft);
-  // `types` comes back with each page, so it cannot be a dep of the filters the page is fetched
-  // with. Read through a ref, exactly as the old timeout did: an un-typed column filters as text,
-  // which is also what the first keystroke before any page has loaded gets.
-  const typesRef = useRef<Record<string, ColType> | undefined>(undefined);
+  // From the schema, not a page: a page is fetched WITH these filters, so that would be circular.
+  const { data: types } = useQuery({
+    queryKey: ["parquet-types", href],
+    queryFn: async () => (await import("./download")).columnTypes(href),
+    staleTime: Infinity,
+  });
   const applied = useMemo(
-    () => ({ search: settledSearch, filters: buildFilters(settledDraft, typesRef.current) }),
-    [settledSearch, settledDraft],
+    () => ({ search: settledSearch, filters: buildFilters(settledDraft, types) }),
+    [settledSearch, settledDraft, types],
   );
 
   const sort = sorting[0];
   const filterKey = JSON.stringify(applied.filters);
   const presetKey = JSON.stringify(presetFilter);
-  // Page is scoped to what the rows are OF — the clicked-feature preset, the applied filters, the
-  // search — so any of them changing reads back as page 0 in the same render and the parquet-page
-  // query fires once at offset 0. A reset effect landed the query at the stale page first and
-  // re-fired at 0: two parquet range-reads per change.
+  // Scoped to what the rows are OF, so a change reads back as page 0 in the same render — one fetch.
   const [pageIndex, setPageIndex] = usePerItem(`${presetKey}|${filterKey}|${applied.search}`, 0);
   // The query key IS the dependency list, so a stale response can no longer land after a newer one
   // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
@@ -124,9 +117,6 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     staleTime: 30_000,   // paging back is served from cache; the parquet is immutable per ingest
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
-
-  // Column types arrive with each page; keep the latest for the filter-kind lookup above.
-  typesRef.current = page?.types;
 
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
@@ -197,10 +187,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // Map-feature click → highlight + fly to the real feature (looked up by id, independent of the
   // current filter) AND page the table to it under the current sort/filter. Paging is skipped if
   // the feature is filtered out of the visible set (ordinal null); the highlight + fly still fire.
-  // Depends only on the click nonce, so it captures the sort/filter as of the click (re-running on
-  // every filter keystroke would yank the page around). If the filters change while the two lookups
-  // are in flight, this write lands under the previous page scope and is dropped — which is the
-  // behaviour you want: the new filter set starts at page 1 rather than at the old feature's row.
+  // Depends only on the click nonce, so it captures the sort/filter as of the click — re-running on
+  // every filter keystroke would yank the page around.
   useEffect(() => {
     if (!mapPick) return;
     let live = true;
@@ -323,7 +311,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
             <tr className={showColFilters ? "" : "hidden"}>
               {review && <th className="border-b border-border" />}
               {(page?.columns ?? []).map((col) => {
-                const kind = page?.types[col] ?? "text";
+                const kind = types?.[col] ?? "text";
                 const d = draft[col] ?? {};
                 const set = (patch: Partial<{ min: string; max: string; text: string }>) =>
                   setDraft((prev) => ({ ...prev, [col]: { ...prev[col], ...patch } }));

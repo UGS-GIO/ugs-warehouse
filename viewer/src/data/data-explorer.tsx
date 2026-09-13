@@ -119,6 +119,10 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     // presetKey, so listing it would re-arm this 300ms debounce on every feature/preset change and,
     // 300ms later, snap a just-paged table back to page 1. presetKey changes already reset the page
     // synchronously via usePerItem — same ref-vs-dep reasoning as the typesRef note above.
+    // Safe ONLY because the value written here is 0, which is also usePerItem's `initial`: a setter
+    // captured under the previous presetKey writes under that stale key and is dropped, and the
+    // fresh key reads 0 regardless. Writing any other page number from this closure would silently
+    // no-op across a preset change.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [search, draft]);
 

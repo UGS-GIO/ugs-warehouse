@@ -35,7 +35,7 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
 
   const [body, setBody] = useState("");
   // @-mention autocomplete: roster = review group members (fetched once, filtered client-side).
-  const reviewers = useQuery({ queryKey: ["reviewers"], queryFn: listReviewers, retry: false, staleTime: 5 * 60_000 });
+  const reviewers = useQuery({ queryKey: ["reviewers"], queryFn: listReviewers, retry: false });
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [mentions, setMentions] = useState<string[]>([]);  // current dropdown matches (empty = hidden)
   const [mentionIdx, setMentionIdx] = useState(0);         // keyboard-highlighted row in the dropdown

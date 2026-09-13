@@ -298,7 +298,6 @@ export function useStac(url?: string) {
     queryKey: ["stac", url],
     queryFn: () => fetchJson(url as string),
     enabled: Boolean(url),
-    staleTime: 5 * 60_000,
   });
 }
 
@@ -309,7 +308,6 @@ export function useDocs(urls: string[]) {
     queries: urls.map((u) => ({
       queryKey: ["stac", u],
       queryFn: () => fetchJson(u),
-      staleTime: 5 * 60_000,
     })),
   });
   return {
@@ -331,7 +329,6 @@ export function useStyleLayers(styleUrl?: string): Record<string, unknown>[] | n
     queryKey: ["gl-style-layers", styleUrl],
     queryFn: ({ signal }) => fetchStyleLayers(styleUrl as string, signal),
     enabled: Boolean(styleUrl),
-    staleTime: 5 * 60_000,
   });
   return styleUrl ? (data ?? null) : null;
 }
@@ -384,7 +381,6 @@ export function useStyleLayersFor(layers: { id: string; styleUrl?: string }[]): 
     queries: withStyle.map((l) => ({
       queryKey: ["gl-style-layers", l.styleUrl],
       queryFn: ({ signal }: { signal?: AbortSignal }) => fetchStyleLayers(l.styleUrl as string, signal),
-      staleTime: 5 * 60_000,
     })),
   });
   const out: Record<string, Record<string, unknown>[]> = {};
@@ -447,7 +443,6 @@ export function useIndexes(collections: { id: string; href: string }[]) {
     queries: collections.map((c) => ({
       queryKey: ["index", c.href],
       queryFn: () => fetchJson(indexUrlFor(c.href)) as Promise<unknown>,
-      staleTime: 5 * 60_000,
       retry: false,
       enabled: hasItemsIndex(c.href),
     })),

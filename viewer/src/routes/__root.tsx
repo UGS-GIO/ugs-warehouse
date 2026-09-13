@@ -2,7 +2,8 @@
 //   c/i  selected collection / item      l  active layer ids      s  series selection
 // Any other param (catalog, m, ftsdb, vssdb, models, extrepo, features, and the Discover filter
 // keys) passes through untouched so override and deep links keep working.
-import { createRootRoute, Link } from "@tanstack/react-router";
+import type { QueryClient } from "@tanstack/react-query";
+import { createRootRouteWithContext, Link } from "@tanstack/react-router";
 
 import { AppLayout } from "@/app";
 
@@ -30,7 +31,7 @@ function NotFound() {
   );
 }
 
-export const Route = createRootRoute({
+export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()({
   component: AppLayout,
   notFoundComponent: NotFound,
   validateSearch: (s: Record<string, unknown>): ViewerSearch => ({

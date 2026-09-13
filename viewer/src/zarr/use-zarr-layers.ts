@@ -46,7 +46,6 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
         const src = await openZarr(s.href, s.variable);
         return { src, range: await sampleRange(src) };
       },
-      staleTime: 5 * 60_000,
       retry: false,
     })),
   });

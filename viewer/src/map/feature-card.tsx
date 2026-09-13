@@ -18,7 +18,6 @@ function PeekRow({ join, value, onOpen }: {
       const { queryParquet } = await import("@/data/download");
       return queryParquet(join.href, { limit: 6, offset: 0, filters: [{ col: join.childField, kind: "exact", value: v! }] });
     },
-    staleTime: 30_000,
   });
   if (v === undefined) return null;
   const total = data?.total ?? 0;

@@ -106,7 +106,6 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       const r = await fetch(`${import.meta.env.BASE_URL}3d-colors/${item.id}.json`, { signal });
       return r.ok ? r.json() : {};
     },
-    staleTime: 5 * 60_000,
   });
   // Per-unit fill carried in the GeoParquet `fill` column (cloud-native path) — authored, highest
   // precedence. Empty on the GeoJSON path.

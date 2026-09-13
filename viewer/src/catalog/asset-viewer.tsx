@@ -97,7 +97,6 @@ function TextPreview({ href }: { href: string }) {
   const { data: txt, error } = useQuery({
     queryKey: ["text-preview", href],
     queryFn: async ({ signal }) => (await (await fetch(href, { signal })).text()).slice(0, 20000),
-    staleTime: 5 * 60_000,
   });
   if (error) return <div className="mt-2 text-xs text-destructive">preview failed: {error instanceof Error ? error.message : String(error)}</div>;
   if (txt === undefined) return <div className="mt-2 text-xs text-muted-foreground">loading…</div>;

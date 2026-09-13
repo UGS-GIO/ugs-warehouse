@@ -113,8 +113,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
         filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
       });
     },
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,   // paging back is served from cache; the parquet is immutable per ingest
+    placeholderData: keepPreviousData,   // paging back is served from cache
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
 

@@ -1,7 +1,8 @@
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "@tanstack/react-router";
 import React from "react";
 import ReactDOM from "react-dom/client";
+import { queryClient } from "./query-client";
 import { router } from "./router";
 import { applyTheme, getTheme } from "./shell/theme";
 import "@fontsource-variable/source-sans-3";   // Utah DS body font, self-hosted
@@ -10,8 +11,6 @@ import "./index.css";
 
 // Apply persisted theme before first paint to avoid a flash.
 applyTheme(getTheme());
-
-const queryClient = new QueryClient();
 
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>

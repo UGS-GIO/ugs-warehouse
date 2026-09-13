@@ -11,8 +11,8 @@ import { routeTree } from "./routeTree.gen";
 export const router = createRouter({
   routeTree,
   basepath: toBasepath(import.meta.env.BASE_URL),
-  // The query client rides the router context so a route loader can prefetch into the same cache the
-  // components read (see #312). "intent" warms a route's code-split chunk on hover/touch-start.
+  // The query client rides the context so a route loader can prefetch into the cache the components
+  // read. "intent" warms a route's code-split chunk on hover/touch-start.
   context: { queryClient },
   defaultPreload: "intent",
 });

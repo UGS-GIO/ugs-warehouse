@@ -34,8 +34,7 @@ export default tseslint.config(
   {
     // Routes are the URL layer: search params + queries, not effects. Scoped reset-on-key state goes
     // through usePerItem, fetched state through TanStack Query, shareable state through router search
-    // params. Effects here kept reappearing as reset-on-change anti-patterns (PR #301 review), so ban
-    // them outright rather than re-litigating each one.
+    // params. Reset-on-change effects belong to none of those, so effects are banned here outright.
     files: ["src/routes/**/*.{ts,tsx}"],
     rules: {
       "no-restricted-syntax": ["error", {

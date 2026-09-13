@@ -495,9 +495,8 @@ function RelatedLinks({ info, props, onOpen }: {
   );
 }
 
-// Docked feature detail — a clicked data feature's props + related-table launchers, rendered in the
-// Info dock (in the dock's overflow-auto slot, so no fixed height needed). Replaces the old floating
-// feature popup entirely; the footprint "Open item →" popup above is a separate, unrelated affordance.
+// A clicked data feature's props + related-table launchers, rendered in the Info dock (whose slot
+// scrolls, so no fixed height here). The footprint "Open item →" popup is a separate affordance.
 export function FeatureDetail({ feature, onOpenRelated, onClose }: {
   feature: SelectedFeature; onOpenRelated: (r: OpenRelated) => void; onClose: () => void;
 }) {

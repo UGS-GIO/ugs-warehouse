@@ -18,7 +18,7 @@ describe("useDebounced", () => {
 
     rerender(<Probe value="ab" />);
     rerender(<Probe value="abc" />);
-    // Mid-flight: still the old value, and the intermediate keystroke never lands.
+    // Mid-flight: still the previous value, and the intermediate keystroke never lands.
     act(() => { vi.advanceTimersByTime(299); });
     expect(screen.getByTestId("out").textContent).toBe("a");
 

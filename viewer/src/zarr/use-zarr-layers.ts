@@ -3,6 +3,7 @@
  * so both open stores, derive the stretch, and colour the result identically.
  */
 import type { LayersList } from "@deck.gl/core";
+import { qk } from "@/query-keys";
 import { createColormapTexture, decodeColormapSprite, COLORMAP_INDEX } from "@developmentseed/deck.gl-raster/gpu-modules";
 import colormapsPng from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png?url";
 import { ZarrLayer } from "@developmentseed/deck.gl-zarr";
@@ -19,7 +20,7 @@ export type ZarrSpec = { id: string; href: string; variable: string; pinDims: st
 
 function useColormapTexture(device: Device | null) {
   const { data: sprite } = useQuery({
-    queryKey: ["colormap-sprite"],
+    queryKey: qk.colormapSprite,
     queryFn: async () => decodeColormapSprite(await (await fetch(colormapsPng)).arrayBuffer()),
     staleTime: Infinity,
   });
@@ -41,7 +42,7 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
 
   const results = useQueries({
     queries: specs.map((s) => ({
-      queryKey: ["zarr-source", s.href, s.variable],
+      queryKey: qk.zarrSource(s.href, s.variable),
       queryFn: async () => {
         const src = await openZarr(s.href, s.variable);
         return { src, range: await sampleRange(src) };

@@ -2,6 +2,7 @@
 // -> items) on the CDN. No fetch useEffects; components call these hooks. JSON items stay
 // the source of truth (the warehouse writes them via core/stac).
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 
 // Import guard: the pure item view-model (item-view.ts) reuses this module's asset helpers and is
 // unit-tested in the node env, where there is no `location`. Read it through this shim so the module
@@ -295,7 +296,7 @@ async function fetchJson(url: string): Promise<StacDoc> {
 /** Fetch + cache any STAC doc by URL. `enabled` gates on a selected url. */
 export function useStac(url?: string) {
   return useQuery({
-    queryKey: ["stac", url],
+    queryKey: qk.stac(url),
     queryFn: () => fetchJson(url as string),
     enabled: Boolean(url),
   });
@@ -306,7 +307,7 @@ export function useStac(url?: string) {
 export function useDocs(urls: string[]) {
   const results = useQueries({
     queries: urls.map((u) => ({
-      queryKey: ["stac", u],
+      queryKey: qk.stac(u),
       queryFn: () => fetchJson(u),
     })),
   });
@@ -326,7 +327,7 @@ async function fetchStyleLayers(url: string, signal?: AbortSignal): Promise<Reco
 }
 export function useStyleLayers(styleUrl?: string): Record<string, unknown>[] | null {
   const { data } = useQuery({
-    queryKey: ["gl-style-layers", styleUrl],
+    queryKey: qk.styleLayers(styleUrl),
     queryFn: ({ signal }) => fetchStyleLayers(styleUrl as string, signal),
     enabled: Boolean(styleUrl),
   });
@@ -364,7 +365,7 @@ async function fetchStylesManifest(url: string, signal?: AbortSignal): Promise<M
 export function useLiveLegend(styleUrl: string | undefined, itemId: string | undefined, renderId: string | undefined) {
   const url = styleUrl ? manifestUrlOf(styleUrl) : undefined;
   const { data } = useQuery({
-    queryKey: ["styles-manifest", url],
+    queryKey: qk.stylesManifest(url),
     queryFn: ({ signal }) => fetchStylesManifest(url as string, signal),
     enabled: Boolean(url),
     staleTime: 60_000,
@@ -379,7 +380,7 @@ export function useStyleLayersFor(layers: { id: string; styleUrl?: string }[]): 
   const withStyle = layers.filter((l) => l.styleUrl);
   const results = useQueries({
     queries: withStyle.map((l) => ({
-      queryKey: ["gl-style-layers", l.styleUrl],
+      queryKey: qk.styleLayers(l.styleUrl),
       queryFn: ({ signal }: { signal?: AbortSignal }) => fetchStyleLayers(l.styleUrl as string, signal),
     })),
   });
@@ -403,7 +404,7 @@ export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [numb
   const urls = [...new Set(hrefs.filter((h): h is string => Boolean(h)))];
   const results = useQueries({
     queries: urls.map((href) => ({
-      queryKey: ["cog-bbox", href],
+      queryKey: qk.cogBbox(href),
       queryFn: () => fetchCogBox(href),
       staleTime: Infinity,
       retry: 1,
@@ -441,7 +442,7 @@ export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL):
 export function useIndexes(collections: { id: string; href: string }[]) {
   const results = useQueries({
     queries: collections.map((c) => ({
-      queryKey: ["index", c.href],
+      queryKey: qk.index(c.href),
       queryFn: () => fetchJson(indexUrlFor(c.href)) as Promise<unknown>,
       retry: false,
       enabled: hasItemsIndex(c.href),

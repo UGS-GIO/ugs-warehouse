@@ -1,5 +1,6 @@
 // Per-asset preview: picks a viewer by asset kind (map, datacube, 3D, PDF, table, image, text).
 import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
 
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
@@ -95,7 +96,7 @@ const KIND_LABEL: Record<AssetKind, string> = {
 function TextPreview({ href }: { href: string }) {
   // Slice to 20k in the queryFn so only the preview is retained, not the whole (possibly large) file.
   const { data: txt, error } = useQuery({
-    queryKey: ["text-preview", href],
+    queryKey: qk.textPreview(href),
     queryFn: async ({ signal }) => (await (await fetch(href, { signal })).text()).slice(0, 20000),
   });
   if (error) return <div className="mt-2 text-xs text-destructive">preview failed: {error instanceof Error ? error.message : String(error)}</div>;

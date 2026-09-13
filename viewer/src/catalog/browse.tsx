@@ -7,6 +7,7 @@ import {
 import { useMemo, useState } from "react";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { idOf, useViewCtx } from "@/app";
 import { AssetChips } from "./asset-viewer";
 import { rootGroupOf } from "./catalog";
@@ -261,7 +262,7 @@ function BulkItemComposer({ itemIds, onDone }: { itemIds: string[]; onDone: () =
   const [body, setBody] = useState("");
   const add = useMutation({
     mutationFn: () => createComment(itemIds, body, { kind: "item" }),
-    onSuccess: () => { setBody(""); qc.invalidateQueries({ queryKey: ["comments-all"] }); itemIds.forEach((id) => qc.invalidateQueries({ queryKey: ["comments", id] })); onDone(); },
+    onSuccess: () => { setBody(""); qc.invalidateQueries({ queryKey: qk.comments.all }); itemIds.forEach((id) => qc.invalidateQueries({ queryKey: qk.comments.item(id) })); onDone(); },
   });
   return (
     <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-2 text-xs">

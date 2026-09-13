@@ -2,6 +2,7 @@
 // rows live in the Related panel and the /map dock.
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { CommentsPanel } from "@/review/comments-panel";
 import { IS_REVIEW, primaryKeyOf, relatedJoins, type RelatedJoin, summaryFieldsOf, type StacDoc } from "@/stac";
 
@@ -13,7 +14,7 @@ function PeekRow({ join, value, onOpen }: {
   const v = value == null || value === "" ? undefined : String(value);
   const { data, isFetching, error } = useQuery({
     enabled: v !== undefined,
-    queryKey: ["feature-card-related", join.href, join.childField, v],
+    queryKey: qk.featureRelated(join.href, join.childField, v!),
     queryFn: async () => {
       const { queryParquet } = await import("@/data/download");
       return queryParquet(join.href, { limit: 6, offset: 0, filters: [{ col: join.childField, kind: "exact", value: v! }] });

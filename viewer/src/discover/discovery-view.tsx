@@ -6,6 +6,7 @@
 // All pure logic lives in ./discovery-model; this file is the React shell + the map/detail wiring.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { qk } from "@/query-keys";
 
 import type { ItemRef } from "@/catalog/browse";
 import {
@@ -127,7 +128,7 @@ export function DiscoveryView({
   // Which result kind the chips are showing. "all" stacks them; the rest isolate one.
   const [scope, setScope] = useState<"all" | "items" | "articles" | "pubtext">("all");
   const pubFts = useQuery({
-    queryKey: ["pub-fts", q.trim()],
+    queryKey: qk.pubFts(q.trim()),
     enabled: pubText && q.trim().length >= 2,
     staleTime: Infinity, retry: false,
     queryFn: () => searchPubs(q.trim()),

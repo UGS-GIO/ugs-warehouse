@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { useMemo } from "react";
 import { type Comment, listAllComments } from "./comments";
 
@@ -15,7 +16,7 @@ function targetLabel(c: Comment): string {
 
 export function ReviewReport({ onClose, onOpen }: { onClose: () => void; onOpen?: (itemId: string) => void }) {
   const { data: comments = [], isLoading, error } = useQuery({
-    queryKey: ["comments-all", "report"], queryFn: () => listAllComments(), retry: false,
+    queryKey: qk.comments.report, queryFn: () => listAllComments(), retry: false,
   });
 
   // Group by item id (a comment spanning N items appears under each). Sorted: most comments first.

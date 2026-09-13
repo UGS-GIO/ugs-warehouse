@@ -1,4 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { useEffect, useState } from "react";
 import { fullUrl, thumbUrl } from "./ucrc-photos";
 
@@ -16,7 +17,7 @@ export function PhotoGallery({ href }: { href: string }) {
   const [lightbox, setLightbox] = useState<number | null>(null);  // index into the current page's rows
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["ucrc-photo-gallery", href, page],
+    queryKey: qk.photoGallery(href, page),
     queryFn: async () => {
       const { queryParquet } = await import("@/data/download");
       // depth-order so a box's photos read top→bottom; range-read, never downloads the file.

@@ -1,4 +1,5 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -85,7 +86,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const settledDraft = useDebounced(draft);
   // From the schema, not a page: a page is fetched WITH these filters, so that would be circular.
   const { data: types } = useQuery({
-    queryKey: ["parquet-types", href],
+    queryKey: qk.parquetTypes(href),
     queryFn: async () => (await import("./download")).columnTypes(href),
     staleTime: Infinity,
   });
@@ -103,8 +104,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
   // screen while the next one loads, so paging does not blank the table between fetches.
   const { data: page, error, isFetching: loading } = useQuery({
-    queryKey: ["parquet-page", href, pageIndex, pageSize, showAll,
-               sort?.id, sort?.desc, applied.search, filterKey, presetKey],
+    queryKey: qk.parquetPage(href, [pageIndex, pageSize, showAll,
+                              sort?.id, sort?.desc, applied.search, filterKey, presetKey]),
     queryFn: async () => {
       const { queryParquet } = await import("./download");
       return queryParquet(href, {

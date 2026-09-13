@@ -1,4 +1,5 @@
 import { Toggle } from "@base-ui/react/toggle";
+import { qk } from "@/query-keys";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useMutation, useQuery } from "@tanstack/react-query";
@@ -146,7 +147,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const hasCog = layers.some((l) => l.cogHref);
   // One-time async import, cached — hence no ready flag and no late-resolve guard.
   const { isSuccess: cogReady } = useQuery({
-    queryKey: ["cog-protocol"],
+    queryKey: qk.cogProtocol,
     queryFn: async () => { await ensureCogProtocol(); return true as const; },
     enabled: hasCog, staleTime: Infinity, gcTime: Infinity,
   });

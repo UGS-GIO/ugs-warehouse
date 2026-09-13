@@ -1,7 +1,7 @@
 // Cross-boundary state for the item-detail preview map: what to draw, where to portal it, and the
 // wires the table shares with it. The maplibre half is `preview-map-gl.tsx`, loaded on first spec —
 // this module carries no map code, so the catalog and doc views never pay for one.
-import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { type FocusSel, type MapPick, nextPick } from "./map-model";
 import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { rendersOf } from "@/stac";
@@ -101,15 +101,16 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
 // the ONLY thing that mounts/unmounts per item — a cheap DOM node, no WebGL.
 export function PreviewMapSlot({ spec }: { spec: PreviewSpec }) {
   const { setSpec, registerSlot } = usePreviewMap();
-  const elRef = useRef<HTMLDivElement>(null);
 
   // Publish spec on change. Kept in an effect so render stays pure.
   useEffect(() => { setSpec(spec); }, [spec, setSpec]);
-  // Register/clear this slot as the portal target across mount/unmount.
-  useEffect(() => {
-    registerSlot(elRef.current);
+  // Register/clear the portal target from the ref itself: React 19 runs a ref callback's returned
+  // cleanup on unmount, which is what the mount/unmount effect was doing, minus the extra ref and a
+  // second pass over the same DOM node. Stable identity — both callbacks are `useCallback([])`.
+  const slotRef = useCallback((el: HTMLDivElement | null) => {
+    registerSlot(el);
     return () => { registerSlot(null); setSpec(null); };
   }, [registerSlot, setSpec]);
 
-  return <div ref={elRef} />;
+  return <div ref={slotRef} />;
 }

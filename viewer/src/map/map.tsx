@@ -1,6 +1,7 @@
 import { Toggle } from "@base-ui/react/toggle";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
+import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
@@ -144,18 +145,18 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const coverage = showCoverage && footprints.length ? coverageFC(footprints) : null;
   // COG (raster) layers need the cog:// protocol registered before their Source mounts. Register
   // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.
-  const [cogReady, setCogReady] = useState(false);
   const hasCog = layers.some((l) => l.cogHref);
+  // Registering the cog:// protocol is a one-time async import. As a query it needs no ready flag and
+  // no liveness guard: the cache holds the resolved state, so a late resolve can't set state on an
+  // unmounted map, and every map that mounts later reads it as already done.
+  const { isSuccess: cogReady } = useQuery({
+    queryKey: ["cog-protocol"],
+    queryFn: async () => { await ensureCogProtocol(); return true as const; },
+    enabled: hasCog, staleTime: Infinity, gcTime: Infinity,
+  });
   // Datacubes render through deck.gl, not a maplibre Source, so they're collected here and drawn by
   // one overlay rather than in the per-layer Source switch below.
   const zarrSpecs = layers.flatMap((l) => (l.zarr ? [{ id: l.id, ...l.zarr }] : []));
-  useEffect(() => {
-    if (!hasCog || cogReady) return;
-    let live = true;
-    ensureCogProtocol().then(() => { if (live) setCogReady(true); });
-    return () => { live = false; };
-  }, [hasCog, cogReady]);
-
   // COG extents for camera fit (many pub/raster items have no STAC bbox), one cached query per href.
   const cogBoxes = useCogBoxes(layers.map((l) => l.cogHref));
 

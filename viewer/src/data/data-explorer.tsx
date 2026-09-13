@@ -2,10 +2,11 @@ import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDebounced } from "@/lib/use-debounced";
 import { usePerItem } from "@/lib/use-per-item";
 
 import { CommentsPanel } from "@/review/comments-panel";
-import type { ColFilter } from "./download";
+import type { ColFilter, ColType } from "./download";
 import { PAGE_SIZES } from "./paging";
 import type { FocusSel } from "@/map/map-model";
 import { IS_REVIEW } from "@/stac";
@@ -26,6 +27,25 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
+// Typed per-column inputs → SQL-ready filters. Numeric columns become a range (min/max), everything
+// else a substring match; a column with no type yet filters as text. Pure, so the caller can derive
+// it during render instead of writing state from a timeout.
+function buildFilters(draft: Record<string, { min?: string; max?: string; text?: string }>,
+                      types: Record<string, ColType> | undefined): ColFilter[] {
+  const filters: ColFilter[] = [];
+  for (const [col, d] of Object.entries(draft)) {
+    const kind = types?.[col] ?? "text";
+    if (kind === "number") {
+      const min = d.min?.trim() ? Number(d.min) : undefined;
+      const max = d.max?.trim() ? Number(d.max) : undefined;
+      if (Number.isFinite(min) || Number.isFinite(max)) filters.push({ col, kind, min, max });
+    } else if (d.text?.trim()) {
+      filters.push({ col, kind: "text", contains: d.text });
+    }
+  }
+  return filters;
+}
+
 export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
@@ -61,18 +81,31 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [search, setSearch] = useState("");
   // feature_id of the row picked from the map (or a table click) — highlighted in the table.
   const [highlightId, setHighlightId] = useState<number | null>(null);
-  // Raw per-column filter inputs (strings, as typed) → debounced into `applied` (SQL-ready).
+  // Raw per-column filter inputs (strings, as typed) → debounced, then DERIVED into `applied`
+  // (SQL-ready). Derived rather than written from inside the timeout: that shape needed a
+  // setPageIndex in the same closure, and with it an exhaustive-deps disable to keep paging from
+  // snapping back to page 1.
   const [draft, setDraft] = useState<Record<string, { min?: string; max?: string; text?: string }>>({});
-  const [applied, setApplied] = useState<{ search: string; filters: ColFilter[] }>({ search: "", filters: [] });
   const [colFilters, setColFilters] = useState(false);
+  const settledSearch = useDebounced(search);
+  const settledDraft = useDebounced(draft);
+  // `types` comes back with each page, so it cannot be a dep of the filters the page is fetched
+  // with. Read through a ref, exactly as the old timeout did: an un-typed column filters as text,
+  // which is also what the first keystroke before any page has loaded gets.
+  const typesRef = useRef<Record<string, ColType> | undefined>(undefined);
+  const applied = useMemo(
+    () => ({ search: settledSearch, filters: buildFilters(settledDraft, typesRef.current) }),
+    [settledSearch, settledDraft],
+  );
 
   const sort = sorting[0];
   const filterKey = JSON.stringify(applied.filters);
   const presetKey = JSON.stringify(presetFilter);
-  // Page is scoped to the active preset: a new clicked-feature preset reads back as page 0 in the
-  // same render, so the parquet-page query fires once at offset 0. A reset effect landed the query
-  // at the stale page first and re-fired at 0 — two parquet range-reads per feature click.
-  const [pageIndex, setPageIndex] = usePerItem(presetKey, 0);
+  // Page is scoped to what the rows are OF — the clicked-feature preset, the applied filters, the
+  // search — so any of them changing reads back as page 0 in the same render and the parquet-page
+  // query fires once at offset 0. A reset effect landed the query at the stale page first and
+  // re-fired at 0: two parquet range-reads per change.
+  const [pageIndex, setPageIndex] = usePerItem(`${presetKey}|${filterKey}|${applied.search}`, 0);
   // The query key IS the dependency list, so a stale response can no longer land after a newer one
   // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
   // screen while the next one loads, so paging does not blank the table between fetches.
@@ -92,39 +125,9 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
 
-  // Debounce search + per-column filters into the applied query; a filter/search change resets to
-  // page 1. Numeric columns → range (min/max), others → substring (kind from the loaded types).
-  // `types` is read via a ref, NOT a dep: it's a fresh object on every page fetch, so depending on
-  // it would re-run this (→ setPageIndex(0)) every time you advance a page — snapping back to 1.
-  const typesRef = useRef(page?.types);
+  // Column types arrive with each page; keep the latest for the filter-kind lookup above.
   typesRef.current = page?.types;
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const filters: ColFilter[] = [];
-      for (const [col, d] of Object.entries(draft)) {
-        const kind = typesRef.current?.[col] ?? "text";
-        if (kind === "number") {
-          const min = d.min?.trim() ? Number(d.min) : undefined;
-          const max = d.max?.trim() ? Number(d.max) : undefined;
-          if (Number.isFinite(min) || Number.isFinite(max)) filters.push({ col, kind, min, max });
-        } else if (d.text?.trim()) {
-          filters.push({ col, kind: "text", contains: d.text });
-        }
-      }
-      setApplied({ search, filters });
-      setPageIndex(0);
-    }, 300);
-    return () => clearTimeout(t);
-    // setPageIndex omitted deliberately. It's now a usePerItem callback whose identity tracks
-    // presetKey, so listing it would re-arm this 300ms debounce on every feature/preset change and,
-    // 300ms later, snap a just-paged table back to page 1. presetKey changes already reset the page
-    // synchronously via usePerItem — same ref-vs-dep reasoning as the typesRef note above.
-    // Safe ONLY because the value written here is 0, which is also usePerItem's `initial`: a setter
-    // captured under the previous presetKey writes under that stale key and is dropped, and the
-    // fresh key reads 0 regardless. Writing any other page number from this closure would silently
-    // no-op across a preset change.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search, draft]);
+
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
     () => (page?.columns ?? []).map((c) => ({
@@ -195,7 +198,9 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // current filter) AND page the table to it under the current sort/filter. Paging is skipped if
   // the feature is filtered out of the visible set (ordinal null); the highlight + fly still fire.
   // Depends only on the click nonce, so it captures the sort/filter as of the click (re-running on
-  // every filter keystroke would yank the page around).
+  // every filter keystroke would yank the page around). If the filters change while the two lookups
+  // are in flight, this write lands under the previous page scope and is dropped — which is the
+  // behaviour you want: the new filter set starts at page 1 rather than at the old feature's row.
   useEffect(() => {
     if (!mapPick) return;
     let live = true;

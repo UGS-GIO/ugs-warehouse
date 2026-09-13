@@ -1,7 +1,5 @@
-// The clicked feature's identity + a related PEEK, rendered inline (item-detail mounts it — Task 3).
-// Strict peek — NEVER an embedded related-rows table; the full rows live in the Related panel / the
-// /map dock. Relocates and reshapes the old floating popup's PopupRelated/PopupRelatedRow logic
-// (preview-map-gl.tsx), which Task 4 removes now that this card replaces it.
+// The clicked feature's identity + a related PEEK. Strict peek: NEVER an embedded rows table — full
+// rows live in the Related panel and the /map dock.
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { CommentsPanel } from "@/review/comments-panel";
@@ -48,10 +46,8 @@ function PeekRow({ join, value, onOpen }: {
   );
 }
 
-// Review-deploy-only comment action for the clicked feature — re-homes the old popup's
-// "💬 Comment on this feature" button (preview-map-gl.tsx's reviewFeature state + its CommentsPanel
-// block) as a self-contained toggle instead of lifting a second piece of state up to the map. Same
-// row-target shape the old popup used: keyed on the item's stable primary-key column.
+// Review-deploy-only comment action for the clicked feature, keyed on the item's stable primary-key
+// column. Self-contained so the map doesn't have to hold a second piece of selection state.
 function ReviewComment({ item, props }: { item: StacDoc; props: Record<string, unknown> }) {
   const [open, setOpen] = useState(false);
   const pk = primaryKeyOf(item);

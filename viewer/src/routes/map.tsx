@@ -11,10 +11,8 @@ import { colorForId } from "@/map/map-model";
 import { relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 
-// The Info dock shows one of three things, and they are strictly nested: a related table is only
-// reachable from a selected feature. A union (rather than two independent related/selectedFeature
-// states) makes "related with no feature" unrepresentable and drops the paired setRelated(null) every
-// feature click used to need. No floating feature popup anywhere — stakeholder requirement.
+// The Info dock shows one of three things, strictly nested: a related table is only reachable from a
+// selected feature. No floating feature popup anywhere — stakeholder requirement.
 type Dock =
   | { kind: "item" }
   | { kind: "feature"; feature: SelectedFeature }

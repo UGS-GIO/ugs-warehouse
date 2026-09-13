@@ -52,10 +52,8 @@ function RasterMosaicPreview({ item }: { item: StacDoc }) {
   return <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href } : null} />;
 }
 
-// A clicked map feature's detail, rendered directly under the preview map (above the fields/table) so
-// it is in view the moment you click — not below a long data table. `nearest` keeps the map and the
-// highlighted feature visible; gate on a genuinely new selection so a remount, or opening a related
-// table, doesn't re-scroll. usePreviewMap gives the selection wired from the shared map.
+// Directly under the preview map, above the fields/table, so a click's result is in view without
+// scrolling past a long data table.
 function SelectedFeatureCard({ item }: { item: StacDoc }) {
   const { selectedFeature, clearSelection, openRelated } = usePreviewMap();
   const ref = useRef<HTMLDivElement>(null);

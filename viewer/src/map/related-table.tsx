@@ -1,12 +1,9 @@
-// The rows of one related (aspatial child) table for a clicked feature, joined child.field = the
-// feature's key value. Rendered in the map Info dock/sheet when a popup affordance is opened — so
-// nothing runs until OPEN. Renders the shared DataExplorer (search/sort/paging), filtered to the
-// clicked feature — one related-rows surface everywhere, not a separate compact table here.
+// The rows of one related (aspatial child) table for a clicked feature, in the map Info dock —
+// the shared DataExplorer filtered to that feature, so there is one related-rows surface everywhere.
 //
-// The join columns live on the FULL item, not the compact index the popup named the table from (the
-// index strips ugs:foreign_keys by design — core/stac.py). So opening follows the item's `self`:
-// fetch the full item (cached, shared with item-detail), resolve the join, then hand the child
-// table's href + an exact-match preset to DataExplorer.
+// The join columns live on the FULL item, not the compact index the table was named from (the index
+// strips ugs:foreign_keys by design — core/stac.py), so opening follows the item's `self` and
+// resolves the join from there. Nothing fetches until a table is opened.
 import { DataExplorer } from "@/data/data-explorer";
 import type { ColFilter } from "@/data/download";
 import { relatedJoins, useStac } from "@/stac";
@@ -24,13 +21,9 @@ export function RelatedTable({ itemHref, relatedKey, title, props, onClose }: {
   const rawValue = join ? props[join.parentField] : undefined;
   const value = rawValue == null || rawValue === "" ? undefined : String(rawValue);
 
-  // "Ignore the feature preset" escape hatch: clearing the explorer's preset chip widens to the
-  // whole related table without leaving this view. The ← button below stays the primary way back to
-  // item detail. Named distinctly from DataExplorer's own `showAll` (one page with every row).
-  //
-  // Scoped by `scopeKey`: the call site keeps `RelatedTable` mounted across feature clicks (desktop
-  // keeps the map + dock live), so a different feature/table reads back as `false` in the same
-  // render rather than inheriting a stale "ignore preset". See lib/use-per-item.ts.
+  // "Ignore the feature preset" escape hatch: clearing the chip widens to the whole related table
+  // without leaving this view. Not DataExplorer's `showAll` (one page with every row). Scoped by
+  // `scopeKey` because the call site keeps this mounted across feature clicks.
   const scopeKey = `${join?.href}:${value}`;
   const [ignorePreset, setIgnorePreset] = usePerItem(scopeKey, false);
 

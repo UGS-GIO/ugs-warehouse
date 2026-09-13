@@ -107,11 +107,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
-  // The selected feature's geometry, highlighted on the map so switching the dock (e.g. to open a
-  // related table) doesn't lose your place. From the click event's own geometry — tile-clipped for
-  // very large polygons, but accurate enough for a highlight.
-  // Scoped to the shown item: a new item reads back as null in the same render (no reset-effect
-  // frame where the old item's highlight would paint). See lib/use-per-item.ts.
+  // The selected feature's geometry, highlighted so switching the dock doesn't lose your place.
+  // Straight off the click event, so tile-clipped for very large polygons — fine for a highlight.
+  // Scoped to the shown item.
   const [hlGeom, setHlGeom] = usePerItem<GeoJSON.Geometry | null>(item?.id ?? "", null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a

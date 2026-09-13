@@ -37,10 +37,8 @@ export function usePreviewMap(): Ctx {
   return c;
 }
 
-// Internal selection shape. `related` is nested under `feature` — a related table is only reachable
-// from a selected feature — so the context exposes it as the derived `selectedFeature` +
-// `featureRelated` pair, but holds it as one value: impossible states (related with no feature) are
-// unrepresentable, and selecting a new feature drops any open related table by construction.
+// Held as one value, exposed as the derived `selectedFeature` + `featureRelated` pair so consumers
+// didn't change. Nesting `related` is what makes a new feature drop an open related table.
 type Sel = {
   feature: { props: Record<string, unknown>; fid: number | null };
   related: { relatedKey: string; value: string } | null;

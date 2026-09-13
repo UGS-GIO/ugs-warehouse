@@ -43,10 +43,8 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   // effect that mutates `openTables`: deriving keeps the open set and the context from disagreeing,
   // and stops a remount (page↔drawer layout switch) from reopening a table on its own.
   const isOpen = (key: string) => openTables.has(key) || featureRelated?.relatedKey === key;
-  // Scroll here only on a genuinely NEW feature-related selection — not when the panel remounts with
-  // one already held (the old effect fired on mount, jumping the viewport with no click behind it).
-  // Seeding the marker from the mount value makes a carried-in selection a no-op; a later click is a
-  // real change. Scrolling is the one legitimate effect here.
+  // Only a NEW selection scrolls: seeded from the mount value, so a carried-in selection can't jump
+  // the viewport with no click behind it.
   const scrolledFor = useRef(featureRelated ? `${featureRelated.relatedKey}:${featureRelated.value}` : null);
   useEffect(() => {
     if (!featureRelated) return;
@@ -124,10 +122,8 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                   const preset = featureRelated?.relatedKey === key && childField
                     ? { col: childField, kind: "exact" as const, value: featureRelated.value }
                     : undefined;
-                  // Clearing the preset widens the table in place — it must NOT close. When the table
-                  // was auto-opened purely by the feature click (not in `openTables`), record it as
-                  // open here first, then clear the context, so `isOpen` stays true after the preset
-                  // drops. This is a user action, not an effect, so it can't reopen on remount.
+                  // Clearing the preset widens the table in place, so record it open BEFORE clearing
+                  // the context — a table opened only by the click would otherwise close with it.
                   const onClearPreset = () => { setOpenTables((prev) => new Set(prev).add(key)); clearRelated(); };
                   return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={onClearPreset} />;
                 })()}

@@ -466,19 +466,19 @@ function Geocoder({ onPick }: { onPick: (b: [number, number, number, number]) =>
 }
 
 function FeatureProps({ props }: { props: Record<string, unknown> }) {
-  const rows = Object.entries(props).filter(([, v]) => v !== null && v !== "").slice(0, 14);
+  const rows = Object.entries(props).filter(([, v]) => v !== null && v !== "").slice(0, 18);
   if (!rows.length) return <em className="text-muted-foreground">No attributes.</em>;
+  // Flow the pairs into columns so a wide (desktop) dock fills its horizontal space instead of a
+  // narrow table hugging the left edge; collapses to one column in the narrow mobile sheet.
   return (
-    <table className="border-collapse text-xs">
-      <tbody>
-        {rows.map(([k, v]) => (
-          <tr key={k}>
-            <td className="pr-2 align-top font-medium text-muted-foreground">{k}</td>
-            <td className="align-top text-foreground">{String(v)}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <dl className="columns-1 gap-x-8 text-xs sm:columns-2 lg:columns-3">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex break-inside-avoid items-baseline gap-2 py-0.5">
+          <dt className="shrink-0 whitespace-nowrap font-medium text-muted-foreground">{k}</dt>
+          <dd className="min-w-0 flex-1 truncate text-foreground" title={String(v)}>{String(v)}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
@@ -489,15 +489,17 @@ function RelatedLinks({ info, props, onOpen }: {
 }) {
   if (!info?.tables.length) return null;
   return (
-    <div className="mt-2 border-t border-border pt-1.5">
-      <div className="mb-0.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
-      {info.tables.map((t) => (
-        <button key={t.key} type="button"
-          onClick={() => onOpen({ itemHref: info.itemHref, relatedKey: t.key, title: t.title, props })}
-          className="block w-full text-left text-xs font-medium text-primary hover:underline">
-          {t.title} →
-        </button>
-      ))}
+    <div className="mt-3 border-t border-border pt-2.5">
+      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
+      <div className="flex flex-wrap gap-1.5">
+        {info.tables.map((t) => (
+          <button key={t.key} type="button"
+            onClick={() => onOpen({ itemHref: info.itemHref, relatedKey: t.key, title: t.title, props })}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary">
+            {t.title} <span aria-hidden className="text-primary">→</span>
+          </button>
+        ))}
+      </div>
     </div>
   );
 }
@@ -510,12 +512,13 @@ export function FeatureDetail({ feature, onOpenRelated, onClose }: {
 }) {
   return (
     <div>
-      <div className="mb-2 flex items-center gap-2">
-        <h3 className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground" title={feature.title}>
-          {feature.title || "Feature"}
-        </h3>
+      <div className="mb-2.5 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</div>
+          <h3 className="truncate text-sm font-semibold text-foreground" title={feature.title}>{feature.title || "Feature"}</h3>
+        </div>
         <button type="button" onClick={onClose} aria-label="Close feature detail" title="Close feature detail"
-          className="shrink-0 rounded px-1 text-muted-foreground hover:text-foreground"><span aria-hidden>✕</span></button>
+          className="-mr-1 shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"><span aria-hidden>✕</span></button>
       </div>
       <FeatureProps props={feature.props} />
       <RelatedLinks info={feature.related} props={feature.props} onOpen={onOpenRelated} />

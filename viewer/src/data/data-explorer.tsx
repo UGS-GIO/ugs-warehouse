@@ -7,7 +7,8 @@ import { useDebounced } from "@/lib/use-debounced";
 import { usePerItem } from "@/lib/use-per-item";
 
 import { CommentsPanel } from "@/review/comments-panel";
-import type { ColFilter, ColType } from "./download";
+import { buildFilters } from "./build-filters";
+import type { ColFilter } from "./download";
 import { PAGE_SIZES } from "./paging";
 import type { FocusSel } from "@/map/map-model";
 import { IS_REVIEW } from "@/stac";
@@ -28,23 +29,6 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
-// Typed per-column inputs → SQL-ready filters: numeric → range, anything else → substring.
-export function buildFilters(draft: Record<string, { min?: string; max?: string; text?: string }>,
-                      types: Record<string, ColType> | undefined): ColFilter[] {
-  const filters: ColFilter[] = [];
-  for (const [col, d] of Object.entries(draft)) {
-    const kind = types?.[col] ?? "text";
-    if (kind === "number") {
-      const min = d.min?.trim() ? Number(d.min) : undefined;
-      const max = d.max?.trim() ? Number(d.max) : undefined;
-      if (Number.isFinite(min) || Number.isFinite(max)) filters.push({ col, kind, min, max });
-    } else if (d.text?.trim()) {
-      filters.push({ col, kind: "text", contains: d.text });
-    }
-  }
-  return filters;
-}
-
 export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;

@@ -1,7 +1,6 @@
-// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { buildFilters } from "./data-explorer";
+import { buildFilters } from "./build-filters";
 import type { ColType } from "./download";
 
 const TYPES: Record<string, ColType> = { depth: "number", name: "text" };

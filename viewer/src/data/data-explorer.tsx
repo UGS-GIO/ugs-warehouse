@@ -29,7 +29,7 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
 // Typed per-column inputs → SQL-ready filters: numeric → range, anything else → substring.
-function buildFilters(draft: Record<string, { min?: string; max?: string; text?: string }>,
+export function buildFilters(draft: Record<string, { min?: string; max?: string; text?: string }>,
                       types: Record<string, ColType> | undefined): ColFilter[] {
   const filters: ColFilter[] = [];
   for (const [col, d] of Object.entries(draft)) {

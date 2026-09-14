@@ -145,3 +145,15 @@ def test_copy_from_uri_propagates_a_mid_loop_failure(monkeypatch):
     with pytest.raises(ConnectionError):
         gcs.copy_from_uri("gs://stagedrasters/x.tif", "cog/x.tif", content_type="image/tiff")
     assert calls == [None, "next-token"]  # it did resume before failing
+
+
+def test_upload_write_once_refuses_to_overwrite(monkeypatch, tmp_path):
+    seen = {}
+    monkeypatch.setattr(gcs, "exists", lambda p: p in seen)
+    monkeypatch.setattr(gcs, "upload",
+                        lambda local, path, **k: seen.setdefault(path, True) or gcs.FileMeta(1, "x"))
+    f = tmp_path / "a.tif"
+    f.write_bytes(b"x")
+    gcs.upload_write_once(str(f), "geolmap/cogs/M-1.cog.tif", content_type="image/tiff")
+    with pytest.raises(gcs.WriteOnceViolation):
+        gcs.upload_write_once(str(f), "geolmap/cogs/M-1.cog.tif", content_type="image/tiff")

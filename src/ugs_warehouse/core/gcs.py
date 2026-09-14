@@ -161,6 +161,19 @@ def exists(object_path: str) -> bool:
         return False
 
 
+class WriteOnceViolation(Exception):
+    """Attempt to overwrite an existing write-once (authoritative published) object."""
+
+
+def upload_write_once(local_path: str, object_path: str, *, content_type: str,
+                      cache_control: str | None = None) -> FileMeta:
+    """Upload only if `object_path` does not already exist. A published object is never
+    overwritten — a revision must be published as a new edition (new object path)."""
+    if exists(object_path):
+        raise WriteOnceViolation(object_path)
+    return upload(local_path, object_path, content_type=content_type, cache_control=cache_control)
+
+
 def delete(object_path: str) -> None:
     """Delete an object. Best-effort — a missing object is not an error (used to clean up strays)."""
     try:

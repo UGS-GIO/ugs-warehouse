@@ -419,6 +419,10 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
     if skip_existing and gcs.exists(pub.cog_object):
         hlog("SKIP already harvested (COG exists)", step="resolve", level="NOTICE", category="expected")
         return "skip:exists"
+    if force and gcs.exists(pub.cog_object):
+        hlog("REFUSE overwrite of published COG; publish a revision as a new edition (series_id)",
+             step="resolve", level="ERROR", category="unexpected")
+        return "fail:write-once"
     gt_url, gis_url = manifest_urls(series_id)
     if not gt_url and not gis_url:
         gt_url, gis_url = _get_attached_zips(series_id)
@@ -550,9 +554,10 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             return "fail:cog"
         # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
         # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
-        # the slow "flood of requests" on zoom. COGs are write-once (SKIP_EXISTING skips rewrites),
-        # so long-cache is safe; a --force re-harvest needs a CDN cache invalidation.
-        gcs.upload(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+        # the slow "flood of requests" on zoom. COGs are write-once (upload_write_once refuses to
+        # overwrite an existing object) — a revision publishes as a new edition (new series_id),
+        # never an in-place rewrite, so long-cache is always safe.
+        gcs.upload_write_once(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
         if shp:
             import duckdb
             gpq = os.path.join(work, f"{series_id}.units.parquet")

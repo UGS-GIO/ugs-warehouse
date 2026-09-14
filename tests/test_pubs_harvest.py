@@ -108,3 +108,9 @@ def test_get_attached_zips():
         gt, gis = _get_attached_zips("M-94")
         assert gt is None
         assert gis is None
+
+
+def test_harvest_refuses_force_overwrite_of_published_cog(monkeypatch):
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.setattr(harvest.gcs, "exists", lambda p: True)
+    assert harvest.harvest_one("M-299DM", force=True) == "fail:write-once"

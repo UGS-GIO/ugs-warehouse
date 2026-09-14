@@ -448,6 +448,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
@@ -466,6 +467,82 @@ def test_build_catalog_series_filter():
          assert count == 2
          assert mock_build.call_count == 2
          mock_refresh.assert_not_called()
+
+
+def test_vector_manifests_by_sid_reads_the_authoritative_split():
+    """_vector_manifests_by_sid() must read pubs/vectors.py's per-series `_manifest.json` — the
+    AUTHORITATIVE spatial-vs-table split — rather than guess spatial/table from label names."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+
+    manifest = {"spatial": ["geo__ContactsAndFaults"], "tables": ["geo__DescriptionOfMapUnits"]}
+    paths = [
+        f"{vectors.VECTORS_PREFIX}/M-100/geo__ContactsAndFaults.parquet",
+        f"{vectors.VECTORS_PREFIX}/M-100/geo__DescriptionOfMapUnits.parquet",
+        f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json",
+        f"{vectors.VECTORS_PREFIX}/DS-2/_manifest.json",  # unreadable — must not blow up the rest
+    ]
+    bodies = {f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json": json.dumps(manifest).encode()}
+
+    def get_bytes(path):
+        if path not in bodies:
+            raise FileNotFoundError(path)
+        return bodies[path]
+
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=get_bytes):
+        out = _vector_manifests_by_sid()
+
+    assert out["M-100"] == manifest  # keyed by uppercased series_id, matching the other discovery maps
+    assert "DS-2" not in out
+
+
+def test_build_catalog_wires_vector_layers_and_companion_tables():
+    """ALL-5913 task 3: build_catalog must discover each pub's extracted vector layers + companion
+    tables (per pubs/vectors.py's manifest) and pass them into build_item — otherwise the assets
+    task 2 wired up in build_item never actually get attached to a real item."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults"],
+                          "tables": ["geo__DescriptionOfMapUnits"]}}
+
+    with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
+         patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
+         patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._contents_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._threed_classes_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._overrides_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
+         patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
+         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.core.stac.attach_renders"), \
+         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.styles.warm"), \
+         patch("ugs_warehouse.core.stac.write_item"), \
+         patch("ugs_warehouse.core.stac.refresh_catalog"):
+
+         mock_read.return_value = [
+             {"series_id": "DS-8"},
+             {"series_id": "OFR-12"},
+         ]
+
+         count = build_catalog(skip_refresh=True)
+
+         assert count == 2
+         by_sid = {c.args[0]["series_id"]: c.kwargs for c in mock_build.call_args_list}
+         assert by_sid["DS-8"]["vector_layers"] == ["geo__ContactsAndFaults"]
+         assert by_sid["DS-8"]["companion_tables"] == [
+             {"label": "geo__DescriptionOfMapUnits", "columns": None}]
+         # a series absent from the manifest map still gets empty lists, never None/KeyError.
+         assert by_sid["OFR-12"]["vector_layers"] == []
+         assert by_sid["OFR-12"]["companion_tables"] == []
 
 
 def test_list_series(capsys):

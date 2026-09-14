@@ -115,6 +115,7 @@ def test_build_catalog_wires_edition_into_build_item():
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \

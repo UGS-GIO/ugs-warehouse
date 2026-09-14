@@ -751,6 +751,47 @@ def test_pub_item_exposes_all_vector_layers_and_companion_tables():
     assert pubs_sink.stac.TABLE_EXT in item["stac_extensions"]
 
 
+def test_vector_layer_label_colliding_with_a_reserved_key_keeps_both_assets(capsys):
+    """ALL-5913 final-review must-fix: a bare shapefile can produce a label equal to a reserved
+    asset key — `units.shp` -> `units` would otherwise silently overwrite the canonical `units`
+    GeoParquet asset (`assets[label] = ...` clobbers in place, no trace). Both must survive under
+    distinct keys, and the collision must be visible on stderr rather than a link just vanishing.
+    """
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item(
+            {"series_id": "M-100", "series": "M"}, [],
+            has_units=True, vector_layers=["units"],
+        )
+    a = item["assets"]
+    # the canonical units GeoParquet asset is untouched
+    assert a["units"]["href"].endswith("geolmap/units/M-100/M-100.units.parquet")
+    assert a["units"]["title"] == "Geologic unit polygons (GeoParquet)"
+    # the extracted vector layer survives under a distinct key instead of being dropped
+    assert a["vector_units"]["href"].endswith("geolmap/vectors/M-100/units.parquet")
+    assert a["vector_units"]["type"] == pubs_sink.PARQUET_MIME
+    err = capsys.readouterr().err
+    assert "units" in err  # the collision was named on stderr, not silent
+
+
+def test_duplicate_vector_layer_labels_keep_both_assets(capsys):
+    """Two shapefiles sharing a basename (different sub-folders of the same GIS bundle) produce
+    the same extracted label twice. The second must not clobber the first — both assets survive
+    under distinct keys, even though (a vectors.py-side concern, out of scope here) they currently
+    point at the same object path."""
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item(
+            {"series_id": "M-100", "series": "M"}, [],
+            vector_layers=["roads", "roads"],
+        )
+    a = item["assets"]
+    assert a["roads"]["href"].endswith("geolmap/vectors/M-100/roads.parquet")
+    assert a["vector_roads"]["href"].endswith("geolmap/vectors/M-100/roads.parquet")
+    err = capsys.readouterr().err
+    assert "roads" in err
+
+
 def test_raster_collection_borrows_its_newest_scene_thumbnail(monkeypatch):
     """PTL-VIZ-001 wants a thumbnail on a geospatial collection. A raster collection's items are
     scenes of one dataset, so a scene's preview represents it; the newest one, so the preview

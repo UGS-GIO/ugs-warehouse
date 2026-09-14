@@ -38,20 +38,22 @@ from __future__ import annotations
 from collections import defaultdict
 
 from ..core import config, stac
-from . import identity
 from .geolmap_mosaics import tier_of
 
 
-def _item_href(series_id: str) -> str:
-    """Public STAC item URL for a series_id. All quad maps live in the `ugs-publications`
-    collection (controller ruling for this corpus) — deliberately not
-    `sink_stac.collection_group`, which would need the full pub record to look up something
-    already settled here."""
-    from .sink_stac import item_id_for, series_code  # lazy: keeps this module raster-dep-free
+def _item_href(p: dict) -> str:
+    """Public STAC item URL for an edition member. Resolved through its REAL top-level collection
+    group (`sink_stac.collection_group`) — a quad map isn't always in `ugs-publications`: MD-series
+    pubs route to `ugs-mining-district-files` and foreign-publisher pubs (BYU/AAPG/USU/UU, …) route
+    to `ugs-external`, independent of edition grouping (which only looks at quad+scale). Hardcoding
+    `ugs-publications` here would build a dead 404 href for those — this mirrors how
+    `sink_stac.build_item` builds its own collection_path (group + series_code), so the two
+    can never disagree."""
+    from .sink_stac import collection_group, item_id_for, series_code  # lazy: raster-dep-free
 
-    code = series_code(series_id)
-    collection_path = f"{identity.PUBLICATIONS_COLLECTION}/{code}"
-    return config.public_url(stac.item_object_path(collection_path, item_id_for(series_id)))
+    sid = (p.get("series_id") or "").strip()
+    collection_path = f"{collection_group(p)}/{series_code(sid)}"
+    return config.public_url(stac.item_object_path(collection_path, item_id_for(sid)))
 
 
 def _year_key(raw: str | None) -> str | None:
@@ -94,8 +96,8 @@ def _link_group(members: list[dict], out: dict[str, dict], *, quad: str, tier: s
         out[sid] = {
             "version": yr,
             "deprecated": newer is not None,
-            "predecessor_href": _item_href((older["series_id"] or "").strip()) if older else None,
-            "successor_href": _item_href((newer["series_id"] or "").strip()) if newer else None,
+            "predecessor_href": _item_href(older) if older else None,
+            "successor_href": _item_href(newer) if newer else None,
         }
 
 

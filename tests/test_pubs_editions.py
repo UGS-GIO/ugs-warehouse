@@ -82,6 +82,26 @@ def test_missing_or_tied_pub_year_is_logged_and_left_unlinked(capsys):
     assert "M-2" in out and "M-3" in out
 
 
+def test_edition_members_route_hrefs_to_their_real_collection_group():
+    """A quad map can form an edition with a foreign-published sibling — sink_stac.collection_group
+    routes MD-series pubs to ugs-mining-district-files and foreign-publisher pubs to ugs-external,
+    independent of edition grouping (which only looks at quad+scale). A hardcoded ugs-publications
+    href for such a sibling would be a dead 404 — the href must follow the member's REAL group."""
+    pubs = [
+        {"series_id": "M-500", "quad_name": "Foreign Quad", "pub_year": "1985",
+         "pub_scale": "1:24,000", "pub_publisher": ""},
+        {"series_id": "BYU-12", "quad_name": "Foreign Quad", "pub_year": "2010",
+         "pub_scale": "1:24,000", "pub_publisher": "Brigham Young University"},
+    ]
+    g = editions.edition_graph(pubs)
+
+    # M-500 (blank publisher -> UGS) is deprecated by the foreign-published BYU-12: the successor
+    # href must point at BYU-12's REAL collection (ugs-external), not the hardcoded ugs-publications.
+    assert g["M-500"]["successor_href"].endswith("/ugs-external/BYU/BYU-12/BYU-12.json")
+    # BYU-12's predecessor is M-500, which really is ugs-publications-hosted.
+    assert g["BYU-12"]["predecessor_href"].endswith("/ugs-publications/M/M-500/M-500.json")
+
+
 def test_build_catalog_wires_edition_into_build_item():
     from ugs_warehouse.pubs.ingest import build_catalog
 

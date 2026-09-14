@@ -636,6 +636,12 @@ def test_pub_item_exposes_all_vector_layers_and_companion_tables():
     a = item["assets"]
     assert a["gems__ContactsAndFaults"]["href"].endswith("geolmap/vectors/M-100/gems__ContactsAndFaults.parquet")
     assert a["gems__ContactsAndFaults"]["type"] == pubs_sink.PARQUET_MIME
+    assert a["gems__ContactsAndFaults"]["roles"] == ["data"]
+    assert "gems__MapUnitPolys" in a  # the 2nd vector_layers entry produced an asset too
+    assert a["gems__DescriptionOfMapUnits"]["href"].endswith(
+        "geolmap/vectors/M-100/gems__DescriptionOfMapUnits.parquet")
+    assert a["gems__DescriptionOfMapUnits"]["type"] == pubs_sink.PARQUET_MIME
+    assert a["gems__DescriptionOfMapUnits"]["roles"] == ["data"]
     assert a["gems__DescriptionOfMapUnits"]["table:columns"] == [{"name": "MapUnit"}, {"name": "Age"}]
     assert pubs_sink.stac.TABLE_EXT in item["stac_extensions"]
 

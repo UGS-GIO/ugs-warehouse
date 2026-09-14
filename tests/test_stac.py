@@ -665,6 +665,32 @@ def test_pub_item_emits_edition_version_and_supersession_links():
     assert not [lnk for lnk in item["links"] if lnk["rel"] == "predecessor-version"]
 
 
+def _build(p, **kw):
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        return pubs_sink.build_item(p, [], **kw)
+
+
+def test_pub_scale_tier_classification_and_mosaic_link():
+    # COG map, parseable scale: gets the property AND a link to its tier mosaic.
+    item = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"}, has_cog=True)
+    assert item["properties"]["ugs:scale_tier"] == "24k"
+    rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    assert len(rel) == 1
+    assert rel[0]["href"].endswith("/ugs-geologic-maps/geologic-maps-24k/geologic-maps-24k.json")
+
+    # COG map, UNPARSEABLE scale: no property, but still linked to the default tier (mosaic membership).
+    item = _build({"series_id": "M-1", "series": "M", "pub_scale": "n/a"}, has_cog=True)
+    assert "ugs:scale_tier" not in item["properties"]
+    rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    assert len(rel) == 1 and rel[0]["href"].endswith("/geologic-maps-24k/geologic-maps-24k.json")
+
+    # non-COG pub, parseable scale: classified, but NOT linked (not a mosaic member).
+    item = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"}, has_cog=False)
+    assert item["properties"]["ugs:scale_tier"] == "500k"
+    assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+
+
 def test_pub_item_id_is_safe_in_a_path():
     """The id is a directory name and the tail of every link to the item, so a space in it made
     the item's own self link, its collection's item link and the ISO href unresolvable."""

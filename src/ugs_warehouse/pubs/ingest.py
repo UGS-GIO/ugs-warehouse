@@ -122,9 +122,9 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
         sid = rest.split("/", 1)[0].upper()
         try:
             doc = json.loads(gcs.get_bytes(path).decode())
+            out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or []}
         except Exception:  # noqa: BLE001 — a bad manifest just means no vector assets for that pub
             continue
-        out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or []}
     return out
 
 

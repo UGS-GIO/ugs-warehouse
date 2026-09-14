@@ -499,6 +499,34 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
     assert "DS-2" not in out
 
 
+def test_vector_manifests_by_sid_skips_a_non_object_manifest():
+    """A manifest that is valid JSON but not an object (`null`, a list, a bare string — a partial
+    or corrupt write) must not crash discovery for every other pub. `.get()` on a non-dict raises
+    AttributeError; that has to land inside the same try/except as the read, or one bad manifest
+    takes down the whole build_catalog run instead of just costing its own pub the vector assets."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+
+    good = {"spatial": ["geo__ContactsAndFaults"], "tables": []}
+    paths = [
+        f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json",
+        f"{vectors.VECTORS_PREFIX}/DS-9/_manifest.json",
+    ]
+    bodies = {
+        f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json": json.dumps(good).encode(),
+        f"{vectors.VECTORS_PREFIX}/DS-9/_manifest.json": b"null",
+    }
+
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
+        out = _vector_manifests_by_sid()  # must return, not raise
+
+    assert out["M-100"] == good  # unaffected by the sibling's bad manifest
+    assert "DS-9" not in out  # skipped, not crashed on
+
+
 def test_build_catalog_wires_vector_layers_and_companion_tables():
     """ALL-5913 task 3: build_catalog must discover each pub's extracted vector layers + companion
     tables (per pubs/vectors.py's manifest) and pass them into build_item — otherwise the assets

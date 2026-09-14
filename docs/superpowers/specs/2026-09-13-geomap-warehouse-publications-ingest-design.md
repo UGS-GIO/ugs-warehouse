@@ -1,7 +1,7 @@
 # Design: Load the geomap geologic-map corpus into the warehouse — faithful, per-publication, versioned
 
 - **Jira:** ALL-5911 (Task, under epic ALL-3865 "Create Data Ingestion Pipeline")
-- **Subtasks:** ALL-5912 (versioning/editions), ALL-5913 (expose vectors + companion tables), ALL-5914 (ingest the missing maps)
+- **Subtasks:** ALL-5912 (versioning/editions), ALL-5913 (expose vectors + companion tables), ALL-5914 (ingest the missing maps), ALL-5922 (scale-tier layers as first-class grouped items)
 - **Related:** ALL-5837 (land-raw re-architecture), ALL-5832, ALL-5831, ALL-5480, ALL-5860, ALL-5826, ALL-5825, ALL-5827
 - **Date:** 2026-09-13
 - **Status:** Draft for review
@@ -48,6 +48,7 @@ So "COG draped over terrain with feature access" is not new — it is a faithful
 | Companion non-spatial tables | **Missing** | vectors.py `if geomtype:` skips DescriptionOfMapUnits / CorrelationOfMapUnits |
 | Versioning / editions | **Missing** | core/stac.py `write_item` overwrites; no predecessor/successor rels; supersession only free-text in the pubsdb CSV |
 | Grouping / dataset model | **Partial** | collection-nesting by series code only; no whole/members, no edition families |
+| Scale-tier layer ↔ member pubs | **Missing** | mosaic items carry a bare `ugs:map_count`; no `rel:"related"` either direction; pubs don't reference their tier (geolmap_mosaics.py, pubs/sink_stac.py) |
 
 ### 1.4 Two implementations
 The standalone `ugs-geolmap-cog-poc` already has, and the production producer lacks or under-uses: robust multi-layer GeMS extraction with subprocess isolation + per-layer schema log (`pipeline/extract_vectors.py`); flexible scale-banded raster PMTiles plates (`pipeline/build_pmtiles.py`, `denom()` + `--scale-filter`); harvest-from-`ugspub` via `data.php` with GeoTIFF-Zip vs GIS-Data-Zip precedence and PDF rasterization (`pipeline/harvest.py`). **We lift these into the production producer** rather than run the POC as a second producer — one producer, one catalog, shared core.
@@ -80,7 +81,7 @@ The standalone `ugs-geolmap-cog-poc` already has, and the production producer la
 ## 4. Data model
 
 ### 4.1 Per-publication item
-One STAC item per publication under `ugs-publications/{SERIES}` (item id = sanitized `series_id`), as today. The `ugs-geologic-maps` collection currently holds the derived scale-tier serving mosaics, **not** the per-publication items; whether to also surface the map corpus as its own grouped collection is a catalog-grain / grouping question (relates to ALL-5829) and is deferred to sub-project C.
+One STAC item per publication under `ugs-publications/{SERIES}` (item id = sanitized `series_id`), as today. The `ugs-geologic-maps` collection holds the derived scale-tier serving mosaics (see §4.5), **not** the per-publication items. Whole/members linkage between the two is in scope here (§4.5); the deeper catalog-grain redesign — whether the map corpus becomes its own grouped collection, layer-as-item vs layer-as-collection — remains the larger open question ALL-5829.
 
 ### 4.2 Asset taxonomy
 - **Originals (immutable, content-addressed):** `cog` (published raster), `source_bundle` (original gdb/shp zip — new first-class asset; see ALL-5832).
@@ -95,14 +96,31 @@ Originals are the source of truth. Derivatives are generated from originals and 
 - **Curatable metadata** stays as today (`override > source > prior`).
 - **Editions:** a revised map is a new item; link with STAC `predecessor-version`/`successor-version`. Detection: distinct `series_id` values coexist naturally (the common case); a re-harvest of the **same** `series_id` with changed content mints a new version rather than overwriting the published one. Supersession currently living as free text in the pubsdb CSV is promoted to these machine-readable links where known.
 
+### 4.5 Scale-tier layers & grouping — whole/members (ALL-5922)
+
+geomap organizes its services **by scale-tier as a layer that spans publications** (24k / 100k / 500k / statewide). We preserve that in the warehouse: each scale-tier serving layer is loadable on its own **and** cross-linked with its member publications, both directions.
+
+- **Already satisfied — scale-tier layers are first-class loadable items.** The `ugs-geologic-maps` mosaics (`geologic-maps-24k/250k/500k`) load through the viewer's add-to-map path via `rasterPmHref`, detected by a `pmtiles` asset with `roles:["visual"]` / `ugs:render:"raster"` — the same path as any vector/COG layer (`viewer/src/map/map-model.ts`, `app.tsx`, `stac.ts`). No viewer change is needed for "load the scale-tier layer on its own."
+- **Net-new — whole/members linkage.** Verified: a mosaic item carries only a bare `ugs:map_count`, and publications don't reference their tier. We add the linkage with the **warehouse-idiomatic `rel:"related"` mechanism** (the item↔item graph already used in `vector/related.py`) — *not* a new construct:
+  - mosaic (scale-tier) item → one `rel:"related"` link per member publication (membership is already computed at build time by `geolmap_mosaics.tier_of()`); keep `ugs:map_count` as the rollup;
+  - each publication item → a `rel:"related"` link + a `ugs:scale_tier` property to the scale-tier layer(s) it contributes to.
+  - Result: load a scale-tier layer directly (works today), reach a publication's scale-tier layer from the publication, and enumerate a scale-tier layer's members.
+
+**Grouping axes:**
+- **By scale** — primary, matching geomap: the mosaic items + `ugs:scale`, membership materialized as above.
+- **By topic** — reuse the existing `ugs:topic` classifier (`pubs/topic.py`, already stamped on publication items); extend it to the mosaic/serving items and surface it as a real item property so maps group/filter by topic. The viewer's category taxonomy (`viewer/src/catalog/item-view.ts`) already folds the `mapping` schema + `ugs-geologic-maps` into one "Geologic Maps" facet — we make that server-driven rather than a hardcoded client list.
+
+**Deliberately not invented:** there is no formal dataset/groups model in ugs-warehouse (the canonical dataset+grouping model lives on the dataELT side, not this repo). We use the existing `rel:"related"` + collection-nesting + `ugs:topic` idioms. A materialized "whole → member items" list is net-new but follows the `related`-link fan-out precedent in `vector/related.py`.
+
 ---
 
 ## 5. Components & code changes
 
 - **`pubs/vectors.py`** — remove/relax the `if geomtype:` filter to also capture companion non-spatial tables; keep full-schema/CRS preservation; adopt the POC's subprocess isolation + per-layer schema log (ALL-5913).
-- **`pubs/sink_stac.py`** — attach every extracted vector layer and companion table as its own STAC asset (today only `units`); add the `source_bundle` asset; add version links (ALL-5912, ALL-5913, ALL-5832).
+- **`pubs/sink_stac.py`** — attach every extracted vector layer and companion table as its own STAC asset (today only `units`); add the `source_bundle` asset; add version links (ALL-5912, ALL-5913, ALL-5832); emit a `rel:"related"` link + `ugs:scale_tier` to the scale-tier layer and ensure `ugs:topic` is stamped on map items (ALL-5922).
 - **`pubs/mirror.py` / `identity.py`** — make original-bundle archival universal (not COG-bearing-only) and content-addressed (ALL-5912, ALL-5832).
-- **`pubs/geolmap_mosaics.py`** — optionally lift the POC's `denom()` + `--scale-filter` flexible banding if the 3 fixed tiers prove too coarse (ALL-5911, deferred within-scope).
+- **`pubs/geolmap_mosaics.py`** — emit a `rel:"related"` link from each scale-tier mosaic to every member publication (membership already known via `tier_of()`); keep `ugs:map_count` as the rollup (ALL-5922). Optionally lift the POC's `denom()` + `--scale-filter` flexible banding if the 3 fixed tiers prove too coarse.
+- **`pubs/topic.py`** — extend the `ugs:topic` classifier to mosaic/serving items so the by-topic grouping axis is server-driven (ALL-5922).
 - **`core/stac.py` / `core/gcs.py`** — write-once semantics / content-addressed paths for data assets (ALL-5912).
 - **Missing-map ingest** — run the producer for the 18–20 gaps; land source-less series as download-only items (ALL-5914).
 
@@ -136,6 +154,8 @@ Fail loud per house rules. Harvest/convert/extract failures are collected **per 
 - Content-addressing scheme for data assets (hash in path vs version segment) and how it interacts with the existing path-preserved mirror layout.
 - Whether flexible scale-banding (POC) is needed now or the 3 fixed tiers suffice.
 - Exact shape of the additive common identify projection (extra columns vs side table) — coordinate with sub-project C so it feeds the eventual identify without pre-empting the mart design.
+- Scale-tier membership: materialize it in STAC via `rel:"related"` (chosen — warehouse-idiomatic) vs declaring it upstream in `raw.schema_registry.relationships` and projecting it (as vector relationships are). For pubs the tier is derived at mosaic-build time, so materializing directly is simplest — confirm this doesn't diverge from the vector-side relationship source of truth.
+- By-topic grouping: whether it needs its own STAC collection(s) or is purely a property/facet (`ugs:topic`) + `rel:"related"` links; and whether to retire the viewer's hardcoded `item-view.ts` category fold once `ugs:topic` is server-authored.
 
 ---
 

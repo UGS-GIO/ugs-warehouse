@@ -114,3 +114,32 @@ def test_harvest_refuses_force_overwrite_of_published_cog(monkeypatch):
     from ugs_warehouse.pubs import harvest
     monkeypatch.setattr(harvest.gcs, "exists", lambda p: True)
     assert harvest.harvest_one("M-299DM", force=True) == "fail:write-once"
+
+
+def test_harvest_one_does_not_retry_after_first_attempt_already_uploaded_cog(monkeypatch):
+    """First attempt uploads the write-once COG, then fails in a LATER step (units/thumbnail). The
+    GT-fallback retry must not fire once the COG already exists — it would re-hit upload_write_once
+    on the now-published object (WriteOnceViolation), wasting a full reprocess and emitting a bogus
+    write-once failure for a pub whose authoritative COG actually landed. The real first-failure
+    reason must be what's returned, and the retry must not even be attempted."""
+    from ugs_warehouse.pubs import harvest
+
+    cog_uploaded = {"value": False}
+
+    def fake_attempt(pub, zurls):
+        if not cog_uploaded["value"]:
+            # First attempt: "uploads" the COG, then fails in a later derivative step.
+            cog_uploaded["value"] = True
+            return "fail:DuckDBIOException"
+        # Only reachable if the retry guard regresses — mirrors the real WriteOnceViolation path.
+        return "fail:WriteOnceViolation"
+
+    attempt_mock = MagicMock(side_effect=fake_attempt)
+    monkeypatch.setattr(harvest, "manifest_urls", lambda sid: ("https://x/gt.zip", "https://x/gis.zip"))
+    monkeypatch.setattr(harvest.gcs, "exists", lambda p: cog_uploaded["value"])
+    monkeypatch.setattr(harvest, "_harvest_attempt", attempt_mock)
+
+    result = harvest.harvest_one("M-1")
+
+    assert result == "fail:DuckDBIOException"  # the real first-failure reason, not write-once
+    assert attempt_mock.call_count == 1  # no wasted/misleading retry once the COG is already live

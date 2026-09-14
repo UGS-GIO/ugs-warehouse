@@ -453,8 +453,12 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
 
     status = _harvest_attempt(pub, zurls)
     # FALLBACK: the GIS bundle's base raster sometimes has no usable SRS -> the cutline warp dies.
-    # The separate GeoTIFF-Zip is the clean georeferenced plate; retry with it alone.
-    if status.startswith("fail") and gt_url and zurls != [gt_url]:
+    # The separate GeoTIFF-Zip is the clean georeferenced plate; retry with it alone. But only when
+    # nothing has been published yet: if the first attempt's write-once upload already landed the
+    # COG before failing in a LATER step (units/thumbnail), retrying would re-hit upload_write_once
+    # on the now-existing object -> WriteOnceViolation, wasting a full reprocess and masking the
+    # real first-failure reason behind a bogus write-once failure for a pub that actually succeeded.
+    if status.startswith("fail") and gt_url and zurls != [gt_url] and not gcs.exists(pub.cog_object):
         hlog("GIS source failed → retry GeoTIFF source only", step="source", level="WARNING")
         if _harvest_attempt(pub, [gt_url]) == "ok":
             return "ok"

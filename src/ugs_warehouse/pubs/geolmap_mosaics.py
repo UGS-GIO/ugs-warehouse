@@ -152,10 +152,11 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
 
     label = SCALE_LABEL.get(tier, tier)
     n_maps = len(sids)
-    related = []
+    related: list[dict] = []
     for sid in sids:                      # sids are UPPER (from _cog_sids)
         p = by_sid.get(sid)
         if not p:
+            print(f"[mosaics] {tier}: COG {sid} has no pub record — stitched into the raster but not linked (orphan)", file=sys.stderr)
             continue                      # COG present but no pub record -> no STAC item exists to link
         real_sid = (p.get("series_id") or "").strip()
         coll = f"{sink_stac.collection_group(p)}/{sink_stac.series_code(real_sid)}"

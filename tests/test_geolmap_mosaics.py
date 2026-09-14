@@ -4,7 +4,7 @@ from ugs_warehouse.pubs import geolmap_mosaics as gm
 from ugs_warehouse.pubs import identity
 
 
-def test_mosaic_stamps_topic_and_links_members_by_real_collection():
+def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     by_sid = {
         # USGS-authored Utah quad -> main catalog (ugs-publications)
         "GQ-968": {"series_id": "GQ-968", "pub_publisher": "USGS", "pub_name": "Geologic map of Foo"},
@@ -23,3 +23,4 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection():
     assert len(rel) == 2  # ORPHAN-9 skipped
     assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/GQ-968.json") for h in hrefs)
     assert any(h.endswith(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1.json") for h in hrefs)
+    assert "ORPHAN-9" in capsys.readouterr().err  # orphan COG must warn to stderr (fail loud)

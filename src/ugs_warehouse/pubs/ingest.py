@@ -123,7 +123,8 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
         try:
             doc = json.loads(gcs.get_bytes(path).decode())
             out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or []}
-        except Exception:  # noqa: BLE001 — a bad manifest just means no vector assets for that pub
+        except Exception as e:  # noqa: BLE001 — a bad manifest just costs that pub its vector assets
+            print(f"[pubs] corrupt vector manifest, skipping: {path} ({e})", file=sys.stderr)
             continue
     return out
 

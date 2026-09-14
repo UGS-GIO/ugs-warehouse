@@ -499,24 +499,26 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
     assert "DS-2" not in out
 
 
-def test_vector_manifests_by_sid_skips_a_non_object_manifest():
+def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
     """A manifest that is valid JSON but not an object (`null`, a list, a bare string — a partial
     or corrupt write) must not crash discovery for every other pub. `.get()` on a non-dict raises
     AttributeError; that has to land inside the same try/except as the read, or one bad manifest
-    takes down the whole build_catalog run instead of just costing its own pub the vector assets."""
+    takes down the whole build_catalog run instead of just costing its own pub the vector assets.
+
+    The swallow must still be visible, though: ALL-5913 final-review fail-loud fix wants the bad
+    manifest's path named on stderr so a corrupt (vs merely absent) manifest isn't a silent no-op.
+    """
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
     from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
 
     good = {"spatial": ["geo__ContactsAndFaults"], "tables": []}
-    paths = [
-        f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json",
-        f"{vectors.VECTORS_PREFIX}/DS-9/_manifest.json",
-    ]
+    bad_path = f"{vectors.VECTORS_PREFIX}/DS-9/_manifest.json"
+    paths = [f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json", bad_path]
     bodies = {
         f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json": json.dumps(good).encode(),
-        f"{vectors.VECTORS_PREFIX}/DS-9/_manifest.json": b"null",
+        bad_path: b"null",
     }
 
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
@@ -525,6 +527,7 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest():
 
     assert out["M-100"] == good  # unaffected by the sibling's bad manifest
     assert "DS-9" not in out  # skipped, not crashed on
+    assert bad_path in capsys.readouterr().err  # but named on stderr, not silently dropped
 
 
 def test_build_catalog_wires_vector_layers_and_companion_tables():

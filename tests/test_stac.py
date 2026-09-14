@@ -621,6 +621,25 @@ def test_cog_assets_keep_the_cloud_optimized_media_type():
     assert "cloud-optimized" in item["assets"]["cog"]["type"]
 
 
+def test_pub_item_exposes_all_vector_layers_and_companion_tables():
+    """pubs/vectors.py extracts every GDB layer and GeMS companion table to Parquet on GCS —
+    ALL-5913 task 2 wants each one surfaced as its own STAC asset, not just the single hardcoded
+    `units` layer, so a client can discover and fetch any extracted layer/table by name."""
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item(
+            {"series_id": "M-100", "series": "M"}, [],
+            vector_layers=["gems__ContactsAndFaults", "gems__MapUnitPolys"],
+            companion_tables=[{"label": "gems__DescriptionOfMapUnits",
+                               "columns": [{"name": "MapUnit"}, {"name": "Age"}]}],
+        )
+    a = item["assets"]
+    assert a["gems__ContactsAndFaults"]["href"].endswith("geolmap/vectors/M-100/gems__ContactsAndFaults.parquet")
+    assert a["gems__ContactsAndFaults"]["type"] == pubs_sink.PARQUET_MIME
+    assert a["gems__DescriptionOfMapUnits"]["table:columns"] == [{"name": "MapUnit"}, {"name": "Age"}]
+    assert pubs_sink.stac.TABLE_EXT in item["stac_extensions"]
+
+
 def test_raster_collection_borrows_its_newest_scene_thumbnail(monkeypatch):
     """PTL-VIZ-001 wants a thumbnail on a geospatial collection. A raster collection's items are
     scenes of one dataset, so a scene's preview represents it; the newest one, so the preview

@@ -536,6 +536,27 @@ def test_pub_item_omits_the_fields_the_source_left_empty():
     assert props["ugs:series"] == "DS"   # a value the source did give still lands
 
 
+def test_pub_item_emits_edition_version_and_supersession_links():
+    edition = {
+        "version": "2005", "deprecated": True,
+        "predecessor_href": None,
+        "successor_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
+                          "ugs-publications/M/M-233/M-233.json",
+    }
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item(
+            {"series_id": "M-159", "pub_name": "Old Ed", "series": "M", "pub_year": "1980"},
+            [], edition=edition,
+        )
+    assert item["properties"]["version"] == "2005"
+    assert item["properties"]["deprecated"] is True
+    assert stac.VERSION_EXT in item["stac_extensions"]
+    succ = [lnk for lnk in item["links"] if lnk["rel"] == "successor-version"]
+    assert succ and succ[0]["href"].endswith("/M-233/M-233.json")
+    assert not [lnk for lnk in item["links"] if lnk["rel"] == "predecessor-version"]
+
+
 def test_pub_item_id_is_safe_in_a_path():
     """The id is a directory name and the tail of every link to the item, so a space in it made
     the item's own self link, its collection's item link and the ISO href unresolvable."""

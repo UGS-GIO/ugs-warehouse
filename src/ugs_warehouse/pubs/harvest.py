@@ -419,6 +419,10 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
     if skip_existing and gcs.exists(pub.cog_object):
         hlog("SKIP already harvested (COG exists)", step="resolve", level="NOTICE", category="expected")
         return "skip:exists"
+    if force and gcs.exists(pub.cog_object):
+        hlog("REFUSE overwrite of published COG; publish a revision as a new edition (series_id)",
+             step="resolve", level="ERROR", category="attention")
+        return "fail:write-once"
     gt_url, gis_url = manifest_urls(series_id)
     if not gt_url and not gis_url:
         gt_url, gis_url = _get_attached_zips(series_id)
@@ -449,8 +453,12 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
 
     status = _harvest_attempt(pub, zurls)
     # FALLBACK: the GIS bundle's base raster sometimes has no usable SRS -> the cutline warp dies.
-    # The separate GeoTIFF-Zip is the clean georeferenced plate; retry with it alone.
-    if status.startswith("fail") and gt_url and zurls != [gt_url]:
+    # The separate GeoTIFF-Zip is the clean georeferenced plate; retry with it alone. But only when
+    # nothing has been published yet: if the first attempt's write-once upload already landed the
+    # COG before failing in a LATER step (units/thumbnail), retrying would re-hit upload_write_once
+    # on the now-existing object -> WriteOnceViolation, wasting a full reprocess and masking the
+    # real first-failure reason behind a bogus write-once failure for a pub that actually succeeded.
+    if status.startswith("fail") and gt_url and zurls != [gt_url] and not gcs.exists(pub.cog_object):
         hlog("GIS source failed → retry GeoTIFF source only", step="source", level="WARNING")
         if _harvest_attempt(pub, [gt_url]) == "ok":
             return "ok"
@@ -550,9 +558,10 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             return "fail:cog"
         # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
         # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
-        # the slow "flood of requests" on zoom. COGs are write-once (SKIP_EXISTING skips rewrites),
-        # so long-cache is safe; a --force re-harvest needs a CDN cache invalidation.
-        gcs.upload(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+        # the slow "flood of requests" on zoom. COGs are write-once (upload_write_once refuses to
+        # overwrite an existing object) — a revision publishes as a new edition (new series_id),
+        # never an in-place rewrite, so long-cache is always safe.
+        gcs.upload_write_once(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
         if shp:
             import duckdb
             gpq = os.path.join(work, f"{series_id}.units.parquet")
@@ -612,7 +621,9 @@ def main() -> int:
     g.add_argument("--all", action="store_true", help="Harvest all series IDs from the metadata database/CSV")
     ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to harvest")
     ap.add_argument("--dry-run", action="store_true", help="Dry run (check and locate metadata URLs only)")
-    ap.add_argument("--force", action="store_true", help="Force harvest even if COG already exists in GCS")
+    ap.add_argument("--force", action="store_true",
+                    help="Refuse (fail:write-once) instead of skipping when the COG already exists "
+                         "in GCS; publish a revision as a new edition (series_id) instead of forcing")
     ap.add_argument("--strict", action="store_true",
                     help="exit non-zero if ANY publication needs attention (default: only when "
                          "everything attempted failed)")

@@ -82,6 +82,25 @@ def test_build_item_proj_extension():
     assert stac.PROJ_EXT in item["stac_extensions"]
 
 
+def test_build_item_declares_versioning_extension_when_versioned():
+    item = stac.build_item(
+        item_id="M-299DM", collection="M", collection_path="ugs-publications/M",
+        geometry=None, bbox=None, datetime_iso="1998-01-01T00:00:00Z",
+        properties={"version": "1998", "deprecated": False}, assets={},
+    )
+    assert stac.VERSION_EXT in item["stac_extensions"]
+    assert item["properties"]["version"] == "1998"
+    assert item["properties"]["deprecated"] is False
+
+
+def test_build_item_omits_versioning_extension_when_unversioned():
+    item = stac.build_item(
+        item_id="M-299DM", collection="M", collection_path="ugs-publications/M",
+        geometry=None, bbox=None, datetime_iso=None, properties={}, assets={},
+    )
+    assert stac.VERSION_EXT not in (item.get("stac_extensions") or [])
+
+
 def test_extent_unions_bboxes_and_datetimes():
     items = [
         {"bbox": [-114, 37, -111, 40], "properties": {"datetime": "2026-01-01T00:00:00Z"}},
@@ -515,6 +534,27 @@ def test_pub_item_omits_the_fields_the_source_left_empty():
     for absent in ("description", "keywords", "ugs:scale", "ugs:author"):
         assert absent not in props, absent
     assert props["ugs:series"] == "DS"   # a value the source did give still lands
+
+
+def test_pub_item_emits_edition_version_and_supersession_links():
+    edition = {
+        "version": "2005", "deprecated": True,
+        "predecessor_href": None,
+        "successor_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
+                          "ugs-publications/M/M-233/M-233.json",
+    }
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item(
+            {"series_id": "M-159", "pub_name": "Old Ed", "series": "M", "pub_year": "1980"},
+            [], edition=edition,
+        )
+    assert item["properties"]["version"] == "2005"
+    assert item["properties"]["deprecated"] is True
+    assert stac.VERSION_EXT in item["stac_extensions"]
+    succ = [lnk for lnk in item["links"] if lnk["rel"] == "successor-version"]
+    assert succ and succ[0]["href"].endswith("/M-233/M-233.json")
+    assert not [lnk for lnk in item["links"] if lnk["rel"] == "predecessor-version"]
 
 
 def test_pub_item_id_is_safe_in_a_path():

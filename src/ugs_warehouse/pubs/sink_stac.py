@@ -157,11 +157,16 @@ def build_item(p: dict, attachments: list[dict], *,
                has_3d: bool = False, classes_3d: list[dict] | None = None,
                override: dict | None = None,
                contents: list[dict] | None = None,
-               mirrored: set[str] | None = None) -> dict:
+               mirrored: set[str] | None = None,
+               edition: dict | None = None) -> dict:
     """Build a pub STAC Item (collection-nested, via core.stac.build_item).
 
     `mirrored` is the set of object paths the warehouse holds copies of (see pubs/mirror.py).
     Source files in it are served from our CDN; the rest stay linked to the publisher's host.
+
+    `edition` = `{"version", "deprecated", "predecessor_href", "successor_href"}` (edition
+    detection, a later task) — when given, stamps `version`/`deprecated` on the item (Versioning
+    Indicators ext auto-declared by core.stac.build_item) and predecessor/successor-version links.
     """
     sid = (p.get("series_id") or "").strip()
     item_id = item_id_for(sid)
@@ -240,6 +245,14 @@ def build_item(p: dict, attachments: list[dict], *,
     if has_ugs_doi(p.get("pub_publisher")):
         extra_links.append({"rel": "cite-as", "href": f"https://doi.org/10.34191/{quoted_sid}"})
 
+    ed = edition or {}
+    if ed.get("predecessor_href"):
+        extra_links.append({"rel": "predecessor-version", "href": ed["predecessor_href"],
+                            "type": "application/geo+json"})
+    if ed.get("successor_href"):
+        extra_links.append({"rel": "successor-version", "href": ed["successor_href"],
+                            "type": "application/geo+json"})
+
     # No web-map-links here: that extension's rels are [xyz, wms, wmts, tilejson, pmtiles, 3d-tiles]
     # — it has no `cog`, and declaring it forces one of those (which a raster pub lacks). The COG is
     # advertised by its `cog` ASSET (media type `…;profile=cloud-optimized`), which STAC Browser and
@@ -276,6 +289,10 @@ def build_item(p: dict, attachments: list[dict], *,
             **({"ugs:series": s} if (s := (p.get("series") or "").strip()) else {}),
             **({"ugs:scale": sc} if (sc := (p.get("pub_scale") or "").strip()) else {}),
             **({"ugs:author": au} if (au := (p.get("pub_author") or "").strip()) else {}),
+            # Edition version/deprecated (Versioning Indicators ext, auto-declared by
+            # core.stac.build_item from these two properties — see `edition` above).
+            **({"version": v} if (v := ed.get("version")) else {}),
+            **({"deprecated": True} if ed.get("deprecated") else {}),
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
             # ISO topic category. AUTHORED, not defaulted: a UGS publication is our own product, so
             # asserting the category is a statement about our own work — unlike a serving topic,

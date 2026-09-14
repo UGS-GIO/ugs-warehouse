@@ -51,6 +51,9 @@ ALTERNATE_ASSETS_EXT = "https://stac-extensions.github.io/alternate-assets/v1.2.
 # file: `file:size` + `file:checksum` on the assets we write — a consumer budgets the fetch and
 # verifies what it got. Declared only when an asset actually carries one (see `file_fields`).
 FILE_EXT = "https://stac-extensions.github.io/file/v2.1.0/schema.json"
+# version: `version`/`deprecated` on an item — declared only when an item actually carries one
+# of those properties (see `build_item`).
+VERSION_EXT = "https://stac-extensions.github.io/version/v1.2.0/schema.json"
 
 # Per-asset usage hints — the human half of "which asset is for what" (display / query / download).
 # The machine half already rides the standard STAC `roles` (visual = display, data = download,
@@ -150,6 +153,11 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
     # through `file_fields`, and an asset with none (an off-warehouse href) must not force the ext.
     if any("file:size" in a or "file:checksum" in a for a in assets.values()) and FILE_EXT not in exts:
         exts.append(FILE_EXT)
+    # Declared from what the properties carry, same rule as FILE_EXT above: a caller sets
+    # `version`/`deprecated` (pubs editions) and the extension follows, rather than every caller
+    # having to remember to declare it itself.
+    if ("version" in props or "deprecated" in props) and VERSION_EXT not in exts:
+        exts.append(VERSION_EXT)
     if proj_epsg is not None:
         # projection ext v2.0.0: `proj:code` ("EPSG:4326") replaces the deprecated `proj:epsg`.
         props["proj:code"] = f"EPSG:{proj_epsg}"

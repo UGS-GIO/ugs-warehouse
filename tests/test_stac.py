@@ -82,6 +82,25 @@ def test_build_item_proj_extension():
     assert stac.PROJ_EXT in item["stac_extensions"]
 
 
+def test_build_item_declares_versioning_extension_when_versioned():
+    item = stac.build_item(
+        item_id="M-299DM", collection="M", collection_path="ugs-publications/M",
+        geometry=None, bbox=None, datetime_iso="1998-01-01T00:00:00Z",
+        properties={"version": "1998", "deprecated": False}, assets={},
+    )
+    assert stac.VERSION_EXT in item["stac_extensions"]
+    assert item["properties"]["version"] == "1998"
+    assert item["properties"]["deprecated"] is False
+
+
+def test_build_item_omits_versioning_extension_when_unversioned():
+    item = stac.build_item(
+        item_id="M-299DM", collection="M", collection_path="ugs-publications/M",
+        geometry=None, bbox=None, datetime_iso=None, properties={}, assets={},
+    )
+    assert stac.VERSION_EXT not in (item.get("stac_extensions") or [])
+
+
 def test_extent_unions_bboxes_and_datetimes():
     items = [
         {"bbox": [-114, 37, -111, 40], "properties": {"datetime": "2026-01-01T00:00:00Z"}},

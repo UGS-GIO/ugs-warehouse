@@ -92,9 +92,15 @@ One STAC item per publication under `ugs-publications/{SERIES}` (item id = sanit
 Originals are the source of truth. Derivatives are generated from originals and can be rebuilt without touching them. Raw vector schemas are preserved verbatim; the additive common projection (standard identify fields) is stored as extra columns or a side table, never by rewriting the raw layer.
 
 ### 4.4 Versioning / editions (the new build — ALL-5912)
-- **Content-address published data assets** (hash or version segment in the GCS object path) so a reingest writes a new object rather than overwriting; harden the `--force` path so it cannot silently mutate a published asset.
-- **Curatable metadata** stays as today (`override > source > prior`).
-- **Editions:** a revised map is a new item; link with the STAC **Versioning Indicators** extension (`https://stac-extensions.github.io/version/v1.2.0/schema.json` — `version`/`deprecated` fields + `predecessor-version`/`successor-version`/`latest-version` rels). Detection: distinct `series_id` values coexist naturally (the common case); a re-harvest of the **same** `series_id` with changed content mints a new version rather than overwriting the published one. Supersession currently living as free text in the pubsdb CSV is promoted to these machine-readable links where known.
+**Immutability is enforced at the application + catalog layer, scoped to authoritative published data — not blanket, and not via a bucket-wide lock.** Rationale: immutability of a published artifact is a write-discipline + catalog invariant; a bucket-wide WORM/retention lock would break the constantly-rewritten STAC catalog and every rebuild-in-place producer in the shared bucket, is irreversible, and is warranted only by a genuine records/compliance mandate — which is not the requirement here (the requirement is "authoritative published data is never silently changed, and citations are reproducible").
+
+- **Write-once discipline for authoritative data.** Producers never overwrite a published authoritative object; a re-render or correction writes a *new* object and mints a *new* STAC Item, leaving the prior object intact. Asset hrefs pin the specific published object so a citation returns identical bytes over time.
+- **Immutable vs rebuildable vs curatable:**
+  - *Immutable (authoritative):* the published originals — source bundle (gdb/shp/PDF/GeoTIFF) — and the published COG map face.
+  - *Rebuildable from originals:* derived per-pub GeoParquet, scale mosaics, tiles — regenerating a derivative from an unchanged original is not "altering published data."
+  - *Curatable (editable in place):* STAC item, ISO sidecar, thumbnails, curated metadata (`override > source > prior`, as today).
+- **Editions:** a revised map is a new item, linked via the STAC **Versioning Indicators** extension (`https://stac-extensions.github.io/version/v1.2.0/schema.json` — `version`/`deprecated` + `predecessor-version`/`successor-version`/`latest-version`); the superseded edition is retained and marked `deprecated: true`. **Detection is quad-based:** a newer map for the same quad/study-area supersedes older ones; the authoritative quad↔series mapping is the AGOL footprints view the front-end already uses (confirm authoritativeness with the front-end / Clinton). A same-`series_id` re-harvest with changed bytes is rare and mints a new version rather than overwriting.
+- **Backstop, not mechanism:** GCS object versioning stays on for accident recovery; *optionally* lengthen noncurrent retention on **just the pub-data prefixes** (a small, prefix-scoped lifecycle tweak) — explicitly not what the guarantee rests on.
 
 ### 4.5 Scale-tier layers & grouping — whole/members (ALL-5922)
 
@@ -161,7 +167,7 @@ Fail loud per house rules. Harvest/convert/extract failures are collected **per 
 
 ## 9. Open decisions (to resolve in the implementation plan)
 
-- Content-addressing scheme for data assets (hash in path vs version segment) and how it interacts with the existing path-preserved mirror layout.
+- ~~Content-addressing scheme for data assets~~ — **RESOLVED (2026-09-13):** no content-hash paths and no bucket-wide lock. Immutability is app-layer write-once discipline scoped to authoritative published data (originals + COG) + STAC Versioning for editions, with GCS object versioning as an accident backstop (optional prefix-scoped retention window on the pub-data prefixes only). Derivatives are rebuildable; metadata is curatable. See §4.4.
 - Whether flexible scale-banding (POC) is needed now or the 3 fixed tiers suffice.
 - Exact shape of the additive common identify projection (extra columns vs side table) — coordinate with sub-project C so it feeds the eventual identify without pre-empting the mart design.
 - Scale-tier membership: materialize it in STAC via `rel:"related"` (chosen — warehouse-idiomatic) vs declaring it upstream in `raw.schema_registry.relationships` and projecting it (as vector relationships are). For pubs the tier is derived at mosaic-build time, so materializing directly is simplest — confirm this doesn't diverge from the vector-side relationship source of truth.

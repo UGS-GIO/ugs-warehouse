@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -26,11 +25,11 @@ from datetime import datetime, timezone
 
 from ..core import config, gcs, stac
 from . import identity, source
+from .scale import DEFAULT_TIER, SCALE_LABEL, tier_of
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
 COLLECTION = "ugs-geologic-maps"
-SCALE_LABEL = {"24k": "1:24,000", "250k": "1:250,000", "500k": "1:500,000"}
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
 UTAH_GEOM = {"type": "Polygon", "coordinates": [[
@@ -39,7 +38,6 @@ UTAH_GEOM = {"type": "Polygon", "coordinates": [[
 # Scale tiers (denominator upper bounds), matching the old MD_* mosaics. A map's scale is binned by
 # its 1:N denominator: <=62.5k detail, <=350k intermediate, else overview.
 TIERS = ("24k", "250k", "500k")
-DEFAULT_TIER = "24k"          # COG present but scale unparseable/blank -> finest tier (+ logged)
 # Max web-mercator zoom per tier — the real fix for the build timeout. The COGs are 600 DPI, so
 # GDAL's native max zoom is ~z18; tiling a STATEWIDE mosaic to z18 is astronomically many tiles and
 # never finishes. Each tier is capped to the zoom its scale actually warrants (and where it's legible
@@ -51,40 +49,6 @@ OVERVIEW_LEVELS = ("2", "4", "8", "16", "32", "64", "128", "256", "512", "1024",
 
 def mosaic_object(tier: str) -> str:
     return f"{identity.MOSAIC_PREFIX}/geologic-maps-{tier}.pmtiles"
-
-
-def _denominator(raw: str) -> int | None:
-    """Free-text publication scale -> 1:N denominator, or None if unparseable.
-
-    Handles '1:24,000', '1:24 000', '1 inch = 200 feet' (x12), '1 inch = 1 mile' (x63360)."""
-    s = (raw or "").strip().lower().replace(",", "")
-    if not s:
-        return None
-    m = re.search(r"1\s*:\s*(\d[\d ]*\d|\d)", s)         # ratio; tolerate an internal space (24 000)
-    if m:
-        try:
-            return int(m.group(1).replace(" ", ""))
-        except ValueError:
-            return None
-    m = re.search(r"1\s*in(?:ch)?\s*=\s*([\d.]+)\s*feet", s)
-    if m:
-        return int(float(m.group(1)) * 12)
-    m = re.search(r"1\s*in(?:ch)?\s*=\s*([\d.]+)\s*mile", s)
-    if m:
-        return int(float(m.group(1)) * 63360)
-    return None
-
-
-def tier_of(raw: str) -> str | None:
-    """Scale-tier key for a publication scale, or None when unparseable (caller applies fallback)."""
-    d = _denominator(raw)
-    if d is None or d <= 0:
-        return None
-    if d <= 62_500:
-        return "24k"
-    if d <= 350_000:
-        return "250k"
-    return "500k"
 
 
 def _cog_sids() -> set[str]:

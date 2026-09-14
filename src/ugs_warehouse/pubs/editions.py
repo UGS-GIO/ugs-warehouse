@@ -13,7 +13,7 @@ same pub-record field.
 
 Grouping key = (normalized `quad_name`, scale tier). Editions must share BOTH the quad and the
 scale tier — same quad at a different scale is a different map series, not an edition of this one.
-Scale parsing is reused, not reinvented: `geolmap_mosaics.tier_of` (the same 24k/250k/500k tiers
+Scale parsing is reused, not reinvented: `scale.tier_of` (the same 24k/250k/500k tiers
 the mosaics producer bins COGs into) is the single source of truth for "what scale tier is this
 publication". `DM`/`DR` suffixes (`M-206` vs `M-206DM`) are genuinely distinct publications that
 happen to land in the same (quad, scale) group — never collapsed into one series_id.
@@ -38,7 +38,7 @@ from __future__ import annotations
 from collections import defaultdict
 
 from ..core import config, stac
-from .geolmap_mosaics import tier_of
+from .scale import tier_of
 
 
 def _item_href(p: dict) -> str:

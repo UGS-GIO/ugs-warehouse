@@ -17,7 +17,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs, stac
-from . import identity, sink_stac, source, threed, topic
+from . import editions, identity, sink_stac, source, threed, topic
 
 
 def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
@@ -146,6 +146,11 @@ def _cog_footprints(cog_ids: set[str]) -> dict[str, tuple]:
 def build_catalog(limit: int | None = None, series: str | None = None, skip_refresh: bool = False) -> int:
     print(f"[pubs] metadata source: {source.source_name()}")
     pubs = source.read_pubs()
+    # Computed over the FULL corpus, before --series/--limit narrow `pubs` below: a same-quad
+    # edition link can cross series-type prefixes (an OFR predecessor to a later M map) or fall
+    # outside a smoke-test slice, and a filtered run must never blind edition detection to a real
+    # predecessor/successor just because this run isn't writing it.
+    edition_graph = editions.edition_graph(pubs)
     if series:
         series_upper = series.strip().upper()
         pubs = [p for p in pubs if sink_stac.series_code(p.get("series_id")) == series_upper]
@@ -181,6 +186,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
             has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
+            edition=edition_graph.get(sid),
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)

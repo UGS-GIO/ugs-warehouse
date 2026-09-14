@@ -94,7 +94,7 @@ Originals are the source of truth. Derivatives are generated from originals and 
 ### 4.4 Versioning / editions (the new build — ALL-5912)
 - **Content-address published data assets** (hash or version segment in the GCS object path) so a reingest writes a new object rather than overwriting; harden the `--force` path so it cannot silently mutate a published asset.
 - **Curatable metadata** stays as today (`override > source > prior`).
-- **Editions:** a revised map is a new item; link with STAC `predecessor-version`/`successor-version`. Detection: distinct `series_id` values coexist naturally (the common case); a re-harvest of the **same** `series_id` with changed content mints a new version rather than overwriting the published one. Supersession currently living as free text in the pubsdb CSV is promoted to these machine-readable links where known.
+- **Editions:** a revised map is a new item; link with the STAC **Versioning Indicators** extension (`https://stac-extensions.github.io/version/v1.2.0/schema.json` — `version`/`deprecated` fields + `predecessor-version`/`successor-version`/`latest-version` rels). Detection: distinct `series_id` values coexist naturally (the common case); a re-harvest of the **same** `series_id` with changed content mints a new version rather than overwriting the published one. Supersession currently living as free text in the pubsdb CSV is promoted to these machine-readable links where known.
 
 ### 4.5 Scale-tier layers & grouping — whole/members (ALL-5922)
 
@@ -111,6 +111,16 @@ geomap organizes its services **by scale-tier as a layer that spans publications
 - **By topic** — reuse the existing `ugs:topic` classifier (`pubs/topic.py`, already stamped on publication items); extend it to the mosaic/serving items and surface it as a real item property so maps group/filter by topic. The viewer's category taxonomy (`viewer/src/catalog/item-view.ts`) already folds the `mapping` schema + `ugs-geologic-maps` into one "Geologic Maps" facet — we make that server-driven rather than a hardcoded client list.
 
 **Deliberately not invented:** there is no formal dataset/groups model in ugs-warehouse (the canonical dataset+grouping model lives on the dataELT side, not this repo). We use the existing `rel:"related"` + collection-nesting + `ugs:topic` idioms. A materialized "whole → member items" list is net-new but follows the `related`-link fan-out precedent in `vector/related.py`.
+
+### 4.6 STAC conformance
+
+Every construct here is STAC-spec-legal — a declared extension or a spec-permitted mechanism, no bespoke schema:
+
+- **Editions:** STAC **Versioning Indicators** extension (`https://stac-extensions.github.io/version/v1.2.0/schema.json`) — `version` / `deprecated` fields + `predecessor-version` / `successor-version` / `latest-version` rels.
+- **Relationships / membership:** `rel:"related"` — IANA-registered, which the STAC best-practices permit; already the warehouse's item↔item idiom (`vector/related.py`).
+- **Raster CRS:** Projection extension (`proj:code`), as COGs already use.
+- **Custom fields:** prefixed `ugs:*` properties (`ugs:scale_tier`, `ugs:topic`, `ugs:scale`, `ugs:map_count`) — spec-legal prefixed fields (as `ugs:foreign_keys` already is); declared via a `ugs` extension schema where one is warranted.
+- **Assets, tables, alternates:** existing declared extensions (`web-map-links`, `table`, `alternate-assets`, `file`, `classification`).
 
 ---
 
@@ -155,7 +165,7 @@ Fail loud per house rules. Harvest/convert/extract failures are collected **per 
 - Whether flexible scale-banding (POC) is needed now or the 3 fixed tiers suffice.
 - Exact shape of the additive common identify projection (extra columns vs side table) — coordinate with sub-project C so it feeds the eventual identify without pre-empting the mart design.
 - Scale-tier membership: materialize it in STAC via `rel:"related"` (chosen — warehouse-idiomatic) vs declaring it upstream in `raw.schema_registry.relationships` and projecting it (as vector relationships are). For pubs the tier is derived at mosaic-build time, so materializing directly is simplest — confirm this doesn't diverge from the vector-side relationship source of truth.
-- By-topic grouping: whether it needs its own STAC collection(s) or is purely a property/facet (`ugs:topic`) + `rel:"related"` links; and whether to retire the viewer's hardcoded `item-view.ts` category fold once `ugs:topic` is server-authored.
+- By-topic grouping — **decided:** a lightweight `ugs:topic` property on map/mosaic items in A (spec-legal prefixed field); topic *collections* and the viewer facet (including retiring the hardcoded `item-view.ts` fold once `ugs:topic` is server-authored) are deferred to sub-project B.
 
 ---
 

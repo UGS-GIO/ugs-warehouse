@@ -1,8 +1,13 @@
-"""Extract ALL vector feature classes from GIS-bundle publications -> GeoParquet on GCS.
+"""Extract ALL vector feature classes AND non-spatial GeMS companion tables from GIS-bundle
+publications -> Parquet on GCS.
 
-Handles .shp files and spatial layers inside Esri file geodatabases (.gdb), preserving
-CRS and field names. Independent of the COG harvest, providing deep vector layers
-(contacts, faults, folds, etc.) to GCS and STAC.
+Handles .shp files and every layer inside Esri file geodatabases (.gdb) — spatial (preserving
+CRS and field names, written as GeoParquet) and non-spatial companion tables like
+DescriptionOfMapUnits / CorrelationOfMapUnits (written as plain Parquet, no geometry). Raw
+schema is preserved verbatim for both. Independent of the COG harvest, providing deep vector
+layers (contacts, faults, folds, etc.) and their companion tables to GCS and STAC. A per-series
+`_manifest.json` records which extracted labels are spatial vs tables, so downstream (STAC
+ingest) doesn't have to guess from names.
 
     python -m ugs_warehouse.pubs.vectors M-299DM
     python -m ugs_warehouse.pubs.vectors --all
@@ -11,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import glob
+import json
 import os
 import re
 import shutil
@@ -29,16 +35,19 @@ def _safe(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]", "_", name)
 
 
-def _sources(work: str) -> list[tuple[str, str | None, str]]:
-    """Find all vector sources in the extracted bundle directory.
+def _sources(work: str) -> list[tuple[str, str | None, str, bool]]:
+    """Find all vector AND non-spatial table sources in the extracted bundle directory.
 
-    Each entry is a tuple of: (file_path, layer_name_or_None, layer_label).
+    Each entry is a tuple of: (file_path, layer_name_or_None, layer_label, is_spatial).
+    Non-spatial GeMS companion tables (DescriptionOfMapUnits, CorrelationOfMapUnits, ...) are
+    included too, tagged is_spatial=False, so callers can branch by type instead of guessing
+    from the label. A .shp always carries geometry, so shapefile entries are always spatial.
     """
     import pyogrio
 
-    out: list[tuple[str, str | None, str]] = []
+    out: list[tuple[str, str | None, str, bool]] = []
     for shp in glob.glob(os.path.join(work, "**", "*.shp"), recursive=True):
-        out.append((shp, None, _safe(os.path.basename(shp)[:-4])))
+        out.append((shp, None, _safe(os.path.basename(shp)[:-4]), True))
 
     for gdb in glob.glob(os.path.join(work, "**", "*.gdb"), recursive=True):
         if "template" in os.path.basename(gdb).lower():
@@ -46,15 +55,60 @@ def _sources(work: str) -> list[tuple[str, str | None, str]]:
         gstem = _safe(os.path.basename(gdb)[:-4])
         try:
             for name, geomtype in pyogrio.list_layers(gdb):
-                if geomtype:  # spatial layers only
-                    out.append((gdb, name, f"{gstem}__{_safe(name)}"))
+                out.append((gdb, name, f"{gstem}__{_safe(name)}", bool(geomtype)))
         except Exception:
             pass
     return out
 
 
+def _extract_and_upload(
+    work: str, series_id: str, srcs: list[tuple[str, str | None, str, bool]],
+) -> dict[str, list[str]]:
+    """Read every source in `srcs`, upload each non-empty layer/table as Parquet to
+    `{VECTORS_PREFIX}/{series_id}/{label}.parquet`, and write the per-series manifest recording
+    which labels are spatial vs plain tables. Returns that manifest:
+    {"spatial": [...], "tables": [...]}.
+
+    Spatial layers keep their geometry (GeoParquet via geopandas, as before). Non-spatial GeMS
+    companion tables are read WITHOUT geometry via pyogrio and written as plain Parquet. Raw
+    schema is preserved verbatim either way — no rename, no type coercion. A layer with 0 rows
+    is skipped (as before); a layer whose reader raises is logged and skipped, same as today.
+    """
+    import geopandas as gpd
+    import pyogrio
+
+    manifest: dict[str, list[str]] = {"spatial": [], "tables": []}
+    for path, layer, label, is_spatial in srcs:
+        dst = os.path.join(work, f"{label}.parquet")
+        try:
+            if is_spatial:
+                gdf = gpd.read_file(path, layer=layer, engine="pyogrio")
+                if len(gdf) == 0:
+                    continue
+                gdf.to_parquet(dst)
+            else:
+                df = pyogrio.read_dataframe(path, layer=layer, read_geometry=False)
+                if len(df) == 0:
+                    continue
+                df.to_parquet(dst)
+
+            gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
+            gcs.upload(dst, gcs_path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+            manifest["spatial" if is_spatial else "tables"].append(label)
+        except Exception as e:
+            print(f"  layer {label} failed: {e}", file=sys.stderr)
+
+    if manifest["spatial"] or manifest["tables"]:
+        gcs.put_bytes(json.dumps(manifest).encode(),
+                       f"{VECTORS_PREFIX}/{series_id}/_manifest.json",
+                       content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+
+    return manifest
+
+
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False) -> str:
-    """Extract and upload all vector layers for a given series_id.
+    """Extract and upload all vector layers and non-spatial companion tables for a given
+    series_id.
 
     Returns: 'ok', 'skip', or 'fail:*'.
     """
@@ -86,8 +140,6 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
         print(f"[dry-run] {series_id}: would download {gis_url} and extract vector layers")
         return "ok"
 
-    import geopandas as gpd
-
     work = tempfile.mkdtemp(prefix=f"v_{series_id.replace('/', '_')}_")
     try:
         zp = os.path.join(work, "gis.zip")
@@ -97,29 +149,17 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
 
         srcs = _sources(work)
         if not srcs:
-            print(f"{series_id}: SKIP (no spatial shapefiles or GDB layers found)")
+            print(f"{series_id}: SKIP (no shapefiles, GDB layers, or tables found)")
             return "skip"
 
-        n_layers = 0
-        for path, layer, label in srcs:
-            dst = os.path.join(work, f"{label}.parquet")
-            try:
-                gdf = gpd.read_file(path, layer=layer, engine="pyogrio")
-                if len(gdf) == 0:
-                    continue
-                gdf.to_parquet(dst)
-                # Upload to GCS
-                gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
-                gcs.upload(dst, gcs_path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
-                n_layers += 1
-            except Exception as e:
-                print(f"  layer {label} failed: {e}", file=sys.stderr)
-
-        if n_layers == 0:
-            print(f"{series_id}: SKIP (0 spatial layers extracted successfully)")
+        manifest = _extract_and_upload(work, series_id, srcs)
+        n_spatial, n_tables = len(manifest["spatial"]), len(manifest["tables"])
+        if n_spatial + n_tables == 0:
+            print(f"{series_id}: SKIP (0 layers extracted successfully)")
             return "skip"
 
-        print(f"{series_id}: OK ({n_layers} vector layers uploaded to {VECTORS_PREFIX}/{series_id}/)")
+        print(f"{series_id}: OK ({n_spatial} vector layers + {n_tables} companion tables "
+              f"uploaded to {VECTORS_PREFIX}/{series_id}/)")
         return "ok"
     except Exception as e:
         print(f"{series_id}: FAIL {e}", file=sys.stderr)

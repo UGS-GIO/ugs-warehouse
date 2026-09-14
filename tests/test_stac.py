@@ -448,6 +448,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
@@ -466,6 +467,113 @@ def test_build_catalog_series_filter():
          assert count == 2
          assert mock_build.call_count == 2
          mock_refresh.assert_not_called()
+
+
+def test_vector_manifests_by_sid_reads_the_authoritative_split():
+    """_vector_manifests_by_sid() must read pubs/vectors.py's per-series `_manifest.json` — the
+    AUTHORITATIVE spatial-vs-table split — rather than guess spatial/table from label names."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+
+    manifest = {"spatial": ["geo__ContactsAndFaults"], "tables": ["geo__DescriptionOfMapUnits"]}
+    paths = [
+        f"{vectors.VECTORS_PREFIX}/M-100/geo__ContactsAndFaults.parquet",
+        f"{vectors.VECTORS_PREFIX}/M-100/geo__DescriptionOfMapUnits.parquet",
+        f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json",
+        f"{vectors.VECTORS_PREFIX}/DS-2/_manifest.json",  # unreadable — must not blow up the rest
+    ]
+    bodies = {f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json": json.dumps(manifest).encode()}
+
+    def get_bytes(path):
+        if path not in bodies:
+            raise FileNotFoundError(path)
+        return bodies[path]
+
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=get_bytes):
+        out = _vector_manifests_by_sid()
+
+    assert out["M-100"] == manifest  # keyed by uppercased series_id, matching the other discovery maps
+    assert "DS-2" not in out
+
+
+def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
+    """A manifest that is valid JSON but not an object (`null`, a list, a bare string — a partial
+    or corrupt write) must not crash discovery for every other pub. `.get()` on a non-dict raises
+    AttributeError; that has to land inside the same try/except as the read, or one bad manifest
+    takes down the whole build_catalog run instead of just costing its own pub the vector assets.
+
+    The swallow must still be visible, though: ALL-5913 final-review fail-loud fix wants the bad
+    manifest's path named on stderr so a corrupt (vs merely absent) manifest isn't a silent no-op.
+    """
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+
+    good = {"spatial": ["geo__ContactsAndFaults"], "tables": []}
+    bad_path = f"{vectors.VECTORS_PREFIX}/DS-9/_manifest.json"
+    paths = [f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json", bad_path]
+    bodies = {
+        f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json": json.dumps(good).encode(),
+        bad_path: b"null",
+    }
+
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
+        out = _vector_manifests_by_sid()  # must return, not raise
+
+    assert out["M-100"] == good  # unaffected by the sibling's bad manifest
+    assert "DS-9" not in out  # skipped, not crashed on
+    assert bad_path in capsys.readouterr().err  # but named on stderr, not silently dropped
+
+
+def test_build_catalog_wires_vector_layers_and_companion_tables():
+    """ALL-5913 task 3: build_catalog must discover each pub's extracted vector layers + companion
+    tables (per pubs/vectors.py's manifest) and pass them into build_item — otherwise the assets
+    task 2 wired up in build_item never actually get attached to a real item."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults"],
+                          "tables": ["geo__DescriptionOfMapUnits"]}}
+
+    with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
+         patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
+         patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._contents_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._threed_classes_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._overrides_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
+         patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
+         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.core.stac.attach_renders"), \
+         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.styles.warm"), \
+         patch("ugs_warehouse.core.stac.write_item"), \
+         patch("ugs_warehouse.core.stac.refresh_catalog"):
+
+         mock_read.return_value = [
+             {"series_id": "DS-8"},
+             {"series_id": "OFR-12"},
+         ]
+
+         count = build_catalog(skip_refresh=True)
+
+         assert count == 2
+         by_sid = {c.args[0]["series_id"]: c.kwargs for c in mock_build.call_args_list}
+         assert by_sid["DS-8"]["vector_layers"] == ["geo__ContactsAndFaults"]
+         assert by_sid["DS-8"]["companion_tables"] == [
+             {"label": "geo__DescriptionOfMapUnits", "columns": None}]
+         # a series absent from the manifest map still gets empty lists, never None/KeyError.
+         assert by_sid["OFR-12"]["vector_layers"] == []
+         assert by_sid["OFR-12"]["companion_tables"] == []
 
 
 def test_list_series(capsys):
@@ -619,6 +727,72 @@ def test_cog_assets_keep_the_cloud_optimized_media_type():
 
     assert item["assets"]["cog"]["type"] == pubs_sink.COG_MIME
     assert "cloud-optimized" in item["assets"]["cog"]["type"]
+
+
+def test_pub_item_exposes_all_vector_layers_and_companion_tables():
+    """pubs/vectors.py extracts every GDB layer and GeMS companion table to Parquet on GCS —
+    ALL-5913 task 2 wants each one surfaced as its own STAC asset, not just the single hardcoded
+    `units` layer, so a client can discover and fetch any extracted layer/table by name."""
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item(
+            {"series_id": "M-100", "series": "M"}, [],
+            vector_layers=["gems__ContactsAndFaults", "gems__MapUnitPolys"],
+            companion_tables=[{"label": "gems__DescriptionOfMapUnits",
+                               "columns": [{"name": "MapUnit"}, {"name": "Age"}]}],
+        )
+    a = item["assets"]
+    assert a["gems__ContactsAndFaults"]["href"].endswith("geolmap/vectors/M-100/gems__ContactsAndFaults.parquet")
+    assert a["gems__ContactsAndFaults"]["type"] == pubs_sink.PARQUET_MIME
+    assert a["gems__ContactsAndFaults"]["roles"] == ["data"]
+    assert "gems__MapUnitPolys" in a  # the 2nd vector_layers entry produced an asset too
+    assert a["gems__DescriptionOfMapUnits"]["href"].endswith(
+        "geolmap/vectors/M-100/gems__DescriptionOfMapUnits.parquet")
+    assert a["gems__DescriptionOfMapUnits"]["type"] == pubs_sink.PARQUET_MIME
+    assert a["gems__DescriptionOfMapUnits"]["roles"] == ["data"]
+    assert a["gems__DescriptionOfMapUnits"]["table:columns"] == [{"name": "MapUnit"}, {"name": "Age"}]
+    assert pubs_sink.stac.TABLE_EXT in item["stac_extensions"]
+
+
+def test_vector_layer_label_colliding_with_a_reserved_key_keeps_both_assets(capsys):
+    """ALL-5913 final-review must-fix: a bare shapefile can produce a label equal to a reserved
+    asset key — `units.shp` -> `units` would otherwise silently overwrite the canonical `units`
+    GeoParquet asset (`assets[label] = ...` clobbers in place, no trace). Both must survive under
+    distinct keys, and the collision must be visible on stderr rather than a link just vanishing.
+    """
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item(
+            {"series_id": "M-100", "series": "M"}, [],
+            has_units=True, vector_layers=["units"],
+        )
+    a = item["assets"]
+    # the canonical units GeoParquet asset is untouched
+    assert a["units"]["href"].endswith("geolmap/units/M-100/M-100.units.parquet")
+    assert a["units"]["title"] == "Geologic unit polygons (GeoParquet)"
+    # the extracted vector layer survives under a distinct key instead of being dropped
+    assert a["vector_units"]["href"].endswith("geolmap/vectors/M-100/units.parquet")
+    assert a["vector_units"]["type"] == pubs_sink.PARQUET_MIME
+    err = capsys.readouterr().err
+    assert "units" in err  # the collision was named on stderr, not silent
+
+
+def test_duplicate_vector_layer_labels_keep_both_assets(capsys):
+    """Two shapefiles sharing a basename (different sub-folders of the same GIS bundle) produce
+    the same extracted label twice. The second must not clobber the first — both assets survive
+    under distinct keys, even though (a vectors.py-side concern, out of scope here) they currently
+    point at the same object path."""
+    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
+         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
+        item = pubs_sink.build_item(
+            {"series_id": "M-100", "series": "M"}, [],
+            vector_layers=["roads", "roads"],
+        )
+    a = item["assets"]
+    assert a["roads"]["href"].endswith("geolmap/vectors/M-100/roads.parquet")
+    assert a["vector_roads"]["href"].endswith("geolmap/vectors/M-100/roads.parquet")
+    err = capsys.readouterr().err
+    assert "roads" in err
 
 
 def test_raster_collection_borrows_its_newest_scene_thumbnail(monkeypatch):

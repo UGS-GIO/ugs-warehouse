@@ -12,11 +12,13 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import urllib.parse
 
 from ..core import config, stac
 from . import counties, identity, topic
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
+from .vectors import VECTORS_PREFIX
 
 UGSPUB = identity.UGSPUB
 LANDING = "https://geology.utah.gov/publication-details/?pub="
@@ -149,12 +151,24 @@ def collection_group(p: dict) -> str:
     return identity.EXTERNAL_COLLECTION
 
 
+# Fixed-purpose keys build_item claims elsewhere in this function. Most are added to `assets`
+# before the vector-layer/companion-table loops run, so a live collision already shows up there —
+# but `fence_*` is added AFTER (see has_3d below), so it needs listing here too, or a layer named
+# e.g. "fence_mesh" would grab that bare key only to be silently overwritten once has_3d runs.
+_RESERVED_ASSET_KEYS = frozenset({
+    "publication", "cog", "thumbnail", "preview", "units",
+    "fence_polygons", "fence_lines", "fence_mesh",
+})
+
+
 def build_item(p: dict, attachments: list[dict], *,
                geom: dict | None = None, bbox: list[float] | None = None,
                fp_source: str | None = None,
                has_cog: bool = False, has_units: bool = False,
                has_thumb: bool = False, has_cover: bool = False,
                has_3d: bool = False, classes_3d: list[dict] | None = None,
+               vector_layers: list[str] | None = None,
+               companion_tables: list[dict] | None = None,
                override: dict | None = None,
                contents: list[dict] | None = None,
                mirrored: set[str] | None = None,
@@ -167,6 +181,12 @@ def build_item(p: dict, attachments: list[dict], *,
     `edition` = `{"version", "deprecated", "predecessor_href", "successor_href"}` (edition
     detection, a later task) — when given, stamps `version`/`deprecated` on the item (Versioning
     Indicators ext auto-declared by core.stac.build_item) and predecessor/successor-version links.
+
+    `vector_layers` and `companion_tables` mirror what pubs/vectors.py extracted to
+    `{VECTORS_PREFIX}/{series_id}/` (see its `_manifest.json`): one asset per spatial layer, keyed
+    by its label, and one per non-spatial GeMS companion table (DescriptionOfMapUnits, …), keyed by
+    its label with `table:columns` when the column list is known. Additive to the single hardcoded
+    `units` asset above, which stays for backward compatibility.
     """
     sid = (p.get("series_id") or "").strip()
     item_id = item_id_for(sid)
@@ -222,6 +242,48 @@ def build_item(p: dict, attachments: list[dict], *,
         assets["units"] = {
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
             "type": PARQUET_MIME, "title": "Geologic unit polygons (GeoParquet)", "roles": ["data"]}
+
+    def place_asset(label: str, asset: dict, prefix: str) -> None:
+        """Add a vector-layer/companion-table asset under `label`, without clobbering an existing
+        or reserved key.
+
+        GDB layers are namespaced (`{gstem}__{name}`) and collision-safe, but a bare shapefile
+        label (`units.shp` -> `units`) can land on a reserved key, an attachment key, or a sibling
+        layer's own label. `assets[label] = ...` would silently drop whichever asset lost the race
+        — a broken source-download link, or the canonical `units` GeoParquet gone with no trace. On
+        a collision the new asset moves to a namespaced key instead (deduped further with a numeric
+        suffix if THAT's also taken), so both survive, and the rename is warned to stderr since
+        nothing else would surface it.
+        """
+        key = label
+        if key in assets or key in _RESERVED_ASSET_KEYS:
+            key, n = f"{prefix}_{label}", 2
+            while key in assets or key in _RESERVED_ASSET_KEYS:
+                key = f"{prefix}_{label}_{n}"
+                n += 1
+            print(f"[pubs] {item_id}: extracted {prefix} layer {label!r} collides with an "
+                  f"existing asset key — keeping both, this one filed under {key!r}",
+                  file=sys.stderr)
+        assets[key] = asset
+
+    # Every layer pubs/vectors.py extracted from the GIS bundle (shapefiles + every GDB layer),
+    # one asset each, keyed by its label — same {VECTORS_PREFIX}/{series_id}/{label}.parquet the
+    # extractor uploaded to. Additive to `units` above: a series can carry both.
+    for label in vector_layers or []:
+        place_asset(label, {
+            "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
+            "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}, "vector")
+    # Non-spatial GeMS companion tables (DescriptionOfMapUnits, CorrelationOfMapUnits, ...) —
+    # same storage layout as the spatial layers above, plus `table:columns` when the extractor
+    # recorded the schema (declares the table extension below).
+    for t in companion_tables or []:
+        label = t["label"]
+        asset = {
+            "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
+            "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}
+        if t.get("columns"):
+            asset["table:columns"] = t["columns"]
+        place_asset(label, asset, "table")
     # Cloud-native 3D fence diagram (GeoParquet-3D polys/lines + glTF mesh), converted by pubs/threed
     # from the pub's CSA_3D gdb + .mapx. Presence-driven like the COG: the convert step writes the
     # artifacts, this stamps the assets. classification:classes (authored per-unit colors) rides in
@@ -264,6 +326,8 @@ def build_item(p: dict, attachments: list[dict], *,
         extensions.append(stac.ALTERNATE_ASSETS_EXT)  # mirrored file + publisher copy
     if has_3d and classes_3d:
         extensions.append(stac.CLASSIFICATION_EXT)  # per-unit authored colors for the 3D fence
+    if any("table:columns" in a for a in assets.values()):
+        extensions.append(stac.TABLE_EXT)  # companion-table column schema
 
     code = series_code(sid)
     group = collection_group(p)  # top-level: UGS catalog / mining-district files / external

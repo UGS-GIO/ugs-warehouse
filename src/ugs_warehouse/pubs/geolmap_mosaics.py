@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import subprocess
 import sys
 import tempfile
@@ -26,11 +25,11 @@ from datetime import datetime, timezone
 
 from ..core import config, gcs, stac
 from . import identity, source
+from .scale import DEFAULT_TIER, SCALE_LABEL, tier_of
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
 COLLECTION = "ugs-geologic-maps"
-SCALE_LABEL = {"24k": "1:24,000", "250k": "1:250,000", "500k": "1:500,000"}
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
 UTAH_GEOM = {"type": "Polygon", "coordinates": [[
@@ -39,7 +38,6 @@ UTAH_GEOM = {"type": "Polygon", "coordinates": [[
 # Scale tiers (denominator upper bounds), matching the old MD_* mosaics. A map's scale is binned by
 # its 1:N denominator: <=62.5k detail, <=350k intermediate, else overview.
 TIERS = ("24k", "250k", "500k")
-DEFAULT_TIER = "24k"          # COG present but scale unparseable/blank -> finest tier (+ logged)
 # Max web-mercator zoom per tier — the real fix for the build timeout. The COGs are 600 DPI, so
 # GDAL's native max zoom is ~z18; tiling a STATEWIDE mosaic to z18 is astronomically many tiles and
 # never finishes. Each tier is capped to the zoom its scale actually warrants (and where it's legible
@@ -53,40 +51,6 @@ def mosaic_object(tier: str) -> str:
     return f"{identity.MOSAIC_PREFIX}/geologic-maps-{tier}.pmtiles"
 
 
-def _denominator(raw: str) -> int | None:
-    """Free-text publication scale -> 1:N denominator, or None if unparseable.
-
-    Handles '1:24,000', '1:24 000', '1 inch = 200 feet' (x12), '1 inch = 1 mile' (x63360)."""
-    s = (raw or "").strip().lower().replace(",", "")
-    if not s:
-        return None
-    m = re.search(r"1\s*:\s*(\d[\d ]*\d|\d)", s)         # ratio; tolerate an internal space (24 000)
-    if m:
-        try:
-            return int(m.group(1).replace(" ", ""))
-        except ValueError:
-            return None
-    m = re.search(r"1\s*in(?:ch)?\s*=\s*([\d.]+)\s*feet", s)
-    if m:
-        return int(float(m.group(1)) * 12)
-    m = re.search(r"1\s*in(?:ch)?\s*=\s*([\d.]+)\s*mile", s)
-    if m:
-        return int(float(m.group(1)) * 63360)
-    return None
-
-
-def tier_of(raw: str) -> str | None:
-    """Scale-tier key for a publication scale, or None when unparseable (caller applies fallback)."""
-    d = _denominator(raw)
-    if d is None or d <= 0:
-        return None
-    if d <= 62_500:
-        return "24k"
-    if d <= 350_000:
-        return "250k"
-    return "500k"
-
-
 def _cog_sids() -> set[str]:
     """Series ids that have a harvested COG (geolmap/cogs/<sid>.cog.tif)."""
     pfx = identity.COG_PREFIX.rstrip("/") + "/"
@@ -98,20 +62,22 @@ def _cog_sids() -> set[str]:
     return out
 
 
-def _group_by_tier() -> dict[str, list[str]]:
-    """{tier -> [series_id, ...]} for every map that has a COG, binned by its publication scale."""
-    scale_by_sid = {(p.get("series_id") or "").strip().upper(): (p.get("pub_scale") or "")
-                    for p in source.read_pubs()}
+def _group_by_tier() -> tuple[dict[str, list[str]], dict[str, dict]]:
+    """{tier -> [series_id, ...]} for every map that has a COG, binned by its publication scale —
+    plus {UPPER series_id -> pub record}, so `_write_item` can build member links without a
+    second `source.read_pubs()` pass."""
+    pubs_by_sid = {(p.get("series_id") or "").strip().upper(): p for p in source.read_pubs()}
     groups: dict[str, list[str]] = {t: [] for t in TIERS}
     unparsed = 0
     for sid in sorted(_cog_sids()):
-        t = tier_of(scale_by_sid.get(sid, "")) or DEFAULT_TIER
-        if tier_of(scale_by_sid.get(sid, "")) is None:
+        raw_scale = (pubs_by_sid.get(sid, {}).get("pub_scale") or "")
+        t = tier_of(raw_scale) or DEFAULT_TIER
+        if tier_of(raw_scale) is None:
             unparsed += 1
         groups[t].append(sid)
     counts = ", ".join(f"{t}={len(groups[t])}" for t in TIERS)
     print(f"[mosaics] COGs grouped by scale: {counts}  (unparseable -> {DEFAULT_TIER}: {unparsed})")
-    return groups
+    return groups, pubs_by_sid
 
 
 def _vsigs(sid: str) -> str:
@@ -119,7 +85,7 @@ def _vsigs(sid: str) -> str:
     return f"/vsigs/{config.BUCKET}/{identity.COG_PREFIX}/{sid}.cog.tif"
 
 
-def build_tier(tier: str, sids: list[str], maxz: int | None = None) -> bool:
+def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is empty."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
@@ -168,35 +134,63 @@ def build_tier(tier: str, sids: list[str], maxz: int | None = None) -> bool:
         size_mb = os.path.getsize(pmtiles) // 1024 // 1024
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
-        _write_item(tier, len(sids), obj)
+        _write_item(tier, sids, obj, by_sid)
         print(f"[mosaics] {tier}: done -> {config.public_url(obj)}")
         return True
 
 
-def _write_item(tier: str, n_maps: int, obj: str) -> None:
+def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -> None:
     """STAC item for one mosaic tier. The raster PMTiles is a `visual` pmtiles ASSET (a vector layer
-    would be a web-map LINK instead) — that's how the viewer tells a raster mosaic from vector tiles."""
+    would be a web-map LINK instead) — that's how the viewer tells a raster mosaic from vector tiles.
+
+    The mosaic is derived by stitching the member COGs, so each member gets a STAC
+    `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
+    input data in the creation of this Entity") — to its real published item, routed through
+    `sink_stac.collection_group` rather than hardcoded to `ugs-publications` (a member can be
+    foreign-published `ugs-external` or a Mining District File `ugs-mining-district-files`, and
+    hardcoding would 404). A COG with no matching pub record has no item to link to and is skipped,
+    but still counts toward `ugs:map_count` (it's physically stitched into the raster). The reverse
+    map→mosaic direction is a generic `rel:"related"` on the pub side (sink_stac) — STAC defines no
+    reverse of `derived_from`."""
+    from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
+
     label = SCALE_LABEL.get(tier, tier)
+    n_maps = len(sids)
+    derived_from: list[dict] = []
+    for sid in sids:                      # sids are UPPER (from _cog_sids)
+        p = by_sid.get(sid)
+        if not p:
+            print(f"[mosaics] {tier}: COG {sid} has no pub record — stitched into the raster but not linked (orphan)", file=sys.stderr)
+            continue                      # COG present but no pub record -> no STAC item exists to link
+        real_sid = (p.get("series_id") or "").strip()
+        coll = f"{sink_stac.collection_group(p)}/{sink_stac.series_code(real_sid)}"
+        derived_from.append({
+            "rel": "derived_from",
+            "href": config.public_url(stac.item_object_path(coll, sink_stac.item_id_for(real_sid))),
+            "type": "application/geo+json",
+            "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
+
     item = stac.build_item(
         item_id=f"geologic-maps-{tier}",
         collection=COLLECTION,
         geometry=UTAH_GEOM, bbox=UTAH_BBOX,
         datetime_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         properties={"title": f"Utah Geologic Maps — {label} seamless mosaic",
-                    "ugs:scale": tier, "ugs:map_count": n_maps},
+                    "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic"},
         assets={"tiles": {"href": config.public_url(obj), "type": PMTILES_MIME,
                           "roles": ["visual"], "ugs:render": "raster",
                           "title": f"Raster PMTiles ({label})"}},
+        extra_links=derived_from,
         proj_epsg=4326,
     )
     stac.write_item(item)
 
 
 def build(scales: list[str], maxz: int | None = None) -> int:
-    groups = _group_by_tier()
+    groups, by_sid = _group_by_tier()
     built = 0
     for tier in scales:
-        if build_tier(tier, groups.get(tier, []), maxz=maxz):
+        if build_tier(tier, groups.get(tier, []), by_sid, maxz=maxz):
             built += 1
     if built:
         print("[mosaics] refreshing STAC catalog")

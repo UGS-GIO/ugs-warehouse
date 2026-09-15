@@ -191,7 +191,6 @@ def build_item(p: dict, attachments: list[dict], *,
     """
     sid = (p.get("series_id") or "").strip()
     item_id = item_id_for(sid)
-    scale_tier = tier_of(p.get("pub_scale"))
     yr = (p.get("pub_year") or "").strip()
     dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
 
@@ -318,10 +317,11 @@ def build_item(p: dict, attachments: list[dict], *,
                             "type": "application/geo+json"})
 
     # A COG map is stitched into its tier's seamless raster mosaic (geolmap_mosaics.py); a
-    # non-COG pub has no mosaic to belong to. Tier here mirrors `_group_by_tier`'s own fallback
-    # exactly, so an unparseable scale still links to DEFAULT_TIER even without the property below.
+    # non-COG pub has no mosaic to belong to. The tier is the mosaic's identity, not the pub's — the
+    # pub carries only its raw `ugs:scale` and reaches its tier through this link. Tier here mirrors
+    # `_group_by_tier`'s own fallback exactly, so an unparseable scale still links to DEFAULT_TIER.
     if has_cog:
-        link_tier = scale_tier or DEFAULT_TIER
+        link_tier = tier_of(p.get("pub_scale")) or DEFAULT_TIER
         extra_links.append({
             "rel": "related",
             "href": config.public_url(stac.item_object_path("ugs-geologic-maps",
@@ -366,7 +366,6 @@ def build_item(p: dict, attachments: list[dict], *,
             "ugs:pub_type": pub_type_of(p),
             **({"ugs:series": s} if (s := (p.get("series") or "").strip()) else {}),
             **({"ugs:scale": sc} if (sc := (p.get("pub_scale") or "").strip()) else {}),
-            **({"ugs:scale_tier": scale_tier} if scale_tier else {}),
             **({"ugs:author": au} if (au := (p.get("pub_author") or "").strip()) else {}),
             # Edition version/deprecated (Versioning Indicators ext, auto-declared by
             # core.stac.build_item from these two properties — see `edition` above).

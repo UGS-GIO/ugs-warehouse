@@ -18,9 +18,10 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     item = captured["item"]
     assert item["properties"]["ugs:topic"] == "geologic"
     assert item["properties"]["ugs:map_count"] == 3   # count still reflects every stitched COG
-    rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
-    hrefs = [lnk["href"] for lnk in rel]
-    assert len(rel) == 2  # ORPHAN-9 skipped
+    # The mosaic is derived from its member maps -> STAC provenance rel, not generic "related".
+    derived = [lnk for lnk in item["links"] if lnk["rel"] == "derived_from"]
+    hrefs = [lnk["href"] for lnk in derived]
+    assert len(derived) == 2  # ORPHAN-9 skipped
     assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/GQ-968.json") for h in hrefs)
     assert any(h.endswith(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1.json") for h in hrefs)
     assert "ORPHAN-9" in capsys.readouterr().err  # orphan COG must warn to stderr (fail loud)

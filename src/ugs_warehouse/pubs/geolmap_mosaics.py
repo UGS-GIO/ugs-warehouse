@@ -143,16 +143,20 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
     """STAC item for one mosaic tier. The raster PMTiles is a `visual` pmtiles ASSET (a vector layer
     would be a web-map LINK instead) — that's how the viewer tells a raster mosaic from vector tiles.
 
-    Each member COG gets a `rel:"related"` link back to its real published item, routed through
-    `sink_stac.collection_group` rather than hardcoded to `ugs-publications` — a member can be
-    foreign-published (`ugs-external`) or a Mining District File (`ugs-mining-district-files`), and
-    hardcoding would 404. A COG with no matching pub record has no item to link to and is skipped,
-    but still counts toward `ugs:map_count` (it's physically stitched into the raster)."""
+    The mosaic is derived by stitching the member COGs, so each member gets a STAC
+    `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
+    input data in the creation of this Entity") — to its real published item, routed through
+    `sink_stac.collection_group` rather than hardcoded to `ugs-publications` (a member can be
+    foreign-published `ugs-external` or a Mining District File `ugs-mining-district-files`, and
+    hardcoding would 404). A COG with no matching pub record has no item to link to and is skipped,
+    but still counts toward `ugs:map_count` (it's physically stitched into the raster). The reverse
+    map→mosaic direction is a generic `rel:"related"` on the pub side (sink_stac) — STAC defines no
+    reverse of `derived_from`."""
     from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
 
     label = SCALE_LABEL.get(tier, tier)
     n_maps = len(sids)
-    related: list[dict] = []
+    derived_from: list[dict] = []
     for sid in sids:                      # sids are UPPER (from _cog_sids)
         p = by_sid.get(sid)
         if not p:
@@ -160,8 +164,8 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
             continue                      # COG present but no pub record -> no STAC item exists to link
         real_sid = (p.get("series_id") or "").strip()
         coll = f"{sink_stac.collection_group(p)}/{sink_stac.series_code(real_sid)}"
-        related.append({
-            "rel": "related",
+        derived_from.append({
+            "rel": "derived_from",
             "href": config.public_url(stac.item_object_path(coll, sink_stac.item_id_for(real_sid))),
             "type": "application/geo+json",
             "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
@@ -176,7 +180,7 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
         assets={"tiles": {"href": config.public_url(obj), "type": PMTILES_MIME,
                           "roles": ["visual"], "ugs:render": "raster",
                           "title": f"Raster PMTiles ({label})"}},
-        extra_links=related,
+        extra_links=derived_from,
         proj_epsg=4326,
     )
     stac.write_item(item)

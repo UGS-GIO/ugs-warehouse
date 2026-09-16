@@ -189,3 +189,25 @@ def test_build_non_scoped_writes_catalog_item_and_refreshes():
     assert call.kwargs.get("suffix") == ""
     assert call.kwargs.get("write_stac_item") is True
     mock_refresh.assert_called_once()  # real builds refresh the catalog; scoped --quads builds don't
+
+
+def test_vrt_order_sorts_oldest_to_newest_so_the_newest_draws_on_top():
+    """ALL-5954 Clinton review, FIX 2: gdalbuildvrt gives the LAST source priority on overlap, so
+    the VRT input list must be ordered oldest->newest (newest last) — otherwise which edition draws
+    on top of an overlap is arbitrary (today: whatever order `sids` arrives in)."""
+    by_sid = {
+        "M-1": {"pub_year": "2022"},
+        "M-2": {"pub_year": "1971"},
+        "M-3": {"pub_year": "1990"},
+    }
+    assert gm._vrt_order(["M-1", "M-2", "M-3"], by_sid) == ["M-2", "M-3", "M-1"]
+
+
+def test_vrt_order_puts_unparseable_years_at_the_bottom_and_breaks_ties_by_sid():
+    by_sid = {
+        "M-1": {"pub_year": "2022"},
+        "M-2": {"pub_year": ""},       # blank -> 0 -> bottom
+        "M-3": {"pub_year": "n/a"},    # unparseable -> 0 -> bottom
+        "M-4": {"pub_year": "2022"},   # ties with M-1 -> broken by sid
+    }
+    assert gm._vrt_order(["M-1", "M-2", "M-3", "M-4"], by_sid) == ["M-2", "M-3", "M-1", "M-4"]

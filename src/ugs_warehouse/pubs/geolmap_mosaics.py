@@ -140,6 +140,17 @@ def _vsigs(sid: str) -> str:
     return f"/vsigs/{config.BUCKET}/{identity.COG_PREFIX}/{sid}.cog.tif"
 
 
+def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
+    """`sids` ordered ascending by `pub_year` (newest last). `gdalbuildvrt` gives the LAST source
+    priority on overlap, so this makes the newest edition draw on top for free — matters for
+    `--editions all` (every edition stacked) and the pub_year-tie case. An unparseable/missing year
+    sorts to 0 (bottom); ties (including two unparseable years) break on sid for a stable order."""
+    def _yr(s: str) -> int:
+        y = (by_sid.get(s, {}).get("pub_year") or "").strip()
+        return int(y) if len(y) == 4 and y.isdigit() else 0
+    return sorted(sids, key=lambda s: (_yr(s), s))
+
+
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
                 *, suffix: str = "", write_stac_item: bool = True) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
@@ -152,7 +163,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
     with tempfile.TemporaryDirectory() as tmp:
         listfile = os.path.join(tmp, "cogs.txt")
         with open(listfile, "w") as fh:
-            fh.write("\n".join(_vsigs(s) for s in sids) + "\n")
+            fh.write("\n".join(_vsigs(s) for s in _vrt_order(sids, by_sid)) + "\n")
         vrt = os.path.join(tmp, f"{tier}.vrt")
         mbtiles = os.path.join(tmp, f"{tier}.mbtiles")
         pmtiles = os.path.join(tmp, f"{tier}.pmtiles")

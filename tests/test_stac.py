@@ -693,6 +693,31 @@ def test_cog_map_links_to_its_scale_tier_mosaic():
     assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
 
 
+def test_deprecated_edition_drops_the_mosaic_related_link():
+    """A deprecated edition (superseded per the quad edition graph, e.g. GQ-852 superseded by
+    M-296DM) must NOT carry a `related` link into the mosaic — the `--editions current` default
+    drops superseded editions before stitching, so the link would otherwise claim membership in a
+    mosaic whose own `derived_from` omits it (catalog self-contradiction, ALL-5954 final review)."""
+    item = _build({"series_id": "GQ-852", "series": "GQ", "pub_scale": "1:24,000"},
+                  has_cog=True, edition={"deprecated": True, "version": "1971"})
+    assert not [lnk for lnk in item["links"]
+               if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+
+    # no edition info at all -> not known to be superseded -> still current -> keeps the link.
+    item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
+                  has_cog=True, edition=None)
+    rel = [lnk for lnk in item["links"]
+          if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+    assert len(rel) == 1
+
+    # explicitly current (not deprecated) -> keeps the link too.
+    item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
+                  has_cog=True, edition={"deprecated": False, "version": "2022"})
+    rel = [lnk for lnk in item["links"]
+          if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+    assert len(rel) == 1
+
+
 def test_pub_item_id_is_safe_in_a_path():
     """The id is a directory name and the tail of every link to the item, so a space in it made
     the item's own self link, its collection's item link and the ISO href unresolvable."""

@@ -97,21 +97,41 @@ def test_group_by_tier_quads_filter_restricts_membership():
     mock_graph.assert_not_called()  # editions=all -> no deprecation filtering even with --quads
 
 
-def test_mosaic_object_and_write_item_honor_optional_suffix():
-    """The scoped/--quads demo build writes to a `-test-{edition_mode}` suffixed object + item id
-    (e.g. `-test-current`/`-test-all`) so a current-only demo and an all-editions demo of the same
-    quads can coexist and neither clobbers the real tier; the default (no suffix) call sites are
-    unaffected."""
+def test_mosaic_object_honors_optional_suffix_and_build_wires_write_stac_item():
+    """`mosaic_object` still takes an optional `-test-{edition_mode}` suffix (e.g. `-test-current`/
+    `-test-all`) routing the scoped/--quads demo build to its own scratch object, never the real
+    tier. But that scoped build must write NO STAC item (ALL-5954 final review must-fix:
+    `_write_item` no longer takes a suffix at all — an uncataloged scoped item would otherwise leak
+    into the live collection the next time a real run's `refresh_catalog()` lists GCS). `build()`
+    wires `write_stac_item=False` into `build_tier` for a scoped run and `write_stac_item=True`
+    (the default) for a real one, and only refreshes the catalog on the real (non-scoped) path."""
     assert gm.mosaic_object("24k") == f"{identity.MOSAIC_PREFIX}/geologic-maps-24k.pmtiles"
     assert gm.mosaic_object("24k", suffix="-test-current") == (
         f"{identity.MOSAIC_PREFIX}/geologic-maps-24k-test-current.pmtiles")
 
-    by_sid = {"GQ-968": {"series_id": "GQ-968", "pub_publisher": "USGS", "pub_name": "Foo"}}
-    captured = {}
-    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
-        gm._write_item("24k", ["GQ-968"], gm.mosaic_object("24k", suffix="-test-current"), by_sid,
-                        suffix="-test-current")
-    assert captured["item"]["id"] == "geologic-maps-24k-test-current"
+    by_sid = {"M-296DM": {"series_id": "M-296DM", "pub_publisher": "USGS", "pub_name": "Foo"}}
+
+    # scoped (--quads) build: build_tier gets the scoped suffix AND write_stac_item=False, and the
+    # catalog is never refreshed.
+    with patch.object(gm, "_group_by_tier", return_value=({"24k": ["M-296DM"]}, by_sid)), \
+         patch.object(gm, "build_tier", return_value=True) as mock_build_tier, \
+         patch.object(gm.stac, "refresh_catalog") as mock_refresh:
+        built = gm.build(["24k"], quads="Park City East Quad", edition_mode="current")
+    assert built == 1
+    mock_build_tier.assert_called_once()
+    assert mock_build_tier.call_args.kwargs.get("suffix") == "-test-current"
+    assert mock_build_tier.call_args.kwargs.get("write_stac_item") is False
+    mock_refresh.assert_not_called()
+
+    # non-scoped (real) build: no suffix, write_stac_item=True, catalog IS refreshed.
+    with patch.object(gm, "_group_by_tier", return_value=({"24k": ["M-296DM"]}, by_sid)), \
+         patch.object(gm, "build_tier", return_value=True) as mock_build_tier2, \
+         patch.object(gm.stac, "refresh_catalog") as mock_refresh2:
+        built2 = gm.build(["24k"])
+    assert built2 == 1
+    assert mock_build_tier2.call_args.kwargs.get("suffix") == ""
+    assert mock_build_tier2.call_args.kwargs.get("write_stac_item") is True
+    mock_refresh2.assert_called_once()
 
 
 def test_build_composes_deprecation_and_quads_filters_with_edition_scoped_suffix():

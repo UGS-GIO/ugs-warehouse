@@ -15,9 +15,12 @@ this step adds NO further loss. If the harvest later switches to lossless COGs, 
 By default (`--editions current`) a superseded edition of a quad (per `editions.py`'s edition
 graph) is dropped before the VRT — the mosaic shows one current map per quad. `--editions all`
 reproduces the old behavior (every COG, every edition stacked). `--quads` scopes a build to named
-quads and writes it to `*-test-current`/`*-test-all` items/objects (the edition mode is baked into
-the suffix), so a current-only demo and an all-editions demo of the SAME quads can be built side
-by side for comparison without either clobbering the other or the real tier:
+quads and writes ONLY a scratch `*-test-current`/`*-test-all` pmtiles object (the edition mode is
+baked into the suffix) — NO catalog item, so a scoped run can never leak into the live collection
+via a later real run's `refresh_catalog()` GCS listing. Inspect the scratch pmtiles directly (e.g.
+load it in a MapLibre/pmtiles viewer) via the URL the build prints. A current-only demo and an
+all-editions demo of the SAME quads can be built side by side for comparison without either
+clobbering the other or the real tier:
 
     python -m ugs_warehouse.pubs.geolmap_mosaics --scale all
     python -m ugs_warehouse.pubs.geolmap_mosaics --scale 24k --editions all
@@ -138,10 +141,11 @@ def _vsigs(sid: str) -> str:
 
 
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
-                *, suffix: str = "") -> bool:
+                *, suffix: str = "", write_stac_item: bool = True) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
-    empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object +
-    item, never the real tier — see `mosaic_object`/`_write_item`."""
+    empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object,
+    never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
+    uploads the scratch pmtiles for direct inspection but writes NO STAC item — see `build()`."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
@@ -189,13 +193,16 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         size_mb = os.path.getsize(pmtiles) // 1024 // 1024
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
-        _write_item(tier, sids, obj, by_sid, suffix=suffix)
+        if write_stac_item:
+            _write_item(tier, sids, obj, by_sid)
+        else:
+            print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
+                  f"inspect tiles directly at {config.public_url(obj)}")
         print(f"[mosaics] {tier}: done -> {config.public_url(obj)}")
         return True
 
 
-def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict],
-                 *, suffix: str = "") -> None:
+def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -> None:
     """STAC item for one mosaic tier. The raster PMTiles is a `visual` pmtiles ASSET (a vector layer
     would be a web-map LINK instead) — that's how the viewer tells a raster mosaic from vector tiles.
 
@@ -227,7 +234,7 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict],
             "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
 
     item = stac.build_item(
-        item_id=f"geologic-maps-{tier}{suffix}",
+        item_id=f"geologic-maps-{tier}",
         collection=COLLECTION,
         geometry=UTAH_GEOM, bbox=UTAH_BBOX,
         datetime_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
@@ -245,18 +252,20 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict],
 def build(scales: list[str], maxz: int | None = None,
           edition_mode: str = "current", quads: str | None = None) -> int:
     """`edition_mode` ("current"|"all") and `quads` (comma-separated quad names) are threaded
-    through to `_group_by_tier`. A `--quads` build is a scoped demo/scratch run: it writes to
-    `-test-{edition_mode}`-suffixed items/objects (never the real tier) and skips the catalog
-    refresh — the suffix carries the edition mode so a current-only demo and an all-editions demo
-    of the SAME quads can coexist instead of clobbering each other."""
+    through to `_group_by_tier`. A `--quads` build is a scoped demo/scratch run: it writes ONLY a
+    `-test-{edition_mode}`-suffixed scratch pmtiles object (never the real tier), writes NO STAC
+    item, and skips the catalog refresh — the suffix carries the edition mode so a current-only
+    demo and an all-editions demo of the SAME quads can coexist instead of clobbering each other."""
     groups, by_sid = _group_by_tier(edition_mode=edition_mode, quads=quads)
     suffix = f"-test-{edition_mode}" if quads else ""
+    write_stac_item = not bool(quads)
     if quads:
         print(f"[mosaics] SCOPED build (--quads={quads!r}, --editions={edition_mode}) -> "
               f"writing '*{suffix}' items only, real tiers untouched")
     built = 0
     for tier in scales:
-        if build_tier(tier, groups.get(tier, []), by_sid, maxz=maxz, suffix=suffix):
+        if build_tier(tier, groups.get(tier, []), by_sid, maxz=maxz,
+                      suffix=suffix, write_stac_item=write_stac_item):
             built += 1
     if built and not quads:
         print("[mosaics] refreshing STAC catalog")
@@ -277,8 +286,9 @@ def main() -> int:
                          "all reproduces the legacy behavior (every COG, every edition).")
     ap.add_argument("--quads", default=None,
                     help="Comma-separated quad names (as in the footprints quad_name) to restrict "
-                         "members to — a scoped demo/scratch build; writes to *-test-current or "
-                         "*-test-all (matching --editions) instead of the real tier.")
+                         "members to — a scoped demo/scratch build; writes ONLY a scratch "
+                         "*-test-current or *-test-all pmtiles (matching --editions), no STAC "
+                         "item, and never touches the real tier — inspect via the printed URL.")
     args = ap.parse_args()
     if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
         ap.error("--quads contained no usable quad names")

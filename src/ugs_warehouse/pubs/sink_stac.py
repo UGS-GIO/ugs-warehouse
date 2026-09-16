@@ -320,7 +320,7 @@ def build_item(p: dict, attachments: list[dict], *,
     # non-COG pub has no mosaic to belong to. The tier is the mosaic's identity, not the pub's — the
     # pub carries only its raw `ugs:scale` and reaches its tier through this link. Tier here mirrors
     # `_group_by_tier`'s own fallback exactly, so an unparseable scale still links to DEFAULT_TIER.
-    if has_cog:
+    if has_cog and not ed.get("deprecated"):
         link_tier = tier_of(p.get("pub_scale")) or DEFAULT_TIER
         extra_links.append({
             "rel": "related",

@@ -103,24 +103,35 @@ def _link_group(members: list[dict], out: dict[str, dict], *, quad: str, tier: s
 
 
 def quad_by_series() -> dict[str, str]:
-    """{UPPER series_id -> quad_name} from the staged footprints parquet (geolmap/footprints/
-    footprints.parquet, built by pubs.footprints). Fail loud if it's absent — without it edition
+    """{UPPER series_id -> quad_name} from the staged footprints parquet (built by pubs.footprints).
+    Read via gcs.get_bytes (obstore/ADC — the repo's GCS IO path, no httpfs) + a local duckdb read,
+    matching footprints.read_footprints. Fail loud if the parquet is absent — without it edition
     detection can't group quads (the silent-no-op bug this fixes)."""
+    import os
+    import tempfile
+
     import duckdb  # base dep; kept function-level to preserve editions.py's import-cheapness
 
-    from . import identity
+    from ..core import gcs
+    from . import footprints
 
-    url = config.public_url(f"{identity.FOOTPRINTS_PREFIX}/footprints.parquet")
     try:
-        con = duckdb.connect()
-        con.execute("INSTALL httpfs; LOAD httpfs;")
-        rows = con.execute(
-            f"SELECT upper(series_id), quad_name FROM read_parquet('{url}') "
-            "WHERE coalesce(quad_name,'') <> ''").fetchall()
+        data = gcs.get_bytes(footprints.PARQUET_OBJECT)  # obstore; raises if absent
     except Exception as e:  # noqa: BLE001 — surface it, don't silently degrade
         raise RuntimeError(
-            f"[editions] staged footprints parquet unreadable at {url} ({e}); "
-            "run `python -m ugs_warehouse.pubs.footprints` first") from e
+            f"[editions] staged footprints parquet gs://.../{footprints.PARQUET_OBJECT} unreadable "
+            f"({e}); run `python -m ugs_warehouse.pubs.footprints` first") from e
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)
+    try:
+        tmp.write(data)
+        tmp.close()
+        con = duckdb.connect()
+        rows = con.execute(
+            "SELECT upper(series_id), quad_name FROM read_parquet(?) "
+            "WHERE coalesce(quad_name, '') <> ''", [tmp.name]).fetchall()
+    finally:
+        os.unlink(tmp.name)
     return {str(s): str(q) for s, q in rows if s and q}
 
 

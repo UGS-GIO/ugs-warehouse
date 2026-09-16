@@ -27,7 +27,7 @@ Conservative by design (never mislabel a published record):
     cleanly-ordered siblings in the same group still link normally.
 An entry absent from the returned graph carries no edition information at all: `ingest.py` looks
 it up with `graph.get(series_id)`, gets `None`, and passes `edition=None` — `sink_stac.build_item`
-then stamps no `version`/`deprecated`/predecessor/successor for it.
+then stamps no `version`/`deprecated`/predecessor/successor/latest for it.
 
 Import-cheap on purpose: this module (and `geolmap_mosaics`, and `sink_stac`, imported lazily
 below) keeps every rasterio/geopandas/pyogrio/shapely/pygltflib import inside function bodies,
@@ -90,15 +90,18 @@ def _link_group(members: list[dict], out: dict[str, dict], *, quad: str, tier: s
 
     ordered.sort(key=lambda t: t[0])
     n = len(ordered)
+    latest_p = ordered[-1][1] if ordered else None
     for i, (yr, p) in enumerate(ordered):
         sid = (p.get("series_id") or "").strip()
         older = ordered[i - 1][1] if i > 0 else None
         newer = ordered[i + 1][1] if i + 1 < n else None
+        is_latest = p is latest_p
         out[sid] = {
             "version": yr,
             "deprecated": newer is not None,
             "predecessor_href": _item_href(older) if older else None,
             "successor_href": _item_href(newer) if newer else None,
+            "latest_href": None if is_latest else _item_href(latest_p),
         }
 
 
@@ -138,8 +141,8 @@ def quad_by_series() -> dict[str, str]:
 
 def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None) -> dict[str, dict]:
     """{series_id -> edition dict} for every quad map placed unambiguously in a (quad, scale)
-    group — `{"version", "deprecated", "predecessor_href", "successor_href"}`, the shape
-    `sink_stac.build_item(..., edition=...)` consumes. A pub not covered by any rule below is
+    group — `{"version", "deprecated", "predecessor_href", "successor_href", "latest_href"}`, the
+    shape `sink_stac.build_item(..., edition=...)` consumes. A pub not covered by any rule below is
     simply absent from the result (see the module docstring).
 
     `quad_by_sid` (`{UPPER series_id: quad_name}`) is the footprints-sourced quad map; defaults to

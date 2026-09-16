@@ -762,6 +762,31 @@ def test_deprecated_edition_drops_the_mosaic_related_link():
     assert len(rel) == 1
 
 
+def test_deprecated_edition_emits_a_latest_version_link():
+    """ALL-5954 Clinton review, FIX 3: a deprecated item must link forward to the CURRENT edition
+    (not just its immediate successor) via the Versioning Indicators `latest-version` rel — so a
+    reader landing on an old edition can jump straight to the newest one."""
+    edition = {
+        "version": "1971", "deprecated": True,
+        "predecessor_href": None,
+        "successor_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
+                          "ugs-publications/OFR/OFR-677/OFR-677.json",
+        "latest_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
+                       "ugs-publications/M/M-296DM/M-296DM.json",
+    }
+    item = _build({"series_id": "GQ-852", "pub_name": "Old Ed", "series": "GQ", "pub_year": "1971"},
+                  edition=edition)
+    latest = [lnk for lnk in item["links"] if lnk["rel"] == "latest-version"]
+    assert len(latest) == 1
+    assert latest[0]["href"].endswith("/M-296DM/M-296DM.json")
+
+    # the current (latest) edition itself carries no latest-version link (no self-link).
+    item = _build({"series_id": "M-296DM", "pub_name": "New Ed", "series": "M", "pub_year": "2022"},
+                  edition={"version": "2022", "deprecated": False, "predecessor_href": None,
+                          "successor_href": None, "latest_href": None})
+    assert not [lnk for lnk in item["links"] if lnk["rel"] == "latest-version"]
+
+
 def test_pub_item_id_is_safe_in_a_path():
     """The id is a directory name and the tail of every link to the item, so a space in it made
     the item's own self link, its collection's item link and the ISO href unresolvable."""

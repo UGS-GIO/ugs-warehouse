@@ -17,12 +17,16 @@ def test_same_quad_same_scale_links_and_deprecates_including_a_dm_variant():
     assert g["M-100"]["deprecated"] is True
     assert g["M-100"]["predecessor_href"] is None
     assert g["M-100"]["successor_href"].endswith("/M-100DM/M-100DM.json")
+    # not the latest edition -> latest_href points at the newest member (M-100DM).
+    assert g["M-100"]["latest_href"].endswith("/M-100DM/M-100DM.json")
 
     # a DM edition is its own publication, not collapsed into its base series_id.
     assert g["M-100DM"]["version"] == "2005"
     assert g["M-100DM"]["deprecated"] is False
     assert g["M-100DM"]["predecessor_href"].endswith("/M-100/M-100.json")
     assert g["M-100DM"]["successor_href"] is None
+    # the latest edition never links to itself.
+    assert g["M-100DM"]["latest_href"] is None
 
     # a lone map for its quad: present (so its own `version` still stamps), never linked.
     assert g["OFR-9"]["deprecated"] is False

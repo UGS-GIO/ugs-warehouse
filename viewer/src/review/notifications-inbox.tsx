@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { type Notification, listNotifications, markNotificationsSeen } from "./comments";
 
 // Review deploy only (callers gate on IS_REVIEW). Both the inbox and the nav bell read the same
@@ -6,7 +7,7 @@ import { type Notification, listNotifications, markNotificationsSeen } from "./c
 // dev) → treated as "not configured" and both render nothing.
 const useNotifications = () =>
   useQuery({
-    queryKey: ["notifications"],
+    queryKey: qk.notifications,
     queryFn: () => listNotifications(),
     retry: false,
     refetchInterval: 60_000,  // gentle poll so mentions/replies show up without a manual refresh
@@ -53,7 +54,7 @@ export function NotificationsInbox({ onOpen }: { onOpen: (itemId: string) => voi
   const { data: items = [], isLoading, error } = useNotifications();
   const seen = useMutation({
     mutationFn: (ids?: number[]) => markNotificationsSeen(ids),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["notifications"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.notifications }),
   });
 
   if (isNotConfigured(error)) return null;

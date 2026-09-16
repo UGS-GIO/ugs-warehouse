@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evictionVictim, sanitize, shapefileFieldChecks } from "./download";
+import { evictionVictim, filterClause, sanitize, shapefileFieldChecks } from "./download";
 
 describe("sanitize", () => {
   it("keeps safe bigints as numbers", () => {
@@ -51,6 +51,31 @@ describe("evictionVictim", () => {
   });
   it("returns undefined when every handle is in use (caller runs over cap)", () => {
     expect(evictionVictim(reg(), new Map([["q1", 1], ["q2", 1], ["q3", 1]]))).toBeUndefined();
+  });
+});
+
+describe("filterClause", () => {
+  it("builds an exact-match predicate for the related-table join (relate_id = value)", () => {
+    // The clicked feature's join value drives the related lookup: an equality, not a range/contains.
+    expect(filterClause({ col: "relate_id", kind: "exact", value: "FL-3" }))
+      .toBe(`CAST("relate_id" AS VARCHAR) = 'FL-3'`);
+  });
+
+  it("escapes a single quote in the exact value (no SQL injection via the join key)", () => {
+    expect(filterClause({ col: "relate_id", kind: "exact", value: "O'Brien" }))
+      .toBe(`CAST("relate_id" AS VARCHAR) = 'O''Brien'`);
+  });
+
+  it("compares as text so a numeric join key still matches", () => {
+    expect(filterClause({ col: "flhhazardunit", kind: "exact", value: "42" }))
+      .toBe(`CAST("flhhazardunit" AS VARCHAR) = '42'`);
+  });
+
+  it("still builds range and contains predicates", () => {
+    expect(filterClause({ col: "td", kind: "number", min: 10, max: 20 }))
+      .toBe(`"td" >= 10 AND "td" <= 20`);
+    expect(filterClause({ col: "name", kind: "text", contains: "fault" }))
+      .toBe(`CAST("name" AS VARCHAR) ILIKE '%fault%'`);
   });
 });
 

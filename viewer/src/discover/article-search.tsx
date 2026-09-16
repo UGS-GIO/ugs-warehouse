@@ -1,6 +1,7 @@
 // Survey Notes article search — the corpus fetch and the article result row, extracted from the
 // standalone /search page so Discover can render article hits beside its catalog results.
 import { useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 
 import type { Article, Hit } from "./search-index";
 
@@ -14,7 +15,7 @@ const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export function useCorpus(enabled: boolean) {
   return useQuery({
-    queryKey: ["article-corpus", CORPUS_URL],
+    queryKey: qk.articleCorpus(CORPUS_URL),
     enabled, staleTime: Infinity, retry: false,
     queryFn: async () => {
       const r = await fetch(CORPUS_URL);

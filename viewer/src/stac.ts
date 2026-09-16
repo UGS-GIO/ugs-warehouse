@@ -2,6 +2,7 @@
 // -> items) on the CDN. No fetch useEffects; components call these hooks. JSON items stay
 // the source of truth (the warehouse writes them via core/stac).
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 
 // Import guard: the pure item view-model (item-view.ts) reuses this module's asset helpers and is
 // unit-tested in the node env, where there is no `location`. Read it through this shim so the module
@@ -94,6 +95,18 @@ export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
   Object.values(d?.assets ?? {})
     .filter((a) => !a.roles?.includes("related"))
     .flatMap((a) => a["ugs:foreign_keys"] ?? []);
+
+// Click-join descriptors for a clicked feature of THIS layer: each related (aspatial child) asset
+// carrying an FK back to this layer, flattened to the single-column equality we can run — the
+// related row's childField = the clicked feature's parentField value. Composite (multi-column) keys
+// are skipped: a partial join would return wrong rows, so surface nothing rather than bad data.
+export type RelatedJoin = { key: string; title: string; href: string; childField: string; parentField: string };
+export const relatedJoins = (d: StacDoc | undefined): RelatedJoin[] =>
+  relatedAssets(d).flatMap(({ key, asset }) =>
+    (asset["ugs:foreign_keys"] ?? [])
+      .filter((fk) => fk.fields.length === 1 && fk.reference.fields.length === 1)
+      .map((fk) => ({ key, title: asset.title ?? key, href: asset.href,
+                      childField: fk.fields[0], parentField: fk.reference.fields[0] })));
 
 // Per-asset usage hint (STAC `description`) — the warehouse's "display vs query vs download"
 // guidance, stamped in core/stac so one item says which asset/endpoint to use (#280). Returns only
@@ -283,10 +296,9 @@ async function fetchJson(url: string): Promise<StacDoc> {
 /** Fetch + cache any STAC doc by URL. `enabled` gates on a selected url. */
 export function useStac(url?: string) {
   return useQuery({
-    queryKey: ["stac", url],
+    queryKey: qk.stac(url),
     queryFn: () => fetchJson(url as string),
     enabled: Boolean(url),
-    staleTime: 5 * 60_000,
   });
 }
 
@@ -295,9 +307,8 @@ export function useStac(url?: string) {
 export function useDocs(urls: string[]) {
   const results = useQueries({
     queries: urls.map((u) => ({
-      queryKey: ["stac", u],
+      queryKey: qk.stac(u),
       queryFn: () => fetchJson(u),
-      staleTime: 5 * 60_000,
     })),
   });
   return {
@@ -316,10 +327,9 @@ async function fetchStyleLayers(url: string, signal?: AbortSignal): Promise<Reco
 }
 export function useStyleLayers(styleUrl?: string): Record<string, unknown>[] | null {
   const { data } = useQuery({
-    queryKey: ["gl-style-layers", styleUrl],
+    queryKey: qk.styleLayers(styleUrl),
     queryFn: ({ signal }) => fetchStyleLayers(styleUrl as string, signal),
     enabled: Boolean(styleUrl),
-    staleTime: 5 * 60_000,
   });
   return styleUrl ? (data ?? null) : null;
 }
@@ -355,7 +365,7 @@ async function fetchStylesManifest(url: string, signal?: AbortSignal): Promise<M
 export function useLiveLegend(styleUrl: string | undefined, itemId: string | undefined, renderId: string | undefined) {
   const url = styleUrl ? manifestUrlOf(styleUrl) : undefined;
   const { data } = useQuery({
-    queryKey: ["styles-manifest", url],
+    queryKey: qk.stylesManifest(url),
     queryFn: ({ signal }) => fetchStylesManifest(url as string, signal),
     enabled: Boolean(url),
     staleTime: 60_000,
@@ -370,9 +380,8 @@ export function useStyleLayersFor(layers: { id: string; styleUrl?: string }[]): 
   const withStyle = layers.filter((l) => l.styleUrl);
   const results = useQueries({
     queries: withStyle.map((l) => ({
-      queryKey: ["gl-style-layers", l.styleUrl],
+      queryKey: qk.styleLayers(l.styleUrl),
       queryFn: ({ signal }: { signal?: AbortSignal }) => fetchStyleLayers(l.styleUrl as string, signal),
-      staleTime: 5 * 60_000,
     })),
   });
   const out: Record<string, Record<string, unknown>[]> = {};
@@ -395,7 +404,7 @@ export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [numb
   const urls = [...new Set(hrefs.filter((h): h is string => Boolean(h)))];
   const results = useQueries({
     queries: urls.map((href) => ({
-      queryKey: ["cog-bbox", href],
+      queryKey: qk.cogBbox(href),
       queryFn: () => fetchCogBox(href),
       staleTime: Infinity,
       retry: 1,
@@ -433,9 +442,8 @@ export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL):
 export function useIndexes(collections: { id: string; href: string }[]) {
   const results = useQueries({
     queries: collections.map((c) => ({
-      queryKey: ["index", c.href],
+      queryKey: qk.index(c.href),
       queryFn: () => fetchJson(indexUrlFor(c.href)) as Promise<unknown>,
-      staleTime: 5 * 60_000,
       retry: false,
       enabled: hasItemsIndex(c.href),
     })),

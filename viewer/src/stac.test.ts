@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex } from "./stac";
+import { assetUsages, cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex, relatedJoins } from "./stac";
+import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 
@@ -93,5 +94,47 @@ describe("isDrawableCog", () => {
   it("treats an item that states no projection as drawable", () => {
     const plain = { assets: { cog: { href: "https://x/p.cog.tif", type: COG, roles: ["data"] } } };
     expect(isDrawableCog(plain.assets.cog, plain)).toBe(true);
+  });
+});
+
+describe("relatedJoins", () => {
+  // Real shape (hazards_floodanddebrisflow): the related child asset carries the FK back to the
+  // clicked parent — child.relate_id = parent.flhhazardunit.
+  const doc: StacDoc = {
+    assets: {
+      data: { href: "https://x/parent.parquet", roles: ["data"] },
+      hazards_unitdescriptions: {
+        href: "https://x/unitdescriptions.parquet", title: "Unit Descriptions", roles: ["data", "related"],
+        "ugs:foreign_keys": [{ fields: ["relate_id"], reference: { resource: "hazards_floodanddebrisflow", fields: ["flhhazardunit"] } }],
+      },
+    },
+  };
+
+  it("resolves a related asset's FK into a click-join descriptor (child field, parent field)", () => {
+    expect(relatedJoins(doc)).toEqual([{
+      key: "hazards_unitdescriptions", title: "Unit Descriptions", href: "https://x/unitdescriptions.parquet",
+      childField: "relate_id", parentField: "flhhazardunit",
+    }]);
+  });
+
+  it("falls back to the asset key when the related asset has no title", () => {
+    const noTitle: StacDoc = { assets: { child: {
+      href: "https://x/c.parquet", roles: ["related"],
+      "ugs:foreign_keys": [{ fields: ["fk"], reference: { resource: "p", fields: ["pk"] } }],
+    } } };
+    expect(relatedJoins(noTitle)[0].title).toBe("child");
+  });
+
+  it("skips composite (multi-column) keys — a partial join would be wrong data (not yet supported)", () => {
+    const composite: StacDoc = { assets: { child: {
+      href: "https://x/c.parquet", roles: ["related"],
+      "ugs:foreign_keys": [{ fields: ["a", "b"], reference: { resource: "p", fields: ["x", "y"] } }],
+    } } };
+    expect(relatedJoins(composite)).toEqual([]);
+  });
+
+  it("is empty when there are no related assets", () => {
+    expect(relatedJoins({ assets: { data: { href: "https://x/p.parquet", roles: ["data"] } } })).toEqual([]);
+    expect(relatedJoins(undefined)).toEqual([]);
   });
 });

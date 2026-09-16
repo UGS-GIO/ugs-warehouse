@@ -1,9 +1,13 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDebounced } from "@/lib/use-debounced";
+import { usePerItem } from "@/lib/use-per-item";
 
 import { CommentsPanel } from "@/review/comments-panel";
+import { buildFilters } from "./build-filters";
 import type { ColFilter } from "./download";
 import { PAGE_SIZES } from "./paging";
 import type { FocusSel } from "@/map/map-model";
@@ -25,12 +29,15 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
 // so only the visible window renders. Capped so a pathological table can't OOM the tab.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields }: {
+export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
   rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
   summaryFields?: readonly string[];   // item's `ugs:summary_fields` — leads the record cards
+  presetFilter?: ColFilter;  // exact-match filter ANDed ahead of the user's own filters (e.g. clicked feature's FK)
+  onClearPreset?: () => void;  // clears presetFilter — wired to the chip's ✕
+  fill?: boolean;  // fill the parent's height (docked contexts) instead of the fixed h-112
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
   // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
@@ -45,7 +52,6 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     if (next.has(pk)) next.delete(pk); else next.add(pk);
     return next;
   });
-  const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZE);
   const [showAll, setShowAll] = useState(false);  // "All" rows in one virtualized page
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -58,55 +64,43 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [search, setSearch] = useState("");
   // feature_id of the row picked from the map (or a table click) — highlighted in the table.
   const [highlightId, setHighlightId] = useState<number | null>(null);
-  // Raw per-column filter inputs (strings, as typed) → debounced into `applied` (SQL-ready).
   const [draft, setDraft] = useState<Record<string, { min?: string; max?: string; text?: string }>>({});
-  const [applied, setApplied] = useState<{ search: string; filters: ColFilter[] }>({ search: "", filters: [] });
   const [colFilters, setColFilters] = useState(false);
+  const settledSearch = useDebounced(search);
+  const settledDraft = useDebounced(draft);
+  // From the schema, not a page: a page is fetched WITH these filters, so that would be circular.
+  const { data: types } = useQuery({
+    queryKey: qk.parquetTypes(href),
+    queryFn: async () => (await import("./download")).columnTypes(href),
+    staleTime: Infinity,
+  });
+  const applied = useMemo(
+    () => ({ search: settledSearch, filters: buildFilters(settledDraft, types) }),
+    [settledSearch, settledDraft, types],
+  );
 
   const sort = sorting[0];
   const filterKey = JSON.stringify(applied.filters);
+  const presetKey = JSON.stringify(presetFilter);
+  // Scoped to what the rows are OF, so a change reads back as page 0 in the same render — one fetch.
+  const [pageIndex, setPageIndex] = usePerItem(`${presetKey}|${filterKey}|${applied.search}`, 0);
   // The query key IS the dependency list, so a stale response can no longer land after a newer one
   // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
   // screen while the next one loads, so paging does not blank the table between fetches.
   const { data: page, error, isFetching: loading } = useQuery({
-    queryKey: ["parquet-page", href, pageIndex, pageSize, showAll,
-               sort?.id, sort?.desc, applied.search, filterKey],
+    queryKey: qk.parquetPage(href, [pageIndex, pageSize, showAll,
+                              sort?.id, sort?.desc, applied.search, filterKey, presetKey]),
     queryFn: async () => {
       const { queryParquet } = await import("./download");
       return queryParquet(href, {
         limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
-        orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
+        orderBy: sort?.id, desc: sort?.desc, search: applied.search,
+        filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
       });
     },
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,   // paging back is served from cache; the parquet is immutable per ingest
+    placeholderData: keepPreviousData,   // paging back is served from cache
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
-
-  // Debounce search + per-column filters into the applied query; a filter/search change resets to
-  // page 1. Numeric columns → range (min/max), others → substring (kind from the loaded types).
-  // `types` is read via a ref, NOT a dep: it's a fresh object on every page fetch, so depending on
-  // it would re-run this (→ setPageIndex(0)) every time you advance a page — snapping back to 1.
-  const typesRef = useRef(page?.types);
-  typesRef.current = page?.types;
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const filters: ColFilter[] = [];
-      for (const [col, d] of Object.entries(draft)) {
-        const kind = typesRef.current?.[col] ?? "text";
-        if (kind === "number") {
-          const min = d.min?.trim() ? Number(d.min) : undefined;
-          const max = d.max?.trim() ? Number(d.max) : undefined;
-          if (Number.isFinite(min) || Number.isFinite(max)) filters.push({ col, kind, min, max });
-        } else if (d.text?.trim()) {
-          filters.push({ col, kind: "text", contains: d.text });
-        }
-      }
-      setApplied({ search, filters });
-      setPageIndex(0);
-    }, 300);
-    return () => clearTimeout(t);
-  }, [search, draft]);
 
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
@@ -177,8 +171,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // Map-feature click → highlight + fly to the real feature (looked up by id, independent of the
   // current filter) AND page the table to it under the current sort/filter. Paging is skipped if
   // the feature is filtered out of the visible set (ordinal null); the highlight + fly still fire.
-  // Depends only on the click nonce, so it captures the sort/filter as of the click (re-running on
-  // every filter keystroke would yank the page around).
+  // Depends only on the click nonce, so it captures the sort/filter as of the click — re-running on
+  // every filter keystroke would yank the page around.
   useEffect(() => {
     if (!mapPick) return;
     let live = true;
@@ -198,7 +192,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   }, [mapPick?.nonce]);
 
   return (
-    <div className="mt-2">
+    <div className={fill ? "mt-2 flex min-h-0 flex-1 flex-col" : "mt-2"}>
       {/* One header line that says what this is and how big it is — the row count used to float
           mid-toolbar and the disclosure was a bare chevron on its own line. */}
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
@@ -222,6 +216,12 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
               {showColFilters ? "Hide column filters" : "Filter columns"}
             </button>
             {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
+            {presetFilter && (
+              <span className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                Showing rows for the clicked feature
+                <button type="button" onClick={onClearPreset} aria-label="Clear feature filter" className="hover:opacity-80">✕</button>
+              </span>
+            )}
           </>
         )}
       </div>
@@ -262,7 +262,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           } : undefined}
         />
       )}
-      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-xs ${collapsed || asCards ? "hidden" : "h-112 min-h-40"}`}>
+      <div ref={scrollRef} className={`max-w-full overflow-auto rounded-md border border-border text-xs ${collapsed || asCards ? "hidden" : fill ? "h-full min-h-40" : "h-112 min-h-40 resize-y"}`}>
         <table className="w-auto min-w-full border-collapse">
           <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((hg) => (
@@ -295,7 +295,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
             <tr className={showColFilters ? "" : "hidden"}>
               {review && <th className="border-b border-border" />}
               {(page?.columns ?? []).map((col) => {
-                const kind = page?.types[col] ?? "text";
+                const kind = types?.[col] ?? "text";
                 const d = draft[col] ?? {};
                 const set = (patch: Partial<{ min: string; max: string; text: string }>) =>
                   setDraft((prev) => ({ ...prev, [col]: { ...prev[col], ...patch } }));

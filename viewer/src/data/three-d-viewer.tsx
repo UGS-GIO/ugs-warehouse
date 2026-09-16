@@ -1,5 +1,6 @@
 // 3D fence-diagram viewer: GeoParquet/GeoJSON cross-sections draped over a 3DEP terrain mesh.
 import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
+import { qk } from "@/query-keys";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
 import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
@@ -101,12 +102,11 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   // cartography. Interim: a baked per-pub sidecar (the 3D pipeline will fold this into the GeoParquet).
   // Authored geologic colors for this pub (interim baked sidecar). Absent → getUnitColor fallback.
   const { data: authored = {} } = useQuery<Record<string, string>>({
-    queryKey: ["3d-colors", item.id],
+    queryKey: qk.threeDColors(item.id),
     queryFn: async ({ signal }) => {
       const r = await fetch(`${import.meta.env.BASE_URL}3d-colors/${item.id}.json`, { signal });
       return r.ok ? r.json() : {};
     },
-    staleTime: 5 * 60_000,
   });
   // Per-unit fill carried in the GeoParquet `fill` column (cloud-native path) — authored, highest
   // precedence. Empty on the GeoJSON path.

@@ -123,7 +123,9 @@ export type ColType = "number" | "text";
 // Per-column filter: numeric columns get a range (min/max), everything else a substring match.
 export type ColFilter =
   | { col: string; kind: "number"; min?: number; max?: number }
-  | { col: string; kind: "text"; contains: string };
+  | { col: string; kind: "text"; contains: string }
+  // Exact equality — the related-table join (child.fk = the clicked feature's key value).
+  | { col: string; kind: "exact"; value: string };
 
 export interface PageOpts {
   limit: number;
@@ -190,7 +192,7 @@ const buildOrder = (columns: string[], opts: PageOpts, hasId: boolean): string =
 };
 
 // One SQL predicate from a per-column filter (empty string = no constraint).
-function filterClause(f: ColFilter): string {
+export function filterClause(f: ColFilter): string {
   const c = ident(f.col);
   if (f.kind === "number") {
     const parts: string[] = [];
@@ -198,6 +200,8 @@ function filterClause(f: ColFilter): string {
     if (Number.isFinite(f.max)) parts.push(`${c} <= ${f.max}`);
     return parts.join(" AND ");
   }
+  // Compare as text so the join works whether the key column is numeric or string.
+  if (f.kind === "exact") return `CAST(${c} AS VARCHAR) = ${lit(f.value)}`;
   const t = f.contains.trim();
   return t ? `CAST(${c} AS VARCHAR) ILIKE ${lit(`%${t}%`)}` : "";
 }
@@ -205,6 +209,34 @@ function filterClause(f: ColFilter): string {
 /** Server-side-style paged/sorted/filtered query over a remote GeoParquet, run entirely in
  *  DuckDB-WASM via HTTP range reads. Backs the in-page dataset explorer: COUNT(*) gives the
  *  total for pagination, then LIMIT/OFFSET/ORDER BY/WHERE fetch one page. Geometry excluded. */
+/** Displayed column → filter kind, from the schema alone — no page needed. */
+export async function columnTypes(parquetUrl: string): Promise<Record<string, ColType>> {
+  const db = await getDB();
+  const conn = await db.connect();
+  let borrowed: string | undefined;
+  try {
+    const src = borrowed = await registerUrl(parquetUrl);
+    const desc = await conn.query(`DESCRIBE SELECT * FROM read_parquet('${src}');`);
+    return typesOf(desc.toArray());
+  } finally {
+    if (borrowed !== undefined) release(borrowed);
+    await conn.close();
+  }
+}
+
+function typesOf(descRows: { column_name?: unknown; column_type?: unknown }[]): Record<string, ColType> {
+  const allCols = descRows.map((r) => String(r.column_name));
+  const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
+  const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
+  const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
+  const types: Record<string, ColType> = {};
+  for (const r of descRows) {
+    const name = String(r.column_name);
+    if (!hidden.has(name)) types[name] = colType(String(r.column_type ?? ""));
+  }
+  return types;
+}
+
 export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<Page> {
   const db = await getDB();
   const conn = await db.connect();
@@ -223,11 +255,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const rowHidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : [])]);
     const colHidden = new Set([...rowHidden, ID_COL]);
     const columns = allCols.filter((c) => !colHidden.has(c));
-    const types: Record<string, ColType> = {};
-    for (const r of descRows) {
-      const name = String(r.column_name);
-      if (!colHidden.has(name)) types[name] = colType(String(r.column_type ?? ""));
-    }
+    const types = typesOf(descRows);
 
     // WHERE = global free-text (OR across all columns) AND each per-column filter.
     const where = buildWhere(columns, opts);

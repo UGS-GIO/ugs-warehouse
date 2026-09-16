@@ -1,9 +1,10 @@
 // Item detail: two layouts share one component. `page` = the full-width catalog/browse detail (a
 // 2/3 · 1/3 grid); `drawer` = the single-column stack that fits the 560px Discover result drawer. Both
 // reuse the same capability panels (Preview, Downloads, Endpoints, Related, Review, schema, STAC JSON).
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import type { ItemRef } from "./browse";
+import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { AddToMapButton } from "@/map/add-to-map-button";
 import { CommentsPanel } from "@/review/comments-panel";
 import { DataExplorer } from "@/data/data-explorer";
@@ -20,7 +21,8 @@ import { SchemaTable } from "./schema-table";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { type Asset, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
-  relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+  relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
 
 const relatedViewerHref = (stacHref: string): string => {
@@ -36,6 +38,16 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   // additionally offer a thumbnail Gallery. Both use a Set so multiple stay open.
   const [openTables, setOpenTables] = useState<Set<string>>(new Set());
   const [openGalleries, setOpenGalleries] = useState<Set<string>>(new Set());
+  const { featureRelated, clearRelated } = usePreviewMap();
+  const sectionRef = useRef<HTMLDivElement>(null);
+  // A map-feature click (via the preview-map context) auto-opens its related table — DERIVED, not an
+  // effect that mutates `openTables`: deriving keeps the open set and the context from disagreeing,
+  // and stops a remount (page↔drawer layout switch) from reopening a table on its own.
+  const isOpen = (key: string) => openTables.has(key) || featureRelated?.relatedKey === key;
+  // `block: "start"` here, not "nearest": the section expands as this renders, so put its heading at
+  // the top rather than scrolling the minimum distance to a box that is still growing.
+  useScrollOnNew(featureRelated && `${featureRelated.relatedKey}:${featureRelated.value}`,
+                 sectionRef, { behavior: "smooth", block: "start" });
   const toggleIn = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (key: string) =>
     set((prev) => {
       const next = new Set(prev);
@@ -47,7 +59,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
   if (!links.length && !tables.length && !fks.length) return null;
   return (
-    <section className="mt-4 rounded-md border border-border p-3">
+    <section ref={sectionRef} className="mt-4 rounded-md border border-border p-3">
       <h3 className="text-sm font-semibold">Related</h3>
       {links.length > 0 && (
         <div className="mt-1.5">
@@ -85,7 +97,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                   <span className="font-medium">{asset.title ?? key}</span>
                   <button className="text-primary hover:underline"
                     onClick={() => toggleTable(key)}>
-                    {openTables.has(key) ? "Hide" : "View"}
+                    {isOpen(key) ? "Hide" : "View"}
                   </button>
                   {isPhotos(key, asset) && (
                     <button className="text-primary hover:underline" onClick={() => toggleGallery(key)}>
@@ -99,7 +111,16 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                 </div>
                 {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
                     range-read (never downloads the whole file). No geometry → a plain data table. */}
-                {openTables.has(key) && <DataExplorer key={asset.href} href={asset.href} />}
+                {isOpen(key) && (() => {
+                  const childField = relatedJoins(item).find((j) => j.key === key)?.childField;
+                  const preset = featureRelated?.relatedKey === key && childField
+                    ? { col: childField, kind: "exact" as const, value: featureRelated.value }
+                    : undefined;
+                  // Clearing the preset widens the table in place, so record it open BEFORE clearing
+                  // the context — a table opened only by the click would otherwise close with it.
+                  const onClearPreset = () => { setOpenTables((prev) => new Set(prev).add(key)); clearRelated(); };
+                  return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={onClearPreset} />;
+                })()}
                 {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
               </li>
             ))}

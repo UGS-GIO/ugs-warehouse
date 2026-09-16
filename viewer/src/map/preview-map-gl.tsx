@@ -6,15 +6,13 @@ import { createPortal } from "react-dom";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
-import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
+import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { CommentsPanel } from "@/review/comments-panel";
 import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
-import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, useLiveLegend, useStyleLayers } from "@/stac";
+import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
 import { bboxPolygon, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
-import { usePerItem } from "@/lib/use-per-item";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
 
@@ -54,10 +52,12 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number) => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
+  onFeatureSelect?: (props: Record<string, unknown>, fid: number | null) => void;
+  onClearSelection?: () => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
@@ -87,9 +87,6 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   // goes stale as soon as a style publishes, so it's only the fallback.
   const liveLegend = useLiveLegend(styleUrl, item ? String(item.id ?? "") : undefined, sel);
   const [spriteReady, setSpriteReady] = useState(false);
-  const [popup, setPopup] = usePerItem<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(itemId, null);
-  const [reviewFeature, setReviewFeature] = usePerItem<{ pkVal: string; props: Record<string, unknown> } | null>(itemId, null);
-  const pkCol = isVector && item ? primaryKeyOf(item) : "";
 
   // Preload the render's sprite (icon renders) before its symbol layers mount.
   useEffect(() => {
@@ -166,10 +163,10 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   const onMapClick = (e: MapLayerMouseEvent) => {
     if (!isVector) return;
     const f = e.features?.[0];
-    if (!f) { setPopup(null); return; }
+    if (!f) { onClearSelection?.(); return; }
     const props = (f.properties ?? {}) as Record<string, unknown>;
     const fid = f.id != null ? Number(f.id) : null;
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, props, fid });
+    onFeatureSelect?.(props, fid);
     if (fid != null) onFeatureClick(fid);
   };
 
@@ -268,43 +265,8 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
               <Layer id="fp-mini-line" type="line" paint={{ "line-color": "#888", "line-width": 1.5 }} />
             </Source>
           )}
-
-          {isVector && popup && (
-            <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
-              <div className="max-h-56 overflow-auto">
-                <table className="border-collapse text-xs">
-                  <tbody>
-                    {Object.entries(popup.props).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
-                      <tr key={k}>
-                        <td className="whitespace-nowrap py-0.5 pr-2 align-top text-gray-500">{k}</td>
-                        <td className="py-0.5 text-gray-900">{String(v)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {IS_REVIEW && popup.props[pkCol] != null && (
-                  <button
-                    className="mt-1.5 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-500/20"
-                    onClick={() => { setReviewFeature({ pkVal: String(popup.props[pkCol]), props: popup.props }); setPopup(null); }}>
-                    💬 Comment on this feature
-                  </button>
-                )}
-              </div>
-            </Popup>
-          )}
         </MapGL>
       </div>
-
-      {isVector && IS_REVIEW && reviewFeature && item && (
-        <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Feature review</h3>
-            <button className="text-xs text-muted-foreground hover:underline" onClick={() => setReviewFeature(null)}>close</button>
-          </div>
-          <CommentsPanel itemId={String(item.id ?? "")} target={{ kind: "row", rowKey: pkCol, rowVal: reviewFeature.pkVal }}
-            label={`Comments on ${pkCol} ${reviewFeature.pkVal}`} />
-        </div>
-      )}
 
       {isVector && item && (
         <Legend layers={styleLayers ?? undefined}

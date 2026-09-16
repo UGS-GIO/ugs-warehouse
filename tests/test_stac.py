@@ -449,6 +449,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.editions.quad_by_series", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
@@ -552,6 +553,7 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
+         patch("ugs_warehouse.pubs.editions.quad_by_series", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \

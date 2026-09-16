@@ -151,6 +151,8 @@ def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None) -
 
     out: dict[str, dict] = {}
     for (_norm_quad, tier), members in groups.items():
-        quad_label = (members[0].get("quad_name") or "").strip()
+        first_sid = (members[0].get("series_id") or "").strip()
+        quad_label = (quad_by_sid.get(first_sid.upper())
+                      or (members[0].get("quad_name") or "")).strip()
         _link_group(members, out, quad=quad_label, tier=tier)
     return out

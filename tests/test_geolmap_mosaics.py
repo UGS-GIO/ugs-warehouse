@@ -168,3 +168,24 @@ def test_build_composes_deprecation_and_quads_filters_with_edition_scoped_suffix
     assert call.args[0] == "24k"
     assert call.args[1] == ["M-296DM"]   # deprecated GQ-852 AND out-of-quad M-1 both dropped
     assert call.kwargs.get("suffix") == "-test-current"
+    assert call.kwargs.get("write_stac_item") is False  # scoped build writes NO cataloged item (Defect 2)
+
+
+def test_build_non_scoped_writes_catalog_item_and_refreshes():
+    """A normal (no --quads) build writes the real tier: empty suffix, DOES write the STAC item
+    (write_stac_item=True), and refreshes the catalog. Guards the Defect-2 fix against flipping the
+    default and silently stopping real mosaics from being cataloged/refreshed."""
+    pubs = [{"series_id": "M-296DM", "pub_scale": "1:24,000", "pub_year": "2022"}]
+    with patch.object(gm, "_cog_sids", return_value={"M-296DM"}), \
+         patch.object(gm.source, "read_pubs", return_value=pubs), \
+         patch.object(gm.editions, "quad_by_series", return_value={"M-296DM": "Park City East Quad"}), \
+         patch.object(gm.editions, "edition_graph", return_value={"M-296DM": {"deprecated": False}}), \
+         patch.object(gm, "build_tier", return_value=True) as mock_build_tier, \
+         patch.object(gm.stac, "refresh_catalog") as mock_refresh:
+        built = gm.build(["24k"], edition_mode="current")
+
+    assert built == 1
+    call = mock_build_tier.call_args
+    assert call.kwargs.get("suffix") == ""
+    assert call.kwargs.get("write_stac_item") is True
+    mock_refresh.assert_called_once()  # real builds refresh the catalog; scoped --quads builds don't

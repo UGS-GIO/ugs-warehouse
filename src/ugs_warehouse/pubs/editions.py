@@ -105,7 +105,7 @@ def _link_group(members: list[dict], out: dict[str, dict], *, quad: str, tier: s
 def quad_by_series() -> dict[str, str]:
     """{UPPER series_id -> quad_name} from the staged footprints parquet (built by pubs.footprints).
     Read via gcs.get_bytes (obstore/ADC — the repo's GCS IO path, no httpfs) + a local duckdb read,
-    matching footprints.read_footprints. Fail loud if the parquet is absent — without it edition
+    the same way footprints.py reads it. Fail loud if the parquet is absent — without it edition
     detection can't group quads (the silent-no-op bug this fixes)."""
     import os
     import tempfile
@@ -113,13 +113,14 @@ def quad_by_series() -> dict[str, str]:
     import duckdb  # base dep; kept function-level to preserve editions.py's import-cheapness
 
     from ..core import gcs
-    from . import footprints
+    from . import identity  # cheap (os/dataclasses/urllib only) — avoids footprints' `requests` dep
 
+    obj = f"{identity.FOOTPRINTS_PREFIX}/footprints.parquet"  # == footprints.PARQUET_OBJECT
     try:
-        data = gcs.get_bytes(footprints.PARQUET_OBJECT)  # obstore; raises if absent
+        data = gcs.get_bytes(obj)  # obstore; raises if absent
     except Exception as e:  # noqa: BLE001 — surface it, don't silently degrade
         raise RuntimeError(
-            f"[editions] staged footprints parquet gs://.../{footprints.PARQUET_OBJECT} unreadable "
+            f"[editions] staged footprints parquet gs://.../{obj} unreadable "
             f"({e}); run `python -m ugs_warehouse.pubs.footprints` first") from e
 
     tmp = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)

@@ -15,12 +15,14 @@ this step adds NO further loss. If the harvest later switches to lossless COGs, 
 By default (`--editions current`) a superseded edition of a quad (per `editions.py`'s edition
 graph) is dropped before the VRT — the mosaic shows one current map per quad. `--editions all`
 reproduces the old behavior (every COG, every edition stacked). `--quads` scopes a build to named
-quads and writes it to `*-test` items/objects, for a before/after demo without touching the real
-tiers:
+quads and writes it to `*-test-current`/`*-test-all` items/objects (the edition mode is baked into
+the suffix), so a current-only demo and an all-editions demo of the SAME quads can be built side
+by side for comparison without either clobbering the other or the real tier:
 
     python -m ugs_warehouse.pubs.geolmap_mosaics --scale all
     python -m ugs_warehouse.pubs.geolmap_mosaics --scale 24k --editions all
     python -m ugs_warehouse.pubs.geolmap_mosaics --scale 24k --quads "Park City East Quad" --editions current
+    python -m ugs_warehouse.pubs.geolmap_mosaics --scale 24k --quads "Park City East Quad" --editions all
 """
 from __future__ import annotations
 
@@ -32,7 +34,7 @@ import tempfile
 from datetime import datetime, timezone
 
 from ..core import config, gcs, stac
-from . import editions, identity, source  # noqa: F401 (patch target for tests)
+from . import editions, identity, source
 from .scale import DEFAULT_TIER, SCALE_LABEL, tier_of
 
 PMTILES_MIME = config.PMTILES_MIME
@@ -70,15 +72,15 @@ def _cog_sids() -> set[str]:
     return out
 
 
-def _group_by_tier(editions: str = "current",  # noqa: F811 -- intentional shadow, see below
+def _group_by_tier(edition_mode: str = "current",
                     quads: str | None = None) -> tuple[dict[str, list[str]], dict[str, dict]]:
     """{tier -> [series_id, ...]} for every map that has a COG, binned by its publication scale —
     plus {UPPER series_id -> pub record}, so `_write_item` can build member links without a
     second `source.read_pubs()` pass.
 
-    `editions`: "current" (default) drops superseded quad editions before the tier bins fill, using
-    the edition graph from `editions.py` — the authoritative mosaic should show one map per quad,
-    not every historical revision stacked on top of each other. "all" reproduces the legacy
+    `edition_mode`: "current" (default) drops superseded quad editions before the tier bins fill,
+    using the edition graph from `editions.py` — the authoritative mosaic should show one map per
+    quad, not every historical revision stacked on top of each other. "all" reproduces the legacy
     behavior (every COG, every edition) and skips the footprints/edition-graph read entirely (no
     reason to pay for a CDN round trip when nothing will be filtered).
 
@@ -87,20 +89,15 @@ def _group_by_tier(editions: str = "current",  # noqa: F811 -- intentional shado
 
     The footprints quad map is loaded AT MOST once and reused for both the deprecation graph and
     the `--quads` filter, whichever of the two apply."""
-    # Re-import under a local alias: the `editions` PARAMETER above shadows the module-level
-    # `editions` import for the rest of this function body, so the bare name won't reach the
-    # module here (this is the same cached module object either way, just rebound locally).
-    from . import editions as editions_mod
-
     pubs_by_sid = {(p.get("series_id") or "").strip().upper(): p for p in source.read_pubs()}
 
     qmap: dict[str, str] = {}
-    if editions == "current" or quads:
-        qmap = editions_mod.quad_by_series()
+    if edition_mode == "current" or quads:
+        qmap = editions.quad_by_series()
 
     deprecated_upper: set[str] = set()
-    if editions == "current":
-        graph = editions_mod.edition_graph(list(pubs_by_sid.values()), quad_by_sid=qmap)
+    if edition_mode == "current":
+        graph = editions.edition_graph(list(pubs_by_sid.values()), quad_by_sid=qmap)
         deprecated_upper = {s.upper() for s, e in graph.items() if e["deprecated"]}
 
     requested_quads: set[str] | None = None
@@ -112,7 +109,7 @@ def _group_by_tier(editions: str = "current",  # noqa: F811 -- intentional shado
     n_deprecated = 0
     n_outside_quads = 0
     for sid in sorted(_cog_sids()):
-        if editions == "current" and sid in deprecated_upper:
+        if edition_mode == "current" and sid in deprecated_upper:
             n_deprecated += 1
             continue
         if requested_quads is not None:
@@ -127,7 +124,7 @@ def _group_by_tier(editions: str = "current",  # noqa: F811 -- intentional shado
         groups[t].append(sid)
     counts = ", ".join(f"{t}={len(groups[t])}" for t in TIERS)
     detail = f"unparseable -> {DEFAULT_TIER}: {unparsed}"
-    if editions == "current":
+    if edition_mode == "current":
         detail += f", deprecated editions dropped: {n_deprecated}"
     if requested_quads is not None:
         detail += f", outside --quads: {n_outside_quads}"
@@ -143,8 +140,8 @@ def _vsigs(sid: str) -> str:
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
                 *, suffix: str = "") -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
-    empty. `suffix` (e.g. "-test") routes a scoped/--quads demo build to its own object + item,
-    never the real tier — see `mosaic_object`/`_write_item`."""
+    empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object +
+    item, never the real tier — see `mosaic_object`/`_write_item`."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
@@ -246,16 +243,17 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict],
 
 
 def build(scales: list[str], maxz: int | None = None,
-          editions: str = "current",  # noqa: F811 -- intentional shadow, see below
-          quads: str | None = None) -> int:
-    """`editions` ("current"|"all") and `quads` (comma-separated quad names) are threaded through to
-    `_group_by_tier`. A `--quads` build is a scoped demo/scratch run: it writes to `-test`-suffixed
-    items/objects (never the real tier) and skips the catalog refresh."""
-    groups, by_sid = _group_by_tier(editions=editions, quads=quads)
-    suffix = "-test" if quads else ""
+          edition_mode: str = "current", quads: str | None = None) -> int:
+    """`edition_mode` ("current"|"all") and `quads` (comma-separated quad names) are threaded
+    through to `_group_by_tier`. A `--quads` build is a scoped demo/scratch run: it writes to
+    `-test-{edition_mode}`-suffixed items/objects (never the real tier) and skips the catalog
+    refresh — the suffix carries the edition mode so a current-only demo and an all-editions demo
+    of the SAME quads can coexist instead of clobbering each other."""
+    groups, by_sid = _group_by_tier(edition_mode=edition_mode, quads=quads)
+    suffix = f"-test-{edition_mode}" if quads else ""
     if quads:
-        print(f"[mosaics] SCOPED build (--quads={quads!r}) -> writing '*{suffix}' items only, "
-              "real tiers untouched")
+        print(f"[mosaics] SCOPED build (--quads={quads!r}, --editions={edition_mode}) -> "
+              f"writing '*{suffix}' items only, real tiers untouched")
     built = 0
     for tier in scales:
         if build_tier(tier, groups.get(tier, []), by_sid, maxz=maxz, suffix=suffix):
@@ -279,11 +277,14 @@ def main() -> int:
                          "all reproduces the legacy behavior (every COG, every edition).")
     ap.add_argument("--quads", default=None,
                     help="Comma-separated quad names (as in the footprints quad_name) to restrict "
-                         "members to — a scoped demo/scratch build; writes to *-test items instead "
-                         "of the real tier.")
+                         "members to — a scoped demo/scratch build; writes to *-test-current or "
+                         "*-test-all (matching --editions) instead of the real tier.")
     args = ap.parse_args()
+    if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
+        ap.error("--quads contained no usable quad names")
     scales = list(TIERS) if args.scale == "all" else [args.scale]
-    return 0 if build(scales, maxz=args.maxzoom, editions=args.editions, quads=args.quads) >= 0 else 1
+    return 0 if build(scales, maxz=args.maxzoom, edition_mode=args.editions,
+                       quads=args.quads) >= 0 else 1
 
 
 if __name__ == "__main__":

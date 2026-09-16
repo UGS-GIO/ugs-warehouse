@@ -52,7 +52,7 @@ def test_group_by_tier_current_drops_deprecated_editions():
          patch.object(gm.source, "read_pubs", return_value=_PARK_CITY_PUBS), \
          patch.object(gm.editions, "quad_by_series", return_value=_PARK_CITY_QMAP), \
          patch.object(gm.editions, "edition_graph", return_value=_PARK_CITY_GRAPH) as mock_graph:
-        groups, by_sid = gm._group_by_tier(editions="current")
+        groups, by_sid = gm._group_by_tier(edition_mode="current")
 
     assert groups["24k"] == ["M-296DM"]
     assert set(by_sid) == {"GQ-852", "OFR-677", "M-296DM"}  # pubs_by_sid still carries every pub
@@ -71,7 +71,7 @@ def test_group_by_tier_all_keeps_every_edition_and_skips_the_graph():
          patch.object(gm.source, "read_pubs", return_value=_PARK_CITY_PUBS), \
          patch.object(gm.editions, "quad_by_series") as mock_qmap, \
          patch.object(gm.editions, "edition_graph") as mock_graph:
-        groups, _ = gm._group_by_tier(editions="all")
+        groups, _ = gm._group_by_tier(edition_mode="all")
 
     assert set(groups["24k"]) == {"GQ-852", "OFR-677", "M-296DM"}
     mock_graph.assert_not_called()
@@ -91,22 +91,60 @@ def test_group_by_tier_quads_filter_restricts_membership():
          patch.object(gm.source, "read_pubs", return_value=pubs), \
          patch.object(gm.editions, "quad_by_series", return_value=qmap), \
          patch.object(gm.editions, "edition_graph") as mock_graph:
-        groups, _ = gm._group_by_tier(editions="all", quads="park city east quad")
+        groups, _ = gm._group_by_tier(edition_mode="all", quads="park city east quad")
 
     assert groups["24k"] == ["GQ-852"]  # M-1's quad doesn't match -> excluded
     mock_graph.assert_not_called()  # editions=all -> no deprecation filtering even with --quads
 
 
 def test_mosaic_object_and_write_item_honor_optional_suffix():
-    """The scoped/--quads demo build writes to a `-test` suffixed object + item id so it never
-    clobbers the real tier; the default (no suffix) call sites are unaffected."""
+    """The scoped/--quads demo build writes to a `-test-{edition_mode}` suffixed object + item id
+    (e.g. `-test-current`/`-test-all`) so a current-only demo and an all-editions demo of the same
+    quads can coexist and neither clobbers the real tier; the default (no suffix) call sites are
+    unaffected."""
     assert gm.mosaic_object("24k") == f"{identity.MOSAIC_PREFIX}/geologic-maps-24k.pmtiles"
-    assert gm.mosaic_object("24k", suffix="-test") == (
-        f"{identity.MOSAIC_PREFIX}/geologic-maps-24k-test.pmtiles")
+    assert gm.mosaic_object("24k", suffix="-test-current") == (
+        f"{identity.MOSAIC_PREFIX}/geologic-maps-24k-test-current.pmtiles")
 
     by_sid = {"GQ-968": {"series_id": "GQ-968", "pub_publisher": "USGS", "pub_name": "Foo"}}
     captured = {}
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
-        gm._write_item("24k", ["GQ-968"], gm.mosaic_object("24k", suffix="-test"), by_sid,
-                        suffix="-test")
-    assert captured["item"]["id"] == "geologic-maps-24k-test"
+        gm._write_item("24k", ["GQ-968"], gm.mosaic_object("24k", suffix="-test-current"), by_sid,
+                        suffix="-test-current")
+    assert captured["item"]["id"] == "geologic-maps-24k-test-current"
+
+
+def test_build_composes_deprecation_and_quads_filters_with_edition_scoped_suffix():
+    """The actual demo path: `edition_mode="current"` WITH `--quads` together, through the real
+    `build()` (GDAL/GCS/STAC-write all mocked out via `build_tier`). Both filters must compose —
+    a deprecated sid is dropped, a sid outside the requested quad is dropped, a current in-quad
+    sid survives — and the scoped build must route to the edition-scoped `-test-current` suffix."""
+    pubs = [
+        # current + in the requested quad -> must survive both filters
+        {"series_id": "M-296DM", "pub_scale": "1:24,000", "pub_year": "2022"},
+        # deprecated + in the requested quad -> dropped by the edition filter
+        {"series_id": "GQ-852", "pub_scale": "1:24,000", "pub_year": "1971"},
+        # current, but a different quad -> dropped by the --quads filter
+        {"series_id": "M-1", "pub_scale": "1:24,000", "pub_year": "1990"},
+    ]
+    qmap = {
+        "M-296DM": "Park City East Quad",
+        "GQ-852": "Park City East Quad",
+        "M-1": "Some Other Quad",
+    }
+    # M-1 is absent from the graph entirely (not a quad-edition member anywhere) -- must NOT be
+    # treated as deprecated just because it's missing; only the --quads filter should drop it.
+    graph = {"M-296DM": {"deprecated": False}, "GQ-852": {"deprecated": True}}
+    with patch.object(gm, "_cog_sids", return_value=set(qmap)), \
+         patch.object(gm.source, "read_pubs", return_value=pubs), \
+         patch.object(gm.editions, "quad_by_series", return_value=qmap), \
+         patch.object(gm.editions, "edition_graph", return_value=graph), \
+         patch.object(gm, "build_tier", return_value=True) as mock_build_tier:
+        built = gm.build(["24k"], edition_mode="current", quads="Park City East Quad")
+
+    assert built == 1
+    mock_build_tier.assert_called_once()
+    call = mock_build_tier.call_args
+    assert call.args[0] == "24k"
+    assert call.args[1] == ["M-296DM"]   # deprecated GQ-852 AND out-of-quad M-1 both dropped
+    assert call.kwargs.get("suffix") == "-test-current"

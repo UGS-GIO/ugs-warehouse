@@ -86,6 +86,56 @@ def test_prepare_plates_virtual_vfs():
         )
 
 
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_render_geospatial_pdf_returns_none_when_no_crs(monkeypatch, tmp_path):
+    """A PDF with no embedded CRS (e.g. a plain print-layout PDF) isn't a geospatial plate —
+    _render_geospatial_pdf must skip it so the caller falls back to the GeoTIFF."""
+    from ugs_warehouse.pubs import harvest
+
+    monkeypatch.setattr(harvest, "COG_DPI", 600)
+    mock_ds = MagicMock()
+    mock_ds.crs = None
+
+    with patch("zipfile.ZipFile") as mock_zipfile, patch("rasterio.open") as mock_open:
+        mock_zipfile.return_value.__enter__.return_value = MagicMock()
+        mock_open.return_value.__enter__.return_value = mock_ds
+
+        result = harvest._render_geospatial_pdf([("/tmp/test.zip", "M-1_Plate1.pdf")], str(tmp_path))
+
+    assert result is None
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_render_geospatial_pdf_renders_georeferenced_candidate(monkeypatch, tmp_path):
+    """A georeferenced plate PDF (GDAL reads a CRS) is rasterized via gdal_translate at COG_DPI,
+    using the PDF's own georeferencing (-oo DPI=…) rather than the GeoTIFF's bounds."""
+    from ugs_warehouse.pubs import harvest
+
+    monkeypatch.setattr(harvest, "COG_DPI", 600)
+    mock_ds = MagicMock()
+    mock_ds.crs = MagicMock()  # truthy CRS -> georeferenced
+
+    def fake_run(cmd):
+        open(cmd[5], "wb").close()  # simulate gdal_translate writing the rendered output
+
+    mock_run = MagicMock(side_effect=fake_run)
+    monkeypatch.setattr(harvest, "run", mock_run)
+
+    with patch("zipfile.ZipFile") as mock_zipfile, patch("rasterio.open") as mock_open:
+        mock_zipfile.return_value.__enter__.return_value = MagicMock()
+        mock_open.return_value.__enter__.return_value = mock_ds
+
+        result = harvest._render_geospatial_pdf([("/tmp/test.zip", "M-1_Plate1.pdf")], str(tmp_path))
+
+    expected = str(tmp_path / "plate_render.tif")
+    assert result == expected
+    assert (tmp_path / "plate_render.tif").exists()
+
+    cmd = mock_run.call_args[0][0]
+    assert cmd[0] == "gdal_translate"
+    assert cmd[cmd.index("-oo") + 1] == "DPI=600"
+
+
 def test_get_attached_zips():
     from ugs_warehouse.pubs.harvest import _attachments_cache, _get_attached_zips
 

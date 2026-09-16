@@ -333,34 +333,35 @@ def ensure_rgb(tif):
 
 
 def prepare_plates(zip_paths, work):
-    """Extract plates from multiple zips. If COG_DPI>0 and a geospatial PDF is present, rasterize
-    it at COG_DPI and georeference from the GeoTIFF; else use the published GeoTIFF. Returns
-    (plate_path_or_vrt, shapefile_path_or_None)."""
-    import rasterio
-    gtif = pdf = shp = None
-    target_zip = None
-    inner_gtif = None
+    """Extract plates from multiple zips. If COG_DPI>0 and a GEOSPATIAL PDF is present (detected by
+    content — GDAL reads a CRS — not by filename), rasterize it at COG_DPI via GDAL using the PDF's
+    OWN georeferencing, and return that as the plate. Else use the published GeoTIFF. Returns
+    (plate_path, shapefile_path_or_None).
+
+    UGS plates are named `..._Plate1.pdf`, not `*geospatial.pdf`, so the old name regex missed them
+    and the harvest fell back to the ~1.5 m GeoTIFF (z16). A geospatial plate PDF carries full ~600
+    DPI vector cartography (→ z17), and its internal georef places the map frame correctly even
+    though the page includes the collar — the later cutline warp (in _harvest_attempt) trims the
+    collar to the map footprint. (The old pdftoppm + `-a_ullr`-from-the-GeoTIFF path only worked for
+    a map-frame-only PDF and would misregister a full plate.)"""
+    gtif = shp = None
+    target_zip = inner_gtif = None
+    pdf_candidates = []  # (zip_path, inner_name)
     for zip_path in zip_paths:
         with zipfile.ZipFile(zip_path) as z:
             names = z.namelist()
-            _gtif = (pick(names, r"plate1.*geotiff\.tiff?$", r"geotiff\.tiff?$",
-                          r"utah-500k.*\.tiff?$")
+            _gtif = (pick(names, r"plate1.*geotiff\.tiff?$", r"geotiff\.tiff?$", r"utah-500k.*\.tiff?$")
                      or next((n for n in names if n.lower().endswith((".tif", ".tiff")) and not any(
                           x in n.lower() for x in ("basemap", "topo", "hillshade", "mashup"))), None))
-            _pdf = pick(names, r"plate1.*geospatial\.pdf$", r"geospatial\.pdf$",
-                        r"GeologicMapOfUtah_plate1\.pdf$")
             _shp = pick(names, r"geologicunits\.shp$", r"units\.shp$")
             if _gtif:
                 gtif = _gtif
                 target_zip = zip_path
                 inner_gtif = _gtif
-            if _pdf:
-                pdf = _pdf
             if _shp:
                 shp = _shp
+            pdf_candidates += [(zip_path, n) for n in names if n.lower().endswith(".pdf")]
             want = []
-            if _pdf:
-                want.append(_pdf)
             if _shp:
                 stem = re.sub(r"\.shp$", "", _shp, flags=re.I)
                 want += [n for n in names if re.sub(r"\.[^.]+$", "", n) == stem]
@@ -372,39 +373,51 @@ def prepare_plates(zip_paths, work):
                 z.extract(nm, work)
 
     shp_path = os.path.join(work, shp) if shp else None
+    rendered = _render_geospatial_pdf(pdf_candidates, work)
+    if rendered:
+        return rendered, shp_path
     if not gtif:
         return None, shp_path
     virtual_gtif = f"/vsizip/{target_zip}/{inner_gtif}"
     gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
-    if COG_DPI > 0 and pdf:
-        prefix = os.path.join(work, "plate")
+    return gtif_path, shp_path
+
+
+def _render_geospatial_pdf(pdf_candidates, work):
+    """Return a path to a GeoTIFF rendered from the first GEOSPATIAL plate PDF among `pdf_candidates`
+    (list of (zip_path, inner_name)), rasterized at COG_DPI via GDAL (using the PDF's OWN georef),
+    or None if COG_DPI<=0, no candidate is georeferenced, or rendering keeps failing (caller falls
+    back to the GeoTIFF). A plate1-named candidate is tried first. `rasterio.open` reads the geo dict
+    without rendering pixels (~0.4 s), so detection is cheap."""
+    if COG_DPI <= 0 or not pdf_candidates:
+        return None
+    import rasterio
+    ordered = sorted(pdf_candidates, key=lambda zn: (0 if "plate1" in zn[1].lower() else 1, zn[1].lower()))
+    for zp, nm in ordered:
+        with zipfile.ZipFile(zp) as z:
+            z.extract(nm, work)
+        cand = os.path.join(work, nm)
+        try:
+            with rasterio.open(cand) as ds:
+                if ds.crs is None:
+                    continue
+        except Exception:
+            continue
         dpi = COG_DPI
+        rendered = os.path.join(work, "plate_render.tif")
         while dpi >= 150:
             try:
-                run(["pdftoppm", "-png", "-r", str(dpi), os.path.join(work, pdf), prefix])
-                break
+                run(["gdal_translate", "-q", "-oo", f"DPI={dpi}", cand, rendered,
+                     "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", "-co", "BIGTIFF=YES"])
+                hlog(f"geospatial PDF rendered at {dpi}dpi ({os.path.basename(nm)})", step="plate")
+                return rendered
             except Exception as e:
-                hlog(f"pdftoppm failed at {dpi} DPI (likely OOM): {e}. Retrying at lower DPI...",
-                     step="plate", level="WARNING")
-                dpi = dpi // 2
-                # Clean up any partial output
-                for filename in os.listdir(work):
-                    if filename.startswith("plate-") or filename == "plate.png":
-                        try:
-                            os.remove(os.path.join(work, filename))
-                        except Exception:
-                            pass
-        png = next((p for p in (prefix + "-1.png", prefix + ".png") if os.path.exists(p)), None)
-        with rasterio.open(gtif_path) as g:
-            b, crs = g.bounds, g.crs
-        if png and crs is not None:
-            srs = os.path.join(work, "srs.wkt")
-            open(srs, "w").write(crs.to_wkt())
-            vrt = os.path.join(work, "plate.vrt")
-            run(["gdal_translate", "-q", "-of", "VRT", "-a_srs", srs, "-a_ullr",
-                 str(b.left), str(b.top), str(b.right), str(b.bottom), png, vrt])
-            return vrt, shp_path
-    return gtif_path, shp_path
+                hlog(f"geoPDF render failed at {dpi}dpi ({e}); retrying lower", step="plate", level="WARNING")
+                if os.path.exists(rendered):
+                    os.remove(rendered)
+                dpi //= 2
+        break
+    return None
 
 
 def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> str:
@@ -506,7 +519,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         prof = dict(cog_profiles.get(COG_COMPRESS))
         prof["bigtiff"] = "IF_SAFER"
         if COG_COMPRESS == "webp":
-            prof["quality"] = COG_QUALITY
+            prof["WEBP_LEVEL"] = COG_QUALITY
         elif COG_COMPRESS in ("zstd", "deflate", "lzw"):
             prof["predictor"] = 2
 
@@ -517,7 +530,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             if os.path.exists(cog):
                 os.remove(cog)
             prof["compress"] = "lzw"
-            prof.pop("quality", None)          # webp-only; lzw rejects it
+            prof.pop("WEBP_LEVEL", None)        # webp-only; lzw rejects it
             cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
 
         # webp is 8-bit-only and raises on 16-bit/float plates; lossless lzw keeps web_optimized

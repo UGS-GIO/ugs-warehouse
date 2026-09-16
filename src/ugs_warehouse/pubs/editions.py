@@ -130,10 +130,10 @@ def quad_by_series() -> dict[str, str]:
     try:
         tmp.write(data)
         tmp.close()
-        con = duckdb.connect()
-        rows = con.execute(
-            "SELECT upper(series_id), quad_name FROM read_parquet(?) "
-            "WHERE coalesce(quad_name, '') <> ''", [tmp.name]).fetchall()
+        with duckdb.connect() as con:
+            rows = con.execute(
+                "SELECT upper(series_id), quad_name FROM read_parquet(?) "
+                "WHERE coalesce(quad_name, '') <> ''", [tmp.name]).fetchall()
     finally:
         os.unlink(tmp.name)
     return {str(s): str(q) for s, q in rows if s and q}

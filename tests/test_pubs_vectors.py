@@ -7,11 +7,13 @@ from __future__ import annotations
 import json
 from io import BytesIO
 
-import geopandas as gpd
-import pandas as pd
+import pytest
 from shapely.geometry import Point
 
 from ugs_warehouse.pubs import vectors
+
+gpd = pytest.importorskip("geopandas")
+pd = pytest.importorskip("pandas")
 
 
 def _mem_gcs(monkeypatch):

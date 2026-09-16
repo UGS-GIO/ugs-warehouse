@@ -449,6 +449,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.editions.quad_by_series", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
@@ -467,6 +468,50 @@ def test_build_catalog_series_filter():
          assert count == 2
          assert mock_build.call_count == 2
          mock_refresh.assert_not_called()
+
+
+def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys):
+    """ALL-5954 Clinton review, FIX 1 (blocking): editions are an enhancement — a missing/unreadable
+    footprints parquet must not abort the whole pub catalog rebuild. `editions.edition_graph`
+    raising RuntimeError must be caught, warned loudly on stderr, and the build must still complete
+    with every item carrying no edition info (edition=None), not blow up the run."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
+         patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
+         patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._contents_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._threed_classes_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._overrides_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
+         patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.editions.edition_graph",
+               side_effect=RuntimeError("footprints missing")), \
+         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.core.stac.attach_renders"), \
+         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.styles.warm"), \
+         patch("ugs_warehouse.core.stac.write_item"), \
+         patch("ugs_warehouse.core.stac.refresh_catalog"):
+
+         mock_read.return_value = [
+             {"series_id": "DS-8"},
+             {"series_id": "OFR-12"},
+         ]
+
+         count = build_catalog(skip_refresh=True)
+
+         assert count == 2
+         assert mock_build.call_count == 2
+         assert all(c.kwargs["edition"] is None for c in mock_build.call_args_list)
+
+         err = capsys.readouterr().err
+         assert "WARNING" in err and "edition detection skipped" in err and "footprints missing" in err
 
 
 def test_vector_manifests_by_sid_reads_the_authoritative_split():
@@ -552,6 +597,7 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
+         patch("ugs_warehouse.pubs.editions.quad_by_series", return_value={}), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
@@ -689,6 +735,56 @@ def test_cog_map_links_to_its_scale_tier_mosaic():
     # non-COG pub: not stitched into any mosaic, so no member link.
     item = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"}, has_cog=False)
     assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+
+
+def test_deprecated_edition_drops_the_mosaic_related_link():
+    """A deprecated edition (superseded per the quad edition graph, e.g. GQ-852 superseded by
+    M-296DM) must NOT carry a `related` link into the mosaic — the `--editions current` default
+    drops superseded editions before stitching, so the link would otherwise claim membership in a
+    mosaic whose own `derived_from` omits it (catalog self-contradiction, ALL-5954 final review)."""
+    item = _build({"series_id": "GQ-852", "series": "GQ", "pub_scale": "1:24,000"},
+                  has_cog=True, edition={"deprecated": True, "version": "1971"})
+    assert not [lnk for lnk in item["links"]
+               if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+
+    # no edition info at all -> not known to be superseded -> still current -> keeps the link.
+    item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
+                  has_cog=True, edition=None)
+    rel = [lnk for lnk in item["links"]
+          if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+    assert len(rel) == 1
+
+    # explicitly current (not deprecated) -> keeps the link too.
+    item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
+                  has_cog=True, edition={"deprecated": False, "version": "2022"})
+    rel = [lnk for lnk in item["links"]
+          if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+    assert len(rel) == 1
+
+
+def test_deprecated_edition_emits_a_latest_version_link():
+    """ALL-5954 Clinton review, FIX 3: a deprecated item must link forward to the CURRENT edition
+    (not just its immediate successor) via the Versioning Indicators `latest-version` rel — so a
+    reader landing on an old edition can jump straight to the newest one."""
+    edition = {
+        "version": "1971", "deprecated": True,
+        "predecessor_href": None,
+        "successor_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
+                          "ugs-publications/OFR/OFR-677/OFR-677.json",
+        "latest_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
+                       "ugs-publications/M/M-296DM/M-296DM.json",
+    }
+    item = _build({"series_id": "GQ-852", "pub_name": "Old Ed", "series": "GQ", "pub_year": "1971"},
+                  edition=edition)
+    latest = [lnk for lnk in item["links"] if lnk["rel"] == "latest-version"]
+    assert len(latest) == 1
+    assert latest[0]["href"].endswith("/M-296DM/M-296DM.json")
+
+    # the current (latest) edition itself carries no latest-version link (no self-link).
+    item = _build({"series_id": "M-296DM", "pub_name": "New Ed", "series": "M", "pub_year": "2022"},
+                  edition={"version": "2022", "deprecated": False, "predecessor_href": None,
+                          "successor_href": None, "latest_href": None})
+    assert not [lnk for lnk in item["links"] if lnk["rel"] == "latest-version"]
 
 
 def test_pub_item_id_is_safe_in_a_path():

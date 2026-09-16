@@ -171,7 +171,13 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     # edition link can cross series-type prefixes (an OFR predecessor to a later M map) or fall
     # outside a smoke-test slice, and a filtered run must never blind edition detection to a real
     # predecessor/successor just because this run isn't writing it.
-    edition_graph = editions.edition_graph(pubs)
+    try:
+        edition_graph = editions.edition_graph(pubs)
+    except RuntimeError as e:
+        print(f"[ingest] WARNING: edition detection skipped — {e}. Items will carry no "
+              "version/deprecated/predecessor/successor/latest links until the footprints "
+              "parquet is built.", file=sys.stderr)
+        edition_graph = {}
     if series:
         series_upper = series.strip().upper()
         pubs = [p for p in pubs if sink_stac.series_code(p.get("series_id")) == series_upper]

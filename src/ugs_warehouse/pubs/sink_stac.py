@@ -179,9 +179,10 @@ def build_item(p: dict, attachments: list[dict], *,
     `mirrored` is the set of object paths the warehouse holds copies of (see pubs/mirror.py).
     Source files in it are served from our CDN; the rest stay linked to the publisher's host.
 
-    `edition` = `{"version", "deprecated", "predecessor_href", "successor_href"}` (edition
-    detection, a later task) — when given, stamps `version`/`deprecated` on the item (Versioning
-    Indicators ext auto-declared by core.stac.build_item) and predecessor/successor-version links.
+    `edition` = `{"version", "deprecated", "predecessor_href", "successor_href", "latest_href"}`
+    (edition detection, a later task) — when given, stamps `version`/`deprecated` on the item
+    (Versioning Indicators ext auto-declared by core.stac.build_item) and
+    predecessor/successor/latest-version links.
 
     `vector_layers` and `companion_tables` mirror what pubs/vectors.py extracted to
     `{VECTORS_PREFIX}/{series_id}/` (see its `_manifest.json`): one asset per spatial layer, keyed
@@ -315,12 +316,15 @@ def build_item(p: dict, attachments: list[dict], *,
     if ed.get("successor_href"):
         extra_links.append({"rel": "successor-version", "href": ed["successor_href"],
                             "type": "application/geo+json"})
+    if ed.get("latest_href"):
+        extra_links.append({"rel": "latest-version", "href": ed["latest_href"],
+                            "type": "application/geo+json"})
 
     # A COG map is stitched into its tier's seamless raster mosaic (geolmap_mosaics.py); a
     # non-COG pub has no mosaic to belong to. The tier is the mosaic's identity, not the pub's — the
     # pub carries only its raw `ugs:scale` and reaches its tier through this link. Tier here mirrors
     # `_group_by_tier`'s own fallback exactly, so an unparseable scale still links to DEFAULT_TIER.
-    if has_cog:
+    if has_cog and not ed.get("deprecated"):
         link_tier = tier_of(p.get("pub_scale")) or DEFAULT_TIER
         extra_links.append({
             "rel": "related",

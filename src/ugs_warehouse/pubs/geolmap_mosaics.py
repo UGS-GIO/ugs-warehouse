@@ -12,7 +12,20 @@ Pipeline per tier (GDAL, no full download — COGs are read in place over /vsigs
 Source COGs are currently WebP-lossy (harvest COG_COMPRESS); tiles are encoded as PNG (lossless) so
 this step adds NO further loss. If the harvest later switches to lossless COGs, just re-run this job.
 
+By default (`--editions current`) a superseded edition of a quad (per `editions.py`'s edition
+graph) is dropped before the VRT — the mosaic shows one current map per quad. `--editions all`
+reproduces the old behavior (every COG, every edition stacked). `--quads` scopes a build to named
+quads and writes ONLY a scratch `*-test-current`/`*-test-all` pmtiles object (the edition mode is
+baked into the suffix) — NO catalog item, so a scoped run can never leak into the live collection
+via a later real run's `refresh_catalog()` GCS listing. Inspect the scratch pmtiles directly (e.g.
+load it in a MapLibre/pmtiles viewer) via the URL the build prints. A current-only demo and an
+all-editions demo of the SAME quads can be built side by side for comparison without either
+clobbering the other or the real tier:
+
     python -m ugs_warehouse.pubs.geolmap_mosaics --scale all
+    python -m ugs_warehouse.pubs.geolmap_mosaics --scale 24k --editions all
+    python -m ugs_warehouse.pubs.geolmap_mosaics --scale 24k --quads "Park City East Quad" --editions current
+    python -m ugs_warehouse.pubs.geolmap_mosaics --scale 24k --quads "Park City East Quad" --editions all
 """
 from __future__ import annotations
 
@@ -24,7 +37,7 @@ import tempfile
 from datetime import datetime, timezone
 
 from ..core import config, gcs, stac
-from . import identity, source
+from . import editions, identity, source
 from .scale import DEFAULT_TIER, SCALE_LABEL, tier_of
 
 PMTILES_MIME = config.PMTILES_MIME
@@ -47,8 +60,8 @@ TIER_MAXZOOM = {"24k": 14, "250k": 12, "500k": 12}
 OVERVIEW_LEVELS = ("2", "4", "8", "16", "32", "64", "128", "256", "512", "1024", "2048")
 
 
-def mosaic_object(tier: str) -> str:
-    return f"{identity.MOSAIC_PREFIX}/geologic-maps-{tier}.pmtiles"
+def mosaic_object(tier: str, *, suffix: str = "") -> str:
+    return f"{identity.MOSAIC_PREFIX}/geologic-maps-{tier}{suffix}.pmtiles"
 
 
 def _cog_sids() -> set[str]:
@@ -62,21 +75,63 @@ def _cog_sids() -> set[str]:
     return out
 
 
-def _group_by_tier() -> tuple[dict[str, list[str]], dict[str, dict]]:
+def _group_by_tier(edition_mode: str = "current",
+                    quads: str | None = None) -> tuple[dict[str, list[str]], dict[str, dict]]:
     """{tier -> [series_id, ...]} for every map that has a COG, binned by its publication scale —
     plus {UPPER series_id -> pub record}, so `_write_item` can build member links without a
-    second `source.read_pubs()` pass."""
+    second `source.read_pubs()` pass.
+
+    `edition_mode`: "current" (default) drops superseded quad editions before the tier bins fill,
+    using the edition graph from `editions.py` — the authoritative mosaic should show one map per
+    quad, not every historical revision stacked on top of each other. "all" reproduces the legacy
+    behavior (every COG, every edition) and skips the footprints/edition-graph read entirely (no
+    reason to pay for a CDN round trip when nothing will be filtered).
+
+    `quads`: comma-separated quad names (matched casefolded) restricting membership to those
+    quads — the scoped/demo build path driven by `--quads` in `main()`.
+
+    The footprints quad map is loaded AT MOST once and reused for both the deprecation graph and
+    the `--quads` filter, whichever of the two apply."""
     pubs_by_sid = {(p.get("series_id") or "").strip().upper(): p for p in source.read_pubs()}
+
+    qmap: dict[str, str] = {}
+    if edition_mode == "current" or quads:
+        qmap = editions.quad_by_series()
+
+    deprecated_upper: set[str] = set()
+    if edition_mode == "current":
+        graph = editions.edition_graph(list(pubs_by_sid.values()), quad_by_sid=qmap)
+        deprecated_upper = {s.upper() for s, e in graph.items() if e["deprecated"]}
+
+    requested_quads: set[str] | None = None
+    if quads:
+        requested_quads = {q.strip().casefold() for q in quads.split(",") if q.strip()}
+
     groups: dict[str, list[str]] = {t: [] for t in TIERS}
     unparsed = 0
+    n_deprecated = 0
+    n_outside_quads = 0
     for sid in sorted(_cog_sids()):
+        if edition_mode == "current" and sid in deprecated_upper:
+            n_deprecated += 1
+            continue
+        if requested_quads is not None:
+            quad_name = qmap.get(sid)
+            if quad_name is None or quad_name.casefold() not in requested_quads:
+                n_outside_quads += 1
+                continue
         raw_scale = (pubs_by_sid.get(sid, {}).get("pub_scale") or "")
         t = tier_of(raw_scale) or DEFAULT_TIER
         if tier_of(raw_scale) is None:
             unparsed += 1
         groups[t].append(sid)
     counts = ", ".join(f"{t}={len(groups[t])}" for t in TIERS)
-    print(f"[mosaics] COGs grouped by scale: {counts}  (unparseable -> {DEFAULT_TIER}: {unparsed})")
+    detail = f"unparseable -> {DEFAULT_TIER}: {unparsed}"
+    if edition_mode == "current":
+        detail += f", deprecated editions dropped: {n_deprecated}"
+    if requested_quads is not None:
+        detail += f", outside --quads: {n_outside_quads}"
+    print(f"[mosaics] COGs grouped by scale: {counts}  ({detail})")
     return groups, pubs_by_sid
 
 
@@ -85,15 +140,30 @@ def _vsigs(sid: str) -> str:
     return f"/vsigs/{config.BUCKET}/{identity.COG_PREFIX}/{sid}.cog.tif"
 
 
-def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None) -> bool:
-    """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is empty."""
+def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
+    """`sids` ordered ascending by `pub_year` (newest last). `gdalbuildvrt` gives the LAST source
+    priority on overlap, so this makes the newest edition draw on top for free — matters for
+    `--editions all` (every edition stacked) and the pub_year-tie case. An unparseable/missing year
+    sorts to 0 (bottom); ties (including two unparseable years) break on sid for a stable order."""
+    def _yr(s: str) -> int:
+        y = (by_sid.get(s, {}).get("pub_year") or "").strip()
+        return int(y) if len(y) == 4 and y.isdigit() else 0
+    return sorted(sids, key=lambda s: (_yr(s), s))
+
+
+def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
+                *, suffix: str = "", write_stac_item: bool = True) -> bool:
+    """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
+    empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object,
+    never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
+    uploads the scratch pmtiles for direct inspection but writes NO STAC item — see `build()`."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
     with tempfile.TemporaryDirectory() as tmp:
         listfile = os.path.join(tmp, "cogs.txt")
         with open(listfile, "w") as fh:
-            fh.write("\n".join(_vsigs(s) for s in sids) + "\n")
+            fh.write("\n".join(_vsigs(s) for s in _vrt_order(sids, by_sid)) + "\n")
         vrt = os.path.join(tmp, f"{tier}.vrt")
         mbtiles = os.path.join(tmp, f"{tier}.mbtiles")
         pmtiles = os.path.join(tmp, f"{tier}.pmtiles")
@@ -130,11 +200,15 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         print(f"[mosaics] {tier}: MBTiles -> PMTiles")
         subprocess.run(["pmtiles", "convert", mbtiles, pmtiles], check=True)
 
-        obj = mosaic_object(tier)
+        obj = mosaic_object(tier, suffix=suffix)
         size_mb = os.path.getsize(pmtiles) // 1024 // 1024
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
-        _write_item(tier, sids, obj, by_sid)
+        if write_stac_item:
+            _write_item(tier, sids, obj, by_sid)
+        else:
+            print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
+                  f"inspect tiles directly at {config.public_url(obj)}")
         print(f"[mosaics] {tier}: done -> {config.public_url(obj)}")
         return True
 
@@ -186,13 +260,25 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
     stac.write_item(item)
 
 
-def build(scales: list[str], maxz: int | None = None) -> int:
-    groups, by_sid = _group_by_tier()
+def build(scales: list[str], maxz: int | None = None,
+          edition_mode: str = "current", quads: str | None = None) -> int:
+    """`edition_mode` ("current"|"all") and `quads` (comma-separated quad names) are threaded
+    through to `_group_by_tier`. A `--quads` build is a scoped demo/scratch run: it writes ONLY a
+    `-test-{edition_mode}`-suffixed scratch pmtiles object (never the real tier), writes NO STAC
+    item, and skips the catalog refresh — the suffix carries the edition mode so a current-only
+    demo and an all-editions demo of the SAME quads can coexist instead of clobbering each other."""
+    groups, by_sid = _group_by_tier(edition_mode=edition_mode, quads=quads)
+    suffix = f"-test-{edition_mode}" if quads else ""
+    write_stac_item = not bool(quads)
+    if quads:
+        print(f"[mosaics] SCOPED build (--quads={quads!r}, --editions={edition_mode}) -> "
+              f"writing '*{suffix}' items only, real tiers untouched")
     built = 0
     for tier in scales:
-        if build_tier(tier, groups.get(tier, []), by_sid, maxz=maxz):
+        if build_tier(tier, groups.get(tier, []), by_sid, maxz=maxz,
+                      suffix=suffix, write_stac_item=write_stac_item):
             built += 1
-    if built:
+    if built and not quads:
         print("[mosaics] refreshing STAC catalog")
         stac.refresh_catalog()
     print(f"[mosaics] complete: {built}/{len(scales)} tiers built")
@@ -206,9 +292,20 @@ def main() -> int:
                          "with more memory if needed.")
     ap.add_argument("--maxzoom", type=int, default=None,
                     help="Cap the base (native) zoom level; default lets GDAL pick from resolution.")
+    ap.add_argument("--editions", choices=("current", "all"), default="current",
+                    help="current (default) drops superseded quad editions before stitching; "
+                         "all reproduces the legacy behavior (every COG, every edition).")
+    ap.add_argument("--quads", default=None,
+                    help="Comma-separated quad names (as in the footprints quad_name) to restrict "
+                         "members to — a scoped demo/scratch build; writes ONLY a scratch "
+                         "*-test-current or *-test-all pmtiles (matching --editions), no STAC "
+                         "item, and never touches the real tier — inspect via the printed URL.")
     args = ap.parse_args()
+    if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
+        ap.error("--quads contained no usable quad names")
     scales = list(TIERS) if args.scale == "all" else [args.scale]
-    return 0 if build(scales, maxz=args.maxzoom) >= 0 else 1
+    return 0 if build(scales, maxz=args.maxzoom, edition_mode=args.editions,
+                       quads=args.quads) >= 0 else 1
 
 
 if __name__ == "__main__":

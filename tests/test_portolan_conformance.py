@@ -90,6 +90,24 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
         {"series_id": "MD-50", "series": "MD", "pub_year": "1954", "pub_publisher": "",
          "pub_name": "Mining district file 50"}, [], override={}))
 
+    # An edition pair: a current map and its deprecated predecessor, both with a COG (exercises the
+    # version/deprecated properties, predecessor/successor/latest links, and the currency-gated
+    # related link — ALL-5954).
+    _current_href = config.public_url(stac.item_object_path(
+        pubs_sink.collection_group({"series_id": "M-296DM"}) + "/M", "M-296DM"))
+    stac.write_item(pubs_sink.build_item(
+        {"series_id": "M-296DM", "series": "M", "pub_year": "2022", "pub_publisher": "UGS",
+         "pub_name": "Geologic map of the Park City East quadrangle", "pub_scale": "1:24,000"},
+        [], has_cog=True,
+        edition={"version": "2022", "deprecated": False, "predecessor_href": None,
+                 "successor_href": None, "latest_href": None}, override={}))
+    stac.write_item(pubs_sink.build_item(
+        {"series_id": "GQ-852", "series": "GQ", "pub_year": "1971", "pub_publisher": "USGS",
+         "pub_name": "Geologic map of the Park City East quadrangle", "pub_scale": "1:24,000"},
+        [], has_cog=True,
+        edition={"version": "1971", "deprecated": True, "predecessor_href": None,
+                 "successor_href": _current_href, "latest_href": _current_href}, override={}))
+
     stac.refresh_catalog()
 
     root = tmp_path / "catalog"

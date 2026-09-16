@@ -6,10 +6,11 @@ back — the STAC Versioning Indicators fields `core.stac.build_item` / `sink_st
 already stamp when handed an `edition` dict (Task 2).
 
 Authoritative quad<->series source (SME-confirmed — supersedes the original AGOL-confirmation
-gate; ALL-5911 Task 4): the pub record itself, as `source.read_pubs()` already returns it — no
-live AGOL/network fetch. `series_id`, `quad_name`, `pub_year`, `pub_scale` are read straight off
-each pub dict. The front-end's authoritative displayed `quad_name` IS the UGSpubs value, i.e. this
-same pub-record field.
+gate; ALL-5911 Task 4): `quad_name` comes from the staged footprints parquet (`quad_by_series()`,
+keyed by `series_id`) — the pub feed itself (`source.read_pubs()`) has no `quad_name` column in
+prod, which made edition detection silently produce nothing. A pub's own `p["quad_name"]` (when
+present, e.g. in tests or a future feed) is kept only as a fallback for a pub absent from
+footprints. `pub_year`/`pub_scale` are still read straight off each pub dict.
 
 Grouping key = (normalized `quad_name`, scale tier). Editions must share BOTH the quad and the
 scale tier — same quad at a different scale is a different map series, not an edition of this one.
@@ -26,7 +27,7 @@ Conservative by design (never mislabel a published record):
     cleanly-ordered siblings in the same group still link normally.
 An entry absent from the returned graph carries no edition information at all: `ingest.py` looks
 it up with `graph.get(series_id)`, gets `None`, and passes `edition=None` — `sink_stac.build_item`
-then stamps no `version`/`deprecated`/predecessor/successor for it.
+then stamps no `version`/`deprecated`/predecessor/successor/latest for it.
 
 Import-cheap on purpose: this module (and `geolmap_mosaics`, and `sink_stac`, imported lazily
 below) keeps every rasterio/geopandas/pyogrio/shapely/pygltflib import inside function bodies,
@@ -89,27 +90,70 @@ def _link_group(members: list[dict], out: dict[str, dict], *, quad: str, tier: s
 
     ordered.sort(key=lambda t: t[0])
     n = len(ordered)
+    latest_p = ordered[-1][1] if ordered else None
     for i, (yr, p) in enumerate(ordered):
         sid = (p.get("series_id") or "").strip()
         older = ordered[i - 1][1] if i > 0 else None
         newer = ordered[i + 1][1] if i + 1 < n else None
+        is_latest = p is latest_p
         out[sid] = {
             "version": yr,
             "deprecated": newer is not None,
             "predecessor_href": _item_href(older) if older else None,
             "successor_href": _item_href(newer) if newer else None,
+            "latest_href": None if is_latest else _item_href(latest_p),
         }
 
 
-def edition_graph(pubs: list[dict]) -> dict[str, dict]:
+def quad_by_series() -> dict[str, str]:
+    """{UPPER series_id -> quad_name} from the staged footprints parquet (built by pubs.footprints).
+    Read via gcs.get_bytes (obstore/ADC — the repo's GCS IO path, no httpfs) + a local duckdb read,
+    the same way footprints.py reads it. Fail loud if the parquet is absent — without it edition
+    detection can't group quads (the silent-no-op bug this fixes)."""
+    import os
+    import tempfile
+
+    import duckdb  # base dep; kept function-level to preserve editions.py's import-cheapness
+
+    from ..core import gcs
+    from . import identity  # cheap (os/dataclasses/urllib only) — avoids footprints' `requests` dep
+
+    obj = f"{identity.FOOTPRINTS_PREFIX}/footprints.parquet"  # == footprints.PARQUET_OBJECT
+    try:
+        data = gcs.get_bytes(obj)  # obstore; raises if absent
+    except Exception as e:  # noqa: BLE001 — surface it, don't silently degrade
+        raise RuntimeError(
+            f"[editions] staged footprints parquet gs://.../{obj} unreadable "
+            f"({e}); run `python -m ugs_warehouse.pubs.footprints` first") from e
+
+    tmp = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)
+    try:
+        tmp.write(data)
+        tmp.close()
+        with duckdb.connect() as con:
+            rows = con.execute(
+                "SELECT upper(series_id), quad_name FROM read_parquet(?) "
+                "WHERE coalesce(quad_name, '') <> ''", [tmp.name]).fetchall()
+    finally:
+        os.unlink(tmp.name)
+    return {str(s): str(q) for s, q in rows if s and q}
+
+
+def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None) -> dict[str, dict]:
     """{series_id -> edition dict} for every quad map placed unambiguously in a (quad, scale)
-    group — `{"version", "deprecated", "predecessor_href", "successor_href"}`, the shape
-    `sink_stac.build_item(..., edition=...)` consumes. A pub not covered by any rule below is
-    simply absent from the result (see the module docstring)."""
+    group — `{"version", "deprecated", "predecessor_href", "successor_href", "latest_href"}`, the
+    shape `sink_stac.build_item(..., edition=...)` consumes. A pub not covered by any rule below is
+    simply absent from the result (see the module docstring).
+
+    `quad_by_sid` (`{UPPER series_id: quad_name}`) is the footprints-sourced quad map; defaults to
+    `quad_by_series()` (a live parquet read) when omitted. Pass `{}` to force the feed-only
+    fallback with no network call — see `tests/test_pubs_editions.py`."""
+    if quad_by_sid is None:
+        quad_by_sid = quad_by_series()
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for p in pubs:
         sid = (p.get("series_id") or "").strip()
-        quad = (p.get("quad_name") or "").strip()
+        quad = (quad_by_sid.get(sid.upper()) or (p.get("quad_name") or "")).strip()
         if not sid or not quad:
             continue  # no quad_name -> not a quad map (the common case, not an anomaly)
         tier = tier_of(p.get("pub_scale"))
@@ -122,6 +166,8 @@ def edition_graph(pubs: list[dict]) -> dict[str, dict]:
 
     out: dict[str, dict] = {}
     for (_norm_quad, tier), members in groups.items():
-        quad_label = (members[0].get("quad_name") or "").strip()
+        first_sid = (members[0].get("series_id") or "").strip()
+        quad_label = (quad_by_sid.get(first_sid.upper())
+                      or (members[0].get("quad_name") or "")).strip()
         _link_group(members, out, quad=quad_label, tier=tier)
     return out

@@ -470,6 +470,50 @@ def test_build_catalog_series_filter():
          mock_refresh.assert_not_called()
 
 
+def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys):
+    """ALL-5954 Clinton review, FIX 1 (blocking): editions are an enhancement — a missing/unreadable
+    footprints parquet must not abort the whole pub catalog rebuild. `editions.edition_graph`
+    raising RuntimeError must be caught, warned loudly on stderr, and the build must still complete
+    with every item carrying no edition info (edition=None), not blow up the run."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
+         patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
+         patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._contents_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._threed_classes_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._overrides_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
+         patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
+         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
+         patch("ugs_warehouse.pubs.editions.edition_graph",
+               side_effect=RuntimeError("footprints missing")), \
+         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.core.stac.attach_renders"), \
+         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.styles.warm"), \
+         patch("ugs_warehouse.core.stac.write_item"), \
+         patch("ugs_warehouse.core.stac.refresh_catalog"):
+
+         mock_read.return_value = [
+             {"series_id": "DS-8"},
+             {"series_id": "OFR-12"},
+         ]
+
+         count = build_catalog(skip_refresh=True)
+
+         assert count == 2
+         assert mock_build.call_count == 2
+         assert all(c.kwargs["edition"] is None for c in mock_build.call_args_list)
+
+         err = capsys.readouterr().err
+         assert "WARNING" in err and "edition detection skipped" in err and "footprints missing" in err
+
+
 def test_vector_manifests_by_sid_reads_the_authoritative_split():
     """_vector_manifests_by_sid() must read pubs/vectors.py's per-series `_manifest.json` — the
     AUTHORITATIVE spatial-vs-table split — rather than guess spatial/table from label names."""

@@ -6,10 +6,11 @@ back — the STAC Versioning Indicators fields `core.stac.build_item` / `sink_st
 already stamp when handed an `edition` dict (Task 2).
 
 Authoritative quad<->series source (SME-confirmed — supersedes the original AGOL-confirmation
-gate; ALL-5911 Task 4): the pub record itself, as `source.read_pubs()` already returns it — no
-live AGOL/network fetch. `series_id`, `quad_name`, `pub_year`, `pub_scale` are read straight off
-each pub dict. The front-end's authoritative displayed `quad_name` IS the UGSpubs value, i.e. this
-same pub-record field.
+gate; ALL-5911 Task 4): `quad_name` comes from the staged footprints parquet (`quad_by_series()`,
+keyed by `series_id`) — the pub feed itself (`source.read_pubs()`) has no `quad_name` column in
+prod, which made edition detection silently produce nothing. A pub's own `p["quad_name"]` (when
+present, e.g. in tests or a future feed) is kept only as a fallback for a pub absent from
+footprints. `pub_year`/`pub_scale` are still read straight off each pub dict.
 
 Grouping key = (normalized `quad_name`, scale tier). Editions must share BOTH the quad and the
 scale tier — same quad at a different scale is a different map series, not an edition of this one.
@@ -101,15 +102,43 @@ def _link_group(members: list[dict], out: dict[str, dict], *, quad: str, tier: s
         }
 
 
-def edition_graph(pubs: list[dict]) -> dict[str, dict]:
+def quad_by_series() -> dict[str, str]:
+    """{UPPER series_id -> quad_name} from the staged footprints parquet (geolmap/footprints/
+    footprints.parquet, built by pubs.footprints). Fail loud if it's absent — without it edition
+    detection can't group quads (the silent-no-op bug this fixes)."""
+    import duckdb  # base dep; kept function-level to preserve editions.py's import-cheapness
+
+    from . import identity
+
+    url = config.public_url(f"{identity.FOOTPRINTS_PREFIX}/footprints.parquet")
+    try:
+        con = duckdb.connect()
+        con.execute("INSTALL httpfs; LOAD httpfs;")
+        rows = con.execute(
+            f"SELECT upper(series_id), quad_name FROM read_parquet('{url}') "
+            "WHERE coalesce(quad_name,'') <> ''").fetchall()
+    except Exception as e:  # noqa: BLE001 — surface it, don't silently degrade
+        raise RuntimeError(
+            f"[editions] staged footprints parquet unreadable at {url} ({e}); "
+            "run `python -m ugs_warehouse.pubs.footprints` first") from e
+    return {str(s): str(q) for s, q in rows if s and q}
+
+
+def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None) -> dict[str, dict]:
     """{series_id -> edition dict} for every quad map placed unambiguously in a (quad, scale)
     group — `{"version", "deprecated", "predecessor_href", "successor_href"}`, the shape
     `sink_stac.build_item(..., edition=...)` consumes. A pub not covered by any rule below is
-    simply absent from the result (see the module docstring)."""
+    simply absent from the result (see the module docstring).
+
+    `quad_by_sid` (`{UPPER series_id: quad_name}`) is the footprints-sourced quad map; defaults to
+    `quad_by_series()` (a live parquet read) when omitted. Pass `{}` to force the feed-only
+    fallback with no network call — see `tests/test_pubs_editions.py`."""
+    if quad_by_sid is None:
+        quad_by_sid = quad_by_series()
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for p in pubs:
         sid = (p.get("series_id") or "").strip()
-        quad = (p.get("quad_name") or "").strip()
+        quad = (quad_by_sid.get(sid.upper()) or (p.get("quad_name") or "")).strip()
         if not sid or not quad:
             continue  # no quad_name -> not a quad map (the common case, not an anomaly)
         tier = tier_of(p.get("pub_scale"))

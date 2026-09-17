@@ -26,3 +26,7 @@ The pipeline sink. Upstream: the vector producer reads **dataELT**'s serving `{s
 
 ## Cloud Run / deploy & security
 - Vector = scale-to-zero service, pubs = sharded Jobs; admin console behind IAP. Deploy footgun: `--no-traffic --tag` pins traffic to the old revision — shift with `--to-latest` after. No secrets in code/logs (DSNs/creds via env/Secret Manager). `_current` (and the `geom` column) is an upstream contract — coordinate rather than edit here. GCP/Vertex only.
+
+## Review scope & severity
+- Skip (don't post findings): `viewer/package-lock.json` (lockfile) and `viewer/src/routeTree.gen.ts` (generated). The STAC catalog / GeoParquet / PMTiles / COG are build output published to GCS, not committed source — don't line-review them if a PR ever adds one.
+- Blocking here (not a nit): merge to `main` auto-deploys — the `ugs-warehouse-deploy` Cloud Build trigger rebuilds the producer images + Cloud Run, and the viewer goes live on Firebase. So a swallowed error corrupting the catalog/warehouse, a break to the dataELT `_current` upstream contract, or a change to STAC item/collection/asset shape or CRS handling (`target_epsg=0`→4326) that ripples to downstream viewers is blocking.

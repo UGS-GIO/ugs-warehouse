@@ -8,7 +8,7 @@ pubs prefixes. POC-only bits (local dir, fake-gcs emulator, chmod, thermal coold
 failure log) are dropped — Cloud Run is GCS-only and logs to stderr.
 
 Needs the `pubs` extra (rasterio, rio-cogeo) + system GDAL CLI + poppler (the Dockerfile.harvest
-image). Env: COG_COMPRESS (webp), COG_QUALITY (90), COG_DPI (600; 0 = GeoTIFF as-is),
+image). Env: COG_COMPRESS (deflate), COG_QUALITY (90; webp only), COG_DPI (600; 0 = GeoTIFF as-is),
 SKIP_EXISTING (1), THUMBS (1).
 """
 from __future__ import annotations
@@ -39,7 +39,9 @@ DATAPHP = "https://geology.utah.gov/apps/pubs_landing/data.php"
 MANIFEST = os.environ.get("GEOLMAP_MANIFEST", "")
 SKIP_EXISTING = os.environ.get("SKIP_EXISTING", "1") != "0"
 THUMBS = os.environ.get("THUMBS", "1") != "0"
-COG_COMPRESS = os.environ.get("COG_COMPRESS", "webp").lower()
+# deflate = lossless master: the plate is the archival source of truth (and re-tiled downstream
+# into the mosaic), so it must not be lossy — webp-lossy frays the fine linework. webp still selectable.
+COG_COMPRESS = os.environ.get("COG_COMPRESS", "deflate").lower()
 COG_QUALITY = int(os.environ.get("COG_QUALITY", "90"))
 COG_DPI = int(os.environ.get("COG_DPI", "600"))
 MAX_ZIP_SIZE_MB = int(os.environ.get("MAX_ZIP_SIZE_MB", "0"))
@@ -531,18 +533,22 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                 os.remove(cog)
             prof["compress"] = "lzw"
             prof.pop("WEBP_LEVEL", None)        # webp-only; lzw rejects it
-            cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
+            cog_translate(rgb_clipped, cog, prof, web_optimized=True,
+                          overview_resampling="bilinear", quiet=True)
 
         # webp is 8-bit-only and raises on 16-bit/float plates; lossless lzw keeps web_optimized
         # so the result is still tiled + overviewed for range reads.
         try:
-            cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
+            cog_translate(rgb_clipped, cog, prof, web_optimized=True,
+                          overview_resampling="bilinear", quiet=True)
         except Exception as e:  # noqa: BLE001 — any encode failure is worth one lossless retry
             if COG_COMPRESS != "webp":
                 raise
             _to_lzw(f"failed ({type(e).__name__}: {str(e)[:80]})")
         else:
-            if not os.path.exists(cog) or os.path.getsize(cog) < 100_000:
+            # webp can "succeed" yet emit a tiny/garbage COG; deflate/lzw don't — so this
+            # sanity-retry is webp-only (a real deflate encode error already re-raised above).
+            if COG_COMPRESS == "webp" and (not os.path.exists(cog) or os.path.getsize(cog) < 100_000):
                 _to_lzw("empty/undersized")
 
         # Free up tmpfs RAM by deleting the intermediate clipped/rgb and plate images

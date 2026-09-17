@@ -223,7 +223,7 @@ def build_item(p: dict, attachments: list[dict], *,
         # which differs from the item-level proj:code (4326, the footprint/units CRS). The projection
         # ext allows per-asset overrides, so stamp the COG's real CRS on the asset itself — otherwise
         # a client reads the item-level 4326 and mis-places the raster.
-        # harvest produces an RGBA uint8 WebP COG (gdalwarp -dstalpha → rio-cogeo). Bands are the
+        # harvest produces an RGBA uint8 COG (gdalwarp -dstalpha → rio-cogeo). Bands are the
         # STAC 1.1 common `bands` construct (NOT deprecated raster:bands); data_type is deduped to
         # the asset per 1.1 best practice. Alpha carries transparency, so no separate nodata.
         assets["cog"] = {"href": config.public_url(identity.Pub(sid.upper()).cog_object),

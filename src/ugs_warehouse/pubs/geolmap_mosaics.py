@@ -9,8 +9,9 @@ Pipeline per tier (GDAL, no full download — COGs are read in place over /vsigs
   gdalbuildvrt (over /vsigs/<bucket>/...)  ->  gdal_translate -of MBTILES (lossless PNG tiles)
   ->  gdaladdo (overview = lower zooms)  ->  `pmtiles convert` (MBTiles -> PMTiles)  ->  upload
 
-Source COGs are currently WebP-lossy (harvest COG_COMPRESS); tiles are encoded as PNG (lossless) so
-this step adds NO further loss. If the harvest later switches to lossless COGs, just re-run this job.
+Tiles are encoded as PNG (lossless), so this step adds NO further loss; source-COG fidelity is
+whatever the harvest wrote (COG_COMPRESS — deflate-lossless going forward). COGs are write-once,
+so pubs harvested before that switch keep their original codec until re-harvested as a new edition.
 
 By default (`--editions current`) a superseded edition of a quad (per `editions.py`'s edition
 graph) is dropped before the VRT — the mosaic shows one current map per quad. `--editions all`

@@ -8,12 +8,12 @@ import json
 from io import BytesIO
 
 import pytest
-from shapely.geometry import Point
 
 from ugs_warehouse.pubs import vectors
 
 gpd = pytest.importorskip("geopandas")
 pd = pytest.importorskip("pandas")
+Point = pytest.importorskip("shapely.geometry").Point
 
 
 def _mem_gcs(monkeypatch):

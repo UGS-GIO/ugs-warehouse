@@ -33,8 +33,9 @@ dependencies = [
 # real builders write. It pulls the raster stack (rasterio, pyarrow, pyproj), which the base
 # install deliberately avoids — the cost is ~400MB in CI and nothing in the runtime images. The
 # test skips when it is absent, so a lean local env still runs the rest of the suite.
+# geopandas/shapely: without them, test_pubs_vectors.py importorskips the GeoParquet writer away.
 dev = ["pytest>=8", "ruff==0.16.0", "pre-commit>=3.7", "pystac[validation]>=1.11", "httpx>=0.27",
-       "rashid>=0.1.8"]
+       "rashid>=0.1.8", "geopandas>=1.0", "shapely>=2.0"]
 # pubs/COG producer — heavy raster deps; installed in Dockerfile.harvest (needs system
 # GDAL CLI + poppler too). duckdb is in the base deps.
 pubs = [

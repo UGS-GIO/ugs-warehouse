@@ -1,6 +1,9 @@
 # ugs-warehouse — PR review guide
 Cloud-native STAC catalog producer (Python 3.11, DuckDB/DuckLake, obstore→GCS/CDN). Two producers (vector, pubs) on a shared `core/` emit ONE strict-STAC catalog + DuckLake/GeoParquet/PMTiles/COG to a private CDN-fronted bucket. Review ONLY the changed lines against these repo-specific rules (general bug/security/perf/quality assumed). Cite file:line, use repo context, skip unrelated pre-existing issues, group nits.
 
+## Pipeline position & cross-repo contracts
+The pipeline sink. Upstream: the vector producer reads **dataELT**'s serving `{schema}.{topic}_current` tables — their schema, `ugs_key`, `geom`, and `target_epsg` are an upstream CONTRACT; a dataELT serving change can break `transform`/sinks here, so coordinate rather than patch around it. **ugs-styles** binds styling via the `ugs:renders` block (rebound by the `restyle` job, no reingest). Downstream: the strict-STAC catalog + GeoParquet/PMTiles/COG assets you publish to the CDN are consumed by **ugs-map-viewer** and other viewers — a breaking change to item/collection shape or asset keys ripples to them, so flag it for a coordinated consumer update.
+
 ## STAC catalog — one builder, derive from truth
 - ONE item builder / ONE catalog: items come from `core/stac.py` (`build_item`), and `refresh_catalog()` rewrites root `catalog.json` + every `collection.json` from GCS truth. Never hand-edit or hand-write catalog/collection JSON, and keep the pure builders (`build_item`, `_root_doc`, `_collection_doc`, `_group_items`) side-effect-free so tests hold.
 - Collections are fixed (`ugs-serving-topics`, `ugs-publications`, `ugs-rasters`); new per-item data goes in properties/assets, not an ad-hoc collection. Prefer standard STAC constructs; `ugs:*` only when nothing standard fits.

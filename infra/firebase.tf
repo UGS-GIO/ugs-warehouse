@@ -24,9 +24,3 @@ output "firebase_site_url" {
   description = "Default Firebase URL for the discovery viewer."
   value       = google_firebase_hosting_site.discovery.default_url
 }
-
-output "firebase_custom_domain" {
-  description = "Custom domain URL for the discovery viewer."
-  value       = "https://${google_firebase_hosting_custom_domain.discovery.custom_domain}"
-}
-

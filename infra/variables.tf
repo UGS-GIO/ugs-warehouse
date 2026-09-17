@@ -128,4 +128,3 @@ variable "firebase_custom_domain" {
   description = "Custom domain for the public discovery viewer on Firebase Hosting."
   default     = "data.geology.utah.gov"
 }
-

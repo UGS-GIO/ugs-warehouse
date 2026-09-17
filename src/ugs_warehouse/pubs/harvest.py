@@ -73,10 +73,12 @@ _series_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("series_id", d
 
 
 def hlog(message: str, *, step: str = "", level: str = "INFO", category: str = "",
-         err: bool = False) -> None:
+         err: bool = False, extra: dict | None = None) -> None:
     rec = {"severity": level, "series_id": _series_ctx.get(), "step": step, "message": message}
     if category:
         rec["category"] = category  # ok | expected | attention — triage in the report
+    if extra:
+        rec.update(extra)           # structured payload (e.g. the per-pub harvest report record)
     print(json.dumps(rec), file=sys.stderr if err else sys.stdout, flush=True)
 
 
@@ -91,6 +93,104 @@ def outcome_category(code: str) -> str:
     if code.startswith("skip"):
         return "expected"   # placeholder / already-harvested / no spatial data
     return "attention"      # fail:*
+
+
+# --- Harvest run report -----------------------------------------------------------------------
+# A per-pub reconciliation of what the source bundle CONTAINED vs. what was USED and PRODUCED, so a
+# run is auditable without log-diving. The pub's pipeline stages fill `_pub_report` in place
+# (harvest_one -> prepare_plates / _render_geospatial_pdf -> _harvest_attempt); `_run_report`
+# collects every pub. Module-level, not threaded through signatures — the run loop is sequential
+# per process (parallelism is across separate Cloud Run tasks/processes, each with its own state).
+_pub_report: dict = {}
+_run_report: list[dict] = []
+
+_SIDECAR_EXTS = (".tfwx", ".tfw", ".wld", ".aux.xml", ".prj", ".dbf", ".shx", ".cpg",
+                 ".sbn", ".sbx", ".xml")
+
+
+def _classify(name: str) -> str:
+    """Bucket a source-bundle inner file for the report."""
+    low = name.lower()
+    if low.endswith(".pdf"):
+        return "pdf"
+    if low.endswith((".tif", ".tiff")):
+        # basemaps/hillshades are .tif too but never the map raster (mirrors prepare_plates' filter)
+        return "basemap" if any(x in low for x in ("basemap", "topo", "hillshade", "mashup")) else "geotiff"
+    if low.endswith(".shp"):
+        return "shapefile"
+    if low.endswith(_SIDECAR_EXTS):
+        return "sidecar"
+    return "other"
+
+
+def _report_begin(series_id: str) -> None:
+    global _pub_report
+    _pub_report = {"series_id": series_id, "source_zips": [], "found": [],
+                   "used": {"plate": None, "units_shp": None}, "tier": None,
+                   "produced": {"cog": None, "units_parquet": None, "thumbnail": None},
+                   "skipped": [], "status": None}
+
+
+def _report(section: str | None = None, **updates) -> None:
+    """Update the current pub report: section=None updates top-level keys, else the nested dict."""
+    target = _pub_report.setdefault(section, {}) if section else _pub_report
+    target.update(updates)
+
+
+def _report_add(key: str, entry: dict) -> None:
+    """Append to a list field (found / skipped) of the current pub report."""
+    _pub_report.setdefault(key, []).append(entry)
+
+
+def _report_geo(inner_name: str, value: bool) -> None:
+    """Stamp a found PDF entry with whether GDAL read a CRS (georeferenced)."""
+    for e in _pub_report.get("found", []):
+        if e["name"] == inner_name:
+            e["georeferenced"] = value
+            return
+
+
+def _report_derive_skipped(used_shp: str | None) -> None:
+    """Fill skipped[]: data files present in the source but not used, each with a reason."""
+    plate = _pub_report.get("used", {}).get("plate")
+    used_plate = os.path.basename(plate["name"]) if plate else None
+    tier = _pub_report.get("tier")
+    for e in _pub_report.get("found", []):
+        name, kind = e["name"], e["kind"]
+        base = os.path.basename(name)
+        if kind == "sidecar":
+            continue                                  # support files, not a selection decision
+        if used_plate and base == used_plate:
+            continue                                  # this is what we used
+        if kind == "shapefile" and name == used_shp:
+            continue
+        if kind == "pdf":
+            g = e.get("georeferenced")
+            # a georeferenced PDF only reaches skipped when its render failed (a successful one
+            # becomes used.plate and later candidates are never probed)
+            reason = ("no CRS" if g is False else
+                      "render failed at all DPIs" if g else "not evaluated (plate already chosen)")
+        elif kind == "geotiff":
+            reason = "superseded by geo-PDF" if tier == "geo-pdf" else "unused geotiff"
+        elif kind == "basemap":
+            reason = "basemap, not the map raster"
+        elif kind == "shapefile":
+            reason = "secondary shapefile"
+        elif base.lower().endswith(".mpk"):
+            reason = "unsupported (Esri map package)"
+        else:
+            continue                                  # docs/metadata — not a raster candidate
+        _report_add("skipped", {"name": name, "reason": reason})
+
+
+def _report_finish(status: str) -> None:
+    """Stamp the outcome, add the pub to the run, and emit its structured record."""
+    if not _pub_report.get("series_id"):
+        return
+    _pub_report["status"] = status
+    _run_report.append(dict(_pub_report))
+    hlog(f"report: {_pub_report['series_id']} tier={_pub_report.get('tier')} status={status}",
+         step="report", extra={"report": _pub_report})
 
 
 def _get(url, params):
@@ -352,6 +452,9 @@ def prepare_plates(zip_paths, work):
     for zip_path in zip_paths:
         with zipfile.ZipFile(zip_path) as z:
             names = z.namelist()
+            for _nm in names:                        # full source inventory for the run report
+                if not _nm.endswith("/"):
+                    _report_add("found", {"name": _nm, "kind": _classify(_nm)})
             _gtif = (pick(names, r"plate1.*geotiff\.tiff?$", r"geotiff\.tiff?$", r"utah-500k.*\.tiff?$")
                      or next((n for n in names if n.lower().endswith((".tif", ".tiff")) and not any(
                           x in n.lower() for x in ("basemap", "topo", "hillshade", "mashup"))), None))
@@ -375,13 +478,20 @@ def prepare_plates(zip_paths, work):
                 z.extract(nm, work)
 
     shp_path = os.path.join(work, shp) if shp else None
+    _report("used", units_shp=shp)
     rendered = _render_geospatial_pdf(pdf_candidates, work)
     if rendered:
+        _report(tier="geo-pdf")                       # _render recorded used["plate"] (name + dpi)
+        _report_derive_skipped(shp)
         return rendered, shp_path
     if not gtif:
+        _report_derive_skipped(shp)
         return None, shp_path
     virtual_gtif = f"/vsizip/{target_zip}/{inner_gtif}"
     gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
+    _report(tier="geotiff")
+    _report("used", plate={"name": inner_gtif, "dpi": None})
+    _report_derive_skipped(shp)
     return gtif_path, shp_path
 
 
@@ -404,10 +514,12 @@ def _render_geospatial_pdf(pdf_candidates, work):
         try:
             with rasterio.open(cand) as ds:
                 opened_any = True
+                _report_geo(nm, ds.crs is not None)
                 if ds.crs is None:
                     continue
                 crs_seen = True
         except Exception:
+            _report_geo(nm, False)
             continue
         dpi = COG_DPI
         rendered = os.path.join(work, "plate_render.tif")
@@ -416,6 +528,7 @@ def _render_geospatial_pdf(pdf_candidates, work):
                 run(["gdal_translate", "-q", "-oo", f"DPI={dpi}", cand, rendered,
                      "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", "-co", "BIGTIFF=YES"])
                 hlog(f"geospatial PDF rendered at {dpi}dpi ({os.path.basename(nm)})", step="plate")
+                _report("used", plate={"name": os.path.basename(nm), "dpi": dpi})
                 return rendered
             except Exception as e:
                 hlog(f"geoPDF render failed at {dpi}dpi ({e}); retrying lower", step="plate", level="WARNING")
@@ -446,6 +559,7 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
     pub = identity.Pub.parse(series_id)
     series_id = pub.series_id
     _series_ctx.set(series_id)
+    _report_begin(series_id)
     if "XXXX" in series_id:
         hlog("SKIP unpublished placeholder", step="resolve", level="NOTICE", category="expected")
         return "skip:placeholder"
@@ -506,6 +620,11 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
 
     series_id = pub.series_id
     _series_ctx.set(series_id)
+    # Each attempt re-inventories the source (harvest_one may retry with a different zip set), so
+    # reset the per-attempt report fields; series_id/status stay owned by harvest_one/_report_finish.
+    _report(source_zips=list(zurls), found=[], skipped=[], tier=None,
+            used={"plate": None, "units_shp": None},
+            produced={"cog": None, "units_parquet": None, "thumbnail": None})
     work = tempfile.mkdtemp(prefix=f"h_{series_id.replace('/', '_')}_")
     try:
         cut, n_feat = footprint(series_id, work)
@@ -600,6 +719,9 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         # overwrite an existing object) — a revision publishes as a new edition (new series_id),
         # never an in-place rewrite, so long-cache is always safe.
         gcs.upload_write_once(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+        _report("produced", cog={"object": pub.cog_object,
+                                 "size_mb": os.path.getsize(cog) // 1024 // 1024,
+                                 "compress": prof.get("compress", COG_COMPRESS)})
         if shp:
             import duckdb
             gpq = os.path.join(work, f"{series_id}.units.parquet")
@@ -609,13 +731,15 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                 con.execute(f"COPY (SELECT * FROM ST_Read('{shp}')) TO '{gpq}' (FORMAT PARQUET)")
             finally:
                 con.close()
-            gcs.upload(gpq, f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet",
-                       content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+            units_obj = f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet"
+            gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+            _report("produced", units_parquet=units_obj)
         if THUMBS:
             th = os.path.join(work, f"{series_id}.thumb.png")
+            thumb_obj = f"{identity.COG_PREFIX}/{series_id}.thumb.png"
             run(["gdal_translate", "-of", "PNG", "-outsize", "700", "0", cog, th])
-            gcs.upload(th, f"{identity.COG_PREFIX}/{series_id}.thumb.png",
-                       content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
+            gcs.upload(th, thumb_obj, content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
+            _report("produced", thumbnail=thumb_obj)
         used = prof.get("compress", COG_COMPRESS)          # may have fallen back from webp
         qual = f" q{COG_QUALITY}" if used == "webp" else ""
         hlog(f"OK ({COG_DPI}dpi {used}{qual}) → {pub.cog_object}", step="result", category="ok")
@@ -696,7 +820,33 @@ def main() -> int:
     for sid in sids:
         res = harvest_one(sid, dry_run=args.dry_run, force=args.force)
         tally[outcome_category(res)] += 1
+        _report_finish(res)
     _series_ctx.set("")  # the summary is job-level, not scoped to the last pub
+
+    # Persist the run report (found-vs-used-vs-produced per pub) as one artifact + a tier roll-up,
+    # so a run is auditable at a glance and a GeoTIFF fallback (z16) jumps out of the counts.
+    report_path = os.environ.get("HARVEST_REPORT", "harvest-report.json")
+    try:
+        with open(report_path, "w") as f:
+            json.dump(_run_report, f, indent=2)
+        report_gcs = os.environ.get("HARVEST_REPORT_GCS")
+        if report_gcs:
+            gcs.upload(report_path, report_gcs, content_type="application/json",
+                       cache_control=gcs.CACHE_MUTABLE)
+            hlog(f"harvest report → {report_gcs}", step="report")
+    except Exception as e:
+        hlog(f"could not write harvest report: {e}", step="report", level="WARNING")
+    tiers = {"geo-pdf": 0, "geotiff": 0, "none": 0}
+    skipped = 0
+    for r in _run_report:
+        if (r.get("status") or "").startswith("skip"):
+            skipped += 1                              # already-harvested / placeholder — not "no source"
+        else:
+            tiers[r.get("tier") or "none"] += 1
+    hlog(f"report: {tiers['geo-pdf']} geo-pdf (z17), {tiers['geotiff']} geotiff (z16), "
+         f"{tiers['none']} no-source, {skipped} skipped across {len(_run_report)} pub(s) → {report_path}",
+         step="report")
+
     hlog(f"run complete: {tally['ok']} ok, {tally['expected']} expected (skip / PDF-only), "
          f"{tally['attention']} need attention", step="summary",
          level="WARNING" if tally["attention"] else "NOTICE")

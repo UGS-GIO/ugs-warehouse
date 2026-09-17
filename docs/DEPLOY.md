@@ -175,8 +175,8 @@ rewrites (`firebase.json`) do it. The old `gs://${_PUBLIC_BUCKET}/warehouse/view
 retired; the bucket still serves STAC, COGs and tiles, unchanged.
 
 The Hosting *site* is tofu-managed (`infra/firebase.tf`). Served at
-**https://data-geology-utah-gov.web.app** until the custom domain `data.geology.utah.gov` is cut
-over (DNS-gated). `index.html` is `no-cache`; hashed assets are immutable (`firebase.json`).
+**https://data.geology.utah.gov** (or the default `https://data-geology-utah-gov.web.app`).
+`index.html` is `no-cache`; hashed assets are immutable (`firebase.json`).
 
 ### One-time setup
 

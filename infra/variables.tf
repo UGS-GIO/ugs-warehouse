@@ -122,3 +122,10 @@ variable "firebase_site_id" {
   EOT
   default     = "data-geology-utah-gov"
 }
+
+variable "firebase_custom_domain" {
+  type        = string
+  description = "Custom domain for the public discovery viewer on Firebase Hosting."
+  default     = "data.geology.utah.gov"
+}
+

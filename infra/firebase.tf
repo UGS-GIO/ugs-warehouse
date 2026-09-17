@@ -12,7 +12,21 @@ resource "google_firebase_hosting_site" "discovery" {
   site_id  = var.firebase_site_id
 }
 
+resource "google_firebase_hosting_custom_domain" "discovery" {
+  provider              = google-beta
+  project               = var.project_id
+  site_id               = google_firebase_hosting_site.discovery.site_id
+  custom_domain         = var.firebase_custom_domain
+  wait_dns_verification = false
+}
+
 output "firebase_site_url" {
-  description = "Default Firebase URL for the discovery viewer (custom domain is a later, DNS-gated step)."
+  description = "Default Firebase URL for the discovery viewer."
   value       = google_firebase_hosting_site.discovery.default_url
 }
+
+output "firebase_custom_domain" {
+  description = "Custom domain URL for the discovery viewer."
+  value       = "https://${google_firebase_hosting_custom_domain.discovery.custom_domain}"
+}
+

@@ -536,18 +536,19 @@ def _render_geospatial_pdf(pdf_candidates, work):
                     os.remove(rendered)
                 dpi //= 2
         break
-    # No geospatial plate was rendered. COG_DPI>0 explicitly asked for PDF rendering, so a fall-back
-    # to the low-res GeoTIFF must be LOUD, never silent — distinguish WHY so the log is actionable.
+    # No geospatial plate was rendered — fall back to the low-res GeoTIFF. Surface WHY as an ADVISORY
+    # (WARNING, never attention/blocking): the pub still produces a valid COG and succeeds; the run
+    # report is the audit trail, this log is just at-a-glance visibility into which pubs fell back.
     n = len(pdf_candidates)
     if not opened_any:
-        # Opened ZERO of the candidates → the PDF driver has no working backend (poppler/pdfium) in
-        # this image. This hits EVERY pub and quietly degrades the whole corpus to z16 — flag it.
-        hlog(f"PDF render UNAVAILABLE: GDAL opened 0 of {n} candidate PDF(s) (missing poppler/pdfium "
-             f"backend?) — degrading to GeoTIFF (z16); fix the harvest image or set COG_DPI=0 to use "
-             f"GeoTIFF intentionally", step="plate", level="ERROR", category="attention", err=True)
+        # Opened ZERO of the candidates → the PDF driver likely has no working backend (poppler/pdfium)
+        # in this image, so every pub degrades to z16. Advisory, so it's visible without gating a run.
+        hlog(f"advisory: GDAL opened 0 of {n} candidate PDF(s) (missing poppler/pdfium backend?) — "
+             f"using GeoTIFF (z16); fix the harvest image or set COG_DPI=0 to use GeoTIFF intentionally",
+             step="plate", level="WARNING")
     elif crs_seen:
-        hlog(f"geospatial plate found but render failed at every DPI down to 150 — degrading to "
-             f"GeoTIFF (z16)", step="plate", level="ERROR", category="attention", err=True)
+        hlog(f"advisory: geospatial plate found but render failed at every DPI down to 150 — using "
+             f"GeoTIFF (z16)", step="plate", level="WARNING")
     else:
         hlog(f"{n} plate PDF(s) present but none georeferenced (no embedded CRS) — using GeoTIFF "
              f"(lower res)", step="plate", level="WARNING")

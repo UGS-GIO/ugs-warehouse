@@ -395,14 +395,18 @@ def _render_geospatial_pdf(pdf_candidates, work):
         return None
     import rasterio
     ordered = sorted(pdf_candidates, key=lambda zn: (0 if "plate1" in zn[1].lower() else 1, zn[1].lower()))
+    opened_any = False   # GDAL could actually READ at least one PDF (i.e. the driver has a backend)
+    crs_seen = False     # at least one PDF carried embedded georeferencing
     for zp, nm in ordered:
         with zipfile.ZipFile(zp) as z:
             z.extract(nm, work)
         cand = os.path.join(work, nm)
         try:
             with rasterio.open(cand) as ds:
+                opened_any = True
                 if ds.crs is None:
                     continue
+                crs_seen = True
         except Exception:
             continue
         dpi = COG_DPI
@@ -419,6 +423,21 @@ def _render_geospatial_pdf(pdf_candidates, work):
                     os.remove(rendered)
                 dpi //= 2
         break
+    # No geospatial plate was rendered. COG_DPI>0 explicitly asked for PDF rendering, so a fall-back
+    # to the low-res GeoTIFF must be LOUD, never silent — distinguish WHY so the log is actionable.
+    n = len(pdf_candidates)
+    if not opened_any:
+        # Opened ZERO of the candidates → the PDF driver has no working backend (poppler/pdfium) in
+        # this image. This hits EVERY pub and quietly degrades the whole corpus to z16 — flag it.
+        hlog(f"PDF render UNAVAILABLE: GDAL opened 0 of {n} candidate PDF(s) (missing poppler/pdfium "
+             f"backend?) — degrading to GeoTIFF (z16); fix the harvest image or set COG_DPI=0 to use "
+             f"GeoTIFF intentionally", step="plate", level="ERROR", category="attention", err=True)
+    elif crs_seen:
+        hlog(f"geospatial plate found but render failed at every DPI down to 150 — degrading to "
+             f"GeoTIFF (z16)", step="plate", level="ERROR", category="attention", err=True)
+    else:
+        hlog(f"{n} plate PDF(s) present but none georeferenced (no embedded CRS) — using GeoTIFF "
+             f"(lower res)", step="plate", level="WARNING")
     return None
 
 

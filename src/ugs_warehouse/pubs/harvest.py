@@ -547,8 +547,8 @@ def _render_geospatial_pdf(pdf_candidates, work):
              f"using GeoTIFF (z16); fix the harvest image or set COG_DPI=0 to use GeoTIFF intentionally",
              step="plate", level="WARNING")
     elif crs_seen:
-        hlog(f"advisory: geospatial plate found but render failed at every DPI down to 150 — using "
-             f"GeoTIFF (z16)", step="plate", level="WARNING")
+        hlog("advisory: geospatial plate found but render failed at every DPI down to 150 — using "
+             "GeoTIFF (z16)", step="plate", level="WARNING")
     else:
         hlog(f"{n} plate PDF(s) present but none georeferenced (no embedded CRS) — using GeoTIFF "
              f"(lower res)", step="plate", level="WARNING")

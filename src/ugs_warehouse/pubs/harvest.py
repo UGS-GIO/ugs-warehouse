@@ -495,15 +495,33 @@ def prepare_plates(zip_paths, work):
     return gtif_path, shp_path
 
 
+def _pdf_has_crs(path):
+    """(opened, has_crs) for a PDF, via the CLI `gdalinfo` — the render already uses the CLI
+    gdal_translate, and the harvest image's rasterio (a pip wheel) has no PDF driver, so detection
+    must use the same poppler-capable CLI GDAL, not rasterio.open. Reads only the geo dict (no
+    rasterization), so it stays cheap. opened=False means GDAL could not open the PDF at all."""
+    try:
+        out = subprocess.run(["gdalinfo", "-json", path], capture_output=True, text=True, timeout=120)
+    except Exception:
+        return False, False
+    if out.returncode != 0 or not out.stdout:
+        return False, False
+    try:
+        info = json.loads(out.stdout)
+    except Exception:
+        return True, False
+    return True, bool((info.get("coordinateSystem") or {}).get("wkt"))
+
+
 def _render_geospatial_pdf(pdf_candidates, work):
     """Return a path to a GeoTIFF rendered from the first GEOSPATIAL plate PDF among `pdf_candidates`
     (list of (zip_path, inner_name)), rasterized at COG_DPI via GDAL (using the PDF's OWN georef),
     or None if COG_DPI<=0, no candidate is georeferenced, or rendering keeps failing (caller falls
-    back to the GeoTIFF). A plate1-named candidate is tried first. `rasterio.open` reads the geo dict
-    without rendering pixels (~0.4 s), so detection is cheap."""
+    back to the GeoTIFF). A plate1-named candidate is tried first. Detection uses the CLI `gdalinfo`
+    (the render's poppler-capable GDAL — the image's rasterio wheel has no PDF driver); it reads only
+    the geo dict, no rasterization, so it stays cheap."""
     if COG_DPI <= 0 or not pdf_candidates:
         return None
-    import rasterio
     ordered = sorted(pdf_candidates, key=lambda zn: (0 if "plate1" in zn[1].lower() else 1, zn[1].lower()))
     opened_any = False   # GDAL could actually READ at least one PDF (i.e. the driver has a backend)
     crs_seen = False     # at least one PDF carried embedded georeferencing
@@ -511,16 +529,13 @@ def _render_geospatial_pdf(pdf_candidates, work):
         with zipfile.ZipFile(zp) as z:
             z.extract(nm, work)
         cand = os.path.join(work, nm)
-        try:
-            with rasterio.open(cand) as ds:
-                opened_any = True
-                _report_geo(nm, ds.crs is not None)
-                if ds.crs is None:
-                    continue
-                crs_seen = True
-        except Exception:
-            _report_geo(nm, False)
+        opened, has_crs = _pdf_has_crs(cand)
+        if opened:
+            opened_any = True
+        _report_geo(nm, has_crs)
+        if not has_crs:
             continue
+        crs_seen = True
         dpi = COG_DPI
         rendered = os.path.join(work, "plate_render.tif")
         while dpi >= 150:
@@ -832,7 +847,10 @@ def main() -> int:
             json.dump(_run_report, f, indent=2)
         report_gcs = os.environ.get("HARVEST_REPORT_GCS")
         if report_gcs:
-            gcs.upload(report_path, report_gcs, content_type="application/json",
+            # gcs.upload wants a bucket-relative object path; tolerate a full gs://bucket/obj URL too.
+            obj = (report_gcs.split("/", 3)[3]
+                   if report_gcs.startswith("gs://") and report_gcs.count("/") >= 3 else report_gcs)
+            gcs.upload(report_path, obj, content_type="application/json",
                        cache_control=gcs.CACHE_MUTABLE)
             hlog(f"harvest report → {report_gcs}", step="report")
     except Exception as e:

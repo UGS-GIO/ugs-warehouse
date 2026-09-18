@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -86,6 +87,56 @@ def test_prepare_plates_virtual_vfs():
         )
 
 
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_render_geospatial_pdf_returns_none_when_no_crs(monkeypatch, tmp_path):
+    """A PDF with no embedded CRS (e.g. a plain print-layout PDF) isn't a geospatial plate —
+    _render_geospatial_pdf must skip it so the caller falls back to the GeoTIFF."""
+    from ugs_warehouse.pubs import harvest
+
+    monkeypatch.setattr(harvest, "COG_DPI", 600)
+    mock_ds = MagicMock()
+    mock_ds.crs = None
+
+    with patch("zipfile.ZipFile") as mock_zipfile, patch("rasterio.open") as mock_open:
+        mock_zipfile.return_value.__enter__.return_value = MagicMock()
+        mock_open.return_value.__enter__.return_value = mock_ds
+
+        result = harvest._render_geospatial_pdf([("/tmp/test.zip", "M-1_Plate1.pdf")], str(tmp_path))
+
+    assert result is None
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_render_geospatial_pdf_renders_georeferenced_candidate(monkeypatch, tmp_path):
+    """A georeferenced plate PDF (GDAL reads a CRS) is rasterized via gdal_translate at COG_DPI,
+    using the PDF's own georeferencing (-oo DPI=…) rather than the GeoTIFF's bounds."""
+    from ugs_warehouse.pubs import harvest
+
+    monkeypatch.setattr(harvest, "COG_DPI", 600)
+    mock_ds = MagicMock()
+    mock_ds.crs = MagicMock()  # truthy CRS -> georeferenced
+
+    def fake_run(cmd):
+        open(cmd[5], "wb").close()  # simulate gdal_translate writing the rendered output
+
+    mock_run = MagicMock(side_effect=fake_run)
+    monkeypatch.setattr(harvest, "run", mock_run)
+
+    with patch("zipfile.ZipFile") as mock_zipfile, patch("rasterio.open") as mock_open:
+        mock_zipfile.return_value.__enter__.return_value = MagicMock()
+        mock_open.return_value.__enter__.return_value = mock_ds
+
+        result = harvest._render_geospatial_pdf([("/tmp/test.zip", "M-1_Plate1.pdf")], str(tmp_path))
+
+    expected = str(tmp_path / "plate_render.tif")
+    assert result == expected
+    assert (tmp_path / "plate_render.tif").exists()
+
+    cmd = mock_run.call_args[0][0]
+    assert cmd[0] == "gdal_translate"
+    assert cmd[cmd.index("-oo") + 1] == "DPI=600"
+
+
 def test_get_attached_zips():
     from ugs_warehouse.pubs.harvest import _attachments_cache, _get_attached_zips
 
@@ -143,3 +194,123 @@ def test_harvest_one_does_not_retry_after_first_attempt_already_uploaded_cog(mon
 
     assert result == "fail:DuckDBIOException"  # the real first-failure reason, not write-once
     assert attempt_mock.call_count == 1  # no wasted/misleading retry once the COG is already live
+
+
+# --- harvest run report -----------------------------------------------------------------------
+
+class _FakeDS:
+    """Minimal rasterio dataset stand-in: a context manager exposing only `.crs`."""
+    def __init__(self, crs):
+        self.crs = crs
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _fake_rasterio_open(geo_basenames):
+    """rasterio.open replacement: a dataset is 'georeferenced' iff its basename is in the set."""
+    def _open(path, *a, **k):
+        base = os.path.basename(path)
+        return _FakeDS(object() if base in geo_basenames else None)
+    return _open
+
+
+_BUNDLE = ["M-1_Plate1.pdf", "M-1_Plate2.pdf", "M-1_Booklet.pdf", "M-1_geotiff.tif",
+           "M-1_geotiff.tfw", "M-1_geotiff.prj", "M-1_units.shp", "M-1_units.dbf", "M-1.mpk"]
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_report_geo_pdf_tier(monkeypatch, tmp_path):
+    """A georeferenced plate wins → report tier=geo-pdf, the plate is `used`, and the GeoTIFF is
+    `skipped` as superseded — the found-vs-used reconciliation for the good path."""
+    from ugs_warehouse.pubs import harvest
+
+    monkeypatch.setattr(harvest, "COG_DPI", 600)
+    harvest._report_begin("M-1")
+    mock_zip = MagicMock()
+    mock_zip.namelist.return_value = _BUNDLE
+
+    def fake_run(cmd):
+        open(cmd[5], "wb").close()  # gdal_translate writes the rendered plate
+
+    monkeypatch.setattr(harvest, "run", fake_run)
+    with patch("zipfile.ZipFile") as mock_zipfile, \
+         patch("rasterio.open", side_effect=_fake_rasterio_open({"M-1_Plate1.pdf"})):
+        mock_zipfile.return_value.__enter__.return_value = mock_zip
+        plate, shp = harvest.prepare_plates(["/tmp/m-1.zip"], str(tmp_path))
+
+    assert plate == str(tmp_path / "plate_render.tif")
+    rep = harvest._pub_report
+    assert rep["tier"] == "geo-pdf"
+    assert rep["used"]["plate"] == {"name": "M-1_Plate1.pdf", "dpi": 600}
+    assert rep["used"]["units_shp"] == "M-1_units.shp"
+    plate1 = next(e for e in rep["found"] if e["name"] == "M-1_Plate1.pdf")
+    assert plate1 == {"name": "M-1_Plate1.pdf", "kind": "pdf", "georeferenced": True}
+    skipped = {s["name"]: s["reason"] for s in rep["skipped"]}
+    assert skipped["M-1_geotiff.tif"] == "superseded by geo-PDF"
+    assert skipped["M-1.mpk"] == "unsupported (Esri map package)"
+    assert "M-1_Plate2.pdf" in skipped  # a non-chosen plate is accounted for, not dropped
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_report_geotiff_fallback_tier(monkeypatch, tmp_path):
+    """No PDF carries a CRS → report tier=geotiff, the GeoTIFF is `used`, and every PDF is `skipped`
+    with reason 'no CRS' — the audit trail that makes a z16 fallback explicit."""
+    from ugs_warehouse.pubs import harvest
+
+    monkeypatch.setattr(harvest, "COG_DPI", 600)
+    monkeypatch.setattr(harvest, "corrected_georef", lambda *a, **k: "mocked_gtif")
+    harvest._report_begin("M-1")
+    mock_zip = MagicMock()
+    mock_zip.namelist.return_value = _BUNDLE
+
+    with patch("zipfile.ZipFile") as mock_zipfile, \
+         patch("rasterio.open", side_effect=_fake_rasterio_open(set())):  # nothing georeferenced
+        mock_zipfile.return_value.__enter__.return_value = mock_zip
+        plate, shp = harvest.prepare_plates(["/tmp/m-1.zip"], str(tmp_path))
+
+    assert plate == "mocked_gtif"
+    rep = harvest._pub_report
+    assert rep["tier"] == "geotiff"
+    assert rep["used"]["plate"] == {"name": "M-1_geotiff.tif", "dpi": None}
+    skipped = {s["name"]: s["reason"] for s in rep["skipped"]}
+    for pdf in ("M-1_Plate1.pdf", "M-1_Plate2.pdf", "M-1_Booklet.pdf"):
+        assert skipped[pdf] == "no CRS"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_report_records_produced_cog(monkeypatch, tmp_path):
+    """The produced side: after a successful attempt the report captures the COG object, size, and
+    (lossless) compression, plus the source zip(s) the attempt drew from."""
+    from ugs_warehouse.pubs import harvest
+
+    pub = identity.Pub(series_id="M-1")
+    harvest._report_begin("M-1")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work: (str(tmp_path / "plate.tif"), None))
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: None)  # gdalwarp no-op
+
+    def fake_cog_translate(src, dst, prof, **k):
+        with open(dst, "wb") as f:
+            f.write(b"x" * 200_000)
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    monkeypatch.setattr(harvest.gcs, "upload_write_once", lambda *a, **k: None)
+    monkeypatch.setattr(harvest.gcs, "upload", lambda *a, **k: None)
+
+    res = _harvest_attempt(pub, ["http://x/m-1.zip"])
+
+    assert res == "ok"
+    rep = harvest._pub_report
+    assert rep["source_zips"] == ["http://x/m-1.zip"]
+    cog = rep["produced"]["cog"]
+    assert cog is not None
+    assert cog["object"] == pub.cog_object
+    assert cog["compress"].lower() == "deflate"  # lossless master, not webp

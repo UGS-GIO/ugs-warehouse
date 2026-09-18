@@ -94,13 +94,10 @@ def test_render_geospatial_pdf_returns_none_when_no_crs(monkeypatch, tmp_path):
     from ugs_warehouse.pubs import harvest
 
     monkeypatch.setattr(harvest, "COG_DPI", 600)
-    mock_ds = MagicMock()
-    mock_ds.crs = None
+    monkeypatch.setattr(harvest, "_pdf_has_crs", lambda path: (True, False))  # opened, no CRS
 
-    with patch("zipfile.ZipFile") as mock_zipfile, patch("rasterio.open") as mock_open:
+    with patch("zipfile.ZipFile") as mock_zipfile:
         mock_zipfile.return_value.__enter__.return_value = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_ds
-
         result = harvest._render_geospatial_pdf([("/tmp/test.zip", "M-1_Plate1.pdf")], str(tmp_path))
 
     assert result is None
@@ -113,8 +110,7 @@ def test_render_geospatial_pdf_renders_georeferenced_candidate(monkeypatch, tmp_
     from ugs_warehouse.pubs import harvest
 
     monkeypatch.setattr(harvest, "COG_DPI", 600)
-    mock_ds = MagicMock()
-    mock_ds.crs = MagicMock()  # truthy CRS -> georeferenced
+    monkeypatch.setattr(harvest, "_pdf_has_crs", lambda path: (True, True))  # opened, georeferenced
 
     def fake_run(cmd):
         open(cmd[5], "wb").close()  # simulate gdal_translate writing the rendered output
@@ -122,10 +118,8 @@ def test_render_geospatial_pdf_renders_georeferenced_candidate(monkeypatch, tmp_
     mock_run = MagicMock(side_effect=fake_run)
     monkeypatch.setattr(harvest, "run", mock_run)
 
-    with patch("zipfile.ZipFile") as mock_zipfile, patch("rasterio.open") as mock_open:
+    with patch("zipfile.ZipFile") as mock_zipfile:
         mock_zipfile.return_value.__enter__.return_value = MagicMock()
-        mock_open.return_value.__enter__.return_value = mock_ds
-
         result = harvest._render_geospatial_pdf([("/tmp/test.zip", "M-1_Plate1.pdf")], str(tmp_path))
 
     expected = str(tmp_path / "plate_render.tif")
@@ -198,24 +192,12 @@ def test_harvest_one_does_not_retry_after_first_attempt_already_uploaded_cog(mon
 
 # --- harvest run report -----------------------------------------------------------------------
 
-class _FakeDS:
-    """Minimal rasterio dataset stand-in: a context manager exposing only `.crs`."""
-    def __init__(self, crs):
-        self.crs = crs
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *a):
-        return False
-
-
-def _fake_rasterio_open(geo_basenames):
-    """rasterio.open replacement: a dataset is 'georeferenced' iff its basename is in the set."""
-    def _open(path, *a, **k):
-        base = os.path.basename(path)
-        return _FakeDS(object() if base in geo_basenames else None)
-    return _open
+def _fake_pdf_has_crs(geo_basenames):
+    """_pdf_has_crs replacement: a PDF is 'georeferenced' iff its basename is in the set (always
+    opened — the harvest image's CLI GDAL has the PDF driver)."""
+    def _check(path):
+        return True, os.path.basename(path) in geo_basenames
+    return _check
 
 
 _BUNDLE = ["M-1_Plate1.pdf", "M-1_Plate2.pdf", "M-1_Booklet.pdf", "M-1_geotiff.tif",
@@ -237,8 +219,8 @@ def test_report_geo_pdf_tier(monkeypatch, tmp_path):
         open(cmd[5], "wb").close()  # gdal_translate writes the rendered plate
 
     monkeypatch.setattr(harvest, "run", fake_run)
-    with patch("zipfile.ZipFile") as mock_zipfile, \
-         patch("rasterio.open", side_effect=_fake_rasterio_open({"M-1_Plate1.pdf"})):
+    monkeypatch.setattr(harvest, "_pdf_has_crs", _fake_pdf_has_crs({"M-1_Plate1.pdf"}))
+    with patch("zipfile.ZipFile") as mock_zipfile:
         mock_zipfile.return_value.__enter__.return_value = mock_zip
         plate, shp = harvest.prepare_plates(["/tmp/m-1.zip"], str(tmp_path))
 
@@ -267,8 +249,8 @@ def test_report_geotiff_fallback_tier(monkeypatch, tmp_path):
     mock_zip = MagicMock()
     mock_zip.namelist.return_value = _BUNDLE
 
-    with patch("zipfile.ZipFile") as mock_zipfile, \
-         patch("rasterio.open", side_effect=_fake_rasterio_open(set())):  # nothing georeferenced
+    monkeypatch.setattr(harvest, "_pdf_has_crs", _fake_pdf_has_crs(set()))  # nothing georeferenced
+    with patch("zipfile.ZipFile") as mock_zipfile:
         mock_zipfile.return_value.__enter__.return_value = mock_zip
         plate, shp = harvest.prepare_plates(["/tmp/m-1.zip"], str(tmp_path))
 

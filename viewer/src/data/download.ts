@@ -153,8 +153,9 @@ const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
 // Stable per-row id the transform stamps (1..N, hilbert order) into BOTH the GeoParquet and the
 // PMTiles (as the MVT feature id). It's the join key for map↔table linking. Hidden from the
 // displayed columns (synthetic noise) but kept on each row object so the table can highlight a
-// row the map picked, and used as a deterministic ORDER BY tiebreaker so OFFSET paging and the
-// feature_id→ordinal lookup agree exactly.
+// row the map picked, and used as a deterministic ORDER BY tiebreaker under a user sort so OFFSET
+// paging and the feature_id→ordinal lookup agree exactly. Because it is stamped in hilbert order,
+// it also matches file order — which is why the unsorted page can drop the sort entirely.
 const ID_COL = "feature_id";
 
 // DuckDB type → filter UI kind. Numeric (range) vs everything else (substring). Date/time stay
@@ -175,18 +176,22 @@ function buildWhere(columns: string[], opts: PageOpts): string {
   }
   return clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
 }
-// Inner ORDER BY expression (no leading " ORDER BY "): the user's sort (if any) then feature_id
-// as a stable tiebreaker, so two rows with an equal sort key always page in the same order — and
-// the feature_id→ordinal lookup (a row_number() window over this same expression) lines up with
+// Inner ORDER BY expression (no leading " ORDER BY "): the user's sort, then feature_id as a stable
+// tiebreaker so two rows with an equal sort key always page in the same order — and the
+// feature_id→ordinal lookup (a row_number() window over this same expression) lines up with
 // LIMIT/OFFSET paging exactly. `hasId` is false for pre-reingest parquet with no feature_id.
+//
+// Empty with NO user sort, on purpose: a sort is global, so `ORDER BY feature_id` alone made the
+// unsorted first page read every column chunk in the file (11.3 MB on wetlands_riverine) before
+// returning row 1. feature_id is stamped in file order, so the tiebreaker bought nothing there.
 function orderExpr(columns: string[], opts: PageOpts, hasId: boolean): string {
-  const parts: string[] = [];
-  if (opts.orderBy && columns.includes(opts.orderBy))
-    parts.push(`${ident(opts.orderBy)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST`);
+  const sorted = opts.orderBy && columns.includes(opts.orderBy);
+  if (!sorted) return "";
+  const parts = [`${ident(opts.orderBy!)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST`];
   if (hasId) parts.push(`${ident(ID_COL)} ASC`);
   return parts.join(", ");
 }
-const buildOrder = (columns: string[], opts: PageOpts, hasId: boolean): string => {
+export const buildOrder = (columns: string[], opts: PageOpts, hasId: boolean): string => {
   const e = orderExpr(columns, opts, hasId);
   return e ? ` ORDER BY ${e}` : "";
 };
@@ -343,9 +348,12 @@ export async function ordinalByFeatureId(
     const full: PageOpts = { ...opts, limit: 1, offset: 0 };
     const where = buildWhere(columns, full);
     const ord = orderExpr(columns, full, true);  // hasId known true here
+    // Empty when unsorted — the page query is then in file order, so the window must be too
+    // (`OVER ()` numbers rows in scan order, which DuckDB preserves).
+    const over = ord ? `OVER (ORDER BY ${ord})` : "OVER ()";
     const res = await conn.query(
       `SELECT pos FROM (
-         SELECT ${ident(ID_COL)} AS fid, row_number() OVER (ORDER BY ${ord}) - 1 AS pos
+         SELECT ${ident(ID_COL)} AS fid, row_number() ${over} - 1 AS pos
          FROM ${from}${where}
        ) WHERE fid = ${Number(featureId)};`,
     );

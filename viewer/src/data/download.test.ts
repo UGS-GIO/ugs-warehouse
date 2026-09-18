@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evictionVictim, filterClause, sanitize, shapefileFieldChecks } from "./download";
+import { buildOrder, evictionVictim, filterClause, sanitize, shapefileFieldChecks } from "./download";
 
 describe("sanitize", () => {
   it("keeps safe bigints as numbers", () => {
@@ -94,5 +94,27 @@ describe("duckdb-wasm is self-hosted", () => {
       .filter((f) => /getJsDelivrBundles\s*\(|jsdelivr\.net/i.test(readFileSync(f, "utf8")));
 
     expect(offenders).toEqual([]);
+  });
+});
+
+describe("buildOrder", () => {
+  const cols = ["acres", "attribute"];
+
+  it("sorts by nothing when the user has not picked a column", () => {
+    expect(buildOrder(cols, { limit: 50, offset: 0 }, true)).toBe("");
+  });
+
+  it("ignores an orderBy that is not a displayed column", () => {
+    expect(buildOrder(cols, { limit: 50, offset: 0, orderBy: "geom" }, true)).toBe("");
+  });
+
+  it("appends the feature_id tiebreaker under a user sort", () => {
+    expect(buildOrder(cols, { limit: 50, offset: 0, orderBy: "acres" }, true))
+      .toBe(' ORDER BY "acres" ASC NULLS LAST, "feature_id" ASC');
+  });
+
+  it("omits the tiebreaker when the parquet has no feature_id", () => {
+    expect(buildOrder(cols, { limit: 50, offset: 0, orderBy: "acres", desc: true }, false))
+      .toBe(' ORDER BY "acres" DESC NULLS LAST');
   });
 });

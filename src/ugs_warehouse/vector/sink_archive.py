@@ -20,6 +20,11 @@ from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
 
+# Smallest unit a range-reading client can fetch, so it floors the viewer's first page. DuckDB's
+# default (122,880) put wetlands_riverine in 2 groups — a 50-row page pulled 11.3 MB. Costs +0.8%
+# file size.
+ROW_GROUP_SIZE = 10_000
+
 
 def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
     """COPY the transformed `view` to a GeoParquet file.
@@ -40,7 +45,8 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
         f"COPY (SELECT *, "
         f"ST_XMin(geom) AS bbox_xmin, ST_YMin(geom) AS bbox_ymin, "
         f"ST_XMax(geom) AS bbox_xmax, ST_YMax(geom) AS bbox_ymax "
-        f"FROM {view}) TO '{path}' (FORMAT PARQUET, COMPRESSION ZSTD)"
+        f"FROM {view}) TO '{path}' "
+        f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {ROW_GROUP_SIZE})"
     )
 
 

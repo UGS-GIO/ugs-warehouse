@@ -54,14 +54,15 @@ UTAH_GEOM = {"type": "Polygon", "coordinates": [[
 # Scale tiers (denominator upper bounds), matching the old MD_* mosaics. A map's scale is binned by
 # its 1:N denominator: <=62.5k detail, <=350k intermediate, else overview.
 TIERS = ("24k", "250k", "500k")
-# Recommended max web-mercator zoom per tier for a STATEWIDE build — a 600 DPI COG's native max zoom
-# is ~z17-18, and tiling every 24k map statewide to native is astronomically many tiles. These are a
-# REFERENCE, NOT auto-applied: pass --maxzoom to actually cap (a statewide run should). The default is
-# the COGs' native zoom, which is what you want for a scoped/--quads build (e.g. two quads at z17).
-# (Auto-applying them downsampled nothing anyway — the MBTiles driver ignores -co ZOOM_LEVEL.)
+# Max web-mercator zoom per tier for a STATEWIDE build — a 600 DPI COG's native max zoom is ~z17-18,
+# and tiling every 24k map statewide to native is astronomically many tiles (build hang/OOM). This
+# per-tier cap is the DEFAULT for a full statewide/--scale build; a scoped --quads build renders at
+# native zoom (full detail on a few maps); an explicit --maxzoom overrides either (see build()).
+# (Historically these were passed as -co ZOOM_LEVEL, which the MBTiles driver silently ignores, so
+# the cap never took effect — build() now enforces it by pre-resampling the VRT.)
 TIER_MAXZOOM = {"24k": 14, "250k": 12, "500k": 12}
-# WebP tile quality (0-100). Visually lossless on this content at 90, ~9x smaller than PNG.
-TILE_QUALITY = int(os.environ.get("MOSAIC_WEBP_QUALITY", "90"))
+# WebP tile quality, clamped to WebP's valid 1-100 (out-of-range crashes the GDAL MBTiles driver).
+TILE_QUALITY = max(1, min(100, int(os.environ.get("MOSAIC_WEBP_QUALITY", "90"))))
 # How far down to build overviews (lower zoom levels) off the base tiles.
 OVERVIEW_LEVELS = ("2", "4", "8", "16", "32", "64", "128", "256", "512", "1024", "2048")
 
@@ -289,7 +290,10 @@ def build(scales: list[str], maxz: int | None = None,
               f"writing '*{suffix}' items only, real tiers untouched")
     built = 0
     for tier in scales:
-        if build_tier(tier, groups.get(tier, []), by_sid, maxz=maxz,
+        # Statewide (full) builds cap at the tier's TIER_MAXZOOM to keep the tile count sane; a scoped
+        # --quads build renders at native zoom (full detail on a few maps). An explicit --maxzoom wins.
+        tier_maxz = maxz if maxz is not None else (None if quads else TIER_MAXZOOM.get(tier))
+        if build_tier(tier, groups.get(tier, []), by_sid, maxz=tier_maxz,
                       suffix=suffix, write_stac_item=write_stac_item):
             built += 1
     if built and not quads:

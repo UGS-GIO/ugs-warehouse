@@ -363,7 +363,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         if (l.cogHref) {
           if (!cogReady) return null;
           return (
-            <Source key={l.id} id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
+            <Source key={l.id} id={`cog-${s}`} type="raster" tiles={[`cog://${l.cogHref}/{z}/{x}/{y}`]} tileSize={256}>
               <Layer id={`cog-${s}-raster`} type="raster" paint={{ "raster-opacity": 0.9 }} />
             </Source>
           );

@@ -7,7 +7,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
 import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
-import { ensureCogProtocol } from "./cog";
+import { ensureCogProtocol, getCogBounds } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
@@ -121,9 +121,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
       (async () => {
         await ensureCogProtocol();
         try {
-          const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
-          const meta = await getCogMetadata(spec.href);
-          const b = validBbox(meta?.bbox as number[] | undefined) ?? validBbox(spec.item.bbox);
+          const b = validBbox((await getCogBounds(spec.href)) ?? undefined) ?? validBbox(spec.item.bbox);
           if (live && b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 16, duration: 0 });
         } catch { /* keep default view */ }
       })();
@@ -254,7 +252,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
 
           {/* COG raster (once the cog:// protocol is registered) */}
           {spec?.kind === "cog" && cogReady && (
-            <Source id="cog" type="raster" url={`cog://${spec.href}`} tileSize={256}>
+            <Source id="cog" type="raster" tiles={[`cog://${spec.href}/{z}/{x}/{y}`]} tileSize={256}>
               <Layer id="cog-raster" type="raster" />
             </Source>
           )}

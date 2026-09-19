@@ -6,12 +6,14 @@ grouped by their publication scale into three tiers and stitched into one raster
 geolmap/mosaics/geologic-maps-{tier}.pmtiles. The viewer toggles them like the old portal.
 
 Pipeline per tier (GDAL, no full download — COGs are read in place over /vsigs):
-  gdalbuildvrt (over /vsigs/<bucket>/...)  ->  gdal_translate -of MBTILES (lossless PNG tiles)
+  gdalbuildvrt (over /vsigs/<bucket>/...)  ->  gdal_translate -of MBTILES (WebP q90 tiles)
   ->  gdaladdo (overview = lower zooms)  ->  `pmtiles convert` (MBTiles -> PMTiles)  ->  upload
 
-Tiles are encoded as PNG (lossless), so this step adds NO further loss; source-COG fidelity is
-whatever the harvest wrote (COG_COMPRESS — deflate-lossless going forward). COGs are write-once,
-so pubs harvested before that switch keep their original codec until re-harvested as a new edition.
+Tiles are WebP q90 — the derived display product, downsampled + anti-aliased, so lossy WebP is
+visually indistinguishable here (~9x smaller than PNG) and it is NOT the color-authority (that is
+the lossless master COG). Source-COG fidelity is whatever the harvest wrote (COG_COMPRESS —
+deflate-lossless going forward); COGs are write-once, so pubs harvested before that switch keep
+their original codec until re-harvested as a new edition.
 
 By default (`--editions current`) a superseded edition of a quad (per `editions.py`'s edition
 graph) is dropped before the VRT — the mosaic shows one current map per quad. `--editions all`
@@ -52,12 +54,16 @@ UTAH_GEOM = {"type": "Polygon", "coordinates": [[
 # Scale tiers (denominator upper bounds), matching the old MD_* mosaics. A map's scale is binned by
 # its 1:N denominator: <=62.5k detail, <=350k intermediate, else overview.
 TIERS = ("24k", "250k", "500k")
-# Max web-mercator zoom per tier — the real fix for the build timeout. The COGs are 600 DPI, so
-# GDAL's native max zoom is ~z18; tiling a STATEWIDE mosaic to z18 is astronomically many tiles and
-# never finishes. Each tier is capped to the zoom its scale actually warrants (and where it's legible
-# in the viewer): a 1:500k map adds nothing past ~z12, 24k past ~z14. Override with --maxzoom.
+# Max web-mercator zoom per tier for a STATEWIDE build — a 600 DPI COG's native max zoom is ~z17-18,
+# and tiling every 24k map statewide to native is astronomically many tiles (build hang/OOM). This
+# per-tier cap is the DEFAULT for a full statewide/--scale build; a scoped --quads build renders at
+# native zoom (full detail on a few maps); an explicit --maxzoom overrides either (see build()).
+# (Historically these were passed as -co ZOOM_LEVEL, which the MBTiles driver silently ignores, so
+# the cap never took effect — build() now enforces it by pre-resampling the VRT.)
 TIER_MAXZOOM = {"24k": 14, "250k": 12, "500k": 12}
-# How far down to build overviews (lower zoom levels) off the capped base tiles.
+# WebP tile quality, clamped to WebP's valid 1-100 (out-of-range crashes the GDAL MBTiles driver).
+TILE_QUALITY = max(1, min(100, int(os.environ.get("MOSAIC_WEBP_QUALITY", "90"))))
+# How far down to build overviews (lower zoom levels) off the base tiles.
 OVERVIEW_LEVELS = ("2", "4", "8", "16", "32", "64", "128", "256", "512", "1024", "2048")
 
 
@@ -186,14 +192,22 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         subprocess.run(["gdalbuildvrt", "-q", "-addalpha", "-input_file_list", listfile, vrt],
                        env=gdal_env, check=True)
 
-        # Lossless PNG tiles (alpha → transparent gaps where no map covers). Cap the base zoom to the
-        # tier's level (--maxzoom overrides) — without this the 600 DPI native zoom blows the build up.
-        mz = maxz if maxz is not None else TIER_MAXZOOM.get(tier)
-        tr = ["gdal_translate", "-of", "MBTILES", "-r", "bilinear", "-co", "TILE_FORMAT=PNG"]
-        if mz is not None:
-            tr += ["-co", f"ZOOM_LEVEL={mz}"]
-        print(f"[mosaics] {tier}: rendering base tiles -> MBTiles (max zoom {mz})")
-        subprocess.run([*tr, vrt, mbtiles], env=gdal_env, check=True)
+        # WebP tiles (alpha → transparent gaps where no map covers). By default the base renders at the
+        # member COGs' NATIVE zoom; pass --maxzoom to cap (a statewide build should — see TIER_MAXZOOM).
+        # The MBTiles driver ignores -co ZOOM_LEVEL, so a real cap must lower the INPUT resolution:
+        # resample the VRT to the target web-mercator zoom's m/px before tiling.
+        src = vrt
+        if maxz is not None:
+            res = 156543.03392804097 / (2 ** maxz)   # web-mercator m/px at zoom maxz
+            capped = os.path.join(tmp, f"{tier}.capped.vrt")
+            subprocess.run(["gdalwarp", "-q", "-overwrite", "-of", "VRT", "-tr", str(res), str(res),
+                            "-r", "bilinear", vrt, capped], env=gdal_env, check=True)
+            src = capped
+        tr = ["gdal_translate", "-of", "MBTILES", "-r", "bilinear",
+              "-co", "TILE_FORMAT=WEBP", "-co", f"QUALITY={TILE_QUALITY}"]
+        zdesc = f"max zoom {maxz}" if maxz is not None else "native COG zoom"
+        print(f"[mosaics] {tier}: rendering base tiles -> MBTiles (WebP q{TILE_QUALITY}, {zdesc})")
+        subprocess.run([*tr, src, mbtiles], env=gdal_env, check=True)
 
         print(f"[mosaics] {tier}: building overviews (lower zooms)")
         subprocess.run(["gdaladdo", "-r", "bilinear", mbtiles, *OVERVIEW_LEVELS], env=gdal_env, check=True)
@@ -276,7 +290,10 @@ def build(scales: list[str], maxz: int | None = None,
               f"writing '*{suffix}' items only, real tiers untouched")
     built = 0
     for tier in scales:
-        if build_tier(tier, groups.get(tier, []), by_sid, maxz=maxz,
+        # Statewide (full) builds cap at the tier's TIER_MAXZOOM to keep the tile count sane; a scoped
+        # --quads build renders at native zoom (full detail on a few maps). An explicit --maxzoom wins.
+        tier_maxz = maxz if maxz is not None else (None if quads else TIER_MAXZOOM.get(tier))
+        if build_tier(tier, groups.get(tier, []), by_sid, maxz=tier_maxz,
                       suffix=suffix, write_stac_item=write_stac_item):
             built += 1
     if built and not quads:

@@ -343,3 +343,211 @@ def test_report_records_produced_cog(monkeypatch, tmp_path):
     assert cog is not None
     assert cog["object"] == pub.cog_object
     assert cog["compress"].lower() == "deflate"  # lossless master, not webp
+
+
+# --- color source selection (ALL-5995) --------------------------------------------------------
+
+def _write_tif(path, arr, dtype="uint8"):
+    import rasterio
+    from rasterio.transform import from_origin
+    bands, h, w = arr.shape
+    with rasterio.open(path, "w", driver="GTiff", height=h, width=w, count=bands, dtype=dtype,
+                       crs="EPSG:4326", transform=from_origin(-112.0, 40.0, 0.001, 0.001)) as ds:
+        ds.write(arr)
+
+
+def _zip_tifs(zip_path, named_arrays):
+    """Write real GeoTIFFs into a real zip. named_arrays: (inner_name, ndarray[, dtype])."""
+    import zipfile as zf
+    d = os.path.dirname(zip_path)
+    with zf.ZipFile(zip_path, "w") as z:
+        for entry in named_arrays:
+            name, arr = entry[0], entry[1]
+            dtype = entry[2] if len(entry) > 2 else "uint8"
+            src = os.path.join(d, "_src_" + os.path.basename(name))
+            _write_tif(src, arr, dtype)
+            z.write(src, arcname=name)
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_prepare_plates_picks_color_over_grayscale_base(monkeypatch, tmp_path):
+    """The bug: the name pick grabs `..._geotiff.tif` (a grayscale base) and excludes the color
+    MashUp. The content pick must select the color render instead."""
+    import numpy as np
+
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.setattr(harvest, "COG_DPI", 600)
+    monkeypatch.setattr(harvest, "_pdf_has_crs", _fake_pdf_has_crs(set()))    # no geo-PDF
+    monkeypatch.setattr(harvest, "corrected_georef",
+                        lambda virtual, work, **k: "USED::" + k["inner_gtif"])
+    harvest._report_begin("M-CLR")
+    color = np.stack([np.full((64, 64), v, "uint8") for v in (200, 40, 90)])  # spread 160
+    gray = np.stack([np.full((64, 64), 128, "uint8")] * 3)                    # spread 0
+    zp = tmp_path / "gis.zip"
+    _zip_tifs(str(zp), [("WhiteHills_ShadedReliefBaseWithUnitColorsMashUp.tif", color),
+                        ("WhiteHills_geotiff.tif", gray)])
+    plate, shp = harvest.prepare_plates([str(zp)], str(tmp_path))
+    assert plate == "USED::WhiteHills_ShadedReliefBaseWithUnitColorsMashUp.tif"
+    assert harvest._pub_report["used"]["plate"]["name"].endswith("MashUp.tif")
+    assert harvest._pub_report["color_source_sat"] >= harvest.COLOR_SAT_FLOOR
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_prepare_plates_picks_unnamed_color_plate(monkeypatch, tmp_path):
+    """A color plate whose name matches no pattern (e.g. `Price.tif`) still beats a grayscale
+    `..._geotiff.tif` the name pick would otherwise take."""
+    import numpy as np
+
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.setattr(harvest, "COG_DPI", 600)
+    monkeypatch.setattr(harvest, "_pdf_has_crs", _fake_pdf_has_crs(set()))
+    monkeypatch.setattr(harvest, "corrected_georef",
+                        lambda virtual, work, **k: "USED::" + k["inner_gtif"])
+    harvest._report_begin("M-PRICE")
+    color = np.stack([np.full((64, 64), v, "uint8") for v in (30, 150, 200)])
+    gray = np.stack([np.full((64, 64), 100, "uint8")] * 3)
+    zp = tmp_path / "gis.zip"
+    _zip_tifs(str(zp), [("Price.tif", color), ("pricebase_geotiff.tif", gray)])
+    plate, shp = harvest.prepare_plates([str(zp)], str(tmp_path))
+    assert plate == "USED::Price.tif"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_source_saturation_dem_vs_color(tmp_path):
+    """A 1-band Int16 DEM is not a map (-> -1); a 3-band color raster scores above the floor."""
+    import numpy as np
+
+    from ugs_warehouse.pubs import harvest
+    _write_tif(str(tmp_path / "dem.tif"),
+               np.random.randint(1000, 2000, (1, 64, 64)).astype("int16"), "int16")
+    _write_tif(str(tmp_path / "color.tif"),
+               np.stack([np.full((64, 64), v, "uint8") for v in (210, 20, 120)]))
+    assert harvest._source_saturation(str(tmp_path / "dem.tif")) == -1.0
+    assert harvest._source_saturation(str(tmp_path / "color.tif")) > harvest.COLOR_SAT_FLOOR
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_harvest_attempt_guards_grayscale_cog(monkeypatch, tmp_path):
+    """The post-COG guard: a color source that yields a grayscale COG must fail loud and NOT publish."""
+    from ugs_warehouse.pubs import harvest
+    pub = identity.Pub(series_id="M-GUARD")
+    harvest._report_begin("M-GUARD")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+
+    def fake_prepare(zips, work):
+        harvest._report(color_source_sat=50.0)   # a color source was chosen
+        return (str(tmp_path / "plate.tif"), None)
+
+    monkeypatch.setattr(harvest, "prepare_plates", fake_prepare)
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: None)   # gdalwarp no-op
+
+    def fake_cog_translate(src, dst, prof, **k):
+        with open(dst, "wb") as f:
+            f.write(b"x" * 200_000)
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    monkeypatch.setattr(harvest, "_source_saturation", lambda p: 2.0)   # the COG reads grayscale
+    up = MagicMock()
+    monkeypatch.setattr(harvest.gcs, "upload_write_once", up)
+
+    res = _harvest_attempt(pub, ["http://x/m-guard.zip"])
+    assert res == "fail:grayscale_cog"
+    up.assert_not_called()   # never published
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_source_saturation_ignores_transparent_margin(tmp_path):
+    """A 4-band RGBA color map with a mostly-transparent collar must score on its OPAQUE (color)
+    pixels — the transparent margin must NOT dilute the spread toward grayscale. Without opaque-only
+    masking (the old over-white composite) this vivid map would read < floor and the guard would
+    false-fail it."""
+    import numpy as np
+    import rasterio
+    from rasterio.enums import ColorInterp
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+    rgb = np.stack([np.full((64, 64), v, "uint8") for v in (210, 30, 110)])  # vivid everywhere, spread 180
+    alpha = np.zeros((64, 64), "uint8")
+    alpha[:8, :8] = 255                                                       # only a 1/64 corner opaque
+    p = str(tmp_path / "rgba.tif")
+    with rasterio.open(p, "w", driver="GTiff", height=64, width=64, count=4, dtype="uint8",
+                       crs="EPSG:4326", transform=from_origin(-112.0, 40.0, 0.001, 0.001)) as ds:
+        ds.write(np.concatenate([rgb, alpha[None]]))
+        ds.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha]
+    sat = harvest._source_saturation(p)
+    assert sat > 150                          # ~180 from the opaque area, not ~3 from margin dilution
+    assert sat > harvest.COLOR_SAT_FLOOR
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_source_saturation_grayscale_scan_is_zero(tmp_path):
+    """A 1-band uint8 B&W scan is a readable raster (not a DEM) but has zero color spread → 0.0, so
+    it never clears the floor and falls to the legacy pick, exactly as before."""
+    import numpy as np
+
+    from ugs_warehouse.pubs import harvest
+    _write_tif(str(tmp_path / "scan.tif"), np.random.randint(0, 255, (1, 64, 64)).astype("uint8"))
+    assert harvest._source_saturation(str(tmp_path / "scan.tif")) == 0.0
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_source_saturation_palette_gray_vs_color(tmp_path):
+    """A paletted raster is scored from its colortable's own spread: a gray-ramp palette scores ~0
+    (below floor, won't outrank a real color plate), a color table scores high."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+
+    def _paletted(path, cmap):
+        with rasterio.open(path, "w", driver="GTiff", height=64, width=64, count=1, dtype="uint8",
+                           crs="EPSG:4326", transform=from_origin(-112.0, 40.0, 0.001, 0.001)) as ds:
+            ds.write(np.zeros((1, 64, 64), "uint8"))
+            ds.write_colormap(1, cmap)
+
+    _paletted(str(tmp_path / "pgray.tif"), {i: (i, i, i, 255) for i in range(256)})
+    _paletted(str(tmp_path / "pcolor.tif"),
+              {i: ((i * 7) % 256, (i * 3) % 256, (i * 13) % 256, 255) for i in range(256)})
+    assert harvest._source_saturation(str(tmp_path / "pgray.tif")) < harvest.COLOR_SAT_FLOOR
+    assert harvest._source_saturation(str(tmp_path / "pcolor.tif")) > harvest.COLOR_SAT_FLOOR
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_harvest_attempt_publishes_color_cog(monkeypatch, tmp_path):
+    """Guard no-op / happy path: a color source that yields a color COG publishes normally — the guard
+    must NOT trip on every color pub (a regression that did would zero out the whole corpus)."""
+    from ugs_warehouse.pubs import harvest
+    pub = identity.Pub(series_id="M-OK")
+    harvest._report_begin("M-OK")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+
+    def fake_prepare(zips, work):
+        harvest._report(color_source_sat=50.0)   # a color source was chosen
+        return (str(tmp_path / "plate.tif"), None)
+
+    monkeypatch.setattr(harvest, "prepare_plates", fake_prepare)
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: None)
+
+    def fake_cog_translate(src, dst, prof, **k):
+        with open(dst, "wb") as f:
+            f.write(b"x" * 200_000)
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    monkeypatch.setattr(harvest, "_source_saturation", lambda p: 55.0)   # the COG reads COLOR
+    up = MagicMock()
+    monkeypatch.setattr(harvest.gcs, "upload_write_once", up)
+    monkeypatch.setattr(harvest.gcs, "upload", lambda *a, **k: None)
+
+    res = _harvest_attempt(pub, ["http://x/m-ok.zip"])
+    assert res == "ok"
+    up.assert_called()   # published — the guard did not false-fail a color COG

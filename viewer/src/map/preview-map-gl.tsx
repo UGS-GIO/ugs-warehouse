@@ -3,6 +3,7 @@
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { useQuery } from "@tanstack/react-query";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
@@ -12,6 +13,7 @@ import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
+import { qk } from "@/query-keys";
 import { bboxPolygon, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
@@ -70,7 +72,6 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   const holderRef = useRef<HTMLDivElement>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [showDem, setShowDem] = useState(false);
-  const [cogReady, setCogReady] = useState(false);
 
   const isVector = spec?.kind === "vector";
   const item = spec?.item;
@@ -99,13 +100,13 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     return () => { live = false; };
   }, [sprite, mapLoaded]);
 
-  // Register the cog:// protocol lazily the first time a COG spec appears.
-  useEffect(() => {
-    if (spec?.kind !== "cog" || cogReady) return;
-    let live = true;
-    ensureCogProtocol().then(() => { if (live) setCogReady(true); });
-    return () => { live = false; };
-  }, [spec?.kind, cogReady]);
+  // COG sources need the cog:// protocol registered first. Register lazily via a query (as map.tsx
+  // does) so a failed WASM init retries and never leaks an unhandled rejection into the preview.
+  const { isSuccess: cogReady } = useQuery({
+    queryKey: qk.cogProtocol,
+    queryFn: async () => { await ensureCogProtocol(); return true as const; },
+    enabled: spec?.kind === "cog", staleTime: Infinity, gcTime: Infinity,
+  });
 
   // ---- imperative camera fit: a persistent map honours initialViewState only once, so fit on every
   // spec change (keyed on item+kind). COG has no STAC bbox for many items → fit to its GeoTIFF extent.
@@ -119,8 +120,9 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     if (spec.kind === "cog") {
       let live = true;
       (async () => {
-        await ensureCogProtocol();
         try {
+          // getCogBounds registers the cog:// protocol itself, so a failed init rejects here and is
+          // caught below rather than escaping as an unhandled rejection.
           const b = validBbox((await getCogBounds(spec.href)) ?? undefined) ?? validBbox(spec.item.bbox);
           if (live && b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 16, duration: 0 });
         } catch { /* keep default view */ }

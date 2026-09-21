@@ -461,7 +461,7 @@ def _source_saturation(path) -> float:
                     cmap = None
                 if cmap:                          # real color content of the palette, not a blanket 255
                     spreads = [max(c[:3]) - min(c[:3]) for c in cmap.values()]
-                    return float(sum(spreads) / len(spreads))
+                    return float(sum(spreads) / len(spreads)) if spreads else 0.0
                 return 255.0
             if ds.count < 3 and str(ds.dtypes[0]) != "uint8":
                 return -1.0                       # 1-2 band non-Byte = DEM / data grid — intentional skip

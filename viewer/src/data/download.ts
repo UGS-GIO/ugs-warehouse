@@ -110,10 +110,12 @@ export function seqToFeatureCollection(seq: Uint8Array): Uint8Array {
 // independently. A wide attribute table can blow the .dbf while the .shp is nowhere near.
 export const SHP_FILE_LIMIT = 2 * 1024 ** 3;
 
-/** DBF field width by source type, following GDAL's shapefile writer defaults. VARCHAR has no
- *  fixed width and its true max needs a full scan, so it is estimated from the column's average
- *  uncompressed bytes. */
-export function dbfFieldWidth(type: string, avgBytes: number): number {
+/** DBF field width by source type, following GDAL's shapefile writer defaults. Text has no fixed
+ *  width, so it takes the column's longest decoded value (`maxBytes`), which is what the driver
+ *  sizes the field to. Parquet's `total_uncompressed_size` must NOT be used for this: it is the
+ *  page size after dictionary encoding, so a repeated string reports a fraction of its real width
+ *  and the .dbf estimate comes out an order of magnitude low. */
+export function dbfFieldWidth(type: string, maxBytes: number): number {
   const t = type.toUpperCase();
   if (t.startsWith("BOOLEAN")) return 1;
   if (/^U?(BIG|HUGE)INT/.test(t)) return 20;
@@ -121,18 +123,24 @@ export function dbfFieldWidth(type: string, avgBytes: number): number {
   if (/DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC/.test(t)) return 24;
   if (t.startsWith("DATE")) return 8;
   if (t.startsWith("TIMESTAMP") || t.startsWith("TIME")) return 24;
-  return Math.min(254, Math.ceil(avgBytes * 2) + 4);
+  return Math.min(254, Math.max(1, Math.ceil(maxBytes)));
+}
+
+/** True when `dbfFieldWidth` would fall through to the text branch, i.e. the column needs a
+ *  measured width rather than a fixed one. */
+export function needsMeasuredWidth(type: string): boolean {
+  return dbfFieldWidth(type, 1) === 1 && !type.toUpperCase().startsWith("BOOLEAN");
 }
 
 /** Estimate the uncompressed .shp and .dbf from parquet footer stats — no column data read.
  *  `geomBytes` is the geometry column's uncompressed size (WKB, close to the .shp payload). */
 export function estimateShapefileBytes(
-  fields: { type: string; avgBytes: number }[],
+  fields: { type: string; maxBytes: number }[],
   rowCount: number,
   geomBytes: number,
 ): { estShpBytes: number; estDbfBytes: number; over2gb: boolean } {
   const estShpBytes = 100 + geomBytes + rowCount * 40;          // 100-byte header + per-record framing
-  const width = fields.reduce((n, f) => n + dbfFieldWidth(f.type, f.avgBytes), 0);
+  const width = fields.reduce((n, f) => n + dbfFieldWidth(f.type, f.maxBytes), 0);
   const estDbfBytes = 33 + 32 * fields.length + rowCount * (width + 1);   // header + descriptors + rows
   return {
     estShpBytes,
@@ -166,10 +174,17 @@ export function estimateExportPeakBytes(geojsonBytes: number, outputBytes: numbe
   return geojsonBytes + outputBytes * 2;   // input copy + written layer + zip
 }
 
-/** Base geometry types (MULTI / Z / M stripped), deduped — >1 can't share a shapefile. */
+/** Base geometry types (MULTI / Z / M stripped), deduped — >1 can't share a shapefile.
+ *  GeoParquet spells the dimension with a space ("Point Z") where ST_GeometryType does not, so
+ *  the suffix strip has to take the space with it or "Point Z" and "Point" stop deduping. */
 export function baseGeometryTypes(names: string[]): string[] {
   return [...new Set(names.map((g) =>
-    g.toUpperCase().replace(/^ST_/, "").replace(/^MULTI/, "").replace(/[ZM]+$/, "")))];
+    g.toUpperCase().replace(/^ST_/, "").replace(/^MULTI/, "").replace(/[\sZM]+$/, "")))];
+}
+
+/** The geometry column actually present, since pub/external parquet may not call it `geom`. */
+export function geomColumn(names: string[]): string {
+  return GEOM_NAMES.find((g) => names.includes(g)) ?? GEOM;
 }
 
 let seq = 0;
@@ -641,13 +656,13 @@ export interface ShapefileWarnings {
 
 /** Geometry types off the GeoParquet `geo` key — present on anything our transform wrote, and
  *  free (footer only). Null when the file predates it or carries no type list. */
-function geoMetadataTypes(json: string): string[] | null {
+function geoMetadataTypes(json: string, geom: string): string[] | null {
   try {
     const geo = JSON.parse(json) as {
       primary_column?: string;
       columns?: Record<string, { geometry_types?: string[] }>;
     };
-    const col = geo.columns?.[geo.primary_column ?? GEOM] ?? Object.values(geo.columns ?? {})[0];
+    const col = geo.columns?.[geo.primary_column ?? geom] ?? Object.values(geo.columns ?? {})[0];
     const types = col?.geometry_types;
     return types?.length ? types : null;
   } catch { return null; }
@@ -666,10 +681,16 @@ const UNINSPECTED = {
   rowCount: 0, estShpBytes: 0, estDbfBytes: 0, over2gb: false, estPeakBytes: 0,
 } satisfies Partial<ShapefileWarnings>;
 
-export async function shapefileWarnings(
+/** Pre-flight an export. The size limits apply to every format: all of them read the whole
+ *  GeoParquet into the tab, and the four GDAL ones then run it through the same wasm instance.
+ *  The shapefile-only findings (field names, field count, single geometry type, the 2 GB per-file
+ *  cap) are filled in for `shp` alone. */
+export async function exportWarnings(
   parquetUrl: string,
+  fmt: ExportFormat,
   clip?: [number, number, number, number],
 ): Promise<ShapefileWarnings> {
+  const shp = fmt === "shp";
   let sourceBytes = 0;
   try {
     const head = await fetch(parquetUrl, { method: "HEAD" });
@@ -689,10 +710,15 @@ export async function shapefileWarnings(
     const from = `read_parquet('${src}')`;
     const desc = (await conn.query(`DESCRIBE SELECT * FROM ${from};`)).toArray();
     const colTypes = new Map(desc.map((r) => [String(r.column_name), String(r.column_type)]));
+    const geom = geomColumn([...colTypes.keys()]);
+    const geomExpr = String(colTypes.get(geom) ?? "").toUpperCase().includes("BLOB")
+      ? `ST_GeomFromWKB(${ident(geom)})` : ident(geom);
     const cols = [...colTypes.keys()].filter((c) => !GEOM_NAMES.includes(c));
 
     // Field-name limits (10 chars) + post-truncation collisions (pure, unit-tested).
-    const { longNames, collisions } = shapefileFieldChecks(cols);
+    const { longNames, collisions } = shp
+      ? shapefileFieldChecks(cols)
+      : { longNames: [] as string[], collisions: [] as [string, string][] };
 
     // Per-column uncompressed bytes + the row count, both from the footer.
     const meta = (await conn.query(
@@ -706,59 +732,74 @@ export async function shapefileWarnings(
 
     // A clip only scales the estimate. The per-row bbox columns answer that without decoding
     // geometry (and prune row groups); fall back to a real intersect if the file lacks them.
-    let rowCount = fullRows;
+    let where = "";
     if (clip) {
       const [w, sy, e, n] = clip;
       if (BBOX_COLS.every((c) => colTypes.has(c))) {
-        rowCount = Number((await conn.query(
-          `SELECT count(*) AS n FROM ${from}
-           WHERE bbox_xmin <= ${e} AND bbox_xmax >= ${w} AND bbox_ymin <= ${n} AND bbox_ymax >= ${sy};`,
-        )).toArray()[0].n);
+        where = ` WHERE bbox_xmin <= ${e} AND bbox_xmax >= ${w} AND bbox_ymin <= ${n} AND bbox_ymax >= ${sy}`;
       } else {
         await conn.query("INSTALL spatial; LOAD spatial;");
-        const gt = String(colTypes.get(GEOM) ?? "").toUpperCase();
-        const gx = gt.includes("BLOB") ? `ST_GeomFromWKB(${ident(GEOM)})` : ident(GEOM);
-        rowCount = Number((await conn.query(
-          `SELECT count(*) AS n FROM ${from} WHERE ST_Intersects(${gx}, ST_MakeEnvelope(${w}, ${sy}, ${e}, ${n}));`,
-        )).toArray()[0].n);
+        where = ` WHERE ST_Intersects(${geomExpr}, ST_MakeEnvelope(${w}, ${sy}, ${e}, ${n}))`;
       }
     }
+    const rowCount = where
+      ? Number((await conn.query(`SELECT count(*) AS n FROM ${from}${where};`)).toArray()[0].n)
+      : fullRows;
 
-    // Geometry types: the GeoParquet `geo` key if the file has one, else a scan of the column.
-    const kv = (await conn.query(
-      `SELECT decode(value) AS v FROM parquet_kv_metadata('${src}') WHERE decode(key) = 'geo';`,
-    )).toArray();
-    let names = kv.length ? geoMetadataTypes(String(kv[0].v)) : null;
+    // Geometry types. The GeoParquet `geo` key is file-level, so under a clip it would report
+    // types the selection no longer holds; scan the column instead whenever the user clipped.
+    let names: string[] | null = null;
+    if (!where) {
+      const kv = (await conn.query(
+        `SELECT decode(value) AS v FROM parquet_kv_metadata('${src}') WHERE decode(key) = 'geo';`,
+      )).toArray();
+      if (kv.length) names = geoMetadataTypes(String(kv[0].v), geom);
+    }
     if (!names) {
       await conn.query("INSTALL spatial; LOAD spatial;");
-      const gt = String(colTypes.get(GEOM) ?? "").toUpperCase();
-      const gx = gt.includes("BLOB") ? `ST_GeomFromWKB(${ident(GEOM)})` : ident(GEOM);
       names = (await conn.query(
-        `SELECT DISTINCT ST_GeometryType(${gx}) AS g FROM ${from} WHERE ${gx} IS NOT NULL;`,
+        `SELECT DISTINCT ST_GeometryType(${geomExpr}) AS g FROM ${from}${where}
+         ${where ? "AND" : "WHERE"} ${geomExpr} IS NOT NULL;`,
       )).toArray().map((r) => String(r.g));
     }
     const baseTypes = baseGeometryTypes(names);
 
+    // Text columns need their decoded length, which the footer cannot give (see dbfFieldWidth).
+    // The file is already local by now — reaching the footer downloaded all of it — so the scan
+    // costs no extra transfer.
+    const measured = cols.filter((c) => needsMeasuredWidth(colTypes.get(c) ?? "VARCHAR"));
+    const lengths = new Map<string, { max: number; avg: number }>();
+    if (measured.length) {
+      // strlen is the BYTE count (length would count characters, and the dbf pads bytes).
+      const sel = measured.map((c, i) =>
+        `max(strlen(CAST(${ident(c)} AS VARCHAR))) AS m${i}, `
+        + `avg(strlen(CAST(${ident(c)} AS VARCHAR))) AS a${i}`).join(", ");
+      const row = (await conn.query(`SELECT ${sel} FROM ${from}${where};`)).toArray()[0];
+      measured.forEach((c, i) =>
+        lengths.set(c, { max: Number(row[`m${i}`] ?? 0), avg: Number(row[`a${i}`] ?? 0) }));
+    }
+
     const scale = fullRows ? rowCount / fullRows : 0;
-    const fields = cols.map((c) => ({
-      name: c,
-      type: colTypes.get(c) ?? "VARCHAR",
-      avgBytes: fullRows ? (colBytes.get(c) ?? 0) / fullRows : 0,
-    }));
-    const geomBytes = Math.round((colBytes.get(GEOM) ?? 0) * scale);
+    const fields = cols.map((c) => {
+      const type = colTypes.get(c) ?? "VARCHAR";
+      const m = lengths.get(c);
+      const fixed = dbfFieldWidth(type, 0);
+      return { name: c, type, maxBytes: m ? m.max : fixed, avgBytes: m ? m.avg : fixed };
+    });
+    const geomBytes = Math.round((colBytes.get(geom) ?? 0) * scale);
     const { estShpBytes, estDbfBytes, over2gb } = estimateShapefileBytes(fields, rowCount, geomBytes);
     const estPeakBytes = estimateExportPeakBytes(
       estimateGeoJSONBytes(fields, rowCount, geomBytes), estShpBytes + estDbfBytes);
     const overBrowserLimit = estPeakBytes > WASM_HEAP_BUDGET;
 
-    const tooManyFields = cols.length > 255;
-    const mixedGeometry = baseTypes.length > 1 ? baseTypes : [];
+    const tooManyFields = shp && cols.length > 255;
+    const mixedGeometry = shp && baseTypes.length > 1 ? baseTypes : [];
     return {
       longNames, collisions, fieldCount: cols.length, tooManyFields,
-      mixedGeometry, rowCount, estShpBytes, estDbfBytes, over2gb, estPeakBytes, overBrowserLimit,
-      sourceBytes, tooBigToInspect: false,
+      mixedGeometry, rowCount, estShpBytes, estDbfBytes, over2gb: shp && over2gb,
+      estPeakBytes, overBrowserLimit, sourceBytes, tooBigToInspect: false,
       any: longNames.length > 0 || collisions.length > 0 || tooManyFields
-        || mixedGeometry.length > 0 || over2gb || overBrowserLimit,
+        || mixedGeometry.length > 0 || (shp && over2gb) || overBrowserLimit,
     };
   } finally {
     await conn.close();

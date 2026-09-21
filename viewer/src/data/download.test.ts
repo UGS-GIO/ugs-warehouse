@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOrder, dbfFieldWidth, estimateExportPeakBytes, estimateGeoJSONBytes, estimateShapefileBytes,
   evictionVictim, featureSeqSql, filterClause, sanitize, seqToFeatureCollection,
-  shapefileFieldChecks, shapefileWarnings, SHP_FILE_LIMIT, PREFLIGHT_MAX_PARQUET_BYTES,
+  needsMeasuredWidth, shapefileFieldChecks, exportWarnings, SHP_FILE_LIMIT,
+  PREFLIGHT_MAX_PARQUET_BYTES, baseGeometryTypes, geomColumn,
   WASM_HEAP_BUDGET,
 } from "./download";
 
@@ -166,14 +167,21 @@ describe("dbfFieldWidth", () => {
     expect(dbfFieldWidth("DATE", 0)).toBe(8);
     expect(dbfFieldWidth("TIMESTAMP WITH TIME ZONE", 0)).toBe(24);
   });
-  it("estimates VARCHAR from average bytes and caps at the dbf 254 maximum", () => {
-    expect(dbfFieldWidth("VARCHAR", 10)).toBe(24);
+  it("sizes VARCHAR to its longest decoded value and caps at the dbf 254 maximum", () => {
+    expect(dbfFieldWidth("VARCHAR", 44)).toBe(44);
     expect(dbfFieldWidth("VARCHAR", 5000)).toBe(254);
+    expect(dbfFieldWidth("VARCHAR", 0)).toBe(1);
+  });
+  it("marks only the text types as needing a measured width", () => {
+    expect(needsMeasuredWidth("VARCHAR")).toBe(true);
+    expect(needsMeasuredWidth("BLOB")).toBe(true);
+    expect(["BOOLEAN", "INTEGER", "BIGINT", "DOUBLE", "DATE", "TIMESTAMP"]
+      .map(needsMeasuredWidth)).toEqual([false, false, false, false, false, false]);
   });
 });
 
 describe("estimateShapefileBytes", () => {
-  const fields = [{ type: "DOUBLE", avgBytes: 8 }];   // 24-wide
+  const fields = [{ type: "DOUBLE", maxBytes: 0 }];   // 24-wide
 
   it("sizes .shp from the geometry bytes and .dbf from the field widths", () => {
     const r = estimateShapefileBytes(fields, 1000, 500_000);
@@ -183,7 +191,7 @@ describe("estimateShapefileBytes", () => {
   });
 
   it("flags a huge attribute table even when the geometry is small (.dbf has its own 2 GB cap)", () => {
-    const wide = Array.from({ length: 200 }, () => ({ type: "DOUBLE", avgBytes: 8 }));
+    const wide = Array.from({ length: 200 }, () => ({ type: "DOUBLE", maxBytes: 0 }));
     const r = estimateShapefileBytes(wide, 500_000, 1_000);
     expect(r.estShpBytes).toBeLessThan(SHP_FILE_LIMIT);
     expect(r.estDbfBytes).toBeGreaterThan(SHP_FILE_LIMIT);
@@ -196,7 +204,7 @@ describe("estimateShapefileBytes", () => {
 });
 
 describe("browser memory ceiling", () => {
-  const fields = [{ name: "unit_name", type: "VARCHAR", avgBytes: 20 }];
+  const fields = [{ name: "unit_name", type: "VARCHAR", maxBytes: 44, avgBytes: 20 }];
 
   it("expands geometry bytes, since GeoJSON spells coordinates out as text", () => {
     expect(estimateGeoJSONBytes([], 1_000, 1_000_000)).toBe(2_500_000 + 1_000 * 100);
@@ -214,7 +222,7 @@ describe("browser memory ceiling", () => {
 
   it("trips below the 2 GB format cap — the browser gives out first", () => {
     // 200k polygons averaging 4 KB of WKB: both shapefile parts fit, the conversion does not.
-    const polys = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}`, type: "DOUBLE", avgBytes: 8 }));
+    const polys = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}`, type: "DOUBLE", maxBytes: 0, avgBytes: 8 }));
     const geomBytes = 200_000 * 4_000;
     const shp = estimateShapefileBytes(polys, 200_000, geomBytes);
     const peak = estimateExportPeakBytes(estimateGeoJSONBytes(polys, 200_000, geomBytes),
@@ -232,7 +240,7 @@ describe("browser memory ceiling", () => {
 
 // DuckDB-WASM has no range reads: reaching the footer downloads the whole file. The gate has to
 // answer from the Content-Length alone, without ever starting the engine.
-describe("shapefileWarnings size gate", () => {
+describe("exportWarnings size gate", () => {
   const headOnly = (bytes: number) => vi.fn(async (_u: string, init?: RequestInit) => {
     expect(init?.method).toBe("HEAD");
     return { headers: new Headers({ "content-length": String(bytes) }) } as Response;
@@ -242,7 +250,7 @@ describe("shapefileWarnings size gate", () => {
   it("refuses a 1.35 GB source on the HEAD alone, without loading DuckDB", async () => {
     const fetchSpy = headOnly(1_351_235_892);
     vi.stubGlobal("fetch", fetchSpy);
-    const w = await shapefileWarnings("https://cdn/wetlands_riverine.parquet");
+    const w = await exportWarnings("https://cdn/wetlands_riverine.parquet", "shp");
     expect(w.tooBigToInspect).toBe(true);
     expect(w.overBrowserLimit).toBe(true);
     expect(w.any).toBe(true);
@@ -254,6 +262,44 @@ describe("shapefileWarnings size gate", () => {
   it("does not gate a file at the threshold", async () => {
     // Under the cap it falls through to the DuckDB path, which has no engine in this environment.
     vi.stubGlobal("fetch", headOnly(PREFLIGHT_MAX_PARQUET_BYTES));
-    await expect(shapefileWarnings("https://cdn/small.parquet")).rejects.toBeTruthy();
+    await expect(exportWarnings("https://cdn/small.parquet", "shp")).rejects.toBeTruthy();
+  });
+});
+
+describe("baseGeometryTypes", () => {
+  it("dedupes GeoParquet's spaced dimension suffix against the plain name", () => {
+    // GeoParquet writes "Point Z"; ST_GeometryType writes "ST_Point". Both are one base type.
+    expect(baseGeometryTypes(["Point", "Point Z"])).toEqual(["POINT"]);
+    expect(baseGeometryTypes(["ST_MultiPolygon", "Polygon Z M"])).toEqual(["POLYGON"]);
+  });
+  it("still reports genuinely mixed types", () => {
+    expect(baseGeometryTypes(["Point", "LineString"])).toEqual(["POINT", "LINESTRING"]);
+  });
+});
+
+describe("geomColumn", () => {
+  it("finds the geometry column a pub or external parquet actually uses", () => {
+    expect(geomColumn(["id", "wkb_geometry"])).toBe("wkb_geometry");
+    expect(geomColumn(["id", "geometry"])).toBe("geometry");
+  });
+  it("prefers our own name and falls back to it", () => {
+    expect(geomColumn(["geom", "geometry"])).toBe("geom");
+    expect(geomColumn(["id"])).toBe("geom");
+  });
+});
+
+describe("dictionary-encoded columns", () => {
+  it("a repeated string measures its real width, not its parquet page size", () => {
+    // 200k rows of two repeated 44-char strings occupy ~54 KB of dictionary-encoded parquet
+    // (0.27 bytes/row). Sizing the dbf from that gave 5; the decoded max gives 44.
+    const pageSizePerRow = 53_648 / 200_000;
+    expect(dbfFieldWidth("VARCHAR", pageSizePerRow)).toBe(1);
+    expect(dbfFieldWidth("VARCHAR", 44)).toBe(44);
+
+    const rows = 50_000_000;
+    const asPageSize = estimateShapefileBytes([{ type: "VARCHAR", maxBytes: pageSizePerRow }], rows, 0);
+    const asMeasured = estimateShapefileBytes([{ type: "VARCHAR", maxBytes: 44 }], rows, 0);
+    expect(asPageSize.over2gb).toBe(false);      // the old model waved this through
+    expect(asMeasured.over2gb).toBe(true);
   });
 });

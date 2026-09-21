@@ -61,10 +61,11 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
       const clip = clipOn ? bbox : undefined;
-      const { exportItem, shapefileWarnings } = await import("@/data/download");   // DuckDB + GDAL, on demand
+      const { exportItem, exportWarnings } = await import("@/data/download");   // DuckDB + GDAL, on demand
+      // Every format reads the whole GeoParquet into the tab, so every format is pre-flighted.
       // A failed pre-flight just proceeds to the export.
-      if (fmt === "shp" && !force) {
-        const w = await shapefileWarnings(parquet!.href, clip).catch(() => null);
+      if (!force) {
+        const w = await exportWarnings(parquet!.href, fmt, clip).catch(() => null);
         if (w?.any) return w;
       }
       await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clip, epsg);
@@ -193,13 +194,17 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             )}
           </ul>
           <div className="mt-2 flex flex-wrap gap-2">
-            <button onClick={() => run.mutate({ fmt: "gpkg" })}
-              className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
-              Use GeoPackage instead
-            </button>
-            <button onClick={() => run.mutate({ fmt: "shp", force: true })}
+            {/* GeoPackage only helps with shapefile's own limits. It runs in the same tab through
+                the same wasm instance, so it is no remedy for a memory ceiling. */}
+            {!warn.overBrowserLimit && run.variables?.fmt === "shp" && (
+              <button onClick={() => run.mutate({ fmt: "gpkg" })}
+                className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
+                Use GeoPackage instead
+              </button>
+            )}
+            <button onClick={() => run.mutate({ fmt: run.variables!.fmt, force: true })}
               className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
-              Download shapefile anyway
+              Download anyway
             </button>
             <button onClick={() => run.reset()} className="text-muted-foreground hover:underline">Cancel</button>
           </div>

@@ -24,7 +24,8 @@ const item: StacDoc = {
 
 const MANGLED = {
   any: true, mixedGeometry: ["POINT", "LINESTRING"], longNames: [], collisions: [],
-  tooManyFields: false, over2gb: false, fieldCount: 3, estBytes: 10,
+  tooManyFields: false, over2gb: false, fieldCount: 3, estShpBytes: 10, estDbfBytes: 10,
+  estPeakBytes: 10, overBrowserLimit: false, sourceBytes: 1000, tooBigToInspect: false,
 };
 
 const show = () => render(

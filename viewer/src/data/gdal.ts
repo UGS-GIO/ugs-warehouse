@@ -1,7 +1,8 @@
 // Real GDAL/OGR in the browser (gdal3.js). DuckDB-WASM's GDAL output drivers are
 // broken, but gdal3.js bundles a full GDAL build whose OGR drivers write correctly —
 // including OpenFileGDB (Esri File Geodatabase, write support since GDAL 3.6). We feed
-// it a GeoJSON (produced by DuckDB) and convert to GPKG / SHP / GDB / FlatGeobuf.
+// it newline-delimited GeoJSON bytes (produced by DuckDB, read through OGR's GeoJSONSeq driver)
+// and convert to GPKG / SHP / GDB / FlatGeobuf.
 import { zipSync } from "fflate";
 import initGdalJs from "gdal3.js";
 import dataUrl from "gdal3.js/dist/package/gdal3WebAssembly.data?url";
@@ -34,35 +35,28 @@ function getGdal(): Promise<Gdal> {
 
 const basename = (p: string) => p.split("/").pop() ?? p;
 
-/** Convert a GeoJSON string (WGS84) to `target`, reprojecting to `epsg` (default 4326).
- * `cols` (all attribute columns) + `floatCols` (the ones that are DOUBLE/REAL in the source) let us
- * force real typing: GDAL's GeoJSON reader otherwise infers Integer for a float column whose values
- * happen to be whole, silently downcasting depth/elevation fields. An OGR-SQL CAST fixes it. */
-export async function convertGeoJSON(
-  geojson: string,
+/** Convert GeoJSONSeq bytes (WGS84, one Feature per line) to `target`, reprojecting to `epsg`
+ * (default 4326).
+ * Float typing needs no help here: DuckDB's JSON writer keeps a whole-valued DOUBLE as `2.0`, so
+ * OGR reads it as Real. (The JS `JSON.stringify` this replaced wrote `2`, which OGR read as
+ * Integer; the OGR-SQL CAST that used to correct that rounded real decimals away, so it is gone.) */
+export async function convertFeatureSeq(
+  seq: Uint8Array,
   stem: string,
   t: GdalTarget,
   epsg = 4326,
-  cols: string[] = [],
-  floatCols: string[] = [],
 ): Promise<{ bytes: Uint8Array; filename: string; mime: string }> {
   const gdal = await getGdal();
-  const input = new File([geojson], "in.geojson", { type: "application/geo+json" });
+  // The .geojsonl extension is what selects OGR's GeoJSONSeq driver; the layer is named "in".
+  const input = new File([seq as BlobPart], "in.geojsonl", { type: "application/geo+json-seq" });
   const { datasets } = await gdal.open(input);
   const ds = datasets[0];
   // Shapefile: pass the bare stem (the driver appends .shp/.dbf/… — giving `stem.shp`
   // would double to `stem.shp.shp`). Other drivers want the full filename.
   const outName = t.ext === "shp" ? stem : `${stem}.${t.ext}`;
-  // -nln names the output layer after the topic (else it inherits "in" from in.geojson).
+  // -nln names the output layer after the topic (else it inherits "in" from in.geojsonl).
   // -t_srs reprojects from the GeoJSON's WGS84 to the user's chosen output CRS (e.g. 26912 UTM 12N).
   const args = ["-f", t.driver, "-t_srs", `EPSG:${epsg}`, "-nln", stem];
-  if (floatCols.length && cols.length) {
-    const fset = new Set(floatCols);
-    const q = (c: string) => `"${c.replace(/"/g, '""')}"`;
-    // Geometry passes through OGR SQL implicitly; CAST only the whole-valued float columns to real.
-    const sel = cols.map((c) => (fset.has(c) ? `CAST(${q(c)} AS float(24,10)) AS ${q(c)}` : q(c))).join(", ");
-    args.push("-sql", `SELECT ${sel} FROM "in"`);
-  }
   const result = await gdal.ogr2ogr(ds, args, outName);
 
   // try/finally so the single-file early return still closes the dataset (else gpkg/fgb exports leak

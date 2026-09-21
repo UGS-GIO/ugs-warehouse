@@ -1,5 +1,10 @@
-import { describe, expect, it } from "vitest";
-import { buildOrder, evictionVictim, filterClause, sanitize, shapefileFieldChecks } from "./download";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  buildOrder, dbfFieldWidth, estimateExportPeakBytes, estimateGeoJSONBytes, estimateShapefileBytes,
+  evictionVictim, featureSeqSql, filterClause, sanitize, seqToFeatureCollection,
+  shapefileFieldChecks, shapefileWarnings, SHP_FILE_LIMIT, PREFLIGHT_MAX_PARQUET_BYTES,
+  WASM_HEAP_BUDGET,
+} from "./download";
 
 describe("sanitize", () => {
   it("keeps safe bigints as numbers", () => {
@@ -116,5 +121,139 @@ describe("buildOrder", () => {
   it("omits the tiebreaker when the parquet has no feature_id", () => {
     expect(buildOrder(cols, { limit: 50, offset: 0, orderBy: "acres", desc: true }, false))
       .toBe(' ORDER BY "acres" DESC NULLS LAST');
+  });
+});
+
+describe("featureSeqSql", () => {
+  it("emits one GeoJSON Feature per row, geometry and properties as JSON (not escaped strings)", () => {
+    expect(featureSeqSql(["name", "td"], "geom", "raw")).toBe(
+      `SELECT 'Feature' AS type, ST_AsGeoJSON(geom)::JSON AS geometry, `
+      + `to_json({'name': "name", 'td': "td"}) AS properties FROM raw`);
+  });
+  it("escapes quotes in column names", () => {
+    expect(featureSeqSql(["O'Brien"], "geom", "raw")).toContain(`'O''Brien': "O'Brien"`);
+  });
+  it("still produces valid features when the table has no attribute columns", () => {
+    expect(featureSeqSql([], "geom", "raw")).toContain(`'{}'::JSON AS properties`);
+  });
+});
+
+describe("seqToFeatureCollection", () => {
+  const wrap = (s: string) => new TextDecoder().decode(seqToFeatureCollection(new TextEncoder().encode(s)));
+
+  it("joins newline-delimited features into one FeatureCollection", () => {
+    expect(JSON.parse(wrap('{"type":"Feature","id":1}\n{"type":"Feature","id":2}\n')))
+      .toEqual({ type: "FeatureCollection", features: [{ type: "Feature", id: 1 }, { type: "Feature", id: 2 }] });
+  });
+  it("handles a missing trailing newline and a single feature", () => {
+    expect(JSON.parse(wrap('{"id":1}')).features).toEqual([{ id: 1 }]);
+  });
+  it("yields an empty collection for no rows", () => {
+    expect(JSON.parse(wrap("")).features).toEqual([]);
+  });
+  it("leaves escaped newlines inside string values alone", () => {
+    // The writer escapes a real newline as \\n, so only record separators are raw 0x0A.
+    expect(JSON.parse(wrap('{"note":"a\\nb"}\n')).features[0].note).toBe("a\nb");
+  });
+});
+
+describe("dbfFieldWidth", () => {
+  it("uses fixed widths for typed columns", () => {
+    expect(dbfFieldWidth("BOOLEAN", 0)).toBe(1);
+    expect(dbfFieldWidth("INTEGER", 0)).toBe(11);
+    expect(dbfFieldWidth("BIGINT", 0)).toBe(20);
+    expect(dbfFieldWidth("DOUBLE", 0)).toBe(24);
+    expect(dbfFieldWidth("DATE", 0)).toBe(8);
+    expect(dbfFieldWidth("TIMESTAMP WITH TIME ZONE", 0)).toBe(24);
+  });
+  it("estimates VARCHAR from average bytes and caps at the dbf 254 maximum", () => {
+    expect(dbfFieldWidth("VARCHAR", 10)).toBe(24);
+    expect(dbfFieldWidth("VARCHAR", 5000)).toBe(254);
+  });
+});
+
+describe("estimateShapefileBytes", () => {
+  const fields = [{ type: "DOUBLE", avgBytes: 8 }];   // 24-wide
+
+  it("sizes .shp from the geometry bytes and .dbf from the field widths", () => {
+    const r = estimateShapefileBytes(fields, 1000, 500_000);
+    expect(r.estShpBytes).toBe(100 + 500_000 + 1000 * 40);
+    expect(r.estDbfBytes).toBe(33 + 32 + 1000 * 25);
+    expect(r.over2gb).toBe(false);
+  });
+
+  it("flags a huge attribute table even when the geometry is small (.dbf has its own 2 GB cap)", () => {
+    const wide = Array.from({ length: 200 }, () => ({ type: "DOUBLE", avgBytes: 8 }));
+    const r = estimateShapefileBytes(wide, 500_000, 1_000);
+    expect(r.estShpBytes).toBeLessThan(SHP_FILE_LIMIT);
+    expect(r.estDbfBytes).toBeGreaterThan(SHP_FILE_LIMIT);
+    expect(r.over2gb).toBe(true);
+  });
+
+  it("flags geometry over the cap on its own", () => {
+    expect(estimateShapefileBytes(fields, 10, 3 * 1024 ** 3).over2gb).toBe(true);
+  });
+});
+
+describe("browser memory ceiling", () => {
+  const fields = [{ name: "unit_name", type: "VARCHAR", avgBytes: 20 }];
+
+  it("expands geometry bytes, since GeoJSON spells coordinates out as text", () => {
+    expect(estimateGeoJSONBytes([], 1_000, 1_000_000)).toBe(2_500_000 + 1_000 * 100);
+  });
+
+  it("charges every row for the field name, not just the value", () => {
+    const withField = estimateGeoJSONBytes(fields, 1_000, 0);
+    const bare = estimateGeoJSONBytes([], 1_000, 0);
+    expect(withField - bare).toBe(1_000 * ("unit_name".length + 20 + 6));
+  });
+
+  it("counts the input, the written layer and the zip as live at once", () => {
+    expect(estimateExportPeakBytes(100, 50)).toBe(200);
+  });
+
+  it("trips below the 2 GB format cap — the browser gives out first", () => {
+    // 200k polygons averaging 4 KB of WKB: both shapefile parts fit, the conversion does not.
+    const polys = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}`, type: "DOUBLE", avgBytes: 8 }));
+    const geomBytes = 200_000 * 4_000;
+    const shp = estimateShapefileBytes(polys, 200_000, geomBytes);
+    const peak = estimateExportPeakBytes(estimateGeoJSONBytes(polys, 200_000, geomBytes),
+      shp.estShpBytes + shp.estDbfBytes);
+    expect(shp.over2gb).toBe(false);
+    expect(peak).toBeGreaterThan(WASM_HEAP_BUDGET);
+  });
+
+  it("leaves an ordinary topic well under the budget", () => {
+    const shp = estimateShapefileBytes(fields, 7_000, 3_000_000);
+    expect(estimateExportPeakBytes(estimateGeoJSONBytes(fields, 7_000, 3_000_000),
+      shp.estShpBytes + shp.estDbfBytes)).toBeLessThan(WASM_HEAP_BUDGET);
+  });
+});
+
+// DuckDB-WASM has no range reads: reaching the footer downloads the whole file. The gate has to
+// answer from the Content-Length alone, without ever starting the engine.
+describe("shapefileWarnings size gate", () => {
+  const headOnly = (bytes: number) => vi.fn(async (_u: string, init?: RequestInit) => {
+    expect(init?.method).toBe("HEAD");
+    return { headers: new Headers({ "content-length": String(bytes) }) } as Response;
+  });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it("refuses a 1.35 GB source on the HEAD alone, without loading DuckDB", async () => {
+    const fetchSpy = headOnly(1_351_235_892);
+    vi.stubGlobal("fetch", fetchSpy);
+    const w = await shapefileWarnings("https://cdn/wetlands_riverine.parquet");
+    expect(w.tooBigToInspect).toBe(true);
+    expect(w.overBrowserLimit).toBe(true);
+    expect(w.any).toBe(true);
+    expect(w.sourceBytes).toBe(1_351_235_892);
+    expect(w.rowCount).toBe(0);              // nothing was read
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not gate a file at the threshold", async () => {
+    // Under the cap it falls through to the DuckDB path, which has no engine in this environment.
+    vi.stubGlobal("fetch", headOnly(PREFLIGHT_MAX_PARQUET_BYTES));
+    await expect(shapefileWarnings("https://cdn/small.parquet")).rejects.toBeTruthy();
   });
 });

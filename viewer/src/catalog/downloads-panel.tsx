@@ -168,7 +168,29 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
               <li><b>Field-name collisions</b> after truncation — <code>{warn.collisions[0][0]}</code> &amp; <code>{warn.collisions[0][1]}</code> collapse to the same name (data loss).</li>
             )}
             {warn.tooManyFields && <li><b>{warn.fieldCount} fields</b> exceeds the 255-field shapefile limit.</li>}
-            {warn.over2gb && <li><b>~{(warn.estBytes / 1024 ** 3).toFixed(1)} GB estimated</b> — over the 2 GB shapefile limit (estimate; export may fail).</li>}
+            {warn.tooBigToInspect && (
+              <li>
+                <b>Too big to convert in the browser</b> — the GeoParquet is{" "}
+                {(warn.sourceBytes / 1024 ** 3).toFixed(1)} GB, and the export has to load all of it
+                into the tab first. Download the GeoParquet above and convert it locally (QGIS,
+                GDAL). Clipping doesn't help: the whole file is read either way.
+              </li>
+            )}
+            {warn.overBrowserLimit && !warn.tooBigToInspect && (
+              <li>
+                <b>Too big to convert in the browser</b> — the conversion needs about{" "}
+                {(warn.estPeakBytes / 1024 ** 3).toFixed(1)} GB of memory and the tab has roughly
+                1.5 GB. Clip to a smaller area, or download the GeoParquet and convert locally.
+              </li>
+            )}
+            {warn.over2gb && (
+              <li>
+                <b>Over the 2 GB per-file shapefile limit</b> — estimated{" "}
+                {(warn.estShpBytes / 1024 ** 3).toFixed(1)} GB of geometry (.shp) and{" "}
+                {(warn.estDbfBytes / 1024 ** 3).toFixed(1)} GB of attributes (.dbf). Use GeoPackage,
+                or clip to a smaller area.
+              </li>
+            )}
           </ul>
           <div className="mt-2 flex flex-wrap gap-2">
             <button onClick={() => run.mutate({ fmt: "gpkg" })}

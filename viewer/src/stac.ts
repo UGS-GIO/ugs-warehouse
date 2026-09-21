@@ -464,6 +464,21 @@ export const isParquetAsset = (a: Asset): boolean =>
 export const parquetAsset = (item: StacDoc): Asset | undefined =>
   Object.values(item.assets ?? {}).find(isParquetAsset);
 
+// A published row count (serving topics stamp ugs:row_count), else undefined.
+export const rowCountOf = (item: StacDoc): number | undefined => {
+  const n = item.properties?.["ugs:row_count"];
+  return typeof n === "number" ? n : undefined;
+};
+
+// DataExplorer scans the whole GeoParquet in DuckDB-WASM to build its table; past this many rows
+// that scan is hundreds of slow single-threaded range reads over a large file and OOMs the browser
+// tab, so the preview sites fall back to a download/OGC notice instead of the table. A missing count
+// fails open (show the table). Interim guard (#333); the durable fix (physical-order paging, sort on
+// demand) is a follow-up.
+export const TABLE_PREVIEW_MAX_ROWS = 50_000;
+export const tableTooLargeToPreview = (item: StacDoc): boolean =>
+  (rowCountOf(item) ?? 0) > TABLE_PREVIEW_MAX_ROWS;
+
 export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
   Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"
     || a.roles?.includes("ducklake") || a.href.includes("ducklake"))?.[1];

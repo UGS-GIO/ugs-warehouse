@@ -8,7 +8,7 @@ import type { ItemRef } from "./browse";
 import { validBbox } from "@/map/map-model";
 import {
   type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset,
-  type TableColumn, zarrAsset,
+  rowCountOf, type TableColumn, zarrAsset,
 } from "@/stac";
 
 // ---- field getters (null-safe; the single home for what browse.tsx + discovery-model.ts duplicated) ----
@@ -78,10 +78,7 @@ export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;
 
 
 // A row count where the warehouse published one (serving topics), else undefined.
-export const rowCount = (it: ItemRef): number | undefined => {
-  const n = propsOf(it)["ugs:row_count"];
-  return typeof n === "number" ? n : undefined;
-};
+export const rowCount = (it: ItemRef): number | undefined => rowCountOf(it.data ?? {});
 export const recordCountLabel = (it: ItemRef): string | undefined => {
   const n = rowCount(it);
   return n === undefined ? undefined : `${n.toLocaleString()} ${n === 1 ? "row" : "rows"}`;

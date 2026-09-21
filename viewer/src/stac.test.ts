@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex, relatedJoins } from "./stac";
+import { assetUsages, cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex, relatedJoins, rowCountOf, TABLE_PREVIEW_MAX_ROWS, tableTooLargeToPreview } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -136,5 +136,33 @@ describe("relatedJoins", () => {
   it("is empty when there are no related assets", () => {
     expect(relatedJoins({ assets: { data: { href: "https://x/p.parquet", roles: ["data"] } } })).toEqual([]);
     expect(relatedJoins(undefined)).toEqual([]);
+  });
+});
+
+describe("tableTooLargeToPreview", () => {
+  const withRows = (n?: unknown): StacDoc => ({ properties: n === undefined ? {} : { "ugs:row_count": n } });
+
+  it("gates items above the row threshold (the DuckDB-WASM tab-crash guard)", () => {
+    expect(tableTooLargeToPreview(withRows(147506))).toBe(true);
+    expect(tableTooLargeToPreview(withRows(TABLE_PREVIEW_MAX_ROWS + 1))).toBe(true);
+  });
+
+  it("keeps the table for normal-sized and threshold-equal layers", () => {
+    expect(tableTooLargeToPreview(withRows(33223))).toBe(false);
+    expect(tableTooLargeToPreview(withRows(TABLE_PREVIEW_MAX_ROWS))).toBe(false);
+  });
+
+  it("never gates when the count is missing or non-numeric (fails open)", () => {
+    expect(tableTooLargeToPreview(withRows())).toBe(false);
+    expect(tableTooLargeToPreview(withRows("lots"))).toBe(false);
+    // the catalog stamps a JSON number, so a numeric string is treated as absent, not parsed
+    expect(tableTooLargeToPreview(withRows("147506"))).toBe(false);
+    expect(tableTooLargeToPreview({})).toBe(false);
+  });
+
+  it("rowCountOf returns the numeric count, else undefined", () => {
+    expect(rowCountOf(withRows(810))).toBe(810);
+    expect(rowCountOf(withRows("810"))).toBeUndefined();
+    expect(rowCountOf({})).toBeUndefined();
   });
 });

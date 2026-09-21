@@ -7,8 +7,9 @@ import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
 import { FeatureCard } from "@/map/feature-card";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
-import { type Asset, type AssetKind, assetKind, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
-  summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
+import { type Asset, type AssetKind, assetKind, FEATURES_BASE, featuresCollectionUrl, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, rowCountOf, type StacDoc,
+  summaryFieldsOf, tableColumns, tableTooLargeToPreview, thumbnailAsset } from "@/stac";
+import { serviceUrlOf } from "./catalog";
 import { ThreeDViewer } from "@/data/three-d-viewer";
 import { C, toggle } from "@/ui/ui";
 
@@ -65,6 +66,26 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
   return <div ref={ref}><FeatureCard item={item} props={selectedFeature.props} onOpenRelated={openRelated} onClear={clearSelection} /></div>;
 }
 
+// DataExplorer OOMs the tab on very large layers, so above tableTooLargeToPreview the vector and
+// parquet-tab previews render this notice instead of the table. Map + fields still load; the full,
+// geometry-bearing data is the GeoParquet download or the OGC API. Interim; see #333.
+function LargeTableNotice({ item }: { item: StacDoc }) {
+  const rows = rowCountOf(item)?.toLocaleString() ?? "many";
+  const pq = parquetAsset(item);
+  const ogc = serviceUrlOf(item, FEATURES_BASE) ?? (pq ? featuresCollectionUrl(String(item.id ?? "")) : undefined);
+  const link = "text-primary hover:underline";
+  return (
+    <div className="mt-2 rounded-md border border-border bg-muted p-3 text-xs text-muted-foreground">
+      Table preview is turned off for large datasets ({rows} rows) so it does not overwhelm the browser.
+      Use the map above, or get the full data via{" "}
+      {pq && <a href={pq.href} target="_blank" rel="noopener" className={link}>GeoParquet download ↗</a>}
+      {pq && ogc && " or "}
+      {ogc && <a href={ogc} target="_blank" rel="noopener" className={link}>the OGC API ↗</a>}
+      {!pq && !ogc && "the Download panel below"}.
+    </div>
+  );
+}
+
 // Vector asset preview: the item's PMTiles on the shared persistent map + full dataset explorer,
 // linked — click a table row → map flies to that feature; click a map feature → table pages to it,
 // and its detail docks in the card directly below the map. The map instance lives in
@@ -81,8 +102,10 @@ function VectorPreview({ item }: { item: StacDoc }) {
       <PreviewMapSlot spec={spec} />
       <SelectedFeatureCard item={item} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer key={pq.href} href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
-        rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}
+      {pq && (tableTooLargeToPreview(item)
+        ? <LargeTableNotice item={item} />
+        : <DataExplorer key={pq.href} href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
+            rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />)}
     </>
   );
 }
@@ -129,7 +152,9 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
         </Suspense>
       );
     case "threeD": return <ThreeDViewer asset={asset} item={item} />;
-    case "parquet": return <DataExplorer key={asset.href} href={asset.href} />;
+    case "parquet": return tableTooLargeToPreview(item) && asset.href === parquetAsset(item)?.href
+      ? <LargeTableNotice item={item} />
+      : <DataExplorer key={asset.href} href={asset.href} />;
     case "image":
       return (
         <img src={asset.href} alt={asset.title ?? "image"} loading="lazy"

@@ -45,6 +45,11 @@ COG_COMPRESS = os.environ.get("COG_COMPRESS", "deflate").lower()
 COG_QUALITY = int(os.environ.get("COG_QUALITY", "90"))
 COG_DPI = int(os.environ.get("COG_DPI", "600"))
 MAX_ZIP_SIZE_MB = int(os.environ.get("MAX_ZIP_SIZE_MB", "0"))
+# A COLOR geologic-map render must win over a grayscale shaded-relief base / topo plate. Pick the
+# source raster by CONTENT (mean per-pixel R/G/B spread), not filename — the old name regex fell to a
+# grayscale plate and served ~31 maps in B&W though a color render sat in the same zip. Below this
+# floor a raster reads as grayscale (DEM, hillshade, or B&W scan); see prepare_plates + the post-COG guard.
+COLOR_SAT_FLOOR = float(os.environ.get("COLOR_SAT_FLOOR", "8"))
 
 
 class ZipTooLargeError(Exception):
@@ -114,8 +119,10 @@ def _classify(name: str) -> str:
     if low.endswith(".pdf"):
         return "pdf"
     if low.endswith((".tif", ".tiff")):
-        # basemaps/hillshades are .tif too but never the map raster (mirrors prepare_plates' filter)
-        return "basemap" if any(x in low for x in ("basemap", "topo", "hillshade", "mashup")) else "geotiff"
+        # Coarse label for the run report only — the color pick now selects the map raster by CONTENT
+        # (_source_saturation), not by name. A shaded-relief/topo BASE isn't the geologic map; a MashUp
+        # (unit-colors) render IS, so it's a "geotiff", not a "basemap".
+        return "basemap" if any(x in low for x in ("basemap", "topo", "hillshade")) else "geotiff"
     if low.endswith(".shp"):
         return "shapefile"
     if low.endswith(_SIDECAR_EXTS):
@@ -128,7 +135,7 @@ def _report_begin(series_id: str) -> None:
     _pub_report = {"series_id": series_id, "source_zips": [], "found": [],
                    "used": {"plate": None, "units_shp": None}, "tier": None,
                    "produced": {"cog": None, "units_parquet": None, "thumbnail": None},
-                   "skipped": [], "status": None}
+                   "skipped": [], "status": None, "color_source_sat": None}
 
 
 def _report(section: str | None = None, **updates) -> None:
@@ -434,6 +441,61 @@ def ensure_rgb(tif):
     return tif
 
 
+def _source_saturation(path) -> float:
+    """Color-vs-grayscale probe: the mean per-pixel R/G/B spread of a raster over its OPAQUE pixels,
+    read cheaply from a decimated 96x96 thumbnail. A palette raster is scored from its colortable's own
+    spread (a gray-ramp palette scores ~0; a real color table scores high). A 1-2 band non-Byte raster
+    is a DEM / data grid, not a map (-> -1, a silent intentional skip). Measuring only alpha>0 pixels
+    keeps the number margin-independent, so a warped COG (whose cutline collar is transparent) compares
+    apples-to-apples with its opaque source plate — the post-COG guard relies on that. Unreadable -> -1,
+    logged loud (never raises)."""
+    try:
+        import numpy as np  # noqa: F401
+        import rasterio
+        from rasterio.enums import ColorInterp, Resampling
+        with rasterio.open(path) as ds:
+            if ColorInterp.palette in ds.colorinterp:
+                try:
+                    cmap = ds.colormap(1)
+                except Exception:
+                    cmap = None
+                if cmap:                          # real color content of the palette, not a blanket 255
+                    spreads = [max(c[:3]) - min(c[:3]) for c in cmap.values()]
+                    return float(sum(spreads) / len(spreads)) if spreads else 0.0
+                return 255.0
+            if ds.count < 3 and str(ds.dtypes[0]) != "uint8":
+                return -1.0                       # 1-2 band non-Byte = DEM / data grid — intentional skip
+            nb = min(ds.count, 4)
+            has_alpha = (nb >= 4 and ds.colorinterp[3] == ColorInterp.alpha
+                         and str(ds.dtypes[3]) == "uint8")   # band 4 = real alpha, not RGBN's NIR
+            a = ds.read(indexes=list(range(1, nb + 1)), out_shape=(nb, 96, 96),
+                        resampling=Resampling.average).astype("float32")
+    except Exception as e:
+        hlog(f"WARN source-color probe failed for {os.path.basename(str(path))}: {str(e)[:80]}",
+             step="plate", level="WARNING")
+        return -1.0
+    if a.shape[0] < 3:                            # 1-band Byte grayscale scan -> zero spread
+        return 0.0
+    spread = a[:3].max(axis=0) - a[:3].min(axis=0)   # per-pixel chroma spread
+    if has_alpha:                                 # ignore transparent cutline margins entirely
+        opaque = a[3] > 0
+        return float(spread[opaque].mean()) if opaque.any() else 0.0
+    return float(spread.mean())
+
+
+def _pick_color_gtif(tif_candidates):
+    """Pick the most-colorful source GeoTIFF among (zip_path, inner_name) candidates. Returns
+    (zip_path, inner_name, saturation) for the best, or None if none is a readable raster."""
+    best = None
+    for zip_path, inner in tif_candidates:
+        sat = _source_saturation(f"/vsizip/{zip_path}/{inner}")
+        if sat < 0:                               # unreadable / DEM — not a map candidate
+            continue
+        if best is None or sat > best[2]:
+            best = (zip_path, inner, sat)
+    return best
+
+
 def prepare_plates(zip_paths, work):
     """Extract plates from multiple zips. If COG_DPI>0 and a GEOSPATIAL PDF is present (detected by
     content — GDAL reads a CRS — not by filename), rasterize it at COG_DPI via GDAL using the PDF's
@@ -449,6 +511,8 @@ def prepare_plates(zip_paths, work):
     gtif = shp = None
     target_zip = inner_gtif = None
     pdf_candidates = []  # (zip_path, inner_name)
+    tif_candidates = []  # (zip_path, inner_name) — probed by content to pick the color source
+    _report(color_source_sat=None)
     for zip_path in zip_paths:
         with zipfile.ZipFile(zip_path) as z:
             names = z.namelist()
@@ -466,6 +530,9 @@ def prepare_plates(zip_paths, work):
             if _shp:
                 shp = _shp
             pdf_candidates += [(zip_path, n) for n in names if n.lower().endswith(".pdf")]
+            tif_candidates += [(zip_path, n) for n in names if n.lower().endswith((".tif", ".tiff"))
+                               and not any(j in n.lower() for j in
+                                           ("legend", "correlation", "thumb", "index", "keyboard", "hillshade"))]
             want = []
             if _shp:
                 stem = re.sub(r"\.shp$", "", _shp, flags=re.I)
@@ -484,6 +551,32 @@ def prepare_plates(zip_paths, work):
         _report(tier="geo-pdf")                       # _render recorded used["plate"] (name + dpi)
         _report_derive_skipped(shp)
         return rendered, shp_path
+    # No georeferenced PDF: choose the source GeoTIFF by COLOR content, not name — a color render
+    # (MashUp / unit-colors, or a color plate that misses the name patterns) must beat a grayscale
+    # shaded-relief base / topo plate. Falls through to the legacy name pick when nothing is color.
+    best = _pick_color_gtif(tif_candidates)
+    if best and best[2] >= COLOR_SAT_FLOOR:
+        target_zip, inner_gtif, sat = best
+        with zipfile.ZipFile(target_zip) as z:                 # bring the chosen plate's sidecars over
+            gstem = re.sub(r"\.[^.]+$", "", inner_gtif)
+            for nm in z.namelist():
+                if nm.startswith(gstem + ".") and nm.lower().endswith(
+                        (".tfwx", ".tfw", ".wld", ".aux.xml", ".prj")):
+                    z.extract(nm, work)
+        _report(color_source_sat=sat)
+        virtual_gtif = f"/vsizip/{target_zip}/{inner_gtif}"
+        gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
+        _report(tier="geotiff")
+        _report("used", plate={"name": inner_gtif, "dpi": None})
+        _report_derive_skipped(shp)
+        return gtif_path, shp_path
+    if tif_candidates:
+        # We probed rasters but none cleared the color floor. Usually a genuinely grayscale scan (fine),
+        # but this is also where a COLOR plate that failed to READ would silently vanish — surface it.
+        best_sat = best[2] if best else -1.0
+        hlog(f"advisory: no color source among {len(tif_candidates)} GeoTIFF candidate(s) "
+             f"(best spread {best_sat:.1f} < floor {COLOR_SAT_FLOOR:.0f}) — using name-pick GeoTIFF; a "
+             f"color plate that failed to read (spread -1) would show here", step="plate", level="WARNING")
     if not gtif:
         _report_derive_skipped(shp)
         return None, shp_path
@@ -638,7 +731,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     _series_ctx.set(series_id)
     # Each attempt re-inventories the source (harvest_one may retry with a different zip set), so
     # reset the per-attempt report fields; series_id/status stay owned by harvest_one/_report_finish.
-    _report(source_zips=list(zurls), found=[], skipped=[], tier=None,
+    _report(source_zips=list(zurls), found=[], skipped=[], tier=None, color_source_sat=None,
             used={"plate": None, "units_shp": None},
             produced={"cog": None, "units_parquet": None, "thumbnail": None})
     work = tempfile.mkdtemp(prefix=f"h_{series_id.replace('/', '_')}_")
@@ -729,6 +822,16 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         if not ok:
             hlog("FAIL cog invalid", step="validate", level="ERROR", category="attention", err=True)
             return "fail:cog"
+        # "It ran ≠ it's right": a COLOR source that came out grayscale means the pipeline silently
+        # dropped the color — never publish it. (No-op for a webp COG the rasterio wheel can't read:
+        # _source_saturation returns -1, which fails the `0 <= cog_sat` check.)
+        src_sat = _pub_report.get("color_source_sat")
+        if src_sat is not None and src_sat >= COLOR_SAT_FLOOR:
+            cog_sat = _source_saturation(cog)
+            if 0 <= cog_sat < COLOR_SAT_FLOOR:
+                hlog(f"FAIL color source (sat {src_sat:.0f}) produced a GRAYSCALE COG (sat {cog_sat:.1f}) "
+                     "— refusing to publish", step="validate", level="ERROR", category="attention", err=True)
+                return "fail:grayscale_cog"
         # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
         # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
         # the slow "flood of requests" on zoom. COGs are write-once (upload_write_once refuses to

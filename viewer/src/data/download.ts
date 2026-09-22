@@ -34,8 +34,8 @@ async function getDB(): Promise<DB> {
   return dbPromise;
 }
 
-/** Blob rejects a SharedArrayBuffer-backed view, and DuckDB's buffers can be one. Copy only in
- *  that case: at export sizes a blanket copy is a second full allocation of the payload. */
+/** Blob rejects a SharedArrayBuffer view and DuckDB's buffers can be one. Copy only then: at
+ *  export sizes a blanket copy is a second full allocation. */
 function blobSafe(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
   if (typeof SharedArrayBuffer !== "undefined" && bytes.buffer instanceof SharedArrayBuffer) {
     const copy = new Uint8Array(bytes.byteLength);
@@ -113,11 +113,9 @@ export function seqToFeatureCollection(seq: Uint8Array): Uint8Array[] {
 // independently. A wide attribute table can blow the .dbf while the .shp is nowhere near.
 export const SHP_FILE_LIMIT = 2 * 1024 ** 3;
 
-/** DBF field width by source type, following GDAL's shapefile writer defaults. Text has no fixed
- *  width, so it takes the column's longest decoded value (`maxBytes`), which is what the driver
- *  sizes the field to. Parquet's `total_uncompressed_size` must NOT be used for this: it is the
- *  page size after dictionary encoding, so a repeated string reports a fraction of its real width
- *  and the .dbf estimate comes out an order of magnitude low. */
+/** DBF field width, following GDAL's shapefile writer defaults. Text takes the column's longest
+ *  decoded value. NOT parquet's `total_uncompressed_size`: that is post-dictionary-encoding, so a
+ *  repeated string reports a fraction of its width and the estimate lands an order low. */
 export function dbfFieldWidth(type: string, maxBytes: number): number {
   const t = type.toUpperCase();
   if (t.startsWith("BOOLEAN")) return 1;
@@ -172,9 +170,8 @@ export function estimateGeoJSONBytes(
   return Math.round(geometry + rowCount * (60 + perRow));   // 60 = the Feature envelope
 }
 
-/** Peak bytes live at once for `fmt`. CSV never builds a GeoJSONSeq or starts GDAL: DuckDB
- *  streams it straight out. The GDAL formats hold their copy of the input plus the layer they
- *  write, and the multi-file ones (shp, gdb) hold the zip of that layer on top. */
+/** Peak bytes live at once for `fmt`. CSV streams from DuckDB and touches neither GeoJSON nor
+ *  GDAL; the zipped formats (shp, gdb) also hold the archive. */
 export function estimateExportPeakBytes(
   fmt: ExportFormat, geojsonBytes: number, outputBytes: number,
 ): number {
@@ -569,9 +566,8 @@ export async function readFeatures3D(
   }
 }
 
-// An abandoned export must not drop a file on the user minutes later. Cancelling bumps the epoch;
-// a run whose epoch is stale finishes its work but does not hand anything to the browser. The
-// underlying DuckDB/GDAL calls are not interruptible, so this is about the visible outcome.
+// DuckDB and GDAL calls are not interruptible, so cancelling suppresses the delivery instead:
+// an abandoned export must not drop a file on the user minutes later.
 let exportEpoch = 0;
 export const cancelExports = (): void => { exportEpoch++; };
 
@@ -593,8 +589,7 @@ export async function exportItem(
   let seqOut: string | undefined;
   let borrowed: string | undefined;
   try {
-    // The shared LRU handle — see exportWarnings: a private registration would download the whole
-    // file a second time, since DuckDB-WASM does not range-read.
+    // Shared handle — see exportWarnings.
     const src = borrowed = await registerUrl(parquetUrl);
     // Read FIRST, before loading spatial: spatial's GeoParquet reader trips over the
     // CRS metadata ("stoi: no conversion"). Plain read already yields a GEOMETRY column.
@@ -602,8 +597,7 @@ export async function exportItem(
     await conn.query("INSTALL spatial; LOAD spatial;");
     const desc = await conn.query(`DESCRIBE raw;`);
     const descRows = desc.toArray();
-    // Resolve the column rather than assuming `geom`: pub and external parquet use `geometry` or
-    // `wkb_geometry`, and the pre-flight already passes those (geomColumn).
+    // Not always `geom` — the pre-flight already accepts `geometry` / `wkb_geometry`.
     const geomCol = geomColumn(descRows.map((r) => String(r.column_name)));
     const geomType = String(descRows.find((r) => String(r.column_name) === geomCol)?.column_type ?? "").toUpperCase();
     const geom = geomType.includes("BLOB") ? `ST_GeomFromWKB(${ident(geomCol)})` : ident(geomCol);
@@ -637,8 +631,7 @@ export async function exportItem(
     seqOut = `o${id}.geojsonl`;
     await conn.query(`COPY (${featureSeqSql(cols, geom, t)}) TO '${seqOut}' (FORMAT JSON, ARRAY false);`);
     const seqBytes = await db.copyFileToBuffer(seqOut);
-    // Free the DuckDB side NOW. Left to `finally` these outlive the GDAL conversion, so the tab
-    // would hold the raw table, the MEMFS copy and both GDAL buffers at the same moment.
+    // Free the DuckDB side now; in `finally` it would outlive the GDAL conversion.
     await conn.query("DROP TABLE IF EXISTS raw; DROP TABLE IF EXISTS clipped;").catch(() => {});
     await db.dropFile(seqOut).catch(() => {});
     seqOut = undefined;
@@ -698,12 +691,9 @@ function geoMetadataTypes(json: string, geom: string): string[] | null {
   } catch { return null; }
 }
 
-// DuckDB-WASM fetches a parquet in FULL on first access — it does not range-read, whether the file
-// is registered or queried by URL (measured: first footer query costs the whole file at ~21 MB/s,
-// 63s for a 1.35 GB topic, and a 2 GB one crashes the tab). So reading the footer means downloading
-// everything. Past this size the answer is already "too big to convert here", and inspecting would
-// mean downloading a file we are about to refuse; under it, the detailed checks cost the same
-// download the export itself needs.
+// DuckDB-WASM fetches a parquet in FULL on first access, registered or by URL (measured ~21 MB/s;
+// 63s for a 1.35 GB topic, and a 2 GB one crashed the tab). So reaching the footer costs the whole
+// file. Past this size the answer is already no, and inspecting would download what we refuse.
 export const PREFLIGHT_MAX_PARQUET_BYTES = 128 * 1024 ** 2;
 
 const UNINSPECTED = {
@@ -715,8 +705,7 @@ const UNINSPECTED = {
  *  GeoParquet into the tab, and the four GDAL ones then run it through the same wasm instance.
  *  The shapefile-only findings (field names, field count, single geometry type, the 2 GB per-file
  *  cap) are filled in for `shp` alone. */
-/** Byte length of the source, or null when the server will not say. A HEAD that 405s still
- *  resolves, so only a 2xx carrying a usable Content-Length counts as an answer. */
+/** Byte length, or null when the server will not say — `fetch` resolves on a 405. */
 async function sourceLength(url: string): Promise<number | null> {
   try {
     const head = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(15_000) });
@@ -732,8 +721,7 @@ export async function exportWarnings(
   clip?: [number, number, number, number],
 ): Promise<ShapefileWarnings> {
   const shp = fmt === "shp";
-  // Unknown size must not read as small: `fetch` resolves on a 405/403, and a response with no
-  // Content-Length would otherwise give 0 and open the gate onto the path that crashes the tab.
+  // Unknown must not read as small: 0 would open the gate onto the path that crashes the tab.
   const sourceBytes = await sourceLength(parquetUrl);
   if (sourceBytes === null || sourceBytes > PREFLIGHT_MAX_PARQUET_BYTES) {
     return {
@@ -746,9 +734,7 @@ export async function exportWarnings(
   const conn = await db.connect();
   let borrowed: string | undefined;
   try {
-    // The LRU handle, NOT a private registration: DuckDB-WASM downloads a registered parquet in
-    // full, so a handle of our own would make the pre-flight a second copy of the whole file.
-    // Sharing it means the export reads the bytes this pre-flight already pulled.
+    // Shared handle: DuckDB-WASM has no range reads, so a private one is a second full download.
     const src = borrowed = await registerUrl(parquetUrl);
     const from = `read_parquet('${src}')`;
     const desc = (await conn.query(`DESCRIBE SELECT * FROM ${from};`)).toArray();
@@ -789,9 +775,8 @@ export async function exportWarnings(
       ? Number((await conn.query(`SELECT count(*) AS n FROM ${from}${where};`)).toArray()[0].n)
       : fullRows;
 
-    // Geometry types, shapefile only — no other format cares, and under a clip this costs a full
-    // decode of the geometry column. The GeoParquet `geo` key is file-level, so a clipped run has
-    // to scan rather than trust it.
+    // Shapefile only: this costs a full geometry decode under a clip, where the file-level
+    // GeoParquet `geo` key no longer describes the selection.
     let names: string[] | null = null;
     if (shp && !where) {
       const kv = (await conn.query(
@@ -808,9 +793,8 @@ export async function exportWarnings(
     }
     const baseTypes = baseGeometryTypes(names ?? []);
 
-    // Text columns need their decoded length, which the footer cannot give (see dbfFieldWidth).
-    // The file is already local by now — reaching the footer downloaded all of it — so the scan
-    // costs no extra transfer.
+    // Decoded text length, which the footer cannot give (see dbfFieldWidth). The file is already
+    // local by now, so the scan adds no transfer.
     const measured = cols.filter((c) => needsMeasuredWidth(colTypes.get(c) ?? "VARCHAR"));
     const lengths = new Map<string, { max: number; avg: number }>();
     if (measured.length) {
@@ -833,8 +817,7 @@ export async function exportWarnings(
     const geomBytes = Math.round((colBytes.get(geom) ?? 0) * scale);
     const { estShpBytes, estDbfBytes, over2gb } = estimateShapefileBytes(fields, rowCount, geomBytes);
     const geojsonBytes = estimateGeoJSONBytes(fields, rowCount, geomBytes);
-    // A single-file format writes roughly what the shapefile pair would, without the dbf padding;
-    // the GeoJSON download is the seq bytes themselves.
+    // A single-file format writes roughly the shapefile pair without the dbf padding.
     const outputBytes = shp ? estShpBytes + estDbfBytes : geomBytes + rowCount * 40;
     const estPeakBytes = estimateExportPeakBytes(fmt, geojsonBytes, outputBytes);
     const overBrowserLimit = estPeakBytes > WASM_HEAP_BUDGET;

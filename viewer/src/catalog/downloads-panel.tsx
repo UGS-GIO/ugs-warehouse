@@ -45,7 +45,7 @@ const fileAssets = (item: StacDoc): [string, Asset][] =>
       && !a.roles?.includes("related")
       && assetKind(a) !== "zarr");
 
-// The formats that pull gdal3.js (~40 MB of wasm+data) on first use, versus DuckDB's few MB.
+// Formats that pull gdal3.js (~40 MB) on first use, versus DuckDB's few MB.
 const GDAL_FORMATS = new Set<ExportFormat>(["shp", "gpkg", "gdb", "fgb"]);
 const FORMAT_LABEL = Object.fromEntries(FORMATS.map((f) => [f.id, f.label])) as Record<ExportFormat, string>;
 
@@ -80,8 +80,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
     },
   });
   const busy = run.isPending ? run.variables.fmt : null;
-  // DuckDB and GDAL cannot be interrupted mid-call, so cancelling suppresses the delivery rather
-  // than stopping the work — the point is that an abandoned export never drops a surprise file.
+  // Suppresses the delivery, not the work: see cancelExports.
   const cancel = () => {
     void import("@/data/download").then((m) => m.cancelExports());
     run.reset();
@@ -121,8 +120,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         ))}
         {sidecars.map(assetTile)}
       </div>
-      {/* Always mounted: a live region created at the same moment as its text is announced
-          unreliably, and this operation can run for tens of seconds. */}
+      {/* Always mounted: a live region created with its text is announced unreliably. */}
       <p role="status" aria-live="polite" className={`mt-1.5 ${C.muted} ${busy ? "" : "sr-only"}`}>
         {busy ? `preparing in your browser · the first one loads DuckDB${GDAL_FORMATS.has(busy) ? " and GDAL (~40 MB)" : " (~a few MB)"}` : ""}
       </p>
@@ -183,7 +181,6 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         <div role="alertdialog" aria-labelledby="dl-warn-title" tabIndex={-1}
           ref={(el) => el?.focus()}
           className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
-          {/* The box now renders for every format, so the heading cannot say "shapefile". */}
           <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
             {warn.tooBigToInspect || warn.overBrowserLimit
               ? "This export is too big for the browser"
@@ -227,16 +224,15 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             )}
           </ul>
           <div className="mt-2 flex flex-wrap gap-2">
-            {/* GeoPackage only helps with shapefile's own limits. It runs in the same tab through
-                the same wasm instance, so it is no remedy for a memory ceiling. */}
+            {/* GeoPackage shares the tab and the wasm instance, so it is no way out of a
+                memory ceiling — only out of shapefile's own limits. */}
             {!warn.overBrowserLimit && run.variables?.fmt === "shp" && (
               <button onClick={() => run.mutate({ fmt: "gpkg" })}
                 className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
                 Use GeoPackage instead
               </button>
             )}
-            {/* Forcing past a memory ceiling crashes the tab rather than producing a file, so
-                that button is not offered; the mangling warnings stay the user's call. */}
+            {/* Forcing past a memory ceiling crashes the tab instead of producing a file. */}
             {!warn.overBrowserLimit && (
               <button onClick={() => run.mutate({ fmt: run.variables!.fmt, force: true })}
                 className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">

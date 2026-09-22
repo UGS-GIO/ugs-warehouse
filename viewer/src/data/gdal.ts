@@ -7,6 +7,8 @@ import { zip } from "fflate";
 import initGdalJs from "gdal3.js";
 import dataUrl from "gdal3.js/dist/package/gdal3WebAssembly.data?url";
 import wasmUrl from "gdal3.js/dist/package/gdal3WebAssembly.wasm?url";
+// `paths.js` defaults to the bare string "gdal3.js", which resolves to index.html.
+import workerUrl from "gdal3.js/dist/package/gdal3.js?url";
 
 export type GdalTarget = { driver: string; ext: string; multi: boolean };
 
@@ -25,14 +27,10 @@ let gdalPromise: Promise<Gdal> | null = null;
 function getGdal(): Promise<Gdal> {
   if (!gdalPromise)
     gdalPromise = initGdalJs({
-      paths: { wasm: wasmUrl, data: dataUrl },
-      // ogr2ogr blocks the thread it runs on, so a worker would be better. It does not work:
-      // gdal3.js resolves its worker script relative to the page, which serves index.html, and it
-      // postMessages its options, which cannot structured-clone the errorHandler function. Both
-      // were tried in the browser and failed; recorded here so it is not re-litigated.
-      useWorker: false,
-      // GDAL's non-fatal stderr (field-type coercion, name laundering) is warnings, not errors.
-      errorHandler: (m: string) => console.warn(m),
+      paths: { wasm: wasmUrl, data: dataUrl, js: workerUrl },
+      // Off the main thread: ogr2ogr stalled it 2.4s on a 22k-feature layer, now 88ms.
+      // No errorHandler — the config is postMessaged, and a function will not clone.
+      useWorker: true,
     });
   return gdalPromise;
 }

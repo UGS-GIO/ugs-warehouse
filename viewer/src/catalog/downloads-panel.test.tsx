@@ -26,12 +26,14 @@ const CLEAN = {
   any: false, mixedGeometry: [] as string[], longNames: [] as string[],
   collisions: [] as [string, string][], tooManyFields: false, over2gb: false, fieldCount: 3,
   estShpBytes: 10, estDbfBytes: 10, estPeakBytes: 10, overBrowserLimit: false,
-  sourceBytes: 1000, tooBigToInspect: false,
+  sourceBytes: 1000, sizeUnknown: false, tooBigToInspect: false,
 };
 const MANGLED = { ...CLEAN, any: true, mixedGeometry: ["POINT", "LINESTRING"] };
 // Past the tab's memory ceiling: GeoPackage runs in the same wasm instance, so it is no way out.
 const TOO_BIG = { ...CLEAN, any: true, overBrowserLimit: true, tooBigToInspect: true,
   sourceBytes: 1_351_235_892 };
+// The server would not report a length, so the gate refuses rather than guessing it is small.
+const UNKNOWN_SIZE = { ...TOO_BIG, sourceBytes: 0, sizeUnknown: true };
 
 const show = () => render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}>
@@ -68,6 +70,46 @@ describe("DownloadsPanel", () => {
     await userEvent.click(screen.getByLabelText("Download GeoPackage"));
     expect(await screen.findByText(/too big to convert in the browser/i)).toBeDefined();
     expect(exportItem).not.toHaveBeenCalled();
+  });
+
+  it("names the format the user actually picked, not always the shapefile", async () => {
+    exportWarnings.mockResolvedValue({ ...MANGLED });
+    show();
+    await userEvent.click(screen.getByLabelText("Download File Geodatabase (zip)"));
+    expect(await screen.findByText(/File Geodatabase \(zip\) will mangle this data/)).toBeDefined();
+  });
+
+  it("says the size is unknown instead of claiming the file is 0 GB", async () => {
+    exportWarnings.mockResolvedValue(UNKNOWN_SIZE);
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    expect(await screen.findByText(/won't report this file's size/)).toBeDefined();
+    expect(exportItem).not.toHaveBeenCalled();
+  });
+
+  // Forcing past a memory ceiling crashes the tab rather than producing a file.
+  it("offers no way to force an export the tab cannot hold", async () => {
+    exportWarnings.mockResolvedValue(TOO_BIG);
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    await screen.findByText(/too big for the browser/i);
+    expect(screen.queryByText("Download anyway")).toBeNull();
+  });
+
+  it("still lets the user force past a mangling warning", async () => {
+    exportWarnings.mockResolvedValue(MANGLED);
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    expect(await screen.findByText("Download anyway")).toBeDefined();
+  });
+
+  it("announces the warning and moves focus to it", async () => {
+    exportWarnings.mockResolvedValue(MANGLED);
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    const box = await screen.findByRole("alertdialog");
+    expect(document.activeElement).toBe(box);
+    expect(box.getAttribute("aria-labelledby")).toBe("dl-warn-title");
   });
 
   it("does not offer GeoPackage as a way out of a memory ceiling it shares", async () => {

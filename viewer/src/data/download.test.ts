@@ -140,7 +140,9 @@ describe("featureSeqSql", () => {
 });
 
 describe("seqToFeatureCollection", () => {
-  const wrap = (s: string) => new TextDecoder().decode(seqToFeatureCollection(new TextEncoder().encode(s)));
+  const dec = new TextDecoder();
+  const wrap = (s: string) =>
+    seqToFeatureCollection(new TextEncoder().encode(s)).map((p) => dec.decode(p)).join("");
 
   it("joins newline-delimited features into one FeatureCollection", () => {
     expect(JSON.parse(wrap('{"type":"Feature","id":1}\n{"type":"Feature","id":2}\n')))
@@ -151,6 +153,14 @@ describe("seqToFeatureCollection", () => {
   });
   it("yields an empty collection for no rows", () => {
     expect(JSON.parse(wrap("")).features).toEqual([]);
+  });
+  it("returns Blob parts rather than reallocating the payload", () => {
+    // A second full copy is the allocation a large GeoJSON export cannot afford, so the middle
+    // part must be a view onto the caller's buffer.
+    const seq = new TextEncoder().encode('{"id":1}\n{"id":2}\n');
+    const parts = seqToFeatureCollection(seq);
+    expect(parts).toHaveLength(3);
+    expect(parts[1].buffer).toBe(seq.buffer);
   });
   it("leaves escaped newlines inside string values alone", () => {
     // The writer escapes a real newline as \\n, so only record separators are raw 0x0A.
@@ -216,8 +226,18 @@ describe("browser memory ceiling", () => {
     expect(withField - bare).toBe(1_000 * ("unit_name".length + 20 + 6));
   });
 
-  it("counts the input, the written layer and the zip as live at once", () => {
-    expect(estimateExportPeakBytes(100, 50)).toBe(200);
+  it("counts the input, the written layer and the zip for a zipped format", () => {
+    expect(estimateExportPeakBytes("shp", 100, 50)).toBe(200);
+    expect(estimateExportPeakBytes("gdb", 100, 50)).toBe(200);
+  });
+
+  it("does not charge a single-file format for a zip it never makes", () => {
+    expect(estimateExportPeakBytes("gpkg", 100, 50)).toBe(150);
+    expect(estimateExportPeakBytes("fgb", 100, 50)).toBe(150);
+  });
+
+  it("charges CSV nothing: DuckDB streams it without GeoJSON or GDAL", () => {
+    expect(estimateExportPeakBytes("csv", 1e9, 1e9)).toBe(0);
   });
 
   it("trips below the 2 GB format cap — the browser gives out first", () => {
@@ -225,7 +245,7 @@ describe("browser memory ceiling", () => {
     const polys = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}`, type: "DOUBLE", maxBytes: 0, avgBytes: 8 }));
     const geomBytes = 200_000 * 4_000;
     const shp = estimateShapefileBytes(polys, 200_000, geomBytes);
-    const peak = estimateExportPeakBytes(estimateGeoJSONBytes(polys, 200_000, geomBytes),
+    const peak = estimateExportPeakBytes("shp", estimateGeoJSONBytes(polys, 200_000, geomBytes),
       shp.estShpBytes + shp.estDbfBytes);
     expect(shp.over2gb).toBe(false);
     expect(peak).toBeGreaterThan(WASM_HEAP_BUDGET);
@@ -233,7 +253,7 @@ describe("browser memory ceiling", () => {
 
   it("leaves an ordinary topic well under the budget", () => {
     const shp = estimateShapefileBytes(fields, 7_000, 3_000_000);
-    expect(estimateExportPeakBytes(estimateGeoJSONBytes(fields, 7_000, 3_000_000),
+    expect(estimateExportPeakBytes("shp", estimateGeoJSONBytes(fields, 7_000, 3_000_000),
       shp.estShpBytes + shp.estDbfBytes)).toBeLessThan(WASM_HEAP_BUDGET);
   });
 });
@@ -243,7 +263,7 @@ describe("browser memory ceiling", () => {
 describe("exportWarnings size gate", () => {
   const headOnly = (bytes: number) => vi.fn(async (_u: string, init?: RequestInit) => {
     expect(init?.method).toBe("HEAD");
-    return { headers: new Headers({ "content-length": String(bytes) }) } as Response;
+    return { ok: true, headers: new Headers({ "content-length": String(bytes) }) } as Response;
   });
   afterEach(() => { vi.unstubAllGlobals(); });
 
@@ -256,6 +276,7 @@ describe("exportWarnings size gate", () => {
     expect(w.any).toBe(true);
     expect(w.sourceBytes).toBe(1_351_235_892);
     expect(w.rowCount).toBe(0);              // nothing was read
+    expect(w.sizeUnknown).toBe(false);
     expect(fetchSpy).toHaveBeenCalledTimes(1);
   });
 
@@ -263,6 +284,27 @@ describe("exportWarnings size gate", () => {
     // Under the cap it falls through to the DuckDB path, which has no engine in this environment.
     vi.stubGlobal("fetch", headOnly(PREFLIGHT_MAX_PARQUET_BYTES));
     await expect(exportWarnings("https://cdn/small.parquet", "shp")).rejects.toBeTruthy();
+  });
+
+  // Unknown size must not read as small: that opens the gate onto the path that crashes the tab.
+  it("refuses when the server rejects the HEAD", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 405, headers: new Headers() }) as Response));
+    const w = await exportWarnings("https://other-origin/x.parquet", "shp");
+    expect(w.tooBigToInspect).toBe(true);
+    expect(w.sizeUnknown).toBe(true);
+    expect(w.any).toBe(true);
+  });
+
+  it("refuses when the response carries no Content-Length", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, headers: new Headers() }) as Response));
+    const w = await exportWarnings("https://other-origin/x.parquet", "gpkg");
+    expect(w.sizeUnknown).toBe(true);
+    expect(w.tooBigToInspect).toBe(true);
+  });
+
+  it("refuses when the HEAD throws", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("CORS"); }));
+    expect((await exportWarnings("https://other-origin/x.parquet", "csv")).sizeUnknown).toBe(true);
   });
 });
 

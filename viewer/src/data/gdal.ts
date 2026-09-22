@@ -3,7 +3,7 @@
 // including OpenFileGDB (Esri File Geodatabase, write support since GDAL 3.6). We feed
 // it newline-delimited GeoJSON bytes (produced by DuckDB, read through OGR's GeoJSONSeq driver)
 // and convert to GPKG / SHP / GDB / FlatGeobuf.
-import { zipSync } from "fflate";
+import { zip } from "fflate";
 import initGdalJs from "gdal3.js";
 import dataUrl from "gdal3.js/dist/package/gdal3WebAssembly.data?url";
 import wasmUrl from "gdal3.js/dist/package/gdal3WebAssembly.wasm?url";
@@ -26,6 +26,10 @@ function getGdal(): Promise<Gdal> {
   if (!gdalPromise)
     gdalPromise = initGdalJs({
       paths: { wasm: wasmUrl, data: dataUrl },
+      // ogr2ogr blocks the thread it runs on, so a worker would be better. It does not work:
+      // gdal3.js resolves its worker script relative to the page, which serves index.html, and it
+      // postMessages its options, which cannot structured-clone the errorHandler function. Both
+      // were tried in the browser and failed; recorded here so it is not re-litigated.
       useWorker: false,
       // GDAL's non-fatal stderr (field-type coercion, name laundering) is warnings, not errors.
       errorHandler: (m: string) => console.warn(m),
@@ -48,7 +52,12 @@ export async function convertFeatureSeq(
 ): Promise<{ bytes: Uint8Array; filename: string; mime: string }> {
   const gdal = await getGdal();
   // The .geojsonl extension is what selects OGR's GeoJSONSeq driver; the layer is named "in".
-  const input = new File([seq as BlobPart], "in.geojsonl", { type: "application/geo+json-seq" });
+  // Blob rejects a SharedArrayBuffer-backed view, and DuckDB's buffers can be one, so copy only
+  // in that case rather than duplicating the whole payload on every export.
+  const shared = typeof SharedArrayBuffer !== "undefined" && seq.buffer instanceof SharedArrayBuffer;
+  // The check above is what rules out the shared case that Blob rejects.
+  const body = shared ? new Uint8Array(seq) : (seq as Uint8Array<ArrayBuffer>);
+  const input = new File([body], "in.geojsonl", { type: "application/geo+json-seq" });
   const { datasets } = await gdal.open(input);
   const ds = datasets[0];
   // Shapefile: pass the bare stem (the driver appends .shp/.dbf/… — giving `stem.shp`
@@ -76,7 +85,10 @@ export async function convertFeatureSeq(
       if (t.ext === "gdb" && f.path.includes(`${stem}.gdb`)) entries[`${stem}.gdb/${name}`] = await gdal.getFileBytes(f.path);
       else if (t.ext === "shp" && name.startsWith(`${stem}.`)) entries[name] = await gdal.getFileBytes(f.path);
     }
-    return { bytes: zipSync(entries), filename: `${stem}.${t.ext}.zip`, mime: "application/zip" };
+    // Async zip: zipSync blocks the main thread, and these archives run to hundreds of MB.
+    const bytes = await new Promise<Uint8Array>((resolve, reject) =>
+      zip(entries, (err, out) => (err ? reject(err) : resolve(out))));
+    return { bytes, filename: `${stem}.${t.ext}.zip`, mime: "application/zip" };
   } finally {
     try { await gdal.close(ds); } catch { /* best-effort */ }
   }

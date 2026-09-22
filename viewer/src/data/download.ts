@@ -189,6 +189,9 @@ export function baseGeometryTypes(names: string[]): string[] {
     g.toUpperCase().replace(/^ST_/, "").replace(/^MULTI/, "").replace(/[\sZM]+$/, "")))];
 }
 
+/** Clearing the custom EPSG input yields Number("") === 0, which would reach SQL as EPSG:0. */
+export const safeEpsg = (n: number): number => (Number.isInteger(n) && n > 0 ? n : 4326);
+
 /** The geometry column actually present, since pub/external parquet may not call it `geom`. */
 export function geomColumn(names: string[]): string {
   return GEOM_NAMES.find((g) => names.includes(g)) ?? GEOM;
@@ -591,6 +594,7 @@ export async function exportItem(
   epoch = exportEpoch,                      // from beginExport(), taken before the pre-flight ran
 ): Promise<void> {
   if (epoch !== exportEpoch) return;        // cancelled while the pre-flight was still running
+  const srs = safeEpsg(epsg);
   const db = await getDB();
   const conn = await db.connect();
   const id = ++seq;
@@ -633,8 +637,8 @@ export async function exportItem(
       // WKT geometry in the chosen output CRS (source is always 4326); attributes unchanged.
       // always_xy: geom is stored lon/lat, but EPSG:4326's authority axis order is lat/lon — without
       // this the transform reads longitude as latitude and returns inf.
-      const wkt = epsg === 4326 ? `ST_AsText(${geom})`
-        : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${epsg}', always_xy := true))`;
+      const wkt = srs === 4326 ? `ST_AsText(${geom})`
+        : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${srs}', always_xy := true))`;
       await conn.query(`COPY (SELECT * REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
       deliver([await db.copyFileToBuffer(csvOut)], `${stem}.csv`, "text/csv");
       return;
@@ -658,7 +662,7 @@ export async function exportItem(
 
     // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only).
     const { convertFeatureSeq, GDAL_TARGETS } = await import("./gdal");
-    const { bytes, filename, mime } = await convertFeatureSeq(seqBytes, stem, GDAL_TARGETS[fmt], epsg);
+    const { bytes, filename, mime } = await convertFeatureSeq(seqBytes, stem, GDAL_TARGETS[fmt], srs);
     deliver([bytes], filename, mime);
   } finally {
     await conn.query(`DROP TABLE IF EXISTS ${raw}; DROP TABLE IF EXISTS ${clipped};`).catch(() => {});

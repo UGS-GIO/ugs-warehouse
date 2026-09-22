@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOrder, dbfFieldWidth, estimateExportPeakBytes, estimateGeoJSONBytes, estimateShapefileBytes,
   evictionVictim, featureSeqSql, filterClause, sanitize, seqToFeatureCollection,
-  needsMeasuredWidth, shapefileFieldChecks, exportWarnings, SHP_FILE_LIMIT,
+  needsMeasuredWidth, safeEpsg, shapefileFieldChecks, exportWarnings, SHP_FILE_LIMIT,
   PREFLIGHT_MAX_PARQUET_BYTES, baseGeometryTypes, geomColumn,
   WASM_HEAP_BUDGET,
 } from "./download";
@@ -305,6 +305,17 @@ describe("exportWarnings size gate", () => {
   it("refuses when the HEAD throws", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("CORS"); }));
     expect((await exportWarnings("https://other-origin/x.parquet", "csv")).sizeUnknown).toBe(true);
+  });
+});
+
+describe("safeEpsg", () => {
+  // The panel's number input produces 0 when cleared, and NaN from a partial entry. Either would
+  // reach SQL as EPSG:0 / EPSG:NaN and fail the ST_Transform.
+  it.each([0, -1, Number.NaN, 4326.5])("falls back to 4326 for %s", (bad) => {
+    expect(safeEpsg(bad)).toBe(4326);
+  });
+  it("keeps a real projected CRS", () => {
+    expect(safeEpsg(26912)).toBe(26912);
   });
 });
 

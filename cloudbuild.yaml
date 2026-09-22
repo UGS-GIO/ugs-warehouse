@@ -229,14 +229,21 @@ steps:
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=DB_PASS=${_SECRET}:latest
       # custom delimiter (^@^) so gs:// values with no commas stay safe
-      # DUCKDB_MAX_MEMORY caps DuckDB's buffer manager, not the process: RSS lands ~750MB above it
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=512MB
+      # DUCKDB_MAX_MEMORY caps DuckDB's buffer manager, not the process: RSS lands well above it —
+      # the producer hydrates the whole `_current` table into ONE in-memory DuckDB (no temp_directory,
+      # and /tmp is RAM on Cloud Run anyway), so peak RSS tracks the layer's geometry, not this cap.
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600
       - --max-retries=1
-      - --cpu=2
-      - --memory=2Gi
+      # 16Gi/4CPU (was 2Gi/2CPU): heavy wetland _current tables signal-9'd the container at the Postgres
+      # read. wetlands_wetlandsoutline (426k rows / 2876 MB in PG incl TOAST) OOM'd 2Gi outright; riverine
+      # (1815 MB) and nonriverine (1069 MB) do too. Sized to clear the outline layer with headroom — the
+      # same standing remedy as gdal-microservice (16Gi) for this wetland data. It's a batch job, so the
+      # bigger box is only billed per run. Right-size down if/when the producer can spill to real disk.
+      - --cpu=4
+      - --memory=16Gi
 
   # REVIEW ingest — identical to the job above but reads `_review` serving tables and writes the
   # whole catalog under review/ (STAC + GeoParquet + PMTiles + a separate DuckLake root). Feeds the
@@ -266,13 +273,14 @@ steps:
       # CDN-only; styles aren't secret, so the review app fetching them from the public CDN is fine.
       # Review needs its OWN DuckLake metadata schema: a catalog binds one DATA_PATH, so sharing the
       # public catalog while writing to the review bucket fails to attach.
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@WAREHOUSE_BUCKET=${_REVIEW_BUCKET}@WAREHOUSE_PUBLIC_BASE_URL=${_REVIEW_SERVING_URL}@STYLES_CDN_BASE=https://maps-assets.geology.utah.gov/styles@DUCKLAKE_DATA_PATH=gs://${_REVIEW_BUCKET}/review/ducklake/@DUCKLAKE_METADATA_SCHEMA=ducklake_catalog_review@DUCKDB_MAX_MEMORY=512MB@WAREHOUSE_TABLE_SUFFIX=_review@WAREHOUSE_STAC_PREFIX=review/stac@WAREHOUSE_ARCHIVE_PREFIX=review/geoparquet@WAREHOUSE_PMTILES_PREFIX=review/pmtiles@WAREHOUSE_THUMBS_PREFIX=review/thumbs
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@WAREHOUSE_BUCKET=${_REVIEW_BUCKET}@WAREHOUSE_PUBLIC_BASE_URL=${_REVIEW_SERVING_URL}@STYLES_CDN_BASE=https://maps-assets.geology.utah.gov/styles@DUCKLAKE_DATA_PATH=gs://${_REVIEW_BUCKET}/review/ducklake/@DUCKLAKE_METADATA_SCHEMA=ducklake_catalog_review@DUCKDB_MAX_MEMORY=6GB@WAREHOUSE_TABLE_SUFFIX=_review@WAREHOUSE_STAC_PREFIX=review/stac@WAREHOUSE_ARCHIVE_PREFIX=review/geoparquet@WAREHOUSE_PMTILES_PREFIX=review/pmtiles@WAREHOUSE_THUMBS_PREFIX=review/thumbs
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600
       - --max-retries=1
-      - --cpu=2
-      - --memory=2Gi
+      # 16Gi/4CPU + DuckDB 6GB: the same heavy wetland tables OOM 2Gi over _review too. Mirror the public job.
+      - --cpu=4
+      - --memory=16Gi
 
   # Review serving app (ugs-warehouse#16) — the IAP-gated Cloud Run service that streams the private
   # review bucket. tofu owns its config + IAP + ingress and IGNORES the image, so cloudbuild just ships

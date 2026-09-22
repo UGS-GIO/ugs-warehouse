@@ -191,7 +191,9 @@ export const cogAsset = (d: StacDoc | undefined): Asset | undefined => {
 
 // Can THIS client paint this COG over a web-mercator basemap? Only the `visual` derivative, or a
 // COG that is already web mercator (or states no CRS, which is how a single-projection item reads).
-// The renderer cannot reproject: handed a native-CRS raster it throws rather than drawing.
+// deck.gl-geotiff CAN reproject a native-CRS COG, but our local resolver only knows 3857 (anything
+// else falls back to an unvalidated epsg.io lookup), so keep the gate conservative. Broadening it +
+// the resolver to arbitrary CRS is a follow-up.
 export const isDrawableCog = (a: Asset, d?: StacDoc): boolean => {
   if (!isCog(a)) return false;
   if (a.roles?.includes("visual")) return true;
@@ -386,32 +388,6 @@ export function useStyleLayersFor(layers: { id: string; styleUrl?: string }[]): 
   });
   const out: Record<string, Record<string, unknown>[]> = {};
   withStyle.forEach((l, i) => { const d = results[i].data; if (d) out[l.id] = d; });
-  return out;
-}
-
-// ---- COG (GeoTIFF) extents, read from the cog:// metadata, keyed + cached by href ----
-// staleTime:Infinity (a COG's extent is immutable); retry:1 so a transient blip on a bbox-less COG
-// isn't cached as a permanent failure. Returns href→bbox for those that resolved.
-async function fetchCogBox(cogHref: string): Promise<[number, number, number, number] | null> {
-  const { ensureCogProtocol } = await import("./map/cog");
-  await ensureCogProtocol();
-  const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
-  const meta = await getCogMetadata(cogHref);
-  const bb = meta?.bbox ? (meta.bbox as number[]).slice(0, 4) : null;
-  return (bb && bb.length >= 4 ? bb : null) as [number, number, number, number] | null;
-}
-export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [number, number, number, number]> {
-  const urls = [...new Set(hrefs.filter((h): h is string => Boolean(h)))];
-  const results = useQueries({
-    queries: urls.map((href) => ({
-      queryKey: qk.cogBbox(href),
-      queryFn: () => fetchCogBox(href),
-      staleTime: Infinity,
-      retry: 1,
-    })),
-  });
-  const out: Record<string, [number, number, number, number]> = {};
-  urls.forEach((href, i) => { const bb = results[i].data; if (bb) out[href] = bb; });
   return out;
 }
 

@@ -156,20 +156,19 @@ export const reorderLayers = (ids: string[], from: number, to: number): string[]
 export const slugOf = (id: string): string => id.replace(/[^a-zA-Z0-9_]/g, "_");
 
 // The GL layer ids each active layer draws, in bottom→top draw order, matching what map.tsx renders:
-// a raster PMTiles mosaic → one `rpm-<slug>-raster`; a COG → one `cog-<slug>-raster` (only once its
-// protocol is ready); a vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
-// the unstyled fallback `pm-<slug>-fill/line/circle`; a zarr datacube → none (a deck.gl overlay draws
-// it, outside maplibre's layer stack). Flattened across `layers` in order, so the reorder reconcile
-// can walk the list and moveLayer each. Pure so it's unit-tested against the render.
+// a raster PMTiles mosaic → one `rpm-<slug>-raster`; a vector layer → its resolved style layers
+// `pm-<slug>-0..N` (styledCount), else the unstyled fallback `pm-<slug>-fill/line/circle`; a COG or a
+// zarr datacube → none (a deck.gl overlay draws those, outside maplibre's layer stack). Flattened
+// across `layers` in order, so the reorder reconcile can walk the list and moveLayer each. Pure so
+// it's unit-tested against the render.
 export function orderedSublayerIds(
   layers: ActiveLayer[],
-  opts: { styledCount: (id: string) => number | undefined; cogReady: boolean },
+  opts: { styledCount: (id: string) => number | undefined },
 ): string[] {
   return layers.flatMap((l) => {
     const s = slugOf(l.id);
-    if (l.zarr) return [];
+    if (l.zarr || l.cogHref) return [];
     if (l.rasterPmHref) return [`rpm-${s}-raster`];
-    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`] : [];
     const n = opts.styledCount(l.id);
     // map.tsx renders `styleLayers ? styleLayers.map(...) : fallback` — a resolved-but-empty style
     // ([]) is truthy there and draws nothing, so mirror it with `n != null` (0 → no ids), not `n > 0`.
@@ -177,4 +176,28 @@ export function orderedSublayerIds(
       ? Array.from({ length: n }, (_, li) => `pm-${s}-${li}`)
       : [`pm-${s}-fill`, `pm-${s}-line`, `pm-${s}-circle`];
   });
+}
+
+// For each COG layer, the maplibre layer id its deck group should draw UNDER (deck's `beforeId`), so it
+// sits at its tray position. `layers` is front-first (layers[0] = tray top = drawn on top), so scan
+// toward the front (lower indices) for the nearest layer that draws native maplibre sublayers (vector
+// or raster-pm) and return that layer's bottom-most sublayer id. Nothing native above → undefined
+// (deck's "last" group → on top). Mirrors how a native raster restacks with the tray. Pure/tested.
+export function cogBeforeIds(
+  layers: ActiveLayer[],
+  opts: { styledCount: (id: string) => number | undefined },
+): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  layers.forEach((l, i) => {
+    if (!l.cogHref) return;
+    let beforeId: string | undefined;
+    for (let j = i - 1; j >= 0; j--) {
+      const above = layers[j];
+      if (above.zarr || above.cogHref) continue; // deck-drawn, not a native target
+      const ids = orderedSublayerIds([above], opts);
+      if (ids.length) { beforeId = ids[0]; break; }
+    }
+    out[l.id] = beforeId;
+  });
+  return out;
 }

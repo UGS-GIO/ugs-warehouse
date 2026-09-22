@@ -24,8 +24,6 @@ export const qk = {
   stylesManifest: (url?: string) => ["styles-manifest", url] as const,
 
   // Map + raster
-  cogBbox: (href: string) => ["cog-bbox", href] as const,
-  cogProtocol: ["cog-protocol"] as const,
   colormapSprite: ["colormap-sprite"] as const,
   zarrSource: (href: string, variable: string) => ["zarr-source", href, variable] as const,
 

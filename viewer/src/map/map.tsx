@@ -1,21 +1,20 @@
 import { Toggle } from "@base-ui/react/toggle";
-import { qk } from "@/query-keys";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
-import { ensureCogProtocol } from "./cog";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
-import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
+import { type StacDoc, useStyleLayersFor } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { UiSegmented } from "@/ui/segmented";
-import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
+import { type ActiveLayer, cogBeforeIds, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+import type { CogSpec } from "./deck-layers";
 
-// deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
-const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
+// deck.gl-zarr / -geotiff + luma.gl only load when a datacube or COG is actually toggled on.
+const MapDeckLayers = lazy(() => import("./deck-layers").then((m) => ({ default: m.MapDeckLayers })));
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 
@@ -142,26 +141,18 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // mapped where" view.
   const [showCoverage, setShowCoverage] = useState(coverageDefault);
   const coverage = showCoverage && footprints.length ? coverageFC(footprints) : null;
-  // COG (raster) layers need the cog:// protocol registered before their Source mounts. Register
-  // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.
-  const hasCog = layers.some((l) => l.cogHref);
-  // One-time async import, cached — hence no ready flag and no late-resolve guard.
-  const { isSuccess: cogReady } = useQuery({
-    queryKey: qk.cogProtocol,
-    queryFn: async () => { await ensureCogProtocol(); return true as const; },
-    enabled: hasCog, staleTime: Infinity, gcTime: Infinity,
-  });
-  // Datacubes render through deck.gl, not a maplibre Source, so they're collected here and drawn by
-  // one overlay rather than in the per-layer Source switch below.
+  // Datacubes and COGs render through deck.gl (one shared interleaved overlay), not maplibre Sources,
+  // so they're collected here and drawn by <MapDeckLayers> below rather than the per-layer switch.
   const zarrSpecs = layers.flatMap((l) => (l.zarr ? [{ id: l.id, ...l.zarr }] : []));
-  // COG extents for camera fit (many pub/raster items have no STAC bbox), one cached query per href.
-  const cogBoxes = useCogBoxes(layers.map((l) => l.cogHref));
+  // COG extents for camera fit (many pub/raster items have no STAC bbox), captured from each COG's
+  // deck layer as its GeoTIFF header loads (onCogBounds below), keyed by href.
+  const [cogBounds, setCogBounds] = useState<Record<string, [number, number, number, number]>>({});
 
-  // A layer's effective bbox: its STAC bbox, else (for a COG) its fetched GeoTIFF extent.
+  // A layer's effective bbox: its STAC bbox, else (for a COG) its loaded GeoTIFF extent.
   const effBox = (l: ActiveLayer): [number, number, number, number] | undefined => {
     const b = l.bbox?.slice(0, 4);
     if (b && b.length >= 4) return b as [number, number, number, number];
-    return l.cogHref ? cogBoxes[l.cogHref] : undefined;
+    return l.cogHref ? cogBounds[l.cogHref] : undefined;
   };
   const initialCam = useRef(readCam());
   const lastFit = useRef<string | null>(null);
@@ -185,6 +176,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // Bound GL style `layers` per overlay (id→layers for those that resolved), via TanStack Query.
   const styleCache = useStyleLayersFor(layers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
 
+  // COG layers for the shared deck overlay: built bottom→top (reverse the front-first tray) so stacked
+  // COGs draw in the right intra-group order, each given the `beforeId` that places it in the tray.
+  const cogBefore = cogBeforeIds(layers, { styledCount: (id) => styleCache[id]?.length });
+  const cogSpecs: CogSpec[] = [...layers].reverse().flatMap((l) =>
+    l.cogHref ? [{ id: `cog-${slugOf(l.id)}`, href: l.cogHref, beforeId: cogBefore[l.id] }] : [],
+  );
+
   // Restack the canvas to match the tray order. react-map-gl only calls moveLayer when a <Layer>'s
   // beforeId prop changes, and we pass none — so a drag-reorder rewrites ?l= and re-renders the
   // layers in the new order but never restacks the drawn features. Reconcile imperatively:
@@ -202,7 +200,6 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       if (!map.isStyleLoaded()) return;
       const desired = orderedSublayerIds([...layers].reverse(), {
         styledCount: (id) => styleCache[id]?.length,
-        cogReady,
       }).filter((id) => map.getLayer(id));
       // `idle` fires on every pan/zoom — skip the moveLayer churn when the stack is already correct.
       const current = map.getStyle().layers.map((l) => l.id).filter((id) => desired.includes(id));
@@ -213,7 +210,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
     map.on("idle", reconcile);
     return () => { map.off("idle", reconcile); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [orderKey, styledKey, cogReady, mapLoaded]);
+  }, [orderKey, styledKey, mapLoaded]);
 
   // Source/layer ids use slugOf(id) (imported) — a stable slug, never the array index, so unchecking
   // a layer can't rename a mounted source (maplibre throws "source id changed" and takes the map down).
@@ -342,29 +339,25 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Source>
       )}
 
-      {zarrSpecs.length > 0 && (
-        <Suspense fallback={null}><ZarrOverlay specs={zarrSpecs} /></Suspense>
+      {(zarrSpecs.length > 0 || cogSpecs.length > 0) && (
+        <Suspense fallback={null}>
+          <MapDeckLayers
+            zarrSpecs={zarrSpecs}
+            cogSpecs={cogSpecs}
+            onCogBounds={(href, b) => setCogBounds((prev) => (prev[href] ? prev : { ...prev, [href]: b }))}
+          />
+        </Suspense>
       )}
 
       {layers.map((l) => {
         const s = slugOf(l.id);
-        if (l.zarr) return null;   // drawn by the deck overlay above
+        if (l.zarr || l.cogHref) return null;   // both drawn by the shared deck overlay above
         // Raster PMTiles mosaic — the per-scale geologic-map tiles, served via the already-registered
         // pmtiles:// protocol as a raster source. No styling: it's the published map image.
         if (l.rasterPmHref) {
           return (
             <Source key={l.id} id={`rpm-${s}`} type="raster" url={`pmtiles://${l.rasterPmHref}`} tileSize={256}>
               <Layer id={`rpm-${s}-raster`} type="raster" paint={{ "raster-opacity": 1 }} />
-            </Source>
-          );
-        }
-        // Raster COG layer — render the georeferenced GeoTIFF via cog:// (once the protocol is
-        // registered). Distinct `cog-*` ids keep it out of the vector feature-click regex.
-        if (l.cogHref) {
-          if (!cogReady) return null;
-          return (
-            <Source key={l.id} id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
-              <Layer id={`cog-${s}-raster`} type="raster" paint={{ "raster-opacity": 0.9 }} />
             </Source>
           );
         }

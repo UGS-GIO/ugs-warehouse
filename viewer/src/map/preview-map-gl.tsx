@@ -1,13 +1,12 @@
 // The maplibre half of the preview map, loaded on demand — the catalog, search and doc views never
 // draw one. Mounted once by PreviewMapProvider and NEVER torn down: its DOM is portaled into
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
 import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
-import { ensureCogProtocol } from "./cog";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
@@ -15,6 +14,9 @@ import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers }
 import { bboxPolygon, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
+
+// deck.gl-geotiff + luma.gl only load when a COG item is actually previewed.
+const PreviewCogOverlay = lazy(() => import("./deck-layers").then((m) => ({ default: m.PreviewCogOverlay })));
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 
@@ -70,7 +72,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   const holderRef = useRef<HTMLDivElement>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
   const [showDem, setShowDem] = useState(false);
-  const [cogReady, setCogReady] = useState(false);
+  const [cogBox, setCogBox] = useState<{ href: string; box: [number, number, number, number] } | null>(null);
 
   const isVector = spec?.kind === "vector";
   const item = spec?.item;
@@ -99,17 +101,16 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     return () => { live = false; };
   }, [sprite, mapLoaded]);
 
-  // Register the cog:// protocol lazily the first time a COG spec appears.
-  useEffect(() => {
-    if (spec?.kind !== "cog" || cogReady) return;
-    let live = true;
-    ensureCogProtocol().then(() => { if (live) setCogReady(true); });
-    return () => { live = false; };
-  }, [spec?.kind, cogReady]);
+  // The previewed COG's lon/lat extent, reported by its deck layer on load (PreviewCogOverlay →
+  // onBounds) and keyed by href so a stale value from the previous item is never read on a COG→COG
+  // switch (many COG items have no STAC bbox, so this is the fit source). Mirrors map.tsx's cogBounds.
+  const cogHref = spec?.kind === "cog" ? spec.href : undefined;
+  const cogBoxForHref = cogBox && cogBox.href === cogHref ? cogBox.box : null;
 
   // ---- imperative camera fit: a persistent map honours initialViewState only once, so fit on every
-  // spec change (keyed on item+kind). COG has no STAC bbox for many items → fit to its GeoTIFF extent.
-  const fitKey = spec ? `${itemId}|${spec.kind}` : "";
+  // spec change (keyed on item+kind). Once this COG's deck layer reports its extent the key gains
+  // `|box` and this refits to the true GeoTIFF extent (falling back to the STAC bbox meanwhile).
+  const fitKey = spec ? `${itemId}|${spec.kind}${cogBoxForHref ? "|box" : ""}` : "";
   const lastFit = useRef<string>("");
   useEffect(() => {
     const map = mapRef.current?.getMap();
@@ -117,21 +118,13 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     lastFit.current = fitKey;
     setShowDem(false);  // terrain resets per item
     if (spec.kind === "cog") {
-      let live = true;
-      (async () => {
-        await ensureCogProtocol();
-        try {
-          const { getCogMetadata } = await import("@geomatico/maplibre-cog-protocol");
-          const meta = await getCogMetadata(spec.href);
-          const b = validBbox(meta?.bbox as number[] | undefined) ?? validBbox(spec.item.bbox);
-          if (live && b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 16, duration: 0 });
-        } catch { /* keep default view */ }
-      })();
-      return () => { live = false; };
+      const b = validBbox(cogBoxForHref ?? undefined) ?? validBbox(spec.item.bbox);
+      if (b) map.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 16, duration: 0 });
+      return;
     }
     const b = boundsOf(spec.item);
     if (b) map.fitBounds(b, { padding: 16, duration: 0 });
-  }, [fitKey, mapLoaded, spec]);
+  }, [fitKey, mapLoaded, spec, cogBoxForHref]);
 
   // Fly to a picked feature (table row click). Keyed on focus.key so re-picking the same row re-flies.
   const fb = focus?.bbox;
@@ -252,11 +245,11 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
             </Source>
           )}
 
-          {/* COG raster (once the cog:// protocol is registered) */}
-          {spec?.kind === "cog" && cogReady && (
-            <Source id="cog" type="raster" url={`cog://${spec.href}`} tileSize={256}>
-              <Layer id="cog-raster" type="raster" />
-            </Source>
+          {/* COG raster via deck.gl-geotiff (interleaved overlay); reports its extent for camera-fit. */}
+          {spec?.kind === "cog" && (
+            <Suspense fallback={null}>
+              <PreviewCogOverlay href={spec.href} onBounds={(box) => setCogBox({ href: spec.href, box })} />
+            </Suspense>
           )}
 
           {/* Footprint outline */}

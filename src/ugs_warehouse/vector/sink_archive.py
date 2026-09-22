@@ -20,10 +20,34 @@ from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
 
-# Smallest unit a range-reading client can fetch, so it floors the viewer's first page. DuckDB's
-# default (122,880) put wetlands_riverine in 2 groups — a 50-row page pulled 11.3 MB. Costs +0.8%
-# file size.
-ROW_GROUP_SIZE = 10_000
+# A row group is the smallest unit a range-reading client can fetch, so it floors both the viewer's
+# first page and what a clipped export has to download. DuckDB's default (122,880) put
+# wetlands_riverine in 2 groups, the larger holding 1.06 GB — a 22-feature AOI still read all of it.
+#
+# A fixed row count does not bound that, because a row's weight is mostly its geometry and that
+# varies by three orders of magnitude across topics: 10,000 rows is ~0.2 MB of points but ~113 MB
+# of riverine's polylines. So target BYTES and derive the row count per topic. (DuckDB has
+# ROW_GROUP_SIZE_BYTES, but it refuses to run while preserving insertion order, which would throw
+# away the hilbert sort that makes the bbox stats prune at all.)
+TARGET_ROW_GROUP_BYTES = 32 * 1024**2
+ROW_GROUP_MIN = 512          # heavy geometry: a few hundred rows is already tens of MB
+ROW_GROUP_MAX = 122_880      # DuckDB's own default, the ceiling for very light rows
+
+
+def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
+    """Rows per group so a group lands near TARGET_ROW_GROUP_BYTES, from the view's own geometry.
+
+    Sampled, not scanned: the estimate only has to get the order of magnitude right, and the
+    transform has already hilbert-sorted so a head sample is spatially clustered, not skewed.
+    """
+    row = con.execute(
+        f"SELECT avg(octet_length(ST_AsWKB(geom))) + avg(coalesce(len(to_json(t)), 0)) "
+        f"FROM (SELECT * FROM {view} LIMIT 20000) t"
+    ).fetchone()
+    per_row = float(row[0] or 0)
+    if per_row <= 0:
+        return ROW_GROUP_MAX
+    return max(ROW_GROUP_MIN, min(ROW_GROUP_MAX, int(TARGET_ROW_GROUP_BYTES / per_row)))
 
 
 def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
@@ -41,12 +65,14 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
     readers (GDAL/pyarrow) won't auto-detect the bbox column — pushdown still works for our consumers
     via row-group stats. For strict 1.1 covering, post-process with `gpio convert` (geoparquet-io).
     """
+    rows_per_group = _row_group_size(con, view)
+    print(f"[archive] row group size: {rows_per_group} rows (~{TARGET_ROW_GROUP_BYTES // 1024**2} MB)")
     con.execute(
         f"COPY (SELECT *, "
         f"ST_XMin(geom) AS bbox_xmin, ST_YMin(geom) AS bbox_ymin, "
         f"ST_XMax(geom) AS bbox_xmax, ST_YMax(geom) AS bbox_ymax "
         f"FROM {view}) TO '{path}' "
-        f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {ROW_GROUP_SIZE})"
+        f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {rows_per_group})"
     )
 
 

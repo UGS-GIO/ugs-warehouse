@@ -158,6 +158,15 @@ describe("DownloadsPanel", () => {
     expect(await screen.findByText(/File Geodatabase \(zip\) will mangle this data/)).toBeDefined();
   });
 
+  // A slow read mangles nothing, so the heading must not say it does.
+  it("calls a slow read slow, not mangling", async () => {
+    exportWarnings.mockResolvedValue(SLOW_READ);
+    show();
+    await userEvent.click(screen.getByLabelText("Download GeoPackage"));
+    expect(await screen.findByText("This export will be slow")).toBeDefined();
+    expect(screen.queryByText(/will mangle this data/i)).toBeNull();
+  });
+
   // Clipping only helps when the file is grouped finely enough for the AOI to skip groups.
   it("says clipping cannot help when one block is most of the file", async () => {
     exportWarnings.mockResolvedValue(SLOW_READ);

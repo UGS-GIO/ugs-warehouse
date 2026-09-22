@@ -229,7 +229,10 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
             {warn.overBrowserLimit
               ? "This export is too big for the browser"
-              : `${FORMAT_LABEL[run.variables!.fmt]} will mangle this data`}
+              : warn.mixedGeometry.length > 0 || warn.longNames.length > 0
+                || warn.collisions.length > 0 || warn.tooManyFields || warn.over2gb
+                ? `${FORMAT_LABEL[run.variables!.fmt]} will mangle this data`
+                : "This export will be slow"}
           </div>
           <ul id="dl-warn-why" className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
             {warn.mixedGeometry.length > 0 && (

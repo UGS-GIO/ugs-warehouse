@@ -394,6 +394,14 @@ describe("estimateReadBytes", () => {
     expect(Math.max(...groups.map((g) => g.bytes))).toBe(1_418_000_000);
   });
 
+  // A parquet without bbox columns aggregates to SQL NULL, and Number(null) is 0 — a degenerate
+  // extent at (0,0) that any Utah AOI filters away. The caller decides usability from the schema.
+  it("a group with no extent is read, not silently pruned", () => {
+    const noExtent = { bytes: 40_000_000, xmin: 0, xmax: 0, ymin: 0, ymax: 0 };
+    expect(estimateReadBytes([noExtent])).toBe(40_000_000);
+    expect(estimateReadBytes([noExtent], [-111.95, 40.7, -111.85, 40.78])).toBe(0);
+  });
+
   it("counts a group the AOI only touches at the edge", () => {
     expect(estimateReadBytes([wasatch], [-112.5, 40.5, -112.0, 41.0])).toBe(50_000_000);
   });

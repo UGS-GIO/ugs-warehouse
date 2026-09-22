@@ -227,10 +227,9 @@ let seq = 0;
 const ident = (c: string) => `"${c.replace(/"/g, '""')}"`;
 const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
-// Register each remote GeoParquet with DuckDB-WASM ONCE and reuse the handle. Registration is
-// what costs: DuckDB-WASM fetches the whole file on first access rather than range-reading it
-// (see PREFLIGHT_MAX_PARQUET_BYTES), so the cache is what keeps paging, pre-flight and export to
-// a single download of a given URL.
+// Register each remote GeoParquet with DuckDB-WASM ONCE and reuse the handle, so paging, the
+// pre-flight and the export share one registration of a URL and the footer and column chunks each
+// has already fetched (newDb opens these range-reading).
 // LRU of registered parquet handles; each pins DuckDB's in-WASM HTTP buffer, so cap + dropFile the
 // LRU so browsing many tables can't grow the heap unbounded. Re-insert on hit = MRU (insertion order).
 const REGISTERED_CAP = 12;
@@ -701,9 +700,9 @@ export async function exportItem(
 
 // ---- Shapefile pre-flight ----
 // The Esri Shapefile format silently mangles data past its limits; check before exporting so the
-// user isn't handed a broken file. The detailed checks read the parquet footer (column stats, row
-// count, GeoParquet metadata) rather than any column data — but see PREFLIGHT_MAX_PARQUET_BYTES:
-// reaching the footer at all costs the whole file, so a Content-Length gate comes first.
+// user isn't handed a broken file. Range reads make this cheap at any size: the checks come off
+// the footer (column stats, row count, GeoParquet metadata), and the one scan that reads column
+// data is budgeted (see MEASURE_TEXT_BUDGET).
 export interface ShapefileWarnings {
   longNames: string[];                 // > 10 chars → truncated by the driver
   collisions: [string, string][];      // fields that collapse to the same 10-char name → data loss
@@ -746,8 +745,9 @@ const MEASURE_TEXT_BUDGET = 64 * 1024 ** 2;
 // Shared with the panel, which reports the figure alongside the warning.
 export const SLOW_READ_BYTES = 256 * 1024 ** 2;
 
-/** Pre-flight an export. The size limits apply to every format: all of them read the whole
- *  GeoParquet into the tab, and the four GDAL ones then run it through the same wasm instance.
+/** Pre-flight an export. The size limits apply to every format: all of them read the rows the
+ *  export covers into the tab, and the four GDAL ones then run them through the same wasm
+ *  instance.
  *  The shapefile-only findings (field names, field count, single geometry type, the 2 GB per-file
  *  cap) are filled in for `shp` alone. */
 export async function exportWarnings(
@@ -760,7 +760,8 @@ export async function exportWarnings(
   const conn = await db.connect();
   let borrowed: string | undefined;
   try {
-    // Shared handle: DuckDB-WASM has no range reads, so a private one is a second full download.
+    // Shared handle: a private registration would re-fetch the footer and chunks this URL has
+    // already read for the explorer or a previous pre-flight.
     const src = borrowed = await registerUrl(parquetUrl);
     const from = `read_parquet('${src}')`;
     const desc = (await conn.query(`DESCRIBE SELECT * FROM ${from};`)).toArray();
@@ -794,8 +795,9 @@ export async function exportWarnings(
       bytes: Number(r.bytes),
       xmin: Number(r.xmin), xmax: Number(r.xmax), ymin: Number(r.ymin), ymax: Number(r.ymax),
     }));
-    // A file without the bbox columns has no usable extent, so nothing prunes.
-    const usable = groups.every((g) => Number.isFinite(g.xmin) && Number.isFinite(g.xmax));
+    // From the schema, not from the aggregates: a missing bbox column aggregates to SQL NULL and
+    // Number(null) is 0, which would read as a real extent at (0, 0) and prune everything away.
+    const usable = BBOX_COLS.every((c) => colTypes.has(c));
     const estReadBytes = estimateReadBytes(groups, usable ? clip : undefined);
     // A row group is the smallest unit a reader can skip, so the biggest one is the floor on what
     // any clip can get the download down to.
@@ -841,8 +843,11 @@ export async function exportWarnings(
     // Decoded text length, which the footer cannot give (see dbfFieldWidth). The file is already
     // local by now, so the scan adds no transfer.
     const measured = cols.filter((c) => needsMeasuredWidth(colTypes.get(c) ?? "VARCHAR"));
+    // Scaled by the bytes the read will fetch, not by a row fraction: the scan pulls whole column
+    // chunks for every row group the clip admits, which is what estReadBytes already measures.
+    const allGroupBytes = groups.reduce((n, g) => n + g.bytes, 0);
     const textBytes = measured.reduce((n, c) => n + (colBytes.get(c) ?? 0), 0)
-      * (fullRows ? rowCount / fullRows : 0);
+      * (allGroupBytes ? estReadBytes / allGroupBytes : 1);
     const widthsEstimated = textBytes > MEASURE_TEXT_BUDGET;
     const lengths = new Map<string, { max: number; avg: number }>();
     if (measured.length && !widthsEstimated) {

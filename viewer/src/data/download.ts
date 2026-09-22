@@ -200,10 +200,10 @@ let seq = 0;
 const ident = (c: string) => `"${c.replace(/"/g, '""')}"`;
 const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
-// Register each remote GeoParquet with DuckDB-WASM ONCE, reuse across paged queries — DuckDB
-// pulls only the footer + needed row-groups per query over HTTP range reads, so paging a 7000-row
-// table never downloads the whole file. Cache keyed by URL so the explorer's page/sort/search
-// re-queries hit the same registered handle.
+// Register each remote GeoParquet with DuckDB-WASM ONCE and reuse the handle. Registration is
+// what costs: DuckDB-WASM fetches the whole file on first access rather than range-reading it
+// (see PREFLIGHT_MAX_PARQUET_BYTES), so the cache is what keeps paging, pre-flight and export to
+// a single download of a given URL.
 // LRU of registered parquet handles; each pins DuckDB's in-WASM HTTP buffer, so cap + dropFile the
 // LRU so browsing many tables can't grow the heap unbounded. Re-insert on hit = MRU (insertion order).
 const REGISTERED_CAP = 12;
@@ -566,10 +566,21 @@ export async function readFeatures3D(
   }
 }
 
-// DuckDB and GDAL calls are not interruptible, so cancelling suppresses the delivery instead:
-// an abandoned export must not drop a file on the user minutes later.
+// DuckDB and GDAL calls are not interruptible, so cancelling suppresses the delivery instead.
+// The caller takes a ticket BEFORE the pre-flight — that is the slow part, and a cancel during it
+// has to count. `current` lets a panel that remounted mid-export still show and cancel the run.
 let exportEpoch = 0;
-export const cancelExports = (): void => { exportEpoch++; };
+let current: { stem: string; fmt: ExportFormat } | null = null;
+const listeners = new Set<() => void>();
+const publish = (run: typeof current) => { current = run; listeners.forEach((l) => l()); };
+
+export const beginExport = (): number => exportEpoch;
+export const cancelExports = (): void => { exportEpoch++; publish(null); };
+export const currentExport = (): { stem: string; fmt: ExportFormat } | null => current;
+export const subscribeExport = (l: () => void): (() => void) => {
+  listeners.add(l);
+  return () => { listeners.delete(l); };
+};
 
 export async function exportItem(
   parquetUrl: string,
@@ -577,11 +588,15 @@ export async function exportItem(
   fmt: ExportFormat,
   clip?: [number, number, number, number], // [w,s,e,n] in 4326 — clip to this AOI
   epsg = 4326,                              // output CRS for the gdal formats (shp/gpkg/gdb/fgb)
+  epoch = exportEpoch,                      // from beginExport(), taken before the pre-flight ran
 ): Promise<void> {
+  if (epoch !== exportEpoch) return;        // cancelled while the pre-flight was still running
   const db = await getDB();
   const conn = await db.connect();
   const id = ++seq;
-  const epoch = exportEpoch;
+  // Table names are database-scoped in DuckDB, so two runs would collide on a bare `raw`.
+  const raw = `raw_${id}`, clipped = `clipped_${id}`;
+  publish({ stem, fmt });
   const deliver = (parts: Uint8Array[], filename: string, mime: string) => {
     if (epoch === exportEpoch) triggerDownload(parts, filename, mime);
   };
@@ -593,9 +608,9 @@ export async function exportItem(
     const src = borrowed = await registerUrl(parquetUrl);
     // Read FIRST, before loading spatial: spatial's GeoParquet reader trips over the
     // CRS metadata ("stoi: no conversion"). Plain read already yields a GEOMETRY column.
-    await conn.query(`CREATE TABLE raw AS SELECT * FROM read_parquet('${src}');`);
+    await conn.query(`CREATE TABLE ${raw} AS SELECT * FROM read_parquet('${src}');`);
     await conn.query("INSTALL spatial; LOAD spatial;");
-    const desc = await conn.query(`DESCRIBE raw;`);
+    const desc = await conn.query(`DESCRIBE ${raw};`);
     const descRows = desc.toArray();
     // Not always `geom` — the pre-flight already accepts `geometry` / `wkb_geometry`.
     const geomCol = geomColumn(descRows.map((r) => String(r.column_name)));
@@ -604,13 +619,13 @@ export async function exportItem(
 
     // Optional AOI clip: keep only features intersecting the bbox (features kept whole,
     // not geometrically cut — a "download what's in this area" filter).
-    let t = "raw";
+    let t = raw;
     if (clip) {
       const [w, s, e, n] = clip;
       await conn.query(
-        `CREATE TABLE clipped AS SELECT * FROM raw WHERE ST_Intersects(${geom}, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}));`,
+        `CREATE TABLE ${clipped} AS SELECT * FROM ${raw} WHERE ST_Intersects(${geom}, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}));`,
       );
-      t = "clipped";
+      t = clipped;
     }
 
     if (fmt === "csv") {
@@ -632,7 +647,7 @@ export async function exportItem(
     await conn.query(`COPY (${featureSeqSql(cols, geom, t)}) TO '${seqOut}' (FORMAT JSON, ARRAY false);`);
     const seqBytes = await db.copyFileToBuffer(seqOut);
     // Free the DuckDB side now; in `finally` it would outlive the GDAL conversion.
-    await conn.query("DROP TABLE IF EXISTS raw; DROP TABLE IF EXISTS clipped;").catch(() => {});
+    await conn.query(`DROP TABLE IF EXISTS ${raw}; DROP TABLE IF EXISTS ${clipped};`).catch(() => {});
     await db.dropFile(seqOut).catch(() => {});
     seqOut = undefined;
 
@@ -646,11 +661,12 @@ export async function exportItem(
     const { bytes, filename, mime } = await convertFeatureSeq(seqBytes, stem, GDAL_TARGETS[fmt], epsg);
     deliver([bytes], filename, mime);
   } finally {
-    await conn.query("DROP TABLE IF EXISTS raw; DROP TABLE IF EXISTS clipped;").catch(() => {});
+    await conn.query(`DROP TABLE IF EXISTS ${raw}; DROP TABLE IF EXISTS ${clipped};`).catch(() => {});
     await conn.close();
     if (borrowed !== undefined) release(borrowed);
     if (csvOut) await db.dropFile(csvOut).catch(() => {});
     if (seqOut) await db.dropFile(seqOut).catch(() => {});
+    if (current?.stem === stem) publish(null);
   }
 }
 

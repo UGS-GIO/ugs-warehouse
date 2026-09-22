@@ -24,14 +24,25 @@ export const GDAL_TARGETS: Record<string, GdalTarget> = {
 type Gdal = Awaited<ReturnType<typeof initGdalJs>>;
 let gdalPromise: Promise<Gdal> | null = null;
 
+// gdal3.js builds its worker load promise with `reject: console.error`, so a worker that never
+// starts leaves it pending forever and every later export awaits the same dead promise. Race it,
+// and clear the cache on failure so the user gets an error and a retry can re-init.
+const BOOT_TIMEOUT_MS = 60_000;
+
 function getGdal(): Promise<Gdal> {
-  if (!gdalPromise)
-    gdalPromise = initGdalJs({
+  if (!gdalPromise) {
+    const boot = initGdalJs({
       paths: { wasm: wasmUrl, data: dataUrl, js: workerUrl },
       // Off the main thread: ogr2ogr stalled it 2.4s on a 22k-feature layer, now 88ms.
       // No errorHandler — the config is postMessaged, and a function will not clone.
       useWorker: true,
     });
+    gdalPromise = Promise.race([
+      boot,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("GDAL failed to start (worker did not load)")), BOOT_TIMEOUT_MS)),
+    ]).catch((e: unknown) => { gdalPromise = null; throw e; });
+  }
   return gdalPromise;
 }
 

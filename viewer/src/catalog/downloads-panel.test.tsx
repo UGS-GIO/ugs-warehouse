@@ -8,10 +8,14 @@ import { DownloadsPanel } from "./downloads-panel";
 import type { StacDoc } from "@/stac";
 
 // `vi.mock` is hoisted above the file's consts, so the spies have to be hoisted with it.
-const { exportItem, exportWarnings } = vi.hoisted(() => ({
-  exportItem: vi.fn(), exportWarnings: vi.fn(),
+const { exportItem, exportWarnings, beginExport, cancelExports } = vi.hoisted(() => ({
+  exportItem: vi.fn(), exportWarnings: vi.fn(), beginExport: vi.fn(() => 7), cancelExports: vi.fn(),
 }));
-vi.mock("@/data/download", () => ({ exportItem, exportWarnings }));
+vi.mock("@/data/download", () => ({
+  exportItem, exportWarnings, beginExport, cancelExports,
+  // The panel subscribes to the module's own export state so a remount keeps the Cancel button.
+  currentExport: () => null, subscribeExport: () => () => {},
+}));
 
 const HREF = "https://cdn.example/x.parquet";
 const item: StacDoc = {
@@ -43,6 +47,7 @@ const show = () => render(
 
 beforeEach(() => {
   exportItem.mockClear();
+  cancelExports.mockClear();
   exportWarnings.mockReset();
   exportWarnings.mockResolvedValue(CLEAN);
 });
@@ -61,7 +66,7 @@ describe("DownloadsPanel", () => {
     show();
     await userEvent.click(screen.getByLabelText("Download GeoPackage"));
     expect(exportWarnings).toHaveBeenCalledWith(HREF, "gpkg", undefined);
-    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "gpkg", undefined, 4326);
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "gpkg", undefined, 4326, 7);
   });
 
   it("holds back a GeoPackage the tab cannot hold, instead of crashing", async () => {
@@ -70,6 +75,35 @@ describe("DownloadsPanel", () => {
     await userEvent.click(screen.getByLabelText("Download GeoPackage"));
     expect(await screen.findByText(/too big to convert in the browser/i)).toBeDefined();
     expect(exportItem).not.toHaveBeenCalled();
+  });
+
+  // The pre-flight is the slow part (it downloads the file), so a cancel during it has to count.
+  it("cancels during the pre-flight, before the export can deliver", async () => {
+    let release: (v: unknown) => void = () => {};
+    exportWarnings.mockImplementation(() => new Promise((r) => { release = r; }));
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    await userEvent.click(await screen.findByText("Cancel"));
+    expect(cancelExports).toHaveBeenCalledTimes(1);
+    release(CLEAN);
+    expect(exportItem).not.toHaveBeenCalled();
+  });
+
+  it("hands the export the ticket taken before the pre-flight ran", async () => {
+    show();
+    await userEvent.click(screen.getByLabelText("Download GeoJSON"));
+    expect(beginExport).toHaveBeenCalled();
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "geojson", undefined, 4326, 7);
+  });
+
+  it("returns focus to the button that raised the warning", async () => {
+    exportWarnings.mockResolvedValue(MANGLED);
+    show();
+    const button = screen.getByLabelText("Download Shapefile (zip)");
+    await userEvent.click(button);
+    await screen.findByRole("alert", { name: /will mangle/i });
+    await userEvent.click(screen.getByText("Cancel"));
+    expect(document.activeElement).toBe(button);
   });
 
   it("names the format the user actually picked, not always the shapefile", async () => {
@@ -107,9 +141,21 @@ describe("DownloadsPanel", () => {
     exportWarnings.mockResolvedValue(MANGLED);
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
-    const box = await screen.findByRole("alertdialog");
+    const box = await screen.findByRole("alert", { name: /will mangle/i });
     expect(document.activeElement).toBe(box);
     expect(box.getAttribute("aria-labelledby")).toBe("dl-warn-title");
+  });
+
+  // An inline ref arrow re-fires on every commit and yanks focus off whatever the user is typing in.
+  it("keeps focus on the clip inputs the warning tells the user to use", async () => {
+    exportWarnings.mockResolvedValue(MANGLED);
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    await screen.findByRole("alert", { name: /will mangle/i });
+    await userEvent.click(screen.getByText("Projection & area"));
+    const clip = screen.getByLabelText(/clip/i);
+    await userEvent.click(clip);
+    expect(document.activeElement).toBe(clip);
   });
 
   it("does not offer GeoPackage as a way out of a memory ceiling it shares", async () => {
@@ -134,7 +180,7 @@ describe("DownloadsPanel", () => {
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
     await userEvent.click(await screen.findByText("Download anyway"));
-    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "shp", undefined, 4326);
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "shp", undefined, 4326, 7);
     expect(exportWarnings).toHaveBeenCalledTimes(1);
   });
 
@@ -145,7 +191,7 @@ describe("DownloadsPanel", () => {
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
     await userEvent.click(await screen.findByText("Use GeoPackage instead"));
-    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "gpkg", undefined, 4326);
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "gpkg", undefined, 4326, 7);
     expect(screen.queryByText(/will mangle this data/i)).toBeNull();
   });
 
@@ -153,7 +199,7 @@ describe("DownloadsPanel", () => {
     exportWarnings.mockRejectedValue(new Error("read failed"));
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
-    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "shp", undefined, 4326);
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "shp", undefined, 4326, 7);
   });
 
   it("reports a failed export instead of failing silently", async () => {

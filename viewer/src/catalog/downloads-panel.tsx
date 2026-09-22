@@ -1,9 +1,10 @@
 // Every way to save a file, as one grid. Assets read over HTTP instead of saved belong in
 // "Services" — see `endpoints-panel.tsx`.
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import type { ShapefileWarnings } from "@/data/download";
+import { currentExport, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
@@ -53,7 +54,10 @@ const fmtBytes = (n: number) =>
   n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`;
 
 const TILE = "flex items-start justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 " +
-  "text-left text-sm text-foreground no-underline hover:border-primary hover:text-primary disabled:opacity-50";
+  "text-left text-sm text-foreground no-underline hover:border-primary hover:text-primary " +
+  // aria-disabled, not :disabled — the buttons stay focusable, so the native variant never matches.
+  "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:border-border " +
+  "aria-disabled:hover:text-foreground";
 const SUB = "mt-0.5 block text-xs font-normal text-muted-foreground";
 const BBOX_LABELS = ["W", "S", "E", "N"];
 
@@ -65,10 +69,19 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const [epsg, setEpsg] = useState(4326);
   const [customEpsg, setCustomEpsg] = useState(false);
 
+  // The export outlives this component: the panel is keyed per item, so switching items remounts
+  // it while the run continues. Reading the module's own state keeps the indicator and Cancel on
+  // screen wherever the user ends up.
+  const running = useSyncExternalStore(subscribeExport, currentExport);
+  const invoker = useRef<HTMLButtonElement | null>(null);
+
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
       const clip = clipOn ? bbox : undefined;
-      const { exportItem, exportWarnings } = await import("@/data/download");   // DuckDB + GDAL, on demand
+      const { beginExport, exportItem, exportWarnings } = await import("@/data/download");
+      // The ticket is taken BEFORE the pre-flight, which is the slow part — a cancel during it
+      // has to suppress the delivery too.
+      const epoch = beginExport();
       // Every format reads the whole GeoParquet into the tab, so every format is pre-flighted.
       // A failed pre-flight just proceeds to the export.
       if (!force) {
@@ -76,7 +89,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           .catch((e) => { console.warn("export pre-flight failed", e); return null; });
         if (w?.any) return w;
       }
-      await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clip, epsg);
+      await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clip, epsg, epoch);
     },
   });
   const busy = run.isPending ? run.variables.fmt : null;
@@ -85,6 +98,11 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
     void import("@/data/download").then((m) => m.cancelExports());
     run.reset();
   };
+  // Stable identity: an inline arrow is a new ref every commit, so React would re-run it on each
+  // render and steal focus back from the clip and CRS inputs the warning tells the user to use.
+  const focusWarning = useCallback((el: HTMLDivElement | null) => { el?.focus(); }, []);
+  // Dismissing puts focus back on the button that opened the warning, not on <body>.
+  const dismiss = () => { run.reset(); invoker.current?.focus(); };
   const warn: ShapefileWarnings | undefined = run.data?.any ? run.data : undefined;
 
   const files = fileAssets(item);
@@ -109,7 +127,11 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         {data.map(assetTile)}
         {parquet && FORMATS.map((f) => (
           <button key={f.id} aria-disabled={run.isPending} aria-busy={busy === f.id}
-            onClick={() => { if (!run.isPending) run.mutate({ fmt: f.id }); }}
+            onClick={(e) => {
+              if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
+              invoker.current = e.currentTarget;
+              run.mutate({ fmt: f.id });
+            }}
             aria-label={`Download ${f.label}`} className={TILE}>
             <span className="font-medium">
               {f.label}
@@ -120,13 +142,19 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         ))}
         {sidecars.map(assetTile)}
       </div>
-      {/* Always mounted: a live region created with its text is announced unreliably. */}
+      {/* Always mounted: a live region created with its text is announced unreliably. Announces
+          the end as well as the start, since neither is otherwise visible to a screen reader. */}
       <p role="status" aria-live="polite" className={`mt-1.5 ${C.muted} ${busy ? "" : "sr-only"}`}>
-        {busy ? `preparing in your browser · the first one loads DuckDB${GDAL_FORMATS.has(busy) ? " and GDAL (~40 MB)" : " (~a few MB)"}` : ""}
+        {busy
+          ? `preparing in your browser · the first one loads DuckDB${GDAL_FORMATS.has(busy) ? " and GDAL (~40 MB)" : " (~a few MB)"}`
+          : run.isSuccess && !warn ? "export ready" : ""}
       </p>
-      {busy && (
+      <div role="alert" className={run.error ? `mt-1.5 text-sm text-destructive` : "sr-only"}>
+        {run.error ? `Download failed: ${run.error.message}` : ""}
+      </div>
+      {(busy || running) && (
         <button onClick={cancel} className="mt-1 text-sm text-muted-foreground hover:underline">
-          Cancel
+          Cancel{!busy && running ? ` export of ${running.stem}` : ""}
         </button>
       )}
 
@@ -175,11 +203,10 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           )}
         </details>
       )}
-      {run.error && <div role="alert" className="mt-1.5 text-sm text-destructive">Download failed: {run.error.message}</div>}
 
       {warn && (
-        <div role="alertdialog" aria-labelledby="dl-warn-title" tabIndex={-1}
-          ref={(el) => el?.focus()}
+        <div role="alert" aria-labelledby="dl-warn-title" tabIndex={-1} ref={focusWarning}
+          onKeyDown={(e) => { if (e.key === "Escape") dismiss(); }}
           className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
           <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
             {warn.tooBigToInspect || warn.overBrowserLimit
@@ -239,7 +266,8 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
                 Download anyway
               </button>
             )}
-            <button onClick={cancel} className="text-muted-foreground hover:underline">Cancel</button>
+            <button onClick={() => { cancel(); invoker.current?.focus(); }}
+              className="text-muted-foreground hover:underline">Cancel</button>
           </div>
         </div>
       )}

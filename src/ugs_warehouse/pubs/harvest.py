@@ -9,6 +9,7 @@ failure log) are dropped — Cloud Run is GCS-only and logs to stderr.
 
 Needs the `pubs` extra (rasterio, rio-cogeo) + system GDAL CLI + poppler (the Dockerfile.harvest
 image). Env: COG_COMPRESS (deflate), COG_QUALITY (90; webp only), COG_DPI (600; 0 = GeoTIFF as-is),
+COG_ZOOM_STRATEGY (auto; upper keeps a source finer than the nearest web zoom instead of rounding down),
 SKIP_EXISTING (1), THUMBS (1).
 """
 from __future__ import annotations
@@ -44,6 +45,21 @@ THUMBS = os.environ.get("THUMBS", "1") != "0"
 COG_COMPRESS = os.environ.get("COG_COMPRESS", "deflate").lower()
 COG_QUALITY = int(os.environ.get("COG_QUALITY", "90"))
 COG_DPI = int(os.environ.get("COG_DPI", "600"))
+
+
+def _zoom_strategy() -> str:
+    """web_optimized snaps to the nearest web-mercator zoom; "upper" keeps a source that sits just
+    below a zoom at the finer level instead of rounding down and losing detail. Default "auto" leaves
+    the prod --all job (and scanned plates, where a finer zoom is only a bigger fuzzy file) unchanged."""
+    allowed = ("auto", "lower", "upper")
+    raw = os.environ.get("COG_ZOOM_STRATEGY", "auto")
+    v = raw.lower()
+    if v not in allowed:
+        raise ValueError(f"COG_ZOOM_STRATEGY must be one of {'|'.join(allowed)}, got {raw!r}")
+    return v
+
+
+COG_ZOOM_STRATEGY = _zoom_strategy()
 MAX_ZIP_SIZE_MB = int(os.environ.get("MAX_ZIP_SIZE_MB", "0"))
 # A COLOR geologic-map render must win over a grayscale shaded-relief base / topo plate. Pick the
 # source raster by CONTENT (mean per-pixel R/G/B spread), not filename — the old name regex fell to a
@@ -781,12 +797,14 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             prof["compress"] = "lzw"
             prof.pop("WEBP_LEVEL", None)        # webp-only; lzw rejects it
             cog_translate(rgb_clipped, cog, prof, web_optimized=True,
+                          zoom_level_strategy=COG_ZOOM_STRATEGY,
                           overview_resampling="bilinear", quiet=True)
 
         # webp is 8-bit-only and raises on 16-bit/float plates; lossless lzw keeps web_optimized
         # so the result is still tiled + overviewed for range reads.
         try:
             cog_translate(rgb_clipped, cog, prof, web_optimized=True,
+                          zoom_level_strategy=COG_ZOOM_STRATEGY,
                           overview_resampling="bilinear", quiet=True)
         except Exception as e:  # noqa: BLE001 — any encode failure is worth one lossless retry
             if COG_COMPRESS != "webp":

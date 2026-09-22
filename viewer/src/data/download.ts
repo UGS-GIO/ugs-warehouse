@@ -14,9 +14,15 @@
 //     is ~40 MB (wasm+data), so it's dynamically imported only when one is requested.
 
 import { newDuckDb } from "./duckdb";
+import {
+  beginExport, consumeIfCancelled, endRun, isCancelled, startRun,
+} from "./export-runs";
 import type { ExportFormat } from "./export-formats";
 
 export type { ExportFormat };
+export {
+  beginExport, cancelExport, currentExports, subscribeExport, type ExportRun,
+} from "./export-runs";
 
 // The transform writes the geometry column as `geom` (GEOMETRY 4326); pub/external parquet may
 // use `geometry` / `wkb_geometry`. GEOM = the canonical name (export); GEOM_NAMES = all hidden
@@ -574,24 +580,6 @@ export async function readFeatures3D(
 // has to count. Tickets are per-run, not a shared counter: cancelling one export must not
 // silently swallow another's file. `current` lets a panel that remounted mid-export still show
 // and cancel the run.
-export type ExportRun = { id: number; stem: string; fmt: ExportFormat };
-let ticket = 0;
-const cancelled = new Set<number>();
-let current: ExportRun | null = null;
-const listeners = new Set<() => void>();
-const publish = (run: ExportRun | null) => { current = run; listeners.forEach((l) => l()); };
-
-export const beginExport = (): number => ++ticket;
-export const cancelExport = (id: number): void => {
-  cancelled.add(id);
-  if (current?.id === id) publish(null);
-};
-export const currentExport = (): ExportRun | null => current;
-export const subscribeExport = (l: () => void): (() => void) => {
-  listeners.add(l);
-  return () => { listeners.delete(l); };
-};
-
 export async function exportItem(
   parquetUrl: string,
   stem: string,
@@ -600,16 +588,18 @@ export async function exportItem(
   epsg = 4326,                              // output CRS for the gdal formats (shp/gpkg/gdb/fgb)
   epoch = beginExport(),                    // from beginExport(), taken before the pre-flight ran
 ): Promise<void> {
-  if (cancelled.has(epoch)) return;         // cancelled while the pre-flight was still running
+  // Cancelled while the pre-flight was still running. Returning here skips the `finally`, so the
+  // ticket has to be pruned on the way out or the set grows for the life of the tab.
+  if (consumeIfCancelled(epoch)) return;    // cancelled while the pre-flight was still running
   const srs = safeEpsg(epsg);
   const db = await getDB();
   const conn = await db.connect();
   const id = ++seq;
   // Table names are database-scoped in DuckDB, so two runs would collide on a bare `raw`.
   const raw = `raw_${id}`, clipped = `clipped_${id}`;
-  publish({ id: epoch, stem, fmt });
+  startRun({ id: epoch, stem, fmt });
   const deliver = (parts: Uint8Array[], filename: string, mime: string) => {
-    if (!cancelled.has(epoch)) triggerDownload(parts, filename, mime);
+    if (!isCancelled(epoch)) triggerDownload(parts, filename, mime);
   };
   let csvOut: string | undefined;
   let seqOut: string | undefined;
@@ -677,8 +667,7 @@ export async function exportItem(
     if (borrowed !== undefined) release(borrowed);
     if (csvOut) await db.dropFile(csvOut).catch(() => {});
     if (seqOut) await db.dropFile(seqOut).catch(() => {});
-    cancelled.delete(epoch);
-    if (current?.id === epoch) publish(null);   // by id: the same item can have two runs
+    endRun(epoch);
   }
 }
 

@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import type { ShapefileWarnings } from "@/data/download";
-import { currentExport, subscribeExport } from "@/data/download";
+import { currentExports, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
@@ -72,7 +72,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   // The export outlives this component: the panel is keyed per item, so switching items remounts
   // it while the run continues. Reading the module's own state keeps the indicator and Cancel on
   // screen wherever the user ends up.
-  const running = useSyncExternalStore(subscribeExport, currentExport);
+  const running = useSyncExternalStore(subscribeExport, currentExports);
   const invoker = useRef<HTMLButtonElement | null>(null);
   const ticket = useRef<number | null>(null);
 
@@ -95,14 +95,14 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   });
   const busy = run.isPending ? run.variables.fmt : null;
   // Suppresses the delivery, not the work: see cancelExports.
-  // Cancels the run this panel started, or the one it inherited after a remount — never
-  // everything in flight.
-  const cancel = () => {
-    const id = ticket.current ?? running?.id;
-    if (id !== undefined && id !== null) void import("@/data/download").then((m) => m.cancelExport(id));
-    ticket.current = null;
-    run.reset();
+  // Cancels one run by id — never everything in flight.
+  const cancelRun = (id: number) => {
+    void import("@/data/download").then((m) => m.cancelExport(id));
+    if (id === ticket.current) { ticket.current = null; run.reset(); }
   };
+  // During the pre-flight the run has no record yet, so this panel's own ticket is the handle.
+  const pending = busy && ticket.current !== null && !running.some((r) => r.id === ticket.current)
+    ? ticket.current : null;
   // Stable identity: an inline arrow is a new ref every commit, so React would re-run it on each
   // render and steal focus back from the clip and CRS inputs the warning tells the user to use.
   const focusWarning = useCallback((el: HTMLDivElement | null) => { el?.focus(); }, []);
@@ -159,11 +159,19 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       <div role="alert" className={run.error ? `mt-1.5 text-sm text-destructive` : "sr-only"}>
         {run.error ? `Download failed: ${run.error.message}` : ""}
       </div>
-      {(busy || running) && (
-        <button onClick={cancel} className="mt-1 text-sm text-muted-foreground hover:underline">
-          Cancel{!busy && running ? ` export of ${running.stem}` : ""}
+      {pending !== null && (
+        <button onClick={() => cancelRun(pending)}
+          className="mt-1 block text-sm text-muted-foreground hover:underline">
+          Cancel
         </button>
       )}
+      {/* One per live run: an export started before the user navigated here is still theirs. */}
+      {running.map((r) => (
+        <button key={r.id} onClick={() => cancelRun(r.id)}
+          className="mt-1 block text-sm text-muted-foreground hover:underline">
+          Cancel {r.fmt} export{r.id === ticket.current ? "" : ` of ${r.stem}`}
+        </button>
+      ))}
 
       {parquet && (
         <details className="mt-2 border-t border-border pt-2">
@@ -212,7 +220,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       )}
 
       {warn && (
-        <div aria-labelledby="dl-warn-title" tabIndex={-1} ref={focusWarning}
+        <div aria-labelledby="dl-warn-title" aria-describedby="dl-warn-why" tabIndex={-1} ref={focusWarning}
           onKeyDown={(e) => { if (e.key === "Escape") dismiss(); }}
           className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
           <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
@@ -220,7 +228,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
               ? "This export is too big for the browser"
               : `${FORMAT_LABEL[run.variables!.fmt]} will mangle this data`}
           </div>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
+          <ul id="dl-warn-why" className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
             {warn.mixedGeometry.length > 0 && (
               <li><b>Mixed geometry</b> ({warn.mixedGeometry.join(", ").toLowerCase()}) — a shapefile holds one geometry type; the others get dropped. Use GeoPackage.</li>
             )}
@@ -273,8 +281,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
                 Download anyway
               </button>
             )}
-            <button onClick={() => { cancel(); invoker.current?.focus(); }}
-              className="text-muted-foreground hover:underline">Cancel</button>
+            <button onClick={dismiss} className="text-muted-foreground hover:underline">Cancel</button>
           </div>
         </div>
       )}

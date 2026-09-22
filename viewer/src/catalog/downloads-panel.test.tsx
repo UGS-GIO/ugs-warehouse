@@ -8,13 +8,17 @@ import { DownloadsPanel } from "./downloads-panel";
 import type { StacDoc } from "@/stac";
 
 // `vi.mock` is hoisted above the file's consts, so the spies have to be hoisted with it.
-const { exportItem, exportWarnings, beginExport, cancelExport } = vi.hoisted(() => ({
+const { exportItem, exportWarnings, beginExport, cancelExport, NO_RUNS } = vi.hoisted(() => ({
   exportItem: vi.fn(), exportWarnings: vi.fn(), beginExport: vi.fn(() => 7), cancelExport: vi.fn(),
+  // One frozen array: useSyncExternalStore rejects a snapshot that is a new reference each call.
+  NO_RUNS: Object.freeze([]),
 }));
 vi.mock("@/data/download", () => ({
   exportItem, exportWarnings, beginExport, cancelExport,
   // The panel subscribes to the module's own export state so a remount keeps the Cancel button.
-  currentExport: () => null, subscribeExport: () => () => {},
+  // The store has its own suite (export-runs.test.ts); here it stays empty so the panel's own
+  // pending run is the only thing on screen.
+  currentExports: () => NO_RUNS, subscribeExport: () => () => {},
 }));
 
 const HREF = "https://cdn.example/x.parquet";

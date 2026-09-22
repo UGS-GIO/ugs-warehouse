@@ -551,8 +551,6 @@ export async function exportItem(
   epsg = 4326,                              // output CRS for the gdal formats (shp/gpkg/gdb/fgb)
   epoch = beginExport(),                    // from beginExport(), taken before the pre-flight ran
 ): Promise<void> {
-  // Cancelled while the pre-flight was still running. Returning here skips the `finally`, so the
-  // ticket has to be pruned on the way out or the set grows for the life of the tab.
   // Cancelled while the pre-flight was still running; end it so no ticket outlives the run.
   if (consumeIfCancelled(epoch)) { endRun(epoch); return; }
   const srs = safeEpsg(epsg);
@@ -786,8 +784,9 @@ export async function exportWarnings(
     }
     const baseTypes = baseGeometryTypes(names ?? []);
 
-    // Decoded text length, which the footer cannot give (see dbfFieldWidth). The file is already
-    // local by now, so the scan adds no transfer.
+    // Decoded text length, which the footer cannot give (see dbfFieldWidth). This is a real read:
+    // it fetches the text chunks of every row group the clip admits, which is what the budget
+    // above bounds.
     const measured = cols.filter((c) => needsMeasuredWidth(colTypes.get(c) ?? "VARCHAR"));
     // Scaled by the bytes the read will fetch, not by a row fraction: the scan pulls whole column
     // chunks for every row group the clip admits, which is what estReadBytes already measures.

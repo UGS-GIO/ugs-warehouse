@@ -103,9 +103,6 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
     void import("@/data/download").then((m) => m.cancelExport(id));
     if (id === ticket.current) { ticket.current = null; run.reset(); }
   };
-  // During the pre-flight the run has no record yet, so this panel's own ticket is the handle.
-  const pending = busy && ticket.current !== null && !running.some((r) => r.id === ticket.current)
-    ? ticket.current : null;
   // Stable identity: an inline arrow is a new ref every commit, so React would re-run it on each
   // render and steal focus back from the clip and CRS inputs the warning tells the user to use.
   const focusWarning = useCallback((el: HTMLDivElement | null) => { el?.focus(); }, []);
@@ -162,13 +159,8 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       <div role="alert" className={run.error ? `mt-1.5 text-sm text-destructive` : "sr-only"}>
         {run.error ? `Download failed: ${run.error.message}` : ""}
       </div>
-      {pending !== null && (
-        <button onClick={() => cancelRun(pending)}
-          className="mt-1 block text-sm text-muted-foreground hover:underline">
-          Cancel
-        </button>
-      )}
-      {/* One per live run: an export started before the user navigated here is still theirs. */}
+      {/* One per live run, registered from the ticket, so this covers the pre-flight phase too.
+          An export started before the user navigated here is still theirs. */}
       {running.map((r) => (
         <button key={r.id} onClick={() => cancelRun(r.id)}
           className="mt-1 block text-sm text-muted-foreground hover:underline">

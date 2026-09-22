@@ -47,3 +47,22 @@ def test_get_reads_either_representation(monkeypatch, _no_deadline, label, body)
 
 def test_body_leaves_plain_bytes_untouched():
     assert gen_db._body(_Resp(b'{"a": 1}')) == b'{"a": 1}'
+
+
+# The magic bytes are a guess: arbitrary content can start 1f 8b. A body that merely looks gzipped
+# must fall through as raw rather than raise out of what is documented as a plain download.
+def test_get_reads_a_body_that_only_looks_gzipped(monkeypatch, _no_deadline):
+    body = b"\x1f\x8b" + json.dumps(DOC).encode()[2:]
+    monkeypatch.setattr(gen_db.urllib.request, "urlopen", lambda *a, **k: _Resp(body))
+    # The point is that the gunzip attempt does not escape: the raw bytes reach the decode, which
+    # fails on its own terms rather than as a BadGzipFile out of a plain download.
+    with pytest.raises(UnicodeDecodeError):
+        gen_db._get("https://cdn/catalog.json")
+
+
+def test_gcs_gunzip_falls_back_on_a_false_positive():
+    from ugs_warehouse.core import gcs
+
+    assert gcs._gunzip(b"\x1f\x8bnot actually gzip") == b"\x1f\x8bnot actually gzip"
+    assert gcs._gunzip(b"plain") == b"plain"
+    assert gcs._gunzip(gzip.compress(b"real")) == b"real"

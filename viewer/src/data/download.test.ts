@@ -282,53 +282,6 @@ describe("browser memory ceiling", () => {
   });
 });
 
-describe("browser memory ceiling", () => {
-  const fields = [{ name: "unit_name", type: "VARCHAR", maxBytes: 44, avgBytes: 20 }];
-
-  it("expands geometry bytes, since GeoJSON spells coordinates out as text", () => {
-    expect(estimateGeoJSONBytes([], 1_000, 1_000_000)).toBe(2_500_000 + 1_000 * 100);
-  });
-
-  it("charges every row for the field name, not just the value", () => {
-    const withField = estimateGeoJSONBytes(fields, 1_000, 0);
-    const bare = estimateGeoJSONBytes([], 1_000, 0);
-    expect(withField - bare).toBe(1_000 * ("unit_name".length + 20 + 6));
-  });
-
-  it("counts the input, the written layer and the zip for a zipped format", () => {
-    expect(estimateExportPeakBytes("shp", 100, 50)).toBe(200);
-    expect(estimateExportPeakBytes("gdb", 100, 50)).toBe(200);
-  });
-
-  it("does not charge a single-file format for a zip it never makes", () => {
-    expect(estimateExportPeakBytes("gpkg", 100, 50)).toBe(150);
-    expect(estimateExportPeakBytes("fgb", 100, 50)).toBe(150);
-  });
-
-  it("charges CSV nothing: DuckDB streams it without GeoJSON or GDAL", () => {
-    expect(estimateExportPeakBytes("csv", 1e9, 1e9)).toBe(0);
-  });
-
-  it("trips below the 2 GB format cap — the browser gives out first", () => {
-    // 200k polygons averaging 4 KB of WKB: both shapefile parts fit, the conversion does not.
-    const polys = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}`, type: "DOUBLE", maxBytes: 0, avgBytes: 8 }));
-    const geomBytes = 200_000 * 4_000;
-    const shp = estimateShapefileBytes(polys, 200_000, geomBytes);
-    const peak = estimateExportPeakBytes("shp", estimateGeoJSONBytes(polys, 200_000, geomBytes),
-      shp.estShpBytes + shp.estDbfBytes);
-    expect(shp.over2gb).toBe(false);
-    expect(peak).toBeGreaterThan(WASM_HEAP_BUDGET);
-  });
-
-  it("leaves an ordinary topic well under the budget", () => {
-    const shp = estimateShapefileBytes(fields, 7_000, 3_000_000);
-    expect(estimateExportPeakBytes("shp", estimateGeoJSONBytes(fields, 7_000, 3_000_000),
-      shp.estShpBytes + shp.estDbfBytes)).toBeLessThan(WASM_HEAP_BUDGET);
-  });
-});
-
-// DuckDB-WASM has no range reads: reaching the footer downloads the whole file. The gate has to
-// answer from the Content-Length alone, without ever starting the engine.
 describe("safeEpsg", () => {
   // The panel's number input yields 0 when cleared and NaN from a partial entry; either would
   // reach SQL as EPSG:0 / EPSG:NaN and fail the transform.

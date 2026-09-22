@@ -117,6 +117,20 @@ def put_bytes(data: bytes, object_path: str, *, content_type: str,
     return meta
 
 
+def _gunzip(raw: bytes) -> bytes:
+    """Gunzip when the body carries the gzip magic, else return it unchanged.
+
+    The magic is a guess, not a guarantee: arbitrary bytes can start 1f 8b, so a body that merely
+    looks gzipped falls through rather than raising out of a plain download.
+    """
+    if raw[:2] != b"\x1f\x8b":
+        return raw
+    try:
+        return gzip.decompress(raw)
+    except OSError:
+        return raw
+
+
 def get_bytes(object_path: str) -> bytes:
     """Download an object's bytes from `gs://{BUCKET}/{object_path}`.
 
@@ -125,7 +139,7 @@ def get_bytes(object_path: str) -> bytes:
     stack, so a caller would otherwise get plain bytes or compressed ones depending on the build.
     """
     raw = bytes(obs.get(_store(), object_path).bytes())
-    return gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+    return _gunzip(raw)
 
 
 def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,

@@ -37,12 +37,17 @@ ROW_GROUP_MAX = 122_880      # DuckDB's own default, the ceiling for very light 
 def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
     """Rows per group so a group lands near TARGET_ROW_GROUP_BYTES, from the view's own geometry.
 
-    Sampled, not scanned: the estimate only has to get the order of magnitude right, and the
-    transform has already hilbert-sorted so a head sample is spatially clustered, not skewed.
+    Sampled, not scanned: the estimate only has to land the order of magnitude. The sample is the
+    head of a hilbert-sorted view, so it is one region rather than a spread of them; that is
+    adequate where feature complexity is roughly uniform and approximate where it is not.
+
+    `geom` is excluded from the JSON term because to_json() would serialise it again as WKT, and
+    charging the geometry twice put the groups at about half the target.
     """
     row = con.execute(
-        f"SELECT avg(octet_length(ST_AsWKB(geom))) + avg(coalesce(len(to_json(t)), 0)) "
-        f"FROM (SELECT * FROM {view} LIMIT 20000) t"
+        f"SELECT (SELECT avg(octet_length(ST_AsWKB(geom))) FROM (SELECT geom FROM {view} LIMIT 20000)) "
+        f"+ (SELECT avg(coalesce(len(to_json(u)), 0)) "
+        f"   FROM (SELECT * EXCLUDE (geom) FROM {view} LIMIT 20000) u)"
     ).fetchone()
     per_row = float(row[0] or 0)
     if per_row <= 0:

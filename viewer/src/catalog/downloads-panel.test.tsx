@@ -8,14 +8,28 @@ import { DownloadsPanel } from "./downloads-panel";
 import type { StacDoc } from "@/stac";
 
 // `vi.mock` is hoisted above the file's consts, so the spies have to be hoisted with it.
-const {
-  exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun, NO_RUNS,
-} = vi.hoisted(() => ({
-  exportItem: vi.fn(), exportWarnings: vi.fn(), beginExport: vi.fn(() => 7), cancelExport: vi.fn(),
-  startRun: vi.fn(), endRun: vi.fn(),
-  // One frozen array: useSyncExternalStore rejects a snapshot that is a new reference each call.
-  NO_RUNS: Object.freeze([]),
-}));
+// A working stand-in for the run store, not a stub: the panel reads it through
+// useSyncExternalStore to decide what is cancellable, so a store frozen at empty would hide the
+// cancel path entirely. Keeps one snapshot reference between changes, which that hook requires.
+const { exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun, runs } =
+  vi.hoisted(() => {
+    const live = new Map<number, { id: number; stem: string; fmt: string }>();
+    let snapshot: readonly unknown[] = [];
+    const listeners = new Set<() => void>();
+    const publish = () => { snapshot = [...live.values()]; listeners.forEach((l) => l()); };
+    const runs = {
+      currentExports: () => snapshot,
+      subscribeExport: (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; },
+      reset: () => { live.clear(); publish(); },
+    };
+    return {
+      exportItem: vi.fn(), exportWarnings: vi.fn(), beginExport: vi.fn(() => 7),
+      cancelExport: vi.fn((id: number) => { if (live.delete(id)) publish(); }),
+      startRun: vi.fn((r: { id: number; stem: string; fmt: string }) => { live.set(r.id, r); publish(); }),
+      endRun: vi.fn((id: number) => { if (live.delete(id)) publish(); }),
+      runs,
+    };
+  });
 vi.mock("@/data/download", () => ({
   exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun,
   holdsOneGeomType: (fmt: string) => fmt === "shp" || fmt === "gdb",
@@ -23,7 +37,7 @@ vi.mock("@/data/download", () => ({
   // The panel subscribes to the module's own export state so a remount keeps the Cancel button.
   // The store has its own suite (export-runs.test.ts); here it stays empty so the panel's own
   // pending run is the only thing on screen.
-  currentExports: () => NO_RUNS, subscribeExport: () => () => {},
+  currentExports: runs.currentExports, subscribeExport: runs.subscribeExport,
 }));
 
 const HREF = "https://cdn.example/x.parquet";
@@ -63,6 +77,7 @@ beforeEach(() => {
   cancelExport.mockClear();
   startRun.mockClear();
   endRun.mockClear();
+  runs.reset();
   exportWarnings.mockReset();
   exportWarnings.mockResolvedValue(CLEAN);
 });
@@ -98,7 +113,7 @@ describe("DownloadsPanel", () => {
     exportWarnings.mockImplementation(() => new Promise((r) => { release = r; }));
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
-    await userEvent.click(await screen.findByText("Cancel"));
+    await userEvent.click(await screen.findByText(/^Cancel \w+ export/));
     // By ticket, so cancelling one export cannot swallow another's file.
     expect(cancelExport).toHaveBeenCalledWith(7);
     release(CLEAN);
@@ -130,11 +145,11 @@ describe("DownloadsPanel", () => {
     show();
 
     await userEvent.click(screen.getByLabelText("Download GeoJSON"));
-    await userEvent.click(await screen.findByText("Cancel"));
+    await userEvent.click(await screen.findByText(/^Cancel \w+ export/));
     expect(cancelExport).toHaveBeenLastCalledWith(11);
 
     await userEvent.click(screen.getByLabelText("Download CSV (WKT)"));
-    await userEvent.click(await screen.findByText("Cancel"));
+    await userEvent.click(await screen.findByText(/^Cancel \w+ export/));
     expect(cancelExport).toHaveBeenLastCalledWith(12);
     expect(cancelExport).toHaveBeenCalledTimes(2);
     release(CLEAN);

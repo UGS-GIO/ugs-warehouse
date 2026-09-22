@@ -66,7 +66,12 @@ def _body(r) -> bytes:
     costs two lines; guessing wrong is a UnicodeDecodeError that falls back to a stale snapshot.
     """
     raw = r.read()
-    return gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+    # Magic bytes are a guess, not a guarantee: fall back rather than raise on a body that merely
+    # starts like gzip.
+    try:
+        return gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+    except OSError:
+        return raw
 
 
 def _get(url: str, deadline: float | None = None) -> dict:

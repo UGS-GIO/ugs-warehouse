@@ -23,7 +23,13 @@ def _get(url: str):
             raw = r.read()
         # The catalog is stored gzipped. GCS transcodes it for clients that don't ask for gzip,
         # and urllib doesn't, but a CDN holding the compressed representation still serves it.
-        return json.loads((gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw).decode())
+        if raw[:2] == b"\x1f\x8b":
+            # Magic bytes are a guess; a body that merely starts like gzip should not 500 the panel.
+            try:
+                raw = gzip.decompress(raw)
+            except OSError:
+                pass
+        return json.loads(raw.decode())
     except Exception:
         # The dashboard degrades to "unknown" rather than erroring, but a catalog that has moved
         # or stopped decoding must not do that silently.

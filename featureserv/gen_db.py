@@ -17,6 +17,7 @@ Env: STAC_CATALOG, STAC_SKIP, DB_PATH, MODE, GEN_DB_{HTTP_TIMEOUT,DEADLINE,WORKE
 from __future__ import annotations
 
 import argparse
+import gzip
 import json
 import os
 import re
@@ -56,12 +57,24 @@ def _remaining(deadline: float | None) -> float:
     return max(0.05, min(HTTP_TIMEOUT, deadline - time.monotonic()))
 
 
+def _body(r) -> bytes:
+    """Response bytes, gunzipped when they arrive compressed.
+
+    The catalog is stored with `Content-Encoding: gzip`. GCS transcodes it back for a client that
+    doesn't advertise gzip, and urllib doesn't, but a CDN that cached the compressed representation
+    can still hand it over — there is no `Vary: Accept-Encoding` on the object. Reading either form
+    costs two lines; guessing wrong is a UnicodeDecodeError that falls back to a stale snapshot.
+    """
+    raw = r.read()
+    return gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw
+
+
 def _get(url: str, deadline: float | None = None) -> dict:
     # Bound each call by whichever is nearer: its own timeout or what is left of the run budget.
     # Without the deadline term a single slow child can spend the whole budget on retries the
     # caller has no way to interrupt.
     with urllib.request.urlopen(url, timeout=_remaining(deadline)) as r:  # noqa: S310 (trusted https CDN)
-        return json.loads(r.read().decode())
+        return json.loads(_body(r).decode())
 
 
 def _parquet_href(item: dict) -> str | None:

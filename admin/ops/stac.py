@@ -3,6 +3,7 @@ the CDN, so this works from anywhere (incl. local dev)."""
 from __future__ import annotations
 
 import concurrent.futures as cf
+import gzip
 import json
 import time
 import urllib.error
@@ -16,7 +17,10 @@ PUB_COLLECTIONS = ["ugs-publications", "ugs-mining-district-files", "ugs-externa
 def _get(url: str):
     try:
         with urllib.request.urlopen(url, timeout=20) as r:  # noqa: S310 (https CDN)
-            return json.load(r)
+            raw = r.read()
+        # The catalog is stored gzipped. GCS transcodes it for clients that don't ask for gzip,
+        # and urllib doesn't, but a CDN holding the compressed representation still serves it.
+        return json.loads((gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw).decode())
     except Exception:
         return None
 

@@ -346,6 +346,24 @@ describe("geomColumn", () => {
   });
 });
 
+// When the text budget is exceeded the widths come from the footer's bytes-per-row, not from a
+// measured maximum. dbfFieldWidth(type, 0) would be 1 for text, under-reporting a wide table by
+// enough to hide the 2 GB cap the warning exists to raise.
+describe("unmeasured text widths", () => {
+  it("uses bytes-per-row, not the 1-byte floor", () => {
+    expect(dbfFieldWidth("VARCHAR", 0)).toBe(1);          // the floor that must not be used
+    expect(dbfFieldWidth("VARCHAR", 44)).toBe(44);
+  });
+
+  it("the floor would hide a .dbf that overruns 2 GB", () => {
+    const rows = 5_000_000;
+    const asFloor = Array.from({ length: 40 }, () => ({ type: "VARCHAR", maxBytes: 0 }));
+    const asAvg = Array.from({ length: 40 }, () => ({ type: "VARCHAR", maxBytes: 44 }));
+    expect(estimateShapefileBytes(asFloor, rows, 0).over2gb).toBe(false);
+    expect(estimateShapefileBytes(asAvg, rows, 0).over2gb).toBe(true);
+  });
+});
+
 describe("dictionary-encoded columns", () => {
   it("a repeated string measures its real width, not its parquet page size", () => {
     // 200k rows of two repeated 44-char strings occupy ~54 KB of dictionary-encoded parquet

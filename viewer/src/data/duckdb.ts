@@ -35,7 +35,7 @@ export async function newDuckDb(): Promise<import("@duckdb/duckdb-wasm").AsyncDu
  *  footer query on a 1.35 GB topic cost 63s (1.0s with ranges) and a 2 GB one crash the tab.
  *  Leave it off for a reader that needs the whole file anyway (the FTS index, the review diff):
  *  measured on the 485 MB pub-search db, ranges fetch ~19% MORE bytes in the same wall time. */
-async function newDb(duckdb: typeof import("@duckdb/duckdb-wasm"), rangeReads = false) {
+async function newDb(duckdb: typeof import("@duckdb/duckdb-wasm"), rangeReads: boolean) {
   const bundle = await duckdb.selectBundle(BUNDLES);
   const worker = new Worker(bundle.mainWorker!);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
@@ -46,12 +46,14 @@ async function newDb(duckdb: typeof import("@duckdb/duckdb-wasm"), rangeReads = 
   return db;
 }
 
-/** ATTACH a remote DuckDB over HTTP (range-read), load its extension, and switch into it so the
- * extension's macros (fts_main_*) resolve. Returns a ready connection. The engine JS loads lazily
- * here (dynamic import) — nothing downloads until the first search. */
+/** ATTACH a remote DuckDB over HTTP, load its extension, and switch into it so the extension's
+ * macros (fts_main_*) resolve. Returns a ready connection. Read WHOLE, not range-read: a BM25
+ * walk touches pages all over the index, and ranges measured ~19% more bytes on the 485 MB
+ * pub-search db for the same wall time. The engine JS loads lazily here — nothing downloads
+ * until the first search. */
 export async function attach(dbUrl: string, alias: string, ext: "fts"): Promise<Conn> {
   const duckdb = await import("@duckdb/duckdb-wasm");
-  const db = await newDb(duckdb);
+  const db = await newDb(duckdb, false);
   const conn = await db.connect();
   await db.registerFileURL(`${alias}.duckdb`, dbUrl, duckdb.DuckDBDataProtocol.HTTP, false);
   const repo = extRepo();
@@ -62,9 +64,10 @@ export async function attach(dbUrl: string, alias: string, ext: "fts"): Promise<
   return conn;
 }
 
-/** Open a connection with remote parquet files registered for HTTP range-reads. Query them by their
- * registered name, e.g. `read_parquet('review.parquet')`. Used by the _review↔_current diff — no
- * extension needed (GeoParquet `geom` reads as raw WKB BLOB, so `md5(geom)` hashes geometry directly).
+/** Open a connection with remote parquet files registered. Query them by their registered name,
+ * e.g. `read_parquet('review.parquet')`. Used by the _review↔_current diff — no extension needed
+ * (GeoParquet `geom` reads as raw WKB BLOB, so `md5(geom)` hashes geometry directly). Read WHOLE,
+ * not range-read: the diff hashes every column of both files, so the scan is the whole file.
  *
  * Returns a `close()` that MUST be called when done: this spins up a dedicated engine + worker, so
  * without teardown every call leaks the worker thread + its WASM heap (tens of MB each). */
@@ -72,7 +75,7 @@ export async function openParquet(
   files: Record<string, string>,
 ): Promise<{ conn: Conn; close: () => Promise<void> }> {
   const duckdb = await import("@duckdb/duckdb-wasm");
-  const db = await newDb(duckdb);
+  const db = await newDb(duckdb, false);
   const conn = await db.connect();
   for (const [name, url] of Object.entries(files)) {
     await db.registerFileURL(name, url, duckdb.DuckDBDataProtocol.HTTP, false);

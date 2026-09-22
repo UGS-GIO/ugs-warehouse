@@ -158,6 +158,14 @@ describe("DownloadsPanel", () => {
     expect(await screen.findByText(/File Geodatabase \(zip\) will mangle this data/)).toBeDefined();
   });
 
+  // An estimate the user cannot tell is an estimate is worse than no estimate.
+  it("says so when the sizes are approximate, even with nothing else wrong", async () => {
+    exportWarnings.mockResolvedValue({ ...CLEAN, any: true, widthsEstimated: true });
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    expect(await screen.findByText(/Sizes are approximate/i)).toBeDefined();
+  });
+
   // A slow read mangles nothing, so the heading must not say it does.
   it("calls a slow read slow, not mangling", async () => {
     exportWarnings.mockResolvedValue(SLOW_READ);

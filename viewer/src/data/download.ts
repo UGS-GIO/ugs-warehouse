@@ -811,7 +811,7 @@ export async function exportWarnings(
     let where = "";
     if (clip) {
       const [w, sy, e, n] = clip;
-      if (BBOX_COLS.every((c) => colTypes.has(c))) {
+      if (usable) {
         where = ` WHERE bbox_xmin <= ${e} AND bbox_xmax >= ${w} AND bbox_ymin <= ${n} AND bbox_ymax >= ${sy}`;
       } else {
         await conn.query("INSTALL spatial; LOAD spatial;");
@@ -864,8 +864,12 @@ export async function exportWarnings(
     const fields = cols.map((c) => {
       const type = colTypes.get(c) ?? "VARCHAR";
       const m = lengths.get(c);
-      const fixed = dbfFieldWidth(type, 0);
-      return { name: c, type, maxBytes: m ? m.max : fixed, avgBytes: m ? m.avg : fixed };
+      if (m) return { name: c, type, maxBytes: m.max, avgBytes: m.avg };
+      // Unmeasured: the footer's bytes-per-row is the best width available. dbfFieldWidth(type, 0)
+      // would be 1 for text, which under-reports a wide table by enough to hide the 2 GB cap.
+      const avg = needsMeasuredWidth(type) && fullRows ? (colBytes.get(c) ?? 0) / fullRows
+        : dbfFieldWidth(type, 0);
+      return { name: c, type, maxBytes: avg, avgBytes: avg };
     });
     const geomBytes = Math.round((colBytes.get(geom) ?? 0) * scale);
     const { estShpBytes, estDbfBytes, over2gb } = estimateShapefileBytes(fields, rowCount, geomBytes);
@@ -884,7 +888,7 @@ export async function exportWarnings(
       estReadBytes, rowGroups: groups.length, minClipBytes,
       any: longNames.length > 0 || collisions.length > 0 || tooManyFields
         || mixedGeometry.length > 0 || (shp && over2gb) || overBrowserLimit
-        || estReadBytes > SLOW_READ_BYTES,
+        || estReadBytes > SLOW_READ_BYTES || widthsEstimated,
     };
   } finally {
     if (borrowed !== undefined) release(borrowed);

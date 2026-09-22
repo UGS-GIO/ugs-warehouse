@@ -21,13 +21,14 @@ import { useIsDesktop } from "@/ui/use-breakpoint";
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
 // DuckDB-WASM (HTTP range reads; never downloads the whole file). Server-style manual paging:
-// the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 7000-row tables.
+// the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 400k+-row layers.
 // Geometry is excluded (use Download / OGC API / the map for geometry).
 // Page sizes come from ./paging, shared with the catalog item lists so both pagers offer the
 // same choices. This one opens at the smallest: a row here is a full data record, not a title.
 const PAGE_SIZE = PAGE_SIZES[0];
-// "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
-// so only the visible window renders. Capped so a pathological table can't OOM the tab.
+// "All" fetches up to this many rows in one virtualized page. Capped so a pathological table can't
+// OOM the tab; the largest layers (e.g. wetlandsoutline ~426k) exceed it, so "All" truncates them
+// (surfaced as "capped at 100,000") and paging is the way through the full table.
 const ALL_CAP = 100_000;
 export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
   href: string; onPick?: (sel: FocusSel) => void;
@@ -61,6 +62,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [narrowView, setNarrowView] = useState<"cards" | "table">("cards");
   const asCards = !desktop && narrowView === "cards";
   const scrollRef = useRef<HTMLDivElement>(null);  // virtualizer scroll viewport (the resizable box)
+  const pickSeq = useRef(0);  // bumps per row-click so the map re-flies/re-highlights even on the same row
   const [search, setSearch] = useState("");
   // feature_id of the row picked from the map (or a table click) — highlighted in the table.
   const [highlightId, setHighlightId] = useState<number | null>(null);
@@ -126,8 +128,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const total = page?.total ?? 0;
   const pageCount = showAll ? 1 : Math.max(1, Math.ceil(total / pageSize));
 
-  // Virtualize the rows so "All" (up to ~7k) renders only the visible window. Works for paged views
-  // too (small counts → negligible overhead). Scroll viewport = the resizable box (scrollRef).
+  // Virtualize the rows so "All" (up to ALL_CAP) renders only the visible window. Works for paged
+  // views too (small counts → negligible overhead). Scroll viewport = the resizable box (scrollRef).
   const rowModel = table.getRowModel().rows;
   const rowVirt = useVirtualizer({
     count: rowModel.length,
@@ -155,17 +157,13 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const pageSomeSelected = pagePks.some((p) => selPks.has(p));
   const selArr = [...selPks];
 
-  // Row click → zoom + highlight. Fire the bbox immediately (instant feedback), then fetch the
-  // real geometry (same filter+sort, offset = page start + row index) and upgrade the highlight.
-  const pick = (i: number, bbox: [number, number, number, number]) => {
+  // Row click → fly to the bbox + outline the exact feature on the map. The feature id drives a
+  // setFeatureState highlight on the PMTiles tile, so no geometry is read from the parquet (that
+  // pulls the whole geom column and OOMs the tab on large layers). bbox drives the fly. The key
+  // carries a per-click nonce so clicking the same row again still re-fires both effects. (ALL-6001)
+  const pick = (i: number, bbox: [number, number, number, number], featureId?: number) => {
     if (!onPick) return;
-    const offset = pageIndex * pageSize + i;
-    const key = `row:${offset}`;          // same key for both onPick calls → one fly per click
-    onPick({ bbox, key });
-    import("./download").then(({ fetchGeometry }) => fetchGeometry(href,
-      { orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters }, offset))
-      .then((g) => { if (g) onPick({ bbox, geometry: g, key }); })
-      .catch(() => {});
+    onPick({ bbox, featureId, key: `row:${pageIndex * pageSize + i}#${pickSeq.current++}` });
   };
 
   // Map-feature click → highlight + fly to the real feature (looked up by id, independent of the
@@ -177,13 +175,15 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     if (!mapPick) return;
     let live = true;
     setHighlightId(mapPick.id);
-    const key = `map:${mapPick.nonce}`;   // unique per map click → always re-flies
     (async () => {
-      const { fetchRowById, ordinalByFeatureId } = await import("./download");
-      const row = await fetchRowById(href, mapPick.id);
-      if (live && row && onPick) onPick({ bbox: row.bbox, geometry: row.geometry, key });
+      // No parquet geometry read on map-click. The clicked feature is already on the map and
+      // preview-map highlights it from the tile. We only page the table to it here. (ALL-6001)
+      const { ordinalByFeatureId } = await import("./download");
       const pos = await ordinalByFeatureId(href, mapPick.id, {
-        orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
+        orderBy: sort?.id, desc: sort?.desc, search: applied.search,
+        // Same combined filters as the page query, or the computed ordinal is over a different set
+        // than the table shows and the jump lands on the wrong page.
+        filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
       });
       if (live && pos != null) setPageIndex(Math.floor(pos / pageSize));
     })();
@@ -256,9 +256,10 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           onPick={onPick ? (r) => {
             const bbox = page?.bboxes[r.index] ?? null;
             if (!bbox) return;
-            pick(r.index, bbox);
             const fid = r.original.feature_id;
-            if (fid != null) setHighlightId(Number(fid));
+            const nfid = fid != null ? Number(fid) : undefined;
+            pick(r.index, bbox, nfid);
+            if (nfid != null) setHighlightId(nfid);
           } : undefined}
         />
       )}
@@ -320,7 +321,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           </thead>
           <tbody>
             {/* Virtualized window: only the visible rows are in the DOM; spacer rows hold the scroll
-                height above/below so "All" (up to ~7k rows) stays smooth. */}
+                height above/below so "All" (up to ALL_CAP rows) stays smooth. */}
             {padTop > 0 && <tr aria-hidden style={{ height: padTop }}><td colSpan={colCount} /></tr>}
             {vItems.map((vi) => {
               const r = rowModel[vi.index];
@@ -335,7 +336,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
                 <tr key={r.id} data-index={vi.index} ref={rowVirt.measureElement}
                   className={`${hl ? "bg-amber-100 dark:bg-amber-900/40" : ""} ${clickable ? "cursor-pointer hover:bg-hover" : ""}`.trim() || undefined}
                   title={clickable ? "Zoom to feature on map" : undefined}
-                  onClick={clickable ? () => { pick(r.index, bbox!); if (nfid != null) setHighlightId(nfid); } : undefined}>
+                  onClick={clickable ? () => { pick(r.index, bbox!, nfid ?? undefined); if (nfid != null) setHighlightId(nfid); } : undefined}>
                   {review && (
                     <td className="w-8 px-1 text-center align-middle" onClick={(e) => e.stopPropagation()}>
                       {pkStr != null ? (

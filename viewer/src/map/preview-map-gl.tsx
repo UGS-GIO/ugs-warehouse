@@ -12,7 +12,7 @@ import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
-import { bboxPolygon, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
+import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
 
@@ -158,14 +158,46 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   // mounted, so NEUTRAL_LAYERS (ungated) can't make a loading style look hidden.
   const gate = gateOf(layers);
   const gateDirection = useGateDir(mapRef, gate, mapLoaded);
-  const hlGeom: GeoJSON.Geometry | null = isVector ? (focus?.geometry ?? (fb ? bboxPolygon(fb) : null)) : null;
+  // The picked/clicked feature is outlined by setting feature-state `hl` on its PMTiles tile feature
+  // (keyed by feature_id), NOT by reading geometry from the parquet, which pulls the whole geom
+  // column and OOMs the tab on large layers. One writer (highlightFeature) so only ever one feature
+  // is lit, and it survives the fly: feature-state applies to the feature whenever its tile loads, so
+  // setting it before the camera arrives is fine. Tracks the sourceLayer it lit under, so the clear
+  // targets the right tile even across an item switch. (ALL-6001)
+  const sourceLayer = spec?.kind === "vector" ? spec.sourceLayer : undefined;
+  const hlRef = useRef<{ id: number; sourceLayer: string } | null>(null);
+  const highlightFeature = (fid: number | null) => {
+    const map = mapRef.current?.getMap();
+    // No pm-prev source (non-vector item, or not added yet) means nothing to light or clear; any
+    // prior state died with the source it was set on. Guarding on the source keeps setFeatureState
+    // from throwing on the one expected case, so a genuinely unexpected error still surfaces.
+    if (!map || !map.getSource("pm-prev")) { hlRef.current = null; return; }
+    const prev = hlRef.current;
+    if (prev && (prev.id !== fid || prev.sourceLayer !== sourceLayer)) {
+      map.setFeatureState({ source: "pm-prev", sourceLayer: prev.sourceLayer, id: prev.id }, { hl: false });
+    }
+    if (fid != null && sourceLayer) {
+      map.setFeatureState({ source: "pm-prev", sourceLayer, id: fid }, { hl: true });
+      hlRef.current = { id: fid, sourceLayer };
+    } else {
+      hlRef.current = null;
+    }
+  };
+  // Table row-click → outline focus.featureId. Keyed on focus.key so re-picking the same row re-lights
+  // it; on itemId (source swap) so a stale id can't light a same-id feature in the next dataset; on
+  // mapLoaded so a focus set before the map is ready applies once it is. Map clicks call
+  // highlightFeature directly (below) without touching focus, so they don't retrigger this.
+  useEffect(() => { highlightFeature(focus?.featureId ?? null); },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [itemId, focusKey, mapLoaded]);
 
   const onMapClick = (e: MapLayerMouseEvent) => {
     if (!isVector) return;
     const f = e.features?.[0];
-    if (!f) { onClearSelection?.(); return; }
+    if (!f) { highlightFeature(null); onClearSelection?.(); return; }
     const props = (f.properties ?? {}) as Record<string, unknown>;
     const fid = f.id != null ? Number(f.id) : null;
+    highlightFeature(fid);  // exact outline via the tile's feature-state, no parquet read
     onFeatureSelect?.(props, fid);
     if (fid != null) onFeatureClick(fid);
   };
@@ -228,20 +260,27 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
               encoding="terrarium" tileSize={256} />
           )}
 
-          {/* Vector PMTiles */}
+          {/* Vector PMTiles + the highlight layers over it (same source/source-layer). The picked or
+              clicked feature is outlined straight from the tile via feature-state, so no geometry is
+              read from the parquet. Each paint uses ['feature-state','hl'] so only the lit feature
+              draws; the geometry filters keep the circle off polygon/line vertices, and the layers
+              sit after the styled ones so the outline draws on top. (ALL-6001)
+              Keyed by itemId so a vector→vector nav rebuilds the source and its layers with the new
+              item's source-layer (react-map-gl updates a url in place but never re-points an existing
+              layer's source-layer), and each item starts with clean feature-state. */}
           {isVector && spec && (
-            <Source id="pm-prev" type="vector" url={`pmtiles://${spec.pmHref}`}>
+            <Source key={itemId} id="pm-prev" type="vector" url={`pmtiles://${spec.pmHref}`}>
               {layers.map((l, i) => (
                 <Layer key={layerIds[i]} {...({ ...l, id: layerIds[i], source: "pm-prev", "source-layer": spec.sourceLayer } as unknown as LayerProps)} />
               ))}
-            </Source>
-          )}
-          {isVector && hlGeom && (
-            <Source id="pm-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
-              <Layer id="pm-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
-              <Layer id="pm-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
-              {/* Point-only — an unfiltered circle layer draws a dot on every polygon/line vertex. */}
-              <Layer id="pm-hl-pt" type="circle" filter={GEOM_FILTER.point} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
+              <Layer {...({ id: "pm-hl-fill", type: "fill", source: "pm-prev", "source-layer": spec.sourceLayer, filter: GEOM_FILTER.fill,
+                paint: { "fill-color": "#f59e0b", "fill-opacity": ["case", ["boolean", ["feature-state", "hl"], false], 0.3, 0] } } as unknown as LayerProps)} />
+              <Layer {...({ id: "pm-hl-line", type: "line", source: "pm-prev", "source-layer": spec.sourceLayer, filter: GEOM_FILTER.line,
+                paint: { "line-color": "#f59e0b", "line-width": ["case", ["boolean", ["feature-state", "hl"], false], 3, 0] } } as unknown as LayerProps)} />
+              <Layer {...({ id: "pm-hl-pt", type: "circle", source: "pm-prev", "source-layer": spec.sourceLayer, filter: GEOM_FILTER.point,
+                paint: { "circle-color": "#f59e0b", "circle-stroke-color": "#fff",
+                  "circle-radius": ["case", ["boolean", ["feature-state", "hl"], false], 7, 0],
+                  "circle-stroke-width": ["case", ["boolean", ["feature-state", "hl"], false], 2, 0] } } as unknown as LayerProps)} />
             </Source>
           )}
 

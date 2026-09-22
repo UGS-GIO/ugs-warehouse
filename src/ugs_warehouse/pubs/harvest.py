@@ -52,7 +52,7 @@ def _zoom_strategy() -> str:
     below a zoom at the finer level instead of rounding down and losing detail. Default "auto" leaves
     the prod --all job (and scanned plates, where a finer zoom is only a bigger fuzzy file) unchanged."""
     allowed = ("auto", "lower", "upper")
-    raw = os.environ.get("COG_ZOOM_STRATEGY", "auto")
+    raw = (os.environ.get("COG_ZOOM_STRATEGY") or "").strip() or "auto"   # empty/whitespace -> default
     v = raw.lower()
     if v not in allowed:
         raise ValueError(f"COG_ZOOM_STRATEGY must be one of {'|'.join(allowed)}, got {raw!r}")

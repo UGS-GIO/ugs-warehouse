@@ -556,12 +556,17 @@ def test_harvest_attempt_publishes_color_cog(monkeypatch, tmp_path):
 # --- COG zoom strategy (ALL-6006) -------------------------------------------------------------
 
 def test_zoom_strategy_defaults_to_auto_and_normalizes_case(monkeypatch):
-    """Unset -> "auto" (today's behavior); any case is normalized so `Upper`/`UPPER` both work."""
+    """Unset, empty, or whitespace-only -> "auto" (common in containerized env); case and surrounding
+    whitespace are normalized so `UPPER` and ` upper ` both resolve to "upper"."""
     from ugs_warehouse.pubs import harvest
     monkeypatch.delenv("COG_ZOOM_STRATEGY", raising=False)
     assert harvest._zoom_strategy() == "auto"
-    monkeypatch.setenv("COG_ZOOM_STRATEGY", "UPPER")
-    assert harvest._zoom_strategy() == "upper"
+    monkeypatch.setenv("COG_ZOOM_STRATEGY", "")
+    assert harvest._zoom_strategy() == "auto"        # present-but-empty is treated as unset
+    monkeypatch.setenv("COG_ZOOM_STRATEGY", "   ")
+    assert harvest._zoom_strategy() == "auto"        # whitespace-only too
+    monkeypatch.setenv("COG_ZOOM_STRATEGY", " UPPER ")
+    assert harvest._zoom_strategy() == "upper"       # trimmed + lowercased
 
 
 def test_zoom_strategy_rejects_unknown_value(monkeypatch):

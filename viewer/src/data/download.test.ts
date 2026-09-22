@@ -1,11 +1,9 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   buildOrder, dbfFieldWidth, estimateExportPeakBytes, estimateGeoJSONBytes, estimateShapefileBytes,
   evictionVictim, featureSeqSql, filterClause, sanitize, wrapFeatureSeqInPlace,
-  holdsOneGeomType, needsMeasuredWidth, safeEpsg, shapefileFieldChecks, exportWarnings,
-  SHP_FILE_LIMIT,
-  PREFLIGHT_MAX_PARQUET_BYTES, baseGeometryTypes, geomColumn,
-  WASM_HEAP_BUDGET,
+  estimateReadBytes, holdsOneGeomType, needsMeasuredWidth, safeEpsg, shapefileFieldChecks,
+  SHP_FILE_LIMIT, baseGeometryTypes, geomColumn, WASM_HEAP_BUDGET,
 } from "./download";
 
 describe("sanitize", () => {
@@ -259,59 +257,56 @@ describe("browser memory ceiling", () => {
   });
 });
 
-// DuckDB-WASM has no range reads: reaching the footer downloads the whole file. The gate has to
-// answer from the Content-Length alone, without ever starting the engine.
-describe("exportWarnings size gate", () => {
-  const headOnly = (bytes: number) => vi.fn(async (_u: string, init?: RequestInit) => {
-    expect(init?.method).toBe("HEAD");
-    return { ok: true, headers: new Headers({ "content-length": String(bytes) }) } as Response;
-  });
-  afterEach(() => { vi.unstubAllGlobals(); });
+describe("browser memory ceiling", () => {
+  const fields = [{ name: "unit_name", type: "VARCHAR", maxBytes: 44, avgBytes: 20 }];
 
-  it("refuses a 1.35 GB source on the HEAD alone, without loading DuckDB", async () => {
-    const fetchSpy = headOnly(1_351_235_892);
-    vi.stubGlobal("fetch", fetchSpy);
-    const w = await exportWarnings("https://cdn/wetlands_riverine.parquet", "shp");
-    expect(w.tooBigToInspect).toBe(true);
-    expect(w.overBrowserLimit).toBe(true);
-    expect(w.any).toBe(true);
-    expect(w.sourceBytes).toBe(1_351_235_892);
-    expect(w.rowCount).toBe(0);              // nothing was read
-    expect(w.sizeUnknown).toBe(false);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  it("expands geometry bytes, since GeoJSON spells coordinates out as text", () => {
+    expect(estimateGeoJSONBytes([], 1_000, 1_000_000)).toBe(2_500_000 + 1_000 * 100);
   });
 
-  it("does not gate a file at the threshold", async () => {
-    // Under the cap it falls through to the DuckDB path, which has no engine in this environment.
-    vi.stubGlobal("fetch", headOnly(PREFLIGHT_MAX_PARQUET_BYTES));
-    await expect(exportWarnings("https://cdn/small.parquet", "shp")).rejects.toBeTruthy();
+  it("charges every row for the field name, not just the value", () => {
+    const withField = estimateGeoJSONBytes(fields, 1_000, 0);
+    const bare = estimateGeoJSONBytes([], 1_000, 0);
+    expect(withField - bare).toBe(1_000 * ("unit_name".length + 20 + 6));
   });
 
-  // Unknown size must not read as small: that opens the gate onto the path that crashes the tab.
-  it("refuses when the server rejects the HEAD", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: false, status: 405, headers: new Headers() }) as Response));
-    const w = await exportWarnings("https://other-origin/x.parquet", "shp");
-    expect(w.tooBigToInspect).toBe(true);
-    expect(w.sizeUnknown).toBe(true);
-    expect(w.any).toBe(true);
+  it("counts the input, the written layer and the zip for a zipped format", () => {
+    expect(estimateExportPeakBytes("shp", 100, 50)).toBe(200);
+    expect(estimateExportPeakBytes("gdb", 100, 50)).toBe(200);
   });
 
-  it("refuses when the response carries no Content-Length", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => ({ ok: true, headers: new Headers() }) as Response));
-    const w = await exportWarnings("https://other-origin/x.parquet", "gpkg");
-    expect(w.sizeUnknown).toBe(true);
-    expect(w.tooBigToInspect).toBe(true);
+  it("does not charge a single-file format for a zip it never makes", () => {
+    expect(estimateExportPeakBytes("gpkg", 100, 50)).toBe(150);
+    expect(estimateExportPeakBytes("fgb", 100, 50)).toBe(150);
   });
 
-  it("refuses when the HEAD throws", async () => {
-    vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("CORS"); }));
-    expect((await exportWarnings("https://other-origin/x.parquet", "csv")).sizeUnknown).toBe(true);
+  it("charges CSV nothing: DuckDB streams it without GeoJSON or GDAL", () => {
+    expect(estimateExportPeakBytes("csv", 1e9, 1e9)).toBe(0);
+  });
+
+  it("trips below the 2 GB format cap — the browser gives out first", () => {
+    // 200k polygons averaging 4 KB of WKB: both shapefile parts fit, the conversion does not.
+    const polys = Array.from({ length: 10 }, (_, i) => ({ name: `f${i}`, type: "DOUBLE", maxBytes: 0, avgBytes: 8 }));
+    const geomBytes = 200_000 * 4_000;
+    const shp = estimateShapefileBytes(polys, 200_000, geomBytes);
+    const peak = estimateExportPeakBytes("shp", estimateGeoJSONBytes(polys, 200_000, geomBytes),
+      shp.estShpBytes + shp.estDbfBytes);
+    expect(shp.over2gb).toBe(false);
+    expect(peak).toBeGreaterThan(WASM_HEAP_BUDGET);
+  });
+
+  it("leaves an ordinary topic well under the budget", () => {
+    const shp = estimateShapefileBytes(fields, 7_000, 3_000_000);
+    expect(estimateExportPeakBytes("shp", estimateGeoJSONBytes(fields, 7_000, 3_000_000),
+      shp.estShpBytes + shp.estDbfBytes)).toBeLessThan(WASM_HEAP_BUDGET);
   });
 });
 
+// DuckDB-WASM has no range reads: reaching the footer downloads the whole file. The gate has to
+// answer from the Content-Length alone, without ever starting the engine.
 describe("safeEpsg", () => {
-  // The panel's number input produces 0 when cleared, and NaN from a partial entry. Either would
-  // reach SQL as EPSG:0 / EPSG:NaN and fail the ST_Transform.
+  // The panel's number input yields 0 when cleared and NaN from a partial entry; either would
+  // reach SQL as EPSG:0 / EPSG:NaN and fail the transform.
   it.each([0, -1, Number.NaN, 4326.5])("falls back to 4326 for %s", (bad) => {
     expect(safeEpsg(bad)).toBe(4326);
   });
@@ -320,8 +315,6 @@ describe("safeEpsg", () => {
   });
 });
 
-// Measured by converting a point + linestring + polygon through each real driver: shapefile and
-// FileGDB fail the conversion; GeoPackage and FlatGeobuf write all three.
 describe("holdsOneGeomType", () => {
   it.each(["shp", "gdb"] as const)("%s needs the mixed-geometry check", (fmt) => {
     expect(holdsOneGeomType(fmt)).toBe(true);
@@ -366,5 +359,42 @@ describe("dictionary-encoded columns", () => {
     const asMeasured = estimateShapefileBytes([{ type: "VARCHAR", maxBytes: 44 }], rows, 0);
     expect(asPageSize.over2gb).toBe(false);      // the old model waved this through
     expect(asMeasured.over2gb).toBe(true);
+  });
+});
+
+// What a clip can actually save depends on how finely the file is grouped, not on the AOI size.
+// Measured on wetlands_riverine: 2 row groups, both spanning nearly all of Utah, so a 22-feature
+// AOI still reads the whole file.
+describe("estimateReadBytes", () => {
+  const utahWide = { bytes: 1_418_000_000, xmin: -114.98, xmax: -107.31, ymin: 35.73, ymax: 42.79 };
+  const second = { ...utahWide, bytes: 263_000_000 };
+  const wasatch = { bytes: 50_000_000, xmin: -112.0, xmax: -111.5, ymin: 40.5, ymax: 41.0 };
+  const moab = { bytes: 50_000_000, xmin: -110.0, xmax: -109.4, ymin: 38.4, ymax: 38.8 };
+
+  it("reads everything when there is no clip", () => {
+    expect(estimateReadBytes([wasatch, moab])).toBe(100_000_000);
+  });
+
+  it("reads only the groups an AOI overlaps", () => {
+    expect(estimateReadBytes([wasatch, moab], [-111.95, 40.7, -111.85, 40.78])).toBe(50_000_000);
+  });
+
+  it("reads nothing when the AOI misses every group", () => {
+    expect(estimateReadBytes([wasatch, moab], [-100, 10, -99, 11])).toBe(0);
+  });
+
+  it("cannot prune a file stored as two Utah-wide groups, however small the AOI", () => {
+    const tiny: [number, number, number, number] = [-111.95, 40.7, -111.85, 40.78];
+    expect(estimateReadBytes([utahWide, second], tiny)).toBe(1_681_000_000);
+  });
+
+  it("the largest group is the floor on what any clip can read", () => {
+    // A row group is the smallest unit a reader can skip.
+    const groups = [utahWide, second];
+    expect(Math.max(...groups.map((g) => g.bytes))).toBe(1_418_000_000);
+  });
+
+  it("counts a group the AOI only touches at the edge", () => {
+    expect(estimateReadBytes([wasatch], [-112.5, 40.5, -112.0, 41.0])).toBe(50_000_000);
   });
 });

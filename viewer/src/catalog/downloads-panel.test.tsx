@@ -19,6 +19,7 @@ const {
 vi.mock("@/data/download", () => ({
   exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun,
   holdsOneGeomType: (fmt: string) => fmt === "shp" || fmt === "gdb",
+  SLOW_READ_BYTES: 256 * 1024 ** 2,
   // The panel subscribes to the module's own export state so a remount keeps the Cancel button.
   // The store has its own suite (export-runs.test.ts); here it stays empty so the panel's own
   // pending run is the only thing on screen.
@@ -38,16 +39,18 @@ const CLEAN = {
   any: false, mixedGeometry: [] as string[], longNames: [] as string[],
   collisions: [] as [string, string][], tooManyFields: false, over2gb: false, fieldCount: 3,
   estShpBytes: 10, estDbfBytes: 10, estPeakBytes: 10, overBrowserLimit: false,
-  sourceBytes: 1000, sizeUnknown: false, tooBigToInspect: false,
+  widthsEstimated: false, estReadBytes: 1000, rowGroups: 12, minClipBytes: 1000,
+  rowCount: 7_000,
 };
 const MANGLED = { ...CLEAN, any: true, mixedGeometry: ["POINT", "LINESTRING"] };
 // Truncation mangles data but still produces a file, so forcing past it is the user's call.
 const TRUNCATED = { ...CLEAN, any: true, longNames: ["metadata_publication_id"] };
 // Past the tab's memory ceiling: GeoPackage runs in the same wasm instance, so it is no way out.
-const TOO_BIG = { ...CLEAN, any: true, overBrowserLimit: true, tooBigToInspect: true,
-  sourceBytes: 1_351_235_892 };
-// The server would not report a length, so the gate refuses rather than guessing it is small.
-const UNKNOWN_SIZE = { ...TOO_BIG, sourceBytes: 0, sizeUnknown: true };
+const TOO_BIG = { ...CLEAN, any: true, overBrowserLimit: true, estPeakBytes: 7.2 * 1024 ** 3 };
+// Two Utah-wide row groups: a clip cannot narrow what the export has to read.
+const SLOW_READ = {
+  ...CLEAN, any: true, estReadBytes: 1_351_235_892, rowGroups: 2, minClipBytes: 1_100_000_000,
+};
 
 const show = () => render(
   <QueryClientProvider client={new QueryClient({ defaultOptions: { mutations: { retry: false } } })}>
@@ -155,12 +158,12 @@ describe("DownloadsPanel", () => {
     expect(await screen.findByText(/File Geodatabase \(zip\) will mangle this data/)).toBeDefined();
   });
 
-  it("says the size is unknown instead of claiming the file is 0 GB", async () => {
-    exportWarnings.mockResolvedValue(UNKNOWN_SIZE);
+  // Clipping only helps when the file is grouped finely enough for the AOI to skip groups.
+  it("says clipping cannot help when one block is most of the file", async () => {
+    exportWarnings.mockResolvedValue(SLOW_READ);
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
-    expect(await screen.findByText(/won't report this file's size/)).toBeDefined();
-    expect(exportItem).not.toHaveBeenCalled();
+    expect(await screen.findByText(/clipping cannot bring it much below/i)).toBeDefined();
   });
 
   // Forcing past a memory ceiling crashes the tab rather than producing a file.

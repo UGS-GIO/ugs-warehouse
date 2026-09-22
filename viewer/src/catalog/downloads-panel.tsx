@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import type { ShapefileWarnings } from "@/data/download";
-import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
+import { currentExports, holdsOneGeomType, SLOW_READ_BYTES, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
@@ -227,7 +227,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           onKeyDown={(e) => { if (e.key === "Escape") dismiss(); }}
           className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
           <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
-            {warn.tooBigToInspect || warn.overBrowserLimit
+            {warn.overBrowserLimit
               ? "This export is too big for the browser"
               : `${FORMAT_LABEL[run.variables!.fmt]} will mangle this data`}
           </div>
@@ -247,22 +247,28 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
               <li><b>Field-name collisions</b> after truncation — <code>{warn.collisions[0][0]}</code> &amp; <code>{warn.collisions[0][1]}</code> collapse to the same name (data loss).</li>
             )}
             {warn.tooManyFields && <li><b>{warn.fieldCount} fields</b> exceeds the 255-field shapefile limit.</li>}
-            {warn.tooBigToInspect && (
+            {warn.overBrowserLimit && (
               <li>
-                <b>Too big to convert in the browser</b> —{" "}
-                {warn.sizeUnknown
-                  ? "the server won't report this file's size, so we can't tell whether it fits"
-                  : `the GeoParquet is ${fmtBytes(warn.sourceBytes)}`}
-                , and the export has to load all of it into the tab first. Download the GeoParquet
-                above and convert it locally (QGIS, GDAL). Clipping doesn't help: the whole file is
-                read either way.
+                <b>Too big to convert in the browser</b> — {warn.rowCount.toLocaleString()} features
+                need about {fmtBytes(warn.estPeakBytes)} of memory and the tab has roughly 1.5 GB.
+                Clip to a smaller area: only the parts of the file that area covers are read.
+                Otherwise download the GeoParquet above and convert it locally (QGIS, GDAL).
               </li>
             )}
-            {warn.overBrowserLimit && !warn.tooBigToInspect && (
+            {warn.estReadBytes > SLOW_READ_BYTES && (
               <li>
-                <b>Too big to convert in the browser</b> — the conversion needs about{" "}
-                {fmtBytes(warn.estPeakBytes)} of memory and the tab has roughly 1.5 GB. Clip to a
-                smaller area, or download the GeoParquet and convert locally.
+                <b>Reads {fmtBytes(warn.estReadBytes)} first</b> before writing anything.{" "}
+                {warn.minClipBytes > SLOW_READ_BYTES
+                  ? `This file is stored in ${warn.rowGroups} block${warn.rowGroups === 1 ? "" : "s"}`
+                    + ` of up to ${fmtBytes(warn.minClipBytes)}, and a block is the smallest piece`
+                    + " that can be skipped, so clipping cannot bring it much below that."
+                  : "Clip to a smaller area to read less."}
+              </li>
+            )}
+            {warn.widthsEstimated && (
+              <li>
+                <b>Sizes are approximate</b> — this layer has too much text to measure exactly
+                without reading it, so the estimates above use average field lengths.
               </li>
             )}
             {warn.over2gb && (

@@ -2,8 +2,9 @@
 // wasm + worker ship from our own bundle (vite `?url` → hashed assets in dist/), NOT jsDelivr, so the
 // read path has no third-party runtime dependency. `selectBundle` picks the `eh` build on modern
 // browsers (only that one wasm is fetched), `mvp` as the fallback — both lazy, nothing loads until the
-// first search. The remote `.duckdb` is ATTACHed over HTTP and **range-read** (206 partials — duckdb
-// fetches only the index pages a query touches, never the whole file).
+// first search. The GeoParquet the explorer and the exporter read is **range-read** (206 partials,
+// see newDb) so a query fetches only the chunks it projects; the `.duckdb` ATTACHed here is read
+// whole, which is fewer bytes for an index a search walks all over.
 // Asset URLs are static `?url` imports (vite emits hashed asset paths — tiny strings, no engine code),
 // so the heavy duckdb-wasm JS + onnxruntime stay out of the main bundle and load lazily (below).
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
@@ -25,14 +26,23 @@ const extRepo = () =>
 
 /** Boot an engine on the self-hosted bundle — one cache entry across search, diff and export. */
 export async function newDuckDb(): Promise<import("@duckdb/duckdb-wasm").AsyncDuckDB> {
-  return newDb(await import("@duckdb/duckdb-wasm"));
+  return newDb(await import("@duckdb/duckdb-wasm"), true);
 }
 
-async function newDb(duckdb: typeof import("@duckdb/duckdb-wasm")) {
+/** `rangeReads` suits a reader that touches part of a file: the parquet footer, a page of rows,
+ *  the column chunks an export projects. duckdb-wasm >= 1.30 defaults forceFullHTTPReads=true, so
+ *  without it every registered file is pulled whole into the wasm heap — that is what made a
+ *  footer query on a 1.35 GB topic cost 63s (1.0s with ranges) and a 2 GB one crash the tab.
+ *  Leave it off for a reader that needs the whole file anyway (the FTS index, the review diff):
+ *  measured on the 485 MB pub-search db, ranges fetch ~19% MORE bytes in the same wall time. */
+async function newDb(duckdb: typeof import("@duckdb/duckdb-wasm"), rangeReads = false) {
   const bundle = await duckdb.selectBundle(BUNDLES);
   const worker = new Worker(bundle.mainWorker!);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  // Must run before any connect()/query. allowFullHTTPReads off so an origin without range
+  // support fails loudly instead of silently downloading everything.
+  if (rangeReads) await db.open({ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: false } });
   return db;
 }
 

@@ -195,6 +195,19 @@ export function baseGeometryTypes(names: string[]): string[] {
     g.toUpperCase().replace(/^ST_/, "").replace(/^MULTI/, "").replace(/[\sZM]+$/, "")))];
 }
 
+export type RowGroup = { bytes: number; xmin: number; xmax: number; ymin: number; ymax: number };
+
+/** Bytes the export will actually fetch. A clip only reads the row groups whose extent it
+ *  overlaps, so the saving depends on how finely the file is grouped, not on the AOI's size:
+ *  a file written as one big group is read whole however small the area. */
+export function estimateReadBytes(groups: RowGroup[], clip?: [number, number, number, number]): number {
+  if (!clip) return groups.reduce((n, g) => n + g.bytes, 0);
+  const [w, s, e, n] = clip;
+  return groups
+    .filter((g) => g.xmin <= e && g.xmax >= w && g.ymin <= n && g.ymax >= s)
+    .reduce((acc, g) => acc + g.bytes, 0);
+}
+
 /** Formats that reject a layer carrying more than one base geometry type. Measured by converting
  *  a point, a linestring and a polygon through each real driver: these two fail the conversion
  *  outright, while GeoPackage and FlatGeobuf write all three. */
@@ -613,9 +626,18 @@ export async function exportItem(
   try {
     // Shared handle — see exportWarnings.
     const src = borrowed = await registerUrl(parquetUrl);
+    // The clip goes INTO the read, against the per-row bbox columns the transform writes. Their
+    // row-group stats prune whole groups before any geometry is decoded, so a small AOI over a
+    // large topic reads a fraction of the file instead of all of it and then filtering.
+    const cols0 = (await conn.query(`DESCRIBE SELECT * FROM read_parquet('${src}');`)).toArray()
+      .map((r) => String(r.column_name));
+    const prune = clip && BBOX_COLS.every((c) => cols0.includes(c))
+      ? ` WHERE bbox_xmin <= ${clip[2]} AND bbox_xmax >= ${clip[0]}`
+        + ` AND bbox_ymin <= ${clip[3]} AND bbox_ymax >= ${clip[1]}`
+      : "";
     // Read FIRST, before loading spatial: spatial's GeoParquet reader trips over the
     // CRS metadata ("stoi: no conversion"). Plain read already yields a GEOMETRY column.
-    await conn.query(`CREATE TABLE ${raw} AS SELECT * FROM read_parquet('${src}');`);
+    await conn.query(`CREATE TABLE ${raw} AS SELECT * FROM read_parquet('${src}')${prune};`);
     await conn.query("INSTALL spatial; LOAD spatial;");
     const desc = await conn.query(`DESCRIBE ${raw};`);
     const descRows = desc.toArray();
@@ -624,8 +646,8 @@ export async function exportItem(
     const geomType = String(descRows.find((r) => String(r.column_name) === geomCol)?.column_type ?? "").toUpperCase();
     const geom = geomType.includes("BLOB") ? `ST_GeomFromWKB(${ident(geomCol)})` : ident(geomCol);
 
-    // Optional AOI clip: keep only features intersecting the bbox (features kept whole,
-    // not geometrically cut — a "download what's in this area" filter).
+    // Exact intersect over the pruned set — the bbox prune above is a superset (bbox overlap is
+    // not geometry overlap). Features are kept whole, not cut: "download what's in this area".
     let t = raw;
     if (clip) {
       const [w, s, e, n] = clip;
@@ -694,9 +716,10 @@ export interface ShapefileWarnings {
   over2gb: boolean;                    // either file over the format's per-file 2 GB cap
   estPeakBytes: number;                // peak bytes gdal3.js holds during the conversion
   overBrowserLimit: boolean;           // conversion won't fit in the wasm heap, whatever the format
-  sourceBytes: number;                 // Content-Length of the source GeoParquet (0 if unknown)
-  sizeUnknown: boolean;                // the server would not give a length, so we refuse to guess
-  tooBigToInspect: boolean;            // refused on size alone; the detailed fields are unset
+  widthsEstimated: boolean;            // text widths averaged rather than measured (see the budget)
+  estReadBytes: number;                // bytes the export fetches, after row-group pruning
+  rowGroups: number;                   // how finely the file is grouped — what pruning can work with
+  minClipBytes: number;                // the least any clip could read: the largest single group
   any: boolean;                        // true if anything worth warning about
 }
 
@@ -714,45 +737,25 @@ function geoMetadataTypes(json: string, geom: string): string[] | null {
   } catch { return null; }
 }
 
-// DuckDB-WASM fetches a parquet in FULL on first access, registered or by URL (measured ~21 MB/s;
-// 63s for a 1.35 GB topic, and a 2 GB one crashed the tab). So reaching the footer costs the whole
-// file. Past this size the answer is already no, and inspecting would download what we refuse.
-export const PREFLIGHT_MAX_PARQUET_BYTES = 128 * 1024 ** 2;
+// Text has no fixed width, so the .dbf estimate needs the longest decoded value. That is a real
+// column read, and the whole point of range reads is not to pull more than a query needs — so
+// above this much text (footer bytes, scaled by any clip) fall back to the average instead.
+const MEASURE_TEXT_BUDGET = 64 * 1024 ** 2;
 
-const UNINSPECTED = {
-  longNames: [], collisions: [], fieldCount: 0, tooManyFields: false, mixedGeometry: [],
-  rowCount: 0, estShpBytes: 0, estDbfBytes: 0, over2gb: false, estPeakBytes: 0,
-} satisfies Partial<ShapefileWarnings>;
+// A read this big takes long enough that the user should choose to wait rather than discover it.
+// Shared with the panel, which reports the figure alongside the warning.
+export const SLOW_READ_BYTES = 256 * 1024 ** 2;
 
 /** Pre-flight an export. The size limits apply to every format: all of them read the whole
  *  GeoParquet into the tab, and the four GDAL ones then run it through the same wasm instance.
  *  The shapefile-only findings (field names, field count, single geometry type, the 2 GB per-file
  *  cap) are filled in for `shp` alone. */
-/** Byte length, or null when the server will not say — `fetch` resolves on a 405. */
-async function sourceLength(url: string): Promise<number | null> {
-  try {
-    const head = await fetch(url, { method: "HEAD", signal: AbortSignal.timeout(15_000) });
-    if (!head.ok) return null;
-    const n = Number(head.headers.get("content-length"));
-    return Number.isFinite(n) && n > 0 ? n : null;
-  } catch { return null; }
-}
-
 export async function exportWarnings(
   parquetUrl: string,
   fmt: ExportFormat,
   clip?: [number, number, number, number],
 ): Promise<ShapefileWarnings> {
   const shp = fmt === "shp";
-  // Unknown must not read as small: 0 would open the gate onto the path that crashes the tab.
-  const sourceBytes = await sourceLength(parquetUrl);
-  if (sourceBytes === null || sourceBytes > PREFLIGHT_MAX_PARQUET_BYTES) {
-    return {
-      ...UNINSPECTED, sourceBytes: sourceBytes ?? 0, sizeUnknown: sourceBytes === null,
-      tooBigToInspect: true, overBrowserLimit: true, any: true,
-    };
-  }
-
   const db = await getDB();
   const conn = await db.connect();
   let borrowed: string | undefined;
@@ -778,6 +781,25 @@ export async function exportWarnings(
        FROM parquet_metadata('${src}') GROUP BY 1;`,
     )).toArray();
     const colBytes = new Map(meta.map((r) => [String(r.c), Number(r.b)]));
+
+    // Per-row-group extent and transfer size, from the footer. This is what a clip can prune.
+    const groups: RowGroup[] = (await conn.query(
+      `SELECT sum(total_compressed_size)::BIGINT AS bytes,
+              min(CASE WHEN path_in_schema = 'bbox_xmin' THEN CAST(stats_min AS DOUBLE) END) AS xmin,
+              max(CASE WHEN path_in_schema = 'bbox_xmax' THEN CAST(stats_max AS DOUBLE) END) AS xmax,
+              min(CASE WHEN path_in_schema = 'bbox_ymin' THEN CAST(stats_min AS DOUBLE) END) AS ymin,
+              max(CASE WHEN path_in_schema = 'bbox_ymax' THEN CAST(stats_max AS DOUBLE) END) AS ymax
+       FROM parquet_metadata('${src}') GROUP BY row_group_id;`,
+    )).toArray().map((r) => ({
+      bytes: Number(r.bytes),
+      xmin: Number(r.xmin), xmax: Number(r.xmax), ymin: Number(r.ymin), ymax: Number(r.ymax),
+    }));
+    // A file without the bbox columns has no usable extent, so nothing prunes.
+    const usable = groups.every((g) => Number.isFinite(g.xmin) && Number.isFinite(g.xmax));
+    const estReadBytes = estimateReadBytes(groups, usable ? clip : undefined);
+    // A row group is the smallest unit a reader can skip, so the biggest one is the floor on what
+    // any clip can get the download down to.
+    const minClipBytes = usable ? Math.max(0, ...groups.map((g) => g.bytes)) : estReadBytes;
     const fullRows = Number((await conn.query(
       `SELECT sum(num_rows)::BIGINT AS n FROM parquet_file_metadata('${src}');`,
     )).toArray()[0].n);
@@ -819,8 +841,11 @@ export async function exportWarnings(
     // Decoded text length, which the footer cannot give (see dbfFieldWidth). The file is already
     // local by now, so the scan adds no transfer.
     const measured = cols.filter((c) => needsMeasuredWidth(colTypes.get(c) ?? "VARCHAR"));
+    const textBytes = measured.reduce((n, c) => n + (colBytes.get(c) ?? 0), 0)
+      * (fullRows ? rowCount / fullRows : 0);
+    const widthsEstimated = textBytes > MEASURE_TEXT_BUDGET;
     const lengths = new Map<string, { max: number; avg: number }>();
-    if (measured.length) {
+    if (measured.length && !widthsEstimated) {
       // strlen is the BYTE count (length would count characters, and the dbf pads bytes).
       const sel = measured.map((c, i) =>
         `max(strlen(CAST(${ident(c)} AS VARCHAR))) AS m${i}, `
@@ -850,9 +875,11 @@ export async function exportWarnings(
     return {
       longNames, collisions, fieldCount: cols.length, tooManyFields,
       mixedGeometry, rowCount, estShpBytes, estDbfBytes, over2gb: shp && over2gb,
-      estPeakBytes, overBrowserLimit, sourceBytes, sizeUnknown: false, tooBigToInspect: false,
+      estPeakBytes, overBrowserLimit, widthsEstimated,
+      estReadBytes, rowGroups: groups.length, minClipBytes,
       any: longNames.length > 0 || collisions.length > 0 || tooManyFields
-        || mixedGeometry.length > 0 || (shp && over2gb) || overBrowserLimit,
+        || mixedGeometry.length > 0 || (shp && over2gb) || overBrowserLimit
+        || estReadBytes > SLOW_READ_BYTES,
     };
   } finally {
     if (borrowed !== undefined) release(borrowed);

@@ -173,8 +173,11 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     // from throwing on the one expected case, so a genuinely unexpected error still surfaces.
     if (!map || !map.getSource("pm-prev")) { hlRef.current = null; return; }
     const prev = hlRef.current;
-    if (prev && (prev.id !== fid || prev.sourceLayer !== sourceLayer)) {
-      map.setFeatureState({ source: "pm-prev", sourceLayer: prev.sourceLayer, id: prev.id }, { hl: false });
+    // Only clear within the same source-layer. A cross-item change swaps sourceLayer, but that also
+    // remounts the Source (key={itemId}), which drops its feature-state — so clearing the old layer
+    // here is redundant, and on the new tiles (which lack it) it is at best a no-op.
+    if (prev && prev.sourceLayer === sourceLayer && prev.id !== fid) {
+      map.setFeatureState({ source: "pm-prev", sourceLayer, id: prev.id }, { hl: false });
     }
     if (fid != null && sourceLayer) {
       map.setFeatureState({ source: "pm-prev", sourceLayer, id: fid }, { hl: true });

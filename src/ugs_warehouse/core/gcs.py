@@ -10,6 +10,7 @@ object is read back to describe it.
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 from pathlib import Path
 from typing import NamedTuple
@@ -79,10 +80,13 @@ def _gcs_client() -> gcloud_storage.Client:
     return _cached_gcs_client
 
 
-def _attrs(content_type: str, cache_control: str | None) -> dict[str, str]:
+def _attrs(content_type: str, cache_control: str | None,
+           content_encoding: str | None = None) -> dict[str, str]:
     attrs = {"Content-Type": content_type}
     if cache_control:
         attrs["Cache-Control"] = cache_control
+    if content_encoding:
+        attrs["Content-Encoding"] = content_encoding
     return attrs
 
 
@@ -95,15 +99,47 @@ def upload(local_path: str, object_path: str, *, content_type: str,
 
 
 def put_bytes(data: bytes, object_path: str, *, content_type: str,
-              cache_control: str | None = None) -> FileMeta:
-    """Write bytes to `gs://{BUCKET}/{object_path}`."""
-    obs.put(_store(), object_path, data, attributes=_attrs(content_type, cache_control))
-    return FileMeta(len(data), multihash_sha256(hashlib.sha256(data).digest()))
+              cache_control: str | None = None, compress: bool = False) -> FileMeta:
+    """Write bytes to `gs://{BUCKET}/{object_path}`.
+
+    `compress` stores the object gzipped with `Content-Encoding: gzip`. GCS then serves it
+    compressed to clients that send `Accept-Encoding: gzip` (every browser) and decompresses it
+    for those that don't, so the bytes a consumer sees are unchanged. Catalog JSON compresses
+    ~25:1 — the 4,212-item mining-district index is 6.3 MB stored plain, 250 KB gzipped.
+
+    The returned FileMeta describes the UNCOMPRESSED bytes, because `file:size` / `file:checksum`
+    describe the document a consumer receives, not how it happens to be stored.
+    """
+    meta = FileMeta(len(data), multihash_sha256(hashlib.sha256(data).digest()))
+    body = gzip.compress(data, 6) if compress else data
+    obs.put(_store(), object_path, body,
+            attributes=_attrs(content_type, cache_control, "gzip" if compress else None))
+    return meta
+
+
+def _gunzip(raw: bytes) -> bytes:
+    """Gunzip when the body carries the gzip magic, else return it unchanged.
+
+    The magic is a guess, not a guarantee: arbitrary bytes can start 1f 8b, so a body that merely
+    looks gzipped falls through rather than raising out of a plain download.
+    """
+    if raw[:2] != b"\x1f\x8b":
+        return raw
+    try:
+        return gzip.decompress(raw)
+    except OSError:
+        return raw
 
 
 def get_bytes(object_path: str) -> bytes:
-    """Download an object's bytes from `gs://{BUCKET}/{object_path}`."""
-    return bytes(obs.get(_store(), object_path).bytes())
+    """Download an object's bytes from `gs://{BUCKET}/{object_path}`.
+
+    Gunzips when the body still carries the gzip magic. GCS decompresses a `Content-Encoding: gzip`
+    object for clients that don't ask for it, but whether obstore asks is a detail of its HTTP
+    stack, so a caller would otherwise get plain bytes or compressed ones depending on the build.
+    """
+    raw = bytes(obs.get(_store(), object_path).bytes())
+    return _gunzip(raw)
 
 
 def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,

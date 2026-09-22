@@ -3,17 +3,26 @@
 // DuckDB + gdal3.js load lazily on first export.
 //
 // Split of responsibilities:
-//   - DuckDB reads the remote GeoParquet (its native CSV writer + ST_AsGeoJSON work;
+//   - DuckDB reads the remote GeoParquet (its native CSV/JSON writers + ST_AsGeoJSON work;
 //     its GDAL output drivers are broken, so we don't use those).
-//   - GeoJSON is built in JS from ST_AsGeoJSON; CSV via DuckDB's native COPY.
+//   - Features leave DuckDB as newline-delimited GeoJSON *bytes* (COPY ... FORMAT JSON), never
+//     as a JS string: JSON.stringify throws past ~512 MB (V8's max string), which a large topic
+//     hits long before the shapefile's own 2 GB limit. The .geojson download wraps those bytes;
+//     the GDAL formats read them via OGR's GeoJSONSeq driver. CSV via DuckDB's native COPY.
 //   - GPKG / Shapefile / FileGDB / FlatGeobuf go through gdal3.js, whose OGR drivers
 //     write these correctly (incl. Esri .gdb — OpenFileGDB write, GDAL ≥ 3.6). gdal3.js
 //     is ~40 MB (wasm+data), so it's dynamically imported only when one is requested.
 
 import { newDuckDb } from "./duckdb";
+import {
+  beginExport, consumeIfCancelled, endRun, isCancelled, startRun,
+} from "./export-runs";
 import type { ExportFormat } from "./export-formats";
 
 export type { ExportFormat };
+export {
+  beginExport, cancelExport, currentExports, endRun, startRun, subscribeExport, type ExportRun,
+} from "./export-runs";
 
 // The transform writes the geometry column as `geom` (GEOMETRY 4326); pub/external parquet may
 // use `geometry` / `wkb_geometry`. GEOM = the canonical name (export); GEOM_NAMES = all hidden
@@ -31,11 +40,19 @@ async function getDB(): Promise<DB> {
   return dbPromise;
 }
 
-function triggerDownload(bytes: Uint8Array, filename: string, mime: string): void {
-  // Copy into a fresh ArrayBuffer-backed array (DuckDB buffers may be SharedArrayBuffer-backed).
-  const copy = new Uint8Array(bytes.byteLength);
-  copy.set(bytes);
-  const url = URL.createObjectURL(new Blob([copy], { type: mime }));
+/** Blob rejects a SharedArrayBuffer view and DuckDB's buffers can be one. Copy only then: at
+ *  export sizes a blanket copy is a second full allocation. */
+function blobSafe(bytes: Uint8Array): Uint8Array<ArrayBuffer> {
+  if (typeof SharedArrayBuffer !== "undefined" && bytes.buffer instanceof SharedArrayBuffer) {
+    const copy = new Uint8Array(bytes.byteLength);
+    copy.set(bytes);
+    return copy;
+  }
+  return bytes as Uint8Array<ArrayBuffer>;   // the check above is what rules out the shared case
+}
+
+function triggerDownload(parts: Uint8Array[], filename: string, mime: string): void {
+  const url = URL.createObjectURL(new Blob(parts.map(blobSafe), { type: mime }));
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
@@ -68,6 +85,140 @@ export function shapefileFieldChecks(cols: string[]): {
     else seen.set(key, c);
   }
   return { longNames, collisions, fieldCount: cols.length, tooManyFields: cols.length > 255 };
+}
+
+// ---- Newline-delimited GeoJSON ----
+
+/** SELECT whose columns *are* a GeoJSON Feature, so DuckDB's JSON writer emits one Feature per
+ *  line (GeoJSONSeq). `geometry` / `properties` are cast to JSON so they nest instead of being
+ *  written as escaped strings. int64 and dates go out as JSON numbers/ISO text — no `sanitize`
+ *  round-trip through JS values. */
+export function featureSeqSql(cols: string[], geomExpr: string, from: string): string {
+  const props = cols.length
+    ? `to_json({${cols.map((c) => `${lit(c)}: ${ident(c)}`).join(", ")}})`
+    : `'{}'::JSON`;
+  return `SELECT 'Feature' AS type, ST_AsGeoJSON(${geomExpr})::JSON AS geometry, `
+    + `${props} AS properties FROM ${from}`;
+}
+
+/** Wrap GeoJSONSeq bytes into one FeatureCollection, in place of a JS string join, returning Blob
+ *  parts. MUTATES `seq`: a raw 0x0A only ever separates records (the writer escapes newlines
+ *  inside strings), so the separators are overwritten with commas where they sit. A second copy
+ *  of the payload is the one allocation a large GeoJSON export cannot afford. */
+export function wrapFeatureSeqInPlace(seq: Uint8Array): Uint8Array[] {
+  const enc = new TextEncoder();
+  let end = seq.length;
+  while (end > 0 && seq[end - 1] === 0x0a) end--;
+  for (let i = 0; i < end; i++) if (seq[i] === 0x0a) seq[i] = 0x2c;
+  return [enc.encode('{"type":"FeatureCollection","features":['), seq.subarray(0, end), enc.encode("]}")];
+}
+
+// ---- Shapefile size model ----
+
+// Per-file cap: the .shp and .dbf each carry a 32-bit byte offset, so each maxes out at 2 GB
+// independently. A wide attribute table can blow the .dbf while the .shp is nowhere near.
+export const SHP_FILE_LIMIT = 2 * 1024 ** 3;
+
+/** DBF field width, following GDAL's shapefile writer defaults. Text takes the column's longest
+ *  decoded value. NOT parquet's `total_uncompressed_size`: that is post-dictionary-encoding, so a
+ *  repeated string reports a fraction of its width and the estimate lands an order low. */
+export function dbfFieldWidth(type: string, maxBytes: number): number {
+  const t = type.toUpperCase();
+  if (t.startsWith("BOOLEAN")) return 1;
+  if (/^U?(BIG|HUGE)INT/.test(t)) return 20;
+  if (/^U?(TINY|SMALL|INTEGER|INT)/.test(t)) return 11;
+  if (/DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC/.test(t)) return 24;
+  if (t.startsWith("DATE")) return 8;
+  if (t.startsWith("TIMESTAMP") || t.startsWith("TIME")) return 24;
+  return Math.min(254, Math.max(1, Math.ceil(maxBytes)));
+}
+
+/** True when `dbfFieldWidth` would fall through to the text branch, i.e. the column needs a
+ *  measured width rather than a fixed one. */
+export function needsMeasuredWidth(type: string): boolean {
+  return dbfFieldWidth(type, 1) === 1 && !type.toUpperCase().startsWith("BOOLEAN");
+}
+
+/** Estimate the uncompressed .shp and .dbf from parquet footer stats — no column data read.
+ *  `geomBytes` is the geometry column's uncompressed size (WKB, close to the .shp payload). */
+export function estimateShapefileBytes(
+  fields: { type: string; maxBytes: number }[],
+  rowCount: number,
+  geomBytes: number,
+): { estShpBytes: number; estDbfBytes: number; over2gb: boolean } {
+  const estShpBytes = 100 + geomBytes + rowCount * 40;          // 100-byte header + per-record framing
+  const width = fields.reduce((n, f) => n + dbfFieldWidth(f.type, f.maxBytes), 0);
+  const estDbfBytes = 33 + 32 * fields.length + rowCount * (width + 1);   // header + descriptors + rows
+  return {
+    estShpBytes,
+    estDbfBytes,
+    over2gb: estShpBytes > SHP_FILE_LIMIT || estDbfBytes > SHP_FILE_LIMIT,
+  };
+}
+
+// ---- Browser memory ceiling ----
+
+// A wasm32 module's linear memory stops at 4 GiB and browsers fail the growth well before that.
+// gdal3.js is the tighter of the two instances: it holds its copy of the GeoJSONSeq input, the
+// layer it writes, and (for shp/gdb) the zip, all at once. This budget is where that instance
+// starts failing in practice — below the format's own 2 GB cap, so it bites first.
+export const WASM_HEAP_BUDGET = 1.5 * 1024 ** 3;
+
+/** Estimate the GeoJSONSeq fed to GDAL: coordinates go from 16 binary bytes to ~40 text
+ *  characters, and every feature repeats every field name. */
+export function estimateGeoJSONBytes(
+  fields: { name: string; avgBytes: number }[],
+  rowCount: number,
+  geomBytes: number,
+): number {
+  const geometry = geomBytes * 2.5 + rowCount * 40;
+  const perRow = fields.reduce((n, f) => n + f.name.length + Math.ceil(f.avgBytes) + 6, 0);
+  return Math.round(geometry + rowCount * (60 + perRow));   // 60 = the Feature envelope
+}
+
+/** Peak bytes live at once for `fmt`. CSV streams from DuckDB and touches neither GeoJSON nor
+ *  GDAL; the zipped formats (shp, gdb) also hold the archive. */
+export function estimateExportPeakBytes(
+  fmt: ExportFormat, geojsonBytes: number, outputBytes: number,
+): number {
+  if (fmt === "csv") return 0;
+  if (fmt === "geojson") return geojsonBytes * 2;              // the seq bytes + the wrapped copy
+  const zipped = fmt === "shp" || fmt === "gdb";
+  return geojsonBytes + outputBytes * (zipped ? 2 : 1);
+}
+
+/** Base geometry types (MULTI / Z / M stripped), deduped — >1 can't share a shapefile.
+ *  GeoParquet spells the dimension with a space ("Point Z") where ST_GeometryType does not, so
+ *  the suffix strip has to take the space with it or "Point Z" and "Point" stop deduping. */
+export function baseGeometryTypes(names: string[]): string[] {
+  return [...new Set(names.map((g) =>
+    g.toUpperCase().replace(/^ST_/, "").replace(/^MULTI/, "").replace(/[\sZM]+$/, "")))];
+}
+
+export type RowGroup = { bytes: number; xmin: number; xmax: number; ymin: number; ymax: number };
+
+/** Bytes the export will actually fetch. A clip only reads the row groups whose extent it
+ *  overlaps, so the saving depends on how finely the file is grouped, not on the AOI's size:
+ *  a file written as one big group is read whole however small the area. */
+export function estimateReadBytes(groups: RowGroup[], clip?: [number, number, number, number]): number {
+  if (!clip) return groups.reduce((n, g) => n + g.bytes, 0);
+  const [w, s, e, n] = clip;
+  return groups
+    .filter((g) => g.xmin <= e && g.xmax >= w && g.ymin <= n && g.ymax >= s)
+    .reduce((acc, g) => acc + g.bytes, 0);
+}
+
+/** Formats that reject a layer carrying more than one base geometry type. Measured by converting
+ *  a point, a linestring and a polygon through each real driver: these two fail the conversion
+ *  outright, while GeoPackage and FlatGeobuf write all three. */
+export const holdsOneGeomType = (fmt: ExportFormat): boolean => fmt === "shp" || fmt === "gdb";
+
+/** Clearing the custom EPSG input yields Number("") === 0, which would reach SQL as EPSG:0. */
+export const safeEpsg = (n: number): number => (Number.isInteger(n) && n > 0 ? n : 4326);
+
+/** The geometry column actually present, since pub/external parquet may not call it `geom`. */
+export function geomColumn(names: string[]): string {
+  return GEOM_NAMES.find((g) => names.includes(g)) ?? GEOM;
 }
 
 let seq = 0;
@@ -172,8 +323,9 @@ const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
 // Stable per-row id the transform stamps (1..N, hilbert order) into BOTH the GeoParquet and the
 // PMTiles (as the MVT feature id). It's the join key for map↔table linking. Hidden from the
 // displayed columns (synthetic noise) but kept on each row object so the table can highlight a
-// row the map picked, and used as a deterministic ORDER BY tiebreaker so OFFSET paging and the
-// feature_id→ordinal lookup agree exactly.
+// row the map picked, and used as a deterministic ORDER BY tiebreaker under a user sort so OFFSET
+// paging and the feature_id→ordinal lookup agree exactly. Because it is stamped in hilbert order,
+// it also matches file order — which is why the unsorted page can drop the sort entirely.
 const ID_COL = "feature_id";
 
 // DuckDB type → filter UI kind. Numeric (range) vs everything else (substring). Date/time stay
@@ -209,7 +361,7 @@ export function orderExpr(columns: string[], opts: PageOpts, hasId: boolean): st
   if (hasId) parts.push(`${ident(ID_COL)} ASC`);
   return parts.join(", ");
 }
-const buildOrder = (columns: string[], opts: PageOpts, hasId: boolean): string => {
+export const buildOrder = (columns: string[], opts: PageOpts, hasId: boolean): string => {
   const e = orderExpr(columns, opts, hasId);
   return e ? ` ORDER BY ${e}` : "";
 };
@@ -386,38 +538,66 @@ export async function readFeatures3D(
   }
 }
 
+// DuckDB and GDAL calls are not interruptible, so cancelling suppresses the delivery instead.
+// The caller takes a ticket BEFORE the pre-flight — that is the slow part, and a cancel during it
+// has to count. Tickets are per-run, not a shared counter: cancelling one export must not
+// silently swallow another's file. `current` lets a panel that remounted mid-export still show
+// and cancel the run.
 export async function exportItem(
   parquetUrl: string,
   stem: string,
   fmt: ExportFormat,
   clip?: [number, number, number, number], // [w,s,e,n] in 4326 — clip to this AOI
   epsg = 4326,                              // output CRS for the gdal formats (shp/gpkg/gdb/fgb)
+  epoch = beginExport(),                    // from beginExport(), taken before the pre-flight ran
 ): Promise<void> {
-  const duckdb = await import("@duckdb/duckdb-wasm");
+  // Cancelled while the pre-flight was still running; end it so no ticket outlives the run.
+  if (consumeIfCancelled(epoch)) { endRun(epoch); return; }
+  const srs = safeEpsg(epsg);
   const db = await getDB();
   const conn = await db.connect();
   const id = ++seq;
-  const src = `s${id}.parquet`;
+  // Table names are database-scoped in DuckDB, so two runs would collide on a bare `raw`.
+  const raw = `raw_${id}`, clipped = `clipped_${id}`;
+  startRun({ id: epoch, stem, fmt });   // idempotent: the caller may have registered it already
+  const deliver = (parts: Uint8Array[], filename: string, mime: string) => {
+    if (!isCancelled(epoch)) triggerDownload(parts, filename, mime);
+  };
   let csvOut: string | undefined;
+  let seqOut: string | undefined;
+  let borrowed: string | undefined;
   try {
-    await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
+    // Shared handle — see exportWarnings.
+    const src = borrowed = await registerUrl(parquetUrl);
+    // The clip goes INTO the read, against the per-row bbox columns the transform writes. Their
+    // row-group stats prune whole groups before any geometry is decoded, so a small AOI over a
+    // large topic reads a fraction of the file instead of all of it and then filtering.
+    const cols0 = (await conn.query(`DESCRIBE SELECT * FROM read_parquet('${src}');`)).toArray()
+      .map((r) => String(r.column_name));
+    const prune = clip && BBOX_COLS.every((c) => cols0.includes(c))
+      ? ` WHERE bbox_xmin <= ${clip[2]} AND bbox_xmax >= ${clip[0]}`
+        + ` AND bbox_ymin <= ${clip[3]} AND bbox_ymax >= ${clip[1]}`
+      : "";
     // Read FIRST, before loading spatial: spatial's GeoParquet reader trips over the
     // CRS metadata ("stoi: no conversion"). Plain read already yields a GEOMETRY column.
-    await conn.query(`CREATE TABLE raw AS SELECT * FROM read_parquet('${src}');`);
+    await conn.query(`CREATE TABLE ${raw} AS SELECT * FROM read_parquet('${src}')${prune};`);
     await conn.query("INSTALL spatial; LOAD spatial;");
-    const desc = await conn.query(`DESCRIBE raw;`);
-    const geomType = String(desc.toArray().find((r) => String(r.column_name) === GEOM)?.column_type ?? "").toUpperCase();
-    const geom = geomType.includes("BLOB") ? `ST_GeomFromWKB(${GEOM})` : GEOM;
+    const desc = await conn.query(`DESCRIBE ${raw};`);
+    const descRows = desc.toArray();
+    // Not always `geom` — the pre-flight already accepts `geometry` / `wkb_geometry`.
+    const geomCol = geomColumn(descRows.map((r) => String(r.column_name)));
+    const geomType = String(descRows.find((r) => String(r.column_name) === geomCol)?.column_type ?? "").toUpperCase();
+    const geom = geomType.includes("BLOB") ? `ST_GeomFromWKB(${ident(geomCol)})` : ident(geomCol);
 
-    // Optional AOI clip: keep only features intersecting the bbox (features kept whole,
-    // not geometrically cut — a "download what's in this area" filter).
-    let t = "raw";
+    // Exact intersect over the pruned set — the bbox prune above is a superset (bbox overlap is
+    // not geometry overlap). Features are kept whole, not cut: "download what's in this area".
+    let t = raw;
     if (clip) {
       const [w, s, e, n] = clip;
       await conn.query(
-        `CREATE TABLE clipped AS SELECT * FROM raw WHERE ST_Intersects(${geom}, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}));`,
+        `CREATE TABLE ${clipped} AS SELECT * FROM ${raw} WHERE ST_Intersects(${geom}, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}));`,
       );
-      t = "clipped";
+      t = clipped;
     }
 
     if (fmt === "csv") {
@@ -425,56 +605,48 @@ export async function exportItem(
       // WKT geometry in the chosen output CRS (source is always 4326); attributes unchanged.
       // always_xy: geom is stored lon/lat, but EPSG:4326's authority axis order is lat/lon — without
       // this the transform reads longitude as latitude and returns inf.
-      const wkt = epsg === 4326 ? `ST_AsText(${geom})`
-        : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${epsg}', always_xy := true))`;
-      await conn.query(`COPY (SELECT * REPLACE (${wkt} AS ${GEOM}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
-      triggerDownload(await db.copyFileToBuffer(csvOut), `${stem}.csv`, "text/csv");
+      const wkt = srs === 4326 ? `ST_AsText(${geom})`
+        : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${srs}', always_xy := true))`;
+      await conn.query(`COPY (SELECT * REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
+      deliver([await db.copyFileToBuffer(csvOut)], `${stem}.csv`, "text/csv");
       return;
     }
 
-    // Build a GeoJSON FeatureCollection in JS (ST_AsGeoJSON for geometry).
-    const res = await conn.query(`SELECT * EXCLUDE (${GEOM}), ST_AsGeoJSON(${geom}) AS __g FROM ${t};`);
-    const fc = {
-      type: "FeatureCollection",
-      features: res.toArray().map((row) => {
-        const o = row.toJSON() as Record<string, unknown>;
-        const g = o.__g as string | null;
-        delete o.__g;
-        const properties: Record<string, unknown> = {};
-        for (const [k, v] of Object.entries(o)) properties[k] = sanitize(v);
-        return { type: "Feature", geometry: g ? JSON.parse(g) : null, properties };
-      }),
-    };
-    const geojson = JSON.stringify(fc);
+    // One Feature per line, written straight to a DuckDB file — the features never exist as a
+    // JS value or string, so peak memory is one buffer instead of Arrow rows + string + MEMFS copy.
+    const cols = descRows.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
+    seqOut = `o${id}.geojsonl`;
+    await conn.query(`COPY (${featureSeqSql(cols, geom, t)}) TO '${seqOut}' (FORMAT JSON, ARRAY false);`);
+    const seqBytes = await db.copyFileToBuffer(seqOut);
+    // Free the DuckDB side now; in `finally` it would outlive the GDAL conversion.
+    await conn.query(`DROP TABLE IF EXISTS ${raw}; DROP TABLE IF EXISTS ${clipped};`).catch(() => {});
+    await db.dropFile(seqOut).catch(() => {});
+    seqOut = undefined;
 
     if (fmt === "geojson") {
-      triggerDownload(new TextEncoder().encode(geojson), `${stem}.geojson`, "application/geo+json");
+      deliver(wrapFeatureSeqInPlace(seqBytes), `${stem}.geojson`, "application/geo+json");
       return;
     }
 
-    // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only). Pass the source column
-    // types so GDAL keeps DOUBLE columns as real (it otherwise downcasts whole-valued ones to Integer).
-    const descRows = desc.toArray();
-    const cols = descRows.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
-    const floatCols = descRows
-      .filter((r) => /DOUBLE|FLOAT|REAL|DECIMAL|NUMERIC/.test(String(r.column_type).toUpperCase()))
-      .map((r) => String(r.column_name))
-      .filter((c) => !GEOM_NAMES.includes(c));
-    const { convertGeoJSON, GDAL_TARGETS } = await import("./gdal");
-    const { bytes, filename, mime } = await convertGeoJSON(geojson, stem, GDAL_TARGETS[fmt], epsg, cols, floatCols);
-    triggerDownload(bytes, filename, mime);
+    // gpkg / shp / gdb / fgb via gdal3.js (~40 MB, lazy-loaded here only).
+    const { convertFeatureSeq, GDAL_TARGETS } = await import("./gdal");
+    const { bytes, filename, mime } = await convertFeatureSeq(seqBytes, stem, GDAL_TARGETS[fmt], srs);
+    deliver([bytes], filename, mime);
   } finally {
-    await conn.query("DROP TABLE IF EXISTS raw; DROP TABLE IF EXISTS clipped;").catch(() => {});
+    await conn.query(`DROP TABLE IF EXISTS ${raw}; DROP TABLE IF EXISTS ${clipped};`).catch(() => {});
     await conn.close();
-    await db.dropFile(src).catch(() => {});
+    if (borrowed !== undefined) release(borrowed);
     if (csvOut) await db.dropFile(csvOut).catch(() => {});
+    if (seqOut) await db.dropFile(seqOut).catch(() => {});
+    endRun(epoch);
   }
 }
 
 // ---- Shapefile pre-flight ----
-// The Esri Shapefile format silently mangles data past its limits; check before exporting so the user
-// isn't handed a broken file. Deterministic checks (field names/count/geometry) are read from the data;
-// size is an estimate (parquet is compressed ~4× vs the uncompressed .shp/.dbf).
+// The Esri Shapefile format silently mangles data past its limits; check before exporting so the
+// user isn't handed a broken file. Range reads make this cheap at any size: the checks come off
+// the footer (column stats, row count, GeoParquet metadata), and the one scan that reads column
+// data is budgeted (see MEASURE_TEXT_BUDGET).
 export interface ShapefileWarnings {
   longNames: string[];                 // > 10 chars → truncated by the driver
   collisions: [string, string][];      // fields that collapse to the same 10-char name → data loss
@@ -482,67 +654,189 @@ export interface ShapefileWarnings {
   tooManyFields: boolean;
   mixedGeometry: string[];             // >1 base geometry type → shapefile can't hold them together
   rowCount: number;
-  estBytes: number;                    // rough uncompressed-size estimate
-  over2gb: boolean;
+  estShpBytes: number;                 // estimated uncompressed .shp (geometry)
+  estDbfBytes: number;                 // estimated uncompressed .dbf (attributes)
+  over2gb: boolean;                    // either file over the format's per-file 2 GB cap
+  estPeakBytes: number;                // peak bytes gdal3.js holds during the conversion
+  overBrowserLimit: boolean;           // conversion won't fit in the wasm heap, whatever the format
+  widthsEstimated: boolean;            // text widths averaged rather than measured (see the budget)
+  estReadBytes: number;                // bytes the export fetches, after row-group pruning
+  rowGroups: number;                   // how finely the file is grouped — what pruning can work with
+  minClipBytes: number;                // the least any clip could read: the largest single group
   any: boolean;                        // true if anything worth warning about
 }
 
-export async function shapefileWarnings(
+/** Geometry types off the GeoParquet `geo` key — present on anything our transform wrote, and
+ *  free (footer only). Null when the file predates it or carries no type list. */
+function geoMetadataTypes(json: string, geom: string): string[] | null {
+  try {
+    const geo = JSON.parse(json) as {
+      primary_column?: string;
+      columns?: Record<string, { geometry_types?: string[] }>;
+    };
+    const col = geo.columns?.[geo.primary_column ?? geom] ?? Object.values(geo.columns ?? {})[0];
+    const types = col?.geometry_types;
+    return types?.length ? types : null;
+  } catch { return null; }
+}
+
+// Text has no fixed width, so the .dbf estimate needs the longest decoded value. That is a real
+// column read, and the whole point of range reads is not to pull more than a query needs — so
+// above this much text (footer bytes, scaled by any clip) fall back to the average instead.
+const MEASURE_TEXT_BUDGET = 64 * 1024 ** 2;
+
+// A read this big takes long enough that the user should choose to wait rather than discover it.
+// Shared with the panel, which reports the figure alongside the warning.
+export const SLOW_READ_BYTES = 256 * 1024 ** 2;
+
+/** Pre-flight an export. The size limits apply to every format: all of them read the rows the
+ *  export covers into the tab, and the four GDAL ones then run them through the same wasm
+ *  instance.
+ *  The shapefile-only findings (field names, field count, single geometry type, the 2 GB per-file
+ *  cap) are filled in for `shp` alone. */
+export async function exportWarnings(
   parquetUrl: string,
+  fmt: ExportFormat,
   clip?: [number, number, number, number],
 ): Promise<ShapefileWarnings> {
-  const duckdb = await import("@duckdb/duckdb-wasm");
+  const shp = fmt === "shp";
   const db = await getDB();
   const conn = await db.connect();
-  const id = ++seq;
-  const src = `chk${id}.parquet`;
+  let borrowed: string | undefined;
   try {
-    await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
-    await conn.query(`CREATE TABLE chk AS SELECT * FROM read_parquet('${src}');`);
-    const desc = (await conn.query("DESCRIBE chk;")).toArray();
-    const cols = desc.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
+    // Shared handle: a private registration would re-fetch the footer and chunks this URL has
+    // already read for the explorer or a previous pre-flight.
+    const src = borrowed = await registerUrl(parquetUrl);
+    const from = `read_parquet('${src}')`;
+    const desc = (await conn.query(`DESCRIBE SELECT * FROM ${from};`)).toArray();
+    const colTypes = new Map(desc.map((r) => [String(r.column_name), String(r.column_type)]));
+    const geom = geomColumn([...colTypes.keys()]);
+    const geomExpr = String(colTypes.get(geom) ?? "").toUpperCase().includes("BLOB")
+      ? `ST_GeomFromWKB(${ident(geom)})` : ident(geom);
+    const cols = [...colTypes.keys()].filter((c) => !GEOM_NAMES.includes(c));
 
     // Field-name limits (10 chars) + post-truncation collisions (pure, unit-tested).
-    const { longNames, collisions } = shapefileFieldChecks(cols);
+    const { longNames, collisions } = shp
+      ? shapefileFieldChecks(cols)
+      : { longNames: [] as string[], collisions: [] as [string, string][] };
 
-    const fullRows = Number((await conn.query("SELECT count(*) n FROM chk;")).toArray()[0].n);
-    let rowCount = fullRows;
+    // Per-column uncompressed bytes + the row count, both from the footer.
+    const meta = (await conn.query(
+      `SELECT path_in_schema AS c, sum(total_uncompressed_size)::BIGINT AS b
+       FROM parquet_metadata('${src}') GROUP BY 1;`,
+    )).toArray();
+    const colBytes = new Map(meta.map((r) => [String(r.c), Number(r.b)]));
 
-    // Geometry: distinct BASE types (strip MULTI / Z / M). >1 base = can't share a shapefile.
-    await conn.query("INSTALL spatial; LOAD spatial;");
-    const gd = (await conn.query("DESCRIBE chk;")).toArray();
-    const geomType = String(gd.find((r) => String(r.column_name) === GEOM)?.column_type ?? "").toUpperCase();
-    const geomExpr = geomType.includes("BLOB") ? `ST_GeomFromWKB(${GEOM})` : GEOM;
+    // Per-row-group extent and transfer size, from the footer. This is what a clip can prune.
+    const groups: RowGroup[] = (await conn.query(
+      `SELECT sum(total_compressed_size)::BIGINT AS bytes,
+              min(CASE WHEN path_in_schema = 'bbox_xmin' THEN CAST(stats_min AS DOUBLE) END) AS xmin,
+              max(CASE WHEN path_in_schema = 'bbox_xmax' THEN CAST(stats_max AS DOUBLE) END) AS xmax,
+              min(CASE WHEN path_in_schema = 'bbox_ymin' THEN CAST(stats_min AS DOUBLE) END) AS ymin,
+              max(CASE WHEN path_in_schema = 'bbox_ymax' THEN CAST(stats_max AS DOUBLE) END) AS ymax
+       FROM parquet_metadata('${src}') GROUP BY row_group_id;`,
+    )).toArray().map((r) => ({
+      bytes: Number(r.bytes),
+      xmin: Number(r.xmin), xmax: Number(r.xmax), ymin: Number(r.ymin), ymax: Number(r.ymax),
+    }));
+    // From the schema, not from the aggregates: a missing bbox column aggregates to SQL NULL and
+    // Number(null) is 0, which would read as a real extent at (0, 0) and prune everything away.
+    const usable = BBOX_COLS.every((c) => colTypes.has(c));
+    const estReadBytes = estimateReadBytes(groups, usable ? clip : undefined);
+    // A row group is the smallest unit a reader can skip, so the biggest one is the floor on what
+    // any clip can get the download down to.
+    const minClipBytes = usable ? Math.max(0, ...groups.map((g) => g.bytes)) : estReadBytes;
+    const fullRows = Number((await conn.query(
+      `SELECT sum(num_rows)::BIGINT AS n FROM parquet_file_metadata('${src}');`,
+    )).toArray()[0].n);
+
+    // A clip only scales the estimate. The per-row bbox columns answer that without decoding
+    // geometry (and prune row groups); fall back to a real intersect if the file lacks them.
     let where = "";
     if (clip) {
-      const [w, s, e, n] = clip;
-      where = ` WHERE ST_Intersects(${geomExpr}, ST_MakeEnvelope(${w}, ${s}, ${e}, ${n}))`;
-      rowCount = Number((await conn.query(`SELECT count(*) n FROM chk${where};`)).toArray()[0].n);
+      const [w, sy, e, n] = clip;
+      if (usable) {
+        where = ` WHERE bbox_xmin <= ${e} AND bbox_xmax >= ${w} AND bbox_ymin <= ${n} AND bbox_ymax >= ${sy}`;
+      } else {
+        await conn.query("INSTALL spatial; LOAD spatial;");
+        where = ` WHERE ST_Intersects(${geomExpr}, ST_MakeEnvelope(${w}, ${sy}, ${e}, ${n}))`;
+      }
     }
-    const gtypes = (await conn.query(
-      `SELECT DISTINCT ST_GeometryType(${geomExpr}) g FROM chk${where} WHERE ${geomExpr} IS NOT NULL;`,
-    )).toArray().map((r) => String(r.g).toUpperCase());
-    const baseTypes = [...new Set(gtypes.map((g) => g.replace(/^ST_/, "").replace(/^MULTI/, "").replace(/[ZM]+$/, "")))];
+    const rowCount = where
+      ? Number((await conn.query(`SELECT count(*) AS n FROM ${from}${where};`)).toArray()[0].n)
+      : fullRows;
 
-    // Size estimate: parquet Content-Length × ~4 (shp/.dbf are uncompressed), scaled by the clip ratio.
-    let estBytes = 0;
-    try {
-      const head = await fetch(parquetUrl, { method: "HEAD" });
-      const pq = Number(head.headers.get("content-length")) || 0;
-      if (pq && fullRows) estBytes = Math.round(pq * 4 * (rowCount / fullRows));
-    } catch { /* HEAD blocked → skip the size estimate */ }
-    const over2gb = estBytes > 2 * 1024 ** 3;
+    // Shapefile only: this costs a full geometry decode under a clip, where the file-level
+    // GeoParquet `geo` key no longer describes the selection.
+    let names: string[] | null = null;
+    if (holdsOneGeomType(fmt) && !where) {
+      const kv = (await conn.query(
+        `SELECT decode(value) AS v FROM parquet_kv_metadata('${src}') WHERE decode(key) = 'geo';`,
+      )).toArray();
+      if (kv.length) names = geoMetadataTypes(String(kv[0].v), geom);
+    }
+    if (holdsOneGeomType(fmt) && !names) {
+      await conn.query("INSTALL spatial; LOAD spatial;");
+      names = (await conn.query(
+        `SELECT DISTINCT ST_GeometryType(${geomExpr}) AS g FROM ${from}${where}
+         ${where ? "AND" : "WHERE"} ${geomExpr} IS NOT NULL;`,
+      )).toArray().map((r) => String(r.g));
+    }
+    const baseTypes = baseGeometryTypes(names ?? []);
 
-    const tooManyFields = cols.length > 255;
+    // Decoded text length, which the footer cannot give (see dbfFieldWidth). This is a real read:
+    // it fetches the text chunks of every row group the clip admits, which is what the budget
+    // above bounds.
+    const measured = cols.filter((c) => needsMeasuredWidth(colTypes.get(c) ?? "VARCHAR"));
+    // Scaled by the bytes the read will fetch, not by a row fraction: the scan pulls whole column
+    // chunks for every row group the clip admits, which is what estReadBytes already measures.
+    const allGroupBytes = groups.reduce((n, g) => n + g.bytes, 0);
+    const textBytes = measured.reduce((n, c) => n + (colBytes.get(c) ?? 0), 0)
+      * (allGroupBytes ? estReadBytes / allGroupBytes : 1);
+    const widthsEstimated = textBytes > MEASURE_TEXT_BUDGET;
+    const lengths = new Map<string, { max: number; avg: number }>();
+    if (measured.length && !widthsEstimated) {
+      // strlen is the BYTE count (length would count characters, and the dbf pads bytes).
+      const sel = measured.map((c, i) =>
+        `max(strlen(CAST(${ident(c)} AS VARCHAR))) AS m${i}, `
+        + `avg(strlen(CAST(${ident(c)} AS VARCHAR))) AS a${i}`).join(", ");
+      const row = (await conn.query(`SELECT ${sel} FROM ${from}${where};`)).toArray()[0];
+      measured.forEach((c, i) =>
+        lengths.set(c, { max: Number(row[`m${i}`] ?? 0), avg: Number(row[`a${i}`] ?? 0) }));
+    }
+
+    const scale = fullRows ? rowCount / fullRows : 0;
+    const fields = cols.map((c) => {
+      const type = colTypes.get(c) ?? "VARCHAR";
+      const m = lengths.get(c);
+      if (m) return { name: c, type, maxBytes: m.max, avgBytes: m.avg };
+      // Unmeasured: the footer's bytes-per-row is the best width available. dbfFieldWidth(type, 0)
+      // would be 1 for text, which under-reports a wide table by enough to hide the 2 GB cap.
+      const avg = needsMeasuredWidth(type) && fullRows ? (colBytes.get(c) ?? 0) / fullRows
+        : dbfFieldWidth(type, 0);
+      return { name: c, type, maxBytes: avg, avgBytes: avg };
+    });
+    const geomBytes = Math.round((colBytes.get(geom) ?? 0) * scale);
+    const { estShpBytes, estDbfBytes, over2gb } = estimateShapefileBytes(fields, rowCount, geomBytes);
+    const geojsonBytes = estimateGeoJSONBytes(fields, rowCount, geomBytes);
+    // A single-file format writes roughly the shapefile pair without the dbf padding.
+    const outputBytes = shp ? estShpBytes + estDbfBytes : geomBytes + rowCount * 40;
+    const estPeakBytes = estimateExportPeakBytes(fmt, geojsonBytes, outputBytes);
+    const overBrowserLimit = estPeakBytes > WASM_HEAP_BUDGET;
+
+    const tooManyFields = shp && cols.length > 255;
     const mixedGeometry = baseTypes.length > 1 ? baseTypes : [];
     return {
       longNames, collisions, fieldCount: cols.length, tooManyFields,
-      mixedGeometry, rowCount, estBytes, over2gb,
-      any: longNames.length > 0 || collisions.length > 0 || tooManyFields || mixedGeometry.length > 0 || over2gb,
+      mixedGeometry, rowCount, estShpBytes, estDbfBytes, over2gb: shp && over2gb,
+      estPeakBytes, overBrowserLimit, widthsEstimated,
+      estReadBytes, rowGroups: groups.length, minClipBytes,
+      any: longNames.length > 0 || collisions.length > 0 || tooManyFields
+        || mixedGeometry.length > 0 || (shp && over2gb) || overBrowserLimit
+        || estReadBytes > SLOW_READ_BYTES || widthsEstimated,
     };
   } finally {
-    await conn.query("DROP TABLE IF EXISTS chk;").catch(() => {});
+    if (borrowed !== undefined) release(borrowed);
     await conn.close();
-    await db.dropFile(src).catch(() => {});
   }
 }

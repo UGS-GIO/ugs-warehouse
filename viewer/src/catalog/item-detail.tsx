@@ -343,7 +343,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
                 </div>
               ) : <p className="text-sm text-muted-foreground">No metadata published.</p>}
             </Section>
-            <DownloadsPanel item={item} />
+            <DownloadsPanel key={String(item.id)} item={item} />
             <EndpointsPanel item={item} />
             <Section title="Developer"><StacJson item={item} title={`${item.id} — STAC JSON`} /></Section>
             <details className="rounded-lg border border-border">
@@ -374,7 +374,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
       )}
       <div className="mt-1.5">{actions}</div>
       <IssueContents item={item} />
-      <DownloadsPanel item={item} />
+      <DownloadsPanel key={String(item.id)} item={item} />
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />
       {IS_REVIEW && <CatalogReview item={item} />}

@@ -212,7 +212,8 @@ def patch_item_properties(object_path: str, updates: dict) -> bool:
     # no-cache until the next reingest). Operator sees the edit at once (bucket read); public via
     # the CDN within the short max-age.
     gcs.put_bytes(json.dumps(item, indent=2).encode(), object_path,
-                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
+                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG,
+                  compress=True)
     return True
 
 
@@ -334,7 +335,8 @@ def write_item(item: dict) -> str:
     path = item_object_path(_layout_path(item), item["id"])
     item = {k: v for k, v in item.items() if k != "_collection_path"}  # drop private key
     gcs.put_bytes(json.dumps(item, indent=2).encode(), path,
-                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
+                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG,
+                  compress=True)
     return path
 
 
@@ -626,9 +628,11 @@ def _write_markdown(path: str, *, title: str, description: str, kind: str, child
 
 
 def _write_json(doc: dict, object_path: str) -> None:
-    # catalog.json / collection.json / items.json — short edge cache + SWR (see gcs.CACHE_CATALOG).
+    # catalog.json / collection.json / items.json — short edge cache + SWR (see gcs.CACHE_CATALOG),
+    # stored gzipped: the biggest of these (a 4,212-item index) is 6.3 MB plain, 250 KB compressed.
     gcs.put_bytes(json.dumps(doc, indent=2).encode(), object_path,
-                  content_type="application/json", cache_control=gcs.CACHE_CATALOG)
+                  content_type="application/json", cache_control=gcs.CACHE_CATALOG,
+                  compress=True)
 
 
 # Publication-series descriptions, verbatim from geology.utah.gov/map-pub. Set as the series

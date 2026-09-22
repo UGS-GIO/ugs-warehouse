@@ -1,9 +1,10 @@
 // Every way to save a file, as one grid. Assets read over HTTP instead of saved belong in
 // "Services" — see `endpoints-panel.tsx`.
 import { useMutation } from "@tanstack/react-query";
-import { useState } from "react";
+import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import type { ShapefileWarnings } from "@/data/download";
+import { currentExports, holdsOneGeomType, SLOW_READ_BYTES, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
@@ -45,8 +46,18 @@ const fileAssets = (item: StacDoc): [string, Asset][] =>
       && !a.roles?.includes("related")
       && assetKind(a) !== "zarr");
 
+// Formats that pull gdal3.js (~40 MB) on first use, versus DuckDB's few MB.
+const GDAL_FORMATS = new Set<ExportFormat>(["shp", "gpkg", "gdb", "fgb"]);
+const FORMAT_LABEL = Object.fromEntries(FORMATS.map((f) => [f.id, f.label])) as Record<ExportFormat, string>;
+
+const fmtBytes = (n: number) =>
+  n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`;
+
 const TILE = "flex items-start justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 " +
-  "text-left text-sm text-foreground no-underline hover:border-primary hover:text-primary disabled:opacity-50";
+  "text-left text-sm text-foreground no-underline hover:border-primary hover:text-primary " +
+  // aria-disabled, not :disabled — the buttons stay focusable, so the native variant never matches.
+  "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:border-border " +
+  "aria-disabled:hover:text-foreground";
 const SUB = "mt-0.5 block text-xs font-normal text-muted-foreground";
 const BBOX_LABELS = ["W", "S", "E", "N"];
 
@@ -58,19 +69,45 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const [epsg, setEpsg] = useState(4326);
   const [customEpsg, setCustomEpsg] = useState(false);
 
+  // The export outlives this component: the panel is keyed per item, so switching items remounts
+  // it while the run continues. Reading the module's own state keeps the indicator and Cancel on
+  // screen wherever the user ends up.
+  const running = useSyncExternalStore(subscribeExport, currentExports);
+  const invoker = useRef<HTMLButtonElement | null>(null);
+  const ticket = useRef<number | null>(null);
+
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
       const clip = clipOn ? bbox : undefined;
-      const { exportItem, shapefileWarnings } = await import("@/data/download");   // DuckDB + GDAL, on demand
+      const { beginExport, endRun, exportItem, exportWarnings, startRun } = await import("@/data/download");
+      // The ticket is taken BEFORE the pre-flight, which is the slow part — a cancel during it
+      // has to suppress the delivery too.
+      const epoch = ticket.current = beginExport();
+      // Track it from here, not from exportItem: the pre-flight is the long phase, and a panel
+      // remounted during it would otherwise show no indicator and no way to cancel.
+      startRun({ id: epoch, stem: String(item.id ?? "export"), fmt });
+      // Every format reads the whole GeoParquet into the tab, so every format is pre-flighted.
       // A failed pre-flight just proceeds to the export.
-      if (fmt === "shp" && !force) {
-        const w = await shapefileWarnings(parquet!.href, clip).catch(() => null);
-        if (w?.any) return w;
+      if (!force) {
+        const w = await exportWarnings(parquet!.href, fmt, clip)
+          .catch((e) => { console.warn("export pre-flight failed", e); return null; });
+        if (w?.any) { endRun(epoch); return w; }   // no export follows, so release the ticket
       }
-      await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clip, epsg);
+      await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clip, epsg, epoch);
     },
   });
   const busy = run.isPending ? run.variables.fmt : null;
+  // Suppresses the delivery, not the work: see cancelExports.
+  // Cancels one run by id — never everything in flight.
+  const cancelRun = (id: number) => {
+    void import("@/data/download").then((m) => m.cancelExport(id));
+    if (id === ticket.current) { ticket.current = null; run.reset(); }
+  };
+  // Stable identity: an inline arrow is a new ref every commit, so React would re-run it on each
+  // render and steal focus back from the clip and CRS inputs the warning tells the user to use.
+  const focusWarning = useCallback((el: HTMLDivElement | null) => { el?.focus(); }, []);
+  // Dismissing puts focus back on the button that opened the warning, not on <body>.
+  const dismiss = () => { run.reset(); invoker.current?.focus(); };
   const warn: ShapefileWarnings | undefined = run.data?.any ? run.data : undefined;
 
   const files = fileAssets(item);
@@ -94,7 +131,12 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {data.map(assetTile)}
         {parquet && FORMATS.map((f) => (
-          <button key={f.id} disabled={run.isPending} onClick={() => run.mutate({ fmt: f.id })}
+          <button key={f.id} aria-disabled={run.isPending} aria-busy={busy === f.id}
+            onClick={(e) => {
+              if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
+              invoker.current = e.currentTarget;
+              run.mutate({ fmt: f.id });
+            }}
             aria-label={`Download ${f.label}`} className={TILE}>
             <span className="font-medium">
               {f.label}
@@ -105,7 +147,26 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         ))}
         {sidecars.map(assetTile)}
       </div>
-      {busy && <p role="status" className={`mt-1.5 ${C.muted}`}>preparing in your browser · the first one loads DuckDB (~a few MB)</p>}
+      {/* Always mounted: a live region created with its text is announced unreliably. Announces
+          the end as well as the start, since neither is otherwise visible to a screen reader.
+          The warning box below carries no live role for the same reason — moving focus into a
+          labelled container is what announces it. */}
+      <p role="status" aria-live="polite" className={`mt-1.5 ${C.muted} ${busy ? "" : "sr-only"}`}>
+        {busy
+          ? `preparing in your browser · the first one loads DuckDB${GDAL_FORMATS.has(busy) ? " and GDAL (~40 MB)" : " (~a few MB)"}`
+          : run.isSuccess && !warn ? "export ready" : ""}
+      </p>
+      <div role="alert" className={run.error ? `mt-1.5 text-sm text-destructive` : "sr-only"}>
+        {run.error ? `Download failed: ${run.error.message}` : ""}
+      </div>
+      {/* One per live run, registered from the ticket, so this covers the pre-flight phase too.
+          An export started before the user navigated here is still theirs. */}
+      {running.map((r) => (
+        <button key={r.id} onClick={() => cancelRun(r.id)}
+          className="mt-1 block text-sm text-muted-foreground hover:underline">
+          Cancel {r.fmt} export{r.id === ticket.current ? "" : ` of ${r.stem}`}
+        </button>
+      ))}
 
       {parquet && (
         <details className="mt-2 border-t border-border pt-2">
@@ -152,14 +213,27 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           )}
         </details>
       )}
-      {run.error && <div role="alert" className="mt-1.5 text-sm text-destructive">Download failed: {run.error.message}</div>}
 
       {warn && (
-        <div className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
-          <div className="font-semibold text-amber-700 dark:text-amber-400">Shapefile will mangle this data</div>
-          <ul className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
+        <div aria-labelledby="dl-warn-title" aria-describedby="dl-warn-why" tabIndex={-1} ref={focusWarning}
+          onKeyDown={(e) => { if (e.key === "Escape") dismiss(); }}
+          className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
+          <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
+            {warn.overBrowserLimit
+              ? "This export is too big for the browser"
+              : warn.mixedGeometry.length > 0 || warn.longNames.length > 0
+                || warn.collisions.length > 0 || warn.tooManyFields || warn.over2gb
+                ? `${FORMAT_LABEL[run.variables!.fmt]} will mangle this data`
+                : "This export will be slow"}
+          </div>
+          <ul id="dl-warn-why" className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
             {warn.mixedGeometry.length > 0 && (
-              <li><b>Mixed geometry</b> ({warn.mixedGeometry.join(", ").toLowerCase()}) — a shapefile holds one geometry type; the others get dropped. Use GeoPackage.</li>
+              <li>
+                <b>Mixed geometry</b> ({warn.mixedGeometry.join(", ").toLowerCase()}) —{" "}
+                {FORMAT_LABEL[run.variables!.fmt]} holds one geometry type per layer, so the
+                conversion fails rather than dropping the others. Use GeoPackage or FlatGeobuf,
+                which take all of them.
+              </li>
             )}
             {warn.longNames.length > 0 && (
               <li><b>{warn.longNames.length} field name{warn.longNames.length === 1 ? "" : "s"} over 10 chars</b> get truncated (e.g. <code>{warn.longNames[0]}</code> → <code>{warn.longNames[0].slice(0, 10)}</code>).</li>
@@ -168,18 +242,56 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
               <li><b>Field-name collisions</b> after truncation — <code>{warn.collisions[0][0]}</code> &amp; <code>{warn.collisions[0][1]}</code> collapse to the same name (data loss).</li>
             )}
             {warn.tooManyFields && <li><b>{warn.fieldCount} fields</b> exceeds the 255-field shapefile limit.</li>}
-            {warn.over2gb && <li><b>~{(warn.estBytes / 1024 ** 3).toFixed(1)} GB estimated</b> — over the 2 GB shapefile limit (estimate; export may fail).</li>}
+            {warn.overBrowserLimit && (
+              <li>
+                <b>Too big to convert in the browser</b> — {warn.rowCount.toLocaleString()} features
+                need about {fmtBytes(warn.estPeakBytes)} of memory and the tab has roughly 1.5 GB.
+                Clip to a smaller area: only the parts of the file that area covers are read.
+                Otherwise download the GeoParquet above and convert it locally (QGIS, GDAL).
+              </li>
+            )}
+            {warn.estReadBytes > SLOW_READ_BYTES && (
+              <li>
+                <b>Reads {fmtBytes(warn.estReadBytes)} first</b> before writing anything.{" "}
+                {warn.minClipBytes > SLOW_READ_BYTES
+                  ? `This file is stored in ${warn.rowGroups} block${warn.rowGroups === 1 ? "" : "s"}`
+                    + ` of up to ${fmtBytes(warn.minClipBytes)}, and a block is the smallest piece`
+                    + " that can be skipped, so clipping cannot bring it much below that."
+                  : "Clip to a smaller area to read less."}
+              </li>
+            )}
+            {warn.widthsEstimated && (
+              <li>
+                <b>Sizes are approximate</b> — this layer has too much text to measure exactly
+                without reading it, so the estimates above use average field lengths.
+              </li>
+            )}
+            {warn.over2gb && (
+              <li>
+                <b>Over the 2 GB per-file shapefile limit</b> — estimated{" "}
+                {fmtBytes(warn.estShpBytes)} of geometry (.shp) and {fmtBytes(warn.estDbfBytes)} of
+                attributes (.dbf). Use GeoPackage, or clip to a smaller area.
+              </li>
+            )}
           </ul>
           <div className="mt-2 flex flex-wrap gap-2">
-            <button onClick={() => run.mutate({ fmt: "gpkg" })}
-              className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
-              Use GeoPackage instead
-            </button>
-            <button onClick={() => run.mutate({ fmt: "shp", force: true })}
-              className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
-              Download shapefile anyway
-            </button>
-            <button onClick={() => run.reset()} className="text-muted-foreground hover:underline">Cancel</button>
+            {/* GeoPackage shares the tab and the wasm instance, so it is no way out of a memory
+                ceiling — only out of the limits the single-geometry formats impose. */}
+            {!warn.overBrowserLimit && holdsOneGeomType(run.variables!.fmt) && (
+              <button onClick={() => run.mutate({ fmt: "gpkg" })}
+                className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
+                Use GeoPackage instead
+              </button>
+            )}
+            {/* Forcing past a memory ceiling crashes the tab, and past mixed geometry the
+                conversion fails outright — neither produces a file. */}
+            {!warn.overBrowserLimit && warn.mixedGeometry.length === 0 && (
+              <button onClick={() => run.mutate({ fmt: run.variables!.fmt, force: true })}
+                className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
+                Download anyway
+              </button>
+            )}
+            <button onClick={dismiss} className="text-muted-foreground hover:underline">Cancel</button>
           </div>
         </div>
       )}

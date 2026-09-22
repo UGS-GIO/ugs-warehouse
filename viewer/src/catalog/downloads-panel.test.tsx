@@ -129,6 +129,17 @@ describe("DownloadsPanel", () => {
     release(CLEAN);
   });
 
+  // Measured through the real drivers: shapefile and FileGDB fail outright on mixed geometry,
+  // GeoPackage and FlatGeobuf take it.
+  it("says the conversion fails on mixed geometry, not that features get dropped", async () => {
+    exportWarnings.mockResolvedValue(MANGLED);
+    show();
+    await userEvent.click(screen.getByLabelText("Download File Geodatabase (zip)"));
+    const box = await screen.findByLabelText(/will mangle/i);
+    expect(box.textContent).toContain("the conversion fails rather than dropping the others");
+    expect(box.textContent).toContain("GeoPackage or FlatGeobuf");
+  });
+
   it("names the format the user actually picked, not always the shapefile", async () => {
     exportWarnings.mockResolvedValue({ ...MANGLED });
     show();

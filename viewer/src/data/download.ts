@@ -195,6 +195,11 @@ export function baseGeometryTypes(names: string[]): string[] {
     g.toUpperCase().replace(/^ST_/, "").replace(/^MULTI/, "").replace(/[\sZM]+$/, "")))];
 }
 
+/** Formats that reject a layer carrying more than one base geometry type. Measured by converting
+ *  a point, a linestring and a polygon through each real driver: these two fail the conversion
+ *  outright, while GeoPackage and FlatGeobuf write all three. */
+export const holdsOneGeomType = (fmt: ExportFormat): boolean => fmt === "shp" || fmt === "gdb";
+
 /** Clearing the custom EPSG input yields Number("") === 0, which would reach SQL as EPSG:0. */
 export const safeEpsg = (n: number): number => (Number.isInteger(n) && n > 0 ? n : 4326);
 
@@ -795,13 +800,13 @@ export async function exportWarnings(
     // Shapefile only: this costs a full geometry decode under a clip, where the file-level
     // GeoParquet `geo` key no longer describes the selection.
     let names: string[] | null = null;
-    if (shp && !where) {
+    if (holdsOneGeomType(fmt) && !where) {
       const kv = (await conn.query(
         `SELECT decode(value) AS v FROM parquet_kv_metadata('${src}') WHERE decode(key) = 'geo';`,
       )).toArray();
       if (kv.length) names = geoMetadataTypes(String(kv[0].v), geom);
     }
-    if (shp && !names) {
+    if (holdsOneGeomType(fmt) && !names) {
       await conn.query("INSTALL spatial; LOAD spatial;");
       names = (await conn.query(
         `SELECT DISTINCT ST_GeometryType(${geomExpr}) AS g FROM ${from}${where}

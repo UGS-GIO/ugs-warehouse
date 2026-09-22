@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOrder, dbfFieldWidth, estimateExportPeakBytes, estimateGeoJSONBytes, estimateShapefileBytes,
   evictionVictim, featureSeqSql, filterClause, sanitize, wrapFeatureSeqInPlace,
-  needsMeasuredWidth, safeEpsg, shapefileFieldChecks, exportWarnings, SHP_FILE_LIMIT,
+  holdsOneGeomType, needsMeasuredWidth, safeEpsg, shapefileFieldChecks, exportWarnings,
+  SHP_FILE_LIMIT,
   PREFLIGHT_MAX_PARQUET_BYTES, baseGeometryTypes, geomColumn,
   WASM_HEAP_BUDGET,
 } from "./download";
@@ -316,6 +317,17 @@ describe("safeEpsg", () => {
   });
   it("keeps a real projected CRS", () => {
     expect(safeEpsg(26912)).toBe(26912);
+  });
+});
+
+// Measured by converting a point + linestring + polygon through each real driver: shapefile and
+// FileGDB fail the conversion; GeoPackage and FlatGeobuf write all three.
+describe("holdsOneGeomType", () => {
+  it.each(["shp", "gdb"] as const)("%s needs the mixed-geometry check", (fmt) => {
+    expect(holdsOneGeomType(fmt)).toBe(true);
+  });
+  it.each(["gpkg", "fgb", "geojson", "csv"] as const)("%s does not", (fmt) => {
+    expect(holdsOneGeomType(fmt)).toBe(false);
   });
 });
 

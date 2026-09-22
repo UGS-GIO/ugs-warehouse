@@ -230,7 +230,12 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           </div>
           <ul id="dl-warn-why" className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
             {warn.mixedGeometry.length > 0 && (
-              <li><b>Mixed geometry</b> ({warn.mixedGeometry.join(", ").toLowerCase()}) — a shapefile holds one geometry type; the others get dropped. Use GeoPackage.</li>
+              <li>
+                <b>Mixed geometry</b> ({warn.mixedGeometry.join(", ").toLowerCase()}) —{" "}
+                {FORMAT_LABEL[run.variables!.fmt]} holds one geometry type per layer, so the
+                conversion fails rather than dropping the others. Use GeoPackage or FlatGeobuf,
+                which take all of them.
+              </li>
             )}
             {warn.longNames.length > 0 && (
               <li><b>{warn.longNames.length} field name{warn.longNames.length === 1 ? "" : "s"} over 10 chars</b> get truncated (e.g. <code>{warn.longNames[0]}</code> → <code>{warn.longNames[0].slice(0, 10)}</code>).</li>

@@ -77,10 +77,11 @@ export function clampSize(n: number, min: number, max: number, fallback: number)
   return Math.max(min, Math.min(max, n));
 }
 
-// Table row-click → map fly target. `key` identifies the SELECTION (row offset / feature id) so the
-// map re-flies on every distinct pick — even two features at the same lat/lon (identical bbox). The
-// bbox→geometry upgrade within one pick reuses the same key, so it doesn't double-fly.
-export type FocusSel = { bbox?: [number, number, number, number]; geometry?: GeoJSON.Geometry | null; key?: string | number };
+// Table row-click / map-feature-click → map highlight + fly target. `key` identifies the SELECTION
+// so the map re-flies on every distinct pick, even two features at the same lat/lon (identical
+// bbox). `featureId` is the feature to outline via setFeatureState on the PMTiles tile (the exact
+// geometry is already on the map, so nothing is read from the parquet). `bbox` drives the fly.
+export type FocusSel = { bbox?: [number, number, number, number]; featureId?: number; key?: string | number };
 
 // A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
 // layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic

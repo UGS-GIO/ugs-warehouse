@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { evictionVictim, filterClause, sanitize, shapefileFieldChecks } from "./download";
+import { evictionVictim, filterClause, orderExpr, sanitize, shapefileFieldChecks } from "./download";
 
 describe("sanitize", () => {
   it("keeps safe bigints as numbers", () => {
@@ -76,6 +76,31 @@ describe("filterClause", () => {
       .toBe(`"td" >= 10 AND "td" <= 20`);
     expect(filterClause({ col: "name", kind: "text", contains: "fault" }))
       .toBe(`CAST("name" AS VARCHAR) ILIKE '%fault%'`);
+  });
+});
+
+describe("orderExpr", () => {
+  const cols = ["acres", "attribute"];
+  // Load-bearing: no explicit user sort → empty ORDER BY, so the page query streams in physical
+  // (== feature_id) order instead of a TOP_N scan that OOMs DuckDB-WASM on large layers. This empty
+  // return is also what makes ordinalByFeatureId fall back to `feature_id ASC` so the two align.
+  it("returns '' (physical order) when there is no user sort", () => {
+    expect(orderExpr(cols, { limit: 25, offset: 0 }, true)).toBe("");
+  });
+  it("returns '' when orderBy is not a real column", () => {
+    expect(orderExpr(cols, { limit: 25, offset: 0, orderBy: "nope" }, true)).toBe("");
+  });
+  it("sorts by the user column with feature_id as the tiebreaker (asc)", () => {
+    expect(orderExpr(cols, { limit: 25, offset: 0, orderBy: "acres" }, true))
+      .toBe(`"acres" ASC NULLS LAST, "feature_id" ASC`);
+  });
+  it("honors desc and still tiebreaks on feature_id", () => {
+    expect(orderExpr(cols, { limit: 25, offset: 0, orderBy: "acres", desc: true }, true))
+      .toBe(`"acres" DESC NULLS LAST, "feature_id" ASC`);
+  });
+  it("drops the feature_id tiebreaker when the parquet has no feature_id", () => {
+    expect(orderExpr(cols, { limit: 25, offset: 0, orderBy: "acres" }, false))
+      .toBe(`"acres" ASC NULLS LAST`);
   });
 });
 

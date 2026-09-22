@@ -21,7 +21,7 @@ import type { ExportFormat } from "./export-formats";
 
 export type { ExportFormat };
 export {
-  beginExport, cancelExport, currentExports, subscribeExport, type ExportRun,
+  beginExport, cancelExport, currentExports, endRun, startRun, subscribeExport, type ExportRun,
 } from "./export-runs";
 
 // The transform writes the geometry column as `geom` (GEOMETRY 4326); pub/external parquet may
@@ -595,14 +595,15 @@ export async function exportItem(
 ): Promise<void> {
   // Cancelled while the pre-flight was still running. Returning here skips the `finally`, so the
   // ticket has to be pruned on the way out or the set grows for the life of the tab.
-  if (consumeIfCancelled(epoch)) return;    // cancelled while the pre-flight was still running
+  // Cancelled while the pre-flight was still running; end it so no ticket outlives the run.
+  if (consumeIfCancelled(epoch)) { endRun(epoch); return; }
   const srs = safeEpsg(epsg);
   const db = await getDB();
   const conn = await db.connect();
   const id = ++seq;
   // Table names are database-scoped in DuckDB, so two runs would collide on a bare `raw`.
   const raw = `raw_${id}`, clipped = `clipped_${id}`;
-  startRun({ id: epoch, stem, fmt });
+  startRun({ id: epoch, stem, fmt });   // idempotent: the caller may have registered it already
   const deliver = (parts: Uint8Array[], filename: string, mime: string) => {
     if (!isCancelled(epoch)) triggerDownload(parts, filename, mime);
   };

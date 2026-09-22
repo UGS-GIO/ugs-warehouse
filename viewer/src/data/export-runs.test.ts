@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ExportFormat } from "./export-formats";
 
 import {
-  beginExport, cancelExport, consumeIfCancelled, currentExports, endRun, isCancelled,
-  startRun, subscribeExport,
+  beginExport, cancelExport, cancelledCount, consumeIfCancelled, currentExports, endRun,
+  isCancelled, outstandingCount, startRun, subscribeExport,
 } from "./export-runs";
 
 // Drain anything a previous test left live, so each case starts from an empty store.
@@ -64,11 +64,11 @@ describe("overlapping runs", () => {
 
 // The usual moment to cancel is during the pre-flight, before the run has started.
 describe("cancel before the run starts", () => {
-  it("is reported once and then forgotten, so the set cannot grow unbounded", () => {
+  it("is reported to the run, which then ends it", () => {
     const a = beginExport();
     cancelExport(a);
     expect(consumeIfCancelled(a)).toBe(true);
-    expect(consumeIfCancelled(a)).toBe(false);
+    endRun(a);                                  // what exportItem does on a true
     expect(isCancelled(a)).toBe(false);
   });
 
@@ -122,5 +122,51 @@ describe("subscribers", () => {
     cancelExport(beginExport());
     expect(seen).not.toHaveBeenCalled();
     off();
+  });
+});
+
+// Neither set may grow for the life of the tab: every ticket handed out is eventually released,
+// and a cancel for a ticket that has already finished is ignored rather than recorded. Counts are
+// compared as deltas, since other cases in this file leave tickets of their own behind.
+describe("bookkeeping does not leak", () => {
+  let base: { out: number; can: number };
+  beforeEach(() => { base = { out: outstandingCount(), can: cancelledCount() }; });
+  const delta = () => ({ out: outstandingCount() - base.out, can: cancelledCount() - base.can });
+
+  it("releases a ticket whose pre-flight produced warnings and never ran", () => {
+    const a = beginExport();
+    startRun({ id: a, stem: "x", fmt: "shp" });
+    endRun(a);                                  // the panel's path when warnings are returned
+    expect(delta()).toEqual({ out: 0, can: 0 });
+  });
+
+  it("releases a ticket cancelled during the pre-flight", () => {
+    const a = beginExport();
+    cancelExport(a);
+    expect(delta().can).toBe(1);
+    if (consumeIfCancelled(a)) endRun(a);
+    expect(delta()).toEqual({ out: 0, can: 0 });
+  });
+
+  it("ignores a cancel for a run that already finished", () => {
+    const a = beginExport();
+    endRun(a);
+    cancelExport(a);                            // a click on a button not yet unmounted
+    expect(delta()).toEqual({ out: 0, can: 0 });
+    expect(isCancelled(a)).toBe(false);
+  });
+
+  it("ignores a cancel for a ticket that was never issued", () => {
+    cancelExport(999_999);
+    expect(delta()).toEqual({ out: 0, can: 0 });
+  });
+
+  it("stays flat across many cancelled runs", () => {
+    for (let i = 0; i < 25; i++) {
+      const id = beginExport();
+      cancelExport(id);
+      if (consumeIfCancelled(id)) endRun(id);
+    }
+    expect(delta()).toEqual({ out: 0, can: 0 });
   });
 });

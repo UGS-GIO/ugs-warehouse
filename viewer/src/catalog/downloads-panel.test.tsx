@@ -8,13 +8,17 @@ import { DownloadsPanel } from "./downloads-panel";
 import type { StacDoc } from "@/stac";
 
 // `vi.mock` is hoisted above the file's consts, so the spies have to be hoisted with it.
-const { exportItem, exportWarnings, beginExport, cancelExport, NO_RUNS } = vi.hoisted(() => ({
+const {
+  exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun, NO_RUNS,
+} = vi.hoisted(() => ({
   exportItem: vi.fn(), exportWarnings: vi.fn(), beginExport: vi.fn(() => 7), cancelExport: vi.fn(),
+  startRun: vi.fn(), endRun: vi.fn(),
   // One frozen array: useSyncExternalStore rejects a snapshot that is a new reference each call.
   NO_RUNS: Object.freeze([]),
 }));
 vi.mock("@/data/download", () => ({
-  exportItem, exportWarnings, beginExport, cancelExport,
+  exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun,
+  holdsOneGeomType: (fmt: string) => fmt === "shp" || fmt === "gdb",
   // The panel subscribes to the module's own export state so a remount keeps the Cancel button.
   // The store has its own suite (export-runs.test.ts); here it stays empty so the panel's own
   // pending run is the only thing on screen.
@@ -37,6 +41,8 @@ const CLEAN = {
   sourceBytes: 1000, sizeUnknown: false, tooBigToInspect: false,
 };
 const MANGLED = { ...CLEAN, any: true, mixedGeometry: ["POINT", "LINESTRING"] };
+// Truncation mangles data but still produces a file, so forcing past it is the user's call.
+const TRUNCATED = { ...CLEAN, any: true, longNames: ["metadata_publication_id"] };
 // Past the tab's memory ceiling: GeoPackage runs in the same wasm instance, so it is no way out.
 const TOO_BIG = { ...CLEAN, any: true, overBrowserLimit: true, tooBigToInspect: true,
   sourceBytes: 1_351_235_892 };
@@ -52,6 +58,8 @@ const show = () => render(
 beforeEach(() => {
   exportItem.mockClear();
   cancelExport.mockClear();
+  startRun.mockClear();
+  endRun.mockClear();
   exportWarnings.mockReset();
   exportWarnings.mockResolvedValue(CLEAN);
 });
@@ -164,11 +172,30 @@ describe("DownloadsPanel", () => {
     expect(screen.queryByText("Download anyway")).toBeNull();
   });
 
-  it("still lets the user force past a mangling warning", async () => {
-    exportWarnings.mockResolvedValue(MANGLED);
+  it("still lets the user force past a warning that only mangles", async () => {
+    exportWarnings.mockResolvedValue(TRUNCATED);
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
     expect(await screen.findByText("Download anyway")).toBeDefined();
+  });
+
+  // Mixed geometry fails the conversion, so there is no file to force out of it.
+  it("offers no way to force past mixed geometry", async () => {
+    exportWarnings.mockResolvedValue(MANGLED);
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    await screen.findByLabelText(/will mangle/i);
+    expect(screen.queryByText("Download anyway")).toBeNull();
+    expect(screen.getByText("Use GeoPackage instead")).toBeDefined();
+  });
+
+  // b4e0b8e extended the check to FileGDB; the named remedy has to be reachable there too.
+  it("offers GeoPackage for a FileGDB mixed-geometry warning", async () => {
+    exportWarnings.mockResolvedValue(MANGLED);
+    show();
+    await userEvent.click(screen.getByLabelText("Download File Geodatabase (zip)"));
+    await screen.findByLabelText(/will mangle/i);
+    expect(screen.getByText("Use GeoPackage instead")).toBeDefined();
   });
 
   it("announces the warning and moves focus to it", async () => {
@@ -210,7 +237,7 @@ describe("DownloadsPanel", () => {
 
   // The bypass is a `force` variable on the same mutation, so it can't skip the check by accident.
   it("exports the shapefile anyway when asked, without re-running the check", async () => {
-    exportWarnings.mockResolvedValue(MANGLED);
+    exportWarnings.mockResolvedValue(TRUNCATED);
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
     await userEvent.click(await screen.findByText("Download anyway"));

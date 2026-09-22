@@ -4,7 +4,7 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import type { ShapefileWarnings } from "@/data/download";
-import { currentExports, subscribeExport } from "@/data/download";
+import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
@@ -79,16 +79,19 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
       const clip = clipOn ? bbox : undefined;
-      const { beginExport, exportItem, exportWarnings } = await import("@/data/download");
+      const { beginExport, endRun, exportItem, exportWarnings, startRun } = await import("@/data/download");
       // The ticket is taken BEFORE the pre-flight, which is the slow part — a cancel during it
       // has to suppress the delivery too.
       const epoch = ticket.current = beginExport();
+      // Track it from here, not from exportItem: the pre-flight is the long phase, and a panel
+      // remounted during it would otherwise show no indicator and no way to cancel.
+      startRun({ id: epoch, stem: String(item.id ?? "export"), fmt });
       // Every format reads the whole GeoParquet into the tab, so every format is pre-flighted.
       // A failed pre-flight just proceeds to the export.
       if (!force) {
         const w = await exportWarnings(parquet!.href, fmt, clip)
           .catch((e) => { console.warn("export pre-flight failed", e); return null; });
-        if (w?.any) return w;
+        if (w?.any) { endRun(epoch); return w; }   // no export follows, so release the ticket
       }
       await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clip, epsg, epoch);
     },
@@ -271,16 +274,17 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             )}
           </ul>
           <div className="mt-2 flex flex-wrap gap-2">
-            {/* GeoPackage shares the tab and the wasm instance, so it is no way out of a
-                memory ceiling — only out of shapefile's own limits. */}
-            {!warn.overBrowserLimit && run.variables?.fmt === "shp" && (
+            {/* GeoPackage shares the tab and the wasm instance, so it is no way out of a memory
+                ceiling — only out of the limits the single-geometry formats impose. */}
+            {!warn.overBrowserLimit && holdsOneGeomType(run.variables!.fmt) && (
               <button onClick={() => run.mutate({ fmt: "gpkg" })}
                 className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
                 Use GeoPackage instead
               </button>
             )}
-            {/* Forcing past a memory ceiling crashes the tab instead of producing a file. */}
-            {!warn.overBrowserLimit && (
+            {/* Forcing past a memory ceiling crashes the tab, and past mixed geometry the
+                conversion fails outright — neither produces a file. */}
+            {!warn.overBrowserLimit && warn.mixedGeometry.length === 0 && (
               <button onClick={() => run.mutate({ fmt: run.variables!.fmt, force: true })}
                 className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
                 Download anyway

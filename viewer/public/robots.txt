@@ -1,0 +1,9 @@
+# This site is intentionally kept out of search-engine results.
+# De-indexing is enforced by `X-Robots-Tag: noindex` (firebase.json) plus a
+# <meta name="robots" content="noindex"> tag (index.html). For those to work,
+# crawlers must be ALLOWED to fetch the pages so they can see the directives.
+# Do NOT add `Disallow: /` here: blocking the crawl stops bots from ever
+# seeing the noindex, which can leave externally-linked URLs indexed as bare
+# results. Allow-all is deliberate.
+User-agent: *
+Disallow:

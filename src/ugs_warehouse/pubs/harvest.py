@@ -8,7 +8,7 @@ pubs prefixes. POC-only bits (local dir, fake-gcs emulator, chmod, thermal coold
 failure log) are dropped — Cloud Run is GCS-only and logs to stderr.
 
 Needs the `pubs` extra (rasterio, rio-cogeo) + system GDAL CLI + poppler (the Dockerfile.harvest
-image). Env: COG_COMPRESS (webp), COG_QUALITY (90), COG_DPI (600; 0 = GeoTIFF as-is),
+image). Env: COG_COMPRESS (deflate), COG_QUALITY (90; webp only), COG_DPI (600; 0 = GeoTIFF as-is),
 SKIP_EXISTING (1), THUMBS (1).
 """
 from __future__ import annotations
@@ -39,10 +39,17 @@ DATAPHP = "https://geology.utah.gov/apps/pubs_landing/data.php"
 MANIFEST = os.environ.get("GEOLMAP_MANIFEST", "")
 SKIP_EXISTING = os.environ.get("SKIP_EXISTING", "1") != "0"
 THUMBS = os.environ.get("THUMBS", "1") != "0"
-COG_COMPRESS = os.environ.get("COG_COMPRESS", "webp").lower()
+# deflate = lossless master: the plate is the archival source of truth (and re-tiled downstream
+# into the mosaic), so it must not be lossy — webp-lossy frays the fine linework. webp still selectable.
+COG_COMPRESS = os.environ.get("COG_COMPRESS", "deflate").lower()
 COG_QUALITY = int(os.environ.get("COG_QUALITY", "90"))
 COG_DPI = int(os.environ.get("COG_DPI", "600"))
 MAX_ZIP_SIZE_MB = int(os.environ.get("MAX_ZIP_SIZE_MB", "0"))
+# A COLOR geologic-map render must win over a grayscale shaded-relief base / topo plate. Pick the
+# source raster by CONTENT (mean per-pixel R/G/B spread), not filename — the old name regex fell to a
+# grayscale plate and served ~31 maps in B&W though a color render sat in the same zip. Below this
+# floor a raster reads as grayscale (DEM, hillshade, or B&W scan); see prepare_plates + the post-COG guard.
+COLOR_SAT_FLOOR = float(os.environ.get("COLOR_SAT_FLOOR", "8"))
 
 
 class ZipTooLargeError(Exception):
@@ -71,10 +78,12 @@ _series_ctx: contextvars.ContextVar[str] = contextvars.ContextVar("series_id", d
 
 
 def hlog(message: str, *, step: str = "", level: str = "INFO", category: str = "",
-         err: bool = False) -> None:
+         err: bool = False, extra: dict | None = None) -> None:
     rec = {"severity": level, "series_id": _series_ctx.get(), "step": step, "message": message}
     if category:
         rec["category"] = category  # ok | expected | attention — triage in the report
+    if extra:
+        rec.update(extra)           # structured payload (e.g. the per-pub harvest report record)
     print(json.dumps(rec), file=sys.stderr if err else sys.stdout, flush=True)
 
 
@@ -89,6 +98,106 @@ def outcome_category(code: str) -> str:
     if code.startswith("skip"):
         return "expected"   # placeholder / already-harvested / no spatial data
     return "attention"      # fail:*
+
+
+# --- Harvest run report -----------------------------------------------------------------------
+# A per-pub reconciliation of what the source bundle CONTAINED vs. what was USED and PRODUCED, so a
+# run is auditable without log-diving. The pub's pipeline stages fill `_pub_report` in place
+# (harvest_one -> prepare_plates / _render_geospatial_pdf -> _harvest_attempt); `_run_report`
+# collects every pub. Module-level, not threaded through signatures — the run loop is sequential
+# per process (parallelism is across separate Cloud Run tasks/processes, each with its own state).
+_pub_report: dict = {}
+_run_report: list[dict] = []
+
+_SIDECAR_EXTS = (".tfwx", ".tfw", ".wld", ".aux.xml", ".prj", ".dbf", ".shx", ".cpg",
+                 ".sbn", ".sbx", ".xml")
+
+
+def _classify(name: str) -> str:
+    """Bucket a source-bundle inner file for the report."""
+    low = name.lower()
+    if low.endswith(".pdf"):
+        return "pdf"
+    if low.endswith((".tif", ".tiff")):
+        # Coarse label for the run report only — the color pick now selects the map raster by CONTENT
+        # (_source_saturation), not by name. A shaded-relief/topo BASE isn't the geologic map; a MashUp
+        # (unit-colors) render IS, so it's a "geotiff", not a "basemap".
+        return "basemap" if any(x in low for x in ("basemap", "topo", "hillshade")) else "geotiff"
+    if low.endswith(".shp"):
+        return "shapefile"
+    if low.endswith(_SIDECAR_EXTS):
+        return "sidecar"
+    return "other"
+
+
+def _report_begin(series_id: str) -> None:
+    global _pub_report
+    _pub_report = {"series_id": series_id, "source_zips": [], "found": [],
+                   "used": {"plate": None, "units_shp": None}, "tier": None,
+                   "produced": {"cog": None, "units_parquet": None, "thumbnail": None},
+                   "skipped": [], "status": None, "color_source_sat": None}
+
+
+def _report(section: str | None = None, **updates) -> None:
+    """Update the current pub report: section=None updates top-level keys, else the nested dict."""
+    target = _pub_report.setdefault(section, {}) if section else _pub_report
+    target.update(updates)
+
+
+def _report_add(key: str, entry: dict) -> None:
+    """Append to a list field (found / skipped) of the current pub report."""
+    _pub_report.setdefault(key, []).append(entry)
+
+
+def _report_geo(inner_name: str, value: bool) -> None:
+    """Stamp a found PDF entry with whether GDAL read a CRS (georeferenced)."""
+    for e in _pub_report.get("found", []):
+        if e["name"] == inner_name:
+            e["georeferenced"] = value
+            return
+
+
+def _report_derive_skipped(used_shp: str | None) -> None:
+    """Fill skipped[]: data files present in the source but not used, each with a reason."""
+    plate = _pub_report.get("used", {}).get("plate")
+    used_plate = os.path.basename(plate["name"]) if plate else None
+    tier = _pub_report.get("tier")
+    for e in _pub_report.get("found", []):
+        name, kind = e["name"], e["kind"]
+        base = os.path.basename(name)
+        if kind == "sidecar":
+            continue                                  # support files, not a selection decision
+        if used_plate and base == used_plate:
+            continue                                  # this is what we used
+        if kind == "shapefile" and name == used_shp:
+            continue
+        if kind == "pdf":
+            g = e.get("georeferenced")
+            # a georeferenced PDF only reaches skipped when its render failed (a successful one
+            # becomes used.plate and later candidates are never probed)
+            reason = ("no CRS" if g is False else
+                      "render failed at all DPIs" if g else "not evaluated (plate already chosen)")
+        elif kind == "geotiff":
+            reason = "superseded by geo-PDF" if tier == "geo-pdf" else "unused geotiff"
+        elif kind == "basemap":
+            reason = "basemap, not the map raster"
+        elif kind == "shapefile":
+            reason = "secondary shapefile"
+        elif base.lower().endswith(".mpk"):
+            reason = "unsupported (Esri map package)"
+        else:
+            continue                                  # docs/metadata — not a raster candidate
+        _report_add("skipped", {"name": name, "reason": reason})
+
+
+def _report_finish(status: str) -> None:
+    """Stamp the outcome, add the pub to the run, and emit its structured record."""
+    if not _pub_report.get("series_id"):
+        return
+    _pub_report["status"] = status
+    _run_report.append(dict(_pub_report))
+    hlog(f"report: {_pub_report['series_id']} tier={_pub_report.get('tier')} status={status}",
+         step="report", extra={"report": _pub_report})
 
 
 def _get(url, params):
@@ -332,35 +441,99 @@ def ensure_rgb(tif):
     return tif
 
 
+def _source_saturation(path) -> float:
+    """Color-vs-grayscale probe: the mean per-pixel R/G/B spread of a raster over its OPAQUE pixels,
+    read cheaply from a decimated 96x96 thumbnail. A palette raster is scored from its colortable's own
+    spread (a gray-ramp palette scores ~0; a real color table scores high). A 1-2 band non-Byte raster
+    is a DEM / data grid, not a map (-> -1, a silent intentional skip). Measuring only alpha>0 pixels
+    keeps the number margin-independent, so a warped COG (whose cutline collar is transparent) compares
+    apples-to-apples with its opaque source plate — the post-COG guard relies on that. Unreadable -> -1,
+    logged loud (never raises)."""
+    try:
+        import numpy as np  # noqa: F401
+        import rasterio
+        from rasterio.enums import ColorInterp, Resampling
+        with rasterio.open(path) as ds:
+            if ColorInterp.palette in ds.colorinterp:
+                try:
+                    cmap = ds.colormap(1)
+                except Exception:
+                    cmap = None
+                if cmap:                          # real color content of the palette, not a blanket 255
+                    spreads = [max(c[:3]) - min(c[:3]) for c in cmap.values()]
+                    return float(sum(spreads) / len(spreads)) if spreads else 0.0
+                return 255.0
+            if ds.count < 3 and str(ds.dtypes[0]) != "uint8":
+                return -1.0                       # 1-2 band non-Byte = DEM / data grid — intentional skip
+            nb = min(ds.count, 4)
+            has_alpha = (nb >= 4 and ds.colorinterp[3] == ColorInterp.alpha
+                         and str(ds.dtypes[3]) == "uint8")   # band 4 = real alpha, not RGBN's NIR
+            a = ds.read(indexes=list(range(1, nb + 1)), out_shape=(nb, 96, 96),
+                        resampling=Resampling.average).astype("float32")
+    except Exception as e:
+        hlog(f"WARN source-color probe failed for {os.path.basename(str(path))}: {str(e)[:80]}",
+             step="plate", level="WARNING")
+        return -1.0
+    if a.shape[0] < 3:                            # 1-band Byte grayscale scan -> zero spread
+        return 0.0
+    spread = a[:3].max(axis=0) - a[:3].min(axis=0)   # per-pixel chroma spread
+    if has_alpha:                                 # ignore transparent cutline margins entirely
+        opaque = a[3] > 0
+        return float(spread[opaque].mean()) if opaque.any() else 0.0
+    return float(spread.mean())
+
+
+def _pick_color_gtif(tif_candidates):
+    """Pick the most-colorful source GeoTIFF among (zip_path, inner_name) candidates. Returns
+    (zip_path, inner_name, saturation) for the best, or None if none is a readable raster."""
+    best = None
+    for zip_path, inner in tif_candidates:
+        sat = _source_saturation(f"/vsizip/{zip_path}/{inner}")
+        if sat < 0:                               # unreadable / DEM — not a map candidate
+            continue
+        if best is None or sat > best[2]:
+            best = (zip_path, inner, sat)
+    return best
+
+
 def prepare_plates(zip_paths, work):
-    """Extract plates from multiple zips. If COG_DPI>0 and a geospatial PDF is present, rasterize
-    it at COG_DPI and georeference from the GeoTIFF; else use the published GeoTIFF. Returns
-    (plate_path_or_vrt, shapefile_path_or_None)."""
-    import rasterio
-    gtif = pdf = shp = None
-    target_zip = None
-    inner_gtif = None
+    """Extract plates from multiple zips. If COG_DPI>0 and a GEOSPATIAL PDF is present (detected by
+    content — GDAL reads a CRS — not by filename), rasterize it at COG_DPI via GDAL using the PDF's
+    OWN georeferencing, and return that as the plate. Else use the published GeoTIFF. Returns
+    (plate_path, shapefile_path_or_None).
+
+    UGS plates are named `..._Plate1.pdf`, not `*geospatial.pdf`, so the old name regex missed them
+    and the harvest fell back to the ~1.5 m GeoTIFF (z16). A geospatial plate PDF carries full ~600
+    DPI vector cartography (→ z17), and its internal georef places the map frame correctly even
+    though the page includes the collar — the later cutline warp (in _harvest_attempt) trims the
+    collar to the map footprint. (The old pdftoppm + `-a_ullr`-from-the-GeoTIFF path only worked for
+    a map-frame-only PDF and would misregister a full plate.)"""
+    gtif = shp = None
+    target_zip = inner_gtif = None
+    pdf_candidates = []  # (zip_path, inner_name)
+    tif_candidates = []  # (zip_path, inner_name) — probed by content to pick the color source
+    _report(color_source_sat=None)
     for zip_path in zip_paths:
         with zipfile.ZipFile(zip_path) as z:
             names = z.namelist()
-            _gtif = (pick(names, r"plate1.*geotiff\.tiff?$", r"geotiff\.tiff?$",
-                          r"utah-500k.*\.tiff?$")
+            for _nm in names:                        # full source inventory for the run report
+                if not _nm.endswith("/"):
+                    _report_add("found", {"name": _nm, "kind": _classify(_nm)})
+            _gtif = (pick(names, r"plate1.*geotiff\.tiff?$", r"geotiff\.tiff?$", r"utah-500k.*\.tiff?$")
                      or next((n for n in names if n.lower().endswith((".tif", ".tiff")) and not any(
                           x in n.lower() for x in ("basemap", "topo", "hillshade", "mashup"))), None))
-            _pdf = pick(names, r"plate1.*geospatial\.pdf$", r"geospatial\.pdf$",
-                        r"GeologicMapOfUtah_plate1\.pdf$")
             _shp = pick(names, r"geologicunits\.shp$", r"units\.shp$")
             if _gtif:
                 gtif = _gtif
                 target_zip = zip_path
                 inner_gtif = _gtif
-            if _pdf:
-                pdf = _pdf
             if _shp:
                 shp = _shp
+            pdf_candidates += [(zip_path, n) for n in names if n.lower().endswith(".pdf")]
+            tif_candidates += [(zip_path, n) for n in names if n.lower().endswith((".tif", ".tiff"))
+                               and not any(j in n.lower() for j in
+                                           ("legend", "correlation", "thumb", "index", "keyboard", "hillshade"))]
             want = []
-            if _pdf:
-                want.append(_pdf)
             if _shp:
                 stem = re.sub(r"\.shp$", "", _shp, flags=re.I)
                 want += [n for n in names if re.sub(r"\.[^.]+$", "", n) == stem]
@@ -372,39 +545,122 @@ def prepare_plates(zip_paths, work):
                 z.extract(nm, work)
 
     shp_path = os.path.join(work, shp) if shp else None
+    _report("used", units_shp=shp)
+    rendered = _render_geospatial_pdf(pdf_candidates, work)
+    if rendered:
+        _report(tier="geo-pdf")                       # _render recorded used["plate"] (name + dpi)
+        _report_derive_skipped(shp)
+        return rendered, shp_path
+    # No georeferenced PDF: choose the source GeoTIFF by COLOR content, not name — a color render
+    # (MashUp / unit-colors, or a color plate that misses the name patterns) must beat a grayscale
+    # shaded-relief base / topo plate. Falls through to the legacy name pick when nothing is color.
+    best = _pick_color_gtif(tif_candidates)
+    if best and best[2] >= COLOR_SAT_FLOOR:
+        target_zip, inner_gtif, sat = best
+        with zipfile.ZipFile(target_zip) as z:                 # bring the chosen plate's sidecars over
+            gstem = re.sub(r"\.[^.]+$", "", inner_gtif)
+            for nm in z.namelist():
+                if nm.startswith(gstem + ".") and nm.lower().endswith(
+                        (".tfwx", ".tfw", ".wld", ".aux.xml", ".prj")):
+                    z.extract(nm, work)
+        _report(color_source_sat=sat)
+        virtual_gtif = f"/vsizip/{target_zip}/{inner_gtif}"
+        gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
+        _report(tier="geotiff")
+        _report("used", plate={"name": inner_gtif, "dpi": None})
+        _report_derive_skipped(shp)
+        return gtif_path, shp_path
+    if tif_candidates:
+        # We probed rasters but none cleared the color floor. Usually a genuinely grayscale scan (fine),
+        # but this is also where a COLOR plate that failed to READ would silently vanish — surface it.
+        best_sat = best[2] if best else -1.0
+        hlog(f"advisory: no color source among {len(tif_candidates)} GeoTIFF candidate(s) "
+             f"(best spread {best_sat:.1f} < floor {COLOR_SAT_FLOOR:.0f}) — using name-pick GeoTIFF; a "
+             f"color plate that failed to read (spread -1) would show here", step="plate", level="WARNING")
     if not gtif:
+        _report_derive_skipped(shp)
         return None, shp_path
     virtual_gtif = f"/vsizip/{target_zip}/{inner_gtif}"
     gtif_path = corrected_georef(virtual_gtif, work, zip_path=target_zip, inner_gtif=inner_gtif)
-    if COG_DPI > 0 and pdf:
-        prefix = os.path.join(work, "plate")
+    _report(tier="geotiff")
+    _report("used", plate={"name": inner_gtif, "dpi": None})
+    _report_derive_skipped(shp)
+    return gtif_path, shp_path
+
+
+def _pdf_has_crs(path):
+    """(opened, has_crs) for a PDF, via the CLI `gdalinfo` — the render already uses the CLI
+    gdal_translate, and the harvest image's rasterio (a pip wheel) has no PDF driver, so detection
+    must use the same poppler-capable CLI GDAL, not rasterio.open. Reads only the geo dict (no
+    rasterization), so it stays cheap. opened=False means GDAL could not open the PDF at all."""
+    try:
+        out = subprocess.run(["gdalinfo", "-json", path], capture_output=True, text=True, timeout=120)
+    except Exception:
+        return False, False
+    if out.returncode != 0 or not out.stdout:
+        return False, False
+    try:
+        info = json.loads(out.stdout)
+    except Exception:
+        return True, False
+    return True, bool((info.get("coordinateSystem") or {}).get("wkt"))
+
+
+def _render_geospatial_pdf(pdf_candidates, work):
+    """Return a path to a GeoTIFF rendered from the first GEOSPATIAL plate PDF among `pdf_candidates`
+    (list of (zip_path, inner_name)), rasterized at COG_DPI via GDAL (using the PDF's OWN georef),
+    or None if COG_DPI<=0, no candidate is georeferenced, or rendering keeps failing (caller falls
+    back to the GeoTIFF). A plate1-named candidate is tried first. Detection uses the CLI `gdalinfo`
+    (the render's poppler-capable GDAL — the image's rasterio wheel has no PDF driver); it reads only
+    the geo dict, no rasterization, so it stays cheap."""
+    if COG_DPI <= 0 or not pdf_candidates:
+        return None
+    ordered = sorted(pdf_candidates, key=lambda zn: (0 if "plate1" in zn[1].lower() else 1, zn[1].lower()))
+    opened_any = False   # GDAL could actually READ at least one PDF (i.e. the driver has a backend)
+    crs_seen = False     # at least one PDF carried embedded georeferencing
+    for zp, nm in ordered:
+        with zipfile.ZipFile(zp) as z:
+            z.extract(nm, work)
+        cand = os.path.join(work, nm)
+        opened, has_crs = _pdf_has_crs(cand)
+        if opened:
+            opened_any = True
+        _report_geo(nm, has_crs)
+        if not has_crs:
+            continue
+        crs_seen = True
         dpi = COG_DPI
+        rendered = os.path.join(work, "plate_render.tif")
         while dpi >= 150:
             try:
-                run(["pdftoppm", "-png", "-r", str(dpi), os.path.join(work, pdf), prefix])
-                break
+                run(["gdal_translate", "-q", "-oo", f"DPI={dpi}", cand, rendered,
+                     "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", "-co", "BIGTIFF=YES"])
+                hlog(f"geospatial PDF rendered at {dpi}dpi ({os.path.basename(nm)})", step="plate")
+                _report("used", plate={"name": os.path.basename(nm), "dpi": dpi})
+                return rendered
             except Exception as e:
-                hlog(f"pdftoppm failed at {dpi} DPI (likely OOM): {e}. Retrying at lower DPI...",
-                     step="plate", level="WARNING")
-                dpi = dpi // 2
-                # Clean up any partial output
-                for filename in os.listdir(work):
-                    if filename.startswith("plate-") or filename == "plate.png":
-                        try:
-                            os.remove(os.path.join(work, filename))
-                        except Exception:
-                            pass
-        png = next((p for p in (prefix + "-1.png", prefix + ".png") if os.path.exists(p)), None)
-        with rasterio.open(gtif_path) as g:
-            b, crs = g.bounds, g.crs
-        if png and crs is not None:
-            srs = os.path.join(work, "srs.wkt")
-            open(srs, "w").write(crs.to_wkt())
-            vrt = os.path.join(work, "plate.vrt")
-            run(["gdal_translate", "-q", "-of", "VRT", "-a_srs", srs, "-a_ullr",
-                 str(b.left), str(b.top), str(b.right), str(b.bottom), png, vrt])
-            return vrt, shp_path
-    return gtif_path, shp_path
+                hlog(f"geoPDF render failed at {dpi}dpi ({e}); retrying lower", step="plate", level="WARNING")
+                if os.path.exists(rendered):
+                    os.remove(rendered)
+                dpi //= 2
+        break
+    # No geospatial plate was rendered — fall back to the low-res GeoTIFF. Surface WHY as an ADVISORY
+    # (WARNING, never attention/blocking): the pub still produces a valid COG and succeeds; the run
+    # report is the audit trail, this log is just at-a-glance visibility into which pubs fell back.
+    n = len(pdf_candidates)
+    if not opened_any:
+        # Opened ZERO of the candidates → the PDF driver likely has no working backend (poppler/pdfium)
+        # in this image, so every pub degrades to z16. Advisory, so it's visible without gating a run.
+        hlog(f"advisory: GDAL opened 0 of {n} candidate PDF(s) (missing poppler/pdfium backend?) — "
+             f"using GeoTIFF (z16); fix the harvest image or set COG_DPI=0 to use GeoTIFF intentionally",
+             step="plate", level="WARNING")
+    elif crs_seen:
+        hlog("advisory: geospatial plate found but render failed at every DPI down to 150 — using "
+             "GeoTIFF (z16)", step="plate", level="WARNING")
+    else:
+        hlog(f"{n} plate PDF(s) present but none georeferenced (no embedded CRS) — using GeoTIFF "
+             f"(lower res)", step="plate", level="WARNING")
+    return None
 
 
 def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> str:
@@ -412,6 +668,7 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
     pub = identity.Pub.parse(series_id)
     series_id = pub.series_id
     _series_ctx.set(series_id)
+    _report_begin(series_id)
     if "XXXX" in series_id:
         hlog("SKIP unpublished placeholder", step="resolve", level="NOTICE", category="expected")
         return "skip:placeholder"
@@ -472,6 +729,11 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
 
     series_id = pub.series_id
     _series_ctx.set(series_id)
+    # Each attempt re-inventories the source (harvest_one may retry with a different zip set), so
+    # reset the per-attempt report fields; series_id/status stay owned by harvest_one/_report_finish.
+    _report(source_zips=list(zurls), found=[], skipped=[], tier=None, color_source_sat=None,
+            used={"plate": None, "units_shp": None},
+            produced={"cog": None, "units_parquet": None, "thumbnail": None})
     work = tempfile.mkdtemp(prefix=f"h_{series_id.replace('/', '_')}_")
     try:
         cut, n_feat = footprint(series_id, work)
@@ -506,7 +768,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         prof = dict(cog_profiles.get(COG_COMPRESS))
         prof["bigtiff"] = "IF_SAFER"
         if COG_COMPRESS == "webp":
-            prof["quality"] = COG_QUALITY
+            prof["WEBP_LEVEL"] = COG_QUALITY
         elif COG_COMPRESS in ("zstd", "deflate", "lzw"):
             prof["predictor"] = 2
 
@@ -517,19 +779,23 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             if os.path.exists(cog):
                 os.remove(cog)
             prof["compress"] = "lzw"
-            prof.pop("quality", None)          # webp-only; lzw rejects it
-            cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
+            prof.pop("WEBP_LEVEL", None)        # webp-only; lzw rejects it
+            cog_translate(rgb_clipped, cog, prof, web_optimized=True,
+                          overview_resampling="bilinear", quiet=True)
 
         # webp is 8-bit-only and raises on 16-bit/float plates; lossless lzw keeps web_optimized
         # so the result is still tiled + overviewed for range reads.
         try:
-            cog_translate(rgb_clipped, cog, prof, web_optimized=True, quiet=True)
+            cog_translate(rgb_clipped, cog, prof, web_optimized=True,
+                          overview_resampling="bilinear", quiet=True)
         except Exception as e:  # noqa: BLE001 — any encode failure is worth one lossless retry
             if COG_COMPRESS != "webp":
                 raise
             _to_lzw(f"failed ({type(e).__name__}: {str(e)[:80]})")
         else:
-            if not os.path.exists(cog) or os.path.getsize(cog) < 100_000:
+            # webp can "succeed" yet emit a tiny/garbage COG; deflate/lzw don't — so this
+            # sanity-retry is webp-only (a real deflate encode error already re-raised above).
+            if COG_COMPRESS == "webp" and (not os.path.exists(cog) or os.path.getsize(cog) < 100_000):
                 _to_lzw("empty/undersized")
 
         # Free up tmpfs RAM by deleting the intermediate clipped/rgb and plate images
@@ -556,12 +822,25 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         if not ok:
             hlog("FAIL cog invalid", step="validate", level="ERROR", category="attention", err=True)
             return "fail:cog"
+        # "It ran ≠ it's right": a COLOR source that came out grayscale means the pipeline silently
+        # dropped the color — never publish it. (No-op for a webp COG the rasterio wheel can't read:
+        # _source_saturation returns -1, which fails the `0 <= cog_sat` check.)
+        src_sat = _pub_report.get("color_source_sat")
+        if src_sat is not None and src_sat >= COLOR_SAT_FLOOR:
+            cog_sat = _source_saturation(cog)
+            if 0 <= cog_sat < COLOR_SAT_FLOOR:
+                hlog(f"FAIL color source (sat {src_sat:.0f}) produced a GRAYSCALE COG (sat {cog_sat:.1f}) "
+                     "— refusing to publish", step="validate", level="ERROR", category="attention", err=True)
+                return "fail:grayscale_cog"
         # IMMUTABLE: COGs are heavily byte-range-read by the viewer (one request per tile/overview).
         # no-cache means the CDN edge-caches NONE of those → every tile round-trips to GCS origin →
         # the slow "flood of requests" on zoom. COGs are write-once (upload_write_once refuses to
         # overwrite an existing object) — a revision publishes as a new edition (new series_id),
         # never an in-place rewrite, so long-cache is always safe.
         gcs.upload_write_once(cog, pub.cog_object, content_type=COG_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+        _report("produced", cog={"object": pub.cog_object,
+                                 "size_mb": os.path.getsize(cog) // 1024 // 1024,
+                                 "compress": prof.get("compress", COG_COMPRESS)})
         if shp:
             import duckdb
             gpq = os.path.join(work, f"{series_id}.units.parquet")
@@ -571,13 +850,15 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                 con.execute(f"COPY (SELECT * FROM ST_Read('{shp}')) TO '{gpq}' (FORMAT PARQUET)")
             finally:
                 con.close()
-            gcs.upload(gpq, f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet",
-                       content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+            units_obj = f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet"
+            gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+            _report("produced", units_parquet=units_obj)
         if THUMBS:
             th = os.path.join(work, f"{series_id}.thumb.png")
+            thumb_obj = f"{identity.COG_PREFIX}/{series_id}.thumb.png"
             run(["gdal_translate", "-of", "PNG", "-outsize", "700", "0", cog, th])
-            gcs.upload(th, f"{identity.COG_PREFIX}/{series_id}.thumb.png",
-                       content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
+            gcs.upload(th, thumb_obj, content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
+            _report("produced", thumbnail=thumb_obj)
         used = prof.get("compress", COG_COMPRESS)          # may have fallen back from webp
         qual = f" q{COG_QUALITY}" if used == "webp" else ""
         hlog(f"OK ({COG_DPI}dpi {used}{qual}) → {pub.cog_object}", step="result", category="ok")
@@ -658,7 +939,36 @@ def main() -> int:
     for sid in sids:
         res = harvest_one(sid, dry_run=args.dry_run, force=args.force)
         tally[outcome_category(res)] += 1
+        _report_finish(res)
     _series_ctx.set("")  # the summary is job-level, not scoped to the last pub
+
+    # Persist the run report (found-vs-used-vs-produced per pub) as one artifact + a tier roll-up,
+    # so a run is auditable at a glance and a GeoTIFF fallback (z16) jumps out of the counts.
+    report_path = os.environ.get("HARVEST_REPORT", "harvest-report.json")
+    try:
+        with open(report_path, "w") as f:
+            json.dump(_run_report, f, indent=2)
+        report_gcs = os.environ.get("HARVEST_REPORT_GCS")
+        if report_gcs:
+            # gcs.upload wants a bucket-relative object path; tolerate a full gs://bucket/obj URL too.
+            obj = (report_gcs.split("/", 3)[3]
+                   if report_gcs.startswith("gs://") and report_gcs.count("/") >= 3 else report_gcs)
+            gcs.upload(report_path, obj, content_type="application/json",
+                       cache_control=gcs.CACHE_MUTABLE)
+            hlog(f"harvest report → {report_gcs}", step="report")
+    except Exception as e:
+        hlog(f"could not write harvest report: {e}", step="report", level="WARNING")
+    tiers = {"geo-pdf": 0, "geotiff": 0, "none": 0}
+    skipped = 0
+    for r in _run_report:
+        if (r.get("status") or "").startswith("skip"):
+            skipped += 1                              # already-harvested / placeholder — not "no source"
+        else:
+            tiers[r.get("tier") or "none"] += 1
+    hlog(f"report: {tiers['geo-pdf']} geo-pdf (z17), {tiers['geotiff']} geotiff (z16), "
+         f"{tiers['none']} no-source, {skipped} skipped across {len(_run_report)} pub(s) → {report_path}",
+         step="report")
+
     hlog(f"run complete: {tally['ok']} ok, {tally['expected']} expected (skip / PDF-only), "
          f"{tally['attention']} need attention", step="summary",
          level="WARNING" if tally["attention"] else "NOTICE")

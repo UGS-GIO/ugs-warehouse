@@ -227,17 +227,21 @@ let seq = 0;
 const ident = (c: string) => `"${c.replace(/"/g, '""')}"`;
 const lit = (s: string) => `'${s.replace(/'/g, "''")}'`;
 
-// Register each remote GeoParquet with DuckDB-WASM ONCE and reuse the handle, so paging, the
-// pre-flight and the export share one registration of a URL and the footer and column chunks each
-// has already fetched (newDb opens these range-reading).
-// LRU of registered parquet handles; each pins DuckDB's in-WASM HTTP buffer, so cap + dropFile the
-// LRU so browsing many tables can't grow the heap unbounded. Re-insert on hit = MRU (insertion order).
+// Register each remote GeoParquet with DuckDB-WASM ONCE, reuse across paged queries. With range reads
+// enabled at db.open() (see data/duckdb.ts), DuckDB pulls only the footer + the projected columns'
+// chunks per query, so paging a 400k-row, multi-GB table never downloads the whole file. Cache keyed
+// by URL so the explorer's page/sort/search re-queries hit the same registered handle.
+// LRU of registered handles: cap + dropFile so browsing many tables can't grow the heap unbounded.
+// Re-insert on hit = MRU (insertion order).
 const REGISTERED_CAP = 12;
 const registered = new Map<string, string>();
 
 // Ref-count in-use handles so eviction never dropFiles one a live query is mid-read on. Callers
 // borrow via registerUrl and release() in finally.
 const inUse = new Map<string, number>();
+// In-flight registrations, so concurrent callers (columnTypes + queryParquet on mount) share ONE
+// registerFileURL instead of each registering (and opening, i.e. fetching) the same URL twice.
+const pending = new Map<string, { promise: Promise<string>; waiters: number }>();
 const borrow = (src: string) => inUse.set(src, (inUse.get(src) ?? 0) + 1);
 const release = (src: string) => { const n = (inUse.get(src) ?? 0) - 1; if (n > 0) inUse.set(src, n); else inUse.delete(src); };
 
@@ -253,6 +257,22 @@ export function evictionVictim(
 async function registerUrl(parquetUrl: string): Promise<string> {
   const hit = registered.get(parquetUrl);
   if (hit) { registered.delete(parquetUrl); registered.set(parquetUrl, hit); borrow(hit); return hit; }  // touch → MRU
+  let p = pending.get(parquetUrl);
+  if (!p) {
+    const entry = { waiters: 0, promise: undefined as unknown as Promise<string> };
+    entry.promise = register(parquetUrl, entry).finally(() => pending.delete(parquetUrl));
+    pending.set(parquetUrl, entry);
+    p = entry;
+  }
+  p.waiters++;  // register() borrows once per waiter before it resolves; each caller still release()s in finally
+  return p.promise;
+}
+
+// Registration proper (one per URL; concurrent callers share it via `pending`). HTTP range reads are
+// enabled at db.open() (see data/duckdb.ts), NOT here; directIO stays false so DuckDB's page cache
+// keeps the file open across a table's paged queries. Borrows once per waiter inside the same sync
+// block as the registered.set, so eviction can't drop the fresh handle before its callers mark it in use.
+async function register(parquetUrl: string, entry: { waiters: number }): Promise<string> {
   const duckdb = await import("@duckdb/duckdb-wasm");
   const db = await getDB();
   // Evict the LRU, skipping in-use handles; if all are borrowed, run temporarily over cap.
@@ -265,7 +285,7 @@ async function registerUrl(parquetUrl: string): Promise<string> {
   const src = `q${++seq}.parquet`;
   await db.registerFileURL(src, parquetUrl, duckdb.DuckDBDataProtocol.HTTP, false);
   registered.set(parquetUrl, src);
-  borrow(src);  // returned handle is borrowed; caller MUST release() in finally
+  for (let i = 0; i < entry.waiters; i++) borrow(src);
   return src;
 }
 
@@ -326,18 +346,18 @@ function buildWhere(columns: string[], opts: PageOpts): string {
   }
   return clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
 }
-// Inner ORDER BY expression (no leading " ORDER BY "): the user's sort, then feature_id as a stable
-// tiebreaker so two rows with an equal sort key always page in the same order — and the
-// feature_id→ordinal lookup (a row_number() window over this same expression) lines up with
-// LIMIT/OFFSET paging exactly. `hasId` is false for pre-reingest parquet with no feature_id.
-//
-// Empty with NO user sort, on purpose: a sort is global, so `ORDER BY feature_id` alone made the
-// unsorted first page read every column chunk in the file (11.3 MB on wetlands_riverine) before
-// returning row 1. feature_id is stamped in file order, so the tiebreaker bought nothing there.
-function orderExpr(columns: string[], opts: PageOpts, hasId: boolean): string {
-  const sorted = opts.orderBy && columns.includes(opts.orderBy);
-  if (!sorted) return "";
-  const parts = [`${ident(opts.orderBy!)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST`];
+// Inner ORDER BY expression (no leading " ORDER BY "): the user's sort (if any) then feature_id
+// as a stable tiebreaker, so two rows with an equal sort key always page in the same order, and
+// ordinalByFeatureId (a row_number() window over this same order) lines up with LIMIT/OFFSET paging
+// exactly. `hasId` is false for pre-reingest parquet with no feature_id.
+export function orderExpr(columns: string[], opts: PageOpts, hasId: boolean): string {
+  // No explicit user sort means physical/file order (empty ORDER BY). This turns the page query from a
+  // full-table TOP_N scan of every row into a streaming LIMIT read, which is what OOMs DuckDB-WASM on
+  // large layers. ordinalByFeatureId numbers over an empty window in this same case, so the map-click
+  // jump stays aligned with OFFSET paging whatever the physical row order is (e.g. after a spatial
+  // re-sort), not only when feature_id happens to match it.
+  if (!(opts.orderBy && columns.includes(opts.orderBy))) return "";
+  const parts = [`${ident(opts.orderBy)} ${opts.desc ? "DESC" : "ASC"} NULLS LAST`];
   if (hasId) parts.push(`${ident(ID_COL)} ASC`);
   return parts.join(", ");
 }
@@ -441,45 +461,11 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
   }
 }
 
-/** Real geometry of one row (the row at `rowOffset` under the same filter+sort as the page query),
- *  read as WKB and parsed to GeoJSON in JS — NO spatial extension load (which trips DuckDB-WASM's
- *  GeoParquet CRS reader). Returns null if the file has no geometry or the row is gone. */
-export async function fetchGeometry(
-  parquetUrl: string, opts: Omit<PageOpts, "limit" | "offset">, rowOffset: number,
-): Promise<GeoJSON.Geometry | null> {
-  const db = await getDB();
-  const conn = await db.connect();
-  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
-  try {
-    const src = borrowed = await registerUrl(parquetUrl);
-    const from = `read_parquet('${src}')`;
-    const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
-    const allCols = desc.toArray().map((r) => String(r.column_name));
-    const geomCol = GEOM_NAMES.find((c) => allCols.includes(c));
-    if (!geomCol) return null;
-    const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-    const hasId = allCols.includes(ID_COL);
-    const hidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
-    const columns = allCols.filter((c) => !hidden.has(c));
-    const full: PageOpts = { ...opts, limit: 1, offset: rowOffset };
-    const res = await conn.query(
-      `SELECT ${ident(geomCol)} AS g FROM ${from}${buildWhere(columns, full)}${buildOrder(columns, full, hasId)} LIMIT 1 OFFSET ${rowOffset};`,
-    );
-    const blob = res.toArray()[0]?.g as Uint8Array | null | undefined;
-    if (!blob) return null;
-    const { wkbToGeoJSON } = await import("./wkb");
-    return wkbToGeoJSON(blob);
-  } finally {
-    if (borrowed !== undefined) release(borrowed);
-    await conn.close();
-  }
-}
-
 /** 0-based position of the row carrying `featureId` under the SAME sort+filter the explorer shows,
  *  so the caller can jump the table to page `floor(pos / PAGE_SIZE)` and highlight row
  *  `pos % PAGE_SIZE`. Returns null if the parquet has no feature_id, or the row is filtered out of
- *  the current view. Uses the same orderExpr (incl. the feature_id tiebreaker) as the page query,
- *  so the position aligns with OFFSET paging exactly. */
+ *  the current view. Numbers rows in the SAME order the page query uses (its ORDER BY when the user
+ *  sorted, else scan order), so the position aligns with OFFSET paging exactly. */
 export async function ordinalByFeatureId(
   parquetUrl: string, featureId: number, opts: Omit<PageOpts, "limit" | "offset">,
 ): Promise<number | null> {
@@ -497,60 +483,20 @@ export async function ordinalByFeatureId(
     const columns = allCols.filter((c) => !colHidden.has(c));
     const full: PageOpts = { ...opts, limit: 1, offset: 0 };
     const where = buildWhere(columns, full);
-    const ord = orderExpr(columns, full, true);  // hasId known true here
-    // Empty when unsorted — the page query is then in file order, so the window must be too
-    // (`OVER ()` numbers rows in scan order, which DuckDB preserves).
-    const over = ord ? `OVER (ORDER BY ${ord})` : "OVER ()";
+    // The window MUST order rows exactly like the page query, or the computed position won't line up
+    // with OFFSET paging. With no user sort the page has no ORDER BY (physical scan order), so number
+    // over an empty window (also scan order) instead of feature_id: that keeps the two in lockstep
+    // even after the parquet is spatially re-sorted, when feature_id no longer equals row order.
+    const ord = orderExpr(columns, full, true);
+    const over = ord ? `ORDER BY ${ord}` : "";
     const res = await conn.query(
       `SELECT pos FROM (
-         SELECT ${ident(ID_COL)} AS fid, row_number() ${over} - 1 AS pos
+         SELECT ${ident(ID_COL)} AS fid, row_number() OVER (${over}) - 1 AS pos
          FROM ${from}${where}
        ) WHERE fid = ${Number(featureId)};`,
     );
     const pos = res.toArray()[0]?.pos;
     return pos == null ? null : Number(pos);
-  } finally {
-    if (borrowed !== undefined) release(borrowed);
-    await conn.close();
-  }
-}
-
-/** Geometry + bbox of the row carrying `featureId`, looked up directly by id (independent of the
- *  current sort/filter) so a map click can highlight + fly to the real feature even when it's
- *  filtered out of the visible table page. bbox comes from the plain covering columns (no spatial
- *  extension); geometry from the WKB blob parsed in JS. Returns null if there's no feature_id. */
-export async function fetchRowById(
-  parquetUrl: string, featureId: number,
-): Promise<{ bbox?: [number, number, number, number]; geometry: GeoJSON.Geometry | null } | null> {
-  const db = await getDB();
-  const conn = await db.connect();
-  let borrowed: string | undefined;  // released in finally so LRU eviction can't drop a live handle
-  try {
-    const src = borrowed = await registerUrl(parquetUrl);
-    const from = `read_parquet('${src}')`;
-    const desc = await conn.query(`DESCRIBE SELECT * FROM ${from};`);
-    const allCols = desc.toArray().map((r) => String(r.column_name));
-    if (!allCols.includes(ID_COL)) return null;
-    const geomCol = GEOM_NAMES.find((c) => allCols.includes(c));
-    const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-    const sel = [
-      geomCol ? `${ident(geomCol)} AS g` : "NULL AS g",
-      ...(hasBbox ? BBOX_COLS.map((c) => `${ident(c)} AS ${c}`) : []),
-    ].join(", ");
-    const res = await conn.query(
-      `SELECT ${sel} FROM ${from} WHERE ${ident(ID_COL)} = ${Number(featureId)} LIMIT 1;`,
-    );
-    const row = res.toArray()[0];
-    if (!row) return null;
-    let geometry: GeoJSON.Geometry | null = null;
-    const blob = row.g as Uint8Array | null | undefined;
-    if (blob) geometry = (await import("./wkb")).wkbToGeoJSON(blob);
-    let bbox: [number, number, number, number] | undefined;
-    if (hasBbox) {
-      const b = BBOX_COLS.map((c) => Number(row[c]));
-      if (b.every((n) => Number.isFinite(n))) bbox = b as [number, number, number, number];
-    }
-    return { bbox, geometry };
   } finally {
     if (borrowed !== undefined) release(borrowed);
     await conn.close();

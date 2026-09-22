@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// duckdb-wasm >= 1.30 defaults forceFullHTTPReads=true. We only found that after a footer query
-// on a 1.35 GB topic cost 63s and a 2 GB one crashed the tab, because nothing failed — it just
-// downloaded everything. These lock which readers opt out, so a version bump or a refactor that
+// duckdb-wasm >= 1.30 defaults forceFullHTTPReads=true. We only found that after a footer query on
+// a 1.35 GB topic cost 63s and a 2 GB one crashed the tab, because nothing failed — it just
+// downloaded everything. These lock the opt-out in place, so a version bump or a refactor that
 // drops the call fails here instead of silently costing a full download again.
 const { open, instantiate, registerFileURL, connect } = vi.hoisted(() => ({
   open: vi.fn(), instantiate: vi.fn(), registerFileURL: vi.fn(),
@@ -20,21 +20,22 @@ vi.stubGlobal("Worker", class { terminate() {} });
 
 beforeEach(() => { open.mockClear(); connect.mockClear(); instantiate.mockClear(); });
 
+const RANGE_READS = { filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: false } };
+
 describe("range reads", () => {
-  it("are on for the parquet readers, which touch part of a file", async () => {
+  it("are on for the explorer and exporter, which touch part of a file", async () => {
     const { newDuckDb } = await import("./duckdb");
     await newDuckDb();
-    expect(open).toHaveBeenCalledWith({
-      filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: false },
-    });
+    expect(open).toHaveBeenCalledWith(RANGE_READS);
   });
 
-  // Measured on the 485 MB pub-search index: ranges fetch ~19% MORE bytes in the same wall time,
-  // because an FTS walk touches pages all over it. One fetch is better for a whole-file reader.
-  it("are off for the review diff, which reads whole columns", async () => {
+  // Also on for the whole-file readers. They fetch more bytes that way (measured: 577 MB against
+  // 485 MB on the pub-search index) but finish sooner, because a query starts before the file has
+  // landed rather than after: 21.7s against 34.5s for an ATTACH plus a BM25 query.
+  it("are on for the review diff too", async () => {
     const { openParquet } = await import("./duckdb");
     const { close } = await openParquet({ "a.parquet": "https://cdn/a.parquet" });
-    expect(open).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledWith(RANGE_READS);
     await close();
   });
 

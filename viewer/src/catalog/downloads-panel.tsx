@@ -74,6 +74,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   // screen wherever the user ends up.
   const running = useSyncExternalStore(subscribeExport, currentExport);
   const invoker = useRef<HTMLButtonElement | null>(null);
+  const ticket = useRef<number | null>(null);
 
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }) => {
@@ -81,7 +82,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       const { beginExport, exportItem, exportWarnings } = await import("@/data/download");
       // The ticket is taken BEFORE the pre-flight, which is the slow part — a cancel during it
       // has to suppress the delivery too.
-      const epoch = beginExport();
+      const epoch = ticket.current = beginExport();
       // Every format reads the whole GeoParquet into the tab, so every format is pre-flighted.
       // A failed pre-flight just proceeds to the export.
       if (!force) {
@@ -94,8 +95,12 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   });
   const busy = run.isPending ? run.variables.fmt : null;
   // Suppresses the delivery, not the work: see cancelExports.
+  // Cancels the run this panel started, or the one it inherited after a remount — never
+  // everything in flight.
   const cancel = () => {
-    void import("@/data/download").then((m) => m.cancelExports());
+    const id = ticket.current ?? running?.id;
+    if (id !== undefined && id !== null) void import("@/data/download").then((m) => m.cancelExport(id));
+    ticket.current = null;
     run.reset();
   };
   // Stable identity: an inline arrow is a new ref every commit, so React would re-run it on each
@@ -143,7 +148,9 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         {sidecars.map(assetTile)}
       </div>
       {/* Always mounted: a live region created with its text is announced unreliably. Announces
-          the end as well as the start, since neither is otherwise visible to a screen reader. */}
+          the end as well as the start, since neither is otherwise visible to a screen reader.
+          The warning box below carries no live role for the same reason — moving focus into a
+          labelled container is what announces it. */}
       <p role="status" aria-live="polite" className={`mt-1.5 ${C.muted} ${busy ? "" : "sr-only"}`}>
         {busy
           ? `preparing in your browser · the first one loads DuckDB${GDAL_FORMATS.has(busy) ? " and GDAL (~40 MB)" : " (~a few MB)"}`
@@ -205,7 +212,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       )}
 
       {warn && (
-        <div role="alert" aria-labelledby="dl-warn-title" tabIndex={-1} ref={focusWarning}
+        <div aria-labelledby="dl-warn-title" tabIndex={-1} ref={focusWarning}
           onKeyDown={(e) => { if (e.key === "Escape") dismiss(); }}
           className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
           <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">

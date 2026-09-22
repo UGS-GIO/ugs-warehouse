@@ -571,15 +571,22 @@ export async function readFeatures3D(
 
 // DuckDB and GDAL calls are not interruptible, so cancelling suppresses the delivery instead.
 // The caller takes a ticket BEFORE the pre-flight — that is the slow part, and a cancel during it
-// has to count. `current` lets a panel that remounted mid-export still show and cancel the run.
-let exportEpoch = 0;
-let current: { stem: string; fmt: ExportFormat } | null = null;
+// has to count. Tickets are per-run, not a shared counter: cancelling one export must not
+// silently swallow another's file. `current` lets a panel that remounted mid-export still show
+// and cancel the run.
+export type ExportRun = { id: number; stem: string; fmt: ExportFormat };
+let ticket = 0;
+const cancelled = new Set<number>();
+let current: ExportRun | null = null;
 const listeners = new Set<() => void>();
-const publish = (run: typeof current) => { current = run; listeners.forEach((l) => l()); };
+const publish = (run: ExportRun | null) => { current = run; listeners.forEach((l) => l()); };
 
-export const beginExport = (): number => exportEpoch;
-export const cancelExports = (): void => { exportEpoch++; publish(null); };
-export const currentExport = (): { stem: string; fmt: ExportFormat } | null => current;
+export const beginExport = (): number => ++ticket;
+export const cancelExport = (id: number): void => {
+  cancelled.add(id);
+  if (current?.id === id) publish(null);
+};
+export const currentExport = (): ExportRun | null => current;
 export const subscribeExport = (l: () => void): (() => void) => {
   listeners.add(l);
   return () => { listeners.delete(l); };
@@ -591,18 +598,18 @@ export async function exportItem(
   fmt: ExportFormat,
   clip?: [number, number, number, number], // [w,s,e,n] in 4326 — clip to this AOI
   epsg = 4326,                              // output CRS for the gdal formats (shp/gpkg/gdb/fgb)
-  epoch = exportEpoch,                      // from beginExport(), taken before the pre-flight ran
+  epoch = beginExport(),                    // from beginExport(), taken before the pre-flight ran
 ): Promise<void> {
-  if (epoch !== exportEpoch) return;        // cancelled while the pre-flight was still running
+  if (cancelled.has(epoch)) return;         // cancelled while the pre-flight was still running
   const srs = safeEpsg(epsg);
   const db = await getDB();
   const conn = await db.connect();
   const id = ++seq;
   // Table names are database-scoped in DuckDB, so two runs would collide on a bare `raw`.
   const raw = `raw_${id}`, clipped = `clipped_${id}`;
-  publish({ stem, fmt });
+  publish({ id: epoch, stem, fmt });
   const deliver = (parts: Uint8Array[], filename: string, mime: string) => {
-    if (epoch === exportEpoch) triggerDownload(parts, filename, mime);
+    if (!cancelled.has(epoch)) triggerDownload(parts, filename, mime);
   };
   let csvOut: string | undefined;
   let seqOut: string | undefined;
@@ -670,7 +677,8 @@ export async function exportItem(
     if (borrowed !== undefined) release(borrowed);
     if (csvOut) await db.dropFile(csvOut).catch(() => {});
     if (seqOut) await db.dropFile(seqOut).catch(() => {});
-    if (current?.stem === stem) publish(null);
+    cancelled.delete(epoch);
+    if (current?.id === epoch) publish(null);   // by id: the same item can have two runs
   }
 }
 

@@ -8,11 +8,11 @@ import { DownloadsPanel } from "./downloads-panel";
 import type { StacDoc } from "@/stac";
 
 // `vi.mock` is hoisted above the file's consts, so the spies have to be hoisted with it.
-const { exportItem, exportWarnings, beginExport, cancelExports } = vi.hoisted(() => ({
-  exportItem: vi.fn(), exportWarnings: vi.fn(), beginExport: vi.fn(() => 7), cancelExports: vi.fn(),
+const { exportItem, exportWarnings, beginExport, cancelExport } = vi.hoisted(() => ({
+  exportItem: vi.fn(), exportWarnings: vi.fn(), beginExport: vi.fn(() => 7), cancelExport: vi.fn(),
 }));
 vi.mock("@/data/download", () => ({
-  exportItem, exportWarnings, beginExport, cancelExports,
+  exportItem, exportWarnings, beginExport, cancelExport,
   // The panel subscribes to the module's own export state so a remount keeps the Cancel button.
   currentExport: () => null, subscribeExport: () => () => {},
 }));
@@ -47,7 +47,7 @@ const show = () => render(
 
 beforeEach(() => {
   exportItem.mockClear();
-  cancelExports.mockClear();
+  cancelExport.mockClear();
   exportWarnings.mockReset();
   exportWarnings.mockResolvedValue(CLEAN);
 });
@@ -84,7 +84,8 @@ describe("DownloadsPanel", () => {
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
     await userEvent.click(await screen.findByText("Cancel"));
-    expect(cancelExports).toHaveBeenCalledTimes(1);
+    // By ticket, so cancelling one export cannot swallow another's file.
+    expect(cancelExport).toHaveBeenCalledWith(7);
     release(CLEAN);
     expect(exportItem).not.toHaveBeenCalled();
   });
@@ -101,9 +102,27 @@ describe("DownloadsPanel", () => {
     show();
     const button = screen.getByLabelText("Download Shapefile (zip)");
     await userEvent.click(button);
-    await screen.findByRole("alert", { name: /will mangle/i });
+    await screen.findByLabelText(/will mangle/i);
     await userEvent.click(screen.getByText("Cancel"));
     expect(document.activeElement).toBe(button);
+  });
+
+  // One Cancel must not swallow another run's file, so each cancels the ticket it started with.
+  it("cancels the run it started, not whatever else is in flight", async () => {
+    beginExport.mockReturnValueOnce(11).mockReturnValueOnce(12);
+    let release: (v: unknown) => void = () => {};
+    exportWarnings.mockImplementation(() => new Promise((r) => { release = r; }));
+    show();
+
+    await userEvent.click(screen.getByLabelText("Download GeoJSON"));
+    await userEvent.click(await screen.findByText("Cancel"));
+    expect(cancelExport).toHaveBeenLastCalledWith(11);
+
+    await userEvent.click(screen.getByLabelText("Download CSV (WKT)"));
+    await userEvent.click(await screen.findByText("Cancel"));
+    expect(cancelExport).toHaveBeenLastCalledWith(12);
+    expect(cancelExport).toHaveBeenCalledTimes(2);
+    release(CLEAN);
   });
 
   it("names the format the user actually picked, not always the shapefile", async () => {
@@ -141,7 +160,7 @@ describe("DownloadsPanel", () => {
     exportWarnings.mockResolvedValue(MANGLED);
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
-    const box = await screen.findByRole("alert", { name: /will mangle/i });
+    const box = await screen.findByLabelText(/will mangle/i);
     expect(document.activeElement).toBe(box);
     expect(box.getAttribute("aria-labelledby")).toBe("dl-warn-title");
   });
@@ -151,7 +170,7 @@ describe("DownloadsPanel", () => {
     exportWarnings.mockResolvedValue(MANGLED);
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
-    await screen.findByRole("alert", { name: /will mangle/i });
+    await screen.findByLabelText(/will mangle/i);
     await userEvent.click(screen.getByText("Projection & area"));
     const clip = screen.getByLabelText(/clip/i);
     await userEvent.click(clip);

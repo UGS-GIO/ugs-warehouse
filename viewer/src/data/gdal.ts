@@ -25,9 +25,12 @@ type Gdal = Awaited<ReturnType<typeof initGdalJs>>;
 let gdalPromise: Promise<Gdal> | null = null;
 
 // gdal3.js builds its worker load promise with `reject: console.error`, so a worker that never
-// starts leaves it pending forever and every later export awaits the same dead promise. Race it,
-// and clear the cache on failure so the user gets an error and a retry can re-init.
-const BOOT_TIMEOUT_MS = 60_000;
+// starts leaves it pending forever and every later export awaits the same dead promise. Race it
+// so the failure surfaces as "Download failed" instead of a spinner that never stops. Clearing
+// our cache lets a retry re-enter; whether gdal3.js recovers its own state is untested.
+// The budget has to clear a 20.5 MB download (9.0 MB gzipped wasm + an 11.1 MB uncompressible
+// .data), so it is sized to catch a hung boot, not a slow link.
+const BOOT_TIMEOUT_MS = 300_000;
 
 function getGdal(): Promise<Gdal> {
   if (!gdalPromise) {
@@ -37,11 +40,15 @@ function getGdal(): Promise<Gdal> {
       // No errorHandler — the config is postMessaged, and a function will not clone.
       useWorker: true,
     });
+    let timer: ReturnType<typeof setTimeout>;
     gdalPromise = Promise.race([
       boot,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("GDAL failed to start (worker did not load)")), BOOT_TIMEOUT_MS)),
-    ]).catch((e: unknown) => { gdalPromise = null; throw e; });
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("GDAL failed to start")), BOOT_TIMEOUT_MS);
+      }),
+    ])
+      .catch((e: unknown) => { gdalPromise = null; throw e; })
+      .finally(() => clearTimeout(timer));
   }
   return gdalPromise;
 }

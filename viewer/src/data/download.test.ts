@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildOrder, dbfFieldWidth, estimateExportPeakBytes, estimateGeoJSONBytes, estimateShapefileBytes,
-  evictionVictim, featureSeqSql, filterClause, sanitize, seqToFeatureCollection,
+  evictionVictim, featureSeqSql, filterClause, sanitize, wrapFeatureSeqInPlace,
   needsMeasuredWidth, safeEpsg, shapefileFieldChecks, exportWarnings, SHP_FILE_LIMIT,
   PREFLIGHT_MAX_PARQUET_BYTES, baseGeometryTypes, geomColumn,
   WASM_HEAP_BUDGET,
@@ -139,10 +139,10 @@ describe("featureSeqSql", () => {
   });
 });
 
-describe("seqToFeatureCollection", () => {
+describe("wrapFeatureSeqInPlace", () => {
   const dec = new TextDecoder();
   const wrap = (s: string) =>
-    seqToFeatureCollection(new TextEncoder().encode(s)).map((p) => dec.decode(p)).join("");
+    wrapFeatureSeqInPlace(new TextEncoder().encode(s)).map((p) => dec.decode(p)).join("");
 
   it("joins newline-delimited features into one FeatureCollection", () => {
     expect(JSON.parse(wrap('{"type":"Feature","id":1}\n{"type":"Feature","id":2}\n')))
@@ -158,7 +158,7 @@ describe("seqToFeatureCollection", () => {
     // A second full copy is the allocation a large GeoJSON export cannot afford, so the middle
     // part must be a view onto the caller's buffer.
     const seq = new TextEncoder().encode('{"id":1}\n{"id":2}\n');
-    const parts = seqToFeatureCollection(seq);
+    const parts = wrapFeatureSeqInPlace(seq);
     expect(parts).toHaveLength(3);
     expect(parts[1].buffer).toBe(seq.buffer);
   });

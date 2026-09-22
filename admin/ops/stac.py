@@ -5,11 +5,14 @@ from __future__ import annotations
 import concurrent.futures as cf
 import gzip
 import json
+import logging
 import time
 import urllib.error
 import urllib.request
 
 from django.conf import settings
+
+log = logging.getLogger(__name__)
 
 PUB_COLLECTIONS = ["ugs-publications", "ugs-mining-district-files", "ugs-external"]
 
@@ -22,6 +25,9 @@ def _get(url: str):
         # and urllib doesn't, but a CDN holding the compressed representation still serves it.
         return json.loads((gzip.decompress(raw) if raw[:2] == b"\x1f\x8b" else raw).decode())
     except Exception:
+        # The dashboard degrades to "unknown" rather than erroring, but a catalog that has moved
+        # or stopped decoding must not do that silently.
+        log.warning("STAC read failed: %s", url, exc_info=True)
         return None
 
 

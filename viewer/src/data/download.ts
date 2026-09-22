@@ -95,11 +95,11 @@ export function featureSeqSql(cols: string[], geomExpr: string, from: string): s
     + `${props} AS properties FROM ${from}`;
 }
 
-/** Wrap GeoJSONSeq bytes into one FeatureCollection, in place of a JS string join. A raw 0x0A
- *  only ever separates records (the writer escapes newlines inside strings), so it doubles as
- *  the comma. Returns Blob parts and rewrites `seq` in place: a whole second copy of the payload
- *  is the one allocation a large GeoJSON export cannot afford. */
-export function seqToFeatureCollection(seq: Uint8Array): Uint8Array[] {
+/** Wrap GeoJSONSeq bytes into one FeatureCollection, in place of a JS string join, returning Blob
+ *  parts. MUTATES `seq`: a raw 0x0A only ever separates records (the writer escapes newlines
+ *  inside strings), so the separators are overwritten with commas where they sit. A second copy
+ *  of the payload is the one allocation a large GeoJSON export cannot afford. */
+export function wrapFeatureSeqInPlace(seq: Uint8Array): Uint8Array[] {
   const enc = new TextEncoder();
   let end = seq.length;
   while (end > 0 && seq[end - 1] === 0x0a) end--;
@@ -656,7 +656,7 @@ export async function exportItem(
     seqOut = undefined;
 
     if (fmt === "geojson") {
-      deliver(seqToFeatureCollection(seqBytes), `${stem}.geojson`, "application/geo+json");
+      deliver(wrapFeatureSeqInPlace(seqBytes), `${stem}.geojson`, "application/geo+json");
       return;
     }
 

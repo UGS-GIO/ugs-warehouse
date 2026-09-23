@@ -1,7 +1,8 @@
 // Service-worker route predicates, kept out of vite.config.ts so they are unit-testable.
 // Imported by the VitePWA `runtimeCaching` config at build time; never bundled into the app.
 
-/** The shape Workbox hands a route-match callback (the fields we use). */
+/** The fields we use out of Workbox's RouteMatchCallbackOptions. Workbox always passes a request
+    when matching a fetch; it is optional here so the unit test can match on a URL alone. */
 export type RouteMatch = { url: URL; request?: Request };
 
 /**

@@ -30,7 +30,8 @@ describe("isCatalogJson", () => {
     expect(match(`${CDN}/styles/styles/enmin_plss_sections/default.json`)).toBe(false);
   });
 
-  // Workbox types `request` as optional, and a match can be driven programmatically.
+  // Workbox always passes a request when matching a fetch (RouteMatchCallbackOptions declares it
+  // required); `request` is optional here only so this test can call the predicate without one.
   it("survives a match with no request", () => {
     expect(isCatalogJson({ url: new URL(`${CDN}/warehouse/stac/catalog.json`) })).toBe(true);
   });

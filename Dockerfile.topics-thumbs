@@ -20,8 +20,17 @@ COPY README.md ./
 COPY src ./src
 RUN pip install --no-deps .
 
+# The job refreshes the catalog after stamping, which rebuilds the raster collections' item mirrors
+# with DuckDB spatial (core/item_mirror.py). Bake the extension in, as the main image does, so that
+# never depends on a download from the extension servers at 04:00.
+RUN python -c "import duckdb; c = duckdb.connect(); c.execute('INSTALL spatial')"
+
 # Chromium + its OS deps for Playwright (installs into PLAYWRIGHT_BROWSERS_PATH).
 RUN playwright install --with-deps chromium
+
+# App layer — only this rebuilds on a source change.
+COPY src ./src
+RUN pip install --no-deps --force-reinstall .
 
 ENTRYPOINT ["python", "-m", "ugs_warehouse.vector.thumbs"]
 CMD ["--all"]

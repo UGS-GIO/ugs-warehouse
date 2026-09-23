@@ -8,6 +8,7 @@
 // The URL is the filename (percent-encoded, so no "/" survives), so a directory listing IS the
 // manifest and there is no second store to keep in sync.
 
+import { track } from "./in-flight";
 import { fileNameFor, urlFromFileName } from "./opfs-name";
 
 export { fileNameFor, urlFromFileName };
@@ -54,7 +55,13 @@ export async function get(url: string): Promise<File | null> {
  * Writes through a temp name and renames on completion, so an aborted or failed download cannot
  * leave a truncated file that later reads as a valid-looking archive.
  */
-export async function save(url: string, { signal, onProgress }: SaveOptions = {}): Promise<StoredFile> {
+export function save(url: string, opts: SaveOptions = {}): Promise<StoredFile> {
+  // Every download goes through here, so this is the one place that counts them for the
+  // leave-page guard and the on-screen notice.
+  return track(saveOnce(url, opts));
+}
+
+async function saveOnce(url: string, { signal, onProgress }: SaveOptions): Promise<StoredFile> {
   const d = await dir(true);
   if (!d) throw new Error("This browser cannot store layers offline (no OPFS).");
 

@@ -19,6 +19,7 @@ export function lruSet<V>(cache: Map<string, V>, key: string, value: V, cap: num
 export class CappedMap<K, V> extends Map<K, V> {
   constructor(private readonly cap: number, private readonly pinned?: (key: K) => boolean) { super(); }
   set(key: K, value: V): this {
+    super.delete(key);       // re-insert → move to the newest position, as lruSet does
     super.set(key, value);
     if (this.size <= this.cap) return this;
     for (const k of [...this.keys()]) {

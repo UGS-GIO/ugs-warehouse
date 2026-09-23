@@ -94,7 +94,9 @@ export async function save(url: string, { signal, onProgress }: SaveOptions = {}
     await movable.move(name);
   } else {
     const final = await (await d.getFileHandle(name, { create: true })).createWritable();
-    await final.write(await (await handle.getFile()).arrayBuffer());
+    // Write the File itself, not its arrayBuffer: `write` takes a Blob, and buffering a 300 MB
+    // archive to rename it would undo the streaming above and can take the tab down.
+    await final.write(await handle.getFile());
     await final.close();
     await d.removeEntry(tmp).catch(() => {});
   }
@@ -112,14 +114,12 @@ export async function list(): Promise<StoredFile[]> {
   const d = await dir();
   if (!d) return [];
   const out: StoredFile[] = [];
-  // Iterating the handle yields [name, handle] PAIRS (its async iterator is `entries()`), not bare
-  // handles — `values()` is the one that yields handles. Typings lag in some TS DOM libs, so the
-  // wrong one type-checks and then fails at runtime with "h.getFile is not a function".
-  const dirHandle = d as unknown as { values: () => AsyncIterable<FileSystemHandle> };
-  for await (const h of dirHandle.values()) {
-    if (h.kind !== "file" || h.name.endsWith(".part")) continue;
+  // Iterating the handle yields [name, handle] PAIRS, not bare handles. Treating an entry as a
+  // handle type-checks and then fails at runtime with "h.getFile is not a function".
+  for await (const [name, h] of d) {
+    if (h.kind !== "file" || name.endsWith(".part")) continue;
     const file = await (h as FileSystemFileHandle).getFile();
-    out.push({ url: urlFromFileName(h.name), bytes: file.size });
+    out.push({ url: urlFromFileName(name), bytes: file.size });
   }
   return out;
 }

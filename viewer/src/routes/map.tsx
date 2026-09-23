@@ -8,6 +8,7 @@ import { MapLegend } from "@/map/map-legend";
 import { RelatedTable } from "@/map/related-table";
 import { MapShell } from "@/map/map-shell";
 import { colorForId } from "@/map/map-model";
+import { seedStoredArchives } from "@/map/pmtiles-protocol";
 import { relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 
@@ -71,4 +72,11 @@ function MapView() {
     </>} />;
 }
 
-export const Route = createFileRoute("/map")({ component: MapView });
+// Seeding runs in the loader, not in a query: the router awaits it before MapView renders, so a
+// downloaded archive is wired into the pmtiles protocol before any source asks for a tile. Seeded
+// from a query instead, the map mounts first and resolves against the network, which is exactly
+// what fails with no connection. Never rejects — a browser with no OPFS still gets the map.
+export const Route = createFileRoute("/map")({
+  loader: () => seedStoredArchives().catch(() => 0),
+  component: MapView,
+});

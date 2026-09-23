@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { qk } from "@/query-keys";
-import { seedStoredArchives, servePmtilesOffline, stopServingOffline } from "@/map/pmtiles-protocol";
+import { servePmtilesOffline, stopServingOffline } from "@/map/pmtiles-protocol";
 import * as opfs from "./opfs";
 
 /** What is stored, plus the browser's storage headroom. One query so the UI reads one status. */
@@ -11,10 +11,6 @@ export function useStoredLayers() {
   return useQuery({
     queryKey: qk.offlineLayers,
     queryFn: async () => {
-      // Seeding here, rather than in the map, means a stored archive is wired into the pmtiles
-      // protocol before any source asks for it — a source added first would resolve against the
-      // network and fail with no connection.
-      await seedStoredArchives();
       const [files, space] = await Promise.all([opfs.list(), opfs.quota()]);
       return { files, space, bytes: files.reduce((n, f) => n + f.bytes, 0) };
     },

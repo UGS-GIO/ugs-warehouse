@@ -33,6 +33,10 @@ export const isServedOffline = (href: string): boolean => offline.has(href);
  * the archive on its network source.
  */
 export async function servePmtilesOffline(href: string): Promise<boolean> {
+  // Already on the file: leave the live PMTiles alone. Re-seeding would throw away its header and
+  // directory caches under any in-flight tile read. The test is `offline`, not `tiles.has()` — the
+  // protocol caches network archives under the same key, and those DO need replacing.
+  if (offline.has(href)) return true;
   const file = await opfs.get(href);
   if (!file) return false;
   ensurePmtilesProtocol();

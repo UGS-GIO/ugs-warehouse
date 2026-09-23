@@ -1,6 +1,6 @@
 // What a stored file IS, for the offline manager. OPFS only knows URLs and bytes; a person needs
 // "Quaternary Faults" or "Basemap quad 40111g8", and whether a newer version has been published.
-import { BASEMAP_BASE, overviewUrl } from "./basemap";
+import { BASEMAP_BASE, overviewUrl, stateUrl } from "./basemap";
 import type { StoredFile } from "./opfs";
 
 export type Described = StoredFile & {
@@ -32,6 +32,9 @@ const hrefsOf = (it: ItemLike): string[] => [
 const QUAD = /\/quads\/([0-9]{5}[a-h][1-8])\.pmtiles$/;
 
 export function describe(file: StoredFile, items: ItemLike[], base = BASEMAP_BASE): Described {
+  if (file.url === stateUrl(base)) {
+    return { ...file, kind: "basemap", label: "Basemap (all of Utah)", stale: false };
+  }
   if (file.url === overviewUrl(base)) {
     return { ...file, kind: "basemap", label: "Basemap overview (statewide)", stale: false };
   }
@@ -50,8 +53,9 @@ export function describe(file: StoredFile, items: ItemLike[], base = BASEMAP_BAS
   };
 }
 
-/** Layers first, then the basemap; the overview leads the basemap group, then quads by code. */
+/** Layers first, then the basemap: all of Utah, then the overview, then quads by code. */
 export function sortDescribed(rows: Described[]): Described[] {
-  const rank = (r: Described) => (r.kind === "layer" ? 0 : r.label.startsWith("Basemap overview") ? 1 : 2);
+  const rank = (r: Described) => (r.kind === "layer" ? 0
+    : r.label.startsWith("Basemap (all") ? 1 : r.label.startsWith("Basemap overview") ? 2 : 3);
   return [...rows].sort((a, b) => rank(a) - rank(b) || a.label.localeCompare(b.label));
 }

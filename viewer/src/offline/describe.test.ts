@@ -35,6 +35,11 @@ suite("describe", () => {
     expect(d.itemHref).toBeUndefined();
   });
 
+  it("names the statewide basemap", () => {
+    expect(describe({ url: `${BASE}utah.pmtiles`, bytes: 1, savedAt: SAVED }, [], BASE))
+      .toMatchObject({ kind: "basemap", label: "Basemap (all of Utah)" });
+  });
+
   it("names the basemap overview and quads", () => {
     expect(describe({ url: `${BASE}overview.pmtiles`, bytes: 1, savedAt: SAVED }, [], BASE))
       .toMatchObject({ kind: "basemap", label: "Basemap overview (statewide)" });

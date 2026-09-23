@@ -1,20 +1,23 @@
-// "Save this area": download the basemap for what the map is showing, for offline use.
+// Save the basemap for offline use: the whole state, or just the area in view.
 //
-// Downloads the statewide overview (low zooms, once) plus every 7.5-minute quad the view touches,
-// through the same OPFS store and service worker as data layers. Sizes come from the build's
-// index.json, so the button can say what a download costs before anyone commits to it.
+// The whole state (~180 MB) is the main option — it is what someone preparing for a trip on office
+// Wi-Fi wants, and it cannot run out under them the way a saved area does at its edge. "This area"
+// (the overview plus the 7.5-minute quads in view, usually a few MB) is for a phone short on space
+// or a download over a field connection. Sizes come from the build's index.json, so each button
+// says what it costs before anyone commits to it.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
+import { CheckIcon, DownloadIcon } from "@/catalog/stac-url-chip";
 import { qk } from "@/query-keys";
-import { BASEMAP_BASE, overviewUrl, quadsInBbox, quadUrl } from "./basemap";
+import { BASEMAP_BASE, overviewUrl, quadsInBbox, quadUrl, redundantWithState, stateUrl } from "./basemap";
 import * as opfs from "./opfs";
 import { useStoredLayers } from "./use-offline";
 
-// Past this many quads the view is a region, not a work area. Zoom in rather than queue a
-// statewide download from a button meant for "the quads I'm in".
+// Past this many quads the view is a region, not a work area; the statewide save covers that.
 const MAX_QUADS = 40;
 
-type Index = { overview: { bytes: number }; quads: Record<string, { bytes: number }> };
+type Index = { state?: { bytes: number }; overview: { bytes: number }; quads: Record<string, { bytes: number }> };
+type Part = { url: string; bytes: number };
 
 function useBasemapIndex() {
   return useQuery({
@@ -33,56 +36,72 @@ export function BasemapDownload({ bbox }: { bbox: [number, number, number, numbe
   const index = useBasemapIndex();
   const stored = useStoredLayers();
   const client = useQueryClient();
-  const [done, setDone] = useState<{ n: number; of: number } | null>(null);
+  const [progress, setProgress] = useState<{ n: number; of: number } | null>(null);
 
   const have = new Set(stored.data?.files.map((f) => f.url));
-  // Only quads the build produced: a view over Nevada touches quads that do not exist.
   const quads = bbox && index.data ? quadsInBbox(bbox).filter((q) => q.code in index.data.quads) : [];
-  const wanted = [
+  const area: Part[] = [
     ...(have.has(overviewUrl()) ? [] : [{ url: overviewUrl(), bytes: index.data?.overview.bytes ?? 0 }]),
     ...quads.filter((q) => !have.has(quadUrl(q.code)))
       .map((q) => ({ url: quadUrl(q.code), bytes: index.data?.quads[q.code].bytes ?? 0 })),
   ];
-  const bytes = wanted.reduce((n, w) => n + w.bytes, 0);
+  const sum = (ps: Part[]) => ps.reduce((n, p) => n + p.bytes, 0);
 
   const save = useMutation({
-    mutationFn: async () => {
+    mutationFn: async ({ parts, whole }: { parts: Part[]; whole: boolean }) => {
       await navigator.storage?.persist?.().catch(() => false);
-      if (!opfs.fitsInQuota(bytes, await opfs.quota())) {
-        throw new Error(`${opfs.formatBytes(bytes)} will not fit in this browser's storage.`);
+      if (!opfs.fitsInQuota(sum(parts), await opfs.quota())) {
+        throw new Error(`${opfs.formatBytes(sum(parts))} will not fit in this browser's storage.`);
       }
-      setDone({ n: 0, of: wanted.length });
-      for (const [i, w] of wanted.entries()) {
-        await opfs.save(w.url);
-        setDone({ n: i + 1, of: wanted.length });
+      setProgress({ n: 0, of: parts.length });
+      for (const [i, p] of parts.entries()) {
+        await opfs.save(p.url);
+        setProgress({ n: i + 1, of: parts.length });
       }
+      // Only once the statewide file is safely on disk: it holds everything the overview and quads
+      // did, so they are now duplicates. Doing this first would leave a failed download with neither.
+      if (whole) for (const u of redundantWithState(have)) await opfs.remove(u);
     },
     onSettled: () => {
-      setDone(null);
-      // The style query re-reads what is stored, which is what points the protocol at the new files.
+      setProgress(null);
+      // The style query re-reads what is stored, which is what points the protocol at the files.
       client.invalidateQueries({ queryKey: qk.offlineLayers });
       client.invalidateQueries({ queryKey: ["basemap-style"] });
     },
   });
 
-  if (!opfs.isSupported() || index.isError || !index.data) return null;
+  if (!opfs.isSupported() || !index.data) return null;
 
-  const cls = "rounded bg-card/95 px-2 py-1 shadow hover:bg-hover disabled:opacity-60";
+  const cls = "inline-flex items-center gap-1 rounded bg-card/95 px-2 py-1 shadow hover:bg-hover disabled:opacity-60";
+  const busy = save.isPending;
 
-  if (done) return <span className={cls}>Saving basemap {done.n}/{done.of}</span>;
-  if (!quads.length) return null;   // view is outside Utah
-  if (quads.length > MAX_QUADS) {
-    return <span className={cls} title="Zoom in to save the basemap for a work area">Zoom in to save basemap</span>;
+  if (progress) return <span className={cls}>Saving basemap {progress.n}/{progress.of}</span>;
+  if (have.has(stateUrl())) {
+    return <span className={cls} title="The Utah basemap is saved on this device"><CheckIcon /> Utah basemap saved</span>;
   }
-  if (!wanted.length) {
-    return <span className={cls} title={`${quads.length} quad(s) in view are saved`}>✓ Basemap saved</span>;
-  }
+
+  const whole = index.data.state && { url: stateUrl(), bytes: index.data.state.bytes };
+  const areaSaved = quads.length > 0 && area.length === 0;
+  const showArea = quads.length > 0 && quads.length <= MAX_QUADS;
+
   return (
-    <button type="button" className={cls} disabled={save.isPending}
-      title={save.error ? save.error.message
-        : `Save the basemap for the ${quads.length} quad(s) in view, for offline use`}
-      onClick={() => save.mutate()}>
-      {save.error ? "⚠" : "⭳"} Save basemap · {opfs.formatBytes(bytes)}
-    </button>
+    <>
+      {whole && (
+        <button type="button" className={cls} disabled={busy}
+          title={save.error ? save.error.message : "Save the basemap for all of Utah, for offline use"}
+          onClick={() => save.mutate({ parts: [whole], whole: true })}>
+          {save.error ? "⚠" : <DownloadIcon />} Save Utah basemap · {opfs.formatBytes(whole.bytes)}
+        </button>
+      )}
+      {showArea && (areaSaved
+        ? <span className={cls} title={`${quads.length} quad(s) in view are saved`}><CheckIcon /> Area saved</span>
+        : (
+          <button type="button" className={cls} disabled={busy}
+            title={`Save only the ${quads.length} quad(s) in view: smaller, but blank beyond them`}
+            onClick={() => save.mutate({ parts: area, whole: false })}>
+            <DownloadIcon /> This area · {opfs.formatBytes(sum(area))}
+          </button>
+        ))}
+    </>
   );
 }

@@ -12,7 +12,8 @@ permission", which is what saving a region for offline use amounts to.
 
 Output, ready to upload under the CDN's basemap/ prefix (that step needs GCP permissions):
 
-    <out>/overview.pmtiles        z0-10, statewide
+    <out>/utah.pmtiles            z0-14, the whole state in one file — the main "save" option
+    <out>/overview.pmtiles        z0-10, statewide, the low zooms behind a partial save
     <out>/quads/<code>.pmtiles    z11+, one per 7.5-minute quad, named by USGS Ohio code
     <out>/index.json              what exists and how big, for the download UI
 """
@@ -20,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import subprocess
 import sys
 import urllib.request
@@ -67,7 +69,11 @@ def _extract(src: Path, dest: Path, *flags: str) -> int:
 
 
 def cut(src: Path, out: Path, quads: list[Quad], workers: int = 8) -> dict:
-    """Overview + per-quad archives from the statewide one, and the index describing them."""
+    """The statewide archive, plus overview + per-quad archives cut from it, and their index."""
+    out.mkdir(parents=True, exist_ok=True)
+    # The whole state is published as-is: at ~180 MB it is the download most people want before a
+    # trip, and it is smaller than all the quads together, which repeat every tile on a quad edge.
+    shutil.copyfile(src, out / "utah.pmtiles")
     overview = _extract(src, out / "overview.pmtiles", f"--maxzoom={OVERVIEW_MAXZOOM}")
 
     def one(q: Quad) -> tuple[str, dict]:
@@ -81,6 +87,7 @@ def cut(src: Path, out: Path, quads: list[Quad], workers: int = 8) -> dict:
         entries = dict(pool.map(one, quads))
 
     index = {
+        "state": {"bytes": (out / "utah.pmtiles").stat().st_size},
         "overview": {"maxzoom": OVERVIEW_MAXZOOM, "bytes": overview},
         "quad_minzoom": QUAD_MINZOOM,
         "quads": entries,
@@ -115,9 +122,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"not Utah quads, skipped: {', '.join(sorted(missing))}", file=sys.stderr)
 
     index = cut(src, args.out, quads)
-    total = index["overview"]["bytes"] + sum(q["bytes"] for q in index["quads"].values())
-    print(f"overview {index['overview']['bytes'] / 1e6:.1f} MB, {len(index['quads'])} quads, "
-          f"{total / 1e6:.1f} MB total -> {args.out}")
+    quads_total = index["overview"]["bytes"] + sum(q["bytes"] for q in index["quads"].values())
+    print(f"state {index['state']['bytes'] / 1e6:.1f} MB; overview + {len(index['quads'])} quads "
+          f"{quads_total / 1e6:.1f} MB -> {args.out}")
     return 0
 
 

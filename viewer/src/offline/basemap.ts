@@ -24,6 +24,7 @@ const CELL = 0.125;                  // 7.5 minutes
 const ROWS = "abcdefgh";
 export const OVERVIEW_MAXZOOM = 10;  // must match OVERVIEW_MAXZOOM in basemap.py
 
+export const stateUrl = (base = BASEMAP_BASE) => `${base}utah.pmtiles`;
 export const overviewUrl = (base = BASEMAP_BASE) => `${base}overview.pmtiles`;
 export const quadUrl = (code: string, base = BASEMAP_BASE) => `${base}quads/${code}.pmtiles`;
 
@@ -54,6 +55,20 @@ export function archiveFor(z: number, x: number, y: number, base = BASEMAP_BASE)
   if (z <= OVERVIEW_MAXZOOM) return overviewUrl(base);
   const [lon, lat] = tileCenter(z, x, y);
   return quadUrl(quadAt(lon, lat).code, base);
+}
+
+/**
+ * The archive to read a tile from, given what is stored: the statewide file whenever it is saved
+ * (it holds every zoom everywhere), otherwise the overview or quad the tile falls in.
+ */
+export function pickArchive(z: number, x: number, y: number, saved: ReadonlySet<string>,
+  base = BASEMAP_BASE): string {
+  return saved.has(stateUrl(base)) ? stateUrl(base) : archiveFor(z, x, y, base);
+}
+
+/** Stored partial-basemap files the statewide one makes redundant: the overview and every quad. */
+export function redundantWithState(saved: Iterable<string>, base = BASEMAP_BASE): string[] {
+  return [...saved].filter((u) => u === overviewUrl(base) || u.startsWith(`${base}quads/`));
 }
 
 /** Every quad a bbox touches, for "download what I'm looking at". */
@@ -100,7 +115,7 @@ export async function basemapProtocol(
   if (!m) throw new Error(`bad basemap URL: ${params.url}`);
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
 
-  const url = archiveFor(z, x, y);
+  const url = pickArchive(z, x, y, stored);
   if (stored.has(url)) {
     try {
       const t = await archive(url).getZxy(z, x, y, abort.signal);

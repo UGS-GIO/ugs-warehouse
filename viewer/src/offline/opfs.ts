@@ -118,8 +118,13 @@ export async function list(): Promise<StoredFile[]> {
   // handle type-checks and then fails at runtime with "h.getFile is not a function".
   for await (const [name, h] of d) {
     if (h.kind !== "file" || name.endsWith(".part")) continue;
-    const file = await (h as FileSystemFileHandle).getFile();
-    out.push({ url: urlFromFileName(name), bytes: file.size });
+    try {
+      const file = await (h as FileSystemFileHandle).getFile();
+      out.push({ url: urlFromFileName(name), bytes: file.size });
+    } catch {
+      // One locked or unreadable entry must not take down the listing, which is what every
+      // offline control in the UI renders from.
+    }
   }
   return out;
 }

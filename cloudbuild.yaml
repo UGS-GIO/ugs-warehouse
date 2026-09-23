@@ -29,7 +29,7 @@ substitutions:
   _GRAPH_JOB: ugs-pubs-graph              # Cloud Run job: build the pubs knowledge graph (nodes/edges Parquet) — citation + co-author + semantic edges
   _THREED_JOB: ugs-pubs-threed            # Cloud Run job: convert 3D GeMS pubs (gdb+.mapx) → GeoParquet-3D + glTF + classes sidecar; --all auto-discovers, pubs-ingest binds the assets
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
-  _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip; nightly via Cloud Scheduler (scripts/provision.sh)
+  _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip; started by ingest + restyle, nightly via Cloud Scheduler as the backstop
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
   _TILES_SERVICE: ugs-warehouse-tiles         # XYZ vector tiles + ready-to-use MapLibre styles (go-pmtiles over the CDN PMTiles, scale-to-zero)
@@ -232,7 +232,9 @@ steps:
       # DUCKDB_MAX_MEMORY caps DuckDB's buffer manager, not the process: RSS lands well above it —
       # the producer hydrates the whole `_current` table into ONE in-memory DuckDB (no temp_directory,
       # and /tmp is RAM on Cloud Run anyway), so peak RSS tracks the layer's geometry, not this cap.
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB
+      # TOPIC_THUMBS_JOB: after publishing a topic the ingest starts the thumbnail job for it
+      # (core/jobs.py). Prod only; the review job leaves it unset so it starts nothing.
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB@TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600
@@ -505,9 +507,12 @@ steps:
       - --tasks=5
 
   # Styled-preview thumbnails for vector serving-topics — headless MapLibre (Python + Playwright/Chromium)
-  # renders each topic's styled PMTiles → PNG. Runs nightly from Cloud Scheduler (scripts/provision.sh);
-  # content-hash skip means it only re-renders topics that are new or whose style changed. It stamps
-  # the `thumbnail` assets onto the items and refreshes the catalog itself. Chromium = more RAM.
+  # renders each topic's styled PMTiles → PNG. The ingest and restyle jobs start it after publishing
+  # (core/jobs.py) and Cloud Scheduler runs it nightly as the backstop (scripts/provision.sh); the
+  # content-hash skip means it only re-renders topics whose data or style changed. It stamps the
+  # `thumbnail` assets onto the items and refreshes the catalog itself. Chromium = more RAM.
+  # core/jobs.py overrides --args for single-topic runs and relies on --command=python staying as is
+  # (tests/test_thumbs_trigger.py pins the two together).
   - id: deploy-topics-thumbs-job
     waitFor: [push-topics-thumbs]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -566,6 +571,8 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
+      # A rebind starts the thumbnail job, since a style change is a preview change (core/jobs.py).
+      - --set-env-vars=TOPIC_THUMBS_JOB=projects/$PROJECT_ID/locations/${_REGION}/jobs/${_TOPICTHUMB_JOB}
       - --command=python
       - --args=-m,ugs_warehouse.restyle
       - --task-timeout=1800

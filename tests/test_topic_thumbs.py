@@ -42,6 +42,7 @@ def store(monkeypatch) -> dict[str, bytes]:
     monkeypatch.setattr(gcs, "delete", lambda path: s.pop(path, None))
     monkeypatch.setattr(gcs, "list_paths", lambda pre: sorted(k for k in s if k.startswith(pre)))
     monkeypatch.setattr(config, "EXTERNAL_CATALOGS", [])
+    monkeypatch.setattr(thumbs, "REFRESH_RETRY_SECONDS", 0)
     monkeypatch.delenv("CLOUD_RUN_TASK_COUNT", raising=False)
     monkeypatch.delenv("CLOUD_RUN_TASK_INDEX", raising=False)
     return s
@@ -408,9 +409,11 @@ def test_a_forced_render_whose_stamp_fails_is_redone(store, monkeypatch):
     assert _rendered_stems(styles) == ["wetlands_riverine"]
 
 
-@pytest.mark.parametrize("body", [b"[]", b'{"error": "rate limited"}', b'{"layers": "fill"}'])
+@pytest.mark.parametrize("body", [b"[]", b'{"error": "rate limited"}', b'{"layers": "fill"}',
+                                  b'{"layers": ["fill"]}'])
 def test_a_bound_style_without_a_layer_list_fails_instead_of_rendering_sand(store, monkeypatch, body):
-    """A 200 whose JSON isn't a style (not an object, or no layer list) is as broken as a failed fetch."""
+    """A 200 whose JSON isn't a style (not an object, no layer list, or layers that aren't objects)
+    is as broken as a failed fetch: the topic fails, it doesn't render sand or a partial style."""
     _publish("wetlands_riverine", style_url="https://cdn.example/styles/riverine.json")
     monkeypatch.setattr(thumbs, "_fetch", lambda url, timeout=30: body)
     styles: list[dict] = []
@@ -432,3 +435,97 @@ def test_a_topic_retired_after_its_stamp_does_not_fail_the_recheck(store, monkey
 
     monkeypatch.setattr(stac, "refresh_catalog", retired_first)
     assert _run(monkeypatch, "--all") == 0
+
+
+def test_a_refresh_that_loses_a_race_is_retried_before_it_fails_the_run(store, monkeypatch):
+    """A burst of promotes starts one run per layer, and each refreshes the catalog; a refresh that
+    listed before this run's stamp can land last. A retry catches it instead of paging anyone."""
+    _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    refresh = stac.refresh_catalog
+    attempts: list[int] = []
+
+    def overwritten_once():
+        attempts.append(1)
+        if len(attempts) > 1:
+            refresh()
+
+    monkeypatch.setattr(stac, "refresh_catalog", overwritten_once)
+    assert _run(monkeypatch, "--all") == 0
+    assert len(attempts) == 2
+
+
+def test_a_refresh_that_raises_is_retried_before_it_fails_the_run(store, monkeypatch):
+    """Concurrent refreshes rewrite the same catalog objects; a rate-limited write inside one is
+    another lost race, not a reason to fail the run."""
+    _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    refresh = stac.refresh_catalog
+    attempts: list[int] = []
+
+    def rate_limited_once():
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("429 rateLimitExceeded on catalog.json")
+        refresh()
+
+    monkeypatch.setattr(stac, "refresh_catalog", rate_limited_once)
+    assert _run(monkeypatch, "--all") == 0
+    assert len(attempts) == 2
+
+
+def test_a_refresh_that_keeps_raising_fails_the_run_and_says_why(store, monkeypatch, capsys):
+    """A broken refresh (a bug, a permission error) must not read as a lost race in the failure."""
+    _publish("wetlands_riverine")
+    _renders(monkeypatch)
+
+    def denied():
+        raise PermissionError("403 storage.objects.create denied on items.json")
+
+    monkeypatch.setattr(stac, "refresh_catalog", denied)
+    assert _run(monkeypatch, "--all") == 1
+    assert "403 storage.objects.create" in capsys.readouterr().err
+
+
+def test_a_last_refresh_that_raises_still_gets_a_final_check(store, monkeypatch):
+    """Another run's refresh can land while ours is failing; the run checks once more before failing."""
+    _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    others_refresh = stac.refresh_catalog
+    attempts: list[int] = []
+
+    def rate_limited():
+        attempts.append(1)
+        if len(attempts) == thumbs.REFRESH_ATTEMPTS:
+            others_refresh()
+        raise OSError("429 rateLimitExceeded on catalog.json")
+
+    monkeypatch.setattr(stac, "refresh_catalog", rate_limited)
+    assert _run(monkeypatch, "--all") == 0
+
+
+def test_a_refresh_another_run_made_during_the_wait_is_not_redone(store, monkeypatch):
+    """Re-checked after the wait before refreshing again: a later refresh from another run already
+    carries this run's stamp, and piling on another full refresh only adds contention."""
+    _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    others_refresh = stac.refresh_catalog
+    ours: list[int] = []
+    monkeypatch.setattr(stac, "refresh_catalog", lambda: ours.append(1))
+    monkeypatch.setattr(thumbs.time, "sleep", lambda seconds: others_refresh())
+    assert _run(monkeypatch, "--all") == 0
+    assert len(ours) == 1
+
+
+def test_new_data_redraws_the_preview_and_an_unchanged_reingest_does_not(store, monkeypatch):
+    """The ingest's `ugs:content_hash` changes exactly when the data or tiling does."""
+    path = _publish("wetlands_riverine", **{"ugs:content_hash": "147506:aaa:v2|-r1"})
+    styles: list[dict] = []
+    _renders(monkeypatch, styles=styles)
+    assert _run(monkeypatch, "--all") == 0
+    item = json.loads(store[path])
+    item["properties"]["ugs:content_hash"] = "150001:bbb:v2|-r1"
+    store[path] = json.dumps(item).encode()
+    assert _run(monkeypatch, "--all") == 0
+    assert _run(monkeypatch, "--all") == 0
+    assert _rendered_stems(styles) == ["wetlands_riverine", "wetlands_riverine"]

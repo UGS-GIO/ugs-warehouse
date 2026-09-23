@@ -154,7 +154,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     # Content fingerprint (skip-unchanged ingest). Lets a later `--skip-unchanged` run detect that
     # nothing changed and skip the rebuild. Absent when the caller didn't compute one.
     if content_hash:
-        props["ugs:content_hash"] = content_hash
+        props[stac.CONTENT_HASH_PROP] = content_hash
     # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
     # Preserve-on-empty: registry descriptions are often missing, so when this submit has none, keep
     # whatever the published item already had instead of blanking it (last-non-empty wins).

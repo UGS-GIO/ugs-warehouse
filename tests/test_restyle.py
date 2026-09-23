@@ -201,3 +201,34 @@ def test_restyle_verify_reports_drift_when_the_item_holds_an_older_legend(monkey
     store[obj] = json.dumps(item).encode()
 
     assert R._verify(R._scoped_groups("ugs-serving-topics")) == ["ugs-serving-topics/enmin_ucrc_wells"]
+
+
+def _styled_wells(monkeypatch) -> list:
+    """A styled wells item in an in-memory bucket; returns the recorded thumbnail-job starts."""
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, _wells_item(store, [{"label": "Core", "color": "#5E3C99"}]))
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    return kicked
+
+
+def test_a_restyle_that_rebinds_starts_the_thumbnail_job(monkeypatch):
+    """A style change is a preview change; the thumbnail job re-renders what it affects."""
+    kicked = _styled_wells(monkeypatch)
+    R.restyle()
+    assert kicked == [None]
+
+
+def test_a_dry_run_restyle_starts_nothing(monkeypatch):
+    kicked = _styled_wells(monkeypatch)
+    R.restyle(dry_run=True)
+    assert kicked == []
+
+
+def test_a_restyle_with_nothing_styled_starts_nothing(monkeypatch):
+    _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [])
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    R.restyle()
+    assert kicked == []

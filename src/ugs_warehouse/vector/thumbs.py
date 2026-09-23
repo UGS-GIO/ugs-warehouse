@@ -9,10 +9,11 @@ exactly like the viewer (viewer/src/Map.tsx): the ugs-styles JSON is layers-ONLY
 version-8 style with a vector source over `pmtiles://`, a sand background, and `source`/`source-layer`
 injected per layer.
 
-Content-addressed + idempotent: each PNG carries a `.sha` sidecar of `RENDERER_VERSION + the layers it
-draws`. A run skips a topic whose sidecar matches → a NEW layer renders (no PNG yet), a SYMBOLOGY change
-re-renders (drawn layers change), an unchanged topic is skipped. It runs nightly from Cloud Scheduler
-(scripts/provision.sh) and only does work when something changed. Sharded via
+Content-addressed + idempotent: each PNG carries a `.sha` sidecar of `RENDERER_VERSION + the data
+fingerprint + the layers it draws`. A run skips a topic whose sidecar matches → a NEW layer renders (no
+PNG yet), new DATA or a SYMBOLOGY change re-renders, an unchanged topic is skipped. The vector ingest
+starts it for the topic it just published and restyle starts it after a rebind (core/jobs.py); a
+nightly Cloud Scheduler run (scripts/provision.sh) is the backstop. Sharded via
 CLOUD_RUN_TASK_INDEX/COUNT, same as the pubs jobs.
 """
 from __future__ import annotations
@@ -20,8 +21,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import sys
 import tempfile
+import time
 import traceback
 import urllib.request
 
@@ -102,14 +105,21 @@ def _drawn_layers(style_url: str | None) -> list[dict]:
     layers = doc.get("layers") if isinstance(doc, dict) else None
     if not isinstance(layers, list):
         raise ValueError("not a style: no layer list")
+    # Rejected rather than filtered out: dropping bad entries would quietly draw a partial style.
+    bad = [i for i, lyr in enumerate(layers) if not isinstance(lyr, dict)]
+    if bad:
+        raise ValueError(f"not a style: layer(s) {bad} are not objects")
     return [lyr for lyr in layers if lyr.get("type") != "symbol"] or SAND_LAYERS
 
 
-def _layers_hash(layers: list[dict]) -> str:
-    """Content address of a thumbnail: the renderer version plus exactly the layers drawn, so a
-    restyle or an edit to the fallback re-renders the topics it affects and nothing else."""
+def _thumb_hash(item: dict, layers: list[dict]) -> str:
+    """Content address of a thumbnail: the renderer version, the data drawn (the ingest's
+    `ugs:content_hash`, which changes exactly when the data or tiling does) and exactly the layers
+    drawn, so new data, a restyle or an edit to the fallback re-renders the topics it affects and
+    nothing else."""
+    data = (item.get("properties") or {}).get(stac.CONTENT_HASH_PROP) or ""
     drawn = json.dumps(layers, sort_keys=True, separators=(",", ":"))
-    return hashlib.sha256(f"{RENDERER_VERSION}\n{drawn}".encode()).hexdigest()
+    return hashlib.sha256(f"{RENDERER_VERSION}\n{data}\n{drawn}".encode()).hexdigest()
 
 
 def _compose_style(layers: list[dict], pmtiles_url: str, source_layer: str) -> dict:
@@ -190,7 +200,7 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
         hlog(f"FAIL style {style_url}: {type(e).__name__}: {(str(e).splitlines() or [''])[0]}",
              step="resolve", level="ERROR", category="attention", err=True)
         return "fail:style", None
-    want_hash = _layers_hash(layers)
+    want_hash = _thumb_hash(item, layers)
     png_obj, sha_obj = thumb_object(stem), sha_object(stem)
     # Legacy mis-write to clean up: an earlier build stamped a flat item the catalog never references.
     flat_stray = f"{config.STAC_PREFIX}/{_collection_path(item)}/{stem}.json"
@@ -327,6 +337,10 @@ def thumb_path(path: str, force: bool = False) -> tuple[str, dict | None]:
 
 # The rollup the viewer lists layers from.
 ROLLUP_INDEX = f"{config.STAC_PREFIX}/{CATALOG}/items.json"
+# A burst of promotes starts one run per layer and each refreshes the catalog, so a refresh that
+# listed before this run's stamp can land last. Retried a few times before it counts as a failure.
+REFRESH_ATTEMPTS = 3
+REFRESH_RETRY_SECONDS = 20
 
 
 def _index_lags(thumbnails: dict[str, dict]) -> bool:
@@ -349,6 +363,19 @@ def _index_lags(thumbnails: dict[str, dict]) -> bool:
     keys = stac.INDEX_ASSET_KEYS
     return any({k: listed.get(_stem(path), {}).get(k) for k in keys} != {k: asset.get(k) for k in keys}
                for path, asset in thumbnails.items())
+
+
+def _error_tail(e: BaseException) -> str:
+    """The exception type plus the end of its traceback, short enough for one log line."""
+    tail = "".join(traceback.format_exception(e)[-3:]).strip()
+    return f"{type(e).__name__}: {tail[-800:]}"
+
+
+def _still_lags(thumbnails: dict[str, dict]) -> bool:
+    """`_index_lags` after a refresh: a topic retired since its stamp is rightly absent from the
+    rebuilt index, so only topics still published count. The existence lookups only run when the
+    whole set lags, which is rare."""
+    return _index_lags(thumbnails) and _index_lags({p: a for p, a in thumbnails.items() if gcs.exists(p)})
 
 
 def main() -> int:
@@ -382,9 +409,7 @@ def main() -> int:
         try:
             res, asset = thumb_path(path, force=args.force)
         except Exception as e:  # noqa: BLE001 — one topic's failure must not stop the rest of the shard
-            tail = "".join(traceback.format_exception(e)[-3:]).strip()
-            hlog(f"FAIL {type(e).__name__}: {tail[-800:]}", step="error",
-                 level="ERROR", category="attention", err=True)
+            hlog(f"FAIL {_error_tail(e)}", step="error", level="ERROR", category="attention", err=True)
             res, asset = "fail:error", None
         tally[outcome_category(res)] += 1
         if res.startswith("fail"):
@@ -396,13 +421,37 @@ def main() -> int:
         # Only refresh_catalog rebuilds items.json; without this a new thumbnail waits for whichever
         # ingest happens to run next.
         hlog("items.json is missing thumbnails; refreshing the catalog", step="catalog")
-        stac.refresh_catalog()
-        # Checked again so a mismatch a refresh can't fix alerts instead of repeating every night. A
-        # race with another shard's refresh clears on the task retry. A topic retired since its stamp
-        # is rightly absent from the rebuilt index, so only topics still published count.
-        if _index_lags({p: a for p, a in thumbnails.items() if gcs.exists(p)}):
-            hlog("FAIL items.json still missing thumbnails after a refresh", step="catalog",
-                 level="ERROR", category="attention", err=True)
+        caught_up = False
+        refresh_error = None  # set when the latest attempt's refresh raised
+        for attempt in range(1, REFRESH_ATTEMPTS + 1):
+            if attempt > 1:
+                # Jittered so runs started by one burst don't retry in step, then re-checked first: a
+                # refresh another run made meanwhile already carries this run's stamp.
+                time.sleep(random.uniform(0.5, 1.5) * REFRESH_RETRY_SECONDS)
+                if not _still_lags(thumbnails):
+                    caught_up = True
+                    break
+            try:
+                stac.refresh_catalog()
+                refresh_error = None
+            except Exception as e:  # noqa: BLE001 — concurrent refreshes can rate-limit each other
+                refresh_error = _error_tail(e)
+                hlog(f"catalog refresh {attempt}/{REFRESH_ATTEMPTS} failed: {refresh_error}",
+                     step="catalog", level="WARNING")
+                continue
+            # Checked again so a mismatch a refresh can't fix alerts instead of repeating every night.
+            if not _still_lags(thumbnails):
+                caught_up = True
+                break
+            hlog(f"items.json still behind after refresh {attempt}/{REFRESH_ATTEMPTS} "
+                 "(another run's refresh landing last?)", step="catalog", level="WARNING")
+        # A last attempt whose refresh raised was never checked; another run's may have landed.
+        if not caught_up and refresh_error and not _still_lags(thumbnails):
+            caught_up = True
+        if not caught_up:
+            why = f"; the last refresh raised {refresh_error}" if refresh_error else ""
+            hlog(f"FAIL items.json still missing thumbnails after {REFRESH_ATTEMPTS} refresh attempts{why}",
+                 step="catalog", level="ERROR", category="attention", err=True)
             tally["attention"] += 1
             rc = 1
     hlog(f"thumbnails complete: {tally['ok']} ok, {tally['expected']} skipped, "

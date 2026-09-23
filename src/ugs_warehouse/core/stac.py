@@ -534,6 +534,10 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
 # The asset fields an index entry keeps. Public: the topic-thumbnail job compares against them.
 INDEX_ASSET_KEYS = ("href", "type", "roles", "title")
+# The vector ingest's content fingerprint property (vector/fingerprint.py); it changes exactly when a
+# topic's data or tiling does. Read by the ingest's skip check, the thumbnail job's content hash, and
+# tiles/app.py (as a literal, from its own image) to version tile URLs, so a rename must change all.
+CONTENT_HASH_PROP = "ugs:content_hash"
 
 
 def _index_entry(item: dict, *, rollup: bool = False) -> dict:

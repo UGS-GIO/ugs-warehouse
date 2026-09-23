@@ -23,7 +23,7 @@ import json
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
-from .core import config, gcs, stac, styles
+from .core import config, gcs, jobs, stac, styles
 
 
 def _clear_renders(item: dict) -> bool:
@@ -153,6 +153,11 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
 
     if refresh and not dry_run:
         stac.refresh_catalog()
+    if changed and not dry_run:
+        # A style change is a preview change. `changed` counts every styled item (all are rewritten),
+        # so in practice this starts a run every time; its content-hash skip re-renders only what the
+        # new styles affect, and it re-stamps any thumbnail this rewrite raced.
+        jobs.start_topic_thumbs()
     print(f"[restyle] {'would rebind' if dry_run else 'rebound'} {changed} item(s)"
           + ("" if refresh or dry_run else " (run --refresh to refresh items.json asset summaries)"))
     if not dry_run and _verify(groups):

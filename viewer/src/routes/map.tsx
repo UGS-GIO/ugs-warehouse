@@ -45,7 +45,13 @@ function MapView() {
     return rec && tables.length ? { itemHref: rec.href, tables } : undefined;
   };
 
-  return <MapShell
+  // The picker sits beside the shell, not inside a panel: on phones the panels only render while
+  // the sheet is open, so a long press with the sheet down had nowhere to mount it. It portals to
+  // the page body either way.
+  const picker = pick && <WhatsHerePicker key={JSON.stringify(pick.target)} target={pick.target}
+    canSave={pick.canSave} onClose={() => setPick(null)} />;
+
+  return <>{picker}<MapShell
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       onBoundsChange={setView}
@@ -65,8 +71,6 @@ function MapView() {
       {c.catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
       <BasemapDownload bbox={view}
         onSaveArea={view ? () => setPick({ target: { kind: "area", bbox: view }, canSave: true }) : undefined} />
-      {pick && <WhatsHerePicker key={JSON.stringify(pick.target)} target={pick.target} canSave={pick.canSave}
-        onClose={() => setPick(null)} />}
       <LayerList
         rows={c.layerRows}
         activeIds={c.idsForMap}
@@ -85,7 +89,7 @@ function MapView() {
         // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
         legend={<MapLegend layers={c.activeLayers.flatMap((l) => (l.cogHref || l.rasterPmHref ? []
           : [{ id: l.id, title: l.title, color: colorForId(l.id), styleLayers: c.styleCache[l.id] }]))} />} />
-    </>} />;
+    </>} /></>;
 }
 
 export const Route = createFileRoute("/map")({ component: MapView });

@@ -326,7 +326,9 @@ function useViewState() {
 
   // The Map, Discover AND Landing views load every leaf collection's index (all items → the map +
   // facets + the landing tiles/recent strip). Landing reuses this exact cached set — no extra fetch.
-  const mapColls = view === "map" || view === "discover" || view === "landing" ? leafColls : [];
+  // Offline data needs it too, to name what is saved; it is the same cached set.
+  const mapColls = view === "map" || view === "discover" || view === "landing" || view === "offline"
+    ? leafColls : [];
   const mapIdx = useIndexes(mapColls.map((c) => ({ id: c.id, href: c.href })));
   // Same collection.json → item-links fallback the browse list uses. Without it a federated
   // catalog contributes no layers at all: it publishes no items.json, so the index is empty and

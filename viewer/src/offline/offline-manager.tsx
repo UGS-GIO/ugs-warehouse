@@ -9,7 +9,9 @@ import { qk } from "@/query-keys";
 import { BasemapDownload } from "./basemap-download";
 import { describe, type Described, sortDescribed } from "./describe";
 import * as opfs from "./opfs";
-import { useStoredLayers } from "./use-offline";
+import { removeArea } from "./area";
+import { removeCogArea } from "./cog-area";
+import { useStoredAreas, useStoredLayers } from "./use-offline";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50";
 
@@ -23,13 +25,18 @@ function usePersisted() {
 }
 
 export function OfflineManager() {
-  const { allItems, openItem } = useViewCtx();
+  const { allItems, mapItems, openItem } = useViewCtx();
+  // Names come from the whole mappable catalog, not just the open collection (`allItems`), or a
+  // saved layer from another collection would show as a bare filename.
+  const items = [...mapItems, ...allItems];
   const stored = useStoredLayers();
+  const areas = useStoredAreas();
   const persisted = usePersisted();
   const client = useQueryClient();
 
   const refresh = () => {
     client.invalidateQueries({ queryKey: qk.offlineLayers });
+    client.invalidateQueries({ queryKey: ["offline-areas"] });
     client.invalidateQueries({ queryKey: ["storage-persisted"] });
     // The basemap protocol reads its stored set from the style query; stale, it would keep
     // routing a deleted quad's tiles to a file that is no longer there.
@@ -38,6 +45,12 @@ export function OfflineManager() {
 
   const remove = useMutation({
     mutationFn: (urls: string[]) => Promise.all(urls.map((u) => opfs.remove(u))),
+    onSettled: refresh,
+  });
+  // An area save is deleted as a unit per layer or plate: its tiles or blocks go together.
+  const removeAreas = useMutation({
+    mutationFn: (rows: { url: string; kind: "tiles" | "cog" }[]) =>
+      Promise.all(rows.map((r) => (r.kind === "cog" ? removeCogArea(r.url) : removeArea(r.url)))),
     onSettled: refresh,
   });
   const update = useMutation({
@@ -49,12 +62,13 @@ export function OfflineManager() {
     return <Page><p>This browser cannot store data for offline use.</p></Page>;
   }
 
-  const rows = sortDescribed((stored.data?.files ?? []).map((f) => describe(f, allItems)));
+  const rows = sortDescribed((stored.data?.files ?? []).map((f) => describe(f, items)));
   const layers = rows.filter((r) => r.kind === "layer");
   const basemap = rows.filter((r) => r.kind === "basemap");
-  const used = stored.data?.bytes ?? 0;
+  const areaRows = (areas.data ?? []).map((a) => ({ ...describe({ url: a.url, bytes: a.bytes, savedAt: 0 }, items), kind: a.kind }));
+  const used = (stored.data?.bytes ?? 0) + areaRows.reduce((n, a) => n + a.bytes, 0);
   const { quota } = stored.data?.space ?? {};
-  const busy = remove.isPending || update.isPending;
+  const busy = remove.isPending || update.isPending || removeAreas.isPending;
 
   return (
     <Page>
@@ -79,7 +93,7 @@ export function OfflineManager() {
       {/* No map view here, so only the statewide save shows; "This area" lives in the Map's panel. */}
       <BasemapDownload bbox={null} />
 
-      {!rows.length && (
+      {!rows.length && !areaRows.length && (
         <p className="text-muted-foreground">
           Nothing saved yet. Save the basemap above, or on the Map use the download button beside a
           layer under "On the map", to keep it for use with no connection.
@@ -91,6 +105,35 @@ export function OfflineManager() {
           onDelete={(r) => remove.mutate([r.url])} onUpdate={(r) => update.mutate(r.url)}
           onOpen={(r) => r.itemHref && openItem(r.itemHref)}
           onDeleteAll={() => remove.mutate(layers.map((r) => r.url))} />
+      )}
+      {areaRows.length > 0 && (
+        <section className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Saved areas · {areaRows.length} · {opfs.formatBytes(areaRows.reduce((n, a) => n + a.bytes, 0))}
+            </h2>
+            <button type="button" className={`${BTN} ml-auto`} disabled={busy}
+              onClick={() => removeAreas.mutate(areaRows)}>Delete all</button>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Layers and maps saved for part of the map only, from "Save this area". They draw offline
+            inside the areas you saved.
+          </p>
+          <ul className="divide-y divide-border rounded-md border border-border">
+            {areaRows.map((a) => (
+              <li key={a.url} className="flex items-center gap-2 px-3 py-2">
+                <div className="min-w-0 flex-1">
+                  <span className="block truncate">{a.label}</span>
+                  <div className="text-sm text-muted-foreground">
+                    {opfs.formatBytes(a.bytes)} · {a.kind === "cog" ? "map, by area" : "layer, by area"}
+                  </div>
+                </div>
+                <button type="button" className={BTN} disabled={busy} onClick={() => removeAreas.mutate([a])}
+                  aria-label={`Delete saved area of ${a.label}`}>Delete</button>
+              </li>
+            ))}
+          </ul>
+        </section>
       )}
       {basemap.length > 0 && (
         <Group title="Basemap" rows={basemap} busy={busy}

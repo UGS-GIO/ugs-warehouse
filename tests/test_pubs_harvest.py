@@ -551,3 +551,94 @@ def test_harvest_attempt_publishes_color_cog(monkeypatch, tmp_path):
     res = _harvest_attempt(pub, ["http://x/m-ok.zip"])
     assert res == "ok"
     up.assert_called()   # published — the guard did not false-fail a color COG
+
+
+# --- COG zoom strategy (ALL-6006) -------------------------------------------------------------
+
+def test_zoom_strategy_defaults_to_auto_and_normalizes_case(monkeypatch):
+    """Unset, empty, or whitespace-only -> "auto" (common in containerized env); case and surrounding
+    whitespace are normalized so `UPPER` and ` upper ` both resolve to "upper"."""
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.delenv("COG_ZOOM_STRATEGY", raising=False)
+    assert harvest._zoom_strategy() == "auto"
+    monkeypatch.setenv("COG_ZOOM_STRATEGY", "")
+    assert harvest._zoom_strategy() == "auto"        # present-but-empty is treated as unset
+    monkeypatch.setenv("COG_ZOOM_STRATEGY", "   ")
+    assert harvest._zoom_strategy() == "auto"        # whitespace-only too
+    monkeypatch.setenv("COG_ZOOM_STRATEGY", " UPPER ")
+    assert harvest._zoom_strategy() == "upper"       # trimmed + lowercased
+
+
+def test_zoom_strategy_rejects_unknown_value(monkeypatch):
+    """A typo'd strategy fails loud at config read, not with a cryptic GDAL error mid-harvest after a
+    download + warp already burned. The message echoes the value as actually set (raw case)."""
+    from ugs_warehouse.pubs import harvest
+    monkeypatch.setenv("COG_ZOOM_STRATEGY", "Sideways")
+    with pytest.raises(ValueError, match="Sideways"):
+        harvest._zoom_strategy()
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_cog_zoom_strategy_reaches_cog_translate(monkeypatch, tmp_path):
+    """The wiring: COG_ZOOM_STRATEGY is handed to cog_translate's zoom_level_strategy, so a targeted
+    `upper` re-harvest actually keeps the finer zoom instead of rounding down to the nearest."""
+    from ugs_warehouse.pubs import harvest
+    pub = identity.Pub(series_id="M-Z")
+    harvest._report_begin("M-Z")
+    monkeypatch.setattr(harvest, "COG_ZOOM_STRATEGY", "upper")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work: (str(tmp_path / "plate.tif"), None))
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: None)   # gdalwarp no-op
+
+    seen = {}
+
+    def fake_cog_translate(src, dst, prof, **k):
+        seen.update(k)
+        with open(dst, "wb") as f:
+            f.write(b"x" * 200_000)
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    monkeypatch.setattr(harvest.gcs, "upload_write_once", lambda *a, **k: None)
+    monkeypatch.setattr(harvest.gcs, "upload", lambda *a, **k: None)
+
+    assert _harvest_attempt(pub, ["http://x/m-z.zip"]) == "ok"
+    assert seen["zoom_level_strategy"] == "upper"
+    assert seen["web_optimized"] is True   # still web-optimized, only the zoom rounding changed
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_cog_zoom_strategy_reaches_lzw_fallback(monkeypatch, tmp_path):
+    """The webp->lzw retry is a second cog_translate call; it must carry zoom_level_strategy too, so a
+    fallback COG keeps the chosen zoom. Guards against the two call sites drifting apart."""
+    from ugs_warehouse.pubs import harvest
+    pub = identity.Pub(series_id="M-ZL")
+    harvest._report_begin("M-ZL")
+    monkeypatch.setattr(harvest, "COG_ZOOM_STRATEGY", "upper")
+    monkeypatch.setattr(harvest, "COG_COMPRESS", "webp")   # only webp arms the lzw fallback
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work: (str(tmp_path / "plate.tif"), None))
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: None)
+
+    calls = []
+
+    def fake_cog_translate(src, dst, prof, **k):
+        calls.append(k)
+        # first (webp) call writes an undersized file -> triggers _to_lzw; the retry writes a real one
+        with open(dst, "wb") as f:
+            f.write(b"x" * (200_000 if len(calls) > 1 else 10))
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    monkeypatch.setattr(harvest.gcs, "upload_write_once", lambda *a, **k: None)
+    monkeypatch.setattr(harvest.gcs, "upload", lambda *a, **k: None)
+
+    assert _harvest_attempt(pub, ["http://x/m-zl.zip"]) == "ok"
+    assert len(calls) == 2                              # the fallback fired
+    assert calls[1]["zoom_level_strategy"] == "upper"  # the lzw retry carries the strategy too

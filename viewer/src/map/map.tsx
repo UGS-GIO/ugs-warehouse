@@ -15,6 +15,8 @@ import { usePerItem } from "@/lib/use-per-item";
 import { UiSegmented } from "@/ui/segmented";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+import { UiSelect } from "@/ui/select";
+import { useIsDesktop } from "@/ui/use-breakpoint";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
 const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
@@ -144,6 +146,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const [hlGeom, setHlGeom] = usePerItem<GeoJSON.Geometry | null>(item?.id ?? "", null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
   const basemapStyle = useBasemapStyle(basemap);
+  const isDesktop = useIsDesktop();
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
   const highlight = validBbox(highlightBbox);
@@ -326,8 +329,12 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
       <MapControl position="top-right" className="flex gap-1 text-xs">
-        <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
-          className="bg-card/95 shadow" />
+        {/* Phones get one dropdown: three segments squeezed the place search down to "Searc". */}
+        {isDesktop
+          ? <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
+              className="bg-card/95 shadow" />
+          : <UiSelect value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS} title="Basemap"
+              className="bg-card/95 shadow" />}
         {footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"

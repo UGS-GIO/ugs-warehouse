@@ -311,6 +311,33 @@ def test_the_shards_split_the_topics_between_them_without_overlap(store, monkeyp
     assert sorted(_rendered_stems(styles)) == stems
 
 
+def _draws_on(layer: dict, geometry: str) -> bool:
+    """Whether MapLibre would apply `layer` to a feature of `geometry` type. Only the filter forms
+    the renderer emits: none (every feature) or a `match` on `geometry-type`."""
+    flt = layer.get("filter")
+    if flt is None:
+        return True
+    op, getter, types, hit, miss = flt
+    assert (op, getter) == ("match", ["geometry-type"]), f"unsupported filter form: {flt}"
+    return hit if geometry in types else miss
+
+
+def test_an_unstyled_polygon_topic_gets_no_vertex_dots(store, monkeypatch):
+    """MapLibre applies a circle layer to every vertex of a line or polygon, so the fallback's point
+    markers have to be gated to points, as the viewer's GEOM_FILTER does (viewer/src/map/map-model.ts).
+    Ungated, a statewide polygon layer renders as a cloud of dots."""
+    _publish("wetlands_riverine")
+    styles: list[dict] = []
+    _renders(monkeypatch, styles=styles)
+    assert _run(monkeypatch, "--all") == 0
+    layers = [lyr for lyr in styles[0]["layers"] if lyr["type"] != "background"]
+    circles = [lyr for lyr in layers if lyr["type"] == "circle"]
+    assert circles
+    assert not any(_draws_on(c, g) for c in circles for g in ("Polygon", "LineString"))
+    assert all(_draws_on(c, "Point") for c in circles)
+    assert any(lyr["type"] == "fill" and _draws_on(lyr, "Polygon") for lyr in layers)
+
+
 def test_changing_the_fallback_redraws_only_the_topics_drawn_with_it(store, monkeypatch):
     """The content hash covers what is drawn, so an edit to the sand fallback re-renders the
     unstyled topics without a manual version bump, and leaves styled topics alone."""

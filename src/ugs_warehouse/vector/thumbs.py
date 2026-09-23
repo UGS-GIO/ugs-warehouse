@@ -38,13 +38,24 @@ THUMB_H = int(os.environ.get("TOPIC_THUMB_H", "320"))
 
 _ASSETS = os.path.join(os.path.dirname(__file__), "render_assets")
 
+# The viewer's geometry gates for its unstyled fallback (GEOM_FILTER, viewer/src/map/map-model.ts).
+# Without them the circle layer puts a dot on every polygon and line vertex.
+GEOM_FILTER = {
+    "fill": ["match", ["geometry-type"], ["Polygon", "MultiPolygon"], True, False],
+    "line": ["match", ["geometry-type"], ["LineString", "MultiLineString", "Polygon", "MultiPolygon"], True, False],
+    "point": ["match", ["geometry-type"], ["Point", "MultiPoint"], True, False],
+}
+
 # Neutral fallback cartography (sand) — used when a topic has no bound style, or its style is purely
 # symbol/label layers (dropped below). Covers fill / line / circle so any geometry type shows.
 SAND_LAYERS = [
-    {"id": "d-fill", "type": "fill", "paint": {"fill-color": "#d8c39a", "fill-opacity": 0.55, "fill-outline-color": "#7a5c2e"}},
-    {"id": "d-line", "type": "line", "paint": {"line-color": "#7a5c2e", "line-width": 1.1}},
-    {"id": "d-circle", "type": "circle", "paint": {"circle-color": "#9c6b30", "circle-radius": 3.2,
-                                                   "circle-stroke-width": 0.5, "circle-stroke-color": "#4a2f12", "circle-opacity": 0.9}},
+    {"id": "d-fill", "type": "fill", "filter": GEOM_FILTER["fill"],
+     "paint": {"fill-color": "#d8c39a", "fill-opacity": 0.55, "fill-outline-color": "#7a5c2e"}},
+    {"id": "d-line", "type": "line", "filter": GEOM_FILTER["line"],
+     "paint": {"line-color": "#7a5c2e", "line-width": 1.1}},
+    {"id": "d-circle", "type": "circle", "filter": GEOM_FILTER["point"],
+     "paint": {"circle-color": "#9c6b30", "circle-radius": 3.2,
+               "circle-stroke-width": 0.5, "circle-stroke-color": "#4a2f12", "circle-opacity": 0.9}},
 ]
 
 

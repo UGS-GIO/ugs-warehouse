@@ -137,10 +137,31 @@ done
 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" --project="${PROJECT}" \
   --member="serviceAccount:${RUNTIME_SA}" --role=roles/iam.serviceAccountUser --quiet >/dev/null
 
-# Daily DuckLake maintenance — Cloud Scheduler triggers the maintenance Cloud Run job so the
-# append-only catalog stays bounded/fast without anyone remembering the ops-console button. The
-# scheduler calls the Cloud Run Admin API :run endpoint with an OAuth token minted for RUNTIME_SA
-# (which already actAs itself + holds run.developer below), so the execution runs as RUNTIME_SA.
+# Scheduled jobs — Cloud Scheduler starts a Cloud Run job so it runs without anyone remembering
+# the ops-console button. The scheduler calls the Cloud Run Admin API :run endpoint with an OAuth
+# token minted for RUNTIME_SA (which already actAs itself + gets run.developer on the job here), so
+# the execution runs as RUNTIME_SA.
+ensure_schedule() {
+  local job="$1" sched="$2" schedule="$3" tz="$4"
+  local run_uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${job}:run"
+
+  echo "→ run.developer: ${RUNTIME_SA} on ${job} (scheduler runs it as this SA)"
+  gcloud run jobs add-iam-policy-binding "${job}" --region="${REGION}" --project="${PROJECT}" \
+    --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
+
+  echo "→ scheduler ${sched} → ${job} (${schedule} ${tz})"
+  if gcloud scheduler jobs describe "${sched}" --location="${REGION}" --project="${PROJECT}" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "${sched}" --location="${REGION}" --project="${PROJECT}" \
+      --schedule="${schedule}" --time-zone="${tz}" \
+      --uri="${run_uri}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
+  else
+    gcloud scheduler jobs create http "${sched}" --location="${REGION}" --project="${PROJECT}" \
+      --schedule="${schedule}" --time-zone="${tz}" \
+      --uri="${run_uri}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
+  fi
+}
+
+# Daily DuckLake maintenance keeps the append-only catalog bounded/fast.
 #
 # Daily, not weekly (2026-08-31): each run compacts under a budget and stops early, so cadence is
 # what keeps the small-file backlog bounded. Weekly never caught up (111,635 files, ~$2.2k/mo in
@@ -149,22 +170,16 @@ MAINTAIN_JOB="${MAINTAIN_JOB:-ugs-warehouse-ducklake-maintain}"
 SCHED_JOB="${SCHED_JOB:-ugs-warehouse-ducklake-maintain-weekly}"
 MAINTAIN_SCHEDULE="${MAINTAIN_SCHEDULE:-0 3 * * *}"      # daily 03:00 (off-hours)
 MAINTAIN_TZ="${MAINTAIN_TZ:-America/Denver}"
-RUN_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${MAINTAIN_JOB}:run"
+ensure_schedule "${MAINTAIN_JOB}" "${SCHED_JOB}" "${MAINTAIN_SCHEDULE}" "${MAINTAIN_TZ}"
 
-echo "→ run.developer: ${RUNTIME_SA} on ${MAINTAIN_JOB} (scheduler runs it as this SA)"
-gcloud run jobs add-iam-policy-binding "${MAINTAIN_JOB}" --region="${REGION}" --project="${PROJECT}" \
-  --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
-
-echo "→ scheduler ${SCHED_JOB} → ${MAINTAIN_JOB} (${MAINTAIN_SCHEDULE} ${MAINTAIN_TZ})"
-if gcloud scheduler jobs describe "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" >/dev/null 2>&1; then
-  gcloud scheduler jobs update http "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" \
-    --schedule="${MAINTAIN_SCHEDULE}" --time-zone="${MAINTAIN_TZ}" \
-    --uri="${RUN_URI}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
-else
-  gcloud scheduler jobs create http "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" \
-    --schedule="${MAINTAIN_SCHEDULE}" --time-zone="${MAINTAIN_TZ}" \
-    --uri="${RUN_URI}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
-fi
+# Nightly topic thumbnails: previews for layers published or restyled since the last run. Nothing
+# else starts this job, so without the schedule new layers go without a preview. A night with
+# nothing new costs almost nothing (content-hash skip).
+TOPIC_THUMBS_JOB="${TOPIC_THUMBS_JOB:-ugs-topics-thumbs}"
+TOPIC_THUMBS_SCHED_JOB="${TOPIC_THUMBS_SCHED_JOB:-ugs-topics-thumbs-nightly}"
+TOPIC_THUMBS_SCHEDULE="${TOPIC_THUMBS_SCHEDULE:-0 4 * * *}"   # daily 04:00 (off-hours)
+TOPIC_THUMBS_TZ="${TOPIC_THUMBS_TZ:-America/Denver}"
+ensure_schedule "${TOPIC_THUMBS_JOB}" "${TOPIC_THUMBS_SCHED_JOB}" "${TOPIC_THUMBS_SCHEDULE}" "${TOPIC_THUMBS_TZ}"
 
 # --- reliability audit -----------------------------------------------------------------------
 # A push subscription with no dead-letter policy retries forever. That is not a hypothetical: in
@@ -220,45 +235,91 @@ ALERT_NAME="Warehouse job execution failed"
 ALERT_API="https://monitoring.googleapis.com/v3/projects/${PROJECT}/alertPolicies"
 ALERT_TOKEN=$(gcloud auth print-access-token)
 # Quotes are pre-escaped: this is interpolated INTO a JSON string below.
-WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\", \"ugs-warehouse-retire\")'
+WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\", \"ugs-warehouse-retire\", \"ugs-topics-thumbs\")'
+# The one condition: it creates the policy, and a re-run converges an existing policy to it.
+# Asserted on both branches for the same reason as the subscription flags above: create-only, a
+# job added to WATCHED_JOBS never reached the live policy.
+CONDITION=$(cat <<JSON
+{
+  "displayName": "job execution result=failed",
+  "conditionThreshold": {
+    "filter": "resource.type = \"cloud_run_job\" AND metric.type = \"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result = \"failed\" AND resource.labels.job_name = ${WATCHED_JOBS}",
+    "comparison": "COMPARISON_GT",
+    "thresholdValue": 0,
+    "duration": "0s",
+    "aggregations": [{
+      "alignmentPeriod": "300s",
+      "perSeriesAligner": "ALIGN_DELTA",
+      "crossSeriesReducer": "REDUCE_SUM",
+      "groupByFields": ["resource.labels.job_name"]
+    }],
+    "trigger": { "count": 1 }
+  }
+}
+JSON
+)
 
 echo "→ alert policy: ${ALERT_NAME}"
-if curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200" \
-     | jq -e --arg n "${ALERT_NAME}" '[.alertPolicies[]? | select(.displayName == $n)] | length > 0' >/dev/null; then
-  echo "  ✓ exists"
+alert_fail=0
+if ! POLICIES=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200"); then
+  # Not "create": a failed list is not evidence the policy is missing, and creating would duplicate it.
+  echo "  ✗ could not list alert policies (monitoring.alertPolicyViewer?)" >&2
+  alert_fail=1
+elif [ -n "$(jq -r '.nextPageToken // empty' <<<"${POLICIES}")" ]; then
+  # Same reason: past the first page, not finding it proves nothing.
+  echo "  ✗ more than one page of alert policies; not deciding create vs update" >&2
+  alert_fail=1
 else
-  CHANNELS=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" \
-    "https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels" \
-    | jq -c '[.notificationChannels[]? | select(.type=="email") | .name]')
-  curl -sf -X POST -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" \
-    -d "$(cat <<JSON
+  POLICY=$(jq -c --arg n "${ALERT_NAME}" 'first(.alertPolicies[]? | select(.displayName == $n)) // empty' <<<"${POLICIES}")
+  if [ -n "${POLICY}" ]; then
+    if [ "$(jq -r --argjson c "${CONDITION}" 'first(.conditions[]? | select(.displayName == $c.displayName)
+            | .conditionThreshold.filter) // ""' <<<"${POLICY}")" = "$(jq -r '.conditionThreshold.filter' <<<"${CONDITION}")" ]; then
+      echo "  ✓ exists"
+    # updateMask=conditions replaces the whole list (channels + docs untouched), so every condition goes
+    # back: ours replaced in place (its `name` kept, so its ID and incidents survive) or appended, any
+    # other left as it was.
+    elif jq -c --argjson c "${CONDITION}" '{conditions: ((.conditions // []) as $cs
+           | if any($cs[]; .displayName == $c.displayName)
+             then [$cs[] | if .displayName == $c.displayName then $c + {name} else . end]
+             else $cs + [$c] end)}' <<<"${POLICY}" \
+         | curl -sf -X PATCH -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" -d @- \
+             "https://monitoring.googleapis.com/v3/$(jq -r '.name' <<<"${POLICY}")?updateMask=conditions" >/dev/null; then
+      echo "  ✓ updated watched jobs"
+    else
+      echo "  ✗ could not update (monitoring.alertPolicyEditor?)" >&2
+      alert_fail=1
+    fi
+  elif ! CHANNELS=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" \
+         "https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels" \
+         | jq -c '[.notificationChannels[]? | select(.type=="email") | .name]'); then
+    echo "  ✗ could not list notification channels (monitoring.notificationChannelViewer?)" >&2
+    alert_fail=1
+  # Backticks escaped: this heredoc is unquoted (for the interpolation), so a bare backtick would run
+  # the command inside it.
+  elif curl -sf -X POST -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" \
+      -d "$(cat <<JSON
 {
   "displayName": "${ALERT_NAME}",
   "documentation": {
-    "content": "A warehouse Cloud Run job execution failed. Nothing retries it: the Pub/Sub push handler starts the ingest job and acks immediately, so a failure here never reaches the dead-letter queue.\n\nTriage: list the executions for the failing job with `gcloud run jobs executions list`, then read that execution's logs by name. Re-run by re-promoting the topic, or by executing the job directly with a topic arg. Placeholders are omitted here because this field renders as markdown and eats angle brackets.",
+    "content": "A warehouse Cloud Run job execution failed. Nothing retries it: the Pub/Sub push handler starts the ingest job and acks immediately, so a failure here never reaches the dead-letter queue.\n\nTriage: list the executions for the failing job with \`gcloud run jobs executions list\`, then read that execution's logs by name. Re-run by re-promoting the topic, or by executing the job directly with a topic arg. Placeholders are omitted here because this field renders as markdown and eats angle brackets.",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",
-  "conditions": [{
-    "displayName": "job execution result=failed",
-    "conditionThreshold": {
-      "filter": "resource.type = \"cloud_run_job\" AND metric.type = \"run.googleapis.com/job/completed_execution_count\" AND metric.labels.result = \"failed\" AND resource.labels.job_name = ${WATCHED_JOBS}",
-      "comparison": "COMPARISON_GT",
-      "thresholdValue": 0,
-      "duration": "0s",
-      "aggregations": [{
-        "alignmentPeriod": "300s",
-        "perSeriesAligner": "ALIGN_DELTA",
-        "crossSeriesReducer": "REDUCE_SUM",
-        "groupByFields": ["resource.labels.job_name"]
-      }],
-      "trigger": { "count": 1 }
-    }
-  }],
+  "conditions": [${CONDITION}],
   "notificationChannels": ${CHANNELS}
 }
 JSON
-)" "${ALERT_API}" >/dev/null && echo "  ✓ created" || echo "  ✗ could not create (monitoring.alertPolicyEditor?)" >&2
+)" "${ALERT_API}" >/dev/null; then
+    echo "  ✓ created"
+  else
+    echo "  ✗ could not create (monitoring.alertPolicyEditor?)" >&2
+    alert_fail=1
+  fi
+fi
+# Owned here, so a failure is fatal, the same as the dead-letter audit above.
+if [ "${alert_fail}" -ne 0 ]; then
+  echo "✗ the job-failure alert policy is not in the state this script declares; fix and re-run" >&2
+  exit 1
 fi
 
 echo "✓ provisioned"

@@ -30,9 +30,12 @@ steps:
           | tar -xz -C /usr/local/bin pmtiles
         PYTHONPATH=src python3 -m scripts.build_basemap --work /workspace/basemap-work --out /workspace/basemap
 
-  # Publish. Archives are rebuilt under the same names, so they revalidate daily rather than being
-  # marked immutable; index.json (sizes, what exists) revalidates every time, since the viewer
-  # prices a download from it. --delete removes quads a rebuild no longer produces.
+  # Publish, in an order that never leaves the CDN inconsistent. First refuse an incomplete build:
+  # the quad sync deletes what the build no longer produced, so a short build would wipe the live
+  # basemap. Then the archives, and index.json LAST with no-cache from its first byte — the viewer
+  # prices downloads from it, and uploading it with the archives' daily header (even briefly) lets
+  # a CDN edge pin a stale index for a day. Archives revalidate daily: a rebuild reuses their names.
+  # ($$ escapes a literal $ from Cloud Build's own substitution.)
   - id: publish-basemap
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: bash
@@ -40,10 +43,23 @@ steps:
       - -c
       - |
         set -euo pipefail
-        gcloud storage rsync /workspace/basemap gs://${_PUBLIC_BUCKET}/${_BASEMAP_PREFIX} \
-          --recursive --delete-unmatched-destination-objects \
-          --cache-control="public, max-age=86400"
-        gcloud storage objects update gs://${_PUBLIC_BUCKET}/${_BASEMAP_PREFIX}/index.json \
+        out=/workspace/basemap
+        dest=gs://${_PUBLIC_BUCKET}/${_BASEMAP_PREFIX}
+        for f in utah.pmtiles overview.pmtiles index.json; do
+          [[ -s "$$out/$$f" ]] || { echo "missing or empty: $$f; not publishing" >&2; exit 1; }
+        done
+        n=$$(find "$$out/quads" -name '*.pmtiles' | wc -l)
+        listed=$$(python3 -c "import json; print(len(json.load(open('$$out/index.json'))['quads']))")
+        # The grid is fixed at 1,512 quads; anything well short of it is a broken build.
+        if (( n < 1500 || n != listed )); then
+          echo "built $$n quads, index lists $$listed; expected ~1,512 of each. Not publishing." >&2
+          exit 1
+        fi
+        cache="public, max-age=86400"
+        gcloud storage rsync "$$out/quads" "$$dest/quads" --recursive \
+          --delete-unmatched-destination-objects --cache-control="$$cache"
+        gcloud storage cp "$$out/utah.pmtiles" "$$out/overview.pmtiles" "$$dest/" --cache-control="$$cache"
+        gcloud storage cp "$$out/index.json" "$$dest/index.json" \
           --cache-control="no-cache" --content-type="application/json"
 
 # Planetiler runs with a 4 GB heap and the cut runs eight extracts at once; the default machine

@@ -9,6 +9,7 @@
 import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import { CappedMap } from "@/lib/lru";
+import { areaResponse } from "@/offline/area";
 
 const PMTILES_ARCHIVE_CAP = 32;
 let registered = false;
@@ -18,5 +19,14 @@ export function ensurePmtilesProtocol(): void {
   registered = true;
   const protocol = new Protocol();
   protocol.tiles = new CappedMap(PMTILES_ARCHIVE_CAP);
-  maplibregl.addProtocol("pmtiles", protocol.tile);
+  // Saved areas answer first (offline/area.ts); anything they don't hold goes to the archive as
+  // before. A layer with no saved area never touches the disk.
+  type Handler = Parameters<typeof maplibregl.addProtocol>[1];
+  const network = protocol.tile as Handler;
+  const handler: Handler = async (params, abort) => {
+    const kind = params.type === "json" ? "json" : "tile";
+    const hit = await areaResponse(params.url, kind, abort.signal, () => network(params, abort));
+    return (hit as Awaited<ReturnType<Handler>> | null) ?? network(params, abort);
+  };
+  maplibregl.addProtocol("pmtiles", handler);
 }

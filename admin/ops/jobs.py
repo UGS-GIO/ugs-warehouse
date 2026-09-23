@@ -48,7 +48,8 @@ STAGES = [
     {"n": "④", "title": "Styling", "jobs": ["restyle", "topics-thumbs"],
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt. "
               "Then render each topic's styled PMTiles → preview thumbnail (content-hash skip; "
-              "re-renders only changed styles)."},
+              "re-renders only changed data or styles). Restyle and each vector ingest start the "
+              "thumbnails on their own; the button is for a manual re-run."},
     {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "vectors",
                                                  "pubs-ingest", "graph", "fts"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
@@ -104,9 +105,9 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         danger=True, tiers=(("100k", "Intermediate"), ("500k", "1:500,000"))),
     Job("topics-thumbs", "ugs-topics-thumbs", "Topic thumbnails",
         "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
-        "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "
-        "Runs nightly on its own; stamps the thumbnail assets and refreshes the catalog itself. "
-        "3 shards.", tasks=3),
+        "sand style when unstyled). Content-hash skip — re-renders only topics whose data or style "
+        "changed. Starts on its own after each vector ingest and restyle, and nightly as a backstop; "
+        "stamps the thumbnail assets and refreshes the catalog itself. 3 shards.", tasks=3),
     # Out of STAGES while the viewer has no semantic search; here so a manual run shows in Watch.
     Job("embed", "ugs-pubs-embed", "Build semantic search",
         "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "

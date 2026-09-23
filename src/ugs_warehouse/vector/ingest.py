@@ -20,7 +20,7 @@ import logging
 import sys
 from types import ModuleType
 
-from ..core import gcs, logs, stac
+from ..core import gcs, jobs, logs, stac
 from . import (
     fingerprint,
     related,
@@ -269,11 +269,19 @@ def main() -> int:
             except Exception:
                 log.exception("final stac catalog refresh FAILED")
                 rc = 1
+        if not args.dry_run:
+            jobs.start_topic_thumbs()
         return rc
 
     topic = Topic.parse(args.topic)
-    return ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh,
-                        skip_unchanged=skip_unchanged)
+    rc = ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh,
+                      skip_unchanged=skip_unchanged)
+    # Previews in minutes rather than at the nightly thumbnail run, which stays the backstop. Started
+    # even after a failed sink, since the layer may still have been republished; the thumbnail job
+    # works out whether anything it draws changed.
+    if not args.dry_run:
+        jobs.start_topic_thumbs([topic.stem])
+    return rc
 
 
 if __name__ == "__main__":

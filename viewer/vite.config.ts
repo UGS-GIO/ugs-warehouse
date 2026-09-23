@@ -5,7 +5,6 @@ import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
-import { isCatalogJson } from "./src/sw-routes";
 
 // Build stamp — git short hash + the HEAD commit's date, so the date and hash
 // always describe the same commit. Falls back gracefully if git is unavailable
@@ -34,9 +33,15 @@ export default defineConfig({
     tailwindcss(),
     // Service worker + manifest. Scope, start_url and the precache manifest all derive from `base`,
     // so the review and preview builds get a SW scoped to their own prefix with no extra config.
+    //
+    // injectManifest, not generateSW: the worker is written out in src/sw.ts because offline layers
+    // need a fetch handler that answers HTTP Range from local storage, which no Workbox strategy
+    // expresses. The routes are the same either way; only the authoring moves.
     VitePWA({
-      // The catalog is read-mostly and the app must never pin an old deploy: take the new SW as soon
-      // as it is installed rather than waiting for every tab to close.
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
+      // The worker calls skipWaiting/clientsClaim itself; this only drives the client registration.
       registerType: "autoUpdate",
       includeAssets: ["favicon.svg", "robots.txt", "icons/*.png"],
       manifest: {
@@ -52,7 +57,7 @@ export default defineConfig({
           { src: "icons/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
         ],
       },
-      workbox: {
+      injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,woff2}"],
         // The duckdb-wasm engine (a 197 KiB loader plus two ~800 KiB workers) only pays off next to
         // its 35 MB .wasm, which globPatterns already leaves out, so precaching it reaches a dead
@@ -60,26 +65,6 @@ export default defineConfig({
         // duckdb.ts wrapper, which /discover statically imports, and dropping it fails the whole
         // route offline. public/stac and public/pmtiles are the gitignored local dev fixtures.
         globIgnores: ["**/duckdb-browser-*", "stac/**", "pmtiles/**"],
-        cleanupOutdatedCaches: true,
-        // The review deploy serves /api/comments from the same origin; a navigation fallback must
-        // never answer for it.
-        navigateFallbackDenylist: [/^\/api\//],
-        runtimeCaching: [
-          {
-            urlPattern: isCatalogJson,
-            // StaleWhileRevalidate, not CacheFirst: items.json already ships max-age 60 + SWR 600,
-            // and a catalog pinned forever is worse than no catalog.
-            handler: "StaleWhileRevalidate",
-            options: {
-              cacheName: "ugs-stac-json",
-              expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 },
-              // 200 only. The CDN sends CORS headers and the viewer has to parse these bodies, so a
-              // status-0 opaque response here means the request failed; caching it would serve that
-              // failure back as if it were catalog data.
-              cacheableResponse: { statuses: [200] },
-            },
-          },
-        ],
       },
     }),
   ],

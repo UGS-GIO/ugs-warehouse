@@ -22,7 +22,9 @@ const fail = (msg) => {
 if (!existsSync(at("sw.js"))) fail("dist/sw.js missing — did VitePWA run?");
 
 const sw = readFileSync(at("sw.js"), "utf8");
-const precached = new Set([...sw.matchAll(/url:"([^"]+)"/g)].map((m) => m[1]));
+// The key is quoted under injectManifest and bare under generateSW; accept either so a change of
+// authoring strategy cannot quietly turn this check into a no-op.
+const precached = new Set([...sw.matchAll(/"?url"?:"([^"]+)"/g)].map((m) => m[1]));
 
 const js = readdirSync(at("assets")).filter((f) => f.endsWith(".js"));
 const missing = js.filter((f) => !EXPECTED_ABSENT.test(f) && !precached.has(`assets/${f}`));
@@ -33,7 +35,10 @@ if (missing.length) {
 const present = js.filter((f) => EXPECTED_ABSENT.test(f) && precached.has(`assets/${f}`));
 if (present.length) fail(`engine chunks precached but unusable without their .wasm: ${present.join(", ")}`);
 
-if (!sw.includes("NavigationRoute")) fail("no NavigationRoute — SPA deep links will 404 offline");
+// Assert against the worker SOURCE, not the bundle: class names are minified away, so matching
+// the built file would only ever pass by accident.
+const swSrc = readFileSync(new URL("../src/sw.ts", import.meta.url), "utf8");
+if (!swSrc.includes("NavigationRoute")) fail("sw.ts registers no NavigationRoute — SPA deep links will 404 offline");
 
 const manifest = JSON.parse(readFileSync(at("manifest.webmanifest"), "utf8"));
 if (!manifest.icons?.some((i) => i.sizes === "512x512")) fail("manifest has no 512px icon — not installable");

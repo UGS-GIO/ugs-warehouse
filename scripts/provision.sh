@@ -236,9 +236,11 @@ ALERT_API="https://monitoring.googleapis.com/v3/projects/${PROJECT}/alertPolicie
 ALERT_TOKEN=$(gcloud auth print-access-token)
 # Quotes are pre-escaped: this is interpolated INTO a JSON string below.
 WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\", \"ugs-warehouse-retire\", \"ugs-topics-thumbs\")'
-# The one condition: it creates the policy, and a re-run converges an existing policy to it.
-# Asserted on both branches for the same reason as the subscription flags above: create-only, a
-# job added to WATCHED_JOBS never reached the live policy.
+# The one condition: it creates the policy, and a re-run brings an existing policy's watched-job
+# filter in line with it (only the filter is compared; the API drops zero values like
+# thresholdValue, so a whole-condition compare would always differ). Asserted on both branches for
+# the same reason as the subscription flags above: create-only, a job added to WATCHED_JOBS never
+# reached the live policy.
 CONDITION=$(cat <<JSON
 {
   "displayName": "job execution result=failed",
@@ -258,6 +260,12 @@ CONDITION=$(cat <<JSON
 }
 JSON
 )
+# A job added to WATCHED_JOBS without the pre-escaped quotes breaks this JSON, and every jq below
+# would then print nothing, which compares equal and reads as "✓ exists".
+if ! jq -e '.conditionThreshold.filter | type == "string"' <<<"${CONDITION}" >/dev/null; then
+  echo "✗ alert CONDITION is not valid JSON (check WATCHED_JOBS escaping)" >&2
+  exit 1
+fi
 
 echo "→ alert policy: ${ALERT_NAME}"
 alert_fail=0

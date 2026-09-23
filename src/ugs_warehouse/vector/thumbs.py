@@ -99,9 +99,10 @@ def _drawn_layers(style_url: str | None) -> list[dict]:
     if not style_url:
         return SAND_LAYERS
     doc = json.loads(_fetch(style_url))
-    if not isinstance(doc, dict):
-        raise ValueError(f"style is a JSON {type(doc).__name__}, not an object")
-    return [lyr for lyr in (doc.get("layers") or []) if lyr.get("type") != "symbol"] or SAND_LAYERS
+    layers = doc.get("layers") if isinstance(doc, dict) else None
+    if not isinstance(layers, list):
+        raise ValueError("not a style: no layer list")
+    return [lyr for lyr in layers if lyr.get("type") != "symbol"] or SAND_LAYERS
 
 
 def _layers_hash(layers: list[dict]) -> str:
@@ -329,11 +330,11 @@ ROLLUP_INDEX = f"{config.STAC_PREFIX}/{CATALOG}/items.json"
 
 
 def _index_lags(thumbnails: dict[str, dict]) -> bool:
-    """Whether the rollup index is missing any of these thumbnails. Checked against GCS, not against
-    what this run wrote: a crash before the refresh, or another shard's refresh landing last, leaves
-    the index behind while every item is current. A re-render that only changed file:size needs no
-    refresh, since the index doesn't carry it. An index that won't read counts as behind, because
-    the refresh is what rewrites it."""
+    """Whether the rollup index is missing any of these thumbnails, keyed by item path. Checked
+    against GCS, not against what this run wrote: a crash before the refresh, or another shard's
+    refresh landing last, leaves the index behind while every item is current. A re-render that only
+    changed file:size needs no refresh, since the index doesn't carry it. An index that won't read
+    counts as behind, because the refresh is what rewrites it."""
     if not thumbnails:
         return False
     try:
@@ -346,8 +347,8 @@ def _index_lags(thumbnails: dict[str, dict]) -> bool:
              step="catalog", level="ERROR", category="attention", err=True)
         return True
     keys = stac.INDEX_ASSET_KEYS
-    return any({k: listed.get(stem, {}).get(k) for k in keys} != {k: asset.get(k) for k in keys}
-               for stem, asset in thumbnails.items())
+    return any({k: listed.get(_stem(path), {}).get(k) for k in keys} != {k: asset.get(k) for k in keys}
+               for path, asset in thumbnails.items())
 
 
 def main() -> int:
@@ -389,22 +390,24 @@ def main() -> int:
         if res.startswith("fail"):
             rc = 1
         if asset:
-            thumbnails[_stem(path)] = asset
+            thumbnails[path] = asset
     _series_ctx.set("")
-    hlog(f"thumbnails complete: {tally['ok']} ok, {tally['expected']} skipped, "
-         f"{tally['attention']} need attention", step="summary",
-         level="WARNING" if tally["attention"] else "NOTICE")
     if _index_lags(thumbnails):
         # Only refresh_catalog rebuilds items.json; without this a new thumbnail waits for whichever
         # ingest happens to run next.
         hlog("items.json is missing thumbnails; refreshing the catalog", step="catalog")
         stac.refresh_catalog()
         # Checked again so a mismatch a refresh can't fix alerts instead of repeating every night. A
-        # race with another shard's refresh clears on the task retry.
-        if _index_lags(thumbnails):
+        # race with another shard's refresh clears on the task retry. A topic retired since its stamp
+        # is rightly absent from the rebuilt index, so only topics still published count.
+        if _index_lags({p: a for p, a in thumbnails.items() if gcs.exists(p)}):
             hlog("FAIL items.json still missing thumbnails after a refresh", step="catalog",
                  level="ERROR", category="attention", err=True)
+            tally["attention"] += 1
             rc = 1
+    hlog(f"thumbnails complete: {tally['ok']} ok, {tally['expected']} skipped, "
+         f"{tally['attention']} need attention", step="summary",
+         level="WARNING" if tally["attention"] else "NOTICE")
     return rc
 
 

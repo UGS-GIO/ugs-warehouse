@@ -160,7 +160,7 @@ steps:
           --cache-from "$$IMG:latest" \
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
-  # Topics-thumbnail renderer: Python orchestrator + Node/puppeteer/Chromium (headless MapLibre).
+  # Topics-thumbnail renderer: Python driving headless Chromium via Playwright (headless MapLibre).
   - id: build-topics-thumbs
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
@@ -504,7 +504,7 @@ steps:
       - --memory=8Gi
       - --tasks=5
 
-  # Styled-preview thumbnails for vector serving-topics — headless MapLibre (Node/puppeteer/Chromium)
+  # Styled-preview thumbnails for vector serving-topics — headless MapLibre (Python + Playwright/Chromium)
   # renders each topic's styled PMTiles → PNG. Runs nightly from Cloud Scheduler (scripts/provision.sh);
   # content-hash skip means it only re-renders topics that are new or whose style changed. It stamps
   # the `thumbnail` assets onto the items and refreshes the catalog itself. Chromium = more RAM.

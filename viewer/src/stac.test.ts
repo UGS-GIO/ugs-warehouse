@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex, relatedJoins } from "./stac";
+import { assetUsages, catalogItemHref, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, relatedJoins } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -136,5 +136,49 @@ describe("relatedJoins", () => {
   it("is empty when there are no related assets", () => {
     expect(relatedJoins({ assets: { data: { href: "https://x/p.parquet", roles: ["data"] } } })).toEqual([]);
     expect(relatedJoins(undefined)).toEqual([]);
+  });
+});
+
+describe("collKeyOf", () => {
+  const base = "https://maps-assets.geology.utah.gov/warehouse/stac/";
+  it("keeps the full multi-segment path for a nested collection", () => {
+    expect(collKeyOf(`${base}ugs-serving-topics/wetlands/collection.json`)).toBe("ugs-serving-topics/wetlands");
+  });
+  it("derives the collection key from an item href (drops /<id>/<id>.json)", () => {
+    expect(collKeyOf(`${base}ugs-serving-topics/wetlands/wetlands_plants_site/wetlands_plants_site.json`))
+      .toBe("ugs-serving-topics/wetlands");
+  });
+  it("handles a single-segment collection", () => {
+    expect(collKeyOf(`${base}ugs-publications/collection.json`)).toBe("ugs-publications");
+  });
+  it("ignores a ?query / #hash on the href", () => {
+    expect(collKeyOf(`${base}ugs-serving-topics/wetlands/wetlands_plants_site/wetlands_plants_site.json?t=1#x`))
+      .toBe("ugs-serving-topics/wetlands");
+  });
+  it("is idempotent on a bare key, and undefined for no href", () => {
+    expect(collKeyOf("ugs-serving-topics/wetlands")).toBe("ugs-serving-topics/wetlands");
+    expect(collKeyOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("catalogItemHref", () => {
+  const base = "https://maps-assets.geology.utah.gov/warehouse/stac/";
+  // A nested-collection related link must resolve to the FULL collection key. Capturing only the last
+  // folder (c=wetlands, not c=ugs-serving-topics/wetlands) never matched a loaded collection, so the
+  // item page hung on "Loading…", the blank page in warehouse#348.
+  it("routes a nested-collection item to the full-path c=", () => {
+    expect(catalogItemHref(`${base}ugs-serving-topics/wetlands/wetlands_plants_projects/wetlands_plants_projects.json`))
+      .toBe("?c=ugs-serving-topics%2Fwetlands&i=wetlands_plants_projects");
+  });
+  it("routes a single-segment-collection item", () => {
+    expect(catalogItemHref(`${base}ugs-publications/OFR-123/OFR-123.json`)).toBe("?c=ugs-publications&i=OFR-123");
+  });
+  it("resolves a relative catalog href and ignores a ?query / #hash", () => {
+    expect(catalogItemHref("ugs-publications/OFR-123/OFR-123.json")).toBe("?c=ugs-publications&i=OFR-123");
+    expect(catalogItemHref(`${base}ugs-publications/OFR-123/OFR-123.json?t=1#x`)).toBe("?c=ugs-publications&i=OFR-123");
+  });
+  it("leaves a foreign (non-catalog) href as a direct link", () => {
+    const foreign = "https://ubm-assets.geology.utah.gov/stac/ubm-x/item/item.json";
+    expect(catalogItemHref(foreign)).toBe(foreign);
   });
 });

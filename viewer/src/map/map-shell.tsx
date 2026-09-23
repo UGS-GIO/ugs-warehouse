@@ -108,7 +108,10 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div ref={areaRef} className="relative min-h-0 flex-1">
-        <div className="absolute inset-0">{map}</div>
+        {/* The map stops at the top of the peeked sheet rather than running under it: MapLibre's
+            bottom controls (the attribution, which the data licences require be visible) sat
+            behind the peek strip. A raised sheet still covers the map, as it should. */}
+        <div className="absolute inset-x-0 top-0" style={{ bottom: `${DETENTS[0] * 100}%` }}>{map}</div>
         <div
           style={dragH != null ? { height: `${dragH}px` } : { height: `${DETENTS[detent] * 100}%` }}
           className={"absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl "

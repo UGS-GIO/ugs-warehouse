@@ -70,15 +70,17 @@ export function BasemapDownload({ bbox }: { bbox: [number, number, number, numbe
     },
   });
 
-  if (!opfs.isSupported() || !index.data) return null;
-
   const cls = "inline-flex items-center gap-1 rounded bg-card/95 px-2 py-1 shadow hover:bg-hover disabled:opacity-60";
   const busy = save.isPending;
 
+  if (!opfs.isSupported()) return null;
   if (progress) return <span className={cls}>Saving basemap {progress.n}/{progress.of}</span>;
+  // Checked before the index: offline, index.json is unreachable, and "saved" is exactly what
+  // someone in the field needs to see.
   if (have.has(stateUrl())) {
     return <span className={cls} title="The Utah basemap is saved on this device"><CheckIcon /> Utah basemap saved</span>;
   }
+  if (!index.data) return null;
 
   const whole = index.data.state && { url: stateUrl(), bytes: index.data.state.bytes };
   const areaSaved = quads.length > 0 && area.length === 0;

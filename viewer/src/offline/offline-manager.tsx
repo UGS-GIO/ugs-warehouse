@@ -6,6 +6,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useViewCtx } from "@/app";
 import { qk } from "@/query-keys";
+import { BasemapDownload } from "./basemap-download";
 import { describe, type Described, sortDescribed } from "./describe";
 import * as opfs from "./opfs";
 import { useStoredLayers } from "./use-offline";
@@ -75,10 +76,13 @@ export function OfflineManager() {
         </p>
       </section>
 
+      {/* No map view here, so only the statewide save shows; "This area" lives in the Map's panel. */}
+      <BasemapDownload bbox={null} />
+
       {!rows.length && (
         <p className="text-muted-foreground">
-          Nothing saved yet. On the Map, use the download button beside a layer under "On the map",
-          or "Save basemap" at the top right, to keep it for use with no connection.
+          Nothing saved yet. Save the basemap above, or on the Map use the download button beside a
+          layer under "On the map", to keep it for use with no connection.
         </p>
       )}
 

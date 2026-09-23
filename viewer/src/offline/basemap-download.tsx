@@ -76,15 +76,24 @@ export function BasemapDownload({ bbox }: { bbox: [number, number, number, numbe
     },
   });
 
-  const cls = "inline-flex items-center gap-1 rounded bg-card/95 px-2 py-1 shadow hover:bg-hover disabled:opacity-60";
+  const btn = "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-xs hover:bg-hover disabled:opacity-60";
   const busy = save.isPending;
 
+  // A panel section, not map chrome: it used to float over the map and covered the controls
+  // there. Same heading style as the layer panel's other sections.
+  const section = (body: React.ReactNode) => (
+    <section className="flex flex-col gap-1">
+      <div className="px-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Offline basemap</div>
+      <div className="flex flex-wrap items-center gap-1.5 px-1.5">{body}</div>
+    </section>
+  );
+
   if (!opfs.isSupported()) return null;
-  if (progress) return <span className={cls}>Saving basemap {progress.n}/{progress.of}</span>;
+  if (progress) return section(<span className="text-xs">Saving basemap {progress.n}/{progress.of}…</span>);
   // Checked before the index: offline, index.json is unreachable, and "saved" is exactly what
   // someone in the field needs to see.
   if (have.has(stateUrl())) {
-    return <span className={cls} title="The Utah basemap is saved on this device"><CheckIcon /> Utah basemap saved</span>;
+    return section(<span className="inline-flex items-center gap-1 text-xs"><CheckIcon /> All of Utah saved</span>);
   }
   if (!index.data) return null;
 
@@ -92,24 +101,22 @@ export function BasemapDownload({ bbox }: { bbox: [number, number, number, numbe
   const areaSaved = quads.length > 0 && area.length === 0;
   const showArea = quads.length > 0 && quads.length <= MAX_QUADS;
 
-  return (
-    <>
-      {whole && (
-        <button type="button" className={cls} disabled={busy}
-          title={save.error ? save.error.message : "Save the basemap for all of Utah, for offline use"}
-          onClick={() => save.mutate({ parts: [whole], whole: true })}>
-          {save.error ? "⚠" : <DownloadIcon />} Save Utah basemap · {opfs.formatBytes(whole.bytes)}
+  return section(<>
+    {whole && (
+      <button type="button" className={btn} disabled={busy}
+        title={save.error ? save.error.message : "Save the basemap for all of Utah, for offline use"}
+        onClick={() => save.mutate({ parts: [whole], whole: true })}>
+        {save.error ? "⚠" : <DownloadIcon />} All of Utah · {opfs.formatBytes(whole.bytes)}
+      </button>
+    )}
+    {showArea && (areaSaved
+      ? <span className="inline-flex items-center gap-1 text-xs" title={`${quads.length} quad(s) in view are saved`}><CheckIcon /> Area saved</span>
+      : (
+        <button type="button" className={btn} disabled={busy}
+          title={`Save only the ${quads.length} quad(s) in view: smaller, but blank beyond them`}
+          onClick={() => save.mutate({ parts: area, whole: false })}>
+          <DownloadIcon /> This area · {opfs.formatBytes(sum(area))}
         </button>
-      )}
-      {showArea && (areaSaved
-        ? <span className={cls} title={`${quads.length} quad(s) in view are saved`}><CheckIcon /> Area saved</span>
-        : (
-          <button type="button" className={cls} disabled={busy}
-            title={`Save only the ${quads.length} quad(s) in view: smaller, but blank beyond them`}
-            onClick={() => save.mutate({ parts: area, whole: false })}>
-            <DownloadIcon /> This area · {opfs.formatBytes(sum(area))}
-          </button>
-        ))}
-    </>
-  );
+      ))}
+  </>);
 }

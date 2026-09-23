@@ -8,7 +8,6 @@ import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map 
 import { ensureCogProtocol } from "./cog";
 import { basemapProtocol, BLANK_STYLE, rerouteStyle, setStoredBasemaps } from "@/offline/basemap";
 import * as opfs from "@/offline/opfs";
-import { BasemapDownload } from "@/offline/basemap-download";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
@@ -148,16 +147,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
   const highlight = validBbox(highlightBbox);
-  // The viewport bbox, on load + after every move: for the panel's "Search this area", and for
-  // "Save basemap", which downloads the quads in view.
-  const [viewBox, setViewBox] = useState<[number, number, number, number] | null>(null);
+  // Report the viewport bbox on load + after every move: for Discover's "Search this area", and
+  // for the map view's "Save basemap" panel, which downloads the quads in view.
   const reportBounds = () => {
     const m = mapRef.current?.getMap();
-    if (!m) return;
+    if (!m || !onBoundsChange) return;
     const b = m.getBounds();
-    const box: [number, number, number, number] = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
-    setViewBox(box);
-    onBoundsChange?.(box);
+    onBoundsChange([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
   };
   // Map → card: when the cursor is over a coverage footprint, report its href (deduped via a ref so
   // a continuous mousemove doesn't spam state). Only fires when the coverage overlay is shown.
@@ -332,7 +328,6 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       <MapControl position="top-right" className="flex gap-1 text-xs">
         <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
           className="bg-card/95 shadow" />
-        {basemap !== "Satellite" && <BasemapDownload bbox={viewBox} />}
         {footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"

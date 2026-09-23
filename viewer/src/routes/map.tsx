@@ -1,4 +1,5 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 
 import { idOf, useViewCtx } from "@/app";
 import { FeatureDetail, ItemMap, type OpenRelated, type RelatedTablesInfo, type SelectedFeature } from "@/map/map";
@@ -10,6 +11,7 @@ import { MapShell } from "@/map/map-shell";
 import { colorForId } from "@/map/map-model";
 import { relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
+import { BasemapDownload } from "@/offline/basemap-download";
 
 // The Info dock shows one of three things, strictly nested: a related table is only reachable from a
 // selected feature. No floating feature popup anywhere — stakeholder requirement.
@@ -24,6 +26,8 @@ function MapView() {
   // Scoped to the open item (usePerItem): opening a footprint changes the item and the dock reads
   // back as `item` in the same render — no reset effect, so no frame where a stale feature shows.
   const [dock, setDock] = usePerItem<Dock>(c.itemUrl ?? "", DOCK_ITEM);
+  // The map's view, for "This area" in the offline basemap section of the layers panel.
+  const [view, setView] = useState<[number, number, number, number] | null>(null);
 
   // A clicked layer's related tables, named from the compact index (its asset summaries carry the
   // related entries). The FK join columns are stripped from the index by design, so RelatedTable
@@ -37,6 +41,7 @@ function MapView() {
   return <MapShell
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
+      onBoundsChange={setView}
       relatedFor={relatedFor}
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
     info={dock.kind === "related"
@@ -50,6 +55,7 @@ function MapView() {
       : <MapDetail item={c.item.data} loading={c.item.isLoading} />}
     layers={<>
       {c.catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
+      <BasemapDownload bbox={view} />
       <LayerList
         rows={c.layerRows}
         activeIds={c.idsForMap}

@@ -13,6 +13,7 @@ import { SortableContext, sortableKeyboardCoordinates, useSortable,
   verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 
+import { OfflineButton } from "@/offline/offline-button";
 import { reorderLayers } from "./map-model";
 
 // `layer` = a serving topic rather than a publication plate; those sort first and lead the list.
@@ -55,10 +56,11 @@ function Fold({ id, label, action, indent, forceOpen, closed, setClosed, childre
 // A pinned active-layer row that can be dragged to change draw order. Defined at module scope (not
 // inside LayerList) so its useSortable state survives re-renders — an inline component would be a new
 // type each render and remount mid-drag. Kept in lockstep with the plain `Row` below.
-function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove }: {
+function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove, offlineHrefOf }: {
   r: LayerRow; colorOf: (id: string) => string | undefined;
   onToggle: (id: string) => void; onOpen: (href: string) => void; openId?: string;
   onMove: { up?: () => void; down?: () => void };
+  offlineHrefOf?: (id: string) => string | undefined;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: r.id });
   const style = { transform: CSS.Transform.toString(transform), transition };
@@ -77,6 +79,7 @@ function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove }: {
         className={MOVE_CLASS}><span aria-hidden>▲</span></button>
       <button type="button" onClick={onMove.down} disabled={!onMove.down} aria-label={`Move ${r.title} down`} title="Move down"
         className={MOVE_CLASS}><span aria-hidden>▼</span></button>
+      {offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
       <button type="button" onClick={() => onOpen(r.href)} aria-label={`Details for ${r.title}`} title="Details"
         className={INFO_CLASS}><span aria-hidden>ⓘ</span></button>
     </div>
@@ -89,7 +92,7 @@ const INFO_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded te
 const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-25";
 const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal hover:bg-hover";
 
-export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend, onReorder }: {
+export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf }: {
   rows: LayerRow[];
   activeIds: string[];
   colorOf: (id: string) => string | undefined;
@@ -100,6 +103,9 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
   openId?: string;
   legend?: ReactNode;   // what the active layers mean — belongs with them, not after the whole list
   onReorder?: (ids: string[]) => void;   // commit a new draw order after dragging an active layer
+  // The downloadable file behind an active layer (its PMTiles archive), or undefined when it has
+  // none. Omit the prop entirely to leave the offline control out.
+  offlineHrefOf?: (id: string) => string | undefined;
 }) {
   const [filter, setFilter] = useState("");
   // Published maps start closed: they outnumber the serving topics several times over, and someone
@@ -146,6 +152,9 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
           style={on ? { background: colorOf(r.id), borderColor: colorOf(r.id) } : undefined} />
         <span className="truncate" title={r.title}>{r.title}</span>
       </button>
+      {/* Active rows only: downloading a layer you are not looking at is not a thing anyone asks for,
+          and a single active layer renders through here rather than through the sortable ActiveRow. */}
+      {on && offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
       <button type="button" onClick={() => onOpen(r.href)} aria-label={`Details for ${r.title}`} title="Details"
         className={INFO_CLASS}><span aria-hidden>ⓘ</span></button>
     </div>
@@ -175,7 +184,7 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
               <SortableContext items={active.map((r) => r.id)} strategy={verticalListSortingStrategy}>
                 {active.map((r, i) => (
                   <ActiveRow key={r.id} r={r} colorOf={colorOf} onToggle={onToggle} onOpen={onOpen} openId={openId}
-                    onMove={moves(i)} />
+                    onMove={moves(i)} offlineHrefOf={offlineHrefOf} />
                 ))}
               </SortableContext>
             </DndContext>

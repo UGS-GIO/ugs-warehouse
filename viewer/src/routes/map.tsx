@@ -8,6 +8,7 @@ import { MapLegend } from "@/map/map-legend";
 import { RelatedTable } from "@/map/related-table";
 import { MapShell } from "@/map/map-shell";
 import { colorForId } from "@/map/map-model";
+import { seedStoredArchives } from "@/map/pmtiles-protocol";
 import { relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 
@@ -59,10 +60,23 @@ function MapView() {
         onToggleMany={c.toggleLayers}
         onReorder={c.setLayerOrder}
         onOpen={c.openItem}
+        // Vector PMTiles and the raster mosaics are both single files read by range, so both can
+        // be stored whole. A COG goes through the geomatico protocol, which has no file source.
+        offlineHrefOf={(id) => {
+          const l = c.activeLayers.find((a) => a.id === id);
+          return l?.pmHref ?? l?.rasterPmHref;
+        }}
         // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
         legend={<MapLegend layers={c.activeLayers.flatMap((l) => (l.cogHref || l.rasterPmHref ? []
           : [{ id: l.id, title: l.title, color: colorForId(l.id), styleLayers: c.styleCache[l.id] }]))} />} />
     </>} />;
 }
 
-export const Route = createFileRoute("/map")({ component: MapView });
+// Seeding runs in the loader, not in a query: the router awaits it before MapView renders, so a
+// downloaded archive is wired into the pmtiles protocol before any source asks for a tile. Seeded
+// from a query instead, the map mounts first and resolves against the network, which is exactly
+// what fails with no connection. Never rejects — a browser with no OPFS still gets the map.
+export const Route = createFileRoute("/map")({
+  loader: () => seedStoredArchives().catch(() => 0),
+  component: MapView,
+});

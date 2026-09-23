@@ -718,7 +718,7 @@ def refresh_catalog() -> None:
                     # invisible for weeks. Log it so the next obstore/GCS quirk doesn't repeat that with
                     # zero lines in the log.
                     print(f"[catalog] dropped {path}/{iid} from the index: "
-                          f"{type(e).__name__}: {str(e).splitlines()[0]}", file=sys.stderr)
+                          f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}", file=sys.stderr)
                     return None
 
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]

@@ -156,7 +156,7 @@ def get_bytes(object_path: str) -> bytes:
         # and keep it to one line — the GenericError repr is a multi-line debug block. Still loud
         # enough that a genuine auth/permission failure (which re-raises from the fallback) is visible.
         print(f"[gcs] {object_path}: obstore cannot read a gzipped object "
-              f"({type(e).__name__}: {str(e).splitlines()[0]}); reading via google-cloud-storage",
+              f"({type(e).__name__}: {(str(e).splitlines() or [''])[0]}); reading via google-cloud-storage",
               file=sys.stderr)
         raw = _gcs_client().bucket(config.BUCKET).blob(object_path).download_as_bytes(raw_download=True)
     return _gunzip(raw)
@@ -221,7 +221,7 @@ def exists(object_path: str) -> bool:
         # which made ops-console overrides silently not apply to the gzipped items (#341). A genuine
         # auth/transport error surfaces from the fallback instead of the old fail-closed `return False`.
         print(f"[gcs] {object_path}: obstore.head cannot read a gzipped object "
-              f"({type(e).__name__}: {str(e).splitlines()[0]}); checking via google-cloud-storage",
+              f"({type(e).__name__}: {(str(e).splitlines() or [''])[0]}); checking via google-cloud-storage",
               file=sys.stderr)
         return _gcs_client().bucket(config.BUCKET).blob(object_path).exists()
 

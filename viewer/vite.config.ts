@@ -5,6 +5,7 @@ import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vite";
 import { VitePWA } from "vite-plugin-pwa";
+import { isCatalogJson } from "./src/sw-routes";
 
 // Build stamp — git short hash + the HEAD commit's date, so the date and hash
 // always describe the same commit. Falls back gracefully if git is unavailable
@@ -65,21 +66,17 @@ export default defineConfig({
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [
           {
-            // Catalog JSON on the CDN, matched by path so it holds for the public catalog
-            // (warehouse/stac), the review catalog (review/stac) and a ?catalog= override alike.
-            // Range requests are excluded: PMTiles and COGs are single files read by 206 partials,
-            // and the Cache API cannot serve a range from a stored full response.
-            urlPattern: ({ url, request }) =>
-              url.pathname.includes("/stac/")
-              && url.pathname.endsWith(".json")
-              && !request.headers.has("range"),
+            urlPattern: isCatalogJson,
             // StaleWhileRevalidate, not CacheFirst: items.json already ships max-age 60 + SWR 600,
             // and a catalog pinned forever is worse than no catalog.
             handler: "StaleWhileRevalidate",
             options: {
               cacheName: "ugs-stac-json",
               expiration: { maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 },
-              cacheableResponse: { statuses: [0, 200] },
+              // 200 only. The CDN sends CORS headers and the viewer has to parse these bodies, so a
+              // status-0 opaque response here means the request failed; caching it would serve that
+              // failure back as if it were catalog data.
+              cacheableResponse: { statuses: [200] },
             },
           },
         ],

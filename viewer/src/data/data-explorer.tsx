@@ -17,6 +17,8 @@ import { RecordCards } from "@/catalog/record-cards";
 import { UiSegmented } from "@/ui/segmented";
 import { UiSelect } from "@/ui/select";
 import { useIsDesktop } from "@/ui/use-breakpoint";
+import { Unavailable } from "@/offline/offline-notice";
+import { isNetworkError, useOnline } from "@/offline/online";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
@@ -103,6 +105,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     placeholderData: keepPreviousData,   // paging back is served from cache
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
+  const online = useOnline();
 
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
@@ -234,7 +237,9 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           )}
         </div>
       )}
-      {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
+      {err && (online && !isNetworkError(error)
+        ? <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>
+        : <div className="mb-1.5"><Unavailable what="the data table" error={error} /></div>)}
       {review && selPks.size > 0 && (
         <div className="mb-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
           <span className="font-medium text-amber-700 dark:text-amber-400">{selPks.size} row{selPks.size === 1 ? "" : "s"} selected</span>

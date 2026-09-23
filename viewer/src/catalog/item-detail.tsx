@@ -24,6 +24,7 @@ import { type Asset, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAss
   relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
+import { Unavailable } from "@/offline/offline-notice";
 
 const relatedViewerHref = (stacHref: string): string => {
   const m = stacHref.match(/\/([^/]+)\/([^/]+)\/[^/]+\.json(?:\?.*)?$/);
@@ -248,12 +249,18 @@ function ReviewBadge({ itemId }: { itemId: string }) {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
 }
 
-export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layout = "drawer" }: {
+export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
+  error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
   onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
   layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
-  if (!item) return <em className={C.muted}>Loading…</em>;
+  if (!item) {
+    return error
+      ? <Unavailable what="this item" error={error}
+          fallback="Could not load this item." />
+      : <em className={C.muted}>Loading…</em>;
+  }
   const p = item.properties ?? {};
   const hasGeom = Boolean(item.geometry || item.bbox);
   const via = viaLink(item);

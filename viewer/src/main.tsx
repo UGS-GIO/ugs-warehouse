@@ -14,6 +14,13 @@ import "./index.css";
 // instead of holding the update until every tab closes. No-op in dev (devOptions off).
 registerSW({ immediate: true });
 
+// A thumbnail or cover that fails to load (offline, or a missing object) would otherwise draw the
+// browser's broken-image icon. Mark it once, here, rather than at every <img>: index.css hides
+// marked images and the card's own background stands in. Error events don't bubble, hence capture.
+window.addEventListener("error", (e) => {
+  if (e.target instanceof HTMLImageElement) e.target.dataset.broken = "";
+}, true);
+
 // Apply persisted theme before first paint to avoid a flash.
 applyTheme(getTheme());
 

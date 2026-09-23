@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { archiveFor, OVERVIEW_MAXZOOM, overviewUrl, quadAt, quadsInBbox, quadUrl, rerouteStyle, tileCenter } from "./basemap";
+import { archiveFor, OVERVIEW_MAXZOOM, overviewUrl, pickArchive, quadAt, quadsInBbox, quadUrl, redundantWithState,
+  rerouteStyle, tileCenter } from "./basemap";
 
 /** The z/x/y tile containing a point (standard web-mercator XYZ). */
 const tileAt = (lon: number, lat: number, z: number): [number, number, number] => {
@@ -96,5 +97,32 @@ describe("rerouteStyle", () => {
   it("does not touch a style without an OpenMapTiles vector source", () => {
     const sat = { version: 8, sources: { sat: { type: "raster" } }, layers: [] };
     expect(rerouteStyle(sat)).toBe(sat);
+  });
+});
+
+describe("pickArchive", () => {
+  const B = "https://cdn.example/basemap/";
+
+  it("reads everything from the statewide file once it is saved", () => {
+    const saved = new Set([`${B}utah.pmtiles`, `${B}overview.pmtiles`]);
+    expect(pickArchive(3, 1, 3, saved, B)).toBe(`${B}utah.pmtiles`);
+    expect(pickArchive(...SLC, saved, B)).toBe(`${B}utah.pmtiles`);
+  });
+
+  it("falls back to the overview and quads when only those are saved", () => {
+    const saved = new Set([`${B}overview.pmtiles`]);
+    expect(pickArchive(3, 1, 3, saved, B)).toBe(`${B}overview.pmtiles`);
+    expect(pickArchive(...SLC, saved, B)).toBe(`${B}quads/40111g8.pmtiles`);
+  });
+});
+
+describe("redundantWithState", () => {
+  const B = "https://cdn.example/basemap/";
+
+  it("lists the overview and every quad, and nothing else", () => {
+    const saved = [`${B}utah.pmtiles`, `${B}overview.pmtiles`, `${B}quads/40111g8.pmtiles`,
+      `${B}quads/40111b6.pmtiles`, "https://cdn.example/warehouse/pmtiles/layer.pmtiles"];
+    expect(redundantWithState(saved, B).sort()).toEqual(
+      [`${B}overview.pmtiles`, `${B}quads/40111b6.pmtiles`, `${B}quads/40111g8.pmtiles`]);
   });
 });

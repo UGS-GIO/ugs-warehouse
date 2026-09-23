@@ -406,3 +406,29 @@ def test_a_forced_render_whose_stamp_fails_is_redone(store, monkeypatch):
     styles.clear()
     assert _run(monkeypatch, "--all") == 0
     assert _rendered_stems(styles) == ["wetlands_riverine"]
+
+
+@pytest.mark.parametrize("body", [b"[]", b'{"error": "rate limited"}', b'{"layers": "fill"}'])
+def test_a_bound_style_without_a_layer_list_fails_instead_of_rendering_sand(store, monkeypatch, body):
+    """A 200 whose JSON isn't a style (not an object, or no layer list) is as broken as a failed fetch."""
+    _publish("wetlands_riverine", style_url="https://cdn.example/styles/riverine.json")
+    monkeypatch.setattr(thumbs, "_fetch", lambda url, timeout=30: body)
+    styles: list[dict] = []
+    _renders(monkeypatch, styles=styles)
+    assert _run(monkeypatch, "--all") == 1
+    assert styles == []
+
+
+def test_a_topic_retired_after_its_stamp_does_not_fail_the_recheck(store, monkeypatch):
+    """Retired between the stamp and the refresh, the topic is rightly absent from the rebuilt index;
+    that is not the index lagging."""
+    path = _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    refresh = stac.refresh_catalog
+
+    def retired_first():
+        store.pop(path, None)
+        refresh()
+
+    monkeypatch.setattr(stac, "refresh_catalog", retired_first)
+    assert _run(monkeypatch, "--all") == 0

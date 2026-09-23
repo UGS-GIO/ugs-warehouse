@@ -259,7 +259,17 @@ CHANNELS=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" \
 ensure_alert() {
   echo "→ alert policy: $1"
   local policies policy conds
-  policies=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200")
+  # A malformed WATCHED_JOBS escape breaks the JSON, and every jq below would print nothing.
+  if ! jq -e '.conditions | length > 0' <<<"$2" >/dev/null; then
+    echo "  ✗ policy JSON is invalid (check WATCHED_JOBS escaping)" >&2
+    return 1
+  fi
+  # A failed or partial list is no evidence the policy is missing; creating would duplicate it.
+  if ! policies=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200") \
+     || [ -n "$(jq -r '.nextPageToken // empty' <<<"${policies}")" ]; then
+    echo "  ✗ could not list every alert policy (monitoring.alertPolicyViewer?)" >&2
+    return 1
+  fi
   policy=$(jq -c --arg n "$1" 'first(.alertPolicies[]? | select(.displayName == $n)) // empty' \
              <<<"${policies}")
   if [ -n "${policy}" ]; then

@@ -11,6 +11,7 @@ import { ExpirationPlugin } from "workbox-expiration";
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
 import { StaleWhileRevalidate } from "workbox-strategies";
+import { assemble } from "./offline/cog-blocks";
 import { fileNameFor } from "./offline/opfs-name";
 import { contentTypeFor, rangeHeaders, rangeStatus, resolveRange, STORABLE } from "./offline/range";
 import { isCatalogJson } from "./sw-routes";
@@ -73,9 +74,45 @@ async function storedFile(url: string): Promise<File | null> {
   }
 }
 
+/** A COG saved by area (offline/cog-area.ts): its block directory and the file's real size. */
+async function storedCogArea(url: string) {
+  try {
+    const root = await navigator.storage.getDirectory();
+    const dir = await (await root.getDirectoryHandle("cogs")).getDirectoryHandle(fileNameFor(url));
+    const meta = JSON.parse(await (await (await dir.getFileHandle("meta.json")).getFile()).text());
+    return { dir, size: meta.size as number, block: meta.block as number };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Answer a range read of a COG saved by area from its stored blocks. A read that needs a block the
+ * area did not save (the reader panned outside it) goes to the network, or fails cleanly offline
+ * so that part of the plate is simply blank.
+ */
+async function serveCogArea(request: Request, cog: NonNullable<Awaited<ReturnType<typeof storedCogArea>>>) {
+  const miss = () => fetch(request).catch(() => new Response(null, { status: 504 }));
+  const resolved = resolveRange(request.headers.get("range"), cog.size);
+  if (resolved.kind !== "partial") return miss();   // a whole-file read needs the whole file
+  const blocks = new Map<number, Uint8Array>();
+  for (let b = Math.floor(resolved.start / cog.block); b <= Math.floor(resolved.end / cog.block); b++) {
+    const file = await cog.dir.getFileHandle(String(b)).then((h) => h.getFile(), () => null);
+    if (!file) return miss();
+    blocks.set(b, new Uint8Array(await file.arrayBuffer()));
+  }
+  const body = assemble(resolved.start, resolved.end, cog.block, (i) => blocks.get(i) ?? null)!;
+  return new Response(body, {
+    status: 206, headers: rangeHeaders(resolved, contentTypeFor(new URL(request.url).pathname)),
+  });
+}
+
 async function serveStored(request: Request): Promise<Response> {
   const file = await storedFile(request.url);
-  if (!file) return fetch(request);
+  if (!file) {
+    const cog = /\.tiff?$/i.test(new URL(request.url).pathname) ? await storedCogArea(request.url) : null;
+    return cog ? serveCogArea(request, cog) : fetch(request);
+  }
 
   const resolved = resolveRange(request.headers.get("range"), file.size);
   const headers = rangeHeaders(resolved, contentTypeFor(new URL(request.url).pathname));

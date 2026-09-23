@@ -19,11 +19,11 @@ describe("whatsHere", () => {
     expect(whatsHere(layers, slc).map((h) => h.id)).toEqual(["faults", "mosaic", "plate", "cube"]);   // layers, then maps by title
   });
 
-  it("saves vector layers and mosaics by area, plates whole, and cubes not at all", () => {
+  it("saves vector layers, mosaics and plates by area, and cubes not at all", () => {
     const by = Object.fromEntries(whatsHere(layers, slc).map((h) => [h.id, h.save]));
     expect(by.faults).toEqual({ how: "area", url: "https://cdn/faults.pmtiles" });
     expect(by.mosaic).toEqual({ how: "area", url: "https://cdn/500k.pmtiles" });
-    expect(by.plate).toEqual({ how: "file", url: "https://cdn/slc.cog.tif" });
+    expect(by.plate).toEqual({ how: "cog", url: "https://cdn/slc.cog.tif" });
     expect(by.cube).toBeNull();
   });
 

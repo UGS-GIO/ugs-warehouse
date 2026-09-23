@@ -216,10 +216,13 @@ def exists(object_path: str) -> bool:
         return True
     except FileNotFoundError:
         return False
-    except Exception:  # noqa: BLE001 — obstore.head fails the same way as get on a gzipped object
+    except Exception as e:  # noqa: BLE001 — obstore.head fails the same way as get on a gzipped object
         # (GCS strips Content-Length), so fall back rather than report a gzipped STAC item as absent —
         # which made ops-console overrides silently not apply to the gzipped items (#341). A genuine
         # auth/transport error surfaces from the fallback instead of the old fail-closed `return False`.
+        print(f"[gcs] {object_path}: obstore.head cannot read a gzipped object "
+              f"({type(e).__name__}: {str(e).splitlines()[0]}); checking via google-cloud-storage",
+              file=sys.stderr)
         return _gcs_client().bucket(config.BUCKET).blob(object_path).exists()
 
 

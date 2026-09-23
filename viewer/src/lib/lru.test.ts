@@ -40,3 +40,33 @@ describe("CappedMap", () => {
     expect(m.get("a")).toBe(9);
   });
 });
+
+describe("CappedMap pinning", () => {
+  // An archive served from a downloaded file has no network copy behind it, so evicting it would
+  // turn an offline layer into a failed fetch.
+  it("evicts unpinned entries and keeps pinned ones", () => {
+    const pinned = new Set(["keep"]);
+    const m = new CappedMap<string, number>(2, (k) => pinned.has(k));
+    m.set("keep", 1);
+    m.set("a", 2);
+    m.set("b", 3);
+    m.set("c", 4);
+    expect(m.has("keep")).toBe(true);
+    expect(m.size).toBeLessThanOrEqual(3);
+    expect(m.has("c")).toBe(true);
+  });
+
+  it("never evicts the entry just inserted", () => {
+    const m = new CappedMap<string, number>(1);
+    m.set("a", 1);
+    m.set("b", 2);
+    expect([...m.keys()]).toEqual(["b"]);
+  });
+
+  it("grows past the cap when everything is pinned, rather than dropping a live archive", () => {
+    const m = new CappedMap<string, number>(1, () => true);
+    m.set("a", 1);
+    m.set("b", 2);
+    expect(m.size).toBe(2);
+  });
+});

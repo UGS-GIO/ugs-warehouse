@@ -23,6 +23,10 @@ export const qk = {
   styleLayers: (styleUrl?: string) => ["gl-style-layers", styleUrl] as const,
   stylesManifest: (url?: string) => ["styles-manifest", url] as const,
 
+  // Offline store (OPFS): one key for the whole stored set, so a download or delete refreshes
+  // every control at once.
+  offlineLayers: ["offline-layers"] as const,
+
   // Map + raster
   cogBbox: (href: string) => ["cog-bbox", href] as const,
   cogProtocol: ["cog-protocol"] as const,

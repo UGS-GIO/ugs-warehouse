@@ -59,6 +59,12 @@ function MapView() {
         onToggleMany={c.toggleLayers}
         onReorder={c.setLayerOrder}
         onOpen={c.openItem}
+        // Vector PMTiles and the raster mosaics are both single files read by range, so both can
+        // be stored whole. A COG goes through the geomatico protocol, which has no file source.
+        offlineHrefOf={(id) => {
+          const l = c.activeLayers.find((a) => a.id === id);
+          return l?.pmHref ?? l?.rasterPmHref;
+        }}
         // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
         legend={<MapLegend layers={c.activeLayers.flatMap((l) => (l.cogHref || l.rasterPmHref ? []
           : [{ id: l.id, title: l.title, color: colorForId(l.id), styleLayers: c.styleCache[l.id] }]))} />} />

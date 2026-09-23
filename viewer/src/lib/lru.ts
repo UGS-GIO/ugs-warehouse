@@ -9,12 +9,22 @@ export function lruSet<V>(cache: Map<string, V>, key: string, value: V, cap: num
   while (cache.size > cap) cache.delete(cache.keys().next().value as string);
 }
 
-/** A Map that evicts its oldest entry whenever `set` pushes it past `cap`. */
+/**
+ * A Map that evicts its oldest entry whenever `set` pushes it past `cap`.
+ *
+ * `pinned` exempts keys from eviction. The pmtiles protocol needs it: an archive being served from
+ * a downloaded file has no network copy to fall back to, so evicting it would silently turn an
+ * offline layer into a failed fetch. A map of only pinned keys simply grows past the cap.
+ */
 export class CappedMap<K, V> extends Map<K, V> {
-  constructor(private readonly cap: number) { super(); }
+  constructor(private readonly cap: number, private readonly pinned?: (key: K) => boolean) { super(); }
   set(key: K, value: V): this {
     super.set(key, value);
-    while (this.size > this.cap) super.delete(this.keys().next().value as K);
+    if (this.size <= this.cap) return this;
+    for (const k of [...this.keys()]) {
+      if (this.size <= this.cap) break;
+      if (k !== key && !this.pinned?.(k)) super.delete(k);
+    }
     return this;
   }
 }

@@ -4,7 +4,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { GeolocateControl, Layer, NavigationControl, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { basemapProtocol, BLANK_STYLE, rerouteStyle, setStoredBasemaps } from "@/offline/basemap";
 import * as opfs from "@/offline/opfs";
@@ -15,6 +15,8 @@ import { usePerItem } from "@/lib/use-per-item";
 import { UiSegmented } from "@/ui/segmented";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+import { UiSelect } from "@/ui/select";
+import { useIsDesktop } from "@/ui/use-breakpoint";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
 const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
@@ -146,6 +148,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const [hlGeom, setHlGeom] = usePerItem<GeoJSON.Geometry | null>(item?.id ?? "", null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
   const basemapStyle = useBasemapStyle(basemap);
+  const isDesktop = useIsDesktop();
+  // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
+  // when it flips, so a twist gesture's stream of rotate events does not re-render the map each frame.
+  const [offNorth, setOffNorth] = useState(false);
+  const trackNorth = ({ viewState: v }: ViewStateChangeEvent) => {
+    const off = Math.abs(v.bearing) > 0.5 || v.pitch > 0.5;
+    if (off !== offNorth) setOffNorth(off);
+  };
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
   const highlight = validBbox(highlightBbox);
@@ -320,6 +330,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onMouseMove={onHover}
       onLoad={() => { setMapLoaded(true); reportBounds(); }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
+      onRotate={trackNorth}
+      onPitch={trackNorth}
       onClick={onClick}
     >
       <MapControl position="top-left">
@@ -328,8 +340,12 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
       <MapControl position="top-right" className="flex gap-1 text-xs">
-        <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
-          className="bg-card/95 shadow" />
+        {/* Phones get one dropdown: three segments squeezed the place search down to "Searc". */}
+        {isDesktop
+          ? <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
+              className="bg-card/95 shadow" />
+          : <UiSelect value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS} title="Basemap"
+              className="bg-card/95 shadow" />}
         {footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"
@@ -339,8 +355,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         )}
       </MapControl>
 
-      <GeolocateControl position="top-right" trackUserLocation
+      {/* Phones follow the Google/Apple Maps layout. Locate goes bottom-right, in thumb reach: it is
+          the control used most in the field, and top-right is the hardest spot to reach one-handed.
+          (MapLibre stacks bottom controls upward, so it sits just above the attribution.) The compass
+          stays top-right and appears only off north-up, where it earns its space; a tap resets
+          bearing and pitch. No +/-: phones pinch to zoom. */}
+      <GeolocateControl position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
         positionOptions={{ enableHighAccuracy: true }} />
+      {!isDesktop && offNorth && <NavigationControl position="top-right" showZoom={false} visualizePitch />}
 
       {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
           them all. */}

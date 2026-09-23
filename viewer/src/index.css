@@ -228,3 +228,10 @@ div.utds-footer.utah-design-system { display: none !important; }
 
 /* Images that failed to load (see main.tsx): hide the broken-image icon, keep the layout box. */
 img[data-broken] { visibility: hidden; }
+
+/* Phone map shell (map-shell.tsx): lift MapLibre's bottom controls clear of the peeked sheet the
+   map runs under. Deliberately outside any @layer: maplibre-gl.css is unlayered, and unlayered
+   rules beat layered ones whatever their specificity, so a Tailwind utility (layered) cannot
+   override its `bottom: 0`. Out here, plain specificity decides, and two classes beat one. */
+.map-under-sheet .maplibregl-ctrl-bottom-left,
+.map-under-sheet .maplibregl-ctrl-bottom-right { bottom: var(--peek); }

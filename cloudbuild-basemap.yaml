@@ -1,5 +1,6 @@
-# Offline basemap build + publish: OpenStreetMap → Planetiler (OpenMapTiles schema) → one statewide
-# overview archive plus one archive per 7.5-minute quad → the CDN under basemap/.
+# Offline basemap build + publish: OpenStreetMap → Planetiler (OpenMapTiles schema) → the whole
+# state in one archive (utah.pmtiles, ~180 MB), plus a low-zoom overview and one archive per
+# 7.5-minute quad for smaller partial saves → the CDN under basemap/.
 #
 #   gcloud builds submit --config cloudbuild-basemap.yaml --project ut-dnr-ugs-backend-tools \
 #     --service-account projects/ut-dnr-ugs-backend-tools/serviceAccounts/<compute-SA> .
@@ -46,7 +47,8 @@ steps:
           --cache-control="no-cache" --content-type="application/json"
 
 # Planetiler runs with a 4 GB heap and the cut runs eight extracts at once; the default machine
-# is too small for both. The statewide build takes about 2 minutes, the ~1,500 quad cuts a few more.
+# is too small for both. About 3 minutes end to end; ~470 MB published (183 MB statewide file,
+# 289 MB of overview + quads).
 options:
   machineType: E2_HIGHCPU_8
   logging: CLOUD_LOGGING_ONLY

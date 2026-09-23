@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import NamedTuple
 
 import obstore as obs
+from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcloud_storage
 from obstore.store import GCSStore
 
@@ -158,7 +159,13 @@ def get_bytes(object_path: str) -> bytes:
         print(f"[gcs] {object_path}: obstore cannot read a gzipped object "
               f"({type(e).__name__}: {(str(e).splitlines() or [''])[0]}); reading via google-cloud-storage",
               file=sys.stderr)
-        raw = _gcs_client().bucket(config.BUCKET).blob(object_path).download_as_bytes(raw_download=True)
+        try:
+            raw = _gcs_client().bucket(config.BUCKET).blob(object_path).download_as_bytes(raw_download=True)
+        except NotFound as nf:
+            # google-cloud-storage raises NotFound, not FileNotFoundError; translate it so the fallback
+            # keeps get_bytes' one 404 contract — serve/refresh_catalog treat an absent object as a 404,
+            # not a 500. (#341)
+            raise FileNotFoundError(object_path) from nf
     return _gunzip(raw)
 
 

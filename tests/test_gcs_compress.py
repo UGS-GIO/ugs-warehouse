@@ -135,3 +135,18 @@ def test_exists_returns_false_on_404_without_falling_back() -> None:
          patch.object(gcs, "_gcs_client", gcs_client):
         assert gcs.exists("warehouse/stac/missing.json") is False
     gcs_client.assert_not_called()
+
+
+def test_get_bytes_fallback_translates_gcs_not_found_to_file_not_found() -> None:
+    # If the object is gone by the time the fallback runs, google-cloud-storage raises NotFound (not
+    # FileNotFoundError). get_bytes must translate it so callers that catch FileNotFoundError (serve,
+    # refresh_catalog) treat it as absent instead of 500ing. (#341)
+    from google.api_core.exceptions import NotFound
+    gcs_client = MagicMock()
+    gcs_client.return_value.bucket.return_value.blob.return_value.download_as_bytes.side_effect = \
+        NotFound("no such object")
+    with patch.object(gcs, "_store", return_value=object()), \
+         patch.object(gcs.obs, "get", side_effect=RuntimeError("obstore transport")), \
+         patch.object(gcs, "_gcs_client", gcs_client):
+        with pytest.raises(FileNotFoundError):
+            gcs.get_bytes("stac/item.json")

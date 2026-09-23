@@ -104,8 +104,19 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str, append: bool 
 def _merge(con: duckdb.DuckDBPyConnection, fqn: str, view: str, cols: list[str]) -> None:
     """Delta-only upsert+delete keyed on ugs_key, in one transaction (one DuckLake snapshot).
 
-    Two statements because DuckLake forbids UPDATE+DELETE in a single MERGE: (1) MERGE that
-    updates changed rows + inserts new rows, (2) DELETE rows absent from the source.
+    Change detection runs as a NARROW pre-diff on `(ugs_key, content-hash)` only — geometry (or any
+    wide column) never enters a join. The previous form put the change test inside the MERGE,
+    `WHEN MATCHED AND hash(t.<all cols>) IS DISTINCT FROM hash(s.<all cols>)`, which forced DuckDB's
+    join to carry every column of both sides: a ~3 GB hash table, ~2.5 GB of it geometry. It fit
+    under the memory cap, so DuckDB kept it fully resident and then OOM'd on the transient buffers
+    needed to decompress the target's geometry column alongside it — the outline layer's ingest
+    (426k polygons) died there at a 6 GB cap in a 16 GiB container. Comparing a scalar `hash(...)`
+    keeps the diff a few bytes wide, so the write step below only touches the rows that actually
+    changed and the whole merge runs in bounded memory (~1-2 GB regardless of layer size).
+
+    Then two write statements, because DuckLake forbids UPDATE+DELETE in one MERGE: (1) MERGE the
+    changed/new rows, (2) DELETE rows absent from the source. The diff + both writes are one
+    transaction — one atomic DuckLake snapshot per ingest.
 
     Fails loud on a NULL key: a Postgres UNIQUE permits NULLs, and a NULL `ugs_key` never matches the
     `ON` join, so it would fall into WHEN NOT MATCHED (inserted) and then be removed by the DELETE in
@@ -123,20 +134,30 @@ def _merge(con: duckdb.DuckDBPyConnection, fqn: str, view: str, cols: list[str])
             f"(a NULL key never matches ON, so it would be inserted then deleted in the same "
             f"transaction and silently vanish from DuckLake). Fix the serving-layer key upstream."
         )
-    hash_t = ", ".join(f't.{_q(c)}' for c in diff)
-    hash_s = ", ".join(f's.{_q(c)}' for c in diff)
-    # A row with no content columns beyond feature_id can't "change" — omit the UPDATE branch.
-    matched = (
-        f"WHEN MATCHED AND (hash({hash_t}) IS DISTINCT FROM hash({hash_s})) THEN UPDATE SET "
-        + ", ".join(f'{_q(c)} = s.{_q(c)}' for c in upd)
-        if diff else ""
+    # Changed/new keys, projecting ONLY (ugs_key, hash) so geometry never enters the join. `hash()`
+    # over the `diff` columns is the same 64-bit content hash the old MERGE predicate used (identical
+    # change semantics) — just computed below the join instead of after it. A row with no content
+    # columns beyond feature_id can't "change", so only brand-new keys need a write.
+    hsel = (", hash(" + ", ".join(_q(c) for c in diff) + ") AS _h") if diff else ""
+    changed = f"t.{key} IS NULL OR t._h IS DISTINCT FROM s._h" if diff else f"t.{key} IS NULL"
+    con.execute(
+        f"CREATE OR REPLACE TEMP TABLE _ducklake_delta AS "
+        f"SELECT s.{key} AS {key} "
+        f"FROM (SELECT {key}{hsel} FROM {view}) s "
+        f"LEFT JOIN (SELECT {key}{hsel} FROM {fqn}) t ON s.{key} = t.{key} "
+        f"WHERE {changed}"
     )
+    # Restricted to changed/new keys, so WHEN MATCHED is always a known content change (no per-row
+    # hash predicate) and the source scan is the delta, not the whole layer.
+    matched = ("WHEN MATCHED THEN UPDATE SET "
+               + ", ".join(f'{_q(c)} = s.{_q(c)}' for c in upd) + " ") if diff else ""
     con.execute("BEGIN TRANSACTION")
     try:
         con.execute(
-            f"MERGE INTO {fqn} AS t USING (SELECT * FROM {view}) AS s "
+            f"MERGE INTO {fqn} AS t "
+            f"USING (SELECT * FROM {view} WHERE {key} IN (SELECT {key} FROM _ducklake_delta)) AS s "
             f"ON t.{key} = s.{key} "
-            f"{matched} "
+            f"{matched}"
             f"WHEN NOT MATCHED THEN INSERT ({', '.join(_q(c) for c in cols)}) "
             f"VALUES ({', '.join(f's.{_q(c)}' for c in cols)})"
         )
@@ -148,3 +169,10 @@ def _merge(con: duckdb.DuckDBPyConnection, fqn: str, view: str, cols: list[str])
     except duckdb.Error:
         con.execute("ROLLBACK")
         raise
+    finally:
+        # Cleanup must not mask an in-flight error (e.g. the OOM this rewrite targets): a DROP that
+        # itself throws only does so on an already-dead connection, where the real exception matters.
+        try:
+            con.execute("DROP TABLE IF EXISTS _ducklake_delta")
+        except duckdb.Error:
+            pass

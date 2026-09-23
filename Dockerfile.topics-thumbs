@@ -10,14 +10,25 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# Python package + the thumbs extra (playwright, requests). Full install — this job carries no
-# DuckDB/GDAL/tippecanoe weight.
+# Deps layer, same shape as the main Dockerfile: the package's deps + the thumbs extra (playwright,
+# requests) installed against an empty skeleton, so it and the layers below are cached until
+# pyproject.toml changes, not rebuilt on every code edit. No GDAL/tippecanoe weight in this job.
 COPY pyproject.toml README.md ./
-COPY src ./src
-RUN pip install --upgrade pip && pip install ".[thumbs]"
+RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
+    && pip install --upgrade pip && pip install ".[thumbs]" \
+    && rm -rf src
+
+# The job refreshes the catalog after stamping, which rebuilds the raster collections' item mirrors
+# with DuckDB spatial (core/item_mirror.py). Bake the extension in, as the main image does, so that
+# never depends on a download from the extension servers at 04:00.
+RUN python -c "import duckdb; c = duckdb.connect(); c.execute('INSTALL spatial')"
 
 # Chromium + its OS deps for Playwright (installs into PLAYWRIGHT_BROWSERS_PATH).
 RUN playwright install --with-deps chromium
+
+# App layer — only this rebuilds on a source change.
+COPY src ./src
+RUN pip install --no-deps --force-reinstall .
 
 ENTRYPOINT ["python", "-m", "ugs_warehouse.vector.thumbs"]
 CMD ["--all"]

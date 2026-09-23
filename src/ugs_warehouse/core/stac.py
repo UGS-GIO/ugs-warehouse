@@ -532,6 +532,8 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
 _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
                     "ugs:topic", "ugs:scale", "ugs:author", "ugs:county", "ugs:dbt_schema",
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
+# The asset fields an index entry keeps. Public: the topic-thumbnail job compares against them.
+INDEX_ASSET_KEYS = ("href", "type", "roles", "title")
 
 
 def _index_entry(item: dict, *, rollup: bool = False) -> dict:
@@ -553,7 +555,7 @@ def _index_entry(item: dict, *, rollup: bool = False) -> dict:
     if props.get("ugs:renders"):  # bound GL style → lets the map view style from the index alone
         entry["properties"]["ugs:renders"] = props["ugs:renders"]
     assets = {
-        k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
+        k: {kk: a[kk] for kk in INDEX_ASSET_KEYS if a.get(kk) is not None}
         for k, a in (item.get("assets") or {}).items()
     }
     if assets:

@@ -60,8 +60,9 @@ def test_resolve_emits_links_fks_and_aspatial_assets(monkeypatch):
         if "domain_topic =" in sql:  # outgoing FKs of the parent
             return [('[{"sourceColumn": "quad", "targetDomainTopic": "mapping_quads_24k", '
                      '"targetColumn": "quad_id"}]',)]
-        if "domain_topic IN" in sql:  # FK targets' mart schemas (link paths are per-schema)
-            return [("mapping_quads_24k", "mapping")]
+        if "domain_topic IN" in sql:  # FK targets' schema + display + business_schema
+            return [("mapping_quads_24k", "mapping", "24k Quads",
+                     '{"quad_id": {"type": "TEXT"}, "geom": {"type": "geometry(Polygon,4326)"}}')]
         # incoming children (containment query): one aspatial, one spatial
         return [
             ("enmin_ucrc_boxes", "energy_mineral", "UCRC core boxes",
@@ -91,6 +92,73 @@ def test_resolve_emits_links_fks_and_aspatial_assets(monkeypatch):
     assert "enmin_ucrc_boxes" in out["assets"]
     assert "enmin_ucrc_sites" not in out["assets"]
     assert out["assets"]["enmin_ucrc_boxes"]["roles"] == ["data", "related"]
+
+
+def test_resolve_materialises_an_aspatial_outgoing_target(monkeypatch):
+    # An OUTGOING FK to an aspatial lookup (wetlands_plants_site → wetlands_plants_projects). The
+    # target has no STAC item of its own, so it must be materialised as a related-table asset (like an
+    # aspatial child), NOT emitted as a dangling geo+json link (warehouse#347). Its FK is flipped to
+    # the asset's own orientation (target.projectcode → parent.project) for the viewer's click-join.
+    monkeypatch.setattr(related.source, "_connect", lambda: _FakeCon())
+    monkeypatch.setattr(related, "_materialize_child",
+                        lambda con, topic, schema, disp, rel, bs, parent: {
+                            "href": "h", "type": related.PARQUET_MIME,
+                            "roles": ["data", "related"], "title": disp,
+                            "ugs:foreign_keys": [related._foreign_key(rel)]})
+
+    def fake_pg(con, sql):
+        if "domain_topic =" in sql:  # outgoing FKs of the parent
+            return [('[{"sourceColumn": "project", "targetDomainTopic": "wetlands_plants_projects", '
+                     '"targetColumn": "projectcode"}]',)]
+        if "domain_topic IN" in sql:  # target meta: schema, display, aspatial business_schema
+            return [("wetlands_plants_projects", "wetlands", "Wetlands Plants Projects",
+                     '{"projectcode": {"type": "TEXT"}}')]
+        return []  # no incoming children
+    monkeypatch.setattr(related, "_pg", fake_pg)
+
+    out = related.resolve(Topic(schema="wetlands", layer="wetlands_plants_site_current"))
+
+    # Materialised as a related asset; NOT a link (the item does not exist → the link would dangle).
+    assert "wetlands_plants_projects" in out["assets"]
+    assert out["assets"]["wetlands_plants_projects"]["roles"] == ["data", "related"]
+    assert not any("wetlands_plants_projects" in lk["href"] for lk in out["links"])
+    # The FK on the parent's own data asset stays in the declared (parent → target) orientation.
+    assert {"fields": ["project"],
+            "reference": {"resource": "wetlands_plants_projects",
+                          "href": config.public_url(config.archive_path("wetlands_plants_projects")),
+                          "fields": ["projectcode"]}} in out["foreign_keys"]
+    # The materialised asset's own FK is flipped to (target → parent) so the click-join filters
+    # the lookup by the clicked parent row.
+    assert out["assets"]["wetlands_plants_projects"]["ugs:foreign_keys"] == [{
+        "fields": ["projectcode"],
+        "reference": {"resource": "wetlands_plants_site",
+                      "href": config.public_url(config.archive_path("wetlands_plants_site")),
+                      "fields": ["project"]}}]
+
+
+def test_resolve_links_an_outgoing_target_with_no_business_schema(monkeypatch):
+    # A spatial outgoing target can have a target_schema but no business_schema row in the registry.
+    # It must still LINK to its item, never be materialised: materialising on an unconfirmed schema
+    # would COPY a possibly-spatial table and drop the valid link. Only a CONFIRMED geometry-less
+    # target is materialised.
+    monkeypatch.setattr(related.source, "_connect", lambda: _FakeCon())
+
+    def _no_materialise(*a, **k):
+        raise AssertionError("must not materialise a target whose geometry is unconfirmed")
+    monkeypatch.setattr(related, "_materialize_child", _no_materialise)
+
+    def fake_pg(con, sql):
+        if "domain_topic =" in sql:
+            return [('[{"sourceColumn": "quad", "targetDomainTopic": "mapping_quads_24k", '
+                     '"targetColumn": "quad_id"}]',)]
+        if "domain_topic IN" in sql:  # has a target_schema but NULL business_schema
+            return [("mapping_quads_24k", "mapping", "24k Quads", None)]
+        return []
+    monkeypatch.setattr(related, "_pg", fake_pg)
+
+    out = related.resolve(Topic(schema="hazards", layer="hazards_qfaults_current"))
+    assert any("mapping_quads_24k" in lk["href"] for lk in out["links"])
+    assert out["assets"] == {}
 
 
 def test_resolve_graceful_on_db_error(monkeypatch):

@@ -16,6 +16,7 @@ import { Route as DevelopersRouteImport } from './routes/developers'
 import { Route as DiscoverRouteImport } from './routes/discover'
 import { Route as GuideRouteImport } from './routes/guide'
 import { Route as MapRouteImport } from './routes/map'
+import { Route as OfflineRouteImport } from './routes/offline'
 import { Route as PreviewRouteImport } from './routes/preview'
 import { Route as ReviewRouteImport } from './routes/review'
 
@@ -54,6 +55,11 @@ const MapRoute = MapRouteImport.update({
   path: '/map',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OfflineRoute = OfflineRouteImport.update({
+  id: '/offline',
+  path: '/offline',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PreviewRoute = PreviewRouteImport.update({
   id: '/preview',
   path: '/preview',
@@ -73,6 +79,7 @@ export interface FileRoutesByFullPath {
   '/discover': typeof DiscoverRoute
   '/guide': typeof GuideRoute
   '/map': typeof MapRoute
+  '/offline': typeof OfflineRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
 }
@@ -84,6 +91,7 @@ export interface FileRoutesByTo {
   '/discover': typeof DiscoverRoute
   '/guide': typeof GuideRoute
   '/map': typeof MapRoute
+  '/offline': typeof OfflineRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
 }
@@ -96,6 +104,7 @@ export interface FileRoutesById {
   '/discover': typeof DiscoverRoute
   '/guide': typeof GuideRoute
   '/map': typeof MapRoute
+  '/offline': typeof OfflineRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
 }
@@ -109,6 +118,7 @@ export interface FileRouteTypes {
     | '/discover'
     | '/guide'
     | '/map'
+    | '/offline'
     | '/preview'
     | '/review'
   fileRoutesByTo: FileRoutesByTo
@@ -120,6 +130,7 @@ export interface FileRouteTypes {
     | '/discover'
     | '/guide'
     | '/map'
+    | '/offline'
     | '/preview'
     | '/review'
   id:
@@ -131,6 +142,7 @@ export interface FileRouteTypes {
     | '/discover'
     | '/guide'
     | '/map'
+    | '/offline'
     | '/preview'
     | '/review'
   fileRoutesById: FileRoutesById
@@ -143,6 +155,7 @@ export interface RootRouteChildren {
   DiscoverRoute: typeof DiscoverRoute
   GuideRoute: typeof GuideRoute
   MapRoute: typeof MapRoute
+  OfflineRoute: typeof OfflineRoute
   PreviewRoute: typeof PreviewRoute
   ReviewRoute: typeof ReviewRoute
 }
@@ -198,6 +211,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MapRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/offline': {
+      id: '/offline'
+      path: '/offline'
+      fullPath: '/offline'
+      preLoaderRoute: typeof OfflineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/preview': {
       id: '/preview'
       path: '/preview'
@@ -223,6 +243,7 @@ const rootRouteChildren: RootRouteChildren = {
   DiscoverRoute: DiscoverRoute,
   GuideRoute: GuideRoute,
   MapRoute: MapRoute,
+  OfflineRoute: OfflineRoute,
   PreviewRoute: PreviewRoute,
   ReviewRoute: ReviewRoute,
 }

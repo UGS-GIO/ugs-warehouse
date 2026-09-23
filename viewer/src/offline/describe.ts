@@ -24,10 +24,9 @@ export type ItemLike = {
 
 // A layer's PMTiles archive is published as a rel="pmtiles" LINK, while COGs and parquet are
 // assets, so both have to be searched to find the item a stored file came from.
-const hrefsOf = (it: ItemLike): string[] => [
-  ...Object.values(it.data?.assets ?? {}).map((a) => a.href),
-  ...(it.data?.links ?? []).map((l) => l.href),
-];
+const hasHref = (it: ItemLike, url: string): boolean =>
+  Object.values(it.data?.assets ?? {}).some((a) => a.href === url)
+  || (it.data?.links ?? []).some((l) => l.href === url);
 
 const QUAD = /\/quads\/([0-9]{5}[a-h][1-8])\.pmtiles$/;
 
@@ -41,7 +40,7 @@ export function describe(file: StoredFile, items: ItemLike[], base = BASEMAP_BAS
   const quad = file.url.startsWith(base) ? QUAD.exec(file.url)?.[1] : undefined;
   if (quad) return { ...file, kind: "basemap", label: `Basemap quad ${quad}`, stale: false };
 
-  const item = items.find((it) => hrefsOf(it).includes(file.url));
+  const item = items.find((it) => hasHref(it, file.url));
   const updated = item?.data?.properties?.updated;
   const updatedAt = updated ? Date.parse(updated) : NaN;
   return {

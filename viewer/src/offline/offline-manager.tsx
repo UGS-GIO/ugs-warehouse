@@ -12,11 +12,12 @@ import { useStoredLayers } from "./use-offline";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50";
 
+// Not cached forever: the first download asks for persistent storage, so this can flip from
+// "not protected" to "protected" mid-session, and a stale answer would hide that it worked.
 function usePersisted() {
   return useQuery({
     queryKey: ["storage-persisted"],
     queryFn: async () => (await navigator.storage?.persisted?.()) ?? false,
-    staleTime: Infinity,
   });
 }
 
@@ -28,13 +29,14 @@ export function OfflineManager() {
 
   const refresh = () => {
     client.invalidateQueries({ queryKey: qk.offlineLayers });
+    client.invalidateQueries({ queryKey: ["storage-persisted"] });
     // The basemap protocol reads its stored set from the style query; stale, it would keep
     // routing a deleted quad's tiles to a file that is no longer there.
     client.invalidateQueries({ queryKey: ["basemap-style"] });
   };
 
   const remove = useMutation({
-    mutationFn: async (urls: string[]) => { for (const u of urls) await opfs.remove(u); },
+    mutationFn: (urls: string[]) => Promise.all(urls.map((u) => opfs.remove(u))),
     onSettled: refresh,
   });
   const update = useMutation({

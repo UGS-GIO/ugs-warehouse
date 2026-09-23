@@ -151,6 +151,10 @@ describe("collKeyOf", () => {
   it("handles a single-segment collection", () => {
     expect(collKeyOf(`${base}ugs-publications/collection.json`)).toBe("ugs-publications");
   });
+  it("ignores a ?query / #hash on the href", () => {
+    expect(collKeyOf(`${base}ugs-serving-topics/wetlands/wetlands_plants_site/wetlands_plants_site.json?t=1#x`))
+      .toBe("ugs-serving-topics/wetlands");
+  });
   it("is idempotent on a bare key, and undefined for no href", () => {
     expect(collKeyOf("ugs-serving-topics/wetlands")).toBe("ugs-serving-topics/wetlands");
     expect(collKeyOf(undefined)).toBeUndefined();
@@ -168,6 +172,10 @@ describe("catalogItemHref", () => {
   });
   it("routes a single-segment-collection item", () => {
     expect(catalogItemHref(`${base}ugs-publications/OFR-123/OFR-123.json`)).toBe("?c=ugs-publications&i=OFR-123");
+  });
+  it("resolves a relative catalog href and ignores a ?query / #hash", () => {
+    expect(catalogItemHref("ugs-publications/OFR-123/OFR-123.json")).toBe("?c=ugs-publications&i=OFR-123");
+    expect(catalogItemHref(`${base}ugs-publications/OFR-123/OFR-123.json?t=1#x`)).toBe("?c=ugs-publications&i=OFR-123");
   });
   it("leaves a foreign (non-catalog) href as a direct link", () => {
     const foreign = "https://ubm-assets.geology.utah.gov/stac/ubm-x/item/item.json";

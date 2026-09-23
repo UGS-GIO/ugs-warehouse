@@ -37,8 +37,9 @@ export const IS_REVIEW = CATALOG_URL.includes("/review/") ||
 // a catalog.json (sub-catalog), or an item's .json — without needing the loaded tree.
 export const collKeyOf = (href?: string): string | undefined => {
   if (!href) return undefined;
+  const clean = href.split(/[?#]/)[0];                  // drop any ?query / #hash before the $-anchored strips
   const base = CATALOG_URL.replace(/[^/]*$/, "");       // …/stac/
-  const s = (href.startsWith(base) ? href.slice(base.length) : href)
+  const s = (clean.startsWith(base) ? clean.slice(base.length) : clean)
     .replace(/\/?(collection|catalog)\.json$/, "")      // a collection/sub-catalog url → its folder path
     .replace(/\/[^/]+\/[^/]+\.json$/, "");              // an item url → drop /<id>/<id>.json
   return s || undefined;
@@ -50,8 +51,10 @@ export const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id =
 // under our catalog root) has no in-app route, so it is returned unchanged as a direct link.
 export const catalogItemHref = (stacHref: string): string => {
   const base = CATALOG_URL.replace(/[^/]*$/, "");
-  const c = stacHref.startsWith(base) ? collKeyOf(stacHref) : undefined;
-  return c ? `?c=${encodeURIComponent(c)}&i=${encodeURIComponent(idOf(stacHref))}` : stacHref;
+  let abs: string;
+  try { abs = new URL(stacHref, base).href; } catch { return stacHref; }  // resolve a relative catalog link
+  const c = abs.startsWith(base) ? collKeyOf(abs) : undefined;            // foreign / off-catalog → passthrough
+  return c ? `?c=${encodeURIComponent(c)}&i=${encodeURIComponent(idOf(abs))}` : stacHref;
 };
 
 export type Link = {

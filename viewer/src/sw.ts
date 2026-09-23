@@ -39,6 +39,21 @@ registerRoute(isCatalogJson, new StaleWhileRevalidate({
   ],
 }));
 
+// OpenFreeMap's style, sprite, glyphs and TileJSON: the files the map asks for on every load, cached
+// as it asks for them so the basemap's look survives going offline. Tiles are deliberately NOT here:
+// their terms prohibit automated collection, so offline tiles come from our own quad archives.
+registerRoute(
+  ({ url }) => url.hostname === "tiles.openfreemap.org"
+    && (/^\/(styles|sprites|fonts)\//.test(url.pathname) || url.pathname === "/planet"),
+  new StaleWhileRevalidate({
+    cacheName: "ugs-basemap-style",
+    plugins: [
+      new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 }),
+      new CacheableResponsePlugin({ statuses: [200] }),
+    ],
+  }),
+);
+
 // ---- Offline artifacts: serve a downloaded file, Range and all ----
 //
 // Every artifact we publish is a single file read by HTTP Range: PMTiles archives, COGs, GeoParquet.

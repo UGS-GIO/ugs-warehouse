@@ -51,7 +51,7 @@ const idOf = (href: string) => href.split("/").slice(-2)[0];
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
@@ -59,6 +59,7 @@ export function DiscoveryView({
   onOpenPub: (collId: string, itemId: string) => void;  // an article cites a pub by series id
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
   selectedItem?: StacDoc;              // its full doc (App resolves it from ?c=/?i=); undefined while loading
+  selectedItemError?: unknown;         // that doc's request error (e.g. offline and never cached)
   selectedCollectionId?: string;
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
@@ -485,7 +486,7 @@ export function DiscoveryView({
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} layout="drawer"
+              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} error={selectedItemError} layout="drawer"
                 onBack={onCloseItem} onMap={onViewOnMap} onExplore={onExplore} />
             </div>
           </aside>

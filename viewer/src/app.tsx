@@ -9,6 +9,7 @@ import { layerCollectionIds } from "./catalog/catalog";
 import { type ActiveLayer, type Footprint, layerParam, parseLayerParam } from "./map/map-model";
 import { LegalFooter } from "./shell/legal-footer";
 import { SavingNotice } from "./offline/saving-notice";
+import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
@@ -546,6 +547,7 @@ export function AppLayout() {
             ))}
           </div>
           <DataSaverBadge />
+          <OfflineBadge />
           {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}
           {/* Always mounted: it carries the theme picker + the overflow views, and below md the
               primary tabs as well. */}

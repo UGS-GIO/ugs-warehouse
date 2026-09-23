@@ -147,6 +147,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
   const basemapStyle = useBasemapStyle(basemap);
   const isDesktop = useIsDesktop();
+  // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
+  // when it flips, so a twist gesture's stream of rotate events does not re-render the map each frame.
+  const [offNorth, setOffNorth] = useState(false);
+  const trackNorth = ({ viewState: v }: ViewStateChangeEvent) => {
+    const off = Math.abs(v.bearing) > 0.5 || v.pitch > 0.5;
+    if (off !== offNorth) setOffNorth(off);
+  };
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
   const highlight = validBbox(highlightBbox);
@@ -321,6 +328,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onMouseMove={onHover}
       onLoad={() => { setMapLoaded(true); reportBounds(); }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
+      onRotate={trackNorth}
+      onPitch={trackNorth}
       onClick={onClick}
     >
       <MapControl position="top-left">
@@ -344,11 +353,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         )}
       </MapControl>
 
-      <GeolocateControl position="top-right" trackUserLocation
+      {/* Phones follow the Google/Apple Maps layout. Locate goes bottom-right, in thumb reach: it is
+          the control used most in the field, and top-right is the hardest spot to reach one-handed.
+          (MapLibre stacks bottom controls upward, so it sits just above the attribution.) The compass
+          stays top-right and appears only off north-up, where it earns its space; a tap resets
+          bearing and pitch. No +/-: phones pinch to zoom. */}
+      <GeolocateControl position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
         positionOptions={{ enableHighAccuracy: true }} />
-      {/* Phones rotate the map with a two-finger twist and have no easy way back to north; MapLibre's
-          own compass shows the bearing and resets it on tap. No +/-: phones pinch to zoom. */}
-      {!isDesktop && <NavigationControl position="top-right" showZoom={false} visualizePitch />}
+      {!isDesktop && offNorth && <NavigationControl position="top-right" showZoom={false} visualizePitch />}
 
       {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
           them all. */}

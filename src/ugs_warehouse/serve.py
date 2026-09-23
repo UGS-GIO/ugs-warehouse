@@ -28,7 +28,7 @@ from fastapi.responses import StreamingResponse
 from obstore.store import GCSStore
 
 from ugs_warehouse import comments, review_catalog
-from ugs_warehouse.core import config
+from ugs_warehouse.core import config, gcs
 
 app = FastAPI(title="ugs-warehouse-review-serving")
 
@@ -177,7 +177,19 @@ def whoami(request: Request) -> dict[str, str]:
 
 
 def _serve_object(object_path: str, request: Request) -> Response:
-    """Stream a single bucket object (with Range support). Raises 404 if it doesn't exist."""
+    """Serve a single bucket object. Small JSON docs (STAC items + the gzipped catalog/collection/items
+    indexes) are buffered + decompressed via get_bytes; everything else streams with Range support.
+    Raises 404 if it doesn't exist."""
+    if object_path.endswith(".json"):
+        # obstore can't stream a gzipped object (GCS strips Content-Length under decompressive
+        # transcoding, and obs.head fails the same way), and these JSON docs are small and never
+        # Range-requested — so buffer + decompress via get_bytes (its google-cloud fallback reads the
+        # gzipped indexes) and serve plain with an honest Content-Length. (#341)
+        try:
+            body = gcs.get_bytes(object_path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="not found") from None
+        return Response(content=body, media_type=_content_type(object_path))
     try:
         meta = obs.head(_store, object_path)  # ObjectMeta is a TypedDict
     except FileNotFoundError:

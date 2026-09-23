@@ -26,7 +26,7 @@ from fastapi import APIRouter, Request
 from obstore.store import GCSStore
 
 from ugs_warehouse.comments import _author
-from ugs_warehouse.core import config
+from ugs_warehouse.core import config, gcs
 
 router = APIRouter(prefix="/api/review-catalog", tags=["review-catalog"])
 
@@ -44,7 +44,10 @@ _store = GCSStore(bucket=config.BUCKET)
 def _read_json(object_path: str) -> dict | None:
     """A JSON object from the review bucket, or None if absent/unparseable."""
     try:
-        raw = bytes(obs.get(_store, object_path).bytes())
+        # get_bytes handles the gzipped catalog/collection/items indexes — obstore chokes on GCS's
+        # stripped Content-Length, so it falls back to google-cloud-storage — and gunzips; a genuine
+        # 404 still raises FileNotFoundError. Raw obstore here 500'd the crawl on the gzipped root. (#341)
+        raw = gcs.get_bytes(object_path)
     except FileNotFoundError:
         return None
     try:

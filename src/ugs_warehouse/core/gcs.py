@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import sys
 from pathlib import Path
 from typing import NamedTuple
 
 import obstore as obs
+from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcloud_storage
 from obstore.store import GCSStore
 
@@ -71,9 +73,10 @@ def _store() -> GCSStore:
 
 
 def _gcs_client() -> gcloud_storage.Client:
-    # Only used by copy_from_uri's server-side rewrite — obstore has no cross-bucket copy
-    # primitive (its copy() takes a single store, i.e. one bucket). google-cloud-storage is
-    # already an installed dependency (transitive via firebase-admin), ADC auth, no new footprint.
+    # A secondary google-cloud-storage client (ADC auth, no new footprint — already installed
+    # transitively via firebase-admin). Two uses: copy_from_uri's server-side cross-bucket rewrite
+    # (obstore has no cross-bucket copy primitive), and the get_bytes/exists fallback for gzipped
+    # objects obstore can't read (GCS strips Content-Length under decompressive transcoding).
     global _cached_gcs_client
     if _cached_gcs_client is None:
         _cached_gcs_client = gcloud_storage.Client()
@@ -137,8 +140,32 @@ def get_bytes(object_path: str) -> bytes:
     Gunzips when the body still carries the gzip magic. GCS decompresses a `Content-Encoding: gzip`
     object for clients that don't ask for it, but whether obstore asks is a detail of its HTTP
     stack, so a caller would otherwise get plain bytes or compressed ones depending on the build.
+
+    Fallback: when GCS serves a `Content-Encoding: gzip` object with decompressive transcoding it
+    strips `Content-Length`, and obstore (Rust) raises rather than return the body. Retry through
+    google-cloud-storage with `raw_download=True` — the stored bytes, checksum-validated against the
+    stored md5 — and let `_gunzip` decompress them. Keeps the gzipped catalog/rollup indexes, and any
+    items still stored gzipped by a prior build, readable instead of silently dropping out of
+    refresh_catalog / prior_property / overrides. (#341)
     """
-    raw = bytes(obs.get(_store(), object_path).bytes())
+    try:
+        raw = bytes(obs.get(_store(), object_path).bytes())
+    except FileNotFoundError:
+        raise  # genuine 404 — preserve the type callers catch; the fallback would only 404 again
+    except Exception as e:  # noqa: BLE001 — obstore chokes on the stripped Content-Length; fall back
+        # For the permanently-gzipped indexes this IS the read path, so word it as info (not "failed")
+        # and keep it to one line — the GenericError repr is a multi-line debug block. Still loud
+        # enough that a genuine auth/permission failure (which re-raises from the fallback) is visible.
+        print(f"[gcs] {object_path}: obstore cannot read a gzipped object "
+              f"({type(e).__name__}: {(str(e).splitlines() or [''])[0]}); reading via google-cloud-storage",
+              file=sys.stderr)
+        try:
+            raw = _gcs_client().bucket(config.BUCKET).blob(object_path).download_as_bytes(raw_download=True)
+        except NotFound as nf:
+            # google-cloud-storage raises NotFound, not FileNotFoundError; translate it so the fallback
+            # keeps get_bytes' one 404 contract — serve/refresh_catalog treat an absent object as a 404,
+            # not a 500. (#341)
+            raise FileNotFoundError(object_path) from nf
     return _gunzip(raw)
 
 
@@ -189,12 +216,21 @@ def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,
 
 
 def exists(object_path: str) -> bool:
-    """True if the object exists (HEAD). Used for skip-if-already-harvested."""
+    """True if the object exists (HEAD). Used for skip-if-already-harvested + ops-console override
+    placement."""
     try:
         obs.head(_store(), object_path)
         return True
-    except Exception:
+    except FileNotFoundError:
         return False
+    except Exception as e:  # noqa: BLE001 — obstore.head fails the same way as get on a gzipped object
+        # (GCS strips Content-Length), so fall back rather than report a gzipped STAC item as absent —
+        # which made ops-console overrides silently not apply to the gzipped items (#341). A genuine
+        # auth/transport error surfaces from the fallback instead of the old fail-closed `return False`.
+        print(f"[gcs] {object_path}: obstore.head cannot read a gzipped object "
+              f"({type(e).__name__}: {(str(e).splitlines() or [''])[0]}); checking via google-cloud-storage",
+              file=sys.stderr)
+        return _gcs_client().bucket(config.BUCKET).blob(object_path).exists()
 
 
 class WriteOnceViolation(Exception):

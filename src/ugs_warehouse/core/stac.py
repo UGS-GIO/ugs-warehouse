@@ -211,9 +211,9 @@ def patch_item_properties(object_path: str, updates: dict) -> bool:
     # Same cache policy as write_item so an edited item keeps a consistent header (not flipped to
     # no-cache until the next reingest). Operator sees the edit at once (bucket read); public via
     # the CDN within the short max-age.
+    # NOT gzipped — see write_item: a gzipped item breaks every obstore get_bytes read. (#341)
     gcs.put_bytes(json.dumps(item, indent=2).encode(), object_path,
-                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG,
-                  compress=True)
+                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
     return True
 
 
@@ -334,9 +334,13 @@ def write_item(item: dict) -> str:
     """Serialize + upload an item. Overwritten per ingest → short-lived edge cache + SWR."""
     path = item_object_path(_layout_path(item), item["id"])
     item = {k: v for k, v in item.items() if k != "_collection_path"}  # drop private key
+    # Items are ~6 KB and are read back individually (refresh_catalog, prior_property, overrides).
+    # NOT gzipped: GCS serves a Content-Encoding:gzip object with decompressive transcoding, which
+    # strips Content-Length — the header obstore.get() requires — so a gzipped item silently fails
+    # every read (dropped from items.json, blanked descriptions). Only the big rollup/catalog indexes
+    # gzip (see _write_json), where the ~25:1 saving is worth the get_bytes fallback that reads them.
     gcs.put_bytes(json.dumps(item, indent=2).encode(), path,
-                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG,
-                  compress=True)
+                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
     return path
 
 
@@ -707,7 +711,14 @@ def refresh_catalog() -> None:
             def _fetch_one(iid: str) -> dict | None:
                 try:
                     return json.loads(gcs.get_bytes(item_object_path(path, iid)).decode())
-                except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the refresh
+                except FileNotFoundError:
+                    return None  # listed-then-deleted between the list and this read — legitimately silent
+                except Exception as e:  # noqa: BLE001 — one bad item shouldn't sink the refresh, but say so
+                    # An item dropping out of items.json is silent data loss — this is how #341 stayed
+                    # invisible for weeks. Log it so the next obstore/GCS quirk doesn't repeat that with
+                    # zero lines in the log.
+                    print(f"[catalog] dropped {path}/{iid} from the index: {type(e).__name__}: {e}",
+                          file=sys.stderr)
                     return None
 
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]

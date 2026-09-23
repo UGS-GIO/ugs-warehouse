@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { qk } from "@/query-keys";
 import * as opfs from "./opfs";
+import { loadStoredAreas } from "./area";
+import { listCogAreas } from "./cog-area";
 
 /** What is stored, plus the browser's storage headroom. One query so the UI reads one status. */
 export function useStoredLayers() {
@@ -56,4 +58,22 @@ export function useOfflineLayer(href: string | undefined) {
   });
 
   return { download, remove, progress };
+}
+
+/**
+ * Layers and plates saved by area rather than whole (offline/area.ts, offline/cog-area.ts): what
+ * the "Save this area" picker produces. Listed apart from whole files because they delete apart.
+ */
+export function useStoredAreas() {
+  return useQuery({
+    queryKey: ["offline-areas"],
+    queryFn: async () => {
+      const [tiles, cogs] = await Promise.all([loadStoredAreas(), listCogAreas()]);
+      return [
+        ...tiles.map((t) => ({ url: t.url, bytes: t.bytes, kind: "tiles" as const })),
+        ...cogs.map((c) => ({ url: c.url, bytes: c.bytes, kind: "cog" as const })),
+      ];
+    },
+    staleTime: Infinity,
+  });
 }

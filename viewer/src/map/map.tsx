@@ -151,10 +151,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const isDesktop = useIsDesktop();
   // What's-here gestures, without an effect: refs hold the press in progress.
   //  - Touch: a timer. iOS Safari never fires contextmenu on a long press, so a timer is the one
-  //    method that works on every phone; moving the finger (panning) or lifting early cancels it.
+  //    method that works on every phone. Holding arms it (with a short buzz where the phone can);
+  //    LIFTING opens it. Opening while the finger is still down let the lift land on the picker's
+  //    new backdrop as a tap outside, which closed it again at once. Panning cancels.
   //  - Mouse: open on right-button UP without movement. Opening on contextmenu would fire at the
   //    start of every right-drag rotation on macOS and Linux, where it arrives on mousedown.
-  const press = useRef<{ timer?: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
+  const press = useRef<{
+    timer?: ReturnType<typeof setTimeout>; x: number; y: number; lng?: number; lat?: number; armed?: boolean;
+  } | null>(null);
   const cancelPress = () => { clearTimeout(press.current?.timer); press.current = null; };
   const moved = (x: number, y: number) => !!press.current && Math.hypot(x - press.current.x, y - press.current.y) > 8;
   // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
@@ -343,12 +347,22 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onClick={onClick}
       onTouchStart={(e) => {
         if (!onPickAt || e.originalEvent.touches.length !== 1) return cancelPress();
-        const { lng, lat } = e.lngLat;
-        press.current = { x: e.point.x, y: e.point.y,
-          timer: setTimeout(() => { press.current = null; onPickAt(lng, lat); }, 550) };
+        const p = { x: e.point.x, y: e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat, armed: false };
+        press.current = { ...p, timer: setTimeout(() => {
+          if (press.current) press.current.armed = true;
+          navigator.vibrate?.(15);
+        }, 550) };
       }}
       onTouchMove={(e) => { if (moved(e.point.x, e.point.y)) cancelPress(); }}
-      onTouchEnd={cancelPress}
+      onTouchEnd={(e) => {
+        const p = press.current;
+        cancelPress();
+        if (!p?.armed || p.lng === undefined || p.lat === undefined) return;
+        // Swallow the click the browser synthesises after a touch: it would land on the picker
+        // that just opened under the finger and toggle whichever row is there.
+        e.originalEvent.preventDefault();
+        onPickAt?.(p.lng, p.lat);
+      }}
       onMouseDown={(e) => { if (e.originalEvent.button === 2) press.current = { x: e.point.x, y: e.point.y }; }}
       onMouseUp={(e) => {
         if (e.originalEvent.button !== 2 || !press.current) return;

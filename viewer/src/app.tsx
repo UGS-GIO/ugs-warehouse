@@ -11,24 +11,14 @@ import { LegalFooter } from "./shell/legal-footer";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, childLinks, cogRenderAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 
 
-// Unique collection key = the path from the catalog root to the collection folder, so a folder name
-// that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
-// distinct: `ugs-external/B` vs `ugs-publications/B`. Derivable from any href — a collection.json,
-// a catalog.json (sub-catalog), or an item's .json — without needing the loaded tree.
-const collKeyOf = (href?: string): string | undefined => {
-  if (!href) return undefined;
-  const base = CATALOG_URL.replace(/[^/]*$/, "");       // …/stac/
-  const s = (href.startsWith(base) ? href.slice(base.length) : href)
-    .replace(/\/?(collection|catalog)\.json$/, "")      // a collection/sub-catalog url → its folder path
-    .replace(/\/[^/]+\/[^/]+\.json$/, "");              // an item url → drop /<id>/<id>.json
-  return s || undefined;
-};
-export const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
+// collKeyOf + idOf live in the data layer (stac.ts) next to CATALOG_URL. idOf is re-exported here so
+// the existing `@/app` importers keep resolving it from this module.
+export { idOf } from "./stac";
 
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.

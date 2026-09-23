@@ -20,15 +20,10 @@ import { PropertyTable } from "./property-table";
 import { SchemaTable } from "./schema-table";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
-import { type Asset, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
+import { type Asset, catalogItemHref, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
   relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
-
-const relatedViewerHref = (stacHref: string): string => {
-  const m = stacHref.match(/\/([^/]+)\/([^/]+)\/[^/]+\.json(?:\?.*)?$/);
-  return m ? `?c=${encodeURIComponent(m[1])}&i=${encodeURIComponent(m[2])}` : stacHref;
-};
 
 function RelatedPanel({ item }: { item: StacDoc }) {
   const links = relatedLinks(item);
@@ -66,7 +61,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
           <div className="text-xs uppercase tracking-wide text-muted-foreground">Related layers</div>
           <ul className="mt-1 space-y-0.5">
             {links.map((l, i) => (
-              <li key={i}><a href={relatedViewerHref(l.href)} className="text-primary hover:underline">{l.title ?? "related"} ›</a></li>
+              <li key={i}><a href={catalogItemHref(l.href)} className="text-primary hover:underline">{l.title ?? "related"} ›</a></li>
             ))}
           </ul>
         </div>

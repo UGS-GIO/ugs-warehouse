@@ -31,6 +31,29 @@ const DEV = Boolean((import.meta as { env?: Record<string, unknown> }).env?.DEV)
 export const IS_REVIEW = CATALOG_URL.includes("/review/") ||
   (DEV && new URLSearchParams(LOC.search).get("review") === "1");
 
+// Unique collection key = the path from the catalog root to the collection folder, so a folder name
+// that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
+// distinct: `ugs-external/B` vs `ugs-publications/B`. Derivable from any href — a collection.json,
+// a catalog.json (sub-catalog), or an item's .json — without needing the loaded tree.
+export const collKeyOf = (href?: string): string | undefined => {
+  if (!href) return undefined;
+  const base = CATALOG_URL.replace(/[^/]*$/, "");       // …/stac/
+  const s = (href.startsWith(base) ? href.slice(base.length) : href)
+    .replace(/\/?(collection|catalog)\.json$/, "")      // a collection/sub-catalog url → its folder path
+    .replace(/\/[^/]+\/[^/]+\.json$/, "");              // an item url → drop /<id>/<id>.json
+  return s || undefined;
+};
+export const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
+
+// In-app catalog route (?c=<collection key>&i=<item id>) for a STAC item .json href, reusing
+// collKeyOf so the `c` key matches how the catalog tree keys its collections. A foreign href (not
+// under our catalog root) has no in-app route, so it is returned unchanged as a direct link.
+export const catalogItemHref = (stacHref: string): string => {
+  const base = CATALOG_URL.replace(/[^/]*$/, "");
+  const c = stacHref.startsWith(base) ? collKeyOf(stacHref) : undefined;
+  return c ? `?c=${encodeURIComponent(c)}&i=${encodeURIComponent(idOf(stacHref))}` : stacHref;
+};
+
 export type Link = {
   rel: string;
   href: string;

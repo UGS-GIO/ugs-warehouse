@@ -26,6 +26,8 @@ export const qk = {
   // Offline store (OPFS): one key for the whole stored set, so a download or delete refreshes
   // every control at once.
   offlineLayers: ["offline-layers"] as const,
+  basemapStyle: (id: string) => ["basemap-style", id] as const,
+  basemapIndex: ["basemap-index"] as const,
 
   // Map + raster
   cogBbox: (href: string) => ["cog-bbox", href] as const,

@@ -6,6 +6,9 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
+import { basemapProtocol, BLANK_STYLE, rerouteStyle, setStoredBasemaps } from "@/offline/basemap";
+import * as opfs from "@/offline/opfs";
+import { BasemapDownload } from "@/offline/basemap-download";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
@@ -48,29 +51,35 @@ const BASEMAPS = {
 } satisfies Record<string, string | maplibregl.StyleSpecification>;
 type BasemapId = keyof typeof BASEMAPS;
 
-const isStyle = (v: unknown): v is maplibregl.StyleSpecification =>
-  typeof v === "object" && v !== null && "version" in v && v.version === 8
-  && "sources" in v && typeof v.sources === "object" && "layers" in v && Array.isArray(v.layers);
-
-/**
- * Streets without OpenFreeMap's Natural Earth relief: raster tiles of about 300 KB each (six of
- * them made up most of a first map load) that fade to 10% by zoom 6, which is where a view of Utah
- * sits. Everything else in the style is vector, so the map keeps its land cover, water and roads.
- * Falls back to the style as published if it cannot be read.
- */
-async function streetsWithoutRelief(): Promise<maplibregl.StyleSpecification | string> {
-  const url = ofm("liberty");
-  const r = await fetch(url).catch(() => null);
-  // A body that is not JSON falls back too: a failed query would leave the map on EMPTY_STYLE.
-  const style: unknown = r?.ok ? await r.json().catch(() => null) : null;
-  if (!isStyle(style)) return url;
-  const sources = Object.fromEntries(Object.entries(style.sources).filter(([id]) => id !== "ne2_shaded"));
-  return { ...style, sources, layers: style.layers.filter((l) => !("source" in l && l.source === "ne2_shaded")) };
-}
-
-// Glyphs too, so a labelled overlay added before Streets arrives is not refused.
-const EMPTY_STYLE: maplibregl.StyleSpecification = { version: 8, glyphs: GLYPHS, sources: {}, layers: [] };
 const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
+
+let basemapProtocolReady = false;
+
+// Streets and Light keep OpenFreeMap's look; only their vector source is routed through basemap://
+// (offline/basemap.ts), so a downloaded quad draws from disk. The stored list is read in the same
+// query, before the style is handed to the map: the protocol has to know what is on disk before
+// the map asks for its first tile. No style at all (offline, never cached) falls back to a blank
+// one, so the data layers still draw.
+function useBasemapStyle(id: BasemapId) {
+  return useQuery({
+    queryKey: qk.basemapStyle(id),
+    queryFn: async (): Promise<string | maplibregl.StyleSpecification> => {
+      const spec = BASEMAPS[id];
+      if (typeof spec !== "string") return spec;
+      if (!basemapProtocolReady) {
+        basemapProtocolReady = true;
+        maplibregl.addProtocol("basemap", basemapProtocol);
+      }
+      const [style, files] = await Promise.all([
+        fetch(spec).then((r) => r.json()).catch(() => null),
+        opfs.list(),
+      ]);
+      setStoredBasemaps(files.map((f) => f.url));
+      return style ? rerouteStyle(style) : BLANK_STYLE;
+    },
+    staleTime: Infinity,
+  });
+}
 
 // The footprint "Open item →" popup is the only popup left on the map — a data-feature click docks
 // its detail instead (see SelectedFeature/onSelectFeature below), so this never carries feature props.
@@ -137,16 +146,20 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // Scoped to the shown item.
   const [hlGeom, setHlGeom] = usePerItem<GeoJSON.Geometry | null>(item?.id ?? "", null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
-  const { data: streets } = useQuery({ queryKey: ["basemap", "streets-no-relief"], queryFn: streetsWithoutRelief, staleTime: Infinity });
+  const basemapStyle = useBasemapStyle(basemap);
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
   const highlight = validBbox(highlightBbox);
-  // Report the viewport bbox on load + after every move, for the panel's "Search this area".
+  // The viewport bbox, on load + after every move: for the panel's "Search this area", and for
+  // "Save basemap", which downloads the quads in view.
+  const [viewBox, setViewBox] = useState<[number, number, number, number] | null>(null);
   const reportBounds = () => {
     const m = mapRef.current?.getMap();
-    if (!m || !onBoundsChange) return;
+    if (!m) return;
     const b = m.getBounds();
-    onBoundsChange([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+    const box: [number, number, number, number] = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    setViewBox(box);
+    onBoundsChange?.(box);
   };
   // Map → card: when the cursor is over a coverage footprint, report its href (deduped via a ref so
   // a continuous mousemove doesn't spam state). Only fires when the coverage overlay is shown.
@@ -302,7 +315,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       ref={mapRef}
       mapLib={maplibregl}
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
-      mapStyle={basemap === "Streets" ? streets ?? EMPTY_STYLE : BASEMAPS[basemap]}
+      mapStyle={basemapStyle.data ?? BLANK_STYLE}
       style={{ width: "100%", height: "100%" }}
       interactiveLayerIds={allInteractiveIds}
       cursor={cursor}
@@ -321,6 +334,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       <MapControl position="top-right" className="flex gap-1 text-xs">
         <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
           className="bg-card/95 shadow" />
+        {basemap !== "Satellite" && <BasemapDownload bbox={viewBox} />}
         {footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"

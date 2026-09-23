@@ -140,11 +140,16 @@ def _merge(con: duckdb.DuckDBPyConnection, fqn: str, view: str, cols: list[str])
     # columns beyond feature_id can't "change", so only brand-new keys need a write.
     hsel = (", hash(" + ", ".join(_q(c) for c in diff) + ") AS _h") if diff else ""
     changed = f"t.{key} IS NULL OR t._h IS DISTINCT FROM s._h" if diff else f"t.{key} IS NULL"
+    # Restrict the target scan to keys the source also carries: a LEFT JOIN from source→target only
+    # matches those rows anyway, so this skips hashing target rows about to be DELETEd (absent from
+    # the source) and keeps the diff proportional to the source if `view` is ever a partial delta
+    # rather than the full transformed layer. New keys still fall through via `t.<key> IS NULL`.
     con.execute(
         f"CREATE OR REPLACE TEMP TABLE _ducklake_delta AS "
         f"SELECT s.{key} AS {key} "
         f"FROM (SELECT {key}{hsel} FROM {view}) s "
-        f"LEFT JOIN (SELECT {key}{hsel} FROM {fqn}) t ON s.{key} = t.{key} "
+        f"LEFT JOIN (SELECT {key}{hsel} FROM {fqn} WHERE {key} IN (SELECT {key} FROM {view})) t "
+        f"ON s.{key} = t.{key} "
         f"WHERE {changed}"
     )
     # Restricted to changed/new keys, so WHEN MATCHED is always a known content change (no per-row

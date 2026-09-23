@@ -28,7 +28,7 @@ substitutions:
   _VECTORS_JOB: ugs-pubs-vectors          # Cloud Run job: extract every layer + companion table from new pubs' GIS zips → GeoParquet; skip-existing, pubs-ingest binds them
   _PRUNE_JOB: ugs-pubs-prune              # Cloud Run job: delete pub STAC items the source no longer lists (case twins, renamed ids); refuses a large share
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
-  _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip, chain after ingest + restyle
+  _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip; nightly via Cloud Scheduler (scripts/provision.sh)
   _API_SERVICE: ugs-warehouse-api
   _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (pygeoapi over GeoParquet, scale-to-zero)
   _TILES_SERVICE: ugs-warehouse-tiles         # XYZ vector tiles + ready-to-use MapLibre styles (go-pmtiles over the CDN PMTiles, scale-to-zero)
@@ -514,9 +514,9 @@ steps:
       - --tasks=5
 
   # Styled-preview thumbnails for vector serving-topics — headless MapLibre (Node/puppeteer/Chromium)
-  # renders each topic's styled PMTiles → PNG. Content-hash skip means it's safe to run after every
-  # vector ingest AND every restyle; it only re-renders topics whose style changed. Run a vector
-  # ingest (or restyle) after to bind the new `thumbnail` assets onto the items. Chromium = more RAM.
+  # renders each topic's styled PMTiles → PNG. Runs nightly from Cloud Scheduler (scripts/provision.sh);
+  # content-hash skip means it only re-renders topics that are new or whose style changed. It stamps
+  # the `thumbnail` assets onto the items and refreshes the catalog itself. Chromium = more RAM.
   - id: deploy-topics-thumbs-job
     waitFor: [push-topics-thumbs]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

@@ -39,7 +39,7 @@ export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
 // null when the item carries none of them — it isn't a layer.
-function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
+export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   if (!ref?.data) return null;
   const id = idOf(ref.href);
   const title = String(ref.data.properties?.title ?? id);

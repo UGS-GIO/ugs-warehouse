@@ -19,7 +19,7 @@ const MAX_QUADS = 40;
 type Index = { state?: { bytes: number }; overview: { bytes: number }; quads: Record<string, { bytes: number }> };
 type Part = { url: string; bytes: number };
 
-function useBasemapIndex() {
+export function useBasemapIndex() {
   return useQuery({
     queryKey: qk.basemapIndex,
     queryFn: async (): Promise<Index> => {
@@ -38,7 +38,12 @@ function useBasemapIndex() {
   });
 }
 
-export function BasemapDownload({ bbox }: { bbox: [number, number, number, number] | null }) {
+export function BasemapDownload({ bbox, onSaveArea }: {
+  bbox: [number, number, number, number] | null;
+  // Given, "This area" opens the what's-here picker (basemap + layers + maps for the view) rather
+  // than saving just the basemap quads.
+  onSaveArea?: () => void;
+}) {
   const index = useBasemapIndex();
   const stored = useStoredLayers();
   const client = useQueryClient();
@@ -92,8 +97,18 @@ export function BasemapDownload({ bbox }: { bbox: [number, number, number, numbe
   if (progress) return section(<span className="text-xs">Saving basemap {progress.n}/{progress.of}…</span>);
   // Checked before the index: offline, index.json is unreachable, and "saved" is exactly what
   // someone in the field needs to see.
+  // The picker saves layers and maps, not just basemap, so it stays on offer once Utah is saved.
+  const pickArea = onSaveArea && quads.length > 0 && quads.length <= MAX_QUADS && (
+    <button type="button" className={btn} disabled={busy} onClick={onSaveArea}
+      title="Choose what to save for the area in view: basemap, layers and maps">
+      <DownloadIcon /> Save this area…
+    </button>
+  );
   if (have.has(stateUrl())) {
-    return section(<span className="inline-flex items-center gap-1 text-xs"><CheckIcon /> All of Utah saved</span>);
+    return section(<>
+      <span className="inline-flex items-center gap-1 text-xs"><CheckIcon /> All of Utah saved</span>
+      {pickArea}
+    </>);
   }
   if (!index.data) return null;
 
@@ -109,14 +124,16 @@ export function BasemapDownload({ bbox }: { bbox: [number, number, number, numbe
         {save.error ? "⚠" : <DownloadIcon />} All of Utah · {opfs.formatBytes(whole.bytes)}
       </button>
     )}
-    {showArea && (areaSaved
-      ? <span className="inline-flex items-center gap-1 text-xs" title={`${quads.length} quad(s) in view are saved`}><CheckIcon /> Area saved</span>
-      : (
-        <button type="button" className={btn} disabled={busy}
-          title={`Save only the ${quads.length} quad(s) in view: smaller, but blank beyond them`}
-          onClick={() => save.mutate({ parts: area, whole: false })}>
-          <DownloadIcon /> This area · {opfs.formatBytes(sum(area))}
-        </button>
-      ))}
+    {showArea && (onSaveArea
+      ? pickArea
+      : areaSaved
+        ? <span className="inline-flex items-center gap-1 text-xs" title={`${quads.length} quad(s) in view are saved`}><CheckIcon /> Area saved</span>
+        : (
+          <button type="button" className={btn} disabled={busy}
+            title={`Save only the ${quads.length} quad(s) in view: smaller, but blank beyond them`}
+            onClick={() => save.mutate({ parts: area, whole: false })}>
+            <DownloadIcon /> This area · {opfs.formatBytes(sum(area))}
+          </button>
+        ))}
   </>);
 }

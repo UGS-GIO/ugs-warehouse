@@ -120,8 +120,10 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
 }
 
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
-  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature }: {
+  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, onPickAt }: {
   item?: StacDoc; layers: ActiveLayer[];
+  // "What's here" at a point: a long press on phones, a right-click on desktop. Optional.
+  onPickAt?: (lon: number, lat: number) => void;
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
   // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
   // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
@@ -149,6 +151,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
   const basemapStyle = useBasemapStyle(basemap);
   const isDesktop = useIsDesktop();
+  // What's-here gestures, without an effect: refs hold the press in progress.
+  //  - Touch: a timer. iOS Safari never fires contextmenu on a long press, so a timer is the one
+  //    method that works on every phone; moving the finger (panning) or lifting early cancels it.
+  //  - Mouse: open on right-button UP without movement. Opening on contextmenu would fire at the
+  //    start of every right-drag rotation on macOS and Linux, where it arrives on mousedown.
+  const press = useRef<{ timer?: ReturnType<typeof setTimeout>; x: number; y: number } | null>(null);
+  const cancelPress = () => { clearTimeout(press.current?.timer); press.current = null; };
+  const moved = (x: number, y: number) => !!press.current && Math.hypot(x - press.current.x, y - press.current.y) > 8;
   // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
   // when it flips, so a twist gesture's stream of rotate events does not re-render the map each frame.
   const [offNorth, setOffNorth] = useState(false);
@@ -333,6 +343,21 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onRotate={trackNorth}
       onPitch={trackNorth}
       onClick={onClick}
+      onTouchStart={(e) => {
+        if (!onPickAt || e.originalEvent.touches.length !== 1) return cancelPress();
+        const { lng, lat } = e.lngLat;
+        press.current = { x: e.point.x, y: e.point.y,
+          timer: setTimeout(() => { press.current = null; onPickAt(lng, lat); }, 550) };
+      }}
+      onTouchMove={(e) => { if (moved(e.point.x, e.point.y)) cancelPress(); }}
+      onTouchEnd={cancelPress}
+      onMouseDown={(e) => { if (e.originalEvent.button === 2) press.current = { x: e.point.x, y: e.point.y }; }}
+      onMouseUp={(e) => {
+        if (e.originalEvent.button !== 2 || !press.current) return;
+        const still = !moved(e.point.x, e.point.y);
+        press.current = null;
+        if (still) onPickAt?.(e.lngLat.lng, e.lngLat.lat);
+      }}
     >
       <MapControl position="top-left">
         <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />

@@ -24,13 +24,13 @@ export { idOf } from "./stac";
 
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review";
+export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review" | "offline";
 // `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
 // route tree — a computed `/${view}` string would not, which is what the old cast papered over.
 const VIEW_PATH = {
   landing: "/", catalog: "/catalog", map: "/map", discover: "/discover", arch: "/arch",
   guide: "/guide", developers: "/developers", preview: "/preview",
-  review: "/review",
+  review: "/review", offline: "/offline",
 } satisfies Record<View, string>;
 const isView = (v: string): v is View => v !== "landing" && v in VIEW_PATH;
 export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
@@ -85,6 +85,7 @@ const OVERFLOW_VIEWS: { id: View; label: string }[] = [
   { id: "arch", label: "Architecture" },
   { id: "guide", label: "Guide" },
   { id: "developers", label: "Developers" },
+  { id: "offline", label: "Offline data" },
   ...(IS_REVIEW ? [{ id: "review" as const, label: "Review" }] : []),
 ];
 

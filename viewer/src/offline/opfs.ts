@@ -14,8 +14,8 @@ export { fileNameFor, urlFromFileName };
 
 const DIR = "layers";
 
-/** Stored artifact: where it came from and what it costs. */
-export type StoredFile = { url: string; bytes: number };
+/** Stored artifact: where it came from, what it costs, and when it was saved (epoch ms). */
+export type StoredFile = { url: string; bytes: number; savedAt: number };
 
 export type SaveOptions = {
   signal?: AbortSignal;
@@ -98,7 +98,7 @@ export async function save(url: string, { signal, onProgress }: SaveOptions = {}
     await final.close();
     await d.removeEntry(tmp).catch(() => {});
   }
-  return { url, bytes: written };
+  return { url, bytes: written, savedAt: Date.now() };
 }
 
 /** Forget one stored artifact. Silent when it was not stored. */
@@ -118,7 +118,7 @@ export async function list(): Promise<StoredFile[]> {
     if (h.kind !== "file" || name.endsWith(".part")) continue;
     try {
       const file = await (h as FileSystemFileHandle).getFile();
-      out.push({ url: urlFromFileName(name), bytes: file.size });
+      out.push({ url: urlFromFileName(name), bytes: file.size, savedAt: file.lastModified });
     } catch {
       // One locked or unreadable entry must not take down the listing, which is what every
       // offline control in the UI renders from.

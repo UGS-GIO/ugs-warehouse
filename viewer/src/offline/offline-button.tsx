@@ -4,9 +4,10 @@
 // (size, click to delete). The stored state is the only one that needs a second affordance, so the
 // title carries the delete and the glyph carries the state.
 import { useStoredLayers, useOfflineLayer } from "./use-offline";
+import { DownloadIcon } from "@/catalog/stac-url-chip";
 import { formatBytes, isSupported } from "./opfs";
 
-const CLASS = "shrink-0 rounded px-1 text-[11px] tabular-nums text-muted-foreground hover:text-foreground";
+const CLASS = "inline-flex shrink-0 items-center gap-1 rounded px-1 text-[11px] tabular-nums text-muted-foreground hover:text-foreground";
 
 export function OfflineButton({ href, title }: { href?: string; title: string }) {
   const stored = useStoredLayers();
@@ -33,7 +34,7 @@ export function OfflineButton({ href, title }: { href?: string; title: string })
       <button type="button" className={`${CLASS} text-foreground`} disabled={remove.isPending}
         title={`Stored offline (${formatBytes(file.bytes)}) — click to delete`}
         onClick={() => remove.mutate()}>
-        ⭳ {formatBytes(file.bytes)}
+        <DownloadIcon /> {formatBytes(file.bytes)}
       </button>
     );
   }
@@ -42,7 +43,7 @@ export function OfflineButton({ href, title }: { href?: string; title: string })
     <button type="button" className={CLASS} disabled={download.isPending}
       title={error ? String(error.message) : `Keep ${title} on this device for offline use`}
       onClick={() => download.mutate()}>
-      {error ? "⚠" : "⭳"}
+      {error ? "⚠" : <DownloadIcon />}
     </button>
   );
 }

@@ -12,6 +12,9 @@ import { colorForId } from "@/map/map-model";
 import { relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapDownload } from "@/offline/basemap-download";
+import { WhatsHerePicker } from "@/offline/whats-here-picker";
+import type { Target } from "@/offline/whats-here";
+import { useIsDesktop } from "@/ui/use-breakpoint";
 
 // The Info dock shows one of three things, strictly nested: a related table is only reachable from a
 // selected feature. No floating feature popup anywhere — stakeholder requirement.
@@ -28,6 +31,10 @@ function MapView() {
   const [dock, setDock] = usePerItem<Dock>(c.itemUrl ?? "", DOCK_ITEM);
   // The map's view, for "This area" in the offline basemap section of the layers panel.
   const [view, setView] = useState<[number, number, number, number] | null>(null);
+  // The "What's here" picker. `canSave`: the explicit "Save this area…" always saves; a long press
+  // or right-click saves on phones only, and on desktop is for showing what is there.
+  const [pick, setPick] = useState<{ target: Target; canSave: boolean } | null>(null);
+  const isDesktop = useIsDesktop();
 
   // A clicked layer's related tables, named from the compact index (its asset summaries carry the
   // related entries). The FK join columns are stripped from the index by design, so RelatedTable
@@ -42,6 +49,7 @@ function MapView() {
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       onBoundsChange={setView}
+      onPickAt={(lon, lat) => setPick({ target: { kind: "point", lon, lat }, canSave: !isDesktop })}
       relatedFor={relatedFor}
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
     info={dock.kind === "related"
@@ -55,7 +63,10 @@ function MapView() {
       : <MapDetail item={c.item.data} loading={c.item.isLoading} />}
     layers={<>
       {c.catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
-      <BasemapDownload bbox={view} />
+      <BasemapDownload bbox={view}
+        onSaveArea={view ? () => setPick({ target: { kind: "area", bbox: view }, canSave: true }) : undefined} />
+      {pick && <WhatsHerePicker key={JSON.stringify(pick.target)} target={pick.target} canSave={pick.canSave}
+        onClose={() => setPick(null)} />}
       <LayerList
         rows={c.layerRows}
         activeIds={c.idsForMap}

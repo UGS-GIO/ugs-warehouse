@@ -4,7 +4,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { GeolocateControl, Layer, NavigationControl, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { basemapProtocol, BLANK_STYLE, rerouteStyle, setStoredBasemaps } from "@/offline/basemap";
 import * as opfs from "@/offline/opfs";
@@ -346,6 +346,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
       <GeolocateControl position="top-right" trackUserLocation
         positionOptions={{ enableHighAccuracy: true }} />
+      {/* Phones rotate the map with a two-finger twist and have no easy way back to north; MapLibre's
+          own compass shows the bearing and resets it on tap. No +/-: phones pinch to zoom. */}
+      {!isDesktop && <NavigationControl position="top-right" showZoom={false} visualizePitch />}
 
       {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
           them all. */}

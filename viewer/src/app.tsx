@@ -8,6 +8,7 @@ import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/b
 import { layerCollectionIds } from "./catalog/catalog";
 import { type ActiveLayer, type Footprint, layerParam, parseLayerParam } from "./map/map-model";
 import { LegalFooter } from "./shell/legal-footer";
+import { SavingNotice } from "./offline/saving-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
@@ -560,6 +561,7 @@ export function AppLayout() {
       <Suspense fallback={<div className="flex items-center justify-center p-16 text-sm text-muted-foreground">Loading…</div>}>
       <ViewContext.Provider value={state}>
         <Outlet />
+        <SavingNotice />
       </ViewContext.Provider>
       </Suspense>
       {!lockedView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}

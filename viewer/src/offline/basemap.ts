@@ -102,8 +102,15 @@ const archive = (url: string) => {
 let fallbackTemplate: Promise<string | null> | null = null;
 /** OpenFreeMap's current tile URL template. Versioned weekly, so it is read from their TileJSON. */
 const fallback = () => (fallbackTemplate ??= fetch("https://tiles.openfreemap.org/planet")
-  .then((r) => r.json()).then((tj: { tiles?: string[] }) => tj.tiles?.[0] ?? null)
-  .catch(() => { fallbackTemplate = null; return null; }));    // offline: retry next time
+  .then(async (r) => {
+    // A bad status or a TileJSON with no template is a failure, not an answer: throw so it is not
+    // cached, or one 500 would disable the network basemap until the page reloads.
+    if (!r.ok) throw new Error(`OpenFreeMap TileJSON: ${r.status}`);
+    const tpl = ((await r.json()) as { tiles?: string[] }).tiles?.[0];
+    if (!tpl) throw new Error("OpenFreeMap TileJSON has no tile template");
+    return tpl;
+  })
+  .catch(() => { fallbackTemplate = null; return null; }));    // retry on the next tile
 
 const EMPTY = { data: new Uint8Array() };
 

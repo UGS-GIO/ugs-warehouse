@@ -25,7 +25,13 @@ function useBasemapIndex() {
     queryFn: async (): Promise<Index> => {
       const r = await fetch(`${BASEMAP_BASE}index.json`);
       if (!r.ok) throw new Error(`basemap index: ${r.status}`);
-      return r.json();
+      const d = await r.json();
+      // Checked here, once, because the render reads it without guards: a malformed index must hide
+      // the buttons, not throw during render and take the whole map view down with it.
+      if (typeof d?.overview?.bytes !== "number" || typeof d?.quads !== "object" || d.quads === null) {
+        throw new Error("basemap index is malformed");
+      }
+      return d;
     },
     staleTime: 60 * 60 * 1000,
     retry: false,

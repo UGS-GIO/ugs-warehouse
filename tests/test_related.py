@@ -161,6 +161,39 @@ def test_resolve_links_an_outgoing_target_with_no_business_schema(monkeypatch):
     assert out["assets"] == {}
 
 
+def test_resolve_materialises_a_repeated_outgoing_target_once(monkeypatch):
+    # Two outgoing FKs to the SAME aspatial lookup: materialise it once and keep BOTH flipped FKs on
+    # the single asset. A re-COPY would repeat the DB read + GCS upload, and an overwrite would drop
+    # every FK but the last.
+    monkeypatch.setattr(related.source, "_connect", lambda: _FakeCon())
+    calls = {"n": 0}
+
+    def fake_materialise(con, topic, schema, disp, rel, bs, parent):
+        calls["n"] += 1
+        return {"href": "h", "type": related.PARQUET_MIME, "roles": ["data", "related"],
+                "title": disp, "ugs:foreign_keys": [related._foreign_key(rel)]}
+    monkeypatch.setattr(related, "_materialize_child", fake_materialise)
+
+    def fake_pg(con, sql):
+        if "domain_topic =" in sql:  # two outgoing FKs, same target, different columns
+            return [('[{"sourceColumn": "project", "targetDomainTopic": "wetlands_plants_projects", '
+                     '"targetColumn": "projectcode"}, '
+                     '{"sourceColumn": "altproject", "targetDomainTopic": "wetlands_plants_projects", '
+                     '"targetColumn": "altcode"}]',)]
+        if "domain_topic IN" in sql:
+            return [("wetlands_plants_projects", "wetlands", "Wetlands Projects Dataset",
+                     '{"projectcode": {"type": "TEXT"}}')]
+        return []
+    monkeypatch.setattr(related, "_pg", fake_pg)
+
+    out = related.resolve(Topic(schema="wetlands", layer="wetlands_plants_site_current"))
+    assert calls["n"] == 1  # materialised once, not once per relationship
+    fks = out["assets"]["wetlands_plants_projects"]["ugs:foreign_keys"]
+    assert len(fks) == 2
+    assert [f["fields"] for f in fks] == [["projectcode"], ["altcode"]]
+    assert all(f["reference"]["resource"] == "wetlands_plants_site" for f in fks)
+
+
 def test_resolve_graceful_on_db_error(monkeypatch):
     def boom(*a, **k):
         raise RuntimeError("no grant on raw.schema_registry")

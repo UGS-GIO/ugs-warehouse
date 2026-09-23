@@ -227,10 +227,20 @@ def resolve(topic: Topic) -> dict:
                 # Confirmed geometry-less target has no STAC item (the pipeline writes items only for
                 # spatial topics), so a `related` link would dangle. Materialise its `_current` table
                 # as a related-table asset on T instead, the same shape as an aspatial incoming child.
-                asset = _materialize_child(con, target, meta["schema"], meta["display"],
-                                           _inverted_rel(rel, stem), meta["business_schema"], stem)
-                if asset:
-                    result["assets"][target] = asset
+                # Several outgoing FKs can point at the same lookup: materialise it once, then append
+                # each relationship's flipped FK to that one asset (re-COPYing would repeat the DB read
+                # and GCS upload, and an overwrite would keep only the last FK).
+                inv = _inverted_rel(rel, stem)
+                existing = result["assets"].get(target)
+                if existing is not None:
+                    fk = _foreign_key(inv)
+                    if fk:
+                        existing.setdefault("ugs:foreign_keys", []).append(fk)
+                else:
+                    asset = _materialize_child(con, target, meta["schema"], meta["display"],
+                                               inv, meta["business_schema"], stem)
+                    if asset:
+                        result["assets"][target] = asset
 
         # T's INCOMING FKs — children whose relationships reference T (jsonb containment).
         contains = '[{"targetDomainTopic": ' + json.dumps(stem) + "}]"

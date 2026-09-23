@@ -2,8 +2,9 @@
 # state in one archive (utah.pmtiles, ~180 MB), plus a low-zoom overview and one archive per
 # 7.5-minute quad for smaller partial saves → the CDN under basemap/.
 #
-#   gcloud builds submit --config cloudbuild-basemap.yaml --project ut-dnr-ugs-backend-tools \
-#     --service-account projects/ut-dnr-ugs-backend-tools/serviceAccounts/<compute-SA> .
+#   gcloud builds submit . --config cloudbuild-basemap.yaml \
+#     --project ut-dnr-ugs-backend-tools --region us-central1 \
+#     --service-account projects/ut-dnr-ugs-backend-tools/serviceAccounts/534590904912-compute@developer.gserviceaccount.com
 #
 # Runs as the same Compute SA as cloudbuild.yaml / cloudbuild-docs.yaml, which already has
 # objectAdmin on the public bucket, so no extra grants. Nothing in the viewer changes until

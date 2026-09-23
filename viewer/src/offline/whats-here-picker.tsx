@@ -13,6 +13,7 @@ import type { ItemRef } from "@/catalog/browse";
 import type { ActiveLayer } from "@/map/map-model";
 import { qk } from "@/query-keys";
 import { type AreaPlan, planArea, saveArea } from "./area";
+import { type CogPlan, planCogArea, saveCogArea } from "./cog-area";
 import { overviewUrl, quadUrl, stateUrl } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
 import * as opfs from "./opfs";
@@ -29,13 +30,7 @@ async function limit<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { running--; waiting.shift()?.(); }
 }
 
-async function fileSize(url: string): Promise<number> {
-  const r = await fetch(url, { method: "HEAD" });
-  if (!r.ok) throw new Error(`${r.status}`);
-  return Number(r.headers.get("content-length")) || 0;
-}
-
-type Price = { bytes: number; plan?: AreaPlan };
+type Price = { bytes: number; plan?: AreaPlan; cog?: CogPlan };
 const BASEMAP = "__basemap__";
 
 export function WhatsHerePicker({ target, canSave, onClose }: {
@@ -76,10 +71,10 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
 
   const prices = useQueries({
     queries: saveable.map((h) => ({
-      queryKey: ["offline-price", h.save!.url, h.save!.how === "area" ? bbox.join(",") : ""],
+      queryKey: ["offline-price", h.save!.how, h.save!.url, bbox.join(",")],
       queryFn: (): Promise<Price> => limit(() => h.save!.how === "area"
         ? planArea(h.save!.url, bbox).then((plan) => ({ bytes: plan.bytes, plan }))
-        : fileSize(h.save!.url).then((bytes) => ({ bytes }))),
+        : planCogArea(h.save!.url, bbox).then((cog) => ({ bytes: cog.bytes, cog }))),
       enabled: canSave,
       staleTime: 5 * 60_000,
       retry: false,
@@ -104,7 +99,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
         ...chosen.flatMap((h) => {
           const price = priceOf(h)?.data;
           if (!price) return [];
-          return [{ what: h.title, run: () => (price.plan ? saveArea(price.plan) : opfs.save(h.save!.url)) }];
+          return [{ what: h.title, run: () => (price.plan ? saveArea(price.plan) : saveCogArea(price.cog!)) }];
         }),
       ];
       for (const [i, job] of jobs.entries()) {
@@ -136,7 +131,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
 
   const row = (h: Here) => {
     const price = canSave && h.save ? priceOf(h) : undefined;
-    const savedWhole = !!h.save && h.save.how === "file" && have.has(h.save.url);
+    const savedWhole = !!h.save && have.has(h.save.url);   // the whole file is already stored
     const disabled = canSave ? !h.save || savedWhole || !!price?.isError : false;
     return (
       <label key={h.id} className={`flex items-center gap-2 px-3 py-1.5 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>

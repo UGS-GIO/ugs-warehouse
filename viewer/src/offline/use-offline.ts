@@ -3,7 +3,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { qk } from "@/query-keys";
-import { servePmtilesOffline, stopServingOffline } from "@/map/pmtiles-protocol";
 import * as opfs from "./opfs";
 
 /** What is stored, plus the browser's storage headroom. One query so the UI reads one status. */
@@ -40,19 +39,18 @@ export function useOfflineLayer(href: string | undefined) {
         throw new Error(`${opfs.formatBytes(size)} will not fit in the ${opfs.formatBytes(
           (space.quota ?? 0) - (space.usage ?? 0))} this browser still allows.`);
       }
+      // Ask for persistent storage on the first download. Without it the browser may evict OPFS
+      // under pressure, which is precisely the trip this feature exists for.
+      await navigator.storage?.persist?.().catch(() => false);
       setProgress({ written: 0, total: size || undefined });
-      const stored = await opfs.save(href, { onProgress: (written, total) => setProgress({ written, total }) });
-      await servePmtilesOffline(href);
-      return stored;
+      return opfs.save(href, { onProgress: (written, total) => setProgress({ written, total }) });
     },
     onSettled: () => { setProgress(null); invalidate(); },
   });
 
   const remove = useMutation({
     mutationFn: async () => {
-      if (!href) return;
-      stopServingOffline(href);
-      await opfs.remove(href);
+      if (href) await opfs.remove(href);
     },
     onSettled: invalidate,
   });

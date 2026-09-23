@@ -8,13 +8,11 @@
 // The URL is the filename (percent-encoded, so no "/" survives), so a directory listing IS the
 // manifest and there is no second store to keep in sync.
 
+import { fileNameFor, urlFromFileName } from "./opfs-name";
+
+export { fileNameFor, urlFromFileName };
+
 const DIR = "layers";
-
-/** OPFS filename for an artifact URL. Reversible, so `list()` needs no side table. */
-export const fileNameFor = (url: string): string => encodeURIComponent(url);
-
-/** The URL a stored file came from. Inverse of `fileNameFor`. */
-export const urlFromFileName = (name: string): string => decodeURIComponent(name);
 
 /** Stored artifact: where it came from and what it costs. */
 export type StoredFile = { url: string; bytes: number };

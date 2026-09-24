@@ -10,15 +10,19 @@
 // protocol would have built, plus the tile compression) and one file per tile, raw as published.
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
 import { findTile, PMTiles, zxyToTileId } from "pmtiles";
-import { fileNameFor } from "./opfs-name";
+import { currentVersion, fileNameFor } from "./opfs-name";
 import { track } from "./in-flight";
 
 export type Bbox = [number, number, number, number];
 export type TileRef = { z: number; x: number; y: number; offset: number; length: number };
-export type AreaPlan = { url: string; tiles: TileRef[]; bytes: number; meta: AreaMeta };
+export type AreaPlan = { url: string; tiles: TileRef[]; bytes: number; meta: AreaMeta; bbox?: Bbox };
 export type AreaMeta = {
   tilejson: { tiles: string[]; minzoom: number; maxzoom: number; bounds: Bbox };
   compression: number;     // pmtiles Compression: 1 none, 2 gzip
+  /** The archive version the tiles were cut from, the areas saved, and when (for update checks). */
+  version?: string;
+  bboxes?: Bbox[];
+  savedAt?: number;
 };
 
 const AREAS = "areas";
@@ -69,6 +73,7 @@ export async function planArea(url: string, bbox: Bbox, source?: PMTiles): Promi
   if (!SUPPORTED.has(h.tileCompression)) {
     throw new Error(`This layer's tiles use a compression this browser store does not support (${h.tileCompression}).`);
   }
+  const version = await currentVersion(url).catch(() => undefined);
   const tiles: TileRef[] = [];
   for (let z = h.minZoom; z <= h.maxZoom; z++) {
     for (const [x, y] of tilesAt(bbox, z)) {
@@ -86,7 +91,9 @@ export async function planArea(url: string, bbox: Bbox, source?: PMTiles): Promi
         bounds: [h.minLon, h.minLat, h.maxLon, h.maxLat],
       },
       compression: h.tileCompression,
+      version,
     },
+    bbox,
   };
 }
 
@@ -116,6 +123,9 @@ async function write(dir: FileSystemDirectoryHandle, name: string, data: BlobPar
 export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: number) => void,
   source?: PMTiles): Promise<void> {
   return track((async () => {
+    // Tiles cut from an older version of the archive are dropped, not mixed with the new ones.
+    const before = await readAreaMeta(plan.url);
+    if (before && before.version !== plan.meta.version) await removeArea(plan.url);
     const dir = await areaDir(plan.url, true);
     if (!dir) throw new Error("This browser cannot store data offline.");
     const p = source ?? archiveFor(plan.url);
@@ -126,9 +136,18 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
       if (!have) await write(dir, name, (await p.source.getBytes(t.offset, t.length)).data);
       onProgress?.(++done, plan.tiles.length);
     }
-    await write(dir, "meta.json", JSON.stringify(plan.meta));
+    const kept = before && before.version === plan.meta.version ? before.bboxes ?? [] : [];
+    await write(dir, "meta.json", JSON.stringify({
+      ...plan.meta, bboxes: [...kept, ...(plan.bbox ? [plan.bbox] : [])], savedAt: Date.now(),
+    } satisfies AreaMeta));
     stored.add(plan.url);
   })());
+}
+
+async function readAreaMeta(url: string): Promise<AreaMeta | null> {
+  const dir = await areaDir(url, false);
+  return dir?.getFileHandle("meta.json").then((h) => h.getFile()).then((f) => f.text())
+    .then((t) => JSON.parse(t) as AreaMeta).catch(() => null) ?? null;
 }
 
 /** Forget every tile saved for an archive. */
@@ -148,15 +167,19 @@ const stored = new Set<string>();
 let loaded: Promise<unknown> | null = null;
 export const hasArea = (url: string) => stored.has(url);
 
-export async function loadStoredAreas(): Promise<{ url: string; tiles: number; bytes: number }[]> {
-  const out: { url: string; tiles: number; bytes: number }[] = [];
+export type StoredArea = { url: string; tiles: number; bytes: number; version?: string; bboxes: Bbox[]; savedAt?: number };
+
+export async function loadStoredAreas(): Promise<StoredArea[]> {
+  const out: StoredArea[] = [];
   const root = await navigator.storage?.getDirectory?.().catch(() => null);
   const areas = await root?.getDirectoryHandle(AREAS).catch(() => null);
   if (!areas) return out;
   for await (const [name, handle] of areas) {
     if (handle.kind !== "directory") continue;
     const dir = handle as FileSystemDirectoryHandle;
-    if (!(await dir.getFileHandle("meta.json").then(() => true, () => false))) continue;
+    const meta = await dir.getFileHandle("meta.json").then((h) => h.getFile()).then((f) => f.text())
+      .then((t) => JSON.parse(t) as AreaMeta, () => null);
+    if (!meta) continue;
     let tiles = 0;
     let bytes = 0;
     for await (const [n, h] of dir) {
@@ -166,7 +189,7 @@ export async function loadStoredAreas(): Promise<{ url: string; tiles: number; b
     }
     const url = decodeURIComponent(name);
     stored.add(url);
-    out.push({ url, tiles, bytes });
+    out.push({ url, tiles, bytes, version: meta.version, bboxes: meta.bboxes ?? [], savedAt: meta.savedAt });
   }
   return out;
 }

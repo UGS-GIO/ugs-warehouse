@@ -12,7 +12,7 @@ import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from
 import { NavigationRoute, registerRoute } from "workbox-routing";
 import { StaleWhileRevalidate } from "workbox-strategies";
 import { assemble } from "./offline/cog-blocks";
-import { fileNameFor } from "./offline/opfs-name";
+import { fileNameFor, versionOf } from "./offline/opfs-name";
 import { contentTypeFor, rangeHeaders, rangeStatus, resolveRange, STORABLE } from "./offline/range";
 import { isCatalogJson } from "./sw-routes";
 
@@ -87,7 +87,7 @@ async function storedCogArea(url: string) {
     const root = await navigator.storage.getDirectory();
     const dir = await (await root.getDirectoryHandle("cogs")).getDirectoryHandle(fileNameFor(url));
     const meta = JSON.parse(await (await (await dir.getFileHandle("meta.json")).getFile()).text());
-    return { dir, size: meta.size as number, block: meta.block as number };
+    return { dir, size: meta.size as number, block: meta.block as number, version: meta.version as string | undefined };
   } catch {
     return null;
   }
@@ -99,7 +99,15 @@ async function storedCogArea(url: string) {
  * so that part of the plate is simply blank.
  */
 async function serveCogArea(request: Request, cog: NonNullable<Awaited<ReturnType<typeof storedCogArea>>>) {
-  const miss = () => fetch(request).catch(() => new Response(null, { status: 504 }));
+  // A block not saved comes from the network, but only from the version the saved blocks were cut
+  // from: bytes of a newer file at the same offsets would be garbage to the reader. The update
+  // check on Offline data re-saves the area against the new version.
+  const miss = async () => {
+    const res = await fetch(request).catch(() => null);
+    if (!res) return new Response(null, { status: 504 });
+    const v = versionOf(res.headers);
+    return cog.version && v && v !== cog.version ? new Response(null, { status: 504 }) : res;
+  };
   const type = contentTypeFor(new URL(request.url).pathname);
   const resolved = resolveRange(request.headers.get("range"), cog.size);
   // DuckDB sizes a file with HEAD, then probes range support with a ranged HEAD (bytes=0-), which
@@ -147,5 +155,7 @@ self.addEventListener("fetch", (event) => {
   // Narrow by extension before touching storage, so the common request never pays an OPFS lookup.
   // Anything not stored falls through to the network inside the handler.
   if (!STORABLE.test(new URL(request.url).pathname)) return;
+  // "no-store" asks about the published file itself (the update check, opfs-name.ts), not the copy.
+  if (request.cache === "no-store") return;
   event.respondWith(serveStored(request));
 });

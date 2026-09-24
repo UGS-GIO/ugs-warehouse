@@ -15,7 +15,7 @@ import { removeCogArea } from "./cog-area";
 import * as queue from "./queue";
 import { engineBytes, removeEngine } from "./engine";
 import { ENGINE_KEY } from "./table-offline";
-import { useStoredAreas, useStoredLayers } from "./use-offline";
+import { updateArea, useStaleAreas, useStoredAreas, useStoredLayers } from "./use-offline";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50";
 
@@ -63,6 +63,11 @@ export function OfflineManager() {
     mutationFn: removeEngine,
     onSettled: () => client.invalidateQueries({ queryKey: ENGINE_KEY }),
   });
+  const stale = useStaleAreas(areas.data ?? []);
+  const updateAreas = useMutation({
+    mutationFn: (rows: (NonNullable<typeof areas.data>[number] & { label: string })[]) =>
+      Promise.all(rows.map((r) => updateArea(r, r.label))),
+  });
   const update = useMutation({
     mutationFn: (r: Described) => queue.enqueue([{ kind: "file", url: r.url, label: r.label, bytes: r.bytes }]),
   });
@@ -74,7 +79,10 @@ export function OfflineManager() {
   const rows = sortDescribed((stored.data?.files ?? []).map((f) => describe(f, items)));
   const layers = rows.filter((r) => r.kind === "layer");
   const basemap = rows.filter((r) => r.kind === "basemap");
-  const areaRows = (areas.data ?? []).map((a) => ({ ...describe({ url: a.url, bytes: a.bytes, savedAt: 0 }, items), kind: a.kind }));
+  const areaRows = (areas.data ?? []).map((a) => ({
+    ...a, ...describe({ url: a.url, bytes: a.bytes, savedAt: 0 }, items), kind: a.kind,
+    stale: !!stale.data?.has(a.url),
+  }));
   const used = (stored.data?.bytes ?? 0) + areaRows.reduce((n, a) => n + a.bytes, 0) + (engine.data ?? 0);
   const { quota } = stored.data?.space ?? {};
   const busy = remove.isPending || update.isPending || removeAreas.isPending;
@@ -137,8 +145,14 @@ export function OfflineManager() {
                   <span className="block truncate">{a.label}</span>
                   <div className="text-sm text-muted-foreground">
                     {opfs.formatBytes(a.bytes)} · {a.kind === "tiles" ? "layer, by area" : /\.parquet$/i.test(a.url) ? "table, by area" : "map, by area"}
+                    {a.stale && <span className="ml-2 font-medium text-primary">Newer version available</span>}
                   </div>
                 </div>
+                {a.stale && (
+                  <button type="button" className={BTN} disabled={busy || updateAreas.isPending}
+                    title="Save the same area again from the new version"
+                    onClick={() => updateAreas.mutate([a])}>Update</button>
+                )}
                 <button type="button" className={BTN} disabled={busy} onClick={() => removeAreas.mutate([a])}
                   aria-label={`Delete saved area of ${a.label}`}>Delete</button>
               </li>
@@ -165,8 +179,8 @@ export function OfflineManager() {
         </section>
       )}
 
-      {(remove.error || update.error) && (
-        <p className="text-destructive">{String((remove.error ?? update.error)?.message)}</p>
+      {(remove.error || update.error || updateAreas.error) && (
+        <p className="text-destructive">{String((remove.error ?? update.error ?? updateAreas.error)?.message)}</p>
       )}
     </Page>
   );

@@ -9,3 +9,18 @@ export const fileNameFor = (url: string): string => encodeURIComponent(url);
 
 /** The URL a stored file came from. Inverse of `fileNameFor`. */
 export const urlFromFileName = (name: string): string => decodeURIComponent(name);
+
+/**
+ * Which version of a published file a response came from: its ETag, else its Last-Modified. Parts
+ * of a file saved by area are only valid against the version they were cut from.
+ */
+export const versionOf = (h: Headers): string | undefined =>
+  h.get("etag") ?? h.get("last-modified") ?? undefined;
+
+/** The current version of a published file, from a HEAD request. "no-store" also tells the service
+ *  worker to let it through to the network rather than answer from a saved copy. */
+export async function currentVersion(url: string): Promise<string | undefined> {
+  const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+  if (!r.ok) throw new Error(`${r.status}`);
+  return versionOf(r.headers);
+}

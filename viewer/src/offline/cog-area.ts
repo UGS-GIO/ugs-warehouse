@@ -12,7 +12,7 @@
 import { fromUrl, type GeoTIFF } from "geotiff";
 import type { Bbox } from "./area";
 import { track } from "./in-flight";
-import { fileNameFor } from "./opfs-name";
+import { currentVersion, fileNameFor, versionOf } from "./opfs-name";
 
 export { assemble } from "./cog-blocks";
 
@@ -22,8 +22,10 @@ const DIR = "cogs";
 
 export type CogPlan = {
   url: string; size: number; block: number; blocks: number[]; bytes: number; tiles: number;
-  /** The area saved, recorded for a table (table-area.ts), whose queries are clipped to it offline. */
+  /** The area saved: a table's queries are clipped to it offline, and an update re-cuts it. */
   bbox?: Bbox;
+  /** The file version the blocks were cut from; blocks of two versions must never be mixed. */
+  version?: string;
 };
 
 const merc = (lon: number, lat: number): [number, number] => [
@@ -31,10 +33,10 @@ const merc = (lon: number, lat: number): [number, number] => [
   Math.log(Math.tan(Math.PI / 4 + (Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 360)) * 6378137,
 ];
 
-async function fileSize(url: string): Promise<number> {
-  const r = await fetch(url, { method: "HEAD" });
+async function fileHead(url: string): Promise<{ size: number; version?: string }> {
+  const r = await fetch(url, { method: "HEAD", cache: "no-store" });   // the live file, not a saved copy
   if (!r.ok) throw new Error(`${r.status}`);
-  return Number(r.headers.get("content-length"));
+  return { size: Number(r.headers.get("content-length")), version: versionOf(r.headers) };
 }
 
 /** Blocks covering [start, start + length). */
@@ -51,10 +53,14 @@ function blocksOf(start: number, length: number, block: number): number[] {
 export async function planCogArea(url: string, bbox: Bbox,
   opts: { tiff?: GeoTIFF; size?: number; block?: number } = {}): Promise<CogPlan> {
   const block = opts.block ?? COG_BLOCK;
+  // Planning reads the file through the service worker; a saved copy of an older version would
+  // hand it the old directory. Drop that copy first, so the plan is cut from the live file.
+  if (!opts.tiff) await dropIfStale(url);
   // Read in the reader's own block size, so planning warms the same blocks drawing will ask for.
   // geotiff.js accepts blockSize at runtime (remote.js maybeWrapInBlockedSource); its .d.ts lags.
   const tiff = opts.tiff ?? await fromUrl(url, { blockSize: COG_BLOCK } as Parameters<typeof fromUrl>[1]);
-  const size = opts.size ?? await fileSize(url);
+  const head = opts.size ? { size: opts.size, version: undefined } : await fileHead(url);
+  const size = head.size;
   const count = await tiff.getImageCount();
   const [minX, minY, maxX, maxY] = (await tiff.getImage(0)).getBoundingBox();
   const [ax0, ay0] = merc(bbox[0], bbox[1]);
@@ -99,7 +105,7 @@ export async function planCogArea(url: string, bbox: Bbox,
 
   const blocks = [...need].sort((a, b) => a - b);
   const bytes = blocks.reduce((n, b) => n + Math.min(block, size - b * block), 0);
-  return { url, size, block, blocks, bytes, tiles };
+  return { url, size, block, blocks, bytes, tiles, bbox, version: head.version };
 }
 
 async function cogDir(url: string, create: boolean) {
@@ -118,6 +124,10 @@ async function cogDir(url: string, create: boolean) {
  */
 export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: number) => void): Promise<void> {
   return track((async () => {
+    // Blocks cut from another version of the file are byte ranges of a different file: drop them.
+    const old = await cogDir(plan.url, false);
+    const prior = old && await readMeta(old);
+    if (prior && prior.version !== plan.version) await removeCogArea(plan.url);
     const dir = await cogDir(plan.url, true);
     if (!dir) throw new Error("This browser cannot store data offline.");
     const missing: number[] = [];
@@ -143,16 +153,18 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
         onProgress?.(++done, plan.blocks.length);
       }
     }
-    // Areas accumulate: a second save of the same file adds its blocks and its area to the first.
+    // Areas accumulate: a second save of the same version adds its blocks and its area to the first.
     const before = await readMeta(dir);
     const bboxes = [...(before?.bboxes ?? []), ...(plan.bbox ? [plan.bbox] : [])];
     const meta = await (await dir.getFileHandle("meta.json", { create: true })).createWritable();
-    await meta.write(JSON.stringify({ size: plan.size, block: plan.block, bboxes }));
+    await meta.write(JSON.stringify({
+      size: plan.size, block: plan.block, bboxes, version: plan.version, savedAt: Date.now(),
+    } satisfies Meta));
     await meta.close();
   })());
 }
 
-type Meta = { size: number; block: number; bboxes?: Bbox[] };
+type Meta = { size: number; block: number; bboxes?: Bbox[]; version?: string; savedAt?: number };
 
 async function readMeta(dir: FileSystemDirectoryHandle): Promise<Meta | null> {
   return dir.getFileHandle("meta.json").then((h) => h.getFile()).then((f) => f.text())
@@ -166,6 +178,15 @@ export async function savedAreasOf(url: string): Promise<Bbox[] | null> {
   return meta ? meta.bboxes ?? [] : null;
 }
 
+/** Remove a saved copy cut from a version of `url` other than the live one. */
+export async function dropIfStale(url: string): Promise<void> {
+  const dir = await cogDir(url, false);
+  const meta = dir && await readMeta(dir);
+  if (!meta) return;
+  const now = await currentVersion(url).catch(() => undefined);
+  if (now && meta.version !== now) await removeCogArea(url);
+}
+
 /** Forget a saved COG area. */
 export async function removeCogArea(url: string): Promise<void> {
   const root = await navigator.storage.getDirectory().catch(() => null);
@@ -174,20 +195,21 @@ export async function removeCogArea(url: string): Promise<void> {
 }
 
 /** Every COG saved by area, with its stored size. */
-export async function listCogAreas(): Promise<{ url: string; bytes: number }[]> {
-  const out: { url: string; bytes: number }[] = [];
+export type StoredBlocks = { url: string; bytes: number; version?: string; bboxes: Bbox[]; savedAt?: number };
+
+export async function listCogAreas(): Promise<StoredBlocks[]> {
+  const out: StoredBlocks[] = [];
   const root = await navigator.storage?.getDirectory?.().catch(() => null);
   const dir = await root?.getDirectoryHandle(DIR).catch(() => null);
   if (!dir) return out;
   for await (const [name, handle] of dir) {
     if (handle.kind !== "directory") continue;
     let bytes = 0;
-    let complete = false;
     for await (const [n, f] of handle as FileSystemDirectoryHandle) {
-      if (n === "meta.json") complete = true;
-      else if (f.kind === "file") bytes += (await (f as FileSystemFileHandle).getFile()).size;
+      if (n !== "meta.json" && f.kind === "file") bytes += (await (f as FileSystemFileHandle).getFile()).size;
     }
-    if (complete) out.push({ url: decodeURIComponent(name), bytes });
+    const meta = await readMeta(handle as FileSystemDirectoryHandle);
+    if (meta) out.push({ url: decodeURIComponent(name), bytes, version: meta.version, bboxes: meta.bboxes ?? [], savedAt: meta.savedAt });
   }
   return out;
 }

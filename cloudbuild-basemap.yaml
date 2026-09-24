@@ -10,19 +10,22 @@ substitutions:
   _PUBLIC_BUCKET: ut-dnr-ugs-maps-prod-public
   _BASEMAP_PREFIX: basemap
   _PMTILES_VERSION: 1.28.2
+  # GitHub's recorded digest for the Linux_x86_64 asset (the release publishes no checksums file).
+  _PMTILES_SHA256: e5fb0c250a28eea7a659def974a9d1d9c5815532e6e655396d6756fd3f23e74a
 
 steps:
   # Stdlib Python + the pmtiles CLI; no package install.
   - id: build-basemap
-    name: python:3.12-slim
+    name: python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
     entrypoint: bash
     args:
       - -c
       - |
         set -euo pipefail
         apt-get update -qq && apt-get install -y -qq curl > /dev/null
-        curl -sSL "https://github.com/protomaps/go-pmtiles/releases/download/v${_PMTILES_VERSION}/go-pmtiles_${_PMTILES_VERSION}_Linux_x86_64.tar.gz" \
-          | tar -xz -C /usr/local/bin pmtiles
+        curl -sSLo /tmp/pmtiles.tgz "https://github.com/protomaps/go-pmtiles/releases/download/v${_PMTILES_VERSION}/go-pmtiles_${_PMTILES_VERSION}_Linux_x86_64.tar.gz"
+        echo "${_PMTILES_SHA256}  /tmp/pmtiles.tgz" | sha256sum -c -
+        tar -xzf /tmp/pmtiles.tgz -C /usr/local/bin pmtiles
         PYTHONPATH=src python3 -m scripts.build_basemap --work /workspace/basemap-work --out /workspace/basemap
 
   # Publish, in an order that never leaves the CDN inconsistent. First refuse an incomplete build:

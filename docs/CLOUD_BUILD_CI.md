@@ -110,9 +110,11 @@ tofu apply
 Every trigger below was found by `gcloud builds triggers describe` and is now managed by
 `infra/cloudbuild-triggers.tf`. The two preview triggers run as `ugs-warehouse-preview-build@`
 rather than the Compute SA — a preview builds unmerged branch code and must stay the
-least-trusted identity, hence the separate `preview_trigger_service_account` variable.
+least-trusted identity, hence the separate `preview_trigger_service_account` variable. The basemap
+trigger runs as `ugs-basemap-build@`, which can write only under `basemap/` in the public bucket
+(`basemap_trigger_service_account`; grants in `infra/basemap-refresh.tf`).
 
-All five Cloud Build triggers live in `ut-dnr-ugs-backend-tools` (the build project), on the
+All Cloud Build triggers live in `ut-dnr-ugs-backend-tools` (the build project), on the
 2nd-gen GitHub connection `ugs-warehouse-github` (repository resource `ugs-warehouse`) — itself
 console/CLI-created (§ One-time setup above), not Terraform-managed either.
 
@@ -124,6 +126,7 @@ console/CLI-created (§ One-time setup above), not Terraform-managed either.
 | `ugs-warehouse-viewer-preview` | `cloudbuild-viewer-preview.yaml` | PR to `main` | `viewer/**` | `ugs-warehouse-preview-build@` |
 | `ugs-warehouse-tiles-preview` | `cloudbuild-service-preview.yaml` | PR to `main` | `tiles/**` | `ugs-warehouse-preview-build@` |
 | `ugs-warehouse-review-viewer` | `cloudbuild-review-viewer.yaml` | push to `main` | `viewer/**` | default Compute SA |
+| `ugs-warehouse-basemap` | `cloudbuild-basemap.yaml` | Pub/Sub `ugs-warehouse-basemap` (monthly Cloud Scheduler, or by hand) | n/a | `ugs-basemap-build@` |
 
 `default Compute SA` = `534590904912-compute@developer.gserviceaccount.com` — see the "why not
 `warehouse-deployer@`" note above (§ One-time setup, point 2); that finding still holds.

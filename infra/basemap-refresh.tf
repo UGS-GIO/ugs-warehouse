@@ -11,10 +11,10 @@
 #   gcloud projects add-iam-policy-binding $BP --member=serviceAccount:$DEPLOY --role=roles/cloudscheduler.admin --condition=None
 #   gcloud iam service-accounts create ugs-basemap-build --project=$BP --display-name="Builds and publishes the basemap"
 #   gcloud projects add-iam-policy-binding $BP --member=serviceAccount:$SA --role=roles/logging.logWriter --condition=None
-#   # Public bucket stays out of Terraform (README safety contract). Bucket-level match is for list (rsync).
+#   # Public bucket stays out of Terraform (README safety contract). objectListPrefix scopes rsync's list.
 #   gcloud storage buckets add-iam-policy-binding gs://ut-dnr-ugs-maps-prod-public \
 #     --member=serviceAccount:$SA --role=roles/storage.objectAdmin \
-#     --condition='title=basemap-only,expression=resource.type == "storage.googleapis.com/Bucket" || resource.name.startsWith("projects/_/buckets/ut-dnr-ugs-maps-prod-public/objects/basemap/")'
+#     --condition='title=basemap-only,expression=resource.name.startsWith("projects/_/buckets/ut-dnr-ugs-maps-prod-public/objects/basemap/") || api.getAttribute("storage.googleapis.com/objectListPrefix", "").startsWith("basemap/")'
 
 variable "basemap_schedule" {
   type        = string
@@ -55,33 +55,6 @@ resource "google_pubsub_topic" "basemap" {
   name    = "ugs-warehouse-basemap"
   # Drop an undelivered run after a day rather than replay it late.
   message_retention_duration = "86400s"
-}
-
-resource "google_cloudbuild_trigger" "basemap" {
-  count = local.manage_basemap
-
-  project         = var.build_project
-  location        = var.region
-  name            = "ugs-warehouse-basemap"
-  description     = "Basemap: Protomaps daily build → Utah extract → utah.pmtiles, overview and quads on the CDN. Monthly via Pub/Sub, or by hand."
-  service_account = var.basemap_trigger_service_account
-
-  pubsub_config {
-    topic = google_pubsub_topic.basemap[0].id
-  }
-
-  source_to_build {
-    repository = var.build_repository
-    ref        = "refs/heads/main"
-    repo_type  = "GITHUB"
-  }
-
-  git_file_source {
-    path       = "cloudbuild-basemap.yaml"
-    repository = var.build_repository
-    revision   = "refs/heads/main"
-    repo_type  = "GITHUB"
-  }
 }
 
 resource "google_cloud_scheduler_job" "basemap" {

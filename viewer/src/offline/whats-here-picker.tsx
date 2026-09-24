@@ -115,7 +115,9 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const hitsOf = (h: Here) => identified[vectors.findIndex((v) => v.id === h.id)]?.data ?? [];
   const checking = querying ? identified.filter((q) => q.isPending).length : 0;
 
-  const chosen = saveable.filter((h) => ticked.has(h.id));
+  // Ticks are set when the picker opens, possibly before the store's first read; what turns out to
+  // be saved whole already is left out here rather than queued again.
+  const chosen = saveable.filter((h) => ticked.has(h.id) && !have.has(h.save.url));
   const basemapBytes = basemapOffered && ticked.has(BASEMAP) ? basemapParts.reduce((n, p) => n + p.bytes, 0) : 0;
   const pricing = chosen.some((h) => priceOf(h)?.isPending);
   // A table needs the table engine on the device too; it is counted once, the first time.

@@ -204,17 +204,24 @@ async function perform(job: Job) {
  * so two open tabs don't download the same job twice; the other tab's run waits its turn.
  */
 export function run(): Promise<void> {
-  // Already running: that run will reach anything just queued, so wait on it.
-  current ??= (async () => {
+  // Already running: that run may already be past its last look at the queue, so ask it to go
+  // round once more when it ends rather than assume it will see a job queued just now.
+  if (current) { rerun = true; return current; }
+  current = (async () => {
     try {
-      if (navigator.locks) await navigator.locks.request("ugs-offline-queue", work);
-      else await work();
+      do {
+        rerun = false;
+        if (navigator.locks) await navigator.locks.request("ugs-offline-queue", work);
+        else await work();
+      } while (rerun);
     } finally {
       current = null;
     }
   })();
   return current;
 }
+
+let rerun = false;
 
 let swept = false;
 
@@ -257,6 +264,7 @@ async function work(): Promise<void> {
         update(job.id, { state: "queued" });
         await persist();
         setTimeout(() => { void run(); }, 15_000 * 2 ** tries);
+        rerun = false;   // a deliberate pause: the timer or the connection returning resumes it
         break;
       }
       misses.delete(job.id);

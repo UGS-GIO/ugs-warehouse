@@ -118,3 +118,24 @@ describe("an area whose file is republished mid-save", () => {
     expect(q.snapshot()[0]).toMatchObject({ state: "failed", error: "x.pmtiles was republished during the save." });
   });
 });
+
+describe("a save queued as the queue finishes", () => {
+  it("still runs, rather than waiting for the next trigger", async () => {
+    const q = await fresh();
+    let late: Promise<void> | null = null;
+    // Enqueue the second job after the run's last look at the queue, before the run has ended:
+    // the moment the lock is released.
+    Object.defineProperty(navigator, "locks", {
+      configurable: true,
+      value: { request: async (_: string, fn: () => Promise<void>) => { await fn(); late ??= q.enqueue([file("b")]); await late; } },
+    });
+    try {
+      await q.enqueue([file("a")]);
+      await q.run();
+      await vi.waitFor(() => expect(save.mock.calls.map((c) => c[0])).toEqual(["a", "b"]));
+      expect(q.snapshot()).toEqual([]);
+    } finally {
+      Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+    }
+  });
+});

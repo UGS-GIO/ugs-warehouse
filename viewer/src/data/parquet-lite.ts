@@ -21,7 +21,15 @@ function open(url: string): Promise<Opened> {
   let o = opened.get(url);
   if (!o) {
     o = (async () => {
-      const file = cachedAsyncBuffer(await asyncBufferFromUrl({ url }));
+      const cached = cachedAsyncBuffer(await asyncBufferFromUrl({ url }));
+      // The cache keeps a failed range too, so a failed read closes the file and a retry reopens it.
+      const file: AsyncBuffer = {
+        byteLength: cached.byteLength,
+        slice: (start, end) => Promise.resolve(cached.slice(start, end)).catch((e: unknown) => {
+          opened.delete(url);
+          throw e;
+        }),
+      };
       const metadata = await parquetMetadataAsync(file);
       return { file, metadata, columns: parquetSchema(metadata).children.map((c) => c.element) };
     })();
@@ -140,7 +148,7 @@ async function matching(o: Opened, col: string, value: string): Promise<number[]
 
 /**
  * One page of the rows where `col` equals `value`: the related-rows view (a clicked feature's
- * children). Reads the key column once, then only the span of rows the page needs.
+ * children). Reads the key column once, then only the row groups that hold the page's rows.
  */
 export async function readMatching(url: string, col: string, value: string,
   { limit, offset }: { limit: number; offset: number }): Promise<Page> {
@@ -148,13 +156,22 @@ export async function readMatching(url: string, col: string, value: string,
   const l = layout(o.columns);
   const all = await matching(o, col, value);
   const hits = all.slice(offset, offset + limit);
-  if (!hits.length) return toPage([], all.length, l);
-  const first = hits[0];
-  const rowEnd = hits[hits.length - 1] + 1;
-  const span = await parquetReadObjects({
-    file: prefetched(o, l.read, first, rowEnd), metadata: o.metadata, compressors, columns: l.read, rowStart: first, rowEnd,
-  });
-  return toPage(hits.map((i) => span[i - first]), all.length, l);
+  const rows: Record<string, unknown>[] = [];
+  let groupStart = 0;
+  for (const group of o.metadata.row_groups) {
+    const groupEnd = groupStart + Number(group.num_rows);
+    const inGroup = hits.filter((i) => i >= groupStart && i < groupEnd);
+    if (inGroup.length) {
+      const first = inGroup[0];
+      const rowEnd = inGroup[inGroup.length - 1] + 1;
+      const span = await parquetReadObjects({
+        file: prefetched(o, l.read, first, rowEnd), metadata: o.metadata, compressors, columns: l.read, rowStart: first, rowEnd,
+      });
+      for (const i of inGroup) rows.push(span[i - first]);
+    }
+    groupStart = groupEnd;
+  }
+  return toPage(rows, all.length, l);
 }
 
 /**

@@ -192,6 +192,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     if (!mapPick) return;
     let live = true;
     setHighlightId(mapPick.id);
+    // A collapsed table shows no page, so it reads nothing to find one.
+    if (collapsed) return;
     (async () => {
       // No parquet geometry read on map-click. The clicked feature is already on the map and
       // preview-map highlights it from the tile. We only page the table to it here. (ALL-6001)

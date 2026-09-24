@@ -5,6 +5,7 @@ Two artifacts per ingest:
   {ARCHIVE_PREFIX}/{stem}/{stem}_{YYYYMMDD}.parquet    (dated archive, immutable -> long cache)
 
 The latest pointer is the easy-to-link copy; dated archives are the citable snapshots.
+Each also gets a `.search.parquet` sidecar for the viewer's table search (see `_copy_search`).
 GCS IO + bucket/prefix/CDN come from `core` (shared with the pubs producer).
 """
 from __future__ import annotations
@@ -81,14 +82,43 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
     )
 
 
-def _upload(topic: Topic, local: str) -> gcs.FileMeta:
-    """Upload a finished GeoParquet as the latest pointer + a dated immutable snapshot."""
+# Not searched: the geometry, and the id the viewer hides. (The bbox columns are added by the COPY.)
+UNSEARCHED = ("geom", "feature_id")
+
+
+def _copy_search(con: duckdb.DuckDBPyConnection, view: str, path: str) -> bool:
+    """COPY one lowercase text column per row, in feature_id (file) order, for the viewer's search.
+
+    The viewer's table search matches a term in any shown column, as `CAST(col AS VARCHAR) ILIKE`.
+    Read from the GeoParquet, that means every attribute column of every row group, and text that
+    JavaScript must format the way DuckDB would. Here DuckDB writes that text once, so a search
+    reads one column and matches it exactly. Row i here is row i of the GeoParquet. Columns are
+    joined by a newline, which a search box cannot type, so no match spans two columns.
+    """
+    cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall() if r[0] not in UNSEARCHED]
+    if not cols:
+        return False
+    text = ", ".join(f'CAST("{c}" AS VARCHAR)' for c in cols)
+    con.execute(
+        f"COPY (SELECT lower(concat_ws(chr(10), {text})) AS text FROM {view} ORDER BY feature_id) "
+        f"TO '{path}' (FORMAT PARQUET, COMPRESSION ZSTD)"
+    )
+    return True
+
+
+def _upload(topic: Topic, local: str, search: str | None) -> gcs.FileMeta:
+    """Upload a finished GeoParquet (and its search sidecar) as latest + a dated immutable snapshot."""
     stamp = datetime.datetime.now(datetime.UTC).strftime("%Y%m%d")
     base = f"{config.ARCHIVE_PREFIX}/{topic.stem}"
     latest = f"{base}/{topic.stem}.parquet"
     dated = f"{base}/{topic.stem}_{stamp}.parquet"
     meta = gcs.upload(local, latest, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
     gcs.upload(local, dated, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+    if search:
+        # Next to its GeoParquet, same name: the viewer finds it by URL, no catalog entry.
+        for name, cache in ((latest, gcs.CACHE_MUTABLE), (dated, gcs.CACHE_IMMUTABLE)):
+            gcs.upload(search, name.removesuffix(".parquet") + ".search.parquet",
+                       content_type=PARQUET_MIME, cache_control=cache)
     print(f"[{topic.fqn}] archive: {config.public_url(latest)} (+ dated {stamp})")
     return meta  # same bytes both times; the item cites the latest pointer
 
@@ -99,4 +129,5 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMe
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, f"{topic.stem}.parquet")
         _copy_geoparquet(con, view, local)
-        return _upload(topic, local)
+        search = os.path.join(tmp, f"{topic.stem}.search.parquet")
+        return _upload(topic, local, search if _copy_search(con, view, search) else None)

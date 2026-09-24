@@ -8,6 +8,7 @@
 // Stored like a COG saved by area (cog-area.ts): fixed blocks, served by the service worker.
 import type { Bbox } from "./area";
 import type { CogPlan } from "./cog-area";
+import { versionOf } from "./opfs-name";
 
 /** Bigger than a COG block: row groups are contiguous runs of MB, not scattered 64 KB tiles. */
 export const TABLE_BLOCK = 256 * 1024;
@@ -46,12 +47,15 @@ export function planTableBlocks(url: string, size: number, footerLength: number,
 
 /** Plan against the live file: its size, footer length and row groups, all read from the footer. */
 export async function planTableArea(url: string, bbox: Bbox): Promise<CogPlan & { bbox: Bbox }> {
-  const tail = await fetch(url, { headers: { range: "bytes=-8" } });
+  // As for a COG (cog-area.ts dropIfStale): DuckDB reads the footer through the service worker.
+  await (await import("./cog-area")).dropIfStale(url);
+  const tail = await fetch(url, { headers: { range: "bytes=-8" }, cache: "no-store" });
   if (!tail.ok) throw new Error(`${tail.status}`);
   const size = Number(tail.headers.get("content-range")?.split("/")[1]);
+  const version = versionOf(tail.headers);
   const footerLength = new DataView(await tail.arrayBuffer()).getUint32(0, true);
   const { rowGroupSpans } = await import("@/data/download");
   const groups = await rowGroupSpans(url);
   if (groups.some((g) => !Number.isFinite(g.xmin))) throw new Error("This table has no bbox columns to cut by.");
-  return planTableBlocks(url, size, footerLength, groups, bbox);
+  return { ...planTableBlocks(url, size, footerLength, groups, bbox), version };
 }

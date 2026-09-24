@@ -6,7 +6,7 @@ import { qk } from "@/query-keys";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
 import type { Job } from "./queue";
-import { loadStoredAreas } from "./area";
+import { type Bbox, loadStoredAreas } from "./area";
 import { listCogAreas } from "./cog-area";
 
 /** What is stored, plus the browser's storage headroom. One query so the UI reads one status. */
@@ -71,11 +71,56 @@ export function useStoredAreas() {
     queryKey: ["offline-areas"],
     queryFn: async () => {
       const [tiles, cogs] = await Promise.all([loadStoredAreas(), listCogAreas()]);
+      const row = (a: { url: string; bytes: number; version?: string; bboxes: Bbox[] }) =>
+        ({ url: a.url, bytes: a.bytes, version: a.version, bboxes: a.bboxes });
       return [
-        ...tiles.map((t) => ({ url: t.url, bytes: t.bytes, kind: "tiles" as const })),
-        ...cogs.map((c) => ({ url: c.url, bytes: c.bytes, kind: "cog" as const })),
+        ...tiles.map((t) => ({ ...row(t), kind: "tiles" as const })),
+        ...cogs.map((c) => ({ ...row(c), kind: "cog" as const })),
       ];
     },
     staleTime: Infinity,
   });
+}
+
+export type StoredAreaRow = NonNullable<ReturnType<typeof useStoredAreas>["data"]>[number];
+
+/**
+ * Saved areas whose file has been republished since they were cut: one HEAD per file, compared
+ * with the version the area was saved from. Only asked online, and not retried, so offline the
+ * manager simply shows no update.
+ */
+export function useStaleAreas(rows: StoredAreaRow[]) {
+  return useQuery({
+    queryKey: ["offline-areas", "stale", rows.map((r) => `${r.url}@${r.version}`).join("|")],
+    queryFn: async () => {
+      const { currentVersion } = await import("./opfs-name");
+      const stale = new Set<string>();
+      await Promise.all(rows.filter((r) => r.version).map(async (r) => {
+        const now = await currentVersion(r.url).catch(() => undefined);
+        if (now && now !== r.version) stale.add(r.url);
+      }));
+      return stale;
+    },
+    enabled: rows.length > 0,
+    retry: false,
+    staleTime: 10 * 60_000,
+  });
+}
+
+/** Re-cut a saved area against the file's current version, one queued job per area saved. */
+export async function updateArea(row: StoredAreaRow, label: string): Promise<void> {
+  const jobs: queue.JobSpec[] = [];
+  for (const bbox of row.bboxes) {
+    if (row.kind === "tiles") {
+      const plan = await (await import("./area")).planArea(row.url, bbox);
+      jobs.push({ kind: "area", plan, label, bytes: plan.bytes });
+    } else if (/\.parquet$/i.test(row.url)) {
+      const plan = await (await import("./table-area")).planTableArea(row.url, bbox);
+      jobs.push({ kind: "table", plan, label, bytes: plan.bytes });
+    } else {
+      const plan = await (await import("./cog-area")).planCogArea(row.url, bbox);
+      jobs.push({ kind: "cog", plan, label, bytes: plan.bytes });
+    }
+  }
+  await queue.enqueue(jobs);
 }

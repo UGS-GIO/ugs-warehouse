@@ -34,6 +34,16 @@ BUILD_BASE = "https://build.protomaps.com/"
 # MapLibre overzooms past 14; z15 would double the file.
 MAXZOOM = 14
 
+# The source layers the @protomaps/basemaps light style draws (the fleet fuel finder's Streets map
+# reads utah.pmtiles with it). MapLibre silently skips a missing layer, so a wrong file draws a blank
+# or partial map with no error. The v4 schema's transit layer isn't drawn, so it isn't required.
+REQUIRED_LAYERS = frozenset({
+    "boundaries", "buildings", "earth", "landcover", "landuse", "places", "pois", "roads", "water",
+})
+
+# What `pmtiles show --header-json` reports for vector tiles (go-pmtiles tileTypeToString).
+MVT_TILE_TYPE = "mvt"
+
 
 def latest_build() -> str:
     """The newest Protomaps daily build's file name, e.g. 20260924.pmtiles."""
@@ -98,6 +108,43 @@ def cut(src: Path, out: Path, quads: list[Quad], build: str, workers: int = 8) -
     return index
 
 
+def _pmtiles(*args: str) -> str:
+    """Run the `pmtiles` CLI and return its stdout; a failure raises with the CLI's own message."""
+    try:
+        proc = subprocess.run(["pmtiles", *args], check=True, capture_output=True, text=True)
+    except FileNotFoundError as e:
+        raise RuntimeError("pmtiles CLI not found on PATH (install go-pmtiles)") from e
+    except subprocess.CalledProcessError as e:
+        detail = (e.stderr or e.stdout or "").strip()
+        raise RuntimeError(
+            f"pmtiles {' '.join(args)} failed" + (f":\n{detail}" if detail else "")
+        ) from e
+    return proc.stdout
+
+
+def verify_archives(out: Path) -> None:
+    """Refuse to publish a basemap the apps can't draw. Raising fails the build-basemap step, so
+    publish-basemap never runs and the live CDN files stay as they are. `pmtiles verify` only
+    checks archive structure, so the tile type, max zoom and layers are checked separately."""
+    for name in ("utah.pmtiles", "overview.pmtiles"):
+        _pmtiles("verify", str(out / name))
+
+    utah = out / "utah.pmtiles"
+    header = json.loads(_pmtiles("show", str(utah), "--header-json"))
+    if header["tile_type"] != MVT_TILE_TYPE:
+        raise RuntimeError(
+            f"utah.pmtiles: tile_type is {header['tile_type']!r}, expected {MVT_TILE_TYPE!r}"
+        )
+    if header["maxzoom"] != MAXZOOM:
+        raise RuntimeError(f"utah.pmtiles: maxzoom is {header['maxzoom']}, expected {MAXZOOM}")
+
+    metadata = json.loads(_pmtiles("show", str(utah), "--metadata"))
+    have_layers = {layer.get("id") for layer in metadata.get("vector_layers", [])}
+    missing = sorted(REQUIRED_LAYERS - have_layers)
+    if missing:
+        raise RuntimeError(f"utah.pmtiles: missing vector_layers: {', '.join(missing)}")
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--work", type=Path, default=Path("build/basemap-work"))
@@ -130,6 +177,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
 
     index = cut(src, args.out, quads, build)
+    verify_archives(args.out)
     quads_total = index["overview"]["bytes"] + sum(q["bytes"] for q in index["quads"].values())
     print(f"state {index['state']['bytes'] / 1e6:.1f} MB; overview + {len(index['quads'])} quads "
           f"{quads_total / 1e6:.1f} MB -> {args.out}")

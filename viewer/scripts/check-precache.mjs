@@ -10,9 +10,9 @@ import { readdirSync, readFileSync, existsSync } from "node:fs";
 const DIST = new URL("../dist/", import.meta.url);
 const at = (p) => new URL(p, DIST);
 
-// Deliberately excluded (vite.config.ts globIgnores): the duckdb-wasm engine is useless without its
-// 35 MB .wasm, which globPatterns leaves out anyway.
-const EXPECTED_ABSENT = /^duckdb-browser-/;
+// Deliberately excluded (vite.config.ts globIgnores): the `mvp` engine worker, for browsers that
+// offline tables do not serve. The loader and `eh` worker are precached for offline tables.
+const EXPECTED_ABSENT = /^duckdb-browser-mvp/;
 
 const fail = (msg) => {
   console.error(`✗ precache check: ${msg}`);
@@ -33,7 +33,7 @@ if (missing.length) {
 }
 
 const present = js.filter((f) => EXPECTED_ABSENT.test(f) && precached.has(`assets/${f}`));
-if (present.length) fail(`engine chunks precached but unusable without their .wasm: ${present.join(", ")}`);
+if (present.length) fail(`mvp engine chunks precached, though offline tables never use them: ${present.join(", ")}`);
 
 // Assert against the worker SOURCE, not the bundle: class names are minified away, so matching
 // the built file would only ever pass by accident.

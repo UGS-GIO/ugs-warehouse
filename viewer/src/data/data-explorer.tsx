@@ -19,6 +19,7 @@ import { UiSelect } from "@/ui/select";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { Unavailable } from "@/offline/offline-notice";
 import { isNetworkError, useOnline } from "@/offline/online";
+import { TableOffline } from "@/offline/table-offline";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
@@ -32,8 +33,8 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // OOM the tab; the largest layers (e.g. wetlandsoutline ~426k) exceed it, so "All" truncates them
 // (surfaced as "capped at 100,000") and paging is the way through the full table.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
-  href: string; onPick?: (sel: FocusSel) => void;
+export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
+  href: string; title?: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
   rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
@@ -219,6 +220,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
               {showColFilters ? "Hide column filters" : "Filter columns"}
             </button>
             {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
+            <TableOffline href={href} title={title ?? href.split("/").pop() ?? href} />
             {presetFilter && (
               <span className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary">
                 Showing rows for the clicked feature

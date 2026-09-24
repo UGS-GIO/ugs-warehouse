@@ -13,6 +13,8 @@ import * as opfs from "./opfs";
 import { removeArea } from "./area";
 import { removeCogArea } from "./cog-area";
 import * as queue from "./queue";
+import { engineBytes, removeEngine } from "./engine";
+import { ENGINE_KEY } from "./table-offline";
 import { useStoredAreas, useStoredLayers } from "./use-offline";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50";
@@ -55,6 +57,12 @@ export function OfflineManager() {
       Promise.all(rows.map((r) => (r.kind === "cog" ? removeCogArea(r.url) : removeArea(r.url)))),
     onSettled: refresh,
   });
+  // The table engine is shared by every saved table, so it is listed once, on its own.
+  const engine = useQuery({ queryKey: [...ENGINE_KEY, "bytes"], queryFn: engineBytes });
+  const dropEngine = useMutation({
+    mutationFn: removeEngine,
+    onSettled: () => client.invalidateQueries({ queryKey: ENGINE_KEY }),
+  });
   const update = useMutation({
     mutationFn: (r: Described) => queue.enqueue([{ kind: "file", url: r.url, label: r.label, bytes: r.bytes }]),
   });
@@ -67,7 +75,7 @@ export function OfflineManager() {
   const layers = rows.filter((r) => r.kind === "layer");
   const basemap = rows.filter((r) => r.kind === "basemap");
   const areaRows = (areas.data ?? []).map((a) => ({ ...describe({ url: a.url, bytes: a.bytes, savedAt: 0 }, items), kind: a.kind }));
-  const used = (stored.data?.bytes ?? 0) + areaRows.reduce((n, a) => n + a.bytes, 0);
+  const used = (stored.data?.bytes ?? 0) + areaRows.reduce((n, a) => n + a.bytes, 0) + (engine.data ?? 0);
   const { quota } = stored.data?.space ?? {};
   const busy = remove.isPending || update.isPending || removeAreas.isPending;
 
@@ -96,7 +104,7 @@ export function OfflineManager() {
       {/* No map view here, so only the statewide save shows; "This area" lives in the Map's panel. */}
       <BasemapDownload bbox={null} />
 
-      {!rows.length && !areaRows.length && (
+      {!rows.length && !areaRows.length && !engine.data && (
         <p className="text-muted-foreground">
           Nothing saved yet. Save the basemap above, or on the Map use the download button beside a
           layer under "On the map", to keep it for use with no connection.
@@ -142,6 +150,19 @@ export function OfflineManager() {
         <Group title="Basemap" rows={basemap} busy={busy}
           onDelete={(r) => remove.mutate([r.url])} onUpdate={(r) => update.mutate(r)}
           onDeleteAll={() => remove.mutate(basemap.map((r) => r.url))} />
+      )}
+
+      {!!engine.data && (
+        <section className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
+          <div className="min-w-0 flex-1">
+            <span className="block">Table engine</span>
+            <div className="text-sm text-muted-foreground">
+              {opfs.formatBytes(engine.data)} · opens saved tables with no connection
+            </div>
+          </div>
+          <button type="button" className={BTN} disabled={dropEngine.isPending}
+            onClick={() => dropEngine.mutate()}>Delete</button>
+        </section>
       )}
 
       {(remove.error || update.error) && (

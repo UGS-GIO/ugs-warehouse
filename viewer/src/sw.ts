@@ -55,6 +55,13 @@ registerRoute(
   }),
 );
 
+// The table engine's .wasm, once someone saves a table for offline (offline/engine.ts puts it in
+// this cache). Never cached on the way past: at 36 MB it is kept only for people who asked.
+registerRoute(
+  ({ url }) => url.origin === self.location.origin && /\/assets\/duckdb-eh-[^/]+\.wasm$/.test(url.pathname),
+  async ({ request }) => (await caches.match(request, { cacheName: "ugs-engine" })) ?? fetch(request),
+);
+
 // ---- Offline artifacts: serve a downloaded file, Range and all ----
 //
 // Every artifact we publish is a single file read by HTTP Range: PMTiles archives, COGs, GeoParquet.

@@ -14,6 +14,9 @@ import ehWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
 
 export type Conn = { query: (sql: string) => Promise<{ toArray: () => Record<string, unknown>[] }> };
 
+/** The engine's .wasm on modern browsers (the `eh` build): what an offline table needs cached. */
+export const ENGINE_WASM = ehWasm;
+
 const BUNDLES = {
   mvp: { mainModule: mvpWasm, mainWorker: mvpWorker },
   eh: { mainModule: ehWasm, mainWorker: ehWorker },

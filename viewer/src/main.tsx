@@ -26,7 +26,7 @@ window.addEventListener("error", (e) => {
 // Downloads left unfinished last visit carry on, and each finished one refreshes what the app lists
 // as stored (and what the basemap protocol routes to disk).
 downloads.onFinished(() => {
-  for (const key of [qk.offlineLayers, ["offline-areas"], ["basemap-style"], ["storage-persisted"]]) {
+  for (const key of [qk.offlineLayers, ["offline-areas"], ["basemap-style"], ["storage-persisted"], ["offline-engine"]]) {
     void queryClient.invalidateQueries({ queryKey: key });
   }
 });

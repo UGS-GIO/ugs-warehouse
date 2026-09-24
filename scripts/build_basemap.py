@@ -4,11 +4,8 @@
     python -m scripts.build_basemap --quads 40111g8,40111b6
     python -m scripts.build_basemap --reuse-tiles         # skip the extract, re-cut the archives
 
-Source is the Protomaps daily planet build (OpenStreetMap + Natural Earth, Protomaps basemap
-schema), cut to Utah with `pmtiles extract`, which fetches only the byte ranges Utah needs (~140 MB
-in about 5 s). Hosting our own copy rather than reading theirs is what lets a user save it for
-offline use, and the viewer styles it with the maintained @protomaps/basemaps flavors. Measured at
-the same bounds and zooms, it is ~25% smaller than a Planetiler/OpenMapTiles build (warehouse#374).
+Source: the newest Protomaps daily build, cut to Utah with `pmtiles extract` (~140 MB, seconds).
+Protomaps schema; style it with @protomaps/basemaps.
 
 Output, ready to upload under the CDN's basemap/ prefix (that step needs GCP permissions):
 
@@ -33,31 +30,29 @@ from ugs_warehouse.basemap import OVERVIEW_MAXZOOM, QUAD_MINZOOM, Quad, utah_qua
 
 BUILDS_URL = "https://build-metadata.protomaps.dev/builds.json"
 BUILD_BASE = "https://build.protomaps.com/"
-# The deepest zoom Protomaps builds is 15; z14 is what MapLibre overzooms from anyway, and z15
-# would double the file (~290 MB statewide).
+# MapLibre overzooms past 14; z15 would double the file.
 MAXZOOM = 14
 
 
 def latest_build() -> str:
     """The newest Protomaps daily build's file name, e.g. 20260924.pmtiles."""
-    # A timeout, so a stalled connection fails the build instead of hanging it. The metadata host
-    # refuses Python's default User-Agent with a 403, so name ourselves.
+    # The metadata host 403s Python's default User-Agent.
     req = urllib.request.Request(BUILDS_URL, headers={"User-Agent": "ugs-warehouse-basemap"})
     with urllib.request.urlopen(req, timeout=60) as r:
         builds = json.load(r)
-    return max(b["key"] for b in builds)     # keys are YYYYMMDD.pmtiles, so the max is the newest
+    return max(b["key"] for b in builds)     # YYYYMMDD.pmtiles
 
 
 def grid_bbox(quads: list[Quad]) -> str:
-    """The extent of the quad grid, so a quad on the state line is as complete as one inside it."""
+    """Extent of the quad grid, so edge quads are complete."""
     return ",".join(str(v) for v in (min(q.west for q in quads), min(q.south for q in quads),
                                      max(q.east for q in quads), max(q.north for q in quads)))
 
 
 def build_tiles(work: Path, build: str) -> Path:
-    """The Protomaps daily build → one statewide archive covering every Utah quad."""
+    """Extract the statewide archive from a Protomaps build."""
     out = work / "utah.pmtiles"
-    (work / "build.txt").write_text(build)    # so --reuse-tiles stamps index.json with the right source
+    (work / "build.txt").write_text(build)    # read back by --reuse-tiles
     _extract(BUILD_BASE + build, out, f"--bbox={grid_bbox(list(utah_quads()))}", f"--maxzoom={MAXZOOM}")
     return out
 

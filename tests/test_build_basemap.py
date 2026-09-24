@@ -8,8 +8,7 @@ from ugs_warehouse.basemap import utah_quads
 
 
 def test_extract_covers_the_whole_quad_grid():
-    # The statewide file is the source every quad is cut from, so it must reach the grid's edges —
-    # including the sliver column past 114W — or edge quads come out short.
+    # Includes the sliver column past 114W.
     west, south, east, north = map(float, build_basemap.grid_bbox(list(utah_quads())).split(","))
     assert (west, south, east, north) == (-114.125, 37.0, -109.0, 42.0)
 

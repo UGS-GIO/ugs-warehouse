@@ -1,18 +1,8 @@
-# Monthly basemap rebuild: Cloud Scheduler publishes to a Pub/Sub topic, and the Cloud Build trigger
-# for cloudbuild-basemap.yaml runs on each message. Protomaps publishes a new build daily, but the
-# roads and places a field basemap shows change slowly; monthly keeps saved copies current without
-# churning them. A run is one Protomaps extract of Utah plus the quad cut: cents.
+# Monthly basemap rebuild: Cloud Scheduler → Pub/Sub topic → Cloud Build trigger
+# (cloudbuild-basemap.yaml). Runs on Google-managed service agents, so no SA or IAM grants.
+# Run by hand: `gcloud builds triggers run ugs-warehouse-basemap`.
 #
-# Pub/Sub rather than the scheduler calling the trigger's :run API: an HTTP call needs an identity
-# that can create builds in the build project and act as the trigger's SA, i.e. a new SA, a custom
-# role and project-level IAM that only Role Admin + Project IAM Admin could apply. A Pub/Sub target
-# is published by the Cloud Scheduler service agent, and the trigger subscribes through the Cloud
-# Build service agent, both within the build project, so no SA, role or grant is added anywhere.
-#
-# The trigger can still be run by hand: `gcloud builds triggers run ugs-warehouse-basemap`, or
-# publish any message to the topic.
-#
-# Needs, once, on build_project (the deploy SA already manages triggers there):
+# One-time, on build_project:
 #   gcloud services enable pubsub.googleapis.com cloudscheduler.googleapis.com --project=$BP
 #   gcloud projects add-iam-policy-binding $BP --member=serviceAccount:$DEPLOY --role=roles/pubsub.editor
 #   gcloud projects add-iam-policy-binding $BP --member=serviceAccount:$DEPLOY --role=roles/cloudscheduler.admin
@@ -32,7 +22,7 @@ resource "google_pubsub_topic" "basemap" {
 
   project = var.build_project
   name    = "ugs-warehouse-basemap"
-  # A missed month is not worth replaying a week late: drop undelivered runs after a day.
+  # Drop an undelivered run after a day rather than replay it late.
   message_retention_duration = "86400s"
 }
 
@@ -45,7 +35,6 @@ resource "google_cloudbuild_trigger" "basemap" {
   description     = "Basemap: Protomaps daily build → Utah extract → utah.pmtiles, overview and quads on the CDN. Monthly via Pub/Sub, or by hand."
   service_account = var.trigger_service_account
 
-  # Runs on any message to its topic (the monthly schedule, or a person), always from main.
   pubsub_config {
     topic = google_pubsub_topic.basemap[0].id
   }

@@ -58,7 +58,6 @@ def build_tiles(work: Path, build: str) -> Path:
 
 
 def _extract(src: Path | str, dest: Path, *flags: str) -> int:
-    dest.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(["pmtiles", "extract", str(src), str(dest), *flags],
                    check=True, stdout=subprocess.DEVNULL)
     return dest.stat().st_size
@@ -66,7 +65,7 @@ def _extract(src: Path | str, dest: Path, *flags: str) -> int:
 
 def cut(src: Path, out: Path, quads: list[Quad], build: str, workers: int = 8) -> dict:
     """The statewide archive, plus overview + per-quad archives cut from it, and their index."""
-    out.mkdir(parents=True, exist_ok=True)
+    (out / "quads").mkdir(parents=True, exist_ok=True)
     # The whole state is published as-is: at ~140 MB it is the download most people want before a
     # trip, and it is smaller than all the quads together, which repeat every tile on a quad edge.
     shutil.copyfile(src, out / "utah.pmtiles")
@@ -122,6 +121,9 @@ def main(argv: list[str] | None = None) -> int:
         missing = wanted - {q.code for q in quads}
         if missing:
             print(f"not Utah quads, skipped: {', '.join(sorted(missing))}", file=sys.stderr)
+        if not quads:
+            print("no Utah quads to build", file=sys.stderr)
+            return 2
 
     index = cut(src, args.out, quads, build)
     quads_total = index["overview"]["bytes"] + sum(q["bytes"] for q in index["quads"].values())

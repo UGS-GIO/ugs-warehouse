@@ -9,6 +9,7 @@
 // manifest and there is no second store to keep in sync.
 
 import { track } from "./in-flight";
+import { isFile, isRecord, optionalString, readJson } from "./guards";
 import { fileNameFor, urlFromFileName, versionOf } from "./opfs-name";
 
 export { fileNameFor, urlFromFileName };
@@ -88,9 +89,9 @@ async function saveOnce(url: string, { signal, onProgress }: SaveOptions): Promi
   const side = `${tmp}.json`;
   const handle = await d.getFileHandle(tmp, { create: true });
   const have = (await handle.getFile()).size;
-  const saved = have
-    ? await d.getFileHandle(side).then((h) => h.getFile()).then((f) => f.text())
-      .then((t) => JSON.parse(t) as { validator?: string; version?: string }).catch(() => undefined)
+  const sidecar = have ? await readJson(d, side) : null;
+  const saved = isRecord(sidecar)
+    ? { validator: optionalString(sidecar.validator), version: optionalString(sidecar.version) }
     : undefined;
 
   const headers: Record<string, string> = {};
@@ -148,9 +149,8 @@ async function saveOnce(url: string, { signal, onProgress }: SaveOptions): Promi
 
   // `move` is how OPFS renames. Where it is missing, copy through a second write rather than
   // leaving the artifact parked under the .part name.
-  const movable = handle as FileSystemFileHandle & { move?: (name: string) => Promise<void> };
-  if (movable.move) {
-    await movable.move(name);
+  if (canMove(handle)) {
+    await handle.move(name);
   } else {
     const final = await (await d.getFileHandle(name, { create: true })).createWritable();
     // Write the File itself, not its arrayBuffer: `write` takes a Blob, and buffering a 300 MB
@@ -161,6 +161,11 @@ async function saveOnce(url: string, { signal, onProgress }: SaveOptions): Promi
   }
   await d.removeEntry(side).catch(() => {});
   return { url, bytes: written, savedAt: Date.now() };
+}
+
+/** OPFS `move`, which renames in place; not in TypeScript's DOM types, and not in every browser. */
+function canMove(h: FileSystemFileHandle): h is FileSystemFileHandle & { move(name: string): Promise<void> } {
+  return "move" in h && typeof h.move === "function";
 }
 
 /** Throw away a partial download (the user removed it from the queue). */
@@ -176,8 +181,8 @@ export async function listPartials(): Promise<StoredFile[]> {
   const out: StoredFile[] = [];
   if (!d) return out;
   for await (const [name, h] of d) {
-    if (h.kind !== "file" || !name.endsWith(".part")) continue;
-    const f = await (h as FileSystemFileHandle).getFile().catch(() => null);
+    if (!isFile(h) || !name.endsWith(".part")) continue;
+    const f = await h.getFile().catch(() => null);
     if (f) out.push({ url: urlFromFileName(name.slice(0, -".part".length)), bytes: f.size, savedAt: f.lastModified });
   }
   return out;
@@ -220,9 +225,9 @@ export async function list(): Promise<StoredFile[]> {
   // Iterating the handle yields [name, handle] PAIRS, not bare handles. Treating an entry as a
   // handle type-checks and then fails at runtime with "h.getFile is not a function".
   for await (const [name, h] of d) {
-    if (h.kind !== "file" || name.endsWith(".part") || name.endsWith(".part.json")) continue;
+    if (!isFile(h) || name.endsWith(".part") || name.endsWith(".part.json")) continue;
     try {
-      const file = await (h as FileSystemFileHandle).getFile();
+      const file = await h.getFile();
       out.push({ url: urlFromFileName(name), bytes: file.size, savedAt: file.lastModified });
     } catch {
       // One locked or unreadable entry must not take down the listing, which is what every

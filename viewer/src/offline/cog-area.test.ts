@@ -27,8 +27,15 @@ function sparse(blocks: number[]): ArrayBuffer {
   return out.buffer;
 }
 
-const pixels = async (buf: ArrayBuffer, image: number, window: [number, number, number, number]) =>
-  (await (await fromArrayBuffer(buf)).getImage(image)).readRasters({ window, interleave: true });
+/** A window's pixels, interleaved, as raw bytes: compared byte for byte, not element by element
+ *  with toEqual, which is about five times slower on a quarter-million pixels and timed out in CI. */
+const pixels = async (buf: ArrayBuffer, image: number, window: [number, number, number, number]) => {
+  const r = await (await fromArrayBuffer(buf)).getImage(image).then((img) => img.readRasters({ window, interleave: true }));
+  return new Uint8Array(r.buffer, r.byteOffset, r.byteLength);
+};
+/** Index of the first byte where two arrays differ, or -1 when they are identical. */
+const firstDiff = (a: Uint8Array, b: Uint8Array) =>
+  a.length !== b.length ? Math.min(a.length, b.length) : a.findIndex((v, i) => v !== b[i]);
 
 describe("planCogArea", () => {
   it("keeps the whole file when the area covers the whole image", async () => {
@@ -56,7 +63,7 @@ describe("planCogArea", () => {
     for (const [image, window] of [[0, [0, 0, 512, 512]], [1, [0, 0, 256, 256]]] as const) {
       const want = await pixels(buffer(), image, [...window]);
       const got = await pixels(cut, image, [...window]);
-      expect(Array.from(got as Uint8Array)).toEqual(Array.from(want as Uint8Array));
+      expect(firstDiff(got, want)).toBe(-1);
     }
   });
 
@@ -72,13 +79,13 @@ describe("assemble", () => {
 
   it("rebuilds any range from blocks, including ones that straddle block edges", () => {
     for (const [s, e] of [[0, 99], [1000, 1100], [BLOCK * 3 + 7, BLOCK * 5 + 11]]) {
-      expect(Array.from(assemble(s, e, BLOCK, get)!)).toEqual(Array.from(bytes.subarray(s, e + 1)));
+      expect(assemble(s, e, BLOCK, get)).toEqual(bytes.slice(s, e + 1));
     }
   });
 
   it("returns the file's last partial block correctly", () => {
     const last = bytes.length - 1;
-    expect(Array.from(assemble(last - 50, last, BLOCK, get)!)).toEqual(Array.from(bytes.subarray(last - 50)));
+    expect(assemble(last - 50, last, BLOCK, get)).toEqual(bytes.slice(last - 50));
   });
 
   it("reports a missing block rather than inventing bytes", () => {

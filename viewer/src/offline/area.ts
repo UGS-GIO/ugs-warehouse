@@ -11,9 +11,10 @@
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
 import { findTile, PMTiles, zxyToTileId } from "pmtiles";
 import { currentVersion, FileChangedError, fileNameFor } from "./opfs-name";
+import { type Bbox, bboxesOf, isBbox, isDirectory, isFile, isRecord, optionalNumber, optionalString, readJson } from "./guards";
 import { track } from "./in-flight";
 
-export type Bbox = [number, number, number, number];
+export type { Bbox } from "./guards";
 export type TileRef = { z: number; x: number; y: number; offset: number; length: number };
 export type AreaPlan = { url: string; tiles: TileRef[]; bytes: number; meta: AreaMeta; bbox?: Bbox };
 export type AreaMeta = {
@@ -160,10 +161,25 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
   })());
 }
 
+/** A saved area's meta.json, checked field by field; null when missing or not one. */
+export function parseAreaMeta(v: unknown): AreaMeta | null {
+  if (!isRecord(v) || !isRecord(v.tilejson)) return null;
+  const { tiles, minzoom, maxzoom, bounds } = v.tilejson;
+  const compression = optionalNumber(v.compression);
+  if (!Array.isArray(tiles) || !tiles.every((t) => typeof t === "string") || !isBbox(bounds)
+    || typeof minzoom !== "number" || typeof maxzoom !== "number" || compression === undefined) return null;
+  return {
+    tilejson: { tiles, minzoom, maxzoom, bounds },
+    compression,
+    version: optionalString(v.version),
+    bboxes: bboxesOf(v.bboxes),
+    savedAt: optionalNumber(v.savedAt),
+  };
+}
+
 async function readAreaMeta(url: string): Promise<AreaMeta | null> {
   const dir = await areaDir(url, false);
-  return dir?.getFileHandle("meta.json").then((h) => h.getFile()).then((f) => f.text())
-    .then((t) => JSON.parse(t) as AreaMeta).catch(() => null) ?? null;
+  return dir ? parseAreaMeta(await readJson(dir, "meta.json")) : null;
 }
 
 /** Forget every tile saved for an archive. */
@@ -190,18 +206,16 @@ export async function loadStoredAreas(): Promise<StoredArea[]> {
   const root = await navigator.storage?.getDirectory?.().catch(() => null);
   const areas = await root?.getDirectoryHandle(AREAS).catch(() => null);
   if (!areas) return out;
-  for await (const [name, handle] of areas) {
-    if (handle.kind !== "directory") continue;
-    const dir = handle as FileSystemDirectoryHandle;
-    const meta = await dir.getFileHandle("meta.json").then((h) => h.getFile()).then((f) => f.text())
-      .then((t) => JSON.parse(t) as AreaMeta, () => null);
+  for await (const [name, dir] of areas) {
+    if (!isDirectory(dir)) continue;
+    const meta = parseAreaMeta(await readJson(dir, "meta.json"));
     if (!meta) continue;
     let tiles = 0;
     let bytes = 0;
     for await (const [n, h] of dir) {
-      if (n === "meta.json" || h.kind !== "file") continue;
+      if (n === "meta.json" || !isFile(h)) continue;
       tiles++;
-      bytes += (await (h as FileSystemFileHandle).getFile()).size;
+      bytes += (await h.getFile()).size;
     }
     const url = decodeURIComponent(name);
     stored.add(url);
@@ -212,7 +226,7 @@ export async function loadStoredAreas(): Promise<StoredArea[]> {
 
 async function inflate(data: ArrayBuffer, compression: number): Promise<ArrayBuffer> {
   if (compression === 1) return data;
-  const stream = new Response(data).body!.pipeThrough(new DecompressionStream("gzip"));
+  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("gzip"));
   return new Response(stream).arrayBuffer();
 }
 
@@ -229,11 +243,14 @@ export async function areaResponse(url: string, kind: "json" | "tile", signal?: 
   if (!archive || !stored.has(archive)) return null;
   const dir = await areaDir(archive, false);
   if (!dir) return null;
-  const meta = JSON.parse(await (await (await dir.getFileHandle("meta.json")).getFile()).text()) as AreaMeta;
+  const meta = parseAreaMeta(await readJson(dir, "meta.json"));
+  if (!meta) return null;
   if (kind === "json") {
-    try { return await network!(); } catch { return { data: meta.tilejson }; }
+    if (!network) return { data: meta.tilejson };
+    try { return await network(); } catch { return { data: meta.tilejson }; }
   }
-  const [, , z, x, y] = m!;
+  if (!m) return null;
+  const [, , z, x, y] = m;
   const file = await dir.getFileHandle(tileName(+z, +x, +y)).then((h) => h.getFile(), () => null);
   if (signal?.aborted) throw new DOMException("aborted", "AbortError");
   if (file) return { data: new Uint8Array(await inflate(await file.arrayBuffer(), meta.compression)) };

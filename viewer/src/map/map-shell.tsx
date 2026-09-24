@@ -115,7 +115,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
             the attribution, which the data licences require be visible. A % bottom resolves
             against the map's height, which is the same box the sheet's detents are sized from. */}
         <div className="map-under-sheet absolute inset-0"
-          style={{ "--peek": `${DETENTS[0] * 100}%` } as React.CSSProperties}>{map}</div>
+          style={{ "--peek": `${DETENTS[0] * 100}%` }}>{map}</div>
         <div ref={sheetRef} style={{ height: `${DETENTS[detent] * 100}%` }}
           className="absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl transition-[height] duration-300 ease-out">
           {/* A button too, so each detent is a tap or an arrow key away, not only a drag (WCAG 2.5.7). */}

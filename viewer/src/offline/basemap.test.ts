@@ -90,8 +90,7 @@ describe("rerouteStyle", () => {
   });
 
   it("keeps attribution on the rerouted source", () => {
-    const src = rerouteStyle(ofm).sources.openmaptiles as { attribution?: string };
-    expect(src.attribution).toMatch(/OpenStreetMap/);
+    expect(rerouteStyle(ofm).sources.openmaptiles).toMatchObject({ attribution: expect.stringMatching(/OpenStreetMap/) });
   });
 
   it("does not touch a style without an OpenMapTiles vector source", () => {

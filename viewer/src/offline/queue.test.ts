@@ -1,4 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AreaMeta, AreaPlan } from "./area";
+import type { Bbox } from "./guards";
 
 const save = vi.fn();
 const remove = vi.fn();
@@ -89,7 +91,9 @@ describe("download queue", () => {
 });
 
 describe("an area whose file is republished mid-save", () => {
-  const plan = (bytes: number) => ({ url: "https://cdn/x.pmtiles", tiles: [], bytes, meta: {} as never, bbox: [0, 0, 1, 1] as [number, number, number, number] });
+  const box: Bbox = [0, 0, 1, 1];
+  const meta: AreaMeta = { tilejson: { tiles: [], minzoom: 0, maxzoom: 0, bounds: box }, compression: 1 };
+  const plan = (bytes: number): AreaPlan => ({ url: "https://cdn/x.pmtiles", tiles: [], bytes, meta, bbox: box });
 
   it("is cut again from the new version, once, and saved", async () => {
     const q = await fresh();

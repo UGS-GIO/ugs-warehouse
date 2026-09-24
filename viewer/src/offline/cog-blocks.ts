@@ -1,5 +1,18 @@
-// Reassembling a byte range from stored COG blocks. Its own module, with no imports, because the
-// service worker uses it too and must not pull geotiff into its bundle.
+// Reassembling a byte range from stored COG blocks, and reading their meta.json. Its own module,
+// free of geotiff, because the service worker uses it too and must not pull that into its bundle.
+import { type Bbox, bboxesOf, isRecord, optionalNumber, optionalString } from "./guards";
+
+/** meta.json of a file stored by blocks (a COG or table saved by area). */
+export type BlockMeta = { size: number; block: number; bboxes: Bbox[]; version?: string; savedAt?: number };
+
+/** A block store's meta.json, checked field by field; null when missing or not one. */
+export function parseBlockMeta(v: unknown): BlockMeta | null {
+  if (!isRecord(v)) return null;
+  const size = optionalNumber(v.size);
+  const block = optionalNumber(v.block);
+  if (size === undefined || block === undefined || block <= 0) return null;
+  return { size, block, bboxes: bboxesOf(v.bboxes), version: optionalString(v.version), savedAt: optionalNumber(v.savedAt) };
+}
 
 /** A requested byte range [start, end] (inclusive) out of stored blocks, or null if one is missing. */
 export function assemble(start: number, end: number, block: number,

@@ -6,7 +6,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { GeolocateControl, Layer, NavigationControl, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
-import { basemapProtocol, BLANK_STYLE, rerouteStyle, setStoredBasemaps } from "@/offline/basemap";
+import { basemapProtocol, BLANK_STYLE, isStyle, rerouteStyle, setStoredBasemaps } from "@/offline/basemap";
 import * as opfs from "@/offline/opfs";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
@@ -72,11 +72,11 @@ function useBasemapStyle(id: BasemapId) {
         maplibregl.addProtocol("basemap", basemapProtocol);
       }
       const [style, files] = await Promise.all([
-        fetch(spec).then((r) => r.json()).catch(() => null),
+        fetch(spec).then((r): Promise<unknown> => r.json()).catch(() => null),
         opfs.list(),
       ]);
       setStoredBasemaps(files.map((f) => f.url));
-      return style ? rerouteStyle(style) : BLANK_STYLE;
+      return isStyle(style) ? rerouteStyle(style) : BLANK_STYLE;
     },
     staleTime: Infinity,
   });

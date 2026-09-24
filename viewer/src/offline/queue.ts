@@ -9,6 +9,7 @@ import type { CogPlan } from "./cog-area";
 import { isNetworkError } from "./online";
 import * as opfs from "./opfs";
 import { FileChangedError } from "./opfs-name";
+import { isRecord } from "./guards";
 
 export type JobSpec =
   | { kind: "file"; url: string; label: string; bytes?: number; replaces?: string[] }
@@ -16,6 +17,9 @@ export type JobSpec =
   | { kind: "cog"; plan: CogPlan; label: string; bytes: number }
   | { kind: "table"; plan: CogPlan; label: string; bytes: number }
   | { kind: "engine"; label: string; bytes?: number };
+
+/** A save cut to an area: priced exactly before it is queued. */
+export type AreaJobSpec = Extract<JobSpec, { kind: "area" | "cog" | "table" }>;
 
 export type Job = JobSpec & {
   id: string;
@@ -80,12 +84,32 @@ function load() {
     const r = await root();
     const text = await r?.getFileHandle(FILE).then((h) => h.getFile()).then((f) => f.text()).catch(() => null);
     if (text == null) return;   // nothing on disk (or no OPFS): what is in memory stands
-    const saved: Job[] = JSON.parse(text);
+    const parsed: unknown = JSON.parse(text);
+    const saved = Array.isArray(parsed) ? parsed.filter(isJob) : [];
     // A job "running" when the tab closed was cut off; it goes back in line.
     jobs = saved.map((j) => (j.state === "running" ? { ...j, state: "queued" } : j));
     emit();
   })().catch(() => {});
   return loaded;
+}
+
+const STATES: readonly unknown[] = ["queued", "running", "failed"];
+
+/**
+ * A job read back from queue.json. Checked to the depth the runner relies on (kind, ids, the file
+ * or plan it saves); one written by an older build, or damaged, is dropped rather than run.
+ */
+function isJob(v: unknown): v is Job {
+  if (!isRecord(v) || typeof v.id !== "string" || typeof v.label !== "string" || !STATES.includes(v.state)) return false;
+  if (v.kind === "engine") return true;
+  if (v.kind === "file") return typeof v.url === "string";
+  const plan = v.plan;
+  if (!isRecord(plan) || typeof plan.url !== "string" || typeof v.bytes !== "number") return false;
+  if (v.kind === "area") return Array.isArray(plan.tiles) && isRecord(plan.meta);
+  if (v.kind === "cog" || v.kind === "table") {
+    return Array.isArray(plan.blocks) && typeof plan.size === "number" && typeof plan.block === "number";
+  }
+  return false;
 }
 
 /** Add saves to the end of the queue. One already queued for the same thing is not added twice. */

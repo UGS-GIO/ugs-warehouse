@@ -1,10 +1,9 @@
 // Downloads in progress, and the one guard that protects them: leaving the page.
 //
-// Switching views inside the app does not cancel a download (the fetch outlives the component that
-// started it); closing, reloading or navigating away does, and a half-written file is discarded.
-// So while anything is saving, ask the browser to confirm before unloading. Browsers show their own
-// generic wording and ignore custom text, and iOS Safari often skips the prompt entirely, which is
-// why SavingNotice also says it on screen.
+// Switching views inside the app does not stop a download; closing, reloading or navigating away
+// does. The queue resumes it next visit (offline/queue.ts), but only while the page is open, so
+// while anything is saving, ask the browser to confirm before unloading. Browsers show their own
+// generic wording and ignore custom text, and iOS Safari often skips the prompt entirely.
 
 let active = 0;
 const listeners = new Set<() => void>();

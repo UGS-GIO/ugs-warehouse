@@ -7,10 +7,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useViewCtx } from "@/app";
 import { qk } from "@/query-keys";
 import { BasemapDownload } from "./basemap-download";
+import { Downloads } from "./downloads";
 import { describe, type Described, sortDescribed } from "./describe";
 import * as opfs from "./opfs";
 import { removeArea } from "./area";
 import { removeCogArea } from "./cog-area";
+import * as queue from "./queue";
 import { useStoredAreas, useStoredLayers } from "./use-offline";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50";
@@ -54,8 +56,7 @@ export function OfflineManager() {
     onSettled: refresh,
   });
   const update = useMutation({
-    mutationFn: (url: string) => opfs.save(url),
-    onSettled: refresh,
+    mutationFn: (r: Described) => queue.enqueue([{ kind: "file", url: r.url, label: r.label, bytes: r.bytes }]),
   });
 
   if (!opfs.isSupported()) {
@@ -90,6 +91,8 @@ export function OfflineManager() {
         </p>
       </section>
 
+      <Downloads />
+
       {/* No map view here, so only the statewide save shows; "This area" lives in the Map's panel. */}
       <BasemapDownload bbox={null} />
 
@@ -102,7 +105,7 @@ export function OfflineManager() {
 
       {layers.length > 0 && (
         <Group title="Layers" rows={layers} busy={busy}
-          onDelete={(r) => remove.mutate([r.url])} onUpdate={(r) => update.mutate(r.url)}
+          onDelete={(r) => remove.mutate([r.url])} onUpdate={(r) => update.mutate(r)}
           onOpen={(r) => r.itemHref && openItem(r.itemHref)}
           onDeleteAll={() => remove.mutate(layers.map((r) => r.url))} />
       )}
@@ -137,7 +140,7 @@ export function OfflineManager() {
       )}
       {basemap.length > 0 && (
         <Group title="Basemap" rows={basemap} busy={busy}
-          onDelete={(r) => remove.mutate([r.url])} onUpdate={(r) => update.mutate(r.url)}
+          onDelete={(r) => remove.mutate([r.url])} onUpdate={(r) => update.mutate(r)}
           onDeleteAll={() => remove.mutate(basemap.map((r) => r.url))} />
       )}
 

@@ -3,7 +3,9 @@ import { RouterProvider } from "@tanstack/react-router";
 import React from "react";
 import ReactDOM from "react-dom/client";
 import { registerSW } from "virtual:pwa-register";
+import * as downloads from "./offline/queue";
 import { queryClient } from "./query-client";
+import { qk } from "./query-keys";
 import { router } from "./router";
 import { applyTheme, getTheme } from "./shell/theme";
 import "@fontsource-variable/source-sans-3";   // Utah DS body font, self-hosted
@@ -20,6 +22,15 @@ registerSW({ immediate: true });
 window.addEventListener("error", (e) => {
   if (e.target instanceof HTMLImageElement) e.target.dataset.broken = "";
 }, true);
+
+// Downloads left unfinished last visit carry on, and each finished one refreshes what the app lists
+// as stored (and what the basemap protocol routes to disk).
+downloads.onFinished(() => {
+  for (const key of [qk.offlineLayers, ["offline-areas"], ["basemap-style"], ["storage-persisted"]]) {
+    void queryClient.invalidateQueries({ queryKey: key });
+  }
+});
+void downloads.run();
 
 // Apply persisted theme before first paint to avoid a flash.
 applyTheme(getTheme());

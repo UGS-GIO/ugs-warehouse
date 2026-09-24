@@ -1,9 +1,11 @@
 // Query/mutation layer over the OPFS artifact store, so the UI never touches the filesystem
 // directly and one invalidation keeps every download control in sync.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useSyncExternalStore } from "react";
 import { qk } from "@/query-keys";
 import * as opfs from "./opfs";
+import * as queue from "./queue";
+import type { Job } from "./queue";
 import { loadStoredAreas } from "./area";
 import { listCogAreas } from "./cog-area";
 
@@ -22,14 +24,19 @@ export function useStoredLayers() {
 /** Progress of an in-flight download: bytes written, and the total when the server declared one. */
 export type Progress = { written: number; total?: number };
 
+/** Every save waiting, running or failed, from the device's download queue (offline/queue.ts). */
+export const useJobs = (): Job[] => useSyncExternalStore(queue.subscribe, queue.snapshot, queue.snapshot);
+
 /**
- * Download one artifact into OPFS, or delete the stored copy, keeping the pmtiles protocol's view
- * in step. `progress` is component-local because each control drives its own download.
+ * Queue one artifact for download, or delete the stored copy, keeping the pmtiles protocol's view
+ * in step. `progress` is read from the queue, so it survives leaving the page and coming back.
  */
-export function useOfflineLayer(href: string | undefined) {
+export function useOfflineLayer(href: string | undefined, label = href ?? "") {
   const client = useQueryClient();
-  const [progress, setProgress] = useState<Progress | null>(null);
-  const invalidate = () => client.invalidateQueries({ queryKey: qk.offlineLayers });
+  const job = useJobs().find((j) => j.kind === "file" && j.url === href);
+  const progress: Progress | null = job?.state === "running"
+    ? { written: job.done ?? 0, total: job.total }
+    : null;
 
   const download = useMutation({
     mutationFn: async () => {
@@ -41,23 +48,18 @@ export function useOfflineLayer(href: string | undefined) {
         throw new Error(`${opfs.formatBytes(size)} will not fit in the ${opfs.formatBytes(
           (space.quota ?? 0) - (space.usage ?? 0))} this browser still allows.`);
       }
-      // Ask for persistent storage on the first download. Without it the browser may evict OPFS
-      // under pressure, which is precisely the trip this feature exists for.
-      await navigator.storage?.persist?.().catch(() => false);
-      setProgress({ written: 0, total: size || undefined });
-      return opfs.save(href, { onProgress: (written, total) => setProgress({ written, total }) });
+      await queue.enqueue([{ kind: "file", url: href, label, bytes: size || undefined }]);
     },
-    onSettled: () => { setProgress(null); invalidate(); },
   });
 
   const remove = useMutation({
     mutationFn: async () => {
       if (href) await opfs.remove(href);
     },
-    onSettled: invalidate,
+    onSettled: () => client.invalidateQueries({ queryKey: qk.offlineLayers }),
   });
 
-  return { download, remove, progress };
+  return { download, remove, progress, job };
 }
 
 /**

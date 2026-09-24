@@ -26,6 +26,9 @@ import { useIsDesktop } from "@/ui/use-breakpoint";
 // Page sizes come from ./paging, shared with the catalog item lists so both pagers offer the
 // same choices. This one opens at the smallest: a row here is a full data record, not a title.
 const PAGE_SIZE = PAGE_SIZES[0];
+// One empty array, not a new `[]` per render while the first page loads: the table takes a new
+// array as new data and queues a re-render, which queued another, and the tab froze.
+const NO_ROWS: Record<string, unknown>[] = [];
 // "All" fetches up to this many rows in one virtualized page. Capped so a pathological table can't
 // OOM the tab; the largest layers (e.g. wetlandsoutline ~426k) exceed it, so "All" truncates them
 // (surfaced as "capped at 100,000") and paging is the way through the full table.
@@ -137,7 +140,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // Server-side sort/page: TanStack renders + drives the sort UI only (manualSorting), the SQL
   // does the work. Resetting to page 1 on a sort change keeps offset valid.
   const table = useReactTable({
-    data: page?.rows ?? [], columns, state: { sorting },
+    data: page?.rows ?? NO_ROWS, columns, state: { sorting },
     manualSorting: true, onSortingChange: (u) => { setSorting(u); setPageIndex(0); },
     getCoreRowModel: getCoreRowModel(),
   });

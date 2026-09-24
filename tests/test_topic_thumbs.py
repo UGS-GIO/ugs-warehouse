@@ -7,7 +7,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -88,7 +91,7 @@ def _publish(stem: str, schema: str = "wetlands", *, style_url: str | None = Non
 
 def _renders(monkeypatch, *, during=None, fail_for: tuple[str, ...] = (),
              styles: list[dict] | None = None) -> None:
-    """Stand in for headless Chromium: write a PNG, optionally doing something mid-render. Each render
+    """Stand in for headless Chromium: write a WebP, optionally doing something mid-render. Each render
     writes different bytes, as a real re-render usually does, so its file fields differ."""
     renders = 0
 
@@ -102,8 +105,8 @@ def _renders(monkeypatch, *, during=None, fail_for: tuple[str, ...] = (),
         if during:
             during()
         with open(out, "wb") as f:
-            f.write(b"\x89PNG\r\n\x1a\nfake" + b"." * renders)
-    monkeypatch.setattr(thumbs, "_render_png", render)
+            f.write(b"RIFF\x00\x00\x00\x00WEBPfake" + b"." * renders)
+    monkeypatch.setattr(thumbs, "_render_webp", render)
 
 
 def _rendered_stems(styles: list[dict]) -> list[str]:
@@ -124,6 +127,74 @@ def _index_thumbnail(store, stem: str) -> dict | None:
     return entry["assets"].get("thumbnail")
 
 
+def _ingest_thumbnail(monkeypatch, stem: str, schema: str = "wetlands") -> dict | None:
+    """The thumbnail asset the vector ingest would stamp on this topic's item right now."""
+    from ugs_warehouse.vector import sink_stac
+    from ugs_warehouse.vector.topics import Topic
+
+    captured: dict = {}
+    monkeypatch.setattr(sink_stac, "_table_columns", lambda con, view: [])
+    monkeypatch.setattr(sink_stac.stac, "build_item",
+                        lambda **k: captured.update(k) or {"assets": k["assets"]})
+    for name in ("attach_renders", "attach_classification", "attach_iso"):
+        monkeypatch.setattr(sink_stac.stac, name, lambda item: None)
+    monkeypatch.setattr(sink_stac.stac, "write_item", lambda item: "")
+    sink_stac.write(Topic(schema=schema, layer=f"{stem}_current"), None, "v",
+                    bbox=[-114.05, 37.0, -109.04, 42.0], row_count=5)
+    return captured["assets"].get("thumbnail")
+
+
+def test_a_thumbnail_is_a_webp(store, monkeypatch):
+    """Full-size PNG previews were most of the catalog's page weight (#372)."""
+    path = _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    types: dict[str, str] = {}
+    upload = gcs.upload
+
+    def recording(local_path, p, **kw):
+        types[p] = kw["content_type"]
+        return upload(local_path, p, **kw)
+
+    monkeypatch.setattr(gcs, "upload", recording)
+    assert _run(monkeypatch, "--all") == 0
+    assert types == {f"{config.THUMBS_PREFIX}/wetlands_riverine/wetlands_riverine.webp": "image/webp"}
+    assert _thumbnail(store, path)["type"] == "image/webp"
+
+
+def test_the_ingest_stamps_the_thumbnail_this_job_writes(store, monkeypatch):
+    """Both write the item's thumbnail asset, so they must agree on the image and its type, or
+    every ingest would point the item back at a file this job no longer writes."""
+    path = _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    assert _run(monkeypatch, "--all") == 0
+    job = _thumbnail(store, path)
+    assert _ingest_thumbnail(monkeypatch, "wetlands_riverine") == job
+
+
+def test_a_render_that_is_not_webp_fails_instead_of_uploading(store, monkeypatch):
+    """The image is uploaded and stamped as image/webp, so a render in any other format fails."""
+    path = _publish("wetlands_riverine")
+
+    def png_render(style, bbox, out):
+        with open(out, "wb") as f:
+            f.write(b"\x89PNG\r\n\x1a\nfake")
+
+    monkeypatch.setattr(thumbs, "_render_webp", png_render)
+    assert _run(monkeypatch, "--all") == 1
+    assert _thumbnail(store, path) is None
+    assert not [p for p in store if p.startswith(f"{config.THUMBS_PREFIX}/wetlands_riverine/")]
+
+
+def test_an_out_of_range_quality_stops_the_job_at_startup():
+    """Checked once when the job starts, not rediscovered by every topic's render."""
+    env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1] / "src"),
+           "TOPIC_THUMB_QUALITY": "150"}
+    r = subprocess.run([sys.executable, "-c", "import ugs_warehouse.vector.thumbs"],
+                       env=env, capture_output=True, text=True, timeout=120)
+    assert r.returncode != 0
+    assert "TOPIC_THUMB_QUALITY" in r.stderr
+
+
 def test_stamping_keeps_what_an_ingest_wrote_mid_render(store, monkeypatch):
     path = _publish("wetlands_riverine")
 
@@ -136,7 +207,7 @@ def test_stamping_keeps_what_an_ingest_wrote_mid_render(store, monkeypatch):
     assert _run(monkeypatch, "--all") == 0
     item = json.loads(store[path])
     assert item["properties"]["ugs:row_count"] == 4242
-    assert item["assets"]["thumbnail"]["href"].endswith("/wetlands_riverine/wetlands_riverine.png")
+    assert item["assets"]["thumbnail"]["href"].endswith("/wetlands_riverine/wetlands_riverine.webp")
 
 
 def test_a_stamp_keeps_the_catalog_item_conventions(store, monkeypatch):
@@ -165,7 +236,7 @@ def test_the_stamp_lands_on_the_item_where_it_actually_lives(store, monkeypatch)
     _renders(monkeypatch)
     assert _run(monkeypatch, "--all") == 0
     assert _thumbnail(store, path) is not None
-    assert f"{config.THUMBS_PREFIX}/wetlands_riverine/wetlands_riverine.png" in store
+    assert f"{config.THUMBS_PREFIX}/wetlands_riverine/wetlands_riverine.webp" in store
 
 
 def test_a_leftover_pre_split_copy_is_left_alone(store, monkeypatch):
@@ -203,7 +274,7 @@ def test_a_topic_retired_mid_render_stays_retired(store, monkeypatch):
 
 
 def test_a_retired_topics_thumbnail_that_will_not_delete_fails_the_run(store, monkeypatch):
-    """gcs.delete swallows errors; an orphan PNG would be bound to any later topic with this id."""
+    """gcs.delete swallows errors; an orphan image would be bound to any later topic with this id."""
     path = _publish("wetlands_riverine")
     _renders(monkeypatch, during=lambda: store.pop(path))
     monkeypatch.setattr(gcs, "delete", lambda p: None)
@@ -303,7 +374,7 @@ def test_a_new_thumbnail_reaches_the_rollup_index(store, monkeypatch):
     _renders(monkeypatch)
     assert _run(monkeypatch, "--all") == 0
     assert _index_thumbnail(store, "wetlands_riverine")["href"].endswith(
-        "/wetlands_riverine/wetlands_riverine.png")
+        "/wetlands_riverine/wetlands_riverine.webp")
 
 
 def test_an_index_left_behind_by_an_earlier_run_is_caught_up(store, monkeypatch):
@@ -612,7 +683,7 @@ def test_a_write_between_the_stamps_read_and_its_write_is_kept(store, monkeypatc
     assert _run(monkeypatch, "--all") == 0
     item = json.loads(store[path])
     assert item["properties"]["ugs:row_count"] == 4242
-    assert item["assets"]["thumbnail"]["href"].endswith("/wetlands_riverine/wetlands_riverine.png")
+    assert item["assets"]["thumbnail"]["href"].endswith("/wetlands_riverine/wetlands_riverine.webp")
 
 
 def test_a_topic_retired_between_the_stamps_read_and_its_write_is_not_recreated(store, monkeypatch):

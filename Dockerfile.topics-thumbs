@@ -1,5 +1,5 @@
 # ugs-topics-thumbs job image — all-Python. Reads the serving-topics STAC, GCS IO, content-hash skip,
-# then renders each topic's styled PMTiles → PNG via headless Chromium driven by Playwright (no Node).
+# then renders each topic's styled PMTiles → WebP via headless Chromium driven by Playwright (no Node).
 # MapLibre needs WebGL, so the render runs in a real browser (software GL / SwiftShader in Cloud Run);
 # the maplibre-gl + pmtiles browser libs are vendored in the package (vector/render_assets/).
 FROM python:3.12-slim

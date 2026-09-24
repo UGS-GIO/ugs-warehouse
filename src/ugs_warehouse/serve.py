@@ -131,6 +131,7 @@ _MIME = {
     ".tif": config.COG_MIME,
     ".tiff": config.COG_MIME,
     ".png": "image/png",
+    ".webp": config.WEBP_MIME,
     ".xml": "application/xml",
     ".html": "text/html; charset=utf-8",
     ".js": "application/javascript",

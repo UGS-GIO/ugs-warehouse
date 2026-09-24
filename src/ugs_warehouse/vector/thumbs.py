@@ -1,5 +1,6 @@
-"""Styled-preview thumbnails for vector serving-topics — a PNG of the PMTiles layer rendered with its
-bound MapLibre style (or a neutral "sand" style when unstyled), so the catalog shows a real preview.
+"""Styled-preview thumbnails for vector serving-topics — a small WebP of the PMTiles layer rendered
+with its bound MapLibre style (or a neutral "sand" style when unstyled), so the catalog shows a real
+preview.
 
 Pubs get cover thumbnails from a PDF page (`pubs/thumbs.py`); topics are vector + style, so they can't
 be rasterised the same way. MapLibre needs WebGL, so we render in headless Chromium — but driven from
@@ -9,9 +10,9 @@ exactly like the viewer (viewer/src/Map.tsx): the ugs-styles JSON is layers-ONLY
 version-8 style with a vector source over `pmtiles://`, a sand background, and `source`/`source-layer`
 injected per layer.
 
-Content-addressed + idempotent: each PNG carries a `.sha` sidecar of `RENDERER_VERSION + the data
+Content-addressed + idempotent: each image carries a `.sha` sidecar of `RENDERER_VERSION + the data
 fingerprint + the layers it draws`. A run skips a topic whose sidecar matches → a NEW layer renders (no
-PNG yet), new DATA or a SYMBOLOGY change re-renders, an unchanged topic is skipped. The vector ingest
+image yet), new DATA or a SYMBOLOGY change re-renders, an unchanged topic is skipped. The vector ingest
 starts it for the topic it just published and restyle starts it after a rebind (core/jobs.py); a
 nightly Cloud Scheduler run (scripts/provision.sh) is the backstop. Sharded via
 CLOUD_RUN_TASK_INDEX/COUNT, same as the pubs jobs.
@@ -34,12 +35,17 @@ from ..pubs.harvest import _series_ctx, hlog, outcome_category
 CATALOG = stac.SERVING_TOPICS_CATALOG  # items nest one level under it, per mart schema
 # Bump to force a global re-render for a renderer change the drawn layers don't show (the hash
 # already covers the layers, so a restyle or a SAND_LAYERS edit needs no bump).
-RENDERER_VERSION = "1"
+RENDERER_VERSION = "2"
 RENDER_TIMEOUT_MS = int(os.environ.get("TOPIC_THUMB_TIMEOUT_MS", "30000"))
 # Re-reads allowed when another writer keeps changing an item between the stamp's read and write.
 STAMP_ATTEMPTS = 5
+# Rendered at 1x, so the image is exactly THUMB_W x THUMB_H: previews load on every catalog page,
+# including on a weak connection in the field (#372).
 THUMB_W = int(os.environ.get("TOPIC_THUMB_W", "480"))
 THUMB_H = int(os.environ.get("TOPIC_THUMB_H", "320"))
+THUMB_QUALITY = int(os.environ.get("TOPIC_THUMB_QUALITY", "80"))  # WebP, 0-100
+if not 0 <= THUMB_QUALITY <= 100:
+    raise ValueError(f"TOPIC_THUMB_QUALITY must be 0-100, got {THUMB_QUALITY}")
 
 _ASSETS = os.path.join(os.path.dirname(__file__), "render_assets")
 
@@ -62,10 +68,6 @@ SAND_LAYERS = [
      "paint": {"circle-color": "#9c6b30", "circle-radius": 3.2,
                "circle-stroke-width": 0.5, "circle-stroke-color": "#4a2f12", "circle-opacity": 0.9}},
 ]
-
-
-def thumb_object(stem: str) -> str:
-    return f"{config.THUMBS_PREFIX}/{stem}/{stem}.png"
 
 
 def sha_object(stem: str) -> str:
@@ -134,8 +136,8 @@ def _compose_style(layers: list[dict], pmtiles_url: str, source_layer: str) -> d
     }
 
 
-def _render_png(style: dict, bbox: list[float], out: str) -> None:
-    """Render the composed style at the bbox → PNG via headless Chromium (Playwright). Raises on failure."""
+def _render_webp(style: dict, bbox: list[float], out: str) -> None:
+    """Render the composed style at the bbox → WebP via headless Chromium (Playwright). Raises on failure."""
     from playwright.sync_api import sync_playwright
 
     bb = json.dumps([bbox[0], bbox[1], bbox[2], bbox[3]])
@@ -162,14 +164,16 @@ def _render_png(style: dict, bbox: list[float], out: str) -> None:
             "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
         ])
         try:
-            page = browser.new_page(viewport={"width": THUMB_W, "height": THUMB_H}, device_scale_factor=2)
+            page = browser.new_page(viewport={"width": THUMB_W, "height": THUMB_H},
+                                    device_scale_factor=1)  # 1x on purpose, see THUMB_W
             page.set_default_timeout(RENDER_TIMEOUT_MS)
             page.set_content(html, wait_until="domcontentloaded")
             page.add_style_tag(content=_asset("maplibre-gl.css"))
             page.add_script_tag(content=_asset("pmtiles.js"))
             page.add_script_tag(content=_asset("maplibre-gl.js"))
             page.evaluate(script)
-            page.locator("#map").screenshot(path=out)
+            # WebP screenshots need playwright>=1.62 (the thumbs extra in pyproject.toml).
+            page.locator("#map").screenshot(path=out, type="webp", quality=THUMB_QUALITY)
         finally:
             browser.close()
 
@@ -204,11 +208,10 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
              step="resolve", level="ERROR", category="attention", err=True)
         return "fail:style", None
     want_hash = _thumb_hash(item, layers)
-    png_obj, sha_obj = thumb_object(stem), sha_object(stem)
+    img_obj, sha_obj = config.topic_thumbnail_path(stem), sha_object(stem)
     # Legacy mis-write to clean up: an earlier build stamped a flat item the catalog never references,
     # at the path it derived from ugs:dbt_schema.
     flat_stray = f"{config.STAC_PREFIX}/{_collection_path(item)}/{stem}.json"
-    thumb_href = config.public_url(png_obj)
 
     def ensure_stac_thumbnail(meta: gcs.FileMeta | None = None) -> tuple[str, dict | None]:
         """Stamp onto the item as it is in GCS, and only if it is still that version when the write
@@ -225,9 +228,8 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
             current = assets.get("thumbnail") or {}
             # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
             # the file:size/file:checksum an earlier render stamped instead of dropping them. Same
-            # asset the ingest stamps (vector/sink_stac.py), usage hint included.
-            want = {**current, "href": thumb_href, "type": "image/png", "roles": ["thumbnail"],
-                    "title": "Styled preview", "description": stac.USAGE_THUMBNAIL, **stac.file_fields(meta)}
+            # asset the ingest stamps (vector/sink_stac.py).
+            want = {**current, **stac.topic_thumbnail_asset(stem), **stac.file_fields(meta)}
             if current == want:
                 state = "current"
                 break
@@ -252,7 +254,7 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
         return state, want
 
     up_to_date = False
-    if not force and gcs.exists(png_obj) and gcs.exists(sha_obj):
+    if not force and gcs.exists(img_obj) and gcs.exists(sha_obj):
         try:
             up_to_date = gcs.get_bytes(sha_obj).decode().strip() == want_hash
         except Exception as e:  # noqa: BLE001 — logged; the re-render rewrites the sidecar
@@ -267,29 +269,36 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
     style = _compose_style(layers, pmtiles, _source_layer(item))
     work = tempfile.mkdtemp(prefix=f"tt_{stem}_")
     try:
-        out = os.path.join(work, "thumb.png")
+        out = os.path.join(work, "thumb.webp")
         hlog(f"rendering ({'sand' if layers is SAND_LAYERS else 'styled'})", step="render")
         try:
-            _render_png(style, bbox, out)
+            _render_webp(style, bbox, out)
         except Exception as e:  # noqa: BLE001
             hlog(f"FAIL render: {str(e).strip()[-300:]}", step="render", level="ERROR", category="attention", err=True)
             return "fail:render", None
         if not os.path.exists(out) or os.path.getsize(out) == 0:
-            hlog("FAIL no PNG produced", step="render", level="ERROR", category="attention", err=True)
-            return "fail:nopng", None
+            hlog("FAIL no image produced", step="render", level="ERROR", category="attention", err=True)
+            return "fail:noimage", None
+        with open(out, "rb") as f:
+            head = f.read(12)
+        # Uploaded and stamped as image/webp, so the bytes have to be WebP.
+        if head[:4] != b"RIFF" or head[8:12] != b"WEBP":
+            hlog(f"FAIL render is not WebP (starts {head!r})", step="render", level="ERROR",
+                 category="attention", err=True)
+            return "fail:format", None
 
         # Drop the old sidecar first: a --force re-render of an unchanged style would otherwise leave
         # one that still matches, and a stamp that then failed would never be redone.
         gcs.delete(sha_obj)
-        meta = gcs.upload(out, png_obj, content_type="image/png", cache_control=gcs.CACHE_MUTABLE)
+        meta = gcs.upload(out, img_obj, content_type=config.WEBP_MIME, cache_control=gcs.CACHE_MUTABLE)
         state, asset = ensure_stac_thumbnail(meta)
         if state == "gone":
             # Retired while rendering: take back the thumbnail so nothing outlives the topic (a later
             # topic with this id would otherwise be bound to it). gcs.delete swallows errors, so check.
-            gcs.delete(png_obj)
+            gcs.delete(img_obj)
             gcs.delete(sha_obj)
-            if gcs.exists(png_obj) or gcs.exists(sha_obj):
-                hlog(f"FAIL topic retired mid-render but its thumbnail would not delete: {png_obj}",
+            if gcs.exists(img_obj) or gcs.exists(sha_obj):
+                hlog(f"FAIL topic retired mid-render but its thumbnail would not delete: {img_obj}",
                      step="result", level="ERROR", category="attention", err=True)
                 return "fail:cleanup", None
             hlog("topic retired mid-render; dropped its new thumbnail", step="result",
@@ -297,7 +306,7 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
             return "skip:gone", None
         # The sidecar marks this render as done, so it goes last: a stamp that failed renders again.
         gcs.put_bytes(want_hash.encode(), sha_obj, content_type="text/plain", cache_control=gcs.CACHE_MUTABLE)
-        hlog(f"OK thumbnail → {png_obj}", step="result", category="ok")
+        hlog(f"OK thumbnail → {img_obj}", step="result", category="ok")
         return "ok", asset
     finally:
         import shutil

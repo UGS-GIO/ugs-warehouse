@@ -9,6 +9,7 @@ import { useState } from "react";
 
 import { CheckIcon, CopyIcon, copyCatalogUrl } from "@/catalog/stac-url-chip";
 import { type DataSaverPref, setPref, useDataSaverPref } from "@/lib/data-saver";
+import { LEGAL_LINKS } from "./legal-footer";
 import { getTheme, setTheme, type Theme } from "./theme";
 
 const SAVER: { value: DataSaverPref; label: string }[] = [
@@ -67,7 +68,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
-          <Menu.Popup className="min-w-44 rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
+          <Menu.Popup className="max-h-[var(--available-height)] min-w-44 overflow-y-auto rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
             {/* Views only where the tab row is hidden; the theme picker is always here. */}
             {pages.length > 0 && (
               <div className="md:hidden">
@@ -115,6 +116,24 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                 <Menu.Separator className="my-1 h-px bg-border" />
               </div>
             )}
+            {/* Phones hide the state banner and the footer (index.css, legal-footer.tsx); what
+                they said lives here instead. */}
+            <div className="md:hidden">
+              <div className={HEADING}>About</div>
+              <p className="px-2 py-1 text-xs text-muted-foreground">
+                An official website of the state of Utah · © state of Utah
+              </p>
+              {[{ href: "https://geology.utah.gov", label: "Utah Geological Survey" }, ...LEGAL_LINKS].map((l) => (
+                <Menu.Item key={l.label} className={ITEM} nativeButton={false}
+                  render={<a href={l.href} target="_blank" rel="noreferrer" />}>
+                  {l.label}
+                </Menu.Item>
+              ))}
+              <p className="px-2 py-1 text-xs text-muted-foreground" title={`viewer build ${__BUILD_HASH__}`}>
+                build {__BUILD_DATE__} · {__BUILD_HASH__}
+              </p>
+              <Menu.Separator className="my-1 h-px bg-border" />
+            </div>
             <div className={HEADING}>Theme</div>
             <Menu.RadioGroup value={theme} onValueChange={(value) => pick(value as Theme)}>
               {THEMES.map((t) => (

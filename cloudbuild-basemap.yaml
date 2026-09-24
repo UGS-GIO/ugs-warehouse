@@ -1,0 +1,67 @@
+# Basemap build + publish: Protomaps daily build cut to Utah → utah.pmtiles (~140 MB), overview and
+# per-quad archives → the CDN under basemap/. Runs monthly (infra/basemap-refresh.tf).
+#
+#   gcloud builds submit . --config cloudbuild-basemap.yaml \
+#     --project ut-dnr-ugs-backend-tools --region us-central1 \
+#     --service-account projects/ut-dnr-ugs-backend-tools/serviceAccounts/ugs-basemap-build@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com
+#
+# Runs as ugs-basemap-build@, which can write only under basemap/ (infra/basemap-refresh.tf).
+substitutions:
+  _PUBLIC_BUCKET: ut-dnr-ugs-maps-prod-public
+  _BASEMAP_PREFIX: basemap
+  _PMTILES_VERSION: 1.28.2
+  # GitHub's recorded digest for the Linux_x86_64 asset (the release publishes no checksums file).
+  _PMTILES_SHA256: e5fb0c250a28eea7a659def974a9d1d9c5815532e6e655396d6756fd3f23e74a
+
+steps:
+  # Stdlib Python + the pmtiles CLI; no package install.
+  - id: build-basemap
+    name: python:3.12-slim@sha256:2f17fc044b579bab302c2e8054d3a686e2cb9a83de48e70534b94cd8ebbe06a9
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        apt-get update -qq && apt-get install -y -qq curl > /dev/null
+        curl -sSLo /tmp/pmtiles.tgz "https://github.com/protomaps/go-pmtiles/releases/download/v${_PMTILES_VERSION}/go-pmtiles_${_PMTILES_VERSION}_Linux_x86_64.tar.gz"
+        echo "${_PMTILES_SHA256}  /tmp/pmtiles.tgz" | sha256sum -c -
+        tar -xzf /tmp/pmtiles.tgz -C /usr/local/bin pmtiles
+        PYTHONPATH=src python3 -m scripts.build_basemap --work /workspace/basemap-work --out /workspace/basemap
+
+  # Publish, in an order that never leaves the CDN inconsistent. First refuse an incomplete build:
+  # the quad sync deletes what the build no longer produced, so a short build would wipe the live
+  # basemap. Then the archives, and index.json LAST with no-cache from its first byte — the viewer
+  # prices downloads from it, and uploading it with the archives' daily header (even briefly) lets
+  # a CDN edge pin a stale index for a day. Archives revalidate daily: a rebuild reuses their names.
+  # ($$ escapes a literal $ from Cloud Build's own substitution.)
+  - id: publish-basemap
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -euo pipefail
+        out=/workspace/basemap
+        dest=gs://${_PUBLIC_BUCKET}/${_BASEMAP_PREFIX}
+        for f in utah.pmtiles overview.pmtiles index.json; do
+          [[ -s "$$out/$$f" ]] || { echo "missing or empty: $$f; not publishing" >&2; exit 1; }
+        done
+        n=$$(find "$$out/quads" -name '*.pmtiles' | wc -l)
+        listed=$$(python3 -c "import json; print(len(json.load(open('$$out/index.json'))['quads']))")
+        # The grid is fixed at 1,512 quads; anything well short of it is a broken build.
+        if (( n < 1500 || n != listed )); then
+          echo "built $$n quads, index lists $$listed; expected ~1,512 of each. Not publishing." >&2
+          exit 1
+        fi
+        cache="public, max-age=86400"
+        gcloud storage rsync "$$out/quads" "$$dest/quads" --recursive \
+          --delete-unmatched-destination-objects --cache-control="$$cache"
+        gcloud storage cp "$$out/utah.pmtiles" "$$out/overview.pmtiles" "$$dest/" --cache-control="$$cache"
+        gcloud storage cp "$$out/index.json" "$$dest/index.json" \
+          --cache-control="no-cache" --content-type="application/json"
+
+# The quad cut runs eight extracts at once.
+options:
+  machineType: E2_HIGHCPU_8
+  logging: CLOUD_LOGGING_ONLY
+timeout: 3600s

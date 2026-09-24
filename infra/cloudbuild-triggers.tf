@@ -205,3 +205,31 @@ resource "google_cloudbuild_trigger" "tiles_preview" {
   filename       = "cloudbuild-service-preview.yaml"
   included_files = ["tiles/**"]
 }
+
+# Monthly basemap build; its topic, schedule and SA grants are in basemap-refresh.tf.
+resource "google_cloudbuild_trigger" "basemap" {
+  count = local.manage_basemap
+
+  project         = var.build_project
+  location        = var.region
+  name            = "ugs-warehouse-basemap"
+  description     = "Basemap: Protomaps daily build → Utah extract → utah.pmtiles, overview and quads on the CDN. Monthly via Pub/Sub, or by hand."
+  service_account = var.basemap_trigger_service_account
+
+  pubsub_config {
+    topic = google_pubsub_topic.basemap[0].id
+  }
+
+  source_to_build {
+    repository = var.build_repository
+    ref        = "refs/heads/main"
+    repo_type  = "GITHUB"
+  }
+
+  git_file_source {
+    path       = "cloudbuild-basemap.yaml"
+    repository = var.build_repository
+    revision   = "refs/heads/main"
+    repo_type  = "GITHUB"
+  }
+}

@@ -5,6 +5,7 @@ waiting for the next ingest to refresh the catalog.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import sys
 
@@ -35,9 +36,27 @@ def store(monkeypatch) -> dict[str, bytes]:
             s[path] = f.read()
         return gcs.FileMeta(len(s[path]))
 
+    # Content-derived stand-in for the GCS generation, so any write or delete a test makes to the
+    # dict directly changes it, the way a concurrent writer changes the real one.
+    def version(path):
+        return {"version": hashlib.sha256(s[path]).hexdigest()}
+
+    def get_bytes_versioned(path):
+        if path not in s:
+            raise FileNotFoundError(path)
+        return s[path], version(path)
+
+    def put_bytes_if_unchanged(data, path, expected, **_):
+        if path not in s or version(path) != expected:
+            raise gcs.Changed(path)
+        s[path] = data
+        return gcs.FileMeta(len(data))
+
     monkeypatch.setattr(gcs, "get_bytes", get_bytes)
     monkeypatch.setattr(gcs, "put_bytes", put_bytes)
     monkeypatch.setattr(gcs, "upload", upload)
+    monkeypatch.setattr(gcs, "get_bytes_versioned", get_bytes_versioned, raising=False)
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", put_bytes_if_unchanged, raising=False)
     monkeypatch.setattr(gcs, "exists", lambda path: path in s)
     monkeypatch.setattr(gcs, "delete", lambda path: s.pop(path, None))
     monkeypatch.setattr(gcs, "list_paths", lambda pre: sorted(k for k in s if k.startswith(pre)))
@@ -126,13 +145,13 @@ def test_a_stamp_keeps_the_catalog_item_conventions(store, monkeypatch):
     path = _publish("wetlands_riverine")
     _renders(monkeypatch)
     headers: dict[str, dict] = {}
-    put = gcs.put_bytes
+    put = gcs.put_bytes_if_unchanged
 
-    def recording(data, p, **kw):
+    def recording(data, p, version, **kw):
         headers[p] = kw
-        return put(data, p, **kw)
+        return put(data, p, version, **kw)
 
-    monkeypatch.setattr(gcs, "put_bytes", recording)
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", recording)
     assert _run(monkeypatch, "--all") == 0
     assert headers[path]["content_type"] == "application/geo+json"
     assert headers[path]["cache_control"] == gcs.CACHE_CATALOG
@@ -249,16 +268,14 @@ def test_a_failed_stamp_is_redone_with_the_new_render(store, monkeypatch):
     leave the item describing an older render until the style next changed."""
     path = _publish("wetlands_riverine")
     _renders(monkeypatch)
-    put = gcs.put_bytes
+    put = gcs.put_bytes_if_unchanged
 
-    def item_write_fails(data, p, **kw):
-        if p == path:
-            raise OSError("503 from GCS")
-        return put(data, p, **kw)
+    def item_write_fails(data, p, version, **kw):
+        raise OSError("503 from GCS")
 
-    monkeypatch.setattr(gcs, "put_bytes", item_write_fails)
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", item_write_fails)
     assert _run(monkeypatch, "--all") == 1
-    monkeypatch.setattr(gcs, "put_bytes", put)
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", put)
     assert _run(monkeypatch, "--all") == 0
     assert _thumbnail(store, path)["file:size"] > 0
 
@@ -292,8 +309,10 @@ def test_a_night_with_nothing_to_do_writes_nothing(store, monkeypatch):
     _renders(monkeypatch)
     assert _run(monkeypatch, "--all") == 0
     writes: list[str] = []
-    put = gcs.put_bytes
+    put, put_if = gcs.put_bytes, gcs.put_bytes_if_unchanged
     monkeypatch.setattr(gcs, "put_bytes", lambda data, p, **kw: (writes.append(p), put(data, p, **kw))[1])
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged",
+                        lambda data, p, v, **kw: (writes.append(p), put_if(data, p, v, **kw))[1])
     assert _run(monkeypatch, "--all") == 0
     assert writes == []
 
@@ -390,20 +409,18 @@ def test_a_bound_style_that_is_not_a_style_fails_instead_of_rendering_sand(store
 def test_a_forced_render_whose_stamp_fails_is_redone(store, monkeypatch):
     """A --force re-render with an unchanged style must not leave the old, still-matching sidecar
     behind, or the item keeps the previous render's file fields."""
-    path = _publish("wetlands_riverine")
+    _publish("wetlands_riverine")
     styles: list[dict] = []
     _renders(monkeypatch, styles=styles)
     assert _run(monkeypatch, "--all") == 0
-    put = gcs.put_bytes
+    put = gcs.put_bytes_if_unchanged
 
-    def item_write_fails(data, p, **kw):
-        if p == path:
-            raise OSError("503 from GCS")
-        return put(data, p, **kw)
+    def item_write_fails(data, p, version, **kw):
+        raise OSError("503 from GCS")
 
-    monkeypatch.setattr(gcs, "put_bytes", item_write_fails)
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", item_write_fails)
     assert _run(monkeypatch, "--all", "--force") == 1
-    monkeypatch.setattr(gcs, "put_bytes", put)
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", put)
     styles.clear()
     assert _run(monkeypatch, "--all") == 0
     assert _rendered_stems(styles) == ["wetlands_riverine"]
@@ -515,6 +532,72 @@ def test_a_refresh_another_run_made_during_the_wait_is_not_redone(store, monkeyp
     monkeypatch.setattr(thumbs.time, "sleep", lambda seconds: others_refresh())
     assert _run(monkeypatch, "--all") == 0
     assert len(ours) == 1
+
+
+def _between_read_and_write(monkeypatch, path: str, then, *, every: bool = False) -> None:
+    """Run `then()` right after the stamp reads `path` (the item's second read; the first is the
+    listing's) and before its write lands: another writer in that gap. `every` keeps doing it on
+    each re-read, a writer that never lets up."""
+    reads = {"n": 0}
+    for name in ("get_bytes", "get_bytes_versioned"):
+        real = getattr(gcs, name, None)
+        if real is None:
+            continue
+
+        def read(p, _real=real):
+            out = _real(p)
+            if p == path:
+                reads["n"] += 1
+                if reads["n"] == 2 or (every and reads["n"] >= 2):
+                    then()
+            return out
+
+        monkeypatch.setattr(gcs, name, read)
+
+
+def test_a_write_between_the_stamps_read_and_its_write_is_kept(store, monkeypatch):
+    """The gap is a fraction of a second, but a GCS generation match closes it rather than narrowing
+    it: the stamp re-reads and merges instead of writing back what it read."""
+    path = _publish("wetlands_riverine")
+    _renders(monkeypatch)
+
+    def ingest_lands():
+        item = json.loads(store[path])
+        item["properties"]["ugs:row_count"] = 4242
+        store[path] = json.dumps(item).encode()
+
+    _between_read_and_write(monkeypatch, path, ingest_lands)
+    assert _run(monkeypatch, "--all") == 0
+    item = json.loads(store[path])
+    assert item["properties"]["ugs:row_count"] == 4242
+    assert item["assets"]["thumbnail"]["href"].endswith("/wetlands_riverine/wetlands_riverine.png")
+
+
+def test_a_topic_retired_between_the_stamps_read_and_its_write_is_not_recreated(store, monkeypatch):
+    path = _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    _between_read_and_write(monkeypatch, path, lambda: store.pop(path, None))
+    assert _run(monkeypatch, "--all") == 0
+    assert path not in store
+    assert not [p for p in store if p.startswith(f"{config.THUMBS_PREFIX}/wetlands_riverine/")]
+
+
+def test_a_stamp_that_keeps_losing_the_race_fails_loudly_without_reverting(store, monkeypatch):
+    path = _publish("wetlands_riverine")
+    _renders(monkeypatch)
+    writes = {"n": 0}
+
+    def busy_writer():
+        writes["n"] += 1
+        item = json.loads(store[path])
+        item["properties"]["ugs:row_count"] = writes["n"]
+        store[path] = json.dumps(item).encode()
+
+    _between_read_and_write(monkeypatch, path, busy_writer, every=True)
+    assert _run(monkeypatch, "--all") == 1
+    item = json.loads(store[path])
+    assert item["properties"]["ugs:row_count"] == writes["n"]
+    assert "thumbnail" not in item["assets"]
 
 
 def test_new_data_redraws_the_preview_and_an_unchanged_reingest_does_not(store, monkeypatch):

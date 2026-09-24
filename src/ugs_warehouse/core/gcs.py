@@ -19,6 +19,7 @@ from typing import NamedTuple
 import obstore as obs
 from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcloud_storage
+from obstore.exceptions import PreconditionError
 from obstore.store import GCSStore
 
 from . import config
@@ -118,6 +119,36 @@ def put_bytes(data: bytes, object_path: str, *, content_type: str,
     obs.put(_store(), object_path, body,
             attributes=_attrs(content_type, cache_control, "gzip" if compress else None))
     return meta
+
+
+class Changed(Exception):
+    """A conditional write found the object changed or deleted since it was read; nothing was written."""
+
+
+def get_bytes_versioned(object_path: str) -> tuple[bytes, dict[str, str]]:
+    """An object's bytes plus the version token `put_bytes_if_unchanged` checks against (on GCS the
+    object generation, plus its ETag). For small JSON written plain, e.g. STAC items (not gzipped,
+    see stac.write_item), so there is no gzip fallback here. A 404 raises FileNotFoundError."""
+    r = obs.get(_store(), object_path)
+    # obstore rejects a None field in the token, so only the fields this store returned go in.
+    version = {k: v for k in ("e_tag", "version") if (v := r.meta.get(k)) is not None}
+    return bytes(r.bytes()), version
+
+
+def put_bytes_if_unchanged(data: bytes, object_path: str, version: dict[str, str], *,
+                           content_type: str, cache_control: str | None = None) -> FileMeta:
+    """`put_bytes`, but only if the object is still the version `get_bytes_versioned` returned. On GCS
+    this is an if-generation-match write, so a write or delete in between makes it raise `Changed`
+    rather than overwrite a newer object or re-create a deleted one."""
+    if not version:
+        raise ValueError(f"{object_path}: no version token to write against")
+    try:
+        obs.put(_store(), object_path, data, attributes=_attrs(content_type, cache_control), mode=version)
+    # GCS answers a deleted object with 412 too (checked against the real bucket); a 404 is treated the
+    # same so the caller's re-read, not this call, decides whether the object is gone.
+    except (PreconditionError, FileNotFoundError) as e:
+        raise Changed(object_path) from e
+    return FileMeta(len(data), multihash_sha256(hashlib.sha256(data).digest()))
 
 
 def _gunzip(raw: bytes) -> bytes:

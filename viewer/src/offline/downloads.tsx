@@ -3,18 +3,11 @@ import { useQuery } from "@tanstack/react-query";
 import { useJobs } from "./use-offline";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
-import type { Job } from "./queue";
+import { type Job, jobProgress } from "./queue";
 
-const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50";
+const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
 
-/** "41%", or a count when the job has no byte total. */
-export function jobProgress(j: Job): string {
-  if (j.state !== "running" || j.done === undefined) return "";
-  if (j.kind === "file" || j.kind === "engine") return j.total ? `${Math.round((j.done / j.total) * 100)}%` : opfs.formatBytes(j.done);
-  return j.total ? `${Math.round((j.done / j.total) * 100)}%` : "";
-}
-
-export const PARTIALS_KEY = ["offline-partials"] as const;
+const PARTIALS_KEY = ["offline-partials"] as const;
 
 export function Downloads() {
   const jobs = useJobs();

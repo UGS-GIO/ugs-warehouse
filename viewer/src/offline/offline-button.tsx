@@ -7,7 +7,8 @@ import { useStoredLayers, useOfflineLayer } from "./use-offline";
 import { DownloadIcon } from "@/catalog/stac-url-chip";
 import { formatBytes, isSupported } from "./opfs";
 
-const CLASS = "inline-flex shrink-0 items-center gap-1 rounded px-1 text-[11px] tabular-nums text-muted-foreground hover:text-foreground";
+// On a touch screen the control grows to a 44 px target; a mouse keeps the dense row.
+const CLASS = "inline-flex shrink-0 items-center justify-center gap-1 rounded px-1 text-[11px] tabular-nums text-muted-foreground hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-2 pointer-coarse:text-xs";
 
 export function OfflineButton({ href, title }: { href?: string; title: string }) {
   const stored = useStoredLayers();

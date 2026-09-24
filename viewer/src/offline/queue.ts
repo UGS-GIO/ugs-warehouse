@@ -49,6 +49,13 @@ export const onFinished = (fn: (job: Job) => void) => { finished.add(fn); };
 export const keyOf = (s: JobSpec) =>
   s.kind === "file" ? `file:${s.url}` : s.kind === "engine" ? "engine" : `${s.kind}:${s.plan.url}:${s.bytes}`;
 
+/** "41%", or a count when the job has no byte total. */
+export function jobProgress(j: Job): string {
+  if (j.state !== "running" || j.done === undefined) return "";
+  if (j.kind === "file" || j.kind === "engine") return j.total ? `${Math.round((j.done / j.total) * 100)}%` : opfs.formatBytes(j.done);
+  return j.total ? `${Math.round((j.done / j.total) * 100)}%` : "";
+}
+
 async function root() {
   return navigator.storage?.getDirectory?.().catch(() => null) ?? null;
 }

@@ -6,6 +6,8 @@
 import { ENGINE_WASM } from "@/data/duckdb";
 
 export const ENGINE_CACHE = "ugs-engine";
+/** Query key for "is the engine on this device", shared by every control that offers a table. */
+export const ENGINE_KEY = ["offline-engine"] as const;
 /** The .wasm's size, for pricing a save before it is fetched (duckdb-wasm 1.x `eh` build). */
 export const ENGINE_BYTES = 36_000_000;
 

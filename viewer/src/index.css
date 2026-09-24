@@ -2,7 +2,7 @@
 
 /* Tailwind v4 dropped the pointer cursor from buttons; a click target should still look like one. */
 @layer base {
-  button:not(:disabled), [role="button"]:not([aria-disabled="true"]) {
+  :is(button, [role="button"]):not(:disabled, [aria-disabled="true"]) {
     cursor: pointer;
   }
 }

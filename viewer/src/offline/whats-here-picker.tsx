@@ -6,13 +6,16 @@
 // common case is one tap; showing ticks nothing, since drawing every overlapping layer at once
 // is never what anyone wants.
 import { Dialog } from "@base-ui/react/dialog";
-import { useMutation, useQueries } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toLayer, useViewCtx } from "@/app";
 import type { ItemRef } from "@/catalog/browse";
 import type { ActiveLayer } from "@/map/map-model";
 import { type AreaPlan, planArea } from "./area";
 import { type CogPlan, planCogArea } from "./cog-area";
+import { ENGINE_BYTES, hasEngine } from "./engine";
+import { planTableArea } from "./table-area";
+import { ENGINE_KEY } from "./table-offline";
 import * as queue from "./queue";
 import { overviewUrl, quadUrl, stateUrl } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
@@ -31,7 +34,7 @@ async function limit<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { running--; waiting.shift()?.(); }
 }
 
-type Price = { bytes: number; plan?: AreaPlan; cog?: CogPlan };
+type Price = { bytes: number; plan?: AreaPlan; cog?: CogPlan; table?: boolean };
 const BASEMAP = "__basemap__";
 
 export function WhatsHerePicker({ target, canSave, onClose }: {
@@ -62,7 +65,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const basemapOffered = canSave && !stateSaved && basemapParts.length > 0;
 
   const [ticked, setTicked] = useState<Set<string>>(() => new Set(canSave
-    ? [BASEMAP, ...saveable.filter((h) => !have.has(h.save!.url)).map((h) => h.id)] : []));
+    // Tables start unticked: most trips want the map, and each table costs a footer read to price.
+    ? [BASEMAP, ...saveable.filter((h) => h.group !== "table" && !have.has(h.save!.url)).map((h) => h.id)] : []));
   const toggle = (id: string, on: boolean) => setTicked((prev) => {
     const next = new Set(prev);
     if (on) next.add(id); else next.delete(id);
@@ -74,8 +78,10 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
       queryKey: ["offline-price", h.save!.how, h.save!.url, bbox.join(",")],
       queryFn: (): Promise<Price> => limit(() => h.save!.how === "area"
         ? planArea(h.save!.url, bbox).then((plan) => ({ bytes: plan.bytes, plan }))
+        : h.save!.how === "table"
+        ? planTableArea(h.save!.url, bbox).then((cog) => ({ bytes: cog.bytes, cog, table: true }))
         : planCogArea(h.save!.url, bbox).then((cog) => ({ bytes: cog.bytes, cog }))),
-      enabled: canSave,
+      enabled: canSave && (h.group !== "table" || ticked.has(h.id)),
       staleTime: 5 * 60_000,
       retry: false,
     })),
@@ -102,7 +108,11 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const chosen = saveable.filter((h) => ticked.has(h.id));
   const basemapBytes = basemapOffered && ticked.has(BASEMAP) ? basemapParts.reduce((n, p) => n + p.bytes, 0) : 0;
   const pricing = chosen.some((h) => priceOf(h)?.isPending);
-  const total = basemapBytes + chosen.reduce((n, h) => n + (priceOf(h)?.data?.bytes ?? 0), 0);
+  // A table needs the table engine on the device too; it is counted once, the first time.
+  const engine = useQuery({ queryKey: ENGINE_KEY, queryFn: hasEngine, staleTime: Infinity, enabled: canSave });
+  const needsEngine = canSave && engine.data === false && chosen.some((h) => h.group === "table");
+  const total = basemapBytes + chosen.reduce((n, h) => n + (priceOf(h)?.data?.bytes ?? 0), 0)
+    + (needsEngine ? ENGINE_BYTES : 0);
 
   // Queued, not run here: the picker closes at once and Downloads (and the notice) track the saves.
   const save = useMutation({
@@ -111,6 +121,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
         throw new Error(`${opfs.formatBytes(total)} will not fit in this browser's storage.`);
       }
       await queue.enqueue([
+        ...(needsEngine ? [{ kind: "engine" as const, label: "Table engine", bytes: ENGINE_BYTES }] : []),
         ...(basemapBytes ? basemapParts.map((p) => ({
           kind: "file" as const, url: p.url, bytes: p.bytes,
           label: `Basemap ${p.url.split("/").pop()?.replace(".pmtiles", "")}`,
@@ -120,6 +131,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
           if (!price) return [];
           return [price.plan
             ? { kind: "area" as const, plan: price.plan, label: h.title, bytes: price.bytes }
+            : price.table
+            ? { kind: "table" as const, plan: price.cog!, label: `${h.title} (table)`, bytes: price.bytes }
             : { kind: "cog" as const, plan: price.cog!, label: h.title, bytes: price.bytes }];
         }),
       ]);
@@ -127,7 +140,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   });
 
   const show = () => {
-    const ids = here.filter((h) => ticked.has(h.id)).map((h) => h.id);
+    const ids = here.filter((h) => ticked.has(h.id) && h.group !== "table").map((h) => h.id);
     if (ids.length) ctx.toggleLayers(ids, true);
     onClose();
   };
@@ -141,9 +154,10 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   // drops datacubes (no offline form) and anything whose pricing failed. Showing (desktop) keeps all.
   const listed = canSave ? here.filter((h) => h.save && !priceOf(h)?.isError)
     : querying ? here.filter((h) => h.group === "map" || hitsOf(h).length > 0)
-    : here;
+    : here.filter((h) => h.group !== "table");   // a table is only something to save
   const groups = [
     { name: "Data layers", rows: listed.filter((h) => h.group === "layer") },
+    { name: "Data tables", rows: listed.filter((h) => h.group === "table") },
     { name: "Published maps", rows: listed.filter((h) => h.group === "map") },
   ].filter((g) => g.rows.length);
 
@@ -169,7 +183,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
           {ctx.isActive(h.id) && <span className="shrink-0 text-xs text-muted-foreground">on map</span>}
           {canSave && (
             <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-              {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes) : "…"}
+              {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes)
+                : h.group === "table" && !ticked.has(h.id) ? "" : "…"}
             </span>
           )}
         </label>

@@ -20,7 +20,11 @@ export { assemble } from "./cog-blocks";
 export const COG_BLOCK = 65536;
 const DIR = "cogs";
 
-export type CogPlan = { url: string; size: number; block: number; blocks: number[]; bytes: number; tiles: number };
+export type CogPlan = {
+  url: string; size: number; block: number; blocks: number[]; bytes: number; tiles: number;
+  /** The area saved, recorded for a table (table-area.ts), whose queries are clipped to it offline. */
+  bbox?: Bbox;
+};
 
 const merc = (lon: number, lat: number): [number, number] => [
   (lon * 20037508.342789244) / 180,
@@ -139,10 +143,27 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
         onProgress?.(++done, plan.blocks.length);
       }
     }
+    // Areas accumulate: a second save of the same file adds its blocks and its area to the first.
+    const before = await readMeta(dir);
+    const bboxes = [...(before?.bboxes ?? []), ...(plan.bbox ? [plan.bbox] : [])];
     const meta = await (await dir.getFileHandle("meta.json", { create: true })).createWritable();
-    await meta.write(JSON.stringify({ size: plan.size, block: plan.block }));
+    await meta.write(JSON.stringify({ size: plan.size, block: plan.block, bboxes }));
     await meta.close();
   })());
+}
+
+type Meta = { size: number; block: number; bboxes?: Bbox[] };
+
+async function readMeta(dir: FileSystemDirectoryHandle): Promise<Meta | null> {
+  return dir.getFileHandle("meta.json").then((h) => h.getFile()).then((f) => f.text())
+    .then((t) => JSON.parse(t) as Meta).catch(() => null);
+}
+
+/** The areas saved of a file stored by blocks, or null when none is. */
+export async function savedAreasOf(url: string): Promise<Bbox[] | null> {
+  const dir = await cogDir(url, false);
+  const meta = dir && await readMeta(dir);
+  return meta ? meta.bboxes ?? [] : null;
 }
 
 /** Forget a saved COG area. */

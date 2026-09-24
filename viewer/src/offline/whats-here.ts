@@ -10,10 +10,11 @@ export type Target = { kind: "area"; bbox: Bbox } | { kind: "point"; lon: number
 export type Here = {
   id: string;
   title: string;
-  /** vector = a data layer; map = a published map (plate or mosaic); only draws for show */
-  group: "layer" | "map";
-  /** How it is saved, always cut to the area: "area" for PMTiles tiles, "cog" for COG blocks. */
-  save: { how: "area" | "cog"; url: string } | null;
+  /** layer = a data layer; map = a published map (plate or mosaic); table = a layer's rows, for saving */
+  group: "layer" | "map" | "table";
+  /** How it is saved, always cut to the area: "area" for PMTiles tiles, "cog" for COG blocks,
+   *  "table" for the GeoParquet row groups (table-area.ts). */
+  save: { how: "area" | "cog" | "table"; url: string } | null;
 };
 
 /** The area a save covers: the view for an area target, the 7.5' quad under the finger for a point. */
@@ -40,7 +41,8 @@ const contains = (b: number[], lon: number, lat: number) => b[0] <= lon && lon <
 export function whatsHere(layers: ActiveLayer[], t: Target): Here[] {
   const hit = (b?: number[]) => !!b && b.length >= 4
     && (t.kind === "point" ? contains(b, t.lon, t.lat) : overlaps(b, t.bbox));
-  return layers.filter((l) => hit(l.bbox)).map((l): Here => ({
+  const rank = { layer: 0, table: 1, map: 2 };
+  return layers.filter((l) => hit(l.bbox)).flatMap((l): Here[] => [{
     id: l.id,
     title: l.title,
     group: l.pmHref ? "layer" : "map",
@@ -48,5 +50,7 @@ export function whatsHere(layers: ActiveLayer[], t: Target): Here[] {
       : l.rasterPmHref ? { how: "area", url: l.rasterPmHref }
       : l.cogHref ? { how: "cog", url: l.cogHref }
       : null,
-  })).sort((a, b) => (a.group === b.group ? a.title.localeCompare(b.title) : a.group === "layer" ? -1 : 1));
+  }, ...(l.tableHref ? [{
+    id: `${l.id}#table`, title: l.title, group: "table" as const, save: { how: "table" as const, url: l.tableHref },
+  }] : [])]).sort((a, b) => (a.group === b.group ? a.title.localeCompare(b.title) : rank[a.group] - rank[b.group]));
 }

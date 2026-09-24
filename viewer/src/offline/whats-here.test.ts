@@ -27,6 +27,13 @@ describe("whatsHere", () => {
     expect(by.cube).toBeNull();
   });
 
+  it("offers a layer's table as its own row, after the data layers", () => {
+    const withTable = [{ ...layers[0], tableHref: "https://cdn/faults.parquet" }, ...layers.slice(1)];
+    const here = whatsHere(withTable, slc);
+    expect(here.map((h) => h.id)).toEqual(["faults", "faults#table", "mosaic", "plate", "cube"]);
+    expect(here[1]).toMatchObject({ group: "table", save: { how: "table", url: "https://cdn/faults.parquet" } });
+  });
+
   it("leaves out what is elsewhere, and layers with no footprint", () => {
     const ids = whatsHere(layers, slc).map((h) => h.id);
     expect(ids).not.toContain("moab");

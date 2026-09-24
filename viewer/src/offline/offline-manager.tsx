@@ -136,7 +136,7 @@ export function OfflineManager() {
                 <div className="min-w-0 flex-1">
                   <span className="block truncate">{a.label}</span>
                   <div className="text-sm text-muted-foreground">
-                    {opfs.formatBytes(a.bytes)} · {a.kind === "cog" ? "map, by area" : "layer, by area"}
+                    {opfs.formatBytes(a.bytes)} · {a.kind === "tiles" ? "layer, by area" : /\.parquet$/i.test(a.url) ? "table, by area" : "map, by area"}
                   </div>
                 </div>
                 <button type="button" className={BTN} disabled={busy} onClick={() => removeAreas.mutate([a])}

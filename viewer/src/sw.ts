@@ -81,7 +81,7 @@ async function storedFile(url: string): Promise<File | null> {
   }
 }
 
-/** A COG saved by area (offline/cog-area.ts): its block directory and the file's real size. */
+/** A COG or table saved by area (offline/cog-area.ts): its block directory and the file's real size. */
 async function storedCogArea(url: string) {
   try {
     const root = await navigator.storage.getDirectory();
@@ -100,7 +100,13 @@ async function storedCogArea(url: string) {
  */
 async function serveCogArea(request: Request, cog: NonNullable<Awaited<ReturnType<typeof storedCogArea>>>) {
   const miss = () => fetch(request).catch(() => new Response(null, { status: 504 }));
+  const type = contentTypeFor(new URL(request.url).pathname);
   const resolved = resolveRange(request.headers.get("range"), cog.size);
+  // DuckDB sizes a file with HEAD, then probes range support with a ranged HEAD (bytes=0-), which
+  // must come back 206. The stored size answers both offline.
+  if (request.method === "HEAD") {
+    return new Response(null, { status: rangeStatus(resolved), headers: rangeHeaders(resolved, type) });
+  }
   if (resolved.kind !== "partial") return miss();   // a whole-file read needs the whole file
   const blocks = new Map<number, Uint8Array>();
   for (let b = Math.floor(resolved.start / cog.block); b <= Math.floor(resolved.end / cog.block); b++) {
@@ -110,14 +116,15 @@ async function serveCogArea(request: Request, cog: NonNullable<Awaited<ReturnTyp
   }
   const body = assemble(resolved.start, resolved.end, cog.block, (i) => blocks.get(i) ?? null)!;
   return new Response(body, {
-    status: 206, headers: rangeHeaders(resolved, contentTypeFor(new URL(request.url).pathname)),
+    status: 206, headers: rangeHeaders(resolved, type),
   });
 }
 
 async function serveStored(request: Request): Promise<Response> {
   const file = await storedFile(request.url);
   if (!file) {
-    const cog = /\.tiff?$/i.test(new URL(request.url).pathname) ? await storedCogArea(request.url) : null;
+    // A COG or a table saved by area (cog-area.ts, table-area.ts): stored as blocks.
+    const cog = /\.(tiff?|parquet)$/i.test(new URL(request.url).pathname) ? await storedCogArea(request.url) : null;
     return cog ? serveCogArea(request, cog) : fetch(request);
   }
 

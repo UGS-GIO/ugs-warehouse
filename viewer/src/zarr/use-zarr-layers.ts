@@ -30,6 +30,38 @@ function useColormapTexture(device: Device | null) {
   );
 }
 
+/** Opening a cube, as one query definition: the overlay draws from it and the layer list reads its
+ *  status from the same cache entry, so neither opens the store twice. */
+export const zarrSourceQuery = (s: Pick<ZarrSpec, "href" | "variable">) => ({
+  queryKey: qk.zarrSource(s.href, s.variable),
+  queryFn: async () => {
+    const src = await openZarr(s.href, s.variable);
+    return { src, range: await sampleRange(src) };
+  },
+  retry: false,
+  staleTime: Infinity,
+});
+
+/**
+ * Why each cube failed to open, for the layer list: without it a cube that cannot load sits "on"
+ * in the list, with a legend, drawing nothing. Reads the overlay's own cache entries.
+ */
+export function useZarrProblems(specs: Pick<ZarrSpec, "id" | "href" | "variable">[]): Record<string, string> {
+  const results = useQueries({ queries: specs.map(zarrSourceQuery) });
+  return Object.fromEntries(specs.flatMap((s, i) => {
+    const e = results[i]?.error as Error | null | undefined;
+    return e ? [[s.id, describeZarrError(e)]] : [];
+  }));
+}
+
+/** A person-readable reason. A store with nothing at its address is the common case: the catalog
+ *  item exists but its data was never published. */
+export function describeZarrError(e: Error): string {
+  return /404|not found|no such|NoSuchKey/i.test(e.message)
+    ? "No data is published for this datacube yet."
+    : `Could not open the datacube: ${e.message}`;
+}
+
 export interface ZarrLayersResult {
   // LayersList, not ZarrLayer[] — ZarrLayer's generics resolve to our tile-data shape, which isn't
   // assignable to the class's default instantiation.
@@ -40,16 +72,7 @@ export interface ZarrLayersResult {
 export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLayersResult {
   const colormapTexture = useColormapTexture(device);
 
-  const results = useQueries({
-    queries: specs.map((s) => ({
-      queryKey: qk.zarrSource(s.href, s.variable),
-      queryFn: async () => {
-        const src = await openZarr(s.href, s.variable);
-        return { src, range: await sampleRange(src) };
-      },
-      retry: false,
-    })),
-  });
+  const results = useQueries({ queries: specs.map(zarrSourceQuery) });
 
   // Query objects are new every render, so the memo keys off the specs and each query's settled
   // state instead. Rebuilding a ZarrLayer needlessly re-reads chunks.

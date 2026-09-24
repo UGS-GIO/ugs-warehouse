@@ -15,6 +15,7 @@ import { BasemapDownload } from "@/offline/basemap-download";
 import { WhatsHerePicker } from "@/offline/whats-here-picker";
 import type { Target } from "@/offline/whats-here";
 import { useIsDesktop } from "@/ui/use-breakpoint";
+import { useZarrProblems } from "@/zarr/use-zarr-layers";
 
 // The Info dock shows one of three things, strictly nested: a related table is only reachable from a
 // selected feature. No floating feature popup anywhere — stakeholder requirement.
@@ -35,6 +36,9 @@ function MapView() {
   // or right-click saves on phones only, and on desktop is for showing what is there.
   const [pick, setPick] = useState<{ target: Target; canSave: boolean } | null>(null);
   const isDesktop = useIsDesktop();
+  // A datacube that can't open says so in its row instead of sitting "on" and blank.
+  const zarrProblems = useZarrProblems(c.activeLayers.flatMap((l) => (l.zarr
+    ? [{ id: l.id, href: l.zarr.href, variable: l.zarr.variable }] : [])));
 
   // A clicked layer's related tables, named from the compact index (its asset summaries carry the
   // related entries). The FK join columns are stripped from the index by design, so RelatedTable
@@ -79,6 +83,7 @@ function MapView() {
         onToggle={c.toggleLayer}
         onToggleMany={c.toggleLayers}
         onReorder={c.setLayerOrder}
+        problemOf={(id) => zarrProblems[id]}
         onOpen={c.openItem}
         // PMTiles, the raster mosaics and COGs are all single files read by range, and the
         // service worker answers all three out of OPFS, so all three can be stored whole.

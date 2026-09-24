@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { assetKind, cubeVariables, nonSpatialDimensions, timeDimensionOf } from "@/stac";
 import { decodeFillValue, fillValueOf } from "./store";
 import { effectiveNoData, maskNaN, NODATA_SENTINEL } from "./tile";
+import { describeZarrError } from "./use-zarr-layers";
 
 // Shaped like the UBM items the warehouse federates.
 const zarrAsset = { href: "https://ubm-assets.geology.utah.gov/zarr/ubm/v1/DAYMET_DISALEXI", type: "application/vnd.zarr", roles: ["data"] };
@@ -143,5 +144,18 @@ describe("nodata sentinel", () => {
       .toEqual([1, NODATA_SENTINEL, 3]);
     // Must write what the shader tests for, not a fixed sentinel.
     expect(Array.from(maskNaN(new Float32Array([1, Number.NaN]), -9999))).toEqual([1, -9999]);
+  });
+});
+
+describe("describeZarrError", () => {
+  // A catalog item whose store was never published (the UBM Ensemble cubes, 2026-09) fails with a
+  // 404 on its Icechunk entry point; that should read as "not published", not as a crash.
+  it("reads a missing store as not published", () => {
+    expect(describeZarrError(new Error("HTTP 404 fetching repo"))).toBe("No data is published for this datacube yet.");
+    expect(describeZarrError(new Error("NoSuchKey"))).toBe("No data is published for this datacube yet.");
+  });
+  it("passes any other failure through", () => {
+    expect(describeZarrError(new Error("Variable 'AET' is int16; only float32 renders today.")))
+      .toBe("Could not open the datacube: Variable 'AET' is int16; only float32 renders today.");
   });
 });

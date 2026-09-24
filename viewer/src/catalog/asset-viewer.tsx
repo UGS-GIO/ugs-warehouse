@@ -69,6 +69,10 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
 // linked — click a table row → map flies to that feature; click a map feature → table pages to it,
 // and its detail docks in the card directly below the map. The map instance lives in
 // PreviewMapProvider (mounted once); this publishes the vector spec and wires the table↔map state.
+// TEMPORARY: the data table is off on layer pages while we find why they crash. Revert this commit
+// to bring it back.
+const SHOW_DATA_TABLE = false;
+
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const pm = pmtilesLink(item);
@@ -81,7 +85,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
       <PreviewMapSlot spec={spec} />
       <SelectedFeatureCard item={item} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer key={pq.href} href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
+      {SHOW_DATA_TABLE && pq && <DataExplorer key={pq.href} href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
         rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}
     </>
   );

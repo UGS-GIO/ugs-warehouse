@@ -67,8 +67,9 @@ EXTERNAL_CATALOGS: list[tuple[str, str]] = [
 ARCHIVE_PREFIX = os.environ.get("WAREHOUSE_ARCHIVE_PREFIX", "warehouse/geoparquet")
 PMTILES_PREFIX = os.environ.get("WAREHOUSE_PMTILES_PREFIX", "warehouse/pmtiles")
 # Rendered preview thumbnails for vector serving-topics (styled PMTiles → PNG). One per stem,
-# overwritten when its style changes (so CACHE_MUTABLE); a `.sha` sidecar holds the style hash
-# the PNG was rendered from, for content-addressed skip-existing.
+# overwritten when its data or style changes (so CACHE_MUTABLE); a `.sha` sidecar holds the
+# content hash the PNG was rendered from (renderer version, data fingerprint, drawn layers), for
+# content-addressed skip-existing.
 THUMBS_PREFIX = os.environ.get("WAREHOUSE_THUMBS_PREFIX", "warehouse/thumbs")
 # Hand-authored metadata overrides (description/title), one JSON per STAC item id, marked
 # source=manual. Ingest prefers these over source metadata + they survive reingest — for backfilling

@@ -173,14 +173,15 @@ MAINTAIN_SCHEDULE="${MAINTAIN_SCHEDULE:-0 3 * * *}"      # daily 03:00 (off-hour
 MAINTAIN_TZ="${MAINTAIN_TZ:-America/Denver}"
 ensure_schedule "${MAINTAIN_JOB}" "${SCHED_JOB}" "${MAINTAIN_SCHEDULE}" "${MAINTAIN_TZ}"
 
-# Nightly topic thumbnails: previews for layers published or restyled since the last run. Nothing
-# else starts this job, so without the schedule new layers go without a preview. A night with
-# nothing new costs almost nothing (content-hash skip).
-TOPIC_THUMBS_JOB="${TOPIC_THUMBS_JOB:-ugs-topics-thumbs}"
-TOPIC_THUMBS_SCHED_JOB="${TOPIC_THUMBS_SCHED_JOB:-ugs-topics-thumbs-nightly}"
-TOPIC_THUMBS_SCHEDULE="${TOPIC_THUMBS_SCHEDULE:-0 4 * * *}"   # daily 04:00 (off-hours)
-TOPIC_THUMBS_TZ="${TOPIC_THUMBS_TZ:-America/Denver}"
-ensure_schedule "${TOPIC_THUMBS_JOB}" "${TOPIC_THUMBS_SCHED_JOB}" "${TOPIC_THUMBS_SCHEDULE}" "${TOPIC_THUMBS_TZ}"
+# Nightly topic thumbnails: catches any preview the runs started by ingest and restyle missed (a
+# start that failed, or a run that failed). A night with nothing new costs almost nothing
+# (content-hash skip). Not named TOPIC_THUMBS_JOB: that is the full job path the ingest and
+# restyle jobs read (core/jobs.py).
+TOPICTHUMB_JOB="${TOPICTHUMB_JOB:-ugs-topics-thumbs}"
+TOPICTHUMB_SCHED_JOB="${TOPICTHUMB_SCHED_JOB:-ugs-topics-thumbs-nightly}"
+TOPICTHUMB_SCHEDULE="${TOPICTHUMB_SCHEDULE:-0 4 * * *}"   # daily 04:00 (off-hours)
+TOPICTHUMB_TZ="${TOPICTHUMB_TZ:-America/Denver}"
+ensure_schedule "${TOPICTHUMB_JOB}" "${TOPICTHUMB_SCHED_JOB}" "${TOPICTHUMB_SCHEDULE}" "${TOPICTHUMB_TZ}"
 
 # --- reliability audit -----------------------------------------------------------------------
 # A push subscription with no dead-letter policy retries forever. That is not a hypothetical: in

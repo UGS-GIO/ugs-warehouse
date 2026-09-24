@@ -13,7 +13,7 @@ WORKDIR /app
 # Deps layer, same shape as the main Dockerfile: the package's deps + the thumbs extra (playwright,
 # requests) installed against an empty skeleton, so it and the layers below are cached until
 # pyproject.toml changes, not rebuilt on every code edit. No GDAL/tippecanoe weight in this job.
-COPY pyproject.toml README.md ./
+COPY pyproject.toml ./
 RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
     && pip install --upgrade pip && pip install ".[thumbs]" \
     && rm -rf src

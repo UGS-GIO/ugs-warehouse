@@ -127,8 +127,10 @@ class Changed(Exception):
 
 def get_bytes_versioned(object_path: str) -> tuple[bytes, dict[str, str]]:
     """An object's bytes plus the version token `put_bytes_if_unchanged` checks against (on GCS the
-    object generation, plus its ETag). For small JSON written plain, e.g. STAC items (not gzipped,
-    see stac.write_item), so there is no gzip fallback here. A 404 raises FileNotFoundError."""
+    object generation, plus its ETag). A 404 raises FileNotFoundError. For small JSON stored plain,
+    e.g. STAC items (stac.write_item never gzips one). Unlike get_bytes there is no gzip fallback, so
+    a gzipped object fails loudly (here, or at the caller's parse if obstore ever hands back the
+    compressed bytes) instead of being misread."""
     r = obs.get(_store(), object_path)
     # obstore rejects a None field in the token, so only the fields this store returned go in.
     version = {k: v for k in ("e_tag", "version") if (v := r.meta.get(k)) is not None}

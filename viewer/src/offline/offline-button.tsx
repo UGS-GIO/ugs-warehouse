@@ -3,7 +3,8 @@
 // Four states, one button: not stored (download), queued or downloading (click to nothing), stored
 // (size, click to delete). The stored state is the only one that needs a second affordance, so the
 // title carries the delete and the glyph carries the state.
-import { useStoredLayers, useOfflineLayer } from "./use-offline";
+import { useOffline } from "./store";
+import { useOfflineLayer } from "./use-offline";
 import { DownloadIcon } from "@/catalog/stac-url-chip";
 import { formatBytes, isSupported } from "./opfs";
 
@@ -11,14 +12,14 @@ import { formatBytes, isSupported } from "./opfs";
 const CLASS = "inline-flex shrink-0 items-center justify-center gap-1 rounded px-1 text-[11px] tabular-nums text-muted-foreground hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-2 pointer-coarse:text-xs";
 
 export function OfflineButton({ href, title }: { href?: string; title: string }) {
-  const stored = useStoredLayers();
+  const { files } = useOffline();
   const { download, remove, progress, job } = useOfflineLayer(href, title);
 
   // Nothing to download (aspatial or zarr layer), or a browser with no OPFS: show nothing rather
   // than a control that cannot work.
   if (!href || !isSupported()) return null;
 
-  const file = stored.data?.files.find((f) => f.url === href);
+  const file = files.find((f) => f.url === href);
   const error = download.error ?? remove.error ?? (job?.error ? new Error(job.error) : null);
 
   if (progress) {

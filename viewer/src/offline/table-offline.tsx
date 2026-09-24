@@ -4,16 +4,15 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckIcon, DownloadIcon } from "@/catalog/stac-url-chip";
 import { jobProgress } from "./queue";
-import { ENGINE_KEY, hasEngine } from "./engine";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
-import { useJobs, useStoredLayers } from "./use-offline";
+import { useOffline } from "./store";
+import { useJobs } from "./use-offline";
 
 const CLASS = "inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 
 export function TableOffline({ href, title }: { href: string; title: string }) {
-  const stored = useStoredLayers();
-  const engine = useQuery({ queryKey: ENGINE_KEY, queryFn: hasEngine, staleTime: Infinity });
+  const { files, engineBytes } = useOffline();
   const size = useQuery({
     queryKey: ["content-length", href],
     queryFn: async () => Number((await fetch(href, { method: "HEAD" })).headers.get("content-length")) || 0,
@@ -28,15 +27,15 @@ export function TableOffline({ href, title }: { href: string; title: string }) {
         throw new Error(`${opfs.formatBytes(bytes)} will not fit in this browser's storage.`);
       }
       await queue.enqueue([
-        ...(engine.data ? [] : [{ kind: "engine" as const, label: "Table engine" }]),
+        ...(engineBytes ? [] : [{ kind: "engine" as const, label: "Table engine" }]),
         { kind: "file" as const, url: href, label: `${title} (table)`, bytes: bytes || undefined },
       ]);
     },
   });
 
   if (!opfs.isSupported()) return null;
-  const saved = stored.data?.files.some((f) => f.url === href);
-  if (saved && engine.data) {
+  const saved = files.some((f) => f.url === href);
+  if (saved && engineBytes) {
     return <span className="inline-flex items-center gap-1 text-xs text-muted-foreground"><CheckIcon /> Saved offline</span>;
   }
   const job = jobs.find((j) => (j.kind === "file" && j.url === href) || (j.kind === "engine" && !saved));

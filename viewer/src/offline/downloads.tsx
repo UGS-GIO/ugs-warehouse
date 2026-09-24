@@ -1,5 +1,6 @@
 // The download queue as a list: what is saving, what is waiting, what failed and why.
-import { useQuery } from "@tanstack/react-query";
+import { useOffline } from "./store";
+import * as store from "./store";
 import { useJobs } from "./use-offline";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
@@ -7,19 +8,12 @@ import { type Job, jobProgress } from "./queue";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
 
-const PARTIALS_KEY = ["offline-partials"] as const;
-
 export function Downloads() {
   const jobs = useJobs();
-  // What a stopped download already holds on the device, so keeping or removing it is an informed
-  // choice. Re-read when the queue changes shape (a job added, finished or removed).
-  const partials = useQuery({
-    queryKey: [...PARTIALS_KEY, jobs.map((j) => `${j.id}:${j.state}`).join(",")],
-    queryFn: opfs.listPartials,
-    enabled: jobs.length > 0,
-  });
+  // What a stopped download already holds on the device, so keeping or removing it is informed.
+  const { partials } = useOffline();
   const partialOf = (j: Job) => (j.kind === "file" && j.state !== "running"
-    ? partials.data?.find((p) => p.url === j.url)?.bytes ?? 0 : 0);
+    ? partials.find((p) => p.url === j.url)?.bytes ?? 0 : 0);
   if (!jobs.length) return null;
   return (
     <section className="flex flex-col gap-1">
@@ -47,7 +41,7 @@ export function Downloads() {
               <button type="button" className={BTN} onClick={() => void queue.retry(j.id)}>Retry</button>
             )}
             {j.state !== "running" && (
-              <button type="button" className={BTN} onClick={() => void queue.remove(j.id)}
+              <button type="button" className={BTN} onClick={() => void store.removeJob(j.id)}
                 aria-label={`Remove ${j.label} from downloads`}>Remove</button>
             )}
           </li>

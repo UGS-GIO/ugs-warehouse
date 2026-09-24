@@ -5,7 +5,7 @@
 // area or plate skips the tiles and blocks it already has). A job that fails for want of network
 // waits for the connection to come back; any other failure stays listed with its reason, for retry.
 import type { AreaPlan } from "./area";
-import type { CogPlan } from "./cog-area";
+import type { CogPlan } from "./block-store";
 import { isNetworkError } from "./online";
 import * as opfs from "./opfs";
 import { FileChangedError } from "./opfs-name";
@@ -38,7 +38,7 @@ let jobs: Job[] = [];
 let loaded: Promise<void> | null = null;
 let current: Promise<void> | null = null;
 const listeners = new Set<() => void>();
-const finished = new Set<(job: Job) => void>();
+const settled = new Set<(job: Job) => void>();
 
 // A fresh array on every change: useSyncExternalStore compares snapshots by identity.
 const emit = () => { jobs = [...jobs]; listeners.forEach((fn) => fn()); };
@@ -46,8 +46,8 @@ const emit = () => { jobs = [...jobs]; listeners.forEach((fn) => fn()); };
 export const subscribe = (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; };
 export const snapshot = () => jobs;
 
-/** Called after each job completes, so the app can refresh what it lists as stored. */
-export const onFinished = (fn: (job: Job) => void) => { finished.add(fn); };
+/** Called after each attempt at a job ends, done, failed or paused: what is stored has changed. */
+export const onSettled = (fn: (job: Job) => void) => { settled.add(fn); };
 
 // An area save is keyed by its size too, so saving a second area of the same layer is its own job.
 export const keyOf = (s: JobSpec) =>
@@ -182,7 +182,7 @@ async function perform(job: Job) {
     const { saveArea } = await import("./area");
     await saveArea(job.plan, progress);
   } else if (job.kind === "cog" || job.kind === "table") {
-    const { saveCogArea } = await import("./cog-area");
+    const { saveCogArea } = await import("./block-store");
     await saveCogArea(job.plan, progress);
   } else {
     const { saveEngine } = await import("./engine");
@@ -239,7 +239,6 @@ async function work(): Promise<void> {
       misses.delete(job.id);
       jobs = jobs.filter((j) => j.id !== job.id);
       emit();
-      finished.forEach((fn) => fn(job));
     } catch (e) {
       const tries = (misses.get(job.id) ?? 0) + 1;
       if (isNetworkError(e) && tries < MAX_MISSES) {
@@ -253,6 +252,8 @@ async function work(): Promise<void> {
       }
       misses.delete(job.id);
       update(job.id, { state: "failed", error: e instanceof Error ? e.message : String(e) });
+    } finally {
+      settled.forEach((fn) => fn(job));
     }
     await persist();
   }

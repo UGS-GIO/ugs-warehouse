@@ -32,7 +32,7 @@ describe("download queue", () => {
     const order: string[] = [];
     save.mockImplementation(async (url: string) => { order.push(url); });
     const done = vi.fn();
-    q.onFinished(done);
+    q.onSettled(done);
     await q.enqueue([file("a"), file("b")]);
     await settle();
     await q.run();

@@ -6,21 +6,21 @@
 // common case is one tap; showing ticks nothing, since drawing every overlapping layer at once
 // is never what anyone wants.
 import { Dialog } from "@base-ui/react/dialog";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toLayer, useViewCtx } from "@/app";
 import type { ItemRef } from "@/catalog/browse";
 import type { ActiveLayer } from "@/map/map-model";
 import { planArea } from "./area";
 import { planCogArea } from "./cog-area";
-import { ENGINE_BYTES, ENGINE_KEY, hasEngine } from "./engine";
+import { ENGINE_BYTES } from "./engine";
 import { planTableArea } from "./table-area";
 import * as queue from "./queue";
 import { overviewUrl, quadUrl, stateUrl } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
 import { type Hit, hitLabel, identifyAt } from "./identify";
 import * as opfs from "./opfs";
-import { useStoredLayers } from "./use-offline";
+import { useOffline } from "./store";
 import { type Here, isSaveable, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
 
 // Pricing walks each archive's directory; four at a time keeps a busy area from opening dozens
@@ -39,7 +39,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   target: Target; canSave: boolean; onClose: () => void;
 }) {
   const ctx = useViewCtx();
-  const stored = useStoredLayers();
+  const { files, engineBytes } = useOffline();
   const index = useBasemapIndex();
 
   // Every drawable layer the app knows about, resolved exactly as the map resolves them.
@@ -53,7 +53,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const quads = quadsFor(target);
   const saveable = here.filter(isSaveable);
 
-  const have = new Set(stored.data?.files.map((f) => f.url));
+  const have = new Set(files.map((f) => f.url));
   const stateSaved = have.has(stateUrl());
   const idx = index.data;
   const basemapParts = stateSaved || !idx ? [] : [
@@ -119,8 +119,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const basemapBytes = basemapOffered && ticked.has(BASEMAP) ? basemapParts.reduce((n, p) => n + p.bytes, 0) : 0;
   const pricing = chosen.some((h) => priceOf(h)?.isPending);
   // A table needs the table engine on the device too; it is counted once, the first time.
-  const engine = useQuery({ queryKey: ENGINE_KEY, queryFn: hasEngine, staleTime: Infinity, enabled: canSave });
-  const needsEngine = canSave && engine.data === false && chosen.some((h) => h.group === "table");
+  const needsEngine = canSave && !engineBytes && chosen.some((h) => h.group === "table");
   const total = basemapBytes + chosen.reduce((n, h) => n + (priceOf(h)?.data?.bytes ?? 0), 0)
     + (needsEngine ? ENGINE_BYTES : 0);
 

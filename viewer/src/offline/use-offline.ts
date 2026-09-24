@@ -1,25 +1,12 @@
-// Query/mutation layer over the OPFS artifact store, so the UI never touches the filesystem
-// directly and one invalidation keeps every download control in sync.
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+// Hooks for the download controls: the queue (offline/queue.ts) for what is saving, the store
+// (offline/store.ts) for what is saved, and TanStack Query only for questions asked of the network.
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
-import { qk } from "@/query-keys";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
 import type { Job } from "./queue";
-import { type Bbox, loadStoredAreas } from "./area";
-import { listCogAreas } from "./cog-area";
-
-/** What is stored, plus the browser's storage headroom. One query so the UI reads one status. */
-export function useStoredLayers() {
-  return useQuery({
-    queryKey: qk.offlineLayers,
-    queryFn: async () => {
-      const [files, space] = await Promise.all([opfs.list(), opfs.quota()]);
-      return { files, space, bytes: files.reduce((n, f) => n + f.bytes, 0) };
-    },
-    staleTime: Infinity,   // only this module's mutations change it
-  });
-}
+import * as store from "./store";
+import type { StoredArea } from "./store";
 
 /** Progress of an in-flight download: bytes written, and the total when the server declared one. */
 export type Progress = { written: number; total?: number };
@@ -32,7 +19,6 @@ export const useJobs = (): Job[] => useSyncExternalStore(queue.subscribe, queue.
  * in step. `progress` is read from the queue, so it survives leaving the page and coming back.
  */
 export function useOfflineLayer(href: string | undefined, label = href ?? "") {
-  const client = useQueryClient();
   const job = useJobs().find((j) => j.kind === "file" && j.url === href);
   const progress: Progress | null = job?.state === "running"
     ? { written: job.done ?? 0, total: job.total }
@@ -53,43 +39,18 @@ export function useOfflineLayer(href: string | undefined, label = href ?? "") {
   });
 
   const remove = useMutation({
-    mutationFn: async () => {
-      if (href) await opfs.remove(href);
-    },
-    onSettled: () => client.invalidateQueries({ queryKey: qk.offlineLayers }),
+    mutationFn: () => store.removeFiles(href ? [href] : []),
   });
 
   return { download, remove, progress, job };
 }
 
 /**
- * Layers and plates saved by area rather than whole (offline/area.ts, offline/cog-area.ts): what
- * the "Save this area" picker produces. Listed apart from whole files because they delete apart.
- */
-export function useStoredAreas() {
-  return useQuery({
-    queryKey: ["offline-areas"],
-    queryFn: async () => {
-      const [tiles, cogs] = await Promise.all([loadStoredAreas(), listCogAreas()]);
-      const row = (a: { url: string; bytes: number; version?: string; bboxes: Bbox[] }) =>
-        ({ url: a.url, bytes: a.bytes, version: a.version, bboxes: a.bboxes });
-      return [
-        ...tiles.map((t) => ({ ...row(t), kind: "tiles" as const })),
-        ...cogs.map((c) => ({ ...row(c), kind: "cog" as const })),
-      ];
-    },
-    staleTime: Infinity,
-  });
-}
-
-export type StoredAreaRow = NonNullable<ReturnType<typeof useStoredAreas>["data"]>[number];
-
-/**
  * Saved areas whose file has been republished since they were cut: one HEAD per file, compared
  * with the version the area was saved from. Only asked online, and not retried, so offline the
  * manager simply shows no update.
  */
-export function useStaleAreas(rows: StoredAreaRow[]) {
+export function useStaleAreas(rows: StoredArea[]) {
   return useQuery({
     queryKey: ["offline-areas", "stale", rows.map((r) => `${r.url}@${r.version}`).join("|")],
     queryFn: async () => {
@@ -108,7 +69,7 @@ export function useStaleAreas(rows: StoredAreaRow[]) {
 }
 
 /** Re-cut a saved area against the file's current version, one queued job per area saved. */
-export async function updateArea(row: StoredAreaRow, label: string): Promise<void> {
+export async function updateArea(row: StoredArea, label: string): Promise<void> {
   const jobs: queue.JobSpec[] = [];
   for (const bbox of row.bboxes) {
     if (row.kind === "tiles") {

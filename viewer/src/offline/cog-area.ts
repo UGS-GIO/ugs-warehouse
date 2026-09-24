@@ -11,25 +11,18 @@
 // a range that needs a block we did not save goes to the network, or fails cleanly offline.
 import { type BlockedSourceOptions, fromUrl, type GeoTIFF, type RemoteSourceOptions, type TypedArray } from "geotiff";
 import type { Bbox } from "./area";
-import { track } from "./in-flight";
-import { currentVersion, FileChangedError, fileNameFor, versionOf } from "./opfs-name";
+import { versionOf } from "./opfs-name";
 
-import { type BlockMeta, parseBlockMeta } from "./cog-blocks";
-import { isDirectory, isFile, readJson } from "./guards";
+import { dropIfStale } from "./block-store";
 
 export { assemble } from "./cog-blocks";
 
 /** Must equal the block size the COG reader requests in (geomatico's CogReader, 65536). */
 export const COG_BLOCK = 65536;
-const DIR = "cogs";
 
-export type CogPlan = {
-  url: string; size: number; block: number; blocks: number[]; bytes: number; tiles: number;
-  /** The area saved: a table's queries are clipped to it offline, and an update re-cuts it. */
-  bbox?: Bbox;
-  /** The file version the blocks were cut from; blocks of two versions must never be mixed. */
-  version?: string;
-};
+import type { CogPlan } from "./block-store";
+
+export type { CogPlan };
 
 const merc = (lon: number, lat: number): [number, number] => [
   (lon * 20037508.342789244) / 180,
@@ -116,113 +109,4 @@ export async function planCogArea(url: string, bbox: Bbox,
   const blocks = [...need].sort((a, b) => a - b);
   const bytes = blocks.reduce((n, b) => n + Math.min(block, size - b * block), 0);
   return { url, size, block, blocks, bytes, tiles, bbox, version: head.version };
-}
-
-async function cogDir(url: string, create: boolean) {
-  try {
-    const root = await navigator.storage.getDirectory();
-    return await (await root.getDirectoryHandle(DIR, { create })).getDirectoryHandle(fileNameFor(url), { create });
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Save a planned area of a COG. Consecutive blocks are fetched as one range request (capped so a
- * single response stays small), each block written as its own file; blocks already stored from an
- * earlier, overlapping save are skipped. meta.json goes last, so a half-finished save is ignored.
- */
-export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: number) => void): Promise<void> {
-  return track((async () => {
-    // Blocks cut from another version of the file are byte ranges of a different file: drop them.
-    const old = await cogDir(plan.url, false);
-    const prior = old && await readMeta(old);
-    if (prior && prior.version !== plan.version) await removeCogArea(plan.url);
-    const dir = await cogDir(plan.url, true);
-    if (!dir) throw new Error("This browser cannot store data offline.");
-    const missing: number[] = [];
-    for (const b of plan.blocks) {
-      if (!(await dir.getFileHandle(String(b)).then(() => true, () => false))) missing.push(b);
-    }
-    // Consecutive blocks, as [first, last] index pairs of at most 64 blocks.
-    const runs: [number, number][] = [];
-    for (const b of missing) {
-      const run = runs.at(-1);
-      if (run && b === run[1] + 1 && b - run[0] < 64) run[1] = b; else runs.push([b, b]);
-    }
-    let done = plan.blocks.length - missing.length;
-    for (const [first, last] of runs) {
-      const start = first * plan.block;
-      const end = Math.min(plan.size, (last + 1) * plan.block) - 1;
-      const r = await fetch(plan.url, { headers: { range: `bytes=${start}-${end}` } });
-      if (!r.ok) throw new Error(`Download failed: ${r.status}`);
-      // The plan's offsets belong to one version of the file; bytes of another are garbage there.
-      if (plan.version && versionOf(r.headers) !== plan.version) {
-        await r.body?.cancel();
-        throw new FileChangedError(plan.url);
-      }
-      const buf = new Uint8Array(await r.arrayBuffer());
-      for (let b = first; b <= last; b++) {
-        const out = await (await dir.getFileHandle(String(b), { create: true })).createWritable();
-        await out.write(buf.subarray((b - first) * plan.block, (b - first + 1) * plan.block));
-        await out.close();
-        onProgress?.(++done, plan.blocks.length);
-      }
-    }
-    // Areas accumulate: a second save of the same version adds its blocks and its area to the first.
-    const before = await readMeta(dir);
-    const bboxes = [...(before?.bboxes ?? []), ...(plan.bbox ? [plan.bbox] : [])];
-    const meta = await (await dir.getFileHandle("meta.json", { create: true })).createWritable();
-    await meta.write(JSON.stringify({
-      size: plan.size, block: plan.block, bboxes, version: plan.version, savedAt: Date.now(),
-    } satisfies BlockMeta));
-    await meta.close();
-  })());
-}
-
-async function readMeta(dir: FileSystemDirectoryHandle): Promise<BlockMeta | null> {
-  return parseBlockMeta(await readJson(dir, "meta.json"));
-}
-
-/** The areas saved of a file stored by blocks, or null when none is. */
-export async function savedAreasOf(url: string): Promise<Bbox[] | null> {
-  const dir = await cogDir(url, false);
-  const meta = dir && await readMeta(dir);
-  return meta ? meta.bboxes : null;
-}
-
-/** Remove a saved copy cut from a version of `url` other than the live one. */
-export async function dropIfStale(url: string): Promise<void> {
-  const dir = await cogDir(url, false);
-  const meta = dir && await readMeta(dir);
-  if (!meta) return;
-  const now = await currentVersion(url).catch(() => undefined);
-  if (now && meta.version !== now) await removeCogArea(url);
-}
-
-/** Forget a saved COG area. */
-export async function removeCogArea(url: string): Promise<void> {
-  const root = await navigator.storage.getDirectory().catch(() => null);
-  const dir = await root?.getDirectoryHandle(DIR).catch(() => null);
-  await dir?.removeEntry(fileNameFor(url), { recursive: true }).catch(() => {});
-}
-
-/** Every COG saved by area, with its stored size. */
-export type StoredBlocks = { url: string; bytes: number; version?: string; bboxes: Bbox[]; savedAt?: number };
-
-export async function listCogAreas(): Promise<StoredBlocks[]> {
-  const out: StoredBlocks[] = [];
-  const root = await navigator.storage?.getDirectory?.().catch(() => null);
-  const dir = await root?.getDirectoryHandle(DIR).catch(() => null);
-  if (!dir) return out;
-  for await (const [name, handle] of dir) {
-    if (!isDirectory(handle)) continue;
-    let bytes = 0;
-    for await (const [n, f] of handle) {
-      if (n !== "meta.json" && isFile(f)) bytes += (await f.getFile()).size;
-    }
-    const meta = await readMeta(handle);
-    if (meta) out.push({ url: decodeURIComponent(name), bytes, version: meta.version, bboxes: meta.bboxes, savedAt: meta.savedAt });
-  }
-  return out;
 }

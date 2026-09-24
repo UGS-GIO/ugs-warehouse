@@ -20,7 +20,7 @@ import { useIsDesktop } from "@/ui/use-breakpoint";
 import { Unavailable } from "@/offline/offline-notice";
 import { isNetworkError, useOnline } from "@/offline/online";
 import { TableOffline } from "@/offline/table-offline";
-import { useStoredLayers } from "@/offline/use-offline";
+import { useOffline } from "@/offline/store";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
@@ -108,10 +108,10 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
   // can't be read (offline, or a connection that reaches nothing, which navigator.onLine misses),
   // read it clipped to those areas, so DuckDB touches only saved row groups (offline/table-area.ts).
   const online = useOnline();
-  const stored = useStoredLayers();
-  const areas = useQuery({ queryKey: ["offline-areas", href], queryFn: async () => (await import("@/offline/cog-area")).savedAreasOf(href) });
-  const wholeSaved = !!stored.data?.files.some((f) => f.url === href);
-  const saved = !wholeSaved && areas.data?.length ? areas.data : undefined;
+  const device = useOffline();
+  const wholeSaved = device.files.some((f) => f.url === href);
+  const areas = device.areas.find((a) => a.url === href)?.bboxes;
+  const saved = !wholeSaved && areas?.length ? areas : undefined;
   const { data: page, error, isFetching: loading } = useQuery({
     queryKey: qk.parquetPage(href, [pageIndex, pageSize, showAll,
                               sort?.id, sort?.desc, applied.search, filterKey, presetKey, saved?.length ?? 0, online]),
@@ -141,7 +141,7 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
         return { ...(await read(saved)), clipped: true };
       }
     },
-    enabled: !collapsed && !areas.isPending,
+    enabled: !collapsed && device.ready,
     placeholderData: keepPreviousData,   // paging back is served from cache
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;

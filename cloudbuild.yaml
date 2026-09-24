@@ -476,7 +476,7 @@ steps:
       - --cpu=4
       - --memory=4Gi
 
-  # Cover thumbnails — render each pub's PDF first page → PNG in GCS (poppler/pdftoppm). Covers ALL
+  # Cover thumbnails — render each pub's PDF first page → WebP in GCS (poppler/pdftoppm). Covers ALL
   # pubs incl. non-spatial (Survey Notes, reports). Sharded + skip-existing like the COG harvest;
   # run a `pubs-ingest` after to bind the new `preview` assets. Harvest image (has poppler); CSV+GCS.
   - id: deploy-pubthumbs-job

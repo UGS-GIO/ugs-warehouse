@@ -31,7 +31,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ..core import config, gcs
-from . import identity
+from . import identity, webp
 
 FOOTPRINTS = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/services/"
               "Geologic_Map_Footprints_View/FeatureServer/0/query")
@@ -150,7 +150,8 @@ def _report_begin(series_id: str) -> None:
     global _pub_report
     _pub_report = {"series_id": series_id, "source_zips": [], "found": [],
                    "used": {"plate": None, "units_shp": None}, "tier": None,
-                   "produced": {"cog": None, "units_parquet": None, "thumbnail": None},
+                   "produced": {"cog": None, "units_parquet": None, "thumbnail": None,
+                                "sheet": None},
                    "skipped": [], "status": None, "color_source_sat": None}
 
 
@@ -738,6 +739,19 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
     return status
 
 
+def _write_previews(pub: identity.Pub, cog: str, work: str) -> None:
+    """The map's catalog thumbnail and the sheet the 3D viewer drapes, both WebP (#372), cut from one
+    SHEET_PX-wide overview of the COG, which reads its overviews rather than the full plate."""
+    overview = os.path.join(work, "overview.tif")
+    run(["gdal_translate", "-q", "-of", "GTiff", "-outsize", str(webp.SHEET_PX), "0", "-r", "average",
+         cog, overview])
+    for obj, fit in webp.plate_previews(pub):
+        out = os.path.join(work, obj.rsplit("/", 1)[-1])
+        webp.encode(overview, out, fit=fit)
+        gcs.upload(out, obj, content_type=config.WEBP_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+    _report("produced", thumbnail=pub.thumb_object, sheet=pub.sheet_object)
+
+
 def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     """One harvest attempt over a set of source zip URL(s). Returns 'ok' | 'fail:…'."""
     from rio_cogeo.cogeo import cog_translate, cog_validate
@@ -749,7 +763,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     # reset the per-attempt report fields; series_id/status stay owned by harvest_one/_report_finish.
     _report(source_zips=list(zurls), found=[], skipped=[], tier=None, color_source_sat=None,
             used={"plate": None, "units_shp": None},
-            produced={"cog": None, "units_parquet": None, "thumbnail": None})
+            produced={"cog": None, "units_parquet": None, "thumbnail": None, "sheet": None})
     work = tempfile.mkdtemp(prefix=f"h_{series_id.replace('/', '_')}_")
     try:
         cut, n_feat = footprint(series_id, work)
@@ -872,11 +886,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
             _report("produced", units_parquet=units_obj)
         if THUMBS:
-            th = os.path.join(work, f"{series_id}.thumb.png")
-            thumb_obj = f"{identity.COG_PREFIX}/{series_id}.thumb.png"
-            run(["gdal_translate", "-of", "PNG", "-outsize", "700", "0", cog, th])
-            gcs.upload(th, thumb_obj, content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
-            _report("produced", thumbnail=thumb_obj)
+            _write_previews(pub, cog, work)
         used = prof.get("compress", COG_COMPRESS)          # may have fallen back from webp
         qual = f" q{COG_QUALITY}" if used == "webp" else ""
         hlog(f"OK ({COG_DPI}dpi {used}{qual}) → {pub.cog_object}", step="result", category="ok")

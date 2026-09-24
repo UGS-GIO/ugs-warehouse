@@ -20,13 +20,32 @@ from ..core import config, gcs, stac
 from . import editions, identity, sink_stac, source, threed, topic, vectors
 
 
+def _names(prefix: str) -> list[str]:
+    return [path.rsplit("/", 1)[-1] for path in gcs.list_paths(prefix)]
+
+
+def _ids(names: list[str], suffix: str) -> set[str]:
+    return {name[: -len(suffix)].upper() for name in names if name.endswith(suffix)}
+
+
 def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
-    out: set[str] = set()
-    for path in gcs.list_paths(prefix):
-        name = path.rsplit("/", 1)[-1]
-        if name.endswith(suffix):
-            out.add(name[: -len(suffix)].upper())
-    return out
+    return _ids(_names(prefix), suffix)
+
+
+def _image_ids() -> tuple[set[str], set[str]]:
+    """(pubs with a harvested map thumbnail, pubs with a cover). Only the WebPs count, since the items
+    point at them. A pub whose preview exists only as a PNG is named in a warning, because its item
+    goes out without that preview until webp_backfill converts it."""
+    plates, covered = _names(identity.COG_PREFIX), _names(identity.PUB_THUMB_PREFIX)
+    thumbs = _ids(plates, identity.COG_THUMB_SUFFIX)
+    covers = _ids(covered, identity.COVER_SUFFIX)
+    png_only = sorted((_ids(plates, identity.PNG_THUMB_SUFFIX) - thumbs)
+                      | (_ids(covered, identity.PNG_COVER_SUFFIX) - covers))
+    if png_only:
+        print(f"[pubs] WARNING: {len(png_only)} pub(s) have a PNG preview but no WebP, so their items "
+              f"go out without it; run pubs.webp_backfill --apply. {', '.join(png_only[:10])}",
+              file=sys.stderr)
+    return thumbs, covers
 
 
 def _contents_by_sid() -> dict[str, list[dict]]:
@@ -189,8 +208,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         att.setdefault((a.get("series_id") or "").strip().upper(), []).append(a)
 
     cogs = _ids_with_suffix(identity.COG_PREFIX, ".cog.tif")
-    thumbs = _ids_with_suffix(identity.COG_PREFIX, ".thumb.png")
-    covers = _ids_with_suffix(identity.PUB_THUMB_PREFIX, ".png")  # PDF first-page covers
+    thumbs, covers = _image_ids()
     threed_ids = _ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")  # converted 3D pubs
     threed_classes = _threed_classes_by_sid()  # authored fence colors (classification:classes)
     overrides_map = _overrides_by_sid()  # hand-authored description/title overrides

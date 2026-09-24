@@ -1,6 +1,6 @@
 // Per-layer "keep offline" control, shown on an active layer row.
 //
-// Three states, one button: not stored (download), downloading (percent, click to nothing), stored
+// Four states, one button: not stored (download), queued or downloading (click to nothing), stored
 // (size, click to delete). The stored state is the only one that needs a second affordance, so the
 // title carries the delete and the glyph carries the state.
 import { useStoredLayers, useOfflineLayer } from "./use-offline";
@@ -11,14 +11,14 @@ const CLASS = "inline-flex shrink-0 items-center gap-1 rounded px-1 text-[11px] 
 
 export function OfflineButton({ href, title }: { href?: string; title: string }) {
   const stored = useStoredLayers();
-  const { download, remove, progress } = useOfflineLayer(href);
+  const { download, remove, progress, job } = useOfflineLayer(href, title);
 
   // Nothing to download (aspatial or zarr layer), or a browser with no OPFS: show nothing rather
   // than a control that cannot work.
   if (!href || !isSupported()) return null;
 
   const file = stored.data?.files.find((f) => f.url === href);
-  const error = download.error ?? remove.error;
+  const error = download.error ?? remove.error ?? (job?.error ? new Error(job.error) : null);
 
   if (progress) {
     const pct = progress.total ? Math.round((progress.written / progress.total) * 100) : null;
@@ -27,6 +27,10 @@ export function OfflineButton({ href, title }: { href?: string; title: string })
         {pct === null ? formatBytes(progress.written) : `${pct}%`}
       </span>
     );
+  }
+
+  if (job?.state === "queued") {
+    return <span className={CLASS} title={`${title} is waiting its turn in Downloads`}>queued</span>;
   }
 
   if (file) {

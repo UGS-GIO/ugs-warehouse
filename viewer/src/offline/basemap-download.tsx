@@ -5,13 +5,13 @@
 // (the overview plus the 7.5-minute quads in view, usually a few MB) is for a phone short on space
 // or a download over a field connection. Sizes come from the build's index.json, so each button
 // says what it costs before anyone commits to it.
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useState } from "react";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckIcon, DownloadIcon } from "@/catalog/stac-url-chip";
 import { qk } from "@/query-keys";
 import { BASEMAP_BASE, overviewUrl, quadsInBbox, quadUrl, redundantWithState, stateUrl } from "./basemap";
 import * as opfs from "./opfs";
-import { useStoredLayers } from "./use-offline";
+import * as queue from "./queue";
+import { useJobs, useStoredLayers } from "./use-offline";
 
 // Past this many quads the view is a region, not a work area; the statewide save covers that.
 const MAX_QUADS = 40;
@@ -46,8 +46,8 @@ export function BasemapDownload({ bbox, onSaveArea }: {
 }) {
   const index = useBasemapIndex();
   const stored = useStoredLayers();
-  const client = useQueryClient();
-  const [progress, setProgress] = useState<{ n: number; of: number } | null>(null);
+  const jobs = useJobs();
+  const pendingBasemap = jobs.filter((j) => j.kind === "file" && j.url.startsWith(BASEMAP_BASE) && j.state !== "failed").length;
 
   const have = new Set(stored.data?.files.map((f) => f.url));
   const quads = bbox && index.data ? quadsInBbox(bbox).filter((q) => q.code in index.data.quads) : [];
@@ -60,24 +60,16 @@ export function BasemapDownload({ bbox, onSaveArea }: {
 
   const save = useMutation({
     mutationFn: async ({ parts, whole }: { parts: Part[]; whole: boolean }) => {
-      await navigator.storage?.persist?.().catch(() => false);
       if (!opfs.fitsInQuota(sum(parts), await opfs.quota())) {
         throw new Error(`${opfs.formatBytes(sum(parts))} will not fit in this browser's storage.`);
       }
-      setProgress({ n: 0, of: parts.length });
-      for (const [i, p] of parts.entries()) {
-        await opfs.save(p.url);
-        setProgress({ n: i + 1, of: parts.length });
-      }
-      // Only once the statewide file is safely on disk: it holds everything the overview and quads
-      // did, so they are now duplicates. Doing this first would leave a failed download with neither.
-      if (whole) for (const u of redundantWithState(have)) await opfs.remove(u);
-    },
-    onSettled: () => {
-      setProgress(null);
-      // The style query re-reads what is stored, which is what points the protocol at the files.
-      client.invalidateQueries({ queryKey: qk.offlineLayers });
-      client.invalidateQueries({ queryKey: ["basemap-style"] });
+      // The statewide file holds everything the overview and quads did, so once it is on disk they
+      // are duplicates; the job removes them only after it succeeds.
+      await queue.enqueue(parts.map((p) => ({
+        kind: "file", url: p.url, bytes: p.bytes,
+        label: whole ? "Basemap, all of Utah" : p.url === overviewUrl() ? "Basemap overview" : `Basemap quad ${p.url.split("/").pop()?.replace(".pmtiles", "")}`,
+        replaces: whole ? redundantWithState(have) : undefined,
+      })));
     },
   });
 
@@ -94,7 +86,7 @@ export function BasemapDownload({ bbox, onSaveArea }: {
   );
 
   if (!opfs.isSupported()) return null;
-  if (progress) return section(<span className="text-xs">Saving basemap {progress.n}/{progress.of}…</span>);
+  if (pendingBasemap) return section(<span className="text-xs">Saving basemap: {pendingBasemap} left in Downloads</span>);
   // Checked before the index: offline, index.json is unreachable, and "saved" is exactly what
   // someone in the field needs to see.
   // The picker saves layers and maps, not just basemap, so it stays on offer once Utah is saved.

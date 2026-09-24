@@ -6,14 +6,14 @@
 // common case is one tap; showing ticks nothing, since drawing every overlapping layer at once
 // is never what anyone wants.
 import { Dialog } from "@base-ui/react/dialog";
-import { useMutation, useQueries, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries } from "@tanstack/react-query";
 import { useMemo, useState } from "react";
 import { toLayer, useViewCtx } from "@/app";
 import type { ItemRef } from "@/catalog/browse";
 import type { ActiveLayer } from "@/map/map-model";
-import { qk } from "@/query-keys";
-import { type AreaPlan, planArea, saveArea } from "./area";
-import { type CogPlan, planCogArea, saveCogArea } from "./cog-area";
+import { type AreaPlan, planArea } from "./area";
+import { type CogPlan, planCogArea } from "./cog-area";
+import * as queue from "./queue";
 import { overviewUrl, quadUrl, stateUrl } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
 import { type Hit, hitLabel, identifyAt } from "./identify";
@@ -38,7 +38,6 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   target: Target; canSave: boolean; onClose: () => void;
 }) {
   const ctx = useViewCtx();
-  const client = useQueryClient();
   const stored = useStoredLayers();
   const index = useBasemapIndex();
 
@@ -105,31 +104,25 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const pricing = chosen.some((h) => priceOf(h)?.isPending);
   const total = basemapBytes + chosen.reduce((n, h) => n + (priceOf(h)?.data?.bytes ?? 0), 0);
 
-  const [progress, setProgress] = useState<{ n: number; of: number; what: string } | null>(null);
+  // Queued, not run here: the picker closes at once and Downloads (and the notice) track the saves.
   const save = useMutation({
     mutationFn: async () => {
-      await navigator.storage?.persist?.().catch(() => false);
       if (!opfs.fitsInQuota(total, await opfs.quota())) {
         throw new Error(`${opfs.formatBytes(total)} will not fit in this browser's storage.`);
       }
-      const jobs: { what: string; run: () => Promise<unknown> }[] = [
-        ...(basemapBytes ? basemapParts.map((p) => ({ what: "Basemap", run: () => opfs.save(p.url) })) : []),
+      await queue.enqueue([
+        ...(basemapBytes ? basemapParts.map((p) => ({
+          kind: "file" as const, url: p.url, bytes: p.bytes,
+          label: `Basemap ${p.url.split("/").pop()?.replace(".pmtiles", "")}`,
+        })) : []),
         ...chosen.flatMap((h) => {
           const price = priceOf(h)?.data;
           if (!price) return [];
-          return [{ what: h.title, run: () => (price.plan ? saveArea(price.plan) : saveCogArea(price.cog!)) }];
+          return [price.plan
+            ? { kind: "area" as const, plan: price.plan, label: h.title, bytes: price.bytes }
+            : { kind: "cog" as const, plan: price.cog!, label: h.title, bytes: price.bytes }];
         }),
-      ];
-      for (const [i, job] of jobs.entries()) {
-        setProgress({ n: i, of: jobs.length, what: job.what });
-        await job.run();
-      }
-    },
-    onSettled: () => {
-      setProgress(null);
-      client.invalidateQueries({ queryKey: qk.offlineLayers });
-      client.invalidateQueries({ queryKey: ["offline-areas"] });
-      client.invalidateQueries({ queryKey: ["basemap-style"] });
+      ]);
     },
   });
 
@@ -258,11 +251,6 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
 
           <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-3">
             {save.error && <p className="w-full text-sm text-destructive">{save.error.message}</p>}
-            {progress && (
-              <p className="w-full truncate text-sm text-muted-foreground">
-                Saving {progress.n + 1} of {progress.of}: {progress.what}. Keep this page open.
-              </p>
-            )}
             <button type="button" className={btn} disabled={save.isPending || ![...ticked].some((id) => id !== BASEMAP)}
               onClick={show}>Show on map</button>
             {canSave && (

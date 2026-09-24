@@ -22,11 +22,11 @@ export function ensurePmtilesProtocol(): void {
   // Saved areas answer first (offline/area.ts); anything they don't hold goes to the archive as
   // before. A layer with no saved area never touches the disk.
   type Handler = Parameters<typeof maplibregl.addProtocol>[1];
-  const network = protocol.tile as Handler;
+  const network: Handler = (params, abort) => protocol.tile(params, abort);
   const handler: Handler = async (params, abort) => {
     const kind = params.type === "json" ? "json" : "tile";
     const hit = await areaResponse(params.url, kind, abort.signal, () => network(params, abort));
-    return (hit as Awaited<ReturnType<Handler>> | null) ?? network(params, abort);
+    return hit ?? network(params, abort);
   };
   maplibregl.addProtocol("pmtiles", handler);
 }

@@ -14,10 +14,12 @@
 //
 // The quad arithmetic mirrors src/ugs_warehouse/basemap.py; both are tested against the same
 // USGS codes so the viewer never asks for an archive the build did not name.
+import type { StyleSpecification } from "maplibre-gl";
 import { PMTiles } from "pmtiles";
+import { isRecord } from "./guards";
 
 export const BASEMAP_BASE =
-  (import.meta as { env?: Record<string, string> }).env?.VITE_BASEMAP_BASE
+  import.meta.env.VITE_BASEMAP_BASE
   || "https://maps-assets.geology.utah.gov/basemap/";
 
 const CELL = 0.125;                  // 7.5 minutes
@@ -106,8 +108,9 @@ const fallback = () => (fallbackTemplate ??= fetch("https://tiles.openfreemap.or
     // A bad status or a TileJSON with no template is a failure, not an answer: throw so it is not
     // cached, or one 500 would disable the network basemap until the page reloads.
     if (!r.ok) throw new Error(`OpenFreeMap TileJSON: ${r.status}`);
-    const tpl = ((await r.json()) as { tiles?: string[] }).tiles?.[0];
-    if (!tpl) throw new Error("OpenFreeMap TileJSON has no tile template");
+    const tilejson: unknown = await r.json();
+    const tpl = isRecord(tilejson) && Array.isArray(tilejson.tiles) ? tilejson.tiles[0] : undefined;
+    if (typeof tpl !== "string") throw new Error("OpenFreeMap TileJSON has no tile template");
     return tpl;
   })
   .catch(() => { fallbackTemplate = null; return null; }));    // retry on the next tile
@@ -154,6 +157,10 @@ const OFM_ATTRIBUTION = '<a href="https://openfreemap.org" target="_blank">OpenF
  * and the glyphs stay exactly as OpenFreeMap ships them; only where the tiles come from changes,
  * which the tiles allow because ours are built to the same OpenMapTiles schema.
  */
+/** A fetched style document with what rerouteStyle and MapLibre need: version 8, sources, layers. */
+export const isStyle = (v: unknown): v is StyleSpecification =>
+  isRecord(v) && v.version === 8 && isRecord(v.sources) && Array.isArray(v.layers);
+
 export function rerouteStyle<S extends Style>(style: S): S {
   const src = style.sources.openmaptiles;
   if (src?.type !== "vector") return style;

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ActiveLayer } from "@/map/map-model";
-import { quadsFor, saveBbox, whatsHere } from "./whats-here";
+import type { Bbox } from "./guards";
+import { quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
 
 const STATE = [-114.05, 37, -109.04, 42];
 const layers: ActiveLayer[] = [
@@ -41,7 +42,7 @@ describe("whatsHere", () => {
   });
 
   it("matches an area by overlap", () => {
-    const view = { kind: "area" as const, bbox: [-109.7, 38.45, -109.4, 38.65] as [number, number, number, number] };
+    const view: Target = { kind: "area", bbox: [-109.7, 38.45, -109.4, 38.65] };
     expect(whatsHere(layers, view).map((h) => h.id)).toContain("moab");
   });
 });
@@ -54,7 +55,7 @@ describe("saveBbox / quadsFor", () => {
   });
 
   it("keeps an area's own bounds", () => {
-    const bbox = [-112, 40.7, -111.8, 40.8] as [number, number, number, number];
+    const bbox: Bbox = [-112, 40.7, -111.8, 40.8];
     expect(saveBbox({ kind: "area", bbox })).toEqual(bbox);
   });
 });

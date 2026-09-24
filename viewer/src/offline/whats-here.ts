@@ -17,6 +17,10 @@ export type Here = {
   save: { how: "area" | "cog" | "table"; url: string } | null;
 };
 
+/** A row that can be kept offline, with its save method known. */
+export type Saveable = Here & { save: NonNullable<Here["save"]> };
+export const isSaveable = (h: Here): h is Saveable => h.save !== null;
+
 /** The area a save covers: the view for an area target, the 7.5' quad under the finger for a point. */
 export function saveBbox(t: Target): Bbox {
   if (t.kind === "area") return t.bbox;

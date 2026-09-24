@@ -11,8 +11,8 @@ import { useMemo, useState } from "react";
 import { toLayer, useViewCtx } from "@/app";
 import type { ItemRef } from "@/catalog/browse";
 import type { ActiveLayer } from "@/map/map-model";
-import { type AreaPlan, planArea } from "./area";
-import { type CogPlan, planCogArea } from "./cog-area";
+import { planArea } from "./area";
+import { planCogArea } from "./cog-area";
 import { ENGINE_BYTES, ENGINE_KEY, hasEngine } from "./engine";
 import { planTableArea } from "./table-area";
 import * as queue from "./queue";
@@ -21,7 +21,7 @@ import { useBasemapIndex } from "./basemap-download";
 import { type Hit, hitLabel, identifyAt } from "./identify";
 import * as opfs from "./opfs";
 import { useStoredLayers } from "./use-offline";
-import { type Here, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
+import { type Here, isSaveable, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
 
 // Pricing walks each archive's directory; four at a time keeps a busy area from opening dozens
 // of range requests at once on a phone connection.
@@ -33,7 +33,6 @@ async function limit<T>(fn: () => Promise<T>): Promise<T> {
   try { return await fn(); } finally { running--; waiting.shift()?.(); }
 }
 
-type Price = { bytes: number; plan?: AreaPlan; cog?: CogPlan; table?: boolean };
 const BASEMAP = "__basemap__";
 
 export function WhatsHerePicker({ target, canSave, onClose }: {
@@ -52,20 +51,23 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const here = useMemo(() => whatsHere(candidates, target), [candidates, target]);
   const bbox = saveBbox(target);
   const quads = quadsFor(target);
-  const saveable = here.filter((h) => h.save);
+  const saveable = here.filter(isSaveable);
 
   const have = new Set(stored.data?.files.map((f) => f.url));
   const stateSaved = have.has(stateUrl());
-  const basemapParts = stateSaved || !index.data ? [] : [
-    ...(have.has(overviewUrl()) ? [] : [{ url: overviewUrl(), bytes: index.data.overview.bytes }]),
-    ...quads.filter((q) => q.code in index.data!.quads && !have.has(quadUrl(q.code)))
-      .map((q) => ({ url: quadUrl(q.code), bytes: index.data!.quads[q.code].bytes })),
+  const idx = index.data;
+  const basemapParts = stateSaved || !idx ? [] : [
+    ...(have.has(overviewUrl()) ? [] : [{ url: overviewUrl(), bytes: idx.overview.bytes }]),
+    ...quads.flatMap((q) => {
+      const archive = idx.quads[q.code];
+      return archive && !have.has(quadUrl(q.code)) ? [{ url: quadUrl(q.code), bytes: archive.bytes }] : [];
+    }),
   ];
   const basemapOffered = canSave && !stateSaved && basemapParts.length > 0;
 
   const [ticked, setTicked] = useState<Set<string>>(() => new Set(canSave
     // Tables start unticked: most trips want the map, and each table costs a footer read to price.
-    ? [BASEMAP, ...saveable.filter((h) => h.group !== "table" && !have.has(h.save!.url)).map((h) => h.id)] : []));
+    ? [BASEMAP, ...saveable.filter((h) => h.group !== "table" && !have.has(h.save.url)).map((h) => h.id)] : []));
   const toggle = (id: string, on: boolean) => setTicked((prev) => {
     const next = new Set(prev);
     if (on) next.add(id); else next.delete(id);
@@ -74,34 +76,43 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
 
   const prices = useQueries({
     queries: saveable.map((h) => ({
-      queryKey: ["offline-price", h.save!.how, h.save!.url, bbox.join(",")],
-      queryFn: (): Promise<Price> => limit(() => h.save!.how === "area"
-        ? planArea(h.save!.url, bbox).then((plan) => ({ bytes: plan.bytes, plan }))
-        : h.save!.how === "table"
-        ? planTableArea(h.save!.url, bbox).then((cog) => ({ bytes: cog.bytes, cog, table: true }))
-        : planCogArea(h.save!.url, bbox).then((cog) => ({ bytes: cog.bytes, cog }))),
+      queryKey: ["offline-price", h.save.how, h.save.url, bbox.join(",")],
+      // Priced by planning the save itself, so the plan is the job that gets queued.
+      queryFn: (): Promise<queue.AreaJobSpec> => limit(async () => {
+        const { how, url } = h.save;
+        if (how === "area") {
+          const plan = await planArea(url, bbox);
+          return { kind: "area", plan, label: h.title, bytes: plan.bytes };
+        }
+        if (how === "table") {
+          const plan = await planTableArea(url, bbox);
+          return { kind: "table", plan, label: `${h.title} (table)`, bytes: plan.bytes };
+        }
+        const plan = await planCogArea(url, bbox);
+        return { kind: "cog", plan, label: h.title, bytes: plan.bytes };
+      }),
       enabled: canSave && (h.group !== "table" || ticked.has(h.id)),
       staleTime: 5 * 60_000,
       retry: false,
     })),
   });
-  const priceOf = (h: Here) => prices[saveable.indexOf(h)];
+  const priceOf = (h: Here) => prices[saveable.findIndex((s) => s.id === h.id)];
 
   // Showing at a point: ask every vector layer what it has exactly there, so the list is what is
   // under the click, not every layer whose extent covers it (statewide ones always do).
   const querying = !canSave && target.kind === "point";
-  const vectors = here.filter((h) => h.group === "layer" && h.save?.how === "area");
+  const vectors = saveable.filter((h) => h.group === "layer" && h.save.how === "area");
   const identified = useQueries({
     queries: vectors.map((h) => ({
-      queryKey: ["identify", h.save!.url, target.kind === "point" ? `${target.lon.toFixed(6)},${target.lat.toFixed(6)},${Math.round(target.zoom ?? 12)}` : ""],
+      queryKey: ["identify", h.save.url, target.kind === "point" ? `${target.lon.toFixed(6)},${target.lat.toFixed(6)},${Math.round(target.zoom ?? 12)}` : ""],
       queryFn: (): Promise<Hit[]> => limit(() => target.kind === "point"
-        ? identifyAt(h.save!.url, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
+        ? identifyAt(h.save.url, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
       enabled: querying,
       staleTime: 5 * 60_000,
       retry: false,
     })),
   });
-  const hitsOf = (h: Here) => identified[vectors.indexOf(h)]?.data ?? [];
+  const hitsOf = (h: Here) => identified[vectors.findIndex((v) => v.id === h.id)]?.data ?? [];
   const checking = querying ? identified.filter((q) => q.isPending).length : 0;
 
   const chosen = saveable.filter((h) => ticked.has(h.id));
@@ -126,13 +137,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
           label: `Basemap ${p.url.split("/").pop()?.replace(".pmtiles", "")}`,
         })) : []),
         ...chosen.flatMap((h) => {
-          const price = priceOf(h)?.data;
-          if (!price) return [];
-          return [price.plan
-            ? { kind: "area" as const, plan: price.plan, label: h.title, bytes: price.bytes }
-            : price.table
-            ? { kind: "table" as const, plan: price.cog!, label: `${h.title} (table)`, bytes: price.bytes }
-            : { kind: "cog" as const, plan: price.cog!, label: h.title, bytes: price.bytes }];
+          const job = priceOf(h)?.data;
+          return job ? [job] : [];
         }),
       ]);
     },

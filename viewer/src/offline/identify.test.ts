@@ -63,7 +63,8 @@ describe("identifyAt (real PMTiles)", () => {
     };
     const [tx, ty] = toTile((h.minLon + h.maxLon) / 2, (h.minLat + h.maxLat) / 2);
     const tile = await p.getZxy(z, tx, ty);
-    const vt = new VectorTile(new Pbf(new Uint8Array(tile!.data)));
+    if (!tile) throw new Error("the fixture has no tile at its centre");
+    const vt = new VectorTile(new Pbf(new Uint8Array(tile.data)));
     let found: { layer: string; lon: number; lat: number } | null = null;
     for (const name of Object.keys(vt.layers)) {
       const layer = vt.layers[name];
@@ -76,9 +77,10 @@ describe("identifyAt (real PMTiles)", () => {
         if (lon > h.minLon && lon < h.maxLon && lat > h.minLat && lat < h.maxLat) found = { layer: name, lon, lat };
       }
     }
-    expect(found).not.toBeNull();
-    const got = await identifyAt("fixture", found!.lon, found!.lat, 15, archive());
-    expect(got.some((g) => g.layer === found!.layer)).toBe(true);
+    if (!found) throw new Error("the fixture's centre tile has no line inside the archive");
+    const { layer, lon, lat } = found;
+    const got = await identifyAt("fixture", lon, lat, 15, archive());
+    expect(got.some((g) => g.layer === layer)).toBe(true);
 
     expect(await identifyAt("fixture", -100, 30, 15, archive())).toEqual([]);   // Texas: not in this quad
   });

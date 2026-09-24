@@ -56,7 +56,7 @@ describe("planCogArea", () => {
     for (const [image, window] of [[0, [0, 0, 512, 512]], [1, [0, 0, 256, 256]]] as const) {
       const want = await pixels(buffer(), image, [...window]);
       const got = await pixels(cut, image, [...window]);
-      expect(Array.from(got as Uint8Array)).toEqual(Array.from(want as Uint8Array));
+      expect(got).toEqual(want);
     }
   });
 
@@ -72,13 +72,13 @@ describe("assemble", () => {
 
   it("rebuilds any range from blocks, including ones that straddle block edges", () => {
     for (const [s, e] of [[0, 99], [1000, 1100], [BLOCK * 3 + 7, BLOCK * 5 + 11]]) {
-      expect(Array.from(assemble(s, e, BLOCK, get)!)).toEqual(Array.from(bytes.subarray(s, e + 1)));
+      expect(assemble(s, e, BLOCK, get)).toEqual(bytes.slice(s, e + 1));
     }
   });
 
   it("returns the file's last partial block correctly", () => {
     const last = bytes.length - 1;
-    expect(Array.from(assemble(last - 50, last, BLOCK, get)!)).toEqual(Array.from(bytes.subarray(last - 50)));
+    expect(assemble(last - 50, last, BLOCK, get)).toEqual(bytes.slice(last - 50));
   });
 
   it("reports a missing block rather than inventing bytes", () => {

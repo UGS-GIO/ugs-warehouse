@@ -11,7 +11,8 @@ import { ExpirationPlugin } from "workbox-expiration";
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
 import { StaleWhileRevalidate } from "workbox-strategies";
-import { assemble } from "./offline/cog-blocks";
+import { assemble, parseBlockMeta } from "./offline/cog-blocks";
+import { readJson } from "./offline/guards";
 import { fileNameFor, versionOf } from "./offline/opfs-name";
 import { contentTypeFor, rangeHeaders, rangeStatus, resolveRange, STORABLE } from "./offline/range";
 import { isCatalogJson } from "./sw-routes";
@@ -86,8 +87,8 @@ async function storedCogArea(url: string) {
   try {
     const root = await navigator.storage.getDirectory();
     const dir = await (await root.getDirectoryHandle("cogs")).getDirectoryHandle(fileNameFor(url));
-    const meta = JSON.parse(await (await (await dir.getFileHandle("meta.json")).getFile()).text());
-    return { dir, size: meta.size as number, block: meta.block as number, version: meta.version as string | undefined };
+    const meta = parseBlockMeta(await readJson(dir, "meta.json"));
+    return meta && { dir, ...meta };
   } catch {
     return null;
   }
@@ -122,7 +123,8 @@ async function serveCogArea(request: Request, cog: NonNullable<Awaited<ReturnTyp
     if (!file) return miss();
     blocks.set(b, new Uint8Array(await file.arrayBuffer()));
   }
-  const body = assemble(resolved.start, resolved.end, cog.block, (i) => blocks.get(i) ?? null)!;
+  const body = assemble(resolved.start, resolved.end, cog.block, (i) => blocks.get(i) ?? null);
+  if (!body) return miss();
   return new Response(body, {
     status: 206, headers: rangeHeaders(resolved, type),
   });

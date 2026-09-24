@@ -9,10 +9,13 @@
 // files with geotiff.js at a 64 KB block size, so every range it requests is block-aligned. The
 // service worker assembles a requested range from stored blocks (cogs/<encoded url>/<index>), and
 // a range that needs a block we did not save goes to the network, or fails cleanly offline.
-import { fromUrl, type GeoTIFF } from "geotiff";
+import { type BlockedSourceOptions, fromUrl, type GeoTIFF, type RemoteSourceOptions, type TypedArray } from "geotiff";
 import type { Bbox } from "./area";
 import { track } from "./in-flight";
 import { currentVersion, FileChangedError, fileNameFor, versionOf } from "./opfs-name";
+
+import { type BlockMeta, parseBlockMeta } from "./cog-blocks";
+import { isDirectory, isFile, readJson } from "./guards";
 
 export { assemble } from "./cog-blocks";
 
@@ -39,6 +42,12 @@ async function fileHead(url: string): Promise<{ size: number; version?: string }
   return { size: Number(r.headers.get("content-length")), version: versionOf(r.headers) };
 }
 
+/** A TIFF tag's values as numbers; a tiled COG without them cannot be cut. */
+function tagNumbers(v: number | number[] | TypedArray | undefined, tag: string): number[] {
+  if (v === undefined) throw new Error(`This COG has no ${tag}; it can only be saved whole.`);
+  return typeof v === "number" ? [v] : Array.from(v);
+}
+
 /** Blocks covering [start, start + length). */
 function blocksOf(start: number, length: number, block: number): number[] {
   const out: number[] = [];
@@ -57,8 +66,9 @@ export async function planCogArea(url: string, bbox: Bbox,
   // hand it the old directory. Drop that copy first, so the plan is cut from the live file.
   if (!opts.tiff) await dropIfStale(url);
   // Read in the reader's own block size, so planning warms the same blocks drawing will ask for.
-  // geotiff.js accepts blockSize at runtime (remote.js maybeWrapInBlockedSource); its .d.ts lags.
-  const tiff = opts.tiff ?? await fromUrl(url, { blockSize: COG_BLOCK } as Parameters<typeof fromUrl>[1]);
+  // fromUrl passes its options on to the blocked source, whose options type carries blockSize.
+  const options: RemoteSourceOptions & BlockedSourceOptions = { blockSize: COG_BLOCK };
+  const tiff = opts.tiff ?? await fromUrl(url, options);
   const head = opts.size ? { size: opts.size, version: undefined } : await fileHead(url);
   const size = head.size;
   const count = await tiff.getImageCount();
@@ -73,8 +83,8 @@ export async function planCogArea(url: string, bbox: Bbox,
     const img = await tiff.getImage(i);
     if (!img.isTiled) throw new Error("Not a tiled COG; it can only be saved whole.");
     const fd = img.fileDirectory;
-    const offsets = Array.from((await fd.loadValue("TileOffsets")) as ArrayLike<number>);
-    const counts = Array.from((await fd.loadValue("TileByteCounts")) as ArrayLike<number>);
+    const offsets = tagNumbers(await fd.loadValue("TileOffsets"), "TileOffsets");
+    const counts = tagNumbers(await fd.loadValue("TileByteCounts"), "TileByteCounts");
     for (const o of offsets) if (o > 0 && o < firstTile) firstTile = o;
 
     // Every IFD (overviews, internal masks) covers the full-resolution image's extent at its own
@@ -87,7 +97,7 @@ export async function planCogArea(url: string, bbox: Bbox,
     const row = (y: number) => Math.floor(((maxY - y) / (maxY - minY)) * img.getHeight() / th);
     const c0 = Math.max(0, col(ax0)), c1 = Math.min(across - 1, col(ax1));
     const r0 = Math.max(0, row(ay1)), r1 = Math.min(down - 1, row(ay0));
-    const planes = fd.getValue("PlanarConfiguration") === 2 ? (fd.getValue("SamplesPerPixel") as number) : 1;
+    const planes = fd.getValue("PlanarConfiguration") === 2 ? fd.getValue("SamplesPerPixel") ?? 1 : 1;
     for (let p = 0; p < planes; p++) {
       for (let r = r0; r <= r1; r++) {
         for (let c = c0; c <= c1; c++) {
@@ -134,15 +144,16 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
     for (const b of plan.blocks) {
       if (!(await dir.getFileHandle(String(b)).then(() => true, () => false))) missing.push(b);
     }
-    const runs: number[][] = [];
+    // Consecutive blocks, as [first, last] index pairs of at most 64 blocks.
+    const runs: [number, number][] = [];
     for (const b of missing) {
       const run = runs.at(-1);
-      if (run && b === run.at(-1)! + 1 && run.length < 64) run.push(b); else runs.push([b]);
+      if (run && b === run[1] + 1 && b - run[0] < 64) run[1] = b; else runs.push([b, b]);
     }
     let done = plan.blocks.length - missing.length;
-    for (const run of runs) {
-      const start = run[0] * plan.block;
-      const end = Math.min(plan.size, (run.at(-1)! + 1) * plan.block) - 1;
+    for (const [first, last] of runs) {
+      const start = first * plan.block;
+      const end = Math.min(plan.size, (last + 1) * plan.block) - 1;
       const r = await fetch(plan.url, { headers: { range: `bytes=${start}-${end}` } });
       if (!r.ok) throw new Error(`Download failed: ${r.status}`);
       // The plan's offsets belong to one version of the file; bytes of another are garbage there.
@@ -151,9 +162,9 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
         throw new FileChangedError(plan.url);
       }
       const buf = new Uint8Array(await r.arrayBuffer());
-      for (const b of run) {
+      for (let b = first; b <= last; b++) {
         const out = await (await dir.getFileHandle(String(b), { create: true })).createWritable();
-        await out.write(buf.subarray((b - run[0]) * plan.block, (b - run[0] + 1) * plan.block));
+        await out.write(buf.subarray((b - first) * plan.block, (b - first + 1) * plan.block));
         await out.close();
         onProgress?.(++done, plan.blocks.length);
       }
@@ -164,23 +175,20 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
     const meta = await (await dir.getFileHandle("meta.json", { create: true })).createWritable();
     await meta.write(JSON.stringify({
       size: plan.size, block: plan.block, bboxes, version: plan.version, savedAt: Date.now(),
-    } satisfies Meta));
+    } satisfies BlockMeta));
     await meta.close();
   })());
 }
 
-type Meta = { size: number; block: number; bboxes?: Bbox[]; version?: string; savedAt?: number };
-
-async function readMeta(dir: FileSystemDirectoryHandle): Promise<Meta | null> {
-  return dir.getFileHandle("meta.json").then((h) => h.getFile()).then((f) => f.text())
-    .then((t) => JSON.parse(t) as Meta).catch(() => null);
+async function readMeta(dir: FileSystemDirectoryHandle): Promise<BlockMeta | null> {
+  return parseBlockMeta(await readJson(dir, "meta.json"));
 }
 
 /** The areas saved of a file stored by blocks, or null when none is. */
 export async function savedAreasOf(url: string): Promise<Bbox[] | null> {
   const dir = await cogDir(url, false);
   const meta = dir && await readMeta(dir);
-  return meta ? meta.bboxes ?? [] : null;
+  return meta ? meta.bboxes : null;
 }
 
 /** Remove a saved copy cut from a version of `url` other than the live one. */
@@ -208,13 +216,13 @@ export async function listCogAreas(): Promise<StoredBlocks[]> {
   const dir = await root?.getDirectoryHandle(DIR).catch(() => null);
   if (!dir) return out;
   for await (const [name, handle] of dir) {
-    if (handle.kind !== "directory") continue;
+    if (!isDirectory(handle)) continue;
     let bytes = 0;
-    for await (const [n, f] of handle as FileSystemDirectoryHandle) {
-      if (n !== "meta.json" && f.kind === "file") bytes += (await (f as FileSystemFileHandle).getFile()).size;
+    for await (const [n, f] of handle) {
+      if (n !== "meta.json" && isFile(f)) bytes += (await f.getFile()).size;
     }
-    const meta = await readMeta(handle as FileSystemDirectoryHandle);
-    if (meta) out.push({ url: decodeURIComponent(name), bytes, version: meta.version, bboxes: meta.bboxes ?? [], savedAt: meta.savedAt });
+    const meta = await readMeta(handle);
+    if (meta) out.push({ url: decodeURIComponent(name), bytes, version: meta.version, bboxes: meta.bboxes, savedAt: meta.savedAt });
   }
   return out;
 }

@@ -49,7 +49,7 @@ export const zarrSourceQuery = (s: Pick<ZarrSpec, "href" | "variable">) => ({
 export function useZarrProblems(specs: Pick<ZarrSpec, "id" | "href" | "variable">[]): Record<string, string> {
   const results = useQueries({ queries: specs.map(zarrSourceQuery) });
   return Object.fromEntries(specs.flatMap((s, i) => {
-    const e = results[i]?.error as Error | null | undefined;
+    const e = results[i]?.error;
     return e ? [[s.id, describeZarrError(e)]] : [];
   }));
 }
@@ -105,6 +105,6 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [colormapTexture, specKey, readyKey]);
 
-  const states = results.map((r) => ({ isLoading: r.isLoading, error: (r.error as Error | null) ?? null }));
+  const states = results.map((r) => ({ isLoading: r.isLoading, error: r.error ?? null }));
   return { layers, states };
 }

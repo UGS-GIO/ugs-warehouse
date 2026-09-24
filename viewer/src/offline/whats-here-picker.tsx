@@ -16,6 +16,7 @@ import { type AreaPlan, planArea, saveArea } from "./area";
 import { type CogPlan, planCogArea, saveCogArea } from "./cog-area";
 import { overviewUrl, quadUrl, stateUrl } from "./basemap";
 import { useBasemapIndex } from "./basemap-download";
+import { type Hit, hitLabel, identifyAt } from "./identify";
 import * as opfs from "./opfs";
 import { useStoredLayers } from "./use-offline";
 import { type Here, quadsFor, saveBbox, type Target, whatsHere } from "./whats-here";
@@ -82,6 +83,23 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   });
   const priceOf = (h: Here) => prices[saveable.indexOf(h)];
 
+  // Showing at a point: ask every vector layer what it has exactly there, so the list is what is
+  // under the click, not every layer whose extent covers it (statewide ones always do).
+  const querying = !canSave && target.kind === "point";
+  const vectors = here.filter((h) => h.group === "layer" && h.save?.how === "area");
+  const identified = useQueries({
+    queries: vectors.map((h) => ({
+      queryKey: ["identify", h.save!.url, target.kind === "point" ? `${target.lon.toFixed(6)},${target.lat.toFixed(6)},${Math.round(target.zoom ?? 12)}` : ""],
+      queryFn: (): Promise<Hit[]> => limit(() => target.kind === "point"
+        ? identifyAt(h.save!.url, target.lon, target.lat, target.zoom ?? 12) : Promise.resolve([])),
+      enabled: querying,
+      staleTime: 5 * 60_000,
+      retry: false,
+    })),
+  });
+  const hitsOf = (h: Here) => identified[vectors.indexOf(h)]?.data ?? [];
+  const checking = querying ? identified.filter((q) => q.isPending).length : 0;
+
   const chosen = saveable.filter((h) => ticked.has(h.id));
   const basemapBytes = basemapOffered && ticked.has(BASEMAP) ? basemapParts.reduce((n, p) => n + p.bytes, 0) : 0;
   const pricing = chosen.some((h) => priceOf(h)?.isPending);
@@ -121,12 +139,16 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
     onClose();
   };
 
-  const title = target.kind === "point"
+  const title = querying && target.kind === "point"
+    ? `What's here · ${target.lat.toFixed(4)}, ${target.lon.toFixed(4)}`
+    : target.kind === "point"
     ? `Here · quad ${quads[0].code}`
     : `This area · ${quads.length} quad${quads.length === 1 ? "" : "s"}`;
   // When saving, only what can actually be saved is listed: a row you can't tick is noise. That
   // drops datacubes (no offline form) and anything whose pricing failed. Showing (desktop) keeps all.
-  const listed = canSave ? here.filter((h) => h.save && !priceOf(h)?.isError) : here;
+  const listed = canSave ? here.filter((h) => h.save && !priceOf(h)?.isError)
+    : querying ? here.filter((h) => h.group === "map" || hitsOf(h).length > 0)
+    : here;
   const groups = [
     { name: "Data layers", rows: listed.filter((h) => h.group === "layer") },
     { name: "Published maps", rows: listed.filter((h) => h.group === "map") },
@@ -136,18 +158,47 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
     const price = canSave && h.save ? priceOf(h) : undefined;
     const savedWhole = !!h.save && have.has(h.save.url);   // the whole file is already stored
     const disabled = canSave ? !h.save || savedWhole || !!price?.isError : false;
+    const found = querying ? hitsOf(h) : [];
     return (
-      <label key={h.id} className={`flex items-center gap-2 px-3 py-1.5 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>
-        <input type="checkbox" className="h-4 w-4 accent-primary" disabled={disabled}
-          checked={ticked.has(h.id) && !disabled} onChange={(e) => toggle(h.id, e.target.checked)} />
-        <span className="min-w-0 flex-1 truncate" title={h.title}>{h.title}</span>
-        {ctx.isActive(h.id) && <span className="shrink-0 text-xs text-muted-foreground">on map</span>}
-        {canSave && (
-          <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes) : "…"}
+      <div key={h.id}>
+        <label className={`flex items-center gap-2 px-3 py-1.5 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>
+          <input type="checkbox" className="h-4 w-4 accent-primary" disabled={disabled}
+            checked={ticked.has(h.id) && !disabled} onChange={(e) => toggle(h.id, e.target.checked)} />
+          <span className="min-w-0 flex-1">
+            <span className="block truncate" title={h.title}>{h.title}</span>
+            {found.length > 0 && (
+              <span className="block truncate text-xs text-muted-foreground">
+                {[...new Set(found.map((x) => hitLabel(x.properties)).filter(Boolean))].slice(0, 3).join(" · ")
+                  || `${found.length} feature${found.length === 1 ? "" : "s"}`}
+              </span>
+            )}
           </span>
+          {ctx.isActive(h.id) && <span className="shrink-0 text-xs text-muted-foreground">on map</span>}
+          {canSave && (
+            <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+              {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes) : "…"}
+            </span>
+          )}
+        </label>
+        {/* The attributes themselves: what "query what's under my click" is for. Outside the
+            label, so opening it doesn't tick the row. */}
+        {found.length > 0 && (
+          <details className="px-9 pb-1.5 text-xs">
+            <summary className="cursor-pointer text-primary">Attributes</summary>
+            {found.slice(0, 5).map((x, n) => (
+              <dl key={n} className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 border-t border-border pt-1">
+                {Object.entries(x.properties).slice(0, 20).map(([k, v]) => (
+                  <div key={k} className="contents">
+                    <dt className="text-muted-foreground">{k}</dt>
+                    <dd className="break-words">{String(v)}</dd>
+                  </div>
+                ))}
+              </dl>
+            ))}
+            {found.length > 5 && <p className="mt-1 text-muted-foreground">and {found.length - 5} more here</p>}
+          </details>
         )}
-      </label>
+      </div>
     );
   };
 
@@ -155,16 +206,20 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open && !save.isPending) onClose(); }}>
       <Dialog.Portal>
-        <Dialog.Backdrop className="fixed inset-0 z-40 bg-black/40" />
-        <Dialog.Popup className="fixed inset-x-0 bottom-0 z-50 flex max-h-[85vh] flex-col rounded-t-2xl border border-border bg-background shadow-2xl md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-[32rem] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl">
+        {/* Above the Utah header, which sits at z-index 3000 and otherwise covers the title bar. */}
+        <Dialog.Backdrop className="fixed inset-0 z-[3100] bg-black/40" />
+        <Dialog.Popup className="fixed inset-x-0 bottom-0 z-[3101] flex max-h-[85vh] flex-col rounded-t-2xl border border-border bg-background shadow-2xl md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-[32rem] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl">
           <div className="flex items-center gap-2 border-b border-border px-4 py-3">
             <Dialog.Title className="flex-1 text-base font-semibold">{title}</Dialog.Title>
             <Dialog.Close className="rounded px-2 text-muted-foreground hover:text-foreground" aria-label="Close">✕</Dialog.Close>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto py-2">
-            {!listed.length && !basemapOffered && (
-              <p className="px-4 py-2 text-sm text-muted-foreground">{canSave ? "Nothing here can be saved offline." : "Nothing mapped here."}</p>
+            {checking > 0 && (
+              <p className="px-4 py-1 text-xs text-muted-foreground">Checking {checking} more layer{checking === 1 ? "" : "s"}…</p>
+            )}
+            {!listed.length && !basemapOffered && !checking && (
+              <p className="px-4 py-2 text-sm text-muted-foreground">{canSave ? "Nothing here can be saved offline." : "Nothing mapped at this spot."}</p>
             )}
             {basemapOffered && (
               <section>

@@ -5,7 +5,7 @@ import { quadAt, quadsInBbox } from "./basemap";
 import type { Bbox } from "./area";
 
 /** A long press lands on a point; "Save this area" covers the view. */
-export type Target = { kind: "area"; bbox: Bbox } | { kind: "point"; lon: number; lat: number };
+export type Target = { kind: "area"; bbox: Bbox } | { kind: "point"; lon: number; lat: number; zoom?: number };
 
 export type Here = {
   id: string;

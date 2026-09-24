@@ -55,7 +55,7 @@ function MapView() {
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       onBoundsChange={setView}
-      onPickAt={(lon, lat) => setPick({ target: { kind: "point", lon, lat }, canSave: !isDesktop })}
+      onPickAt={(lon, lat, zoom) => setPick({ target: { kind: "point", lon, lat, zoom }, canSave: !isDesktop })}
       relatedFor={relatedFor}
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
     info={dock.kind === "related"

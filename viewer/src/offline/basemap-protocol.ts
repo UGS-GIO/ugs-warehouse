@@ -34,7 +34,8 @@ const archive = (url: string) => {
   return a;
 };
 
-const EMPTY = { data: new Uint8Array() };
+// A new one each time: MapLibre transfers the buffer to its worker, which empties it for reuse.
+const empty = () => ({ data: new Uint8Array() });
 
 /** MapLibre protocol handler for `basemap://{z}/{x}/{y}`. */
 export async function basemapProtocol(
@@ -54,8 +55,8 @@ export async function basemapProtocol(
 
   try {
     const t = await archive(stateUrl()).getZxy(z, x, y, abort.signal);
-    return t ? { data: new Uint8Array(t.data) } : EMPTY;
+    return t ? { data: new Uint8Array(t.data) } : empty();
   } catch {
-    return EMPTY;   // offline and not stored: blank, not an error overlay
+    return empty();   // offline and not stored: blank, not an error overlay
   }
 }

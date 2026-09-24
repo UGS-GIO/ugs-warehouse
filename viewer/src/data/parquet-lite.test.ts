@@ -108,6 +108,13 @@ describe("search scan", () => {
     expect(lite.scanPage(o, scan, { limit: 25, offset: 0 }).rows.map((r) => r.feature_id)).toEqual([4999]);
   });
 
+  it.each([[".0", 2500], ["-01-0", 153]])("finds %s in as many rows as DuckDB's text cast", async (term, want) => {
+    const { lite, o } = await opened();   // "0.0" for a whole double, "2026-01-01" for a date
+    const scan = lite.newScan(term);
+    await lite.scanUntil(o, scan, Infinity);
+    expect(scan.rows.length).toBe(want);
+  });
+
   it("stops a scan that has been replaced", async () => {
     const { lite, o } = await opened();
     const scan = lite.newScan("nothing matches this");

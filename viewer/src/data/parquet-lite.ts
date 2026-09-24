@@ -205,19 +205,39 @@ export type Scan = { term: string; rows: Record<string, unknown>[]; nextGroup: n
 export const newScan = (term: string): Scan => ({ term: term.trim().toLowerCase(), rows: [], nextGroup: 0, done: false });
 
 // Text as DuckDB's VARCHAR cast writes it, so a search finds what the DuckDB path found:
-// "2026-01-02 10:00:00" for a timestamp (a date matches as its prefix), JSON for a nested value.
-function searchText(v: unknown): string {
-  if (v instanceof Date) return v.toISOString().slice(0, 19).replace("T", " ");
-  const clean = sanitize(v);
-  return typeof clean === "object" ? JSON.stringify(clean, (_, x: unknown) => sanitize(x)) : String(clean);
+// "0.0" for a whole double, "5.50" for a DECIMAL(4,2), "2026-01-02" for a date, JSON for a nested value.
+function textOf(e: SchemaElement): (v: unknown) => string {
+  const decimal = e.logical_type?.type === "DECIMAL" ? e.logical_type.scale
+    : e.converted_type === "DECIMAL" ? e.scale ?? 0 : undefined;
+  if (decimal !== undefined) return (v) => Number(v).toFixed(decimal);
+  if (e.type === "DOUBLE") return (v) => wholeDot(Number(v), String(v));
+  // A FLOAT decodes to its exact double (0.1 → 0.10000000149…); DuckDB writes the shortest text
+  // that reads back as the same float.
+  if (e.type === "FLOAT") return (v) => wholeDot(Number(v), shortestFloat(Number(v)));
+  if (e.logical_type?.type === "DATE" || e.converted_type === "DATE") {
+    return (v) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v);
+  }
+  return (v) => {
+    if (v instanceof Date) return v.toISOString().slice(0, 19).replace("T", " ");
+    const clean = sanitize(v);
+    return typeof clean === "object" ? JSON.stringify(clean, (_, x: unknown) => sanitize(x)) : String(clean);
+  };
 }
 
-const matches = (row: Record<string, unknown>, columns: string[], term: string) =>
-  columns.some((c) => row[c] != null && searchText(row[c]).toLowerCase().includes(term));
+const wholeDot = (n: number, text: string) => Number.isInteger(n) && Math.abs(n) < 1e15 ? n.toFixed(1) : text;
+
+function shortestFloat(n: number): string {
+  for (let p = 1; p < 9; p++) {
+    const t = String(Number(n.toPrecision(p)));
+    if (Math.fround(Number(t)) === n) return t;
+  }
+  return String(n);
+}
 
 /** Scan on until `want` rows have matched or the file ends. `alive` stops a superseded scan. */
 export async function scanUntil(o: Opened, scan: Scan, want: number, alive: () => boolean = () => true): Promise<void> {
   const l = layout(o.columns);
+  const shown = o.columns.filter((c) => l.shown.includes(c.name)).map((c) => [c.name, textOf(c)] as const);
   const groups = o.metadata.row_groups;
   // First row of the next group to read, carried forward rather than summed again each round.
   let start = groups.slice(0, scan.nextGroup).reduce((n, g) => n + Number(g.num_rows), 0);
@@ -227,7 +247,9 @@ export async function scanUntil(o: Opened, scan: Scan, want: number, alive: () =
     const rows = await parquetReadObjects({
       file: prefetched(o, l.read, start, end), metadata: o.metadata, compressors, columns: l.read, rowStart: start, rowEnd: end,
     });
-    for (const r of rows) if (matches(r, l.shown, scan.term)) scan.rows.push(r);
+    for (const r of rows) {
+      if (shown.some(([c, text]) => r[c] != null && text(r[c]).toLowerCase().includes(scan.term))) scan.rows.push(r);
+    }
     scan.nextGroup++;
     start = end;
     if (scan.nextGroup >= groups.length) scan.done = true;

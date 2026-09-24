@@ -9,7 +9,7 @@ const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover dis
 /** "41%", or a count when the job has no byte total. */
 export function jobProgress(j: Job): string {
   if (j.state !== "running" || j.done === undefined) return "";
-  if (j.kind === "file") return j.total ? `${Math.round((j.done / j.total) * 100)}%` : opfs.formatBytes(j.done);
+  if (j.kind === "file" || j.kind === "engine") return j.total ? `${Math.round((j.done / j.total) * 100)}%` : opfs.formatBytes(j.done);
   return j.total ? `${Math.round((j.done / j.total) * 100)}%` : "";
 }
 

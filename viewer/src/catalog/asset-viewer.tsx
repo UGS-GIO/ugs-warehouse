@@ -85,7 +85,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
       <PreviewMapSlot spec={spec} />
       <SelectedFeatureCard item={item} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer key={pq.href} href={pq.href} startCollapsed onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
+      {pq && <DataExplorer key={pq.href} href={pq.href} title={String(item.properties?.title ?? item.id ?? "")} startCollapsed onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
         rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}
     </>
   );

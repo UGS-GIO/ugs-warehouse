@@ -43,10 +43,13 @@ export function describe(file: StoredFile, items: ItemLike[], base = BASEMAP_BAS
   const item = items.find((it) => hasHref(it, file.url));
   const updated = item?.data?.properties?.updated;
   const updatedAt = updated ? Date.parse(updated) : NaN;
+  const title = item?.data?.properties?.title;
   return {
     ...file,
     kind: "layer",
-    label: item?.data?.properties?.title ?? decodeURIComponent(file.url.split("/").pop() ?? file.url),
+    // A layer can be saved twice over, as map (PMTiles) and as table (GeoParquet).
+    label: title ? (/\.parquet$/i.test(file.url) ? `${title} (table)` : title)
+      : decodeURIComponent(file.url.split("/").pop() ?? file.url),
     itemHref: item?.href,
     stale: Number.isFinite(updatedAt) && file.savedAt < updatedAt,
   };

@@ -59,12 +59,11 @@ export default defineConfig({
       },
       injectManifest: {
         globPatterns: ["**/*.{js,css,html,svg,woff2}"],
-        // The duckdb-wasm engine (a 197 KiB loader plus two ~800 KiB workers) only pays off next to
-        // its 35 MB .wasm, which globPatterns already leaves out, so precaching it reaches a dead
-        // end. Match `duckdb-browser-*` and not `duckdb-*`: the latter also catches our own 1 KiB
-        // duckdb.ts wrapper, which /discover statically imports, and dropping it fails the whole
-        // route offline. public/stac and public/pmtiles are the gitignored local dev fixtures.
-        globIgnores: ["**/duckdb-browser-*", "stac/**", "pmtiles/**"],
+        // The duckdb-wasm loader and its `eh` worker (~1 MB) are precached so a table saved for
+        // offline can open; the 36 MB .wasm is cached only when someone saves one (offline/engine.ts).
+        // The `mvp` worker serves browsers without Wasm exceptions, which offline tables skip.
+        // public/stac and public/pmtiles are the gitignored local dev fixtures.
+        globIgnores: ["**/duckdb-browser-mvp*", "stac/**", "pmtiles/**"],
       },
     }),
   ],

@@ -19,6 +19,11 @@ suite("describe", () => {
     expect(d).toMatchObject({ kind: "layer", label: "Quaternary Faults", itemHref: item().href, stale: false });
   });
 
+  it("tells a saved table apart from the same layer's map", () => {
+    expect(describe({ url: "https://cdn.example/a.parquet", bytes: 1, savedAt: SAVED }, [item()], BASE).label)
+      .toBe("Quaternary Faults (table)");
+  });
+
   it("flags a layer the catalog has updated since it was saved", () => {
     expect(describe({ url: LAYER, bytes: 1, savedAt: SAVED }, [item("2026-09-20T00:00:00Z")], BASE).stale).toBe(true);
   });

@@ -1,0 +1,11 @@
+# What ugs-basemap-scheduler@ needs to run the monthly basemap trigger (basemap-refresh.tf), and no
+# more: roles/cloudbuild.builds.editor would also let it edit and delete every build in the project.
+#
+# NOT Terraform-managed, like warehouseIapDeploy.yaml: creating a role and binding it on the build
+# project needs Role Admin and Project IAM Admin, which the deploy SA does not hold. Commands in
+# basemap-refresh.tf's header.
+title: Basemap Trigger Runner
+description: Run a Cloud Build trigger. Applied out-of-band.
+stage: GA
+includedPermissions:
+  - cloudbuild.builds.create

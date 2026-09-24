@@ -8,7 +8,14 @@ import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
 import { CheckIcon, CopyIcon, copyCatalogUrl } from "@/catalog/stac-url-chip";
+import { type DataSaverPref, setPref, useDataSaverPref } from "@/lib/data-saver";
 import { getTheme, setTheme, type Theme } from "./theme";
+
+const SAVER: { value: DataSaverPref; label: string }[] = [
+  { value: "auto", label: "Auto (slow connections)" },
+  { value: "on", label: "On" },
+  { value: "off", label: "Off" },
+];
 
 const THEMES: { value: Theme; label: string; icon: string }[] = [
   { value: "light", label: "Light", icon: "☀" },
@@ -26,6 +33,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
   overflow?: NavPage[];  // secondary views (Architecture/Guide/Developers/Review) — always in the menu
   current: string; catalogUrl?: string;
 }) {
+  const saver = useDataSaverPref();
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const pick = (value: Theme) => {
@@ -115,6 +123,21 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                 <Menu.RadioItem key={t.value} value={t.value} className={ITEM} closeOnClick>
                   <span aria-hidden className="w-4 text-center">{t.icon}</span>
                   <span className="flex-1">{t.label}</span>
+                  <Menu.RadioItemIndicator className="text-primary">✓</Menu.RadioItemIndicator>
+                </Menu.RadioItem>
+              ))}
+            </Menu.RadioGroup>
+            <Menu.Separator className="my-1 h-px bg-border" />
+            {/* Holds back previews (the item map) on a slow or metered connection; see
+                lib/data-saver.ts. Auto follows the browser where it says; iPhones don't. */}
+            <div className={HEADING}>Data saver</div>
+            <Menu.RadioGroup value={saver} onValueChange={(value) => {
+              const o = SAVER.find((x) => x.value === value);
+              if (o) setPref(o.value);
+            }}>
+              {SAVER.map((o) => (
+                <Menu.RadioItem key={o.value} value={o.value} className={ITEM} closeOnClick>
+                  <span className="flex-1">{o.label}</span>
                   <Menu.RadioItemIndicator className="text-primary">✓</Menu.RadioItemIndicator>
                 </Menu.RadioItem>
               ))}

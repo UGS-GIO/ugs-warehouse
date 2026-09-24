@@ -30,7 +30,7 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // OOM the tab; the largest layers (e.g. wetlandsoutline ~426k) exceed it, so "All" truncates them
 // (surfaced as "capped at 100,000") and paging is the way through the full table.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
+export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill, startCollapsed = false }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
@@ -39,6 +39,9 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   presetFilter?: ColFilter;  // exact-match filter ANDed ahead of the user's own filters (e.g. clicked feature's FK)
   onClearPreset?: () => void;  // clears presetFilter — wired to the chip's ✕
   fill?: boolean;  // fill the parent's height (docked contexts) instead of the fixed h-112
+  // Start closed, reading nothing until opened: a layer page should cost little more than itself,
+  // so someone on a poor connection can reach the download without loading rows they don't want.
+  startCollapsed?: boolean;
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
   // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
@@ -46,7 +49,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // differs from the map viewer). A pk resolves to the same row across apps.
   const [selPks, setSelPks] = useState<Set<string>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(startCollapsed);
   // Callers key this component by href, so a new dataset arrives as a fresh mount — no reset effect.
   const togglePk = (pk: string) => setSelPks((prev) => {
     const next = new Set(prev);
@@ -73,6 +76,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // From the schema, not a page: a page is fetched WITH these filters, so that would be circular.
   const { data: types } = useQuery({
     queryKey: qk.parquetTypes(href),
+    enabled: !collapsed,
     queryFn: async () => (await import("./parquet-lite")).columnTypes(href),
     staleTime: Infinity,
   });
@@ -112,6 +116,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
         filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
       });
     },
+    enabled: !collapsed,
     placeholderData: keepPreviousData,   // paging back is served from cache
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;

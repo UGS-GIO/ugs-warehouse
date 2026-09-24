@@ -12,7 +12,7 @@
 import { fromUrl, type GeoTIFF } from "geotiff";
 import type { Bbox } from "./area";
 import { track } from "./in-flight";
-import { currentVersion, fileNameFor, versionOf } from "./opfs-name";
+import { currentVersion, FileChangedError, fileNameFor, versionOf } from "./opfs-name";
 
 export { assemble } from "./cog-blocks";
 
@@ -145,6 +145,11 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
       const end = Math.min(plan.size, (run.at(-1)! + 1) * plan.block) - 1;
       const r = await fetch(plan.url, { headers: { range: `bytes=${start}-${end}` } });
       if (!r.ok) throw new Error(`Download failed: ${r.status}`);
+      // The plan's offsets belong to one version of the file; bytes of another are garbage there.
+      if (plan.version && versionOf(r.headers) !== plan.version) {
+        await r.body?.cancel();
+        throw new FileChangedError(plan.url);
+      }
       const buf = new Uint8Array(await r.arrayBuffer());
       for (const b of run) {
         const out = await (await dir.getFileHandle(String(b), { create: true })).createWritable();

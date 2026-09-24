@@ -10,7 +10,7 @@
 // protocol would have built, plus the tile compression) and one file per tile, raw as published.
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
 import { findTile, PMTiles, zxyToTileId } from "pmtiles";
-import { currentVersion, fileNameFor } from "./opfs-name";
+import { currentVersion, FileChangedError, fileNameFor } from "./opfs-name";
 import { track } from "./in-flight";
 
 export type Bbox = [number, number, number, number];
@@ -68,12 +68,19 @@ async function locate(p: PMTiles, h: Awaited<ReturnType<PMTiles["getHeader"]>>, 
 
 /** Every tile of `url` inside `bbox`, with exact byte sizes, read from the directory alone. */
 export async function planArea(url: string, bbox: Bbox, source?: PMTiles): Promise<AreaPlan> {
-  const p = source ?? archiveFor(url);
-  const h = await p.getHeader();
+  const version = source ? undefined : await currentVersion(url).catch(() => undefined);
+  let p = source ?? archiveFor(url);
+  let h = await p.getHeader();
+  // The archive object keeps the header and directories it first read. If the file has been
+  // republished since, those offsets are the old file's: start from a fresh read.
+  if (!source && version && h.etag && h.etag !== version) {
+    archives.delete(url);
+    p = archiveFor(url);
+    h = await p.getHeader();
+  }
   if (!SUPPORTED.has(h.tileCompression)) {
     throw new Error(`This layer's tiles use a compression this browser store does not support (${h.tileCompression}).`);
   }
-  const version = await currentVersion(url).catch(() => undefined);
   const tiles: TileRef[] = [];
   for (let z = h.minZoom; z <= h.maxZoom; z++) {
     for (const [x, y] of tilesAt(bbox, z)) {
@@ -133,7 +140,16 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
     for (const t of plan.tiles) {
       const name = tileName(t.z, t.x, t.y);
       const have = await dir.getFileHandle(name).then(() => true, () => false);
-      if (!have) await write(dir, name, (await p.source.getBytes(t.offset, t.length)).data);
+      if (!have) {
+        const got = await p.source.getBytes(t.offset, t.length);
+        // Offsets come from the directory of the version planned; another version's bytes there
+        // are not this tile.
+        if (plan.meta.version && got.etag && got.etag !== plan.meta.version) {
+          archives.delete(plan.url);   // so the re-plan reads the new directory
+          throw new FileChangedError(plan.url);
+        }
+        await write(dir, name, got.data);
+      }
       onProgress?.(++done, plan.tiles.length);
     }
     const kept = before && before.version === plan.meta.version ? before.bboxes ?? [] : [];

@@ -9,7 +9,7 @@
 // manifest and there is no second store to keep in sync.
 
 import { track } from "./in-flight";
-import { fileNameFor, urlFromFileName } from "./opfs-name";
+import { fileNameFor, urlFromFileName, versionOf } from "./opfs-name";
 
 export { fileNameFor, urlFromFileName };
 
@@ -88,25 +88,33 @@ async function saveOnce(url: string, { signal, onProgress }: SaveOptions): Promi
   const side = `${tmp}.json`;
   const handle = await d.getFileHandle(tmp, { create: true });
   const have = (await handle.getFile()).size;
-  const validator = have
+  const saved = have
     ? await d.getFileHandle(side).then((h) => h.getFile()).then((f) => f.text())
-      .then((t) => JSON.parse(t).validator as string | undefined).catch(() => undefined)
+      .then((t) => JSON.parse(t) as { validator?: string; version?: string }).catch(() => undefined)
     : undefined;
 
   const headers: Record<string, string> = {};
-  if (have && validator) { headers.range = `bytes=${have}-`; headers["if-range"] = validator; }
-  const res = await fetch(url, { signal, headers });
+  if (have && saved?.validator) { headers.range = `bytes=${have}-`; headers["if-range"] = saved.validator; }
+  let res = await fetch(url, { signal, headers });
   if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+  // If-Range is only a request: our CDN ignores it and answers 206 from a file that has since
+  // changed. The rest of a different file would corrupt the partial, so check the version ourselves
+  // and start over when it moved.
+  if (res.status === 206 && (!saved?.version || versionOf(res.headers) !== saved.version)) {
+    await res.body?.cancel();
+    res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+  }
   if (!res.body) throw new Error("Download failed: response had no body to stream.");
 
   const { start, total } = resumeFrom(have, res.status, res.headers.get("content-range"), res.headers.get("content-length"));
   if (start === 0) {
-    // A fresh start: remember what identifies this version, for If-Range next time. A weak ETag
-    // can't be used for a range condition, so Last-Modified stands in.
+    // A fresh start: remember what identifies this version, for If-Range and the check above next
+    // time. A weak ETag can't be used for a range condition, so Last-Modified stands in there.
     const etag = res.headers.get("etag");
-    const v = etag && !etag.startsWith("W/") ? etag : res.headers.get("last-modified");
+    const validator = etag && !etag.startsWith("W/") ? etag : res.headers.get("last-modified");
     const w = await (await d.getFileHandle(side, { create: true })).createWritable();
-    await w.write(JSON.stringify({ validator: v ?? undefined }));
+    await w.write(JSON.stringify({ validator: validator ?? undefined, version: versionOf(res.headers) }));
     await w.close();
   }
 

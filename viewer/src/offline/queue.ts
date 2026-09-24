@@ -8,6 +8,7 @@ import type { AreaPlan } from "./area";
 import type { CogPlan } from "./cog-area";
 import { isNetworkError } from "./online";
 import * as opfs from "./opfs";
+import { FileChangedError } from "./opfs-name";
 
 export type JobSpec =
   | { kind: "file"; url: string; label: string; bytes?: number; replaces?: string[] }
@@ -126,6 +127,21 @@ function update(id: string, patch: Partial<Status>) {
   emit();
 }
 
+/** A fresh plan for an area job whose file changed under it: same area, the new version's offsets. */
+async function replan(job: Job): Promise<Job | null> {
+  if (job.kind === "area" && job.plan.bbox) {
+    const plan = await (await import("./area")).planArea(job.plan.url, job.plan.bbox);
+    return { ...job, plan, bytes: plan.bytes };
+  }
+  if ((job.kind === "cog" || job.kind === "table") && job.plan.bbox) {
+    const plan = job.kind === "table"
+      ? await (await import("./table-area")).planTableArea(job.plan.url, job.plan.bbox)
+      : await (await import("./cog-area")).planCogArea(job.plan.url, job.plan.bbox);
+    return { ...job, plan, bytes: plan.bytes };
+  }
+  return null;
+}
+
 async function perform(job: Job) {
   const progress = (done: number, total?: number) => update(job.id, { done, total });
   if (job.kind === "file") {
@@ -171,7 +187,17 @@ async function work(): Promise<void> {
     update(job.id, { state: "running", error: undefined });
     await persist();
     try {
-      await perform(job);
+      try {
+        await perform(job);
+      } catch (e) {
+        // Republished mid-save: cut the same area again from the new version, once.
+        const again = e instanceof FileChangedError ? await replan(job) : null;
+        if (!again) throw e;
+        jobs = jobs.map((j) => (j.id === job.id ? again : j));
+        emit();
+        await persist();
+        await perform(again);
+      }
       misses.delete(job.id);
       jobs = jobs.filter((j) => j.id !== job.id);
       emit();

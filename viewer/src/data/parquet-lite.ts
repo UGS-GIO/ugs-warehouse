@@ -211,15 +211,17 @@ const matches = (row: Record<string, unknown>, columns: string[], term: string) 
 export async function scanUntil(o: Opened, scan: Scan, want: number, alive: () => boolean = () => true): Promise<void> {
   const l = layout(o.columns);
   const groups = o.metadata.row_groups;
+  // First row of the next group to read, carried forward rather than summed again each round.
+  let start = groups.slice(0, scan.nextGroup).reduce((n, g) => n + Number(g.num_rows), 0);
   while (!scan.done && scan.rows.length < want && alive()) {
     if (scan.nextGroup >= groups.length) { scan.done = true; break; }
-    const start = groups.slice(0, scan.nextGroup).reduce((n, g) => n + Number(g.num_rows), 0);
     const end = start + Number(groups[scan.nextGroup].num_rows);
     const rows = await parquetReadObjects({
       file: prefetched(o, l.read, start, end), metadata: o.metadata, compressors, columns: l.read, rowStart: start, rowEnd: end,
     });
     for (const r of rows) if (matches(r, l.shown, scan.term)) scan.rows.push(r);
     scan.nextGroup++;
+    start = end;
     if (scan.nextGroup >= groups.length) scan.done = true;
   }
 }

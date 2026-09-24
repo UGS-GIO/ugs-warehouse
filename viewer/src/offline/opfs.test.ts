@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { fileNameFor, fitsInQuota, formatBytes, urlFromFileName } from "./opfs";
+import { fileNameFor, fitsInQuota, formatBytes, realQuota, resumeFrom, urlFromFileName } from "./opfs";
 
 const HREF = "https://maps-assets.geology.utah.gov/warehouse/pmtiles/hazards_qfaults_current.pmtiles";
 
@@ -48,5 +48,26 @@ describe("formatBytes", () => {
     expect(formatBytes(12_400_000)).toBe("12.4 MB");
     expect(formatBytes(340_000_000)).toBe("340 MB");
     expect(formatBytes(2_100_000_000)).toBe("2.1 GB");
+  });
+});
+
+describe("realQuota", () => {
+  it("drops Chrome's usage + 10 GiB placeholder", () => {
+    expect(realQuota({ usage: 5e9, quota: 5e9 + 10 * 1024 ** 3 })).toEqual({ usage: 5e9 });
+  });
+  it("keeps a real quota", () => {
+    expect(realQuota({ usage: 5e9, quota: 64e9 })).toEqual({ usage: 5e9, quota: 64e9 });
+  });
+});
+
+describe("resumeFrom", () => {
+  it("continues when the server sends the rest", () => {
+    expect(resumeFrom(100, 206, "bytes 100-999/1000", "900")).toEqual({ start: 100, total: 1000 });
+  });
+  it("starts over when the file changed and the server sent it whole", () => {
+    expect(resumeFrom(100, 200, null, "1200")).toEqual({ start: 0, total: 1200 });
+  });
+  it("starts over when the range doesn't begin where we stopped", () => {
+    expect(resumeFrom(100, 206, "bytes 0-999/1000", "1000")).toEqual({ start: 0, total: 1000 });
   });
 });

@@ -13,8 +13,7 @@ import * as opfs from "./opfs";
 import { removeArea } from "./area";
 import { removeCogArea } from "./cog-area";
 import * as queue from "./queue";
-import { engineBytes, removeEngine } from "./engine";
-import { ENGINE_KEY } from "./table-offline";
+import { ENGINE_KEY, engineBytes, removeEngine } from "./engine";
 import { updateArea, useStaleAreas, useStoredAreas, useStoredLayers } from "./use-offline";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";

@@ -3,13 +3,12 @@
 // answers the table's range reads from the device and the table works with no connection.
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { CheckIcon, DownloadIcon } from "@/catalog/stac-url-chip";
-import { jobProgress } from "./downloads";
-import { hasEngine } from "./engine";
+import { jobProgress } from "./queue";
+import { ENGINE_KEY, hasEngine } from "./engine";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
 import { useJobs, useStoredLayers } from "./use-offline";
 
-export const ENGINE_KEY = ["offline-engine"] as const;
 const CLASS = "inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 
 export function TableOffline({ href, title }: { href: string; title: string }) {

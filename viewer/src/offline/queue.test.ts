@@ -3,7 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const save = vi.fn();
 const remove = vi.fn();
 const discardPartial = vi.fn();
-vi.mock("./opfs", () => ({ save, remove, discardPartial }));
+const sweepPartials = vi.fn().mockResolvedValue(0);
+vi.mock("./opfs", () => ({ save, remove, discardPartial, sweepPartials }));
 const saveArea = vi.fn();
 const planArea = vi.fn();
 vi.mock("./area", () => ({ saveArea, planArea }));
@@ -45,6 +46,7 @@ describe("download queue", () => {
     await q.enqueue([file("a")]);
     await q.enqueue([file("a")]);
     expect(q.snapshot()).toHaveLength(1);
+    await vi.waitFor(() => expect(save).toHaveBeenCalledTimes(1));
     release();
   });
 

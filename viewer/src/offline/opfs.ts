@@ -170,6 +170,42 @@ export async function discardPartial(url: string): Promise<void> {
   await d?.removeEntry(`${fileNameFor(url)}.part.json`).catch(() => {});
 }
 
+/** Downloads stopped part-way: what each has written so far, kept so it can resume. */
+export async function listPartials(): Promise<StoredFile[]> {
+  const d = await dir();
+  const out: StoredFile[] = [];
+  if (!d) return out;
+  for await (const [name, h] of d) {
+    if (h.kind !== "file" || !name.endsWith(".part")) continue;
+    const f = await (h as FileSystemFileHandle).getFile().catch(() => null);
+    if (f) out.push({ url: urlFromFileName(name.slice(0, -".part".length)), bytes: f.size, savedAt: f.lastModified });
+  }
+  return out;
+}
+
+/**
+ * Delete partial downloads no queued job will resume (its job was removed, or the queue was lost),
+ * and sidecars left without their partial. `keep` is the URLs the queue still means to download.
+ */
+export async function sweepPartials(keep: ReadonlySet<string>): Promise<number> {
+  const d = await dir();
+  if (!d) return 0;
+  const names: string[] = [];
+  for await (const [name] of d) names.push(name);
+  const have = new Set(names);
+  let freed = 0;
+  for (const name of names) {
+    const base = name.endsWith(".part") ? name.slice(0, -".part".length)
+      : name.endsWith(".part.json") ? name.slice(0, -".part.json".length) : null;
+    if (base === null) continue;
+    const orphanSidecar = name.endsWith(".json") && !have.has(`${base}.part`);
+    if (!orphanSidecar && keep.has(urlFromFileName(base))) continue;
+    if (name.endsWith(".part")) freed += (await (await d.getFileHandle(name)).getFile()).size;
+    await d.removeEntry(name).catch(() => {});
+  }
+  return freed;
+}
+
 /** Forget one stored artifact. Silent when it was not stored. */
 export async function remove(url: string): Promise<void> {
   const d = await dir();

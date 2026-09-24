@@ -176,10 +176,17 @@ export function run(): Promise<void> {
   return current;
 }
 
+let swept = false;
+
 async function work(): Promise<void> {
   // Another tab may have run jobs while this one waited for the lock: start from what is on disk.
   loaded = null;
   await load();
+  // Once per visit, under the lock so no other tab is mid-download: partials no job will resume.
+  if (!swept) {
+    swept = true;
+    await opfs.sweepPartials(new Set(jobs.flatMap((j) => (j.kind === "file" ? [j.url] : [])))).catch(() => 0);
+  }
   for (;;) {
     const job = jobs.find((j) => j.state === "queued");
     if (!job) break;

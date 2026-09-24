@@ -48,7 +48,5 @@ iap_group = "nrugsall@utah.gov"
 # The PR-preview triggers run as the least-trusted identity, not the Compute SA above:
 # preview_trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/ugs-warehouse-preview-build@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
 
-# Monthly offline-basemap rebuild (basemap-refresh.tf). The SA Cloud Scheduler calls the trigger as,
-# set up by hand first (the file's header); empty: the trigger exists but only runs by hand.
-# basemap_scheduler_service_account = "ugs-basemap-scheduler@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
+# Monthly basemap rebuild (basemap-refresh.tf). Empty: the trigger exists but only runs by hand.
 # basemap_schedule = "0 6 1 * *"

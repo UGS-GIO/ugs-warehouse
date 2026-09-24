@@ -46,7 +46,8 @@ export function planTableBlocks(url: string, size: number, footerLength: number,
 /** Plan against the live file: its size, footer length and row groups, all read from the footer. */
 export async function planTableArea(url: string, bbox: Bbox): Promise<CogPlan & { bbox: Bbox }> {
   const tail = await fetch(url, { headers: { range: "bytes=-8" }, cache: "no-store" });
-  if (!tail.ok) throw new Error(`${tail.status}`);
+  // A 200 would be the whole file, and its first bytes are not the footer length.
+  if (tail.status !== 206) throw new Error(`The server did not answer a range request (${tail.status}).`);
   const size = Number(tail.headers.get("content-range")?.split("/")[1]);
   const version = versionOf(tail.headers);
   // As for a COG (cog-area.ts): DuckDB reads the footer through the service worker, so a saved

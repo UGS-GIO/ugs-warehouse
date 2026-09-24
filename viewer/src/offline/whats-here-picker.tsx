@@ -25,12 +25,17 @@ import { type Here, isSaveable, quadsFor, saveBbox, type Target, whatsHere } fro
 
 // Pricing walks each archive's directory; four at a time keeps a busy area from opening dozens
 // of range requests at once on a phone connection.
+// A finishing task hands its slot straight to the next waiter, so a caller arriving in between
+// cannot take it too and push the count past four.
 let running = 0;
 const waiting: (() => void)[] = [];
 async function limit<T>(fn: () => Promise<T>): Promise<T> {
   if (running >= 4) await new Promise<void>((r) => waiting.push(r));
-  running++;
-  try { return await fn(); } finally { running--; waiting.shift()?.(); }
+  else running++;
+  try { return await fn(); } finally {
+    const next = waiting.shift();
+    if (next) next(); else running--;
+  }
 }
 
 const BASEMAP = "__basemap__";
@@ -117,7 +122,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
 
   // Ticks are set when the picker opens, possibly before the store's first read; what turns out to
   // be saved whole already is left out here rather than queued again.
-  const chosen = saveable.filter((h) => ticked.has(h.id) && !have.has(h.save.url));
+  // What failed to price is not listed (see `listed`), so it is not saved either.
+  const chosen = saveable.filter((h) => ticked.has(h.id) && !have.has(h.save.url) && !priceOf(h)?.isError);
   const basemapBytes = basemapOffered && ticked.has(BASEMAP) ? basemapParts.reduce((n, p) => n + p.bytes, 0) : 0;
   const pricing = chosen.some((h) => priceOf(h)?.isPending);
   // A table needs the table engine on the device too; it is counted once, the first time.

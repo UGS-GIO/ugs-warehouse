@@ -12,7 +12,7 @@
 import { Compression, EtagMismatch, findTile, PMTiles, zxyToTileId } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
 import { type AreaMeta, areaDir, markStored, readAreaMeta, removeArea, tileName, writeFile } from "./area-store";
-import { folderSize } from "./guards";
+import { folderSize, namesIn } from "./guards";
 import { FileChangedError } from "./opfs-name";
 import type { Bbox } from "./guards";
 
@@ -119,10 +119,11 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
     const p = source ?? archiveFor(plan.url);
     const same = before && before.version === plan.meta.version ? before : null;
     let done = 0;
+    // One read of the folder, not a lookup per tile.
+    const stored = await namesIn(dir);
     for (const t of plan.tiles) {
       const name = tileName(t.z, t.x, t.y);
-      const have = await dir.getFileHandle(name).then(() => true, () => false);
-      if (!have) {
+      if (!stored.has(name)) {
         const got = await p.source.getBytes(t.offset, t.length);
         // Offsets come from the directory of the version planned; another version's bytes there
         // are not this tile.

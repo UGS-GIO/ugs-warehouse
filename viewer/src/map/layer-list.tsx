@@ -56,10 +56,11 @@ function Fold({ id, label, action, indent, forceOpen, closed, setClosed, childre
 // A pinned active-layer row that can be dragged to change draw order. Defined at module scope (not
 // inside LayerList) so its useSortable state survives re-renders — an inline component would be a new
 // type each render and remount mid-drag. Kept in lockstep with the plain `Row` below.
-function ActiveRow({ r, colorOf, onToggle, onOpen, openId, offlineHrefOf }: {
+function ActiveRow({ r, colorOf, onToggle, onOpen, openId, offlineHrefOf, problem }: {
   r: LayerRow; colorOf: (id: string) => string | undefined;
   onToggle: (id: string) => void; onOpen: (href: string) => void; openId?: string;
   offlineHrefOf?: (id: string) => string | undefined;
+  problem?: string;   // why this layer draws nothing, shown under its name
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: r.id });
   const style = { transform: CSS.Transform.toString(transform), transition };
@@ -71,7 +72,10 @@ function ActiveRow({ r, colorOf, onToggle, onOpen, openId, offlineHrefOf }: {
       <button type="button" onClick={() => onToggle(r.id)} aria-pressed={true}
         className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <span className="h-3 w-3 shrink-0 rounded-sm border" style={{ background: colorOf(r.id), borderColor: colorOf(r.id) }} />
-        <span className="truncate" title={r.title}>{r.title}</span>
+        <span className="min-w-0">
+          <span className="block truncate" title={r.title}>{r.title}</span>
+          {problem && <span className="block text-xs text-destructive">{problem}</span>}
+        </span>
       </button>
       {offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
       <button type="button" onClick={() => onOpen(r.href)} title="Details"
@@ -82,7 +86,7 @@ function ActiveRow({ r, colorOf, onToggle, onOpen, openId, offlineHrefOf }: {
 
 const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal hover:bg-hover";
 
-export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf }: {
+export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf, problemOf }: {
   rows: LayerRow[];
   activeIds: string[];
   colorOf: (id: string) => string | undefined;
@@ -96,6 +100,8 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
   // The downloadable file behind an active layer (its PMTiles archive), or undefined when it has
   // none. Omit the prop entirely to leave the offline control out.
   offlineHrefOf?: (id: string) => string | undefined;
+  // Why an active layer draws nothing (e.g. a datacube with no published data), shown in its row.
+  problemOf?: (id: string) => string | undefined;
 }) {
   const [filter, setFilter] = useState("");
   // Published maps start closed: they outnumber the serving topics several times over, and someone
@@ -134,7 +140,10 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
         className="flex min-w-0 flex-1 items-center gap-2 text-left">
         <span className="h-3 w-3 shrink-0 rounded-sm border border-muted-foreground/50"
           style={on ? { background: colorOf(r.id), borderColor: colorOf(r.id) } : undefined} />
-        <span className="truncate" title={r.title}>{r.title}</span>
+        <span className="min-w-0">
+          <span className="block truncate" title={r.title}>{r.title}</span>
+          {on && problemOf?.(r.id) && <span className="block text-xs text-destructive">{problemOf(r.id)}</span>}
+        </span>
       </button>
       {/* Active rows only: downloading a layer you are not looking at is not a thing anyone asks for,
           and a single active layer renders through here rather than through the sortable ActiveRow. */}
@@ -170,7 +179,7 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
               <SortableContext items={active.map((r) => r.id)} strategy={verticalListSortingStrategy}>
                 {active.map((r) => (
                   <ActiveRow key={r.id} r={r} colorOf={colorOf} onToggle={onToggle} onOpen={onOpen} openId={openId}
-                    offlineHrefOf={offlineHrefOf} />
+                    offlineHrefOf={offlineHrefOf} problem={problemOf?.(r.id)} />
                 ))}
               </SortableContext>
             </DndContext>

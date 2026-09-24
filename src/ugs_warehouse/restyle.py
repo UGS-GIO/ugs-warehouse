@@ -153,10 +153,13 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
 
     if refresh and not dry_run:
         stac.refresh_catalog()
-    if changed and not dry_run:
-        # A style change is a preview change. `changed` counts every styled item (all are rewritten),
-        # so in practice this starts a run every time; its content-hash skip re-renders only what the
-        # new styles affect, and it re-stamps any thumbnail this rewrite raced.
+    topic_rebound = any(r and cp.split("/")[0] == stac.SERVING_TOPICS_CATALOG
+                        for (cp, _), r in zip(tasks, results, strict=True))
+    if topic_rebound and not dry_run:
+        # A style change is a preview change. Every styled topic item in scope is rewritten, so in
+        # practice a topic restyle always starts a run; its content-hash skip re-renders only what the
+        # new styles affect. Started for all topics, not the rebound ids: an id list runs as a single
+        # task (core/jobs.py), and here it would name nearly every topic.
         jobs.start_topic_thumbs()
     print(f"[restyle] {'would rebind' if dry_run else 'rebound'} {changed} item(s)"
           + ("" if refresh or dry_run else " (run --refresh to refresh items.json asset summaries)"))

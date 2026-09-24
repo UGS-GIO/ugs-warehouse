@@ -159,13 +159,31 @@ def test_a_stamp_keeps_the_catalog_item_conventions(store, monkeypatch):
 
 
 def test_the_stamp_lands_on_the_item_where_it_actually_lives(store, monkeypatch):
-    """The listed path is the truth; a property that disagrees with it must not send the stamp (or
-    the cleanup) somewhere else."""
+    """The listed path is the truth; a property that disagrees with it must not send the stamp
+    somewhere else."""
     path = _publish("wetlands_riverine", **{"ugs:dbt_schema": "hazards"})
     _renders(monkeypatch)
     assert _run(monkeypatch, "--all") == 0
     assert _thumbnail(store, path) is not None
     assert f"{config.THUMBS_PREFIX}/wetlands_riverine/wetlands_riverine.png" in store
+
+
+def test_a_leftover_pre_split_copy_is_left_alone(store, monkeypatch):
+    """Items nest as <catalog>/<schema>/<id>/<id>.json. A copy left at <catalog>/<id>/<id>.json by
+    the pre-split layout (scripts/prune_flat_topic_items.py) isn't the item the viewer lists, and
+    taking it too would process the same topic twice, possibly in two shards at once."""
+    nested = _publish("wetlands_riverine")
+    flat = f"{config.STAC_PREFIX}/ugs-serving-topics/wetlands_riverine/wetlands_riverine.json"
+    store[flat] = before = store[nested]
+    assert thumbs._topic_item_paths() == [nested]
+    styles: list[dict] = []
+    _renders(monkeypatch, styles=styles)
+    # Exit code not asserted: with the copy present, refresh_catalog writes a flat collection index at
+    # the rollup's path, so the run fails its index check.
+    _run(monkeypatch, "--all", "--force")
+    assert _rendered_stems(styles) == ["wetlands_riverine"]
+    assert store[flat] == before
+    assert _thumbnail(store, nested) is not None
 
 
 def test_an_item_whose_id_disagrees_with_its_path_fails_the_run(store, monkeypatch):
@@ -315,6 +333,30 @@ def test_a_night_with_nothing_to_do_writes_nothing(store, monkeypatch):
                         lambda data, p, v, **kw: (writes.append(p), put_if(data, p, v, **kw))[1])
     assert _run(monkeypatch, "--all") == 0
     assert writes == []
+
+
+def test_a_sidecar_that_will_not_read_is_logged_and_re_rendered(store, monkeypatch, capsys):
+    """A sidecar read that keeps failing re-renders the topic every night; the log has to say why."""
+    _publish("wetlands_riverine")
+    styles: list[dict] = []
+    _renders(monkeypatch, styles=styles)
+    assert _run(monkeypatch, "--all") == 0
+    sidecar = thumbs.sha_object("wetlands_riverine")
+    get = gcs.get_bytes
+
+    def sidecar_fails(p):
+        if p == sidecar:
+            raise OSError("503 from GCS")
+        return get(p)
+
+    monkeypatch.setattr(gcs, "get_bytes", sidecar_fails)
+    styles.clear()
+    capsys.readouterr()
+    assert _run(monkeypatch, "--all") == 0
+    assert _rendered_stems(styles) == ["wetlands_riverine"]
+    logged = capsys.readouterr()
+    assert any(sidecar in line and "503 from GCS" in line
+               for line in (logged.out + logged.err).splitlines())
 
 
 def test_the_shards_split_the_topics_between_them_without_overlap(store, monkeypatch):

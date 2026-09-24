@@ -176,7 +176,8 @@ def _render_png(style: dict, bbox: list[float], out: str) -> None:
 
 def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dict | None]:
     """Render + stamp one topic whose item lives at `stac_path`. Returns (outcome code, the thumbnail
-    asset this run put or confirmed on the item; None on skip and failure paths)."""
+    asset now on the item: set for "ok" and "skip:exists", else None). main() checks every returned
+    asset against the rollup index, so the up-to-date path returns it too."""
     stem = item["id"]
     _series_ctx.set(stem)
     pmtiles = ((item.get("assets") or {}).get("pmtiles") or {}).get("href")
@@ -199,12 +200,13 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
     try:
         layers = _drawn_layers(style_url)
     except Exception as e:  # noqa: BLE001 — reported as a failure, never rendered as sand
-        hlog(f"FAIL style {style_url}: {type(e).__name__}: {(str(e).splitlines() or [''])[0]}",
+        hlog(f"FAIL style {style_url}: {_first_line(e)}",
              step="resolve", level="ERROR", category="attention", err=True)
         return "fail:style", None
     want_hash = _thumb_hash(item, layers)
     png_obj, sha_obj = thumb_object(stem), sha_object(stem)
-    # Legacy mis-write to clean up: an earlier build stamped a flat item the catalog never references.
+    # Legacy mis-write to clean up: an earlier build stamped a flat item the catalog never references,
+    # at the path it derived from ugs:dbt_schema.
     flat_stray = f"{config.STAC_PREFIX}/{_collection_path(item)}/{stem}.json"
     thumb_href = config.public_url(png_obj)
 
@@ -253,10 +255,12 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
     if not force and gcs.exists(png_obj) and gcs.exists(sha_obj):
         try:
             up_to_date = gcs.get_bytes(sha_obj).decode().strip() == want_hash
-        except Exception:  # noqa: BLE001 — unreadable sidecar → re-render
-            up_to_date = False
+        except Exception as e:  # noqa: BLE001 — logged; the re-render rewrites the sidecar
+            hlog(f"unreadable sidecar {sha_obj}: {_first_line(e)}; re-rendering", step="resolve",
+                 level="WARNING")
     if up_to_date:
-        hlog("thumbnail up to date (style unchanged)", step="resolve", level="NOTICE", category="expected")
+        hlog("thumbnail up to date (data and style unchanged)", step="resolve", level="NOTICE",
+             category="expected")
         state, asset = ensure_stac_thumbnail()
         return ("skip:gone", None) if state == "gone" else ("skip:exists", asset)
 
@@ -314,13 +318,14 @@ def _stem(path: str) -> str:
 
 
 def _topic_item_paths() -> list[str]:
-    """Every published serving-topic item.json, in topic-id order (skip catalog/collection/items
-    docs). Items are at `<catalog>/<schema>/<id>/<id>.json`; anything else under the prefix is a
-    generated index document."""
+    """Every published serving-topic item.json, in topic-id order. Items are exactly
+    `<catalog>/<schema>/<id>/<id>.json`; anything else under the prefix is an index document, a
+    sidecar, or a copy the pre-split layout left behind (scripts/prune_flat_topic_items.py)."""
+    root = f"{config.STAC_PREFIX}/{CATALOG}/"
     paths = []
-    for path in gcs.list_paths(f"{config.STAC_PREFIX}/{CATALOG}/"):
-        parts = path.split("/")
-        if path.endswith(".json") and len(parts) >= 2 and parts[-1] == f"{parts[-2]}.json":
+    for path in gcs.list_paths(root):
+        parts = path.removeprefix(root).split("/")  # <schema>/<id>/<id>.json
+        if len(parts) == 3 and parts[2] == f"{parts[1]}.json":
             paths.append(path)
     return sorted(paths, key=_stem)
 
@@ -337,7 +342,7 @@ def thumb_path(path: str, force: bool = False) -> tuple[str, dict | None]:
         hlog("item gone since the listing (retired)", step="resolve", level="NOTICE", category="expected")
         return "skip:gone", None
     except Exception as e:  # noqa: BLE001 — reported as a failure, never skipped
-        hlog(f"FAIL unreadable item {path}: {type(e).__name__}: {(str(e).splitlines() or [''])[0]}",
+        hlog(f"FAIL unreadable item {path}: {_first_line(e)}",
              step="resolve", level="ERROR", category="attention", err=True)
         return "fail:unreadable", None
     if item.get("id") != stem:
@@ -369,12 +374,17 @@ def _index_lags(thumbnails: dict[str, dict]) -> bool:
     except FileNotFoundError:
         return True
     except Exception as e:  # noqa: BLE001 — logged; the refresh repairs it or fails loudly itself
-        hlog(f"unreadable {ROLLUP_INDEX}: {type(e).__name__}: {(str(e).splitlines() or [''])[0]}",
+        hlog(f"unreadable {ROLLUP_INDEX}: {_first_line(e)}",
              step="catalog", level="ERROR", category="attention", err=True)
         return True
     keys = stac.INDEX_ASSET_KEYS
     return any({k: listed.get(_stem(path), {}).get(k) for k in keys} != {k: asset.get(k) for k in keys}
                for path, asset in thumbnails.items())
+
+
+def _first_line(e: BaseException) -> str:
+    """The exception type and the first line of its message, for a one-line log entry."""
+    return f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}"
 
 
 def _error_tail(e: BaseException) -> str:
@@ -385,8 +395,8 @@ def _error_tail(e: BaseException) -> str:
 
 def _still_lags(thumbnails: dict[str, dict]) -> bool:
     """`_index_lags` after a refresh: a topic retired since its stamp is rightly absent from the
-    rebuilt index, so only topics still published count. The existence lookups only run when the
-    whole set lags, which is rare."""
+    rebuilt index, so only topics still published count. The existence lookups only run once the
+    index is found behind for some topic, which is rare."""
     return _index_lags(thumbnails) and _index_lags({p: a for p, a in thumbnails.items() if gcs.exists(p)})
 
 
@@ -397,7 +407,8 @@ def main() -> int:
     ap.add_argument("item_id", nargs="*", default=[], help="Topic item id(s); default all")
     ap.add_argument("--all", action="store_true", help="All topics (default when no ids given)")
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--force", action="store_true", help="Re-render even if the style is unchanged")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-render even if the data and style are unchanged")
     args = ap.parse_args()
 
     paths = _topic_item_paths()

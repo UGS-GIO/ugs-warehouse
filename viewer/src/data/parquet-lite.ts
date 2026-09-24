@@ -150,21 +150,14 @@ async function matching(o: Opened, col: string, value: string): Promise<number[]
   return out;
 }
 
-/**
- * One page of the rows where `col` equals `value`: the related-rows view (a clicked feature's
- * children). Reads the key column once, then only the row groups that hold the page's rows.
- */
-export async function readMatching(url: string, col: string, value: string,
-  { limit, offset }: { limit: number; offset: number }): Promise<Page> {
-  const o = await open(url);
+/** The rows at `positions` (ascending, file order), reading only the row groups that hold them. */
+async function readAt(o: Opened, positions: number[]): Promise<Record<string, unknown>[]> {
   const l = layout(o.columns);
-  const all = await matching(o, col, value);
-  const hits = all.slice(offset, offset + limit);
   const rows: Record<string, unknown>[] = [];
   let groupStart = 0;
   for (const group of o.metadata.row_groups) {
     const groupEnd = groupStart + Number(group.num_rows);
-    const inGroup = hits.filter((i) => i >= groupStart && i < groupEnd);
+    const inGroup = positions.filter((i) => i >= groupStart && i < groupEnd);
     if (inGroup.length) {
       const first = inGroup[0];
       const rowEnd = inGroup[inGroup.length - 1] + 1;
@@ -175,7 +168,24 @@ export async function readMatching(url: string, col: string, value: string,
     }
     groupStart = groupEnd;
   }
-  return toPage(rows, all.length, l);
+  return rows;
+}
+
+/**
+ * One page of the rows where `col` equals `value`: the related-rows view (a clicked feature's
+ * children). Reads the key column once, then only the row groups that hold the page's rows.
+ */
+export async function readMatching(url: string, col: string, value: string,
+  { limit, offset }: { limit: number; offset: number }): Promise<Page> {
+  const o = await open(url);
+  const all = await matching(o, col, value);
+  return toPage(await readAt(o, all.slice(offset, offset + limit)), all.length, layout(o.columns));
+}
+
+/** File position of the row carrying `featureId`, or null. */
+export async function rowOf(o: Opened, featureId: number): Promise<number | null> {
+  if (!o.columns.some((c) => c.name === ID_COL)) return null;
+  return (await matching(o, ID_COL, String(featureId)))[0] ?? null;
 }
 
 /**
@@ -184,9 +194,8 @@ export async function readMatching(url: string, col: string, value: string,
  */
 export async function ordinalOf(url: string, featureId: number, only?: { col: string; value: string }): Promise<number | null> {
   const o = await open(url);
-  if (!o.columns.some((c) => c.name === ID_COL)) return null;
-  const row = (await matching(o, ID_COL, String(featureId)))[0];
-  if (row === undefined) return null;
+  const row = await rowOf(o, featureId);
+  if (row === null) return null;
   if (!only) return row;
   const pos = (await matching(o, only.col, only.value)).indexOf(row);
   return pos < 0 ? null : pos;
@@ -195,16 +204,23 @@ export async function ordinalOf(url: string, featureId: number, only?: { col: st
 // ---- search: a progressive scan, row group by row group ----
 //
 // Free-text search matches a term anywhere in any shown column, case-insensitively, as DuckDB's
-// ILIKE '%term%' did. Nothing in a parquet file can answer that without reading the text, so the
-// scan reads one row group at a time (never the geometry) and stops as soon as the page asked for
-// is full; asking for a later page carries on from where it stopped. The matched rows are kept,
-// so paging back costs nothing. It runs in a worker (parquet-scan.worker.ts).
+// ILIKE '%term%' did. The ingest writes that text as one column in a sidecar file
+// (`x.search.parquet` beside `x.parquet`, row for row; vector/sink_archive.py), so the scan reads
+// one column, a row group at a time, and stops as soon as the page asked for is full; a later page
+// carries on from where it stopped. It keeps only the matching row positions and reads a page's
+// rows from the GeoParquet. It runs in a worker (parquet-scan.worker.ts).
+//
+// Files written before the sidecar are scanned by their shown columns, formatted as DuckDB would.
+// TODO: drop that path once every topic has been reingested.
 
-export type Scan = { term: string; rows: Record<string, unknown>[]; nextGroup: number; done: boolean };
+export type Scan = { term: string; hits: number[]; nextGroup: number; done: boolean };
 
-export const newScan = (term: string): Scan => ({ term: term.trim().toLowerCase(), rows: [], nextGroup: 0, done: false });
+export const newScan = (term: string): Scan => ({ term: term.trim().toLowerCase(), hits: [], nextGroup: 0, done: false });
 
-// Text as DuckDB's VARCHAR cast writes it, so a search finds what the DuckDB path found:
+/** Where the search text of `url` lives: its sidecar, next to it. */
+export const searchUrl = (url: string) => url.replace(/\.parquet(?=$|\?)/, ".search.parquet");
+
+// Text as DuckDB's VARCHAR cast writes it, for files with no sidecar:
 // "0.0" for a whole double, "5.50" for a DECIMAL(4,2), "2026-01-02" for a date, JSON for a nested value.
 function textOf(e: SchemaElement): (v: unknown) => string {
   const decimal = e.logical_type?.type === "DECIMAL" ? e.logical_type.scale
@@ -234,33 +250,36 @@ function shortestFloat(n: number): string {
   return String(n);
 }
 
-/** Scan on until `want` rows have matched or the file ends. `alive` stops a superseded scan. */
-export async function scanUntil(o: Opened, scan: Scan, want: number, alive: () => boolean = () => true): Promise<void> {
-  const l = layout(o.columns);
-  const shown = o.columns.filter((c) => l.shown.includes(c.name)).map((c) => [c.name, textOf(c)] as const);
-  const groups = o.metadata.row_groups;
+/**
+ * Scan on until `want` rows have matched or the text ends. `alive` stops a superseded scan.
+ * `sidecar` is the opened search file, or null to scan the GeoParquet's own columns.
+ */
+export async function scanUntil(o: Opened, sidecar: Opened | null, scan: Scan, want: number,
+  alive: () => boolean = () => true): Promise<void> {
+  const src = sidecar ?? o;
+  const texts = sidecar ? [["text", String] as const]
+    : o.columns.filter((c) => layout(o.columns).shown.includes(c.name)).map((c) => [c.name, textOf(c)] as const);
+  const columns = texts.map(([c]) => c);
+  const groups = src.metadata.row_groups;
   // First row of the next group to read, carried forward rather than summed again each round.
   let start = groups.slice(0, scan.nextGroup).reduce((n, g) => n + Number(g.num_rows), 0);
-  while (!scan.done && scan.rows.length < want && alive()) {
+  while (!scan.done && scan.hits.length < want && alive()) {
     if (scan.nextGroup >= groups.length) { scan.done = true; break; }
     const end = start + Number(groups[scan.nextGroup].num_rows);
     const rows = await parquetReadObjects({
-      file: prefetched(o, l.read, start, end), metadata: o.metadata, compressors, columns: l.read, rowStart: start, rowEnd: end,
+      file: prefetched(src, columns, start, end), metadata: src.metadata, compressors, columns, rowStart: start, rowEnd: end,
     });
-    for (const r of rows) {
-      if (shown.some(([c, text]) => r[c] != null && text(r[c]).toLowerCase().includes(scan.term))) scan.rows.push(r);
-    }
+    rows.forEach((r, i) => {
+      if (texts.some(([c, text]) => r[c] != null && text(r[c]).toLowerCase().includes(scan.term))) scan.hits.push(start + i);
+    });
     scan.nextGroup++;
     start = end;
     if (scan.nextGroup >= groups.length) scan.done = true;
   }
 }
 
-/** Position of the feature among a scan's matches so far, or -1. */
-export const scanOrdinal = (scan: Scan, featureId: number) =>
-  scan.rows.findIndex((r) => r[ID_COL] != null && Number(sanitize(r[ID_COL])) === featureId);
-
 /** A page of a scan's matches. Until the scan is done, `total` is a floor and `complete` is false. */
-export function scanPage(o: Opened, scan: Scan, { limit, offset }: { limit: number; offset: number }): Page {
-  return { ...toPage(scan.rows.slice(offset, offset + limit), scan.rows.length, layout(o.columns)), complete: scan.done };
+export async function scanPage(o: Opened, scan: Scan, { limit, offset }: { limit: number; offset: number }): Promise<Page> {
+  const rows = await readAt(o, scan.hits.slice(offset, offset + limit));
+  return { ...toPage(rows, scan.hits.length, layout(o.columns)), complete: scan.done };
 }

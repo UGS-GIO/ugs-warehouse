@@ -4,14 +4,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 // 5,000 rows in three ZSTD row groups, with a geometry column, bbox columns and feature ids:
 // the shape the warehouse publishes (sink_archive).
-const FIXTURE = readFileSync(fileURLToPath(new URL("./__fixtures__/small.parquet", import.meta.url)));
+const BYTES = readFileSync(fileURLToPath(new URL("./__fixtures__/small.parquet", import.meta.url)));
+// Its search sidecar (sink_archive._copy_search), in row groups of the same size.
+const SIDECAR = readFileSync(fileURLToPath(new URL("./__fixtures__/small.search.parquet", import.meta.url)));
 const URL_ = "https://cdn.example/small.parquet";
 
 let requested: string[] = [];
 
 beforeEach(() => {
   requested = [];
-  vi.stubGlobal("fetch", async (_url: string, init?: RequestInit) => {
+  vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+    const FIXTURE = url.endsWith(".search.parquet") ? SIDECAR : BYTES;
     const range = new Headers(init?.headers).get("range");
     if (init?.method === "HEAD") return new Response(null, { headers: { "content-length": String(FIXTURE.length) } });
     const m = range && /bytes=(\d+)-(\d+)/.exec(range);
@@ -73,52 +76,53 @@ describe("parquet-lite", () => {
   });
 });
 
-describe("search scan", () => {
+describe.each([["the sidecar", true], ["the file's own columns", false]])("search scan over %s", (_, withSidecar) => {
   const opened = async () => {
     const lite = await import("./parquet-lite");
     const { asyncBufferFromUrl } = await import("hyparquet");
-    return { lite, o: await lite.openWith(await asyncBufferFromUrl({ url: URL_ })) };
+    const open = async (url: string) => lite.openWith(await asyncBufferFromUrl({ url }));
+    return { lite, o: await open(URL_), side: withSidecar ? await open(lite.searchUrl(URL_)) : null };
   };
 
   it("stops at the row group that fills the page, and carries on for a later one", async () => {
-    const { lite, o } = await opened();
+    const { lite, o, side } = await opened();
     const scan = lite.newScan("DAVIS");   // case does not matter; every third row matches
-    await lite.scanUntil(o, scan, 25);
+    await lite.scanUntil(o, side, scan, 25);
     expect(scan.nextGroup).toBe(1);        // row group 1 held 683 matches: enough
-    const first = lite.scanPage(o, scan, { limit: 25, offset: 0 });
+    const first = await lite.scanPage(o, scan, { limit: 25, offset: 0 });
     expect(first.complete).toBe(false);
     expect(first.rows.map((r) => r.feature_id).slice(0, 3)).toEqual([1, 4, 7]);
-    await lite.scanUntil(o, scan, 1000);
+    await lite.scanUntil(o, side, scan, 1000);
     expect(scan.nextGroup).toBe(2);
   });
 
   it("finishes with the exact total when the term is rare", async () => {
-    const { lite, o } = await opened();
+    const { lite, o, side } = await opened();
     const scan = lite.newScan("fan 4999");
-    await lite.scanUntil(o, scan, 25);
-    const page = lite.scanPage(o, scan, { limit: 25, offset: 0 });
+    await lite.scanUntil(o, side, scan, 25);
+    const page = await lite.scanPage(o, scan, { limit: 25, offset: 0 });
     expect(page).toMatchObject({ total: 1, complete: true });
     expect(page.rows[0]).toMatchObject({ name: "fan 4999", feature_id: 5000 });
   });
 
   it("matches numbers as text, as the DuckDB search did", async () => {
-    const { lite, o } = await opened();
+    const { lite, o, side } = await opened();
     const scan = lite.newScan("4998000");   // big = i * 1000
-    await lite.scanUntil(o, scan, 25);
-    expect(lite.scanPage(o, scan, { limit: 25, offset: 0 }).rows.map((r) => r.feature_id)).toEqual([4999]);
+    await lite.scanUntil(o, side, scan, 25);
+    expect((await lite.scanPage(o, scan, { limit: 25, offset: 0 })).rows.map((r) => r.feature_id)).toEqual([4999]);
   });
 
   it.each([[".0", 2500], ["-01-0", 153]])("finds %s in as many rows as DuckDB's text cast", async (term, want) => {
-    const { lite, o } = await opened();   // "0.0" for a whole double, "2026-01-01" for a date
+    const { lite, o, side } = await opened();   // "0.0" for a whole double, "2026-01-01" for a date
     const scan = lite.newScan(term);
-    await lite.scanUntil(o, scan, Infinity);
-    expect(scan.rows.length).toBe(want);
+    await lite.scanUntil(o, side, scan, Infinity);
+    expect(scan.hits.length).toBe(want);
   });
 
   it("stops a scan that has been replaced", async () => {
-    const { lite, o } = await opened();
+    const { lite, o, side } = await opened();
     const scan = lite.newScan("nothing matches this");
-    await lite.scanUntil(o, scan, 25, () => false);
+    await lite.scanUntil(o, side, scan, 25, () => false);
     expect(scan.nextGroup).toBe(0);
   });
 });

@@ -24,3 +24,11 @@ export async function currentVersion(url: string): Promise<string | undefined> {
   if (!r.ok) throw new Error(`${r.status}`);
   return versionOf(r.headers);
 }
+
+/** Thrown when a file changes while a save planned against it is running: its offsets are void. */
+export class FileChangedError extends Error {
+  constructor(url: string) {
+    super(`${url.split("/").pop()} was republished during the save.`);
+    this.name = "FileChangedError";
+  }
+}

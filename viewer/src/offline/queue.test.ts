@@ -4,6 +4,9 @@ const save = vi.fn();
 const remove = vi.fn();
 const discardPartial = vi.fn();
 vi.mock("./opfs", () => ({ save, remove, discardPartial }));
+const saveArea = vi.fn();
+const planArea = vi.fn();
+vi.mock("./area", () => ({ saveArea, planArea }));
 
 async function fresh() {
   vi.resetModules();
@@ -13,6 +16,8 @@ const file = (url: string) => ({ kind: "file" as const, url, label: url });
 const settle = () => new Promise((r) => setTimeout(r, 0));
 
 beforeEach(() => {
+  saveArea.mockReset().mockResolvedValue(undefined);
+  planArea.mockReset();
   save.mockReset().mockResolvedValue({});
   remove.mockReset().mockResolvedValue(undefined);
   discardPartial.mockReset().mockResolvedValue(undefined);
@@ -78,5 +83,32 @@ describe("download queue", () => {
     await q.remove(q.snapshot()[0].id);
     expect(discardPartial).toHaveBeenCalledWith("a");
     expect(q.snapshot()).toEqual([]);
+  });
+});
+
+describe("an area whose file is republished mid-save", () => {
+  const plan = (bytes: number) => ({ url: "https://cdn/x.pmtiles", tiles: [], bytes, meta: {} as never, bbox: [0, 0, 1, 1] as [number, number, number, number] });
+
+  it("is cut again from the new version, once, and saved", async () => {
+    const q = await fresh();
+    const { FileChangedError } = await import("./opfs-name");
+    saveArea.mockRejectedValueOnce(new FileChangedError("https://cdn/x.pmtiles"));
+    planArea.mockResolvedValue(plan(200));
+    await q.enqueue([{ kind: "area", plan: plan(100), label: "x", bytes: 100 }]);
+    await q.run();
+    expect(planArea).toHaveBeenCalledWith("https://cdn/x.pmtiles", [0, 0, 1, 1]);
+    expect(saveArea).toHaveBeenCalledTimes(2);
+    expect(saveArea.mock.calls[1][0].bytes).toBe(200);
+    expect(q.snapshot()).toEqual([]);
+  });
+
+  it("fails with the reason if the file changes again", async () => {
+    const q = await fresh();
+    const { FileChangedError } = await import("./opfs-name");
+    saveArea.mockRejectedValue(new FileChangedError("https://cdn/x.pmtiles"));
+    planArea.mockResolvedValue(plan(200));
+    await q.enqueue([{ kind: "area", plan: plan(100), label: "x", bytes: 100 }]);
+    await q.run();
+    expect(q.snapshot()[0]).toMatchObject({ state: "failed", error: "x.pmtiles was republished during the save." });
   });
 });

@@ -73,6 +73,35 @@ def _select(source_rel: str) -> str:
     return f"SELECT * EXCLUDE (geom_wkb), {geom_hydrate} AS geom FROM {source_rel}"
 
 
+Extent = tuple[float, float, float, float]
+
+
+def centroid_extent(con: duckdb.DuckDBPyConnection, table: str) -> Extent | None:
+    """The extent of the rows' centroids, or None when no row has geometry."""
+    ext = con.execute(
+        f"SELECT min(ST_X(c)), min(ST_Y(c)), max(ST_X(c)), max(ST_Y(c)) "
+        f"FROM (SELECT ST_Centroid(geom) AS c FROM {table})"
+    ).fetchone()
+    return None if ext is None or ext[0] is None else tuple(float(v) for v in ext)
+
+
+def hilbert_key(extent: Extent | None) -> str:
+    """The sort key: the centroid's Hilbert index over the data's own extent.
+
+    Without bounds, ST_Hilbert indexes the raw float bits of the coordinates, and that order is not
+    spatially local: two points a block apart in Salt Lake City sort far apart. Every row group then
+    spans the state and no bbox filter can skip one. Over the data's extent, nearby rows share a
+    row group.
+    """
+    if extent is None:
+        return "ST_Hilbert(ST_Centroid(geom))"
+    xmin, ymin, xmax, ymax = extent
+    # A zero-width extent (one point, or a column of them) would divide by zero.
+    xmax, ymax = max(xmax, xmin + 1e-9), max(ymax, ymin + 1e-9)
+    box = f"{{'min_x': {xmin!r}, 'min_y': {ymin!r}, 'max_x': {xmax!r}, 'max_y': {ymax!r}}}::BOX_2D"
+    return f"ST_Hilbert(ST_Centroid(geom), {box})"
+
+
 def materialize(con: duckdb.DuckDBPyConnection, source_rel: str | Sequence[str],
                 name: str = "transformed") -> str:
     """Materialize the transform ONCE into a DuckDB table, hilbert-ordered, without ever sorting the
@@ -93,8 +122,8 @@ def materialize(con: duckdb.DuckDBPyConnection, source_rel: str | Sequence[str],
     con.execute(
         f"CREATE OR REPLACE TABLE {ranks} AS "
         f"SELECT rid, row_number() OVER (ORDER BY h, hsh) AS feature_id FROM ("
-        f"  SELECT rowid AS rid, ST_Hilbert(ST_Centroid(geom)) AS h, hash({hydrated}) AS hsh "
-        f"  FROM {hydrated})"
+        f"  SELECT rowid AS rid, {hilbert_key(centroid_extent(con, hydrated))} AS h, "
+        f"  hash({hydrated}) AS hsh FROM {hydrated})"
     )
     total = con.execute(f"SELECT count(*) FROM {ranks}").fetchone()[0]
     con.execute(

@@ -14,6 +14,8 @@ import { PreviewMapProvider } from "./map/preview-map";
 import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
+import { DataSaverBadge } from "./shell/data-saver-badge";
+import { useDataSaver } from "./lib/data-saver";
 
 
 // collKeyOf + idOf live in the data layer (stac.ts) next to CATALOG_URL. idOf is re-exported here so
@@ -252,7 +254,12 @@ function useViewState() {
   // Only while cards show (catalog root / a sub-catalog) — not inside a leaf's item list. Fetches
   // every leaf's items.json so a sub-catalog card (Publications) can aggregate latest-across-series.
   // Shares the ["index", href] cache with the item-list fetch above, so overlapping leaves load once.
-  const coverColls = leafColl ? [] : leafColls;
+  // Decided from the URL, not from `leafColl`: that is unknown until the sub-catalog loads, and in
+  // that gap a layer page fetched every collection's index (all 38 publication series, 400 KB+).
+  const showsCards = view === "catalog" && !itemUrl && (!collectionId || subCats.some((c) => c.id === collectionId));
+  // Data saver shows no covers (catalog/browse.tsx), so it fetches none of the indexes behind them.
+  const saver = useDataSaver();
+  const coverColls = showsCards && !saver ? leafColls : [];
   const coverIdx = useIndexes(coverColls.map((c) => ({ id: c.id, href: c.href })));
   const coversByColl = useMemo(() => {
     const out: Record<string, CoverRef[]> = {};
@@ -535,6 +542,7 @@ export function AppLayout() {
                 className={tab(view === v.id)} onClick={() => setView(v.id)}>{v.label}</button>
             ))}
           </div>
+          <DataSaverBadge />
           {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}
           {/* Always mounted: it carries the theme picker + the overflow views, and below md the
               primary tabs as well. */}

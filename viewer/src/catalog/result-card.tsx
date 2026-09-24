@@ -11,6 +11,7 @@ import type { ItemRef } from "./browse";
 import { collectionLabel, dateOf, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
 import { thumbnailAsset } from "@/stac";
 import { C } from "@/ui/ui";
+import { useDataSaver } from "@/lib/data-saver";
 
 export type Density = "comfortable" | "compact";
 
@@ -55,6 +56,7 @@ const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visibl
 
 // Gallery card — the centerpiece: thumbnail + series + title + meta (+ format chips when roomy).
 export function ResultCard({ it, density, on, link, addSlot }: CardProps) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   const th = thumbnailAsset(it.data);
   const sid = seriesLabel(it);
   const compact = density === "compact";
@@ -68,7 +70,7 @@ export function ResultCard({ it, density, on, link, addSlot }: CardProps) {
         <div className={`${compact ? "h-12 w-12" : "h-20 w-20"} flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted`}>
           {/* No placeholder text: at 48-80px the id just clips ("geolmap_strat_columns_geol…"), so an
               empty slot reads as "no thumbnail" more honestly than a truncated machine name. */}
-          {th && <img src={th.href} alt="" loading="lazy" className="h-full w-full object-cover" />}
+          {th && !saver && <img src={th.href} alt="" loading="lazy" className="h-full w-full object-cover" />}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">

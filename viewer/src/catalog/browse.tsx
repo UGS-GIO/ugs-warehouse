@@ -21,6 +21,7 @@ import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAss
 import { DataTable, Pager } from "@/data/table";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { C, humanize, toggle } from "@/ui/ui";
+import { useDataSaver } from "@/lib/data-saver";
 
 const itemIdOf = (it: ItemRef): string =>
   String(it.data?.id ?? it.href.replace(/\/[^/]+\.json.*$/, "").split("/").pop() ?? it.href);
@@ -127,6 +128,7 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
   collections: CollectionSummary[]; heading: string; onOpen: (href: string) => void;
   onOpenItem: (href: string) => void;
 }) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   if (!collections.length) return <p className={`${C.muted} mt-4`}>Nothing here yet.</p>;
   return (
     <>
@@ -146,7 +148,7 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
               </div>
               <div className="mt-0.5 font-mono text-xs text-muted-foreground">{c.id}</div>
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
-              {c.covers && c.covers.length > 0 && (
+              {!saver && c.covers && c.covers.length > 0 && (
                 <div className="mt-2.5 grid grid-cols-4 gap-1.5" title="Latest covers — click to open">
                   {c.covers.slice(0, 4).map((cv) => (
                     <img key={cv.href} src={cv.thumb} alt={cv.title ?? ""} loading="lazy" title={cv.title ?? ""}
@@ -194,12 +196,13 @@ function Breadcrumb({ crumbs }: { crumbs: { label: string; onClick?: () => void 
 // under "Volume N" headers, newest volume first; otherwise a single flat grid.
 const THUMB_GRID = "grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6";
 function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void }) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   const th = thumbnailAsset(it.data);
   return (
     <div onClick={() => onOpen(it.href)}
       className="cursor-pointer overflow-hidden rounded-md border border-border bg-card hover:border-primary">
       <div className="flex aspect-[3/4] items-center justify-center overflow-hidden bg-muted">
-        {th ? <img src={th.href} alt={gTitle(it)} loading="lazy" className="h-full w-full object-cover" />
+        {th && !saver ? <img src={th.href} alt={gTitle(it)} loading="lazy" className="h-full w-full object-cover" />
             : <span className="p-2 text-center font-mono text-xs text-muted-foreground">{gSeries(it)}</span>}
       </div>
       <div className="p-1.5">

@@ -49,7 +49,7 @@ export const FLOWS: Flow[] = [
       { id: "RC", label: "raster consume + promote|staged COG → public", status: "partial" },
       { id: "STY", label: "ugs-styles|manifest · sprites · glyphs", status: "done" },
       { id: "RS", label: "restyle job|rebind ugs:renders", status: "done", unit: "ugs-warehouse-restyle" },
-      { id: "TH", label: "topic thumbnails|styled PMTiles → PNG", status: "done", unit: "ugs-topics-thumbs" },
+      { id: "TH", label: "topic thumbnails|styled PMTiles → WebP", status: "done", unit: "ugs-topics-thumbs" },
       { id: "MT", label: "DuckLake maintenance", status: "done", unit: "ugs-warehouse-ducklake-maintain" },
       { id: "OUT", label: "DuckLake · GeoParquet|PMTiles · STAC item", status: "done" },
     ],

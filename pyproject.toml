@@ -53,11 +53,12 @@ pubs = [
   "pymysql>=1.1",        # optional: live pub metadata from MySQL (else vendored CSV snapshot)
   "fastembed>=0.3",      # semantic-search embeddings (bge-small via ONNX, no torch) — pubs/embed.py
 ]
-# topics-thumbnail job — headless MapLibre render of styled PMTiles → PNG (vector/thumbs.py).
+# topics-thumbnail job — headless MapLibre render of styled PMTiles → WebP (vector/thumbs.py).
 # Installed in Dockerfile.topics-thumbs, which also runs `playwright install --with-deps chromium`.
+# playwright 1.62 (2026-07-31) is the first release whose screenshot() writes WebP.
 # requests: pulled in transitively by pubs.harvest's logging helpers (hlog) that this job reuses.
 thumbs = [
-  "playwright>=1.40",
+  "playwright>=1.62",
   "requests>=2.31",
 ]
 

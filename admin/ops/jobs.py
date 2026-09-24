@@ -97,7 +97,7 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "(GDAL warp + tile). Use the per-tier buttons to regenerate just one scale.",
         danger=True, tiers=(("24k", "1:24,000"), ("250k", "1:250,000"), ("500k", "1:500,000"))),
     Job("topics-thumbs", "ugs-topics-thumbs", "Topic thumbnails",
-        "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
+        "Render each vector serving-topic's styled PMTiles → preview WebP (headless MapLibre; a neutral "
         "sand style when unstyled). Content-hash skip — re-renders only topics whose data or style "
         "changed. Starts on its own after each vector ingest and restyle, and nightly as a backstop; "
         "stamps the thumbnail assets and refreshes the catalog itself. 3 shards.", tasks=3),

@@ -110,6 +110,13 @@ def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
     return link
 
 
+def topic_thumbnail_asset(stem: str) -> dict:
+    """A serving topic's styled-preview asset. The thumbs job and the vector ingest both stamp it,
+    so both build it here."""
+    return {"href": config.public_url(config.topic_thumbnail_path(stem)), "type": config.WEBP_MIME,
+            "roles": ["thumbnail"], "title": "Styled preview", "description": USAGE_THUMBNAIL}
+
+
 # ---------------------------------------------------------------- items
 
 def file_fields(meta: gcs.FileMeta | None) -> dict:

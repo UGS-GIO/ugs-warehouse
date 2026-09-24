@@ -78,7 +78,10 @@ function useBasemapStyle(id: BasemapId) {
         fetch(spec).then((r): Promise<unknown> => r.json()).catch(() => null),
         offlineStore.whenReady(),
       ]);
-      return isStyle(style) ? rerouteStyle(style) : BLANK_STYLE;
+      // A failure throws rather than settling on the blank style, so the query tries again when
+      // the connection returns; the map shows BLANK_STYLE meanwhile (below).
+      if (!isStyle(style)) throw new Error("basemap style unavailable");
+      return rerouteStyle(style);
     },
     staleTime: Infinity,
   });

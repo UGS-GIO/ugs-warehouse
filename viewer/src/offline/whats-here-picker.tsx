@@ -124,9 +124,12 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const title = target.kind === "point"
     ? `Here · quad ${quads[0].code}`
     : `This area · ${quads.length} quad${quads.length === 1 ? "" : "s"}`;
+  // When saving, only what can actually be saved is listed: a row you can't tick is noise. That
+  // drops datacubes (no offline form) and anything whose pricing failed. Showing (desktop) keeps all.
+  const listed = canSave ? here.filter((h) => h.save && !priceOf(h)?.isError) : here;
   const groups = [
-    { name: "Data layers", rows: here.filter((h) => h.group === "layer") },
-    { name: "Published maps", rows: here.filter((h) => h.group === "map") },
+    { name: "Data layers", rows: listed.filter((h) => h.group === "layer") },
+    { name: "Published maps", rows: listed.filter((h) => h.group === "map") },
   ].filter((g) => g.rows.length);
 
   const row = (h: Here) => {
@@ -141,8 +144,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
         {ctx.isActive(h.id) && <span className="shrink-0 text-xs text-muted-foreground">on map</span>}
         {canSave && (
           <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
-            {!h.save ? "not saveable" : savedWhole ? "saved" : price?.isError ? "can't save"
-              : price?.data ? opfs.formatBytes(price.data.bytes) : "…"}
+            {savedWhole ? "saved" : price?.data ? opfs.formatBytes(price.data.bytes) : "…"}
           </span>
         )}
       </label>
@@ -161,8 +163,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto py-2">
-            {!here.length && !basemapOffered && (
-              <p className="px-4 py-2 text-sm text-muted-foreground">Nothing mapped here.</p>
+            {!listed.length && !basemapOffered && (
+              <p className="px-4 py-2 text-sm text-muted-foreground">{canSave ? "Nothing here can be saved offline." : "Nothing mapped here."}</p>
             )}
             {basemapOffered && (
               <section>

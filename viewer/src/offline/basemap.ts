@@ -6,18 +6,12 @@
 // for high zooms (scripts/build_basemap.py). The style keeps a SINGLE source, `basemap://{z}/{x}/{y}`,
 // and this module decides per tile where the bytes come from:
 //
-//   stored in OPFS  → our archive (the service worker serves its ranges from disk)
-//   otherwise       → OpenFreeMap, exactly as before this existed
-//   neither         → an empty tile, so an offline map draws blank rather than erroring
-//
-// Stored-first rather than ours-first because our extract is clipped to Utah: served to everyone,
-// the neighbouring states would go blank at the border. This way a user who downloads nothing sees
-// no change at all, and one who does sees online what they will see offline.
+//   stored in OPFS  → that archive (the service worker serves its ranges from disk)
+//   otherwise       → the statewide file over the network
+//   neither         → an empty tile: offline, or outside Utah
 //
 // The quad arithmetic mirrors src/ugs_warehouse/basemap.py; both are tested against the same
 // USGS codes so the viewer never asks for an archive the build did not name.
-import type { StyleSpecification } from "maplibre-gl";
-import { isRecord } from "./guards";
 
 export const BASEMAP_BASE =
   import.meta.env.VITE_BASEMAP_BASE
@@ -74,37 +68,7 @@ export function setStoredBasemaps(urls: Iterable<string>): void {
 
 // ---- style ----
 
-type Style = { sources: Record<string, { type: string; url?: string; attribution?: string }> } & Record<string, unknown>;
-
-const OFM_ATTRIBUTION = '<a href="https://openfreemap.org" target="_blank">OpenFreeMap</a> '
-  + '<a href="https://www.openmaptiles.org/" target="_blank">© OpenMapTiles</a> '
-  + 'Data from <a href="https://www.openstreetmap.org/copyright" target="_blank">OpenStreetMap</a>';
-
-/**
- * An OpenFreeMap style with its vector source routed through `basemap://`. Every layer, the sprite
- * and the glyphs stay exactly as OpenFreeMap ships them; only where the tiles come from changes,
- * which the tiles allow because ours are built to the same OpenMapTiles schema.
- */
-/** A fetched style document with what rerouteStyle and MapLibre need: version 8, sources, layers. */
-export const isStyle = (v: unknown): v is StyleSpecification =>
-  isRecord(v) && v.version === 8 && isRecord(v.sources) && Array.isArray(v.layers);
-
-export function rerouteStyle<S extends Style>(style: S): S {
-  const src = style.sources.openmaptiles;
-  if (src?.type !== "vector") return style;
-  return {
-    ...style,
-    sources: {
-      ...style.sources,
-      openmaptiles: {
-        type: "vector", tiles: ["basemap://{z}/{x}/{y}"], minzoom: 0, maxzoom: 14,
-        attribution: src.attribution ?? OFM_ATTRIBUTION,
-      },
-    },
-  };
-}
-
-/** What the map draws when no basemap style can be had at all: data layers over nothing. */
+/** What the map draws before its basemap style resolves: data layers over nothing. */
 export const BLANK_STYLE = {
   version: 8 as const,
   glyphs: "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf",

@@ -81,12 +81,10 @@ registerRoute(isCatalogJson, new StaleWhileRevalidate({
   ],
 }));
 
-// OpenFreeMap's style, sprite, glyphs and TileJSON: the files the map asks for on every load, cached
-// as it asks for them so the basemap's look survives going offline. Tiles are deliberately NOT here:
-// their terms prohibit automated collection, so offline tiles come from our own quad archives.
+// Basemap glyphs, cached as the map asks for them so labels survive going offline (the sprites are
+// precached with the shell; tiles come from saved archives).
 registerRoute(
-  ({ url }) => url.hostname === "tiles.openfreemap.org"
-    && (/^\/(styles|sprites|fonts)\//.test(url.pathname) || url.pathname === "/planet"),
+  ({ url }) => url.hostname === "maps-assets.geology.utah.gov" && url.pathname.startsWith("/styles/fonts/"),
   new StaleWhileRevalidate({
     cacheName: "ugs-basemap-style",
     plugins: [

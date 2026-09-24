@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { MercatorCoordinate } from "maplibre-gl";
-import { OVERVIEW_MAXZOOM, overviewUrl, quadAt, quadsInBbox, quadUrl, redundantWithState, rerouteStyle } from "./basemap";
+import { OVERVIEW_MAXZOOM, overviewUrl, quadAt, quadsInBbox, quadUrl, redundantWithState } from "./basemap";
 import { archiveFor, pickArchive, tileCenter } from "./basemap-protocol";
 
 /** The z/x/y tile containing a point (standard web-mercator XYZ). */
@@ -63,38 +63,6 @@ describe("quadsInBbox", () => {
 
   it("returns one quad for a view inside a single quad", () => {
     expect(quadsInBbox([-111.9, 40.76, -111.88, 40.77]).map((q) => q.code)).toEqual(["40111g8"]);
-  });
-});
-
-describe("rerouteStyle", () => {
-  const ofm = {
-    version: 8, sprite: "https://tiles.openfreemap.org/sprites/ofm", layers: [{ id: "water" }],
-    sources: {
-      ne2_shaded: { type: "raster", tiles: ["https://tiles.openfreemap.org/natural_earth/{z}/{x}/{y}.png"] },
-      openmaptiles: { type: "vector", url: "https://tiles.openfreemap.org/planet" },
-    },
-  };
-
-  it("routes only the vector source through basemap://", () => {
-    const s = rerouteStyle(ofm);
-    expect(s.sources.openmaptiles).toMatchObject({ type: "vector", tiles: ["basemap://{z}/{x}/{y}"], maxzoom: 14 });
-    expect(s.sources.openmaptiles.url).toBeUndefined();
-  });
-
-  it("leaves layers, sprite and the other sources exactly as shipped", () => {
-    const s = rerouteStyle(ofm);
-    expect(s.layers).toBe(ofm.layers);
-    expect(s.sprite).toBe(ofm.sprite);
-    expect(s.sources.ne2_shaded).toBe(ofm.sources.ne2_shaded);
-  });
-
-  it("keeps attribution on the rerouted source", () => {
-    expect(rerouteStyle(ofm).sources.openmaptiles).toMatchObject({ attribution: expect.stringMatching(/OpenStreetMap/) });
-  });
-
-  it("does not touch a style without an OpenMapTiles vector source", () => {
-    const sat = { version: 8, sources: { sat: { type: "raster" } }, layers: [] };
-    expect(rerouteStyle(sat)).toBe(sat);
   });
 });
 

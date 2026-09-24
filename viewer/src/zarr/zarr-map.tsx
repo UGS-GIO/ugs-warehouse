@@ -10,10 +10,14 @@ import { useMemo, useState } from "react";
 import { Map as MapGL, NavigationControl } from "react-map-gl/maplibre";
 
 import { type Asset, cubeVariables, nonSpatialDimensions, type StacDoc } from "@/stac";
+import { DIRECT, protomapsStyle } from "@/map/basemap-style";
+import { ensurePmtilesProtocol } from "@/map/pmtiles-protocol";
 import { DeckOverlay } from "./zarr-overlay";
 import { useZarrLayers } from "./use-zarr-layers";
 
-const POSITRON = "https://tiles.openfreemap.org/styles/positron";
+ensurePmtilesProtocol();
+
+const LIGHT_BASEMAP = protomapsStyle("white", DIRECT);
 const UTAH: [number, number, number, number] = [-114.1, 36.9, -108.9, 42.1];
 
 export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
@@ -45,7 +49,7 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
         <MapGL
           mapLib={maplibregl}
           initialViewState={{ bounds: [w, s, e, n], fitBoundsOptions: { padding: 20 } }}
-          mapStyle={POSITRON}
+          mapStyle={LIGHT_BASEMAP}
           style={{ width: "100%", height: "100%" }}
         >
           <NavigationControl position="top-right" showCompass={false} />

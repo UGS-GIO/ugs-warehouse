@@ -6,7 +6,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { GeolocateControl, Layer, NavigationControl, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
-import { BLANK_STYLE, isStyle, rerouteStyle } from "@/offline/basemap";
+import { BLANK_STYLE } from "@/offline/basemap";
+import { type Flavor, GLYPHS, protomapsStyle } from "./basemap-style";
 import { basemapProtocol } from "@/offline/basemap-protocol";
 import * as offlineStore from "@/offline/store";
 import { MapControl } from "./map-control";
@@ -39,9 +40,7 @@ function writeCam({ longitude, latitude, zoom }: Cam): void {
   history.replaceState(null, "", `${location.pathname}?${p}`);
 }
 
-const ofm = (s: string) => `https://tiles.openfreemap.org/styles/${s}`;
-// Ours, so it names glyphs itself (the OpenFreeMap basemaps bring their own) — else no labels (#116).
-const GLYPHS = "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf";
+// Names glyphs itself, so data-layer labels still draw over imagery — else no labels (#116).
 const SATELLITE: maplibregl.StyleSpecification = {
   version: 8,
   glyphs: GLYPHS,
@@ -49,39 +48,29 @@ const SATELLITE: maplibregl.StyleSpecification = {
   layers: [{ id: "sat", type: "raster", source: "sat" }],
 };
 const BASEMAPS = {
-  Streets: ofm("liberty"), Light: ofm("positron"), Satellite: SATELLITE,
-} satisfies Record<string, string | maplibregl.StyleSpecification>;
+  Streets: "light", Light: "white", Satellite: SATELLITE,
+} satisfies Record<string, Flavor | maplibregl.StyleSpecification>;
 type BasemapId = keyof typeof BASEMAPS;
 
 const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
 
 let basemapProtocolReady = false;
 
-// Streets and Light keep OpenFreeMap's look; only their vector source is routed through basemap://
-// (offline/basemap.ts), so a downloaded quad draws from disk. The stored list is read in the same
-// query, before the style is handed to the map: the protocol has to know what is on disk before
-// the map asks for its first tile. No style at all (offline, never cached) falls back to a blank
-// one, so the data layers still draw.
+// Streets and Light read through basemap:// (offline/basemap-protocol.ts), so a saved archive draws
+// from disk. The protocol has to know what is on disk before the map asks for its first tile, so
+// the style waits for the store's first read.
 function useBasemapStyle(id: BasemapId) {
   return useQuery({
     queryKey: qk.basemapStyle(id),
-    queryFn: async (): Promise<string | maplibregl.StyleSpecification> => {
+    queryFn: async (): Promise<maplibregl.StyleSpecification> => {
       const spec = BASEMAPS[id];
       if (typeof spec !== "string") return spec;
       if (!basemapProtocolReady) {
         basemapProtocolReady = true;
         maplibregl.addProtocol("basemap", basemapProtocol);
       }
-      // The store fills the protocol's set of saved archives; wait for its first read, or the first
-      // tiles offline would be asked of the network.
-      const [style] = await Promise.all([
-        fetch(spec).then((r): Promise<unknown> => r.json()).catch(() => null),
-        offlineStore.whenReady(),
-      ]);
-      // A failure throws rather than settling on the blank style, so the query tries again when
-      // the connection returns; the map shows BLANK_STYLE meanwhile (below).
-      if (!isStyle(style)) throw new Error("basemap style unavailable");
-      return rerouteStyle(style);
+      await offlineStore.whenReady();
+      return protomapsStyle(spec);
     },
     staleTime: Infinity,
   });

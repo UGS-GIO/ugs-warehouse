@@ -8,6 +8,7 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
 import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
+import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
@@ -18,7 +19,7 @@ import { UiSelect } from "@/ui/select";
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 
-const POSITRON = "https://tiles.openfreemap.org/styles/positron";
+const LIGHT_BASEMAP = protomapsStyle("white", DIRECT);
 
 // Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders, not
 // faux cartography. fill/line/circle all added so any geometry type shows.
@@ -220,7 +221,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
           mapLib={maplibregl}
           onLoad={() => setMapLoaded(true)}
           initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
-          mapStyle={POSITRON}
+          mapStyle={LIGHT_BASEMAP}
           interactiveLayerIds={isVector ? layerIds : undefined}
           onClick={onMapClick}
           style={{ width: "100%", height: "100%" }}

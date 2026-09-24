@@ -36,6 +36,8 @@ CATALOG = stac.SERVING_TOPICS_CATALOG  # items nest one level under it, per mart
 # already covers the layers, so a restyle or a SAND_LAYERS edit needs no bump).
 RENDERER_VERSION = "1"
 RENDER_TIMEOUT_MS = int(os.environ.get("TOPIC_THUMB_TIMEOUT_MS", "30000"))
+# Re-reads allowed when another writer keeps changing an item between the stamp's read and write.
+STAMP_ATTEMPTS = 5
 THUMB_W = int(os.environ.get("TOPIC_THUMB_W", "480"))
 THUMB_H = int(os.environ.get("TOPIC_THUMB_H", "320"))
 
@@ -207,29 +209,39 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
     thumb_href = config.public_url(png_obj)
 
     def ensure_stac_thumbnail(meta: gcs.FileMeta | None = None) -> tuple[str, dict | None]:
-        """Stamp onto the item as it is in GCS at write time, not the copy read before rendering:
-        writing that back would revert an ingest that landed mid-render, or re-create a topic retired
-        meanwhile. The gap left is this read to its write, as for every other item writer here.
-        Returns ("stamped" | "current" | "gone", the thumbnail asset)."""
-        try:
-            fresh = json.loads(gcs.get_bytes(stac_path).decode())
-        except FileNotFoundError:
-            return "gone", None
-        assets = fresh.setdefault("assets", {})
-        current = assets.get("thumbnail") or {}
-        # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
-        # the file:size/file:checksum an earlier render stamped instead of dropping them. Same asset
-        # the ingest stamps (vector/sink_stac.py), usage hint included.
-        want = {**current, "href": thumb_href, "type": "image/png", "roles": ["thumbnail"],
-                "title": "Styled preview", "description": stac.USAGE_THUMBNAIL, **stac.file_fields(meta)}
-        state = "current"
-        if current != want:
+        """Stamp onto the item as it is in GCS, and only if it is still that version when the write
+        lands (a GCS generation match). A write in between (an ingest, a restyle, an ops-console
+        edit) is re-read and merged instead of reverted, and a topic retired meanwhile is never
+        re-created. Returns ("stamped" | "current" | "gone", the thumbnail asset)."""
+        for _ in range(STAMP_ATTEMPTS):
+            try:
+                raw, version = gcs.get_bytes_versioned(stac_path)
+            except FileNotFoundError:
+                return "gone", None
+            fresh = json.loads(raw.decode())
+            assets = fresh.setdefault("assets", {})
+            current = assets.get("thumbnail") or {}
+            # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
+            # the file:size/file:checksum an earlier render stamped instead of dropping them. Same
+            # asset the ingest stamps (vector/sink_stac.py), usage hint included.
+            want = {**current, "href": thumb_href, "type": "image/png", "roles": ["thumbnail"],
+                    "title": "Styled preview", "description": stac.USAGE_THUMBNAIL, **stac.file_fields(meta)}
+            if current == want:
+                state = "current"
+                break
             assets["thumbnail"] = want
-            hlog(f"stamping thumbnail asset on STAC item JSON -> {stac_path}", step="stac")
-            # Same headers as stac.write_item, so a stamped item doesn't flip to no-cache.
-            gcs.put_bytes(json.dumps(fresh, indent=2).encode("utf-8"), stac_path,
-                          content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
+            try:
+                # Same headers as stac.write_item, so a stamped item doesn't flip to no-cache.
+                gcs.put_bytes_if_unchanged(json.dumps(fresh, indent=2).encode("utf-8"), stac_path, version,
+                                           content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
+            except gcs.Changed:
+                hlog(f"{stac_path} changed between read and write; re-reading", step="stac", level="NOTICE")
+                continue
+            hlog(f"stamped thumbnail asset on STAC item JSON -> {stac_path}", step="stac")
             state = "stamped"
+            break
+        else:
+            raise RuntimeError(f"{stac_path} kept changing under the stamp; gave up after {STAMP_ATTEMPTS} tries")
         # Self-heal: drop the flat stray an earlier build mis-wrote. `stem` is a topic id, never
         # "collection", so collection.json (same level) is never touched.
         if gcs.exists(flat_stray):

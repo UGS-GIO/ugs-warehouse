@@ -27,7 +27,10 @@ export type SaveOptions = {
 
 /** True when this browser can store artifacts at all (OPFS + a writable stream). */
 export const isSupported = (): boolean =>
-  typeof navigator !== "undefined" && !!navigator.storage?.getDirectory;
+  typeof navigator !== "undefined" && !!navigator.storage?.getDirectory
+  // iOS had getDirectory from 15.2 but createWritable only from 26: without this, iOS 15-18 offer
+  // saves that fail on the first write.
+  && typeof FileSystemFileHandle !== "undefined" && "createWritable" in FileSystemFileHandle.prototype;
 
 async function dir(create = false): Promise<FileSystemDirectoryHandle | null> {
   if (!isSupported()) return null;

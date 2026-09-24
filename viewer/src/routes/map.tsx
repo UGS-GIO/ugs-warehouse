@@ -12,6 +12,7 @@ import { colorForId } from "@/map/map-model";
 import { relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapDownload } from "@/offline/basemap-download";
+import { isSupported } from "@/offline/opfs";
 import { WhatsHerePicker } from "@/offline/whats-here-picker";
 import type { Target } from "@/offline/whats-here";
 import { useIsDesktop } from "@/ui/use-breakpoint";
@@ -59,7 +60,7 @@ function MapView() {
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       onBoundsChange={setView}
-      onPickAt={(lon, lat, zoom) => setPick({ target: { kind: "point", lon, lat, zoom }, canSave: !isDesktop })}
+      onPickAt={(lon, lat, zoom) => setPick({ target: { kind: "point", lon, lat, zoom }, canSave: !isDesktop && isSupported() })}
       relatedFor={relatedFor}
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
     info={dock.kind === "related"

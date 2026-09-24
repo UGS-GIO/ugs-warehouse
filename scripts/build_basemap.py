@@ -112,8 +112,8 @@ def _pmtiles(*args: str) -> str:
     """Run the `pmtiles` CLI and return its stdout; a failure raises with the CLI's own message."""
     try:
         proc = subprocess.run(["pmtiles", *args], check=True, capture_output=True, text=True)
-    except FileNotFoundError as e:
-        raise RuntimeError("pmtiles CLI not found on PATH (install go-pmtiles)") from e
+    except OSError as e:  # missing or not executable
+        raise RuntimeError(f"could not run the pmtiles CLI ({e}); is go-pmtiles installed?") from e
     except subprocess.CalledProcessError as e:
         detail = (e.stderr or e.stdout or "").strip()
         raise RuntimeError(
@@ -139,7 +139,10 @@ def verify_archives(out: Path) -> None:
         raise RuntimeError(f"utah.pmtiles: maxzoom is {header['maxzoom']}, expected {MAXZOOM}")
 
     metadata = json.loads(_pmtiles("show", str(utah), "--metadata"))
-    have_layers = {layer.get("id") for layer in metadata.get("vector_layers", [])}
+    layers = metadata.get("vector_layers") if isinstance(metadata, dict) else None
+    if not isinstance(layers, list):
+        raise RuntimeError("utah.pmtiles: metadata has no vector_layers list")
+    have_layers = {layer.get("id") for layer in layers if isinstance(layer, dict)}
     missing = sorted(REQUIRED_LAYERS - have_layers)
     if missing:
         raise RuntimeError(f"utah.pmtiles: missing vector_layers: {', '.join(missing)}")

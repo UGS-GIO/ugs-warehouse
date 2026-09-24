@@ -114,10 +114,21 @@ def test_verify_archives_stops_on_wrong_maxzoom(monkeypatch, tmp_path):
         build_basemap.verify_archives(tmp_path)
 
 
-def test_verify_archives_explains_a_missing_pmtiles_cli(monkeypatch, tmp_path):
+@pytest.mark.parametrize("error", [
+    FileNotFoundError(2, "No such file or directory", "pmtiles"),
+    PermissionError(13, "Permission denied", "pmtiles"),
+])
+def test_verify_archives_explains_a_pmtiles_cli_it_cannot_run(monkeypatch, tmp_path, error):
     def run(cmd, **kwargs):
-        raise FileNotFoundError(2, "No such file or directory", "pmtiles")
+        raise error
 
     monkeypatch.setattr(build_basemap.subprocess, "run", run)
-    with pytest.raises(RuntimeError, match="pmtiles CLI not found"):
+    with pytest.raises(RuntimeError, match="could not run the pmtiles CLI"):
+        build_basemap.verify_archives(tmp_path)
+
+
+@pytest.mark.parametrize("metadata", ["null", '"text"', "[]", '{"vector_layers": "roads"}', "{}"])
+def test_verify_archives_stops_on_metadata_without_a_layer_list(monkeypatch, tmp_path, metadata):
+    monkeypatch.setattr(build_basemap.subprocess, "run", _fake_pmtiles(metadata=metadata))
+    with pytest.raises(RuntimeError, match="no vector_layers list"):
         build_basemap.verify_archives(tmp_path)

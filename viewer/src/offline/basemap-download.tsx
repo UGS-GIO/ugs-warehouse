@@ -18,7 +18,11 @@ import { useJobs } from "./use-offline";
 // Past this many quads the view is a region, not a work area; the statewide save covers that.
 const MAX_QUADS = 40;
 
-type Index = { state?: { bytes: number }; overview: { bytes: number }; quads: Record<string, { bytes: number }> };
+type Index = {
+  state?: { bytes: number }; overview: { bytes: number }; quads: Record<string, { bytes: number }>;
+  /** When the published basemap was built (ms), if the build says; older builds don't. */
+  built?: number;
+};
 type Part = { url: string; bytes: number };
 
 const sized = (v: unknown): { bytes: number } | null =>
@@ -33,7 +37,8 @@ function parseIndex(d: unknown): Index | null {
     const s = sized(q);
     if (s) quads[code] = s;
   }
-  return { overview, quads, state: sized(d.state) ?? undefined };
+  const built = typeof d.built === "string" ? Date.parse(d.built) : NaN;
+  return { overview, quads, state: sized(d.state) ?? undefined, built: Number.isFinite(built) ? built : undefined };
 }
 
 export function useBasemapIndex() {

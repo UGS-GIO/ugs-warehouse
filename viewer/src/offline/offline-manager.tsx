@@ -13,7 +13,7 @@ import * as opfs from "./opfs";
 import * as queue from "./queue";
 import * as store from "./store";
 import { type StoredArea, useOffline } from "./store";
-import { updateArea, useStaleAreas } from "./use-offline";
+import { updateArea, useStaleAreas, useStaleBasemaps } from "./use-offline";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
 
@@ -31,6 +31,7 @@ export function OfflineManager() {
   // The table engine is shared by every saved table, so it is listed once, on its own.
   const dropEngine = useMutation({ mutationFn: store.removeEngine });
   const stale = useStaleAreas(device.areas);
+  const staleBasemaps = useStaleBasemaps(device.files);
   const updateAreas = useMutation({
     mutationFn: (rows: (StoredArea & { label: string })[]) => Promise.all(rows.map((r) => updateArea(r, r.label))),
   });
@@ -44,7 +45,8 @@ export function OfflineManager() {
 
   const rows = sortDescribed(device.files.map((f) => describe(f, items)));
   const layers = rows.filter((r) => r.kind === "layer");
-  const basemap = rows.filter((r) => r.kind === "basemap");
+  // A basemap file is stale when a newer build was published after it was saved.
+  const basemap = rows.filter((r) => r.kind === "basemap").map((r) => ({ ...r, stale: !!staleBasemaps.data?.has(r.url) }));
   const areaRows = device.areas.map((a) => ({
     ...a, ...describe({ url: a.url, bytes: a.bytes, savedAt: 0 }, items), kind: a.kind,
     stale: !!stale.data?.has(a.url),

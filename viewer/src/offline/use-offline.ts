@@ -2,6 +2,8 @@
 // (offline/store.ts) for what is saved, and TanStack Query only for questions asked of the network.
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useSyncExternalStore } from "react";
+import { BASEMAP_BASE } from "./basemap";
+import { useBasemapIndex } from "./basemap-download";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
 import type { Job } from "./queue";
@@ -84,4 +86,30 @@ export async function updateArea(row: StoredArea, label: string): Promise<void> 
     }
   }
   await queue.enqueue(jobs);
+}
+
+/**
+ * Saved basemap files older than the published build, which Offline data offers to update. The
+ * index's build time answers for all of them in the one fetch the page already makes; a build
+ * from before the index carried it is asked file by file (its Last-Modified). Online only.
+ */
+export function useStaleBasemaps(files: opfs.StoredFile[]) {
+  const { data: index } = useBasemapIndex();
+  const saved = files.filter((f) => f.url.startsWith(BASEMAP_BASE));
+  return useQuery({
+    queryKey: ["basemap-stale", index?.built ?? "unknown", saved.map((f) => `${f.url}@${f.savedAt}`).join("|")],
+    queryFn: async () => {
+      const built = index?.built;
+      const { publishedAt } = await import("./opfs-name");
+      const stale = new Set<string>();
+      await Promise.all(saved.map(async (f) => {
+        const at = built ?? await publishedAt(f.url).catch(() => undefined);
+        if (at !== undefined && f.savedAt < at) stale.add(f.url);
+      }));
+      return stale;
+    },
+    enabled: saved.length > 0 && index !== undefined,
+    retry: false,
+    staleTime: 10 * 60_000,
+  });
 }

@@ -25,6 +25,13 @@ export async function currentVersion(url: string): Promise<string | undefined> {
   return versionOf(r.headers);
 }
 
+/** When a published file was last written, from a HEAD that bypasses the service worker. */
+export async function publishedAt(url: string): Promise<number | undefined> {
+  const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+  const t = r.ok ? Date.parse(r.headers.get("last-modified") ?? "") : NaN;
+  return Number.isFinite(t) ? t : undefined;
+}
+
 /** Thrown when a file changes while a save planned against it is running: its offsets are void. */
 export class FileChangedError extends Error {
   constructor(url: string) {

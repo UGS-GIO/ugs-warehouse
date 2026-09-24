@@ -3,7 +3,7 @@
 // so a half-finished save is ignored. Free of geotiff, so listing what is saved stays light.
 import type { Bbox } from "./guards";
 import { type BlockMeta, parseBlockMeta } from "./cog-blocks";
-import { isDirectory, isFile, readJson } from "./guards";
+import { folderSize, isDirectory, readJson } from "./guards";
 import { currentVersion, FileChangedError, fileNameFor, versionOf } from "./opfs-name";
 
 const DIR = "cogs";
@@ -70,9 +70,12 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
     // Areas accumulate: a second save of the same version adds its blocks and its area to the first.
     const before = await readMeta(dir);
     const bboxes = [...(before?.bboxes ?? []), ...(plan.bbox ? [plan.bbox] : [])];
+    // Counted once here, from the folder itself, so the store can list saved areas from meta.json
+    // alone. Counting as blocks arrive would miss those an interrupted earlier attempt wrote.
+    const { bytes } = await folderSize(dir);
     const meta = await (await dir.getFileHandle("meta.json", { create: true })).createWritable();
     await meta.write(JSON.stringify({
-      size: plan.size, block: plan.block, bboxes, version: plan.version, savedAt: Date.now(),
+      size: plan.size, block: plan.block, bboxes, version: plan.version, savedAt: Date.now(), bytes,
     } satisfies BlockMeta));
     await meta.close();
   })();
@@ -89,12 +92,13 @@ export async function savedAreasOf(url: string): Promise<Bbox[] | null> {
   return meta ? meta.bboxes : null;
 }
 
-/** Remove a saved copy cut from a version of `url` other than the live one. */
-export async function dropIfStale(url: string): Promise<void> {
+/** Remove a saved copy cut from a version of `url` other than the live one (`now`, when the
+ *  caller has already asked; otherwise one HEAD). */
+export async function dropIfStale(url: string, now?: string): Promise<void> {
   const dir = await cogDir(url, false);
   const meta = dir && await readMeta(dir);
   if (!meta) return;
-  const now = await currentVersion(url).catch(() => undefined);
+  now ??= await currentVersion(url).catch(() => undefined);
   if (now && meta.version !== now) await removeCogArea(url);
 }
 
@@ -115,12 +119,11 @@ export async function listCogAreas(): Promise<StoredBlocks[]> {
   if (!dir) return out;
   for await (const [name, handle] of dir) {
     if (!isDirectory(handle)) continue;
-    let bytes = 0;
-    for await (const [n, f] of handle) {
-      if (n !== "meta.json" && isFile(f)) bytes += (await f.getFile()).size;
-    }
     const meta = await readMeta(handle);
-    if (meta) out.push({ url: decodeURIComponent(name), bytes, version: meta.version, bboxes: meta.bboxes, savedAt: meta.savedAt });
+    if (!meta) continue;
+    // Saves record their size; one from before that is counted here instead.
+    const bytes = meta.bytes ?? (await folderSize(handle)).bytes;
+    out.push({ url: decodeURIComponent(name), bytes, version: meta.version, bboxes: meta.bboxes, savedAt: meta.savedAt });
   }
   return out;
 }

@@ -22,6 +22,18 @@ export const optionalNumber = (v: unknown): number | undefined =>
 /** The saved areas in a record, dropping any entry that is not a bbox. */
 export const bboxesOf = (v: unknown): Bbox[] => (Array.isArray(v) ? v.filter(isBbox) : []);
 
+/** How many files a saved folder holds, and their bytes, not counting its meta.json. */
+export async function folderSize(dir: FileSystemDirectoryHandle): Promise<{ files: number; bytes: number }> {
+  let files = 0;
+  let bytes = 0;
+  for await (const [name, h] of dir) {
+    if (name === "meta.json" || !isFile(h)) continue;
+    files++;
+    bytes += (await h.getFile()).size;
+  }
+  return { files, bytes };
+}
+
 /** A JSON file's contents, or null when it is missing or not JSON. */
 export async function readJson(dir: FileSystemDirectoryHandle, name: string): Promise<unknown> {
   try {

@@ -57,12 +57,12 @@ export async function planCogArea(url: string, bbox: Bbox,
   const block = opts.block ?? COG_BLOCK;
   // Planning reads the file through the service worker; a saved copy of an older version would
   // hand it the old directory. Drop that copy first, so the plan is cut from the live file.
-  if (!opts.tiff) await dropIfStale(url);
+  const head = opts.size ? { size: opts.size, version: undefined } : await fileHead(url);
+  if (!opts.tiff) await dropIfStale(url, head.version);
   // Read in the reader's own block size, so planning warms the same blocks drawing will ask for.
   // fromUrl passes its options on to the blocked source, whose options type carries blockSize.
   const options: RemoteSourceOptions & BlockedSourceOptions = { blockSize: COG_BLOCK };
   const tiff = opts.tiff ?? await fromUrl(url, options);
-  const head = opts.size ? { size: opts.size, version: undefined } : await fileHead(url);
   const size = head.size;
   const count = await tiff.getImageCount();
   const [minX, minY, maxX, maxY] = (await tiff.getImage(0)).getBoundingBox();

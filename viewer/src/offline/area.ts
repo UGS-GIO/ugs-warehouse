@@ -9,10 +9,11 @@
 // Stored per archive under areas/<encoded archive URL>/: meta.json (the TileJSON the pmtiles
 // protocol would have built, plus the tile compression) and one file per tile, raw as published.
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
-import { Compression, findTile, PMTiles, zxyToTileId } from "pmtiles";
+import { Compression, EtagMismatch, findTile, PMTiles, zxyToTileId } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
 import { type AreaMeta, areaDir, markStored, readAreaMeta, removeArea, tileName, writeFile } from "./area-store";
-import { currentVersion, FileChangedError } from "./opfs-name";
+import { folderSize } from "./guards";
+import { FileChangedError } from "./opfs-name";
 import type { Bbox } from "./guards";
 
 export type { Bbox } from "./guards";
@@ -61,16 +62,21 @@ async function locate(p: PMTiles, h: Awaited<ReturnType<PMTiles["getHeader"]>>, 
 
 /** Every tile of `url` inside `bbox`, with exact byte sizes, read from the directory alone. */
 export async function planArea(url: string, bbox: Bbox, source?: PMTiles): Promise<AreaPlan> {
-  const version = source ? undefined : await currentVersion(url).catch(() => undefined);
-  let p = source ?? archiveFor(url);
-  let h = await p.getHeader();
-  // The archive object keeps the header and directories it first read. If the file has been
-  // republished since, those offsets are the old file's: start from a fresh read.
-  if (!source && version && h.etag && h.etag !== version) {
+  try {
+    return await planWith(source ?? archiveFor(url), url, bbox);
+  } catch (e) {
+    // The archive object keeps the header and directories it first read; if the file has been
+    // republished since, pmtiles notices on its next read (the ETag moved). Start from a fresh one.
+    if (source || !(e instanceof EtagMismatch)) throw e;
     archives.delete(url);
-    p = archiveFor(url);
-    h = await p.getHeader();
+    return planWith(archiveFor(url), url, bbox);
   }
+}
+
+async function planWith(p: PMTiles, url: string, bbox: Bbox): Promise<AreaPlan> {
+  const h = await p.getHeader();
+  // The header's ETag names the version these offsets belong to; no separate request needed.
+  const version = h.etag;
   if (!SUPPORTED.has(h.tileCompression)) {
     throw new Error(`This layer's tiles use a compression this browser store does not support (${h.tileCompression}).`);
   }
@@ -111,6 +117,7 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
     const dir = await areaDir(plan.url, true);
     if (!dir) throw new Error("This browser cannot store data offline.");
     const p = source ?? archiveFor(plan.url);
+    const same = before && before.version === plan.meta.version ? before : null;
     let done = 0;
     for (const t of plan.tiles) {
       const name = tileName(t.z, t.x, t.y);
@@ -127,9 +134,12 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
       }
       onProgress?.(++done, plan.tiles.length);
     }
-    const kept = before && before.version === plan.meta.version ? before.bboxes ?? [] : [];
+    // Counted once here, from the folder itself, so the store can list saved areas from meta.json
+    // alone. Counting as tiles arrive would miss those an interrupted earlier attempt wrote.
+    const { files: tiles, bytes } = await folderSize(dir);
     await writeFile(dir, "meta.json", JSON.stringify({
-      ...plan.meta, bboxes: [...kept, ...(plan.bbox ? [plan.bbox] : [])], savedAt: Date.now(),
+      ...plan.meta, bboxes: [...(same?.bboxes ?? []), ...(plan.bbox ? [plan.bbox] : [])], savedAt: Date.now(),
+      tiles, bytes,
     } satisfies AreaMeta));
     markStored(plan.url);
   })();

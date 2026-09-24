@@ -2,7 +2,7 @@
 // answering the pmtiles protocol from them. Apart from area.ts (planning and saving, which needs
 // maplibre's projection) because the offline store and the Offline data page load this, and they
 // have no map.
-import { type Bbox, bboxesOf, isBbox, isDirectory, isFile, isRecord, optionalNumber, optionalString, readJson } from "./guards";
+import { type Bbox, bboxesOf, folderSize, isBbox, isDirectory, isRecord, optionalNumber, optionalString, readJson } from "./guards";
 import { Compression } from "pmtiles";
 import { fileNameFor } from "./opfs-name";
 
@@ -13,6 +13,9 @@ export type AreaMeta = {
   version?: string;
   bboxes?: Bbox[];
   savedAt?: number;
+  /** Tiles and bytes on disk, so listing needs no walk of the tiles (absent on older saves). */
+  tiles?: number;
+  bytes?: number;
 };
 
 const AREAS = "areas";
@@ -47,6 +50,8 @@ export function parseAreaMeta(v: unknown): AreaMeta | null {
     version: optionalString(v.version),
     bboxes: bboxesOf(v.bboxes),
     savedAt: optionalNumber(v.savedAt),
+    tiles: optionalNumber(v.tiles),
+    bytes: optionalNumber(v.bytes),
   };
 }
 
@@ -84,13 +89,9 @@ export async function loadStoredAreas(): Promise<StoredArea[]> {
     if (!isDirectory(dir)) continue;
     const meta = parseAreaMeta(await readJson(dir, "meta.json"));
     if (!meta) continue;
-    let tiles = 0;
-    let bytes = 0;
-    for await (const [n, h] of dir) {
-      if (n === "meta.json" || !isFile(h)) continue;
-      tiles++;
-      bytes += (await h.getFile()).size;
-    }
+    // Saves record their size; one from before that is counted here instead.
+    const { files: tiles, bytes } = meta.tiles !== undefined && meta.bytes !== undefined
+      ? { files: meta.tiles, bytes: meta.bytes } : await folderSize(dir);
     const url = decodeURIComponent(name);
     stored.add(url);
     out.push({ url, tiles, bytes, version: meta.version, bboxes: meta.bboxes ?? [], savedAt: meta.savedAt });

@@ -45,12 +45,13 @@ export function planTableBlocks(url: string, size: number, footerLength: number,
 
 /** Plan against the live file: its size, footer length and row groups, all read from the footer. */
 export async function planTableArea(url: string, bbox: Bbox): Promise<CogPlan & { bbox: Bbox }> {
-  // As for a COG (cog-area.ts dropIfStale): DuckDB reads the footer through the service worker.
-  await (await import("./block-store")).dropIfStale(url);
   const tail = await fetch(url, { headers: { range: "bytes=-8" }, cache: "no-store" });
   if (!tail.ok) throw new Error(`${tail.status}`);
   const size = Number(tail.headers.get("content-range")?.split("/")[1]);
   const version = versionOf(tail.headers);
+  // As for a COG (cog-area.ts): DuckDB reads the footer through the service worker, so a saved
+  // copy of an older version goes first. The tail read above already named the live version.
+  await (await import("./block-store")).dropIfStale(url, version);
   const footerLength = new DataView(await tail.arrayBuffer()).getUint32(0, true);
   const { rowGroupSpans } = await import("@/data/download");
   const groups = await rowGroupSpans(url);

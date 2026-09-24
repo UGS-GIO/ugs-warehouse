@@ -3,7 +3,11 @@
 import { type Bbox, bboxesOf, isRecord, optionalNumber, optionalString } from "./guards";
 
 /** meta.json of a file stored by blocks (a COG or table saved by area). */
-export type BlockMeta = { size: number; block: number; bboxes: Bbox[]; version?: string; savedAt?: number };
+export type BlockMeta = {
+  size: number; block: number; bboxes: Bbox[]; version?: string; savedAt?: number;
+  /** Bytes stored, so listing needs no walk of the blocks (absent on older saves). */
+  bytes?: number;
+};
 
 /** A block store's meta.json, checked field by field; null when missing or not one. */
 export function parseBlockMeta(v: unknown): BlockMeta | null {
@@ -11,7 +15,10 @@ export function parseBlockMeta(v: unknown): BlockMeta | null {
   const size = optionalNumber(v.size);
   const block = optionalNumber(v.block);
   if (size === undefined || block === undefined || block <= 0) return null;
-  return { size, block, bboxes: bboxesOf(v.bboxes), version: optionalString(v.version), savedAt: optionalNumber(v.savedAt) };
+  return {
+    size, block, bboxes: bboxesOf(v.bboxes), version: optionalString(v.version),
+    savedAt: optionalNumber(v.savedAt), bytes: optionalNumber(v.bytes),
+  };
 }
 
 /** The indices of the fixed-size blocks covering [start, start + length). */

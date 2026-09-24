@@ -175,7 +175,15 @@ async function replan(job: Job): Promise<Job | null> {
 }
 
 async function perform(job: Job) {
-  const progress = (done: number, total?: number) => update(job.id, { done, total });
+  // Saves report every network chunk (~20 KB), which re-renders every download control; a few
+  // updates a second is all a percentage needs. The last one always goes through.
+  let last = 0;
+  const progress = (done: number, total?: number) => {
+    const now = Date.now();
+    if (now - last < 250 && done !== total) return;
+    last = now;
+    update(job.id, { done, total });
+  };
   if (job.kind === "file") {
     await opfs.save(job.url, { onProgress: progress });
     for (const u of job.replaces ?? []) await opfs.remove(u);

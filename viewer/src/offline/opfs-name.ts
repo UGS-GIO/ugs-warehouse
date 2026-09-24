@@ -17,17 +17,27 @@ export const urlFromFileName = (name: string): string => decodeURIComponent(name
 export const versionOf = (h: Headers): string | undefined =>
   h.get("etag") ?? h.get("last-modified") ?? undefined;
 
-/** The current version of a published file, from a HEAD request. "no-store" also tells the service
- *  worker to let it through to the network rather than answer from a saved copy. */
+// Marks a request for the published file itself, which the service worker lets through rather than
+// answer from a saved copy: update checks, and the downloads that replace a copy. Ours, because
+// `cache: "no-store"` is not: pmtiles sends it on every read in Chrome on Windows.
+const LIVE = "ugs-live";
+export const live = (url: string): string => {
+  const u = new URL(url, globalThis.location?.href);
+  u.searchParams.set(LIVE, "1");
+  return u.href;
+};
+export const isLive = (url: URL): boolean => url.searchParams.has(LIVE);
+
+/** The current version of a published file, from a HEAD request to the network. */
 export async function currentVersion(url: string): Promise<string | undefined> {
-  const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+  const r = await fetch(live(url), { method: "HEAD", cache: "no-store" });
   if (!r.ok) throw new Error(`${r.status}`);
   return versionOf(r.headers);
 }
 
 /** When a published file was last written, from a HEAD that bypasses the service worker. */
 export async function publishedAt(url: string): Promise<number | undefined> {
-  const r = await fetch(url, { method: "HEAD", cache: "no-store" });
+  const r = await fetch(live(url), { method: "HEAD", cache: "no-store" });
   const t = r.ok ? Date.parse(r.headers.get("last-modified") ?? "") : NaN;
   return Number.isFinite(t) ? t : undefined;
 }

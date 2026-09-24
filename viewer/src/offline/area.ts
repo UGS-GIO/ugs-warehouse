@@ -12,7 +12,7 @@
 import { Compression, EtagMismatch, findTile, PMTiles, zxyToTileId } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
 import { type AreaMeta, areaDir, markStored, readAreaMeta, removeArea, tileName, writeFile } from "./area-store";
-import { folderSize, namesIn } from "./guards";
+import { folderSize, namesIn, sameVersion, stampVersion } from "./guards";
 import { FileChangedError } from "./opfs-name";
 import type { Bbox } from "./guards";
 
@@ -113,9 +113,11 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
   return (async () => {
     // Tiles cut from an older version of the archive are dropped, not mixed with the new ones.
     const before = await readAreaMeta(plan.url);
-    if (before && before.version !== plan.meta.version) await removeArea(plan.url);
+    const old = await areaDir(plan.url, false);
+    if (old && !await sameVersion(old, plan.meta.version, before ? before.version : null)) await removeArea(plan.url);
     const dir = await areaDir(plan.url, true);
     if (!dir) throw new Error("This browser cannot store data offline.");
+    await stampVersion(dir, plan.meta.version);
     const p = source ?? archiveFor(plan.url);
     const same = before && before.version === plan.meta.version ? before : null;
     let done = 0;

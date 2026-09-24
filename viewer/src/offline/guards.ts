@@ -29,20 +29,23 @@ export async function namesIn(dir: FileSystemDirectoryHandle): Promise<Set<strin
   return out;
 }
 
-/** How many files a saved folder holds, and their bytes, not counting its meta.json. */
+/** How many files a saved folder holds, and their bytes, not counting its meta.json or version.json. */
 export async function folderSize(dir: FileSystemDirectoryHandle): Promise<{ files: number; bytes: number }> {
   let files = 0;
   let bytes = 0;
   for await (const [name, h] of dir) {
-    if (name === "meta.json" || !isFile(h)) continue;
+    if (name.endsWith(".json") || !isFile(h)) continue;
     files++;
     bytes += (await h.getFile()).size;
   }
   return { files, bytes };
 }
 
+/** What reading a folder's files needs of it. */
+type Readable = { getFileHandle(name: string): Promise<{ getFile(): Promise<File> }> };
+
 /** A JSON file's contents, or null when it is missing or not JSON. */
-export async function readJson(dir: FileSystemDirectoryHandle, name: string): Promise<unknown> {
+export async function readJson(dir: Readable, name: string): Promise<unknown> {
   try {
     const text = await (await (await dir.getFileHandle(name)).getFile()).text();
     const value: unknown = JSON.parse(text);
@@ -50,4 +53,22 @@ export async function readJson(dir: FileSystemDirectoryHandle, name: string): Pr
   } catch {
     return null;
   }
+}
+
+/**
+ * Whether a folder of parts may be added to by a save of `version`. The folder's version is
+ * written before its first part (`stampVersion`), so an unfinished save of another version is
+ * caught too, not only a finished one. A folder from before the stamp falls back to its meta's.
+ */
+export async function sameVersion(dir: Readable, version: string | undefined,
+  metaVersion: string | undefined | null): Promise<boolean> {
+  const stamp = await readJson(dir, "version.json");
+  const was = isRecord(stamp) ? optionalString(stamp.version) ?? "" : metaVersion === null ? null : metaVersion ?? "";
+  return was === (version ?? "");
+}
+
+export async function stampVersion(dir: FileSystemDirectoryHandle, version: string | undefined): Promise<void> {
+  const out = await (await dir.getFileHandle("version.json", { create: true })).createWritable();
+  await out.write(JSON.stringify({ version: version ?? "" }));
+  await out.close();
 }

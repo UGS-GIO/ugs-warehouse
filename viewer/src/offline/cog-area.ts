@@ -12,7 +12,7 @@
 import { type BlockedSourceOptions, fromUrl, type GeoTIFF, type RemoteSourceOptions, type TypedArray } from "geotiff";
 import { MercatorCoordinate } from "maplibre-gl";
 import type { Bbox } from "./area";
-import { versionOf } from "./opfs-name";
+import { live, versionOf } from "./opfs-name";
 
 import { dropIfStale } from "./block-store";
 import { blocksOf } from "./cog-blocks";
@@ -35,7 +35,7 @@ const merc = (lng: number, lat: number): [number, number] => {
 };
 
 async function fileHead(url: string): Promise<{ size: number; version?: string }> {
-  const r = await fetch(url, { method: "HEAD", cache: "no-store" });   // the live file, not a saved copy
+  const r = await fetch(live(url), { method: "HEAD", cache: "no-store" });   // not a saved copy
   if (!r.ok) throw new Error(`${r.status}`);
   return { size: Number(r.headers.get("content-length")), version: versionOf(r.headers) };
 }

@@ -3,8 +3,8 @@
 // so a half-finished save is ignored. Free of geotiff, so listing what is saved stays light.
 import type { Bbox } from "./guards";
 import { type BlockMeta, parseBlockMeta } from "./cog-blocks";
-import { folderSize, isDirectory, namesIn, readJson } from "./guards";
-import { currentVersion, FileChangedError, fileNameFor, versionOf } from "./opfs-name";
+import { folderSize, isDirectory, namesIn, readJson, sameVersion, stampVersion } from "./guards";
+import { currentVersion, FileChangedError, fileNameFor, live, versionOf } from "./opfs-name";
 
 const DIR = "cogs";
 
@@ -34,10 +34,10 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
   return (async () => {
     // Blocks cut from another version of the file are byte ranges of a different file: drop them.
     const old = await cogDir(plan.url, false);
-    const prior = old && await readMeta(old);
-    if (prior && prior.version !== plan.version) await removeCogArea(plan.url);
+    if (old && !await sameVersion(old, plan.version, (await readMeta(old))?.version ?? null)) await removeCogArea(plan.url);
     const dir = await cogDir(plan.url, true);
     if (!dir) throw new Error("This browser cannot store data offline.");
+    await stampVersion(dir, plan.version);
     // One read of the folder, not a lookup per block.
     const have = await namesIn(dir);
     const missing = plan.blocks.filter((b) => !have.has(String(b)));
@@ -51,7 +51,7 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
     for (const [first, last] of runs) {
       const start = first * plan.block;
       const end = Math.min(plan.size, (last + 1) * plan.block) - 1;
-      const r = await fetch(plan.url, { headers: { range: `bytes=${start}-${end}` } });
+      const r = await fetch(live(plan.url), { headers: { range: `bytes=${start}-${end}` } });
       // Blocks are cut from the response by offset; a 200 (the whole file) would put them wrong.
       if (r.status !== 206) throw new Error(`Download failed: the server did not answer a range request (${r.status}).`);
       // The plan's offsets belong to one version of the file; bytes of another are garbage there.

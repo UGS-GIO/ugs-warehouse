@@ -13,7 +13,7 @@ import { NavigationRoute, registerRoute } from "workbox-routing";
 import { StaleWhileRevalidate } from "workbox-strategies";
 import { assemble, parseBlockMeta } from "./offline/cog-blocks";
 import { readJson } from "./offline/guards";
-import { fileNameFor, versionOf } from "./offline/opfs-name";
+import { fileNameFor, isLive, versionOf } from "./offline/opfs-name";
 import { contentTypeFor, rangeHeaders, rangeStatus, resolveRange, STORABLE } from "./offline/range";
 import { isCatalogJson } from "./sw-routes";
 
@@ -156,8 +156,8 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET" && request.method !== "HEAD") return;
   // Narrow by extension before touching storage, so the common request never pays an OPFS lookup.
   // Anything not stored falls through to the network inside the handler.
-  if (!STORABLE.test(new URL(request.url).pathname)) return;
-  // "no-store" asks about the published file itself (the update check, opfs-name.ts), not the copy.
-  if (request.cache === "no-store") return;
+  const url = new URL(request.url);
+  if (!STORABLE.test(url.pathname)) return;
+  if (isLive(url)) return;   // the published file itself (opfs-name.ts live)
   event.respondWith(serveStored(request));
 });

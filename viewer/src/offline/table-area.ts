@@ -10,7 +10,7 @@ import type { Bbox } from "./area";
 import type { CogPlan } from "./block-store";
 import { overlaps } from "@/lib/bbox";
 import { blocksOf } from "./cog-blocks";
-import { versionOf } from "./opfs-name";
+import { live, versionOf } from "./opfs-name";
 
 /** Bigger than a COG block: row groups are contiguous runs of MB, not scattered 64 KB tiles. */
 export const TABLE_BLOCK = 256 * 1024;
@@ -45,7 +45,7 @@ export function planTableBlocks(url: string, size: number, footerLength: number,
 
 /** Plan against the live file: its size, footer length and row groups, all read from the footer. */
 export async function planTableArea(url: string, bbox: Bbox): Promise<CogPlan & { bbox: Bbox }> {
-  const tail = await fetch(url, { headers: { range: "bytes=-8" }, cache: "no-store" });
+  const tail = await fetch(live(url), { headers: { range: "bytes=-8" }, cache: "no-store" });
   // A 200 would be the whole file, and its first bytes are not the footer length.
   if (tail.status !== 206) throw new Error(`The server did not answer a range request (${tail.status}).`);
   const size = Number(tail.headers.get("content-range")?.split("/")[1]);

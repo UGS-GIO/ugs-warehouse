@@ -9,7 +9,7 @@
 // manifest and there is no second store to keep in sync.
 
 import { isFile, isRecord, optionalString, readJson } from "./guards";
-import { fileNameFor, urlFromFileName, versionOf } from "./opfs-name";
+import { fileNameFor, live, urlFromFileName, versionOf } from "./opfs-name";
 
 export { fileNameFor, urlFromFileName };
 
@@ -89,14 +89,15 @@ export async function save(url: string, { signal, onProgress }: SaveOptions = {}
 
   const headers: Record<string, string> = {};
   if (have && saved?.validator) { headers.range = `bytes=${have}-`; headers["if-range"] = saved.validator; }
-  let res = await fetch(url, { signal, headers });
+  // To the network: through the service worker, an update would be answered by the copy it replaces.
+  let res = await fetch(live(url), { signal, headers });
   if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
   // If-Range is only a request: our CDN ignores it and answers 206 from a file that has since
   // changed. The rest of a different file would corrupt the partial, so check the version ourselves
   // and start over when it moved.
   if (res.status === 206 && (!saved?.version || versionOf(res.headers) !== saved.version)) {
     await res.body?.cancel();
-    res = await fetch(url, { signal });
+    res = await fetch(live(url), { signal });
     if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
   }
   if (!res.body) throw new Error("Download failed: response had no body to stream.");

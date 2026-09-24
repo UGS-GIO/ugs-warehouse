@@ -10,7 +10,7 @@ import * as queue from "./queue";
 import { useJobs, useStoredLayers } from "./use-offline";
 
 export const ENGINE_KEY = ["offline-engine"] as const;
-const CLASS = "inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary";
+const CLASS = "inline-flex items-center gap-1 rounded border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-primary pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 
 export function TableOffline({ href, title }: { href: string; title: string }) {
   const stored = useStoredLayers();

@@ -73,7 +73,7 @@ export function BasemapDownload({ bbox, onSaveArea }: {
     },
   });
 
-  const btn = "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-xs hover:bg-hover disabled:opacity-60";
+  const btn = "inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 text-xs hover:bg-hover disabled:opacity-60 pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
   const busy = save.isPending;
 
   // A panel section, not map chrome: it used to float over the map and covered the controls

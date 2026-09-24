@@ -168,8 +168,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
     const found = querying ? hitsOf(h) : [];
     return (
       <div key={h.id}>
-        <label className={`flex items-center gap-2 px-3 py-1.5 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>
-          <input type="checkbox" className="h-4 w-4 accent-primary" disabled={disabled}
+        <label className={`flex items-center gap-2 px-3 py-1.5 pointer-coarse:min-h-12 ${disabled ? "opacity-60" : "cursor-pointer hover:bg-hover"}`}>
+          <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" disabled={disabled}
             checked={ticked.has(h.id) && !disabled} onChange={(e) => toggle(h.id, e.target.checked)} />
           <span className="min-w-0 flex-1">
             <span className="block truncate" title={h.title}>{h.title}</span>
@@ -210,7 +210,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
     );
   };
 
-  const btn = "rounded-md border border-border px-3 py-1.5 text-sm hover:bg-hover disabled:opacity-50";
+  const btn = "rounded-md border border-border px-3 py-1.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11";
   return (
     <Dialog.Root open onOpenChange={(open) => { if (!open && !save.isPending) onClose(); }}>
       <Dialog.Portal>
@@ -219,7 +219,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
         <Dialog.Popup className="fixed inset-x-0 bottom-0 z-[3101] flex max-h-[85vh] flex-col rounded-t-2xl border border-border bg-background shadow-2xl md:inset-x-auto md:bottom-auto md:left-1/2 md:top-1/2 md:w-[32rem] md:-translate-x-1/2 md:-translate-y-1/2 md:rounded-xl">
           <div className="flex items-center gap-2 border-b border-border px-4 py-3">
             <Dialog.Title className="flex-1 text-base font-semibold">{title}</Dialog.Title>
-            <Dialog.Close className="rounded px-2 text-muted-foreground hover:text-foreground" aria-label="Close">✕</Dialog.Close>
+            <Dialog.Close className="rounded px-2 text-muted-foreground hover:text-foreground pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11" aria-label="Close">✕</Dialog.Close>
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto py-2">
@@ -232,8 +232,8 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
             {basemapOffered && (
               <section>
                 <div className="px-4 pb-1 pt-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Basemap</div>
-                <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-hover">
-                  <input type="checkbox" className="h-4 w-4 accent-primary" checked={ticked.has(BASEMAP)}
+                <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 hover:bg-hover pointer-coarse:min-h-12">
+                  <input type="checkbox" className="h-4 w-4 accent-primary pointer-coarse:h-5 pointer-coarse:w-5" checked={ticked.has(BASEMAP)}
                     onChange={(e) => toggle(BASEMAP, e.target.checked)} />
                   <span className="flex-1">Streets basemap for {quads.length === 1 ? "this quad" : `these ${quads.length} quads`}</span>
                   <span className="text-xs tabular-nums text-muted-foreground">
@@ -249,7 +249,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
                 <section key={g.name}>
                   <div className="flex items-center px-4 pb-1 pt-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                     <span className="flex-1">{g.name} · {g.rows.length}</span>
-                    <button type="button" className="normal-case tracking-normal text-primary hover:underline"
+                    <button type="button" className="normal-case tracking-normal text-primary hover:underline pointer-coarse:-my-2 pointer-coarse:min-h-11 pointer-coarse:min-w-11 pointer-coarse:px-3"
                       onClick={() => setTicked((prev) => {
                         const next = new Set(prev);
                         for (const id of ids) { if (all) next.delete(id); else next.add(id); }

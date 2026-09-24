@@ -73,7 +73,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // From the schema, not a page: a page is fetched WITH these filters, so that would be circular.
   const { data: types } = useQuery({
     queryKey: qk.parquetTypes(href),
-    queryFn: async () => (await import("./download")).columnTypes(href),
+    queryFn: async () => (await import("./parquet-lite")).columnTypes(href),
     staleTime: Infinity,
   });
   const applied = useMemo(
@@ -82,6 +82,10 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   );
 
   const sort = sorting[0];
+  // Nothing a query engine is needed for: no sort, search or column filter, and at most the
+  // related-rows exact match.
+  const plain = !sort && !applied.search.trim() && !applied.filters.length
+    && (!presetFilter || presetFilter.kind === "exact");
   const filterKey = JSON.stringify(applied.filters);
   const presetKey = JSON.stringify(presetFilter);
   // Scoped to what the rows are OF, so a change reads back as page 0 in the same render — one fetch.
@@ -93,10 +97,18 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     queryKey: qk.parquetPage(href, [pageIndex, pageSize, showAll,
                               sort?.id, sort?.desc, applied.search, filterKey, presetKey]),
     queryFn: async () => {
+      const range = { limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize };
+      // The plain view (file order, or a related-rows match) reads rows with hyparquet; only
+      // search, column filters and sorting need DuckDB, whose engine is a 36 MB download.
+      if (plain) {
+        const lite = await import("./parquet-lite");
+        return presetFilter?.kind === "exact"
+          ? lite.readMatching(href, presetFilter.col, presetFilter.value, range)
+          : lite.readPage(href, range);
+      }
       const { queryParquet } = await import("./download");
       return queryParquet(href, {
-        limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
-        orderBy: sort?.id, desc: sort?.desc, search: applied.search,
+        ...range, orderBy: sort?.id, desc: sort?.desc, search: applied.search,
         filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
       });
     },
@@ -178,8 +190,10 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     (async () => {
       // No parquet geometry read on map-click. The clicked feature is already on the map and
       // preview-map highlights it from the tile. We only page the table to it here. (ALL-6001)
-      const { ordinalByFeatureId } = await import("./download");
-      const pos = await ordinalByFeatureId(href, mapPick.id, {
+      const pos = plain
+        ? await (await import("./parquet-lite")).ordinalOf(href, mapPick.id,
+          presetFilter?.kind === "exact" ? { col: presetFilter.col, value: presetFilter.value } : undefined)
+        : await (await import("./download")).ordinalByFeatureId(href, mapPick.id, {
         orderBy: sort?.id, desc: sort?.desc, search: applied.search,
         // Same combined filters as the page query, or the computed ordinal is over a different set
         // than the table shows and the jump lands on the wrong page.

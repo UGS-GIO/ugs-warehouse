@@ -3,69 +3,35 @@
 // The per-layer download button and the map's "Save basemap" each see only their own file. This
 // is the one place that sees all of it — and the only way to delete a saved basemap quad, which
 // has no control of its own on the map.
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation } from "@tanstack/react-query";
 import { useViewCtx } from "@/app";
-import { qk } from "@/query-keys";
 import { BasemapDownload } from "./basemap-download";
 import { Downloads } from "./downloads";
 import { describe, type Described, sortDescribed } from "./describe";
 import * as opfs from "./opfs";
-import { removeArea } from "./area";
-import { removeCogArea } from "./cog-area";
 import * as queue from "./queue";
-import { ENGINE_KEY, engineBytes, removeEngine } from "./engine";
-import { updateArea, useStaleAreas, useStoredAreas, useStoredLayers } from "./use-offline";
+import * as store from "./store";
+import { type StoredArea, useOffline } from "./store";
+import { updateArea, useStaleAreas } from "./use-offline";
 
 const BTN = "rounded border border-border px-2 py-0.5 text-sm hover:bg-hover disabled:opacity-50 pointer-coarse:min-h-11 pointer-coarse:px-3";
-
-// Not cached forever: the first download asks for persistent storage, so this can flip from
-// "not protected" to "protected" mid-session, and a stale answer would hide that it worked.
-function usePersisted() {
-  return useQuery({
-    queryKey: ["storage-persisted"],
-    queryFn: async () => (await navigator.storage?.persisted?.()) ?? false,
-  });
-}
 
 export function OfflineManager() {
   const { allItems, mapItems, openItem } = useViewCtx();
   // Names come from the whole mappable catalog, not just the open collection (`allItems`), or a
   // saved layer from another collection would show as a bare filename.
   const items = [...mapItems, ...allItems];
-  const stored = useStoredLayers();
-  const areas = useStoredAreas();
-  const persisted = usePersisted();
-  const client = useQueryClient();
+  const device = useOffline();
 
-  const refresh = () => {
-    client.invalidateQueries({ queryKey: qk.offlineLayers });
-    client.invalidateQueries({ queryKey: ["offline-areas"] });
-    client.invalidateQueries({ queryKey: ["storage-persisted"] });
-    // The basemap protocol reads its stored set from the style query; stale, it would keep
-    // routing a deleted quad's tiles to a file that is no longer there.
-    client.invalidateQueries({ queryKey: ["basemap-style"] });
-  };
-
-  const remove = useMutation({
-    mutationFn: (urls: string[]) => Promise.all(urls.map((u) => opfs.remove(u))),
-    onSettled: refresh,
-  });
+  // Mutations only for their pending and error state: the store re-reads itself after each.
+  const remove = useMutation({ mutationFn: store.removeFiles });
   // An area save is deleted as a unit per layer or plate: its tiles or blocks go together.
-  const removeAreas = useMutation({
-    mutationFn: (rows: { url: string; kind: "tiles" | "cog" }[]) =>
-      Promise.all(rows.map((r) => (r.kind === "cog" ? removeCogArea(r.url) : removeArea(r.url)))),
-    onSettled: refresh,
-  });
+  const removeAreas = useMutation({ mutationFn: store.removeAreas });
   // The table engine is shared by every saved table, so it is listed once, on its own.
-  const engine = useQuery({ queryKey: [...ENGINE_KEY, "bytes"], queryFn: engineBytes });
-  const dropEngine = useMutation({
-    mutationFn: removeEngine,
-    onSettled: () => client.invalidateQueries({ queryKey: ENGINE_KEY }),
-  });
-  const stale = useStaleAreas(areas.data ?? []);
+  const dropEngine = useMutation({ mutationFn: store.removeEngine });
+  const stale = useStaleAreas(device.areas);
   const updateAreas = useMutation({
-    mutationFn: (rows: (NonNullable<typeof areas.data>[number] & { label: string })[]) =>
-      Promise.all(rows.map((r) => updateArea(r, r.label))),
+    mutationFn: (rows: (StoredArea & { label: string })[]) => Promise.all(rows.map((r) => updateArea(r, r.label))),
   });
   const update = useMutation({
     mutationFn: (r: Described) => queue.enqueue([{ kind: "file", url: r.url, label: r.label, bytes: r.bytes }]),
@@ -75,15 +41,15 @@ export function OfflineManager() {
     return <Page><p>This browser cannot store data for offline use.</p></Page>;
   }
 
-  const rows = sortDescribed((stored.data?.files ?? []).map((f) => describe(f, items)));
+  const rows = sortDescribed(device.files.map((f) => describe(f, items)));
   const layers = rows.filter((r) => r.kind === "layer");
   const basemap = rows.filter((r) => r.kind === "basemap");
-  const areaRows = (areas.data ?? []).map((a) => ({
+  const areaRows = device.areas.map((a) => ({
     ...a, ...describe({ url: a.url, bytes: a.bytes, savedAt: 0 }, items), kind: a.kind,
     stale: !!stale.data?.has(a.url),
   }));
-  const used = (stored.data?.bytes ?? 0) + areaRows.reduce((n, a) => n + a.bytes, 0) + (engine.data ?? 0);
-  const { quota } = stored.data?.space ?? {};
+  const used = [...device.files, ...device.areas].reduce((n, f) => n + f.bytes, 0) + device.engineBytes;
+  const { quota } = device.space;
   const busy = remove.isPending || update.isPending || removeAreas.isPending;
 
   return (
@@ -100,7 +66,7 @@ export function OfflineManager() {
           </div>
         ) : null}
         <p className="text-sm text-muted-foreground">
-          {persisted.data
+          {device.persisted
             ? "Protected: the browser will not clear this on its own."
             : "Not protected: the browser may clear this if the device runs low on space."}
         </p>
@@ -111,7 +77,7 @@ export function OfflineManager() {
       {/* No map view here, so only the statewide save shows; "This area" lives in the Map's panel. */}
       <BasemapDownload bbox={null} />
 
-      {!rows.length && !areaRows.length && !engine.data && (
+      {!rows.length && !areaRows.length && !device.engineBytes && (
         <p className="text-muted-foreground">
           Nothing saved yet. Save the basemap above, or on the Map use the download button beside a
           layer under "On the map", to keep it for use with no connection.
@@ -165,12 +131,12 @@ export function OfflineManager() {
           onDeleteAll={() => remove.mutate(basemap.map((r) => r.url))} />
       )}
 
-      {!!engine.data && (
+      {!!device.engineBytes && (
         <section className="flex items-center gap-2 rounded-md border border-border px-3 py-2">
           <div className="min-w-0 flex-1">
             <span className="block">Table engine</span>
             <div className="text-sm text-muted-foreground">
-              {opfs.formatBytes(engine.data)} · opens saved tables with no connection
+              {opfs.formatBytes(device.engineBytes)} · opens saved tables with no connection
             </div>
           </div>
           <button type="button" className={BTN} disabled={dropEngine.isPending}

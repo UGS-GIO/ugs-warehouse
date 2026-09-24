@@ -6,8 +6,8 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { GeolocateControl, Layer, NavigationControl, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
-import { basemapProtocol, BLANK_STYLE, isStyle, rerouteStyle, setStoredBasemaps } from "@/offline/basemap";
-import * as opfs from "@/offline/opfs";
+import { basemapProtocol, BLANK_STYLE, isStyle, rerouteStyle } from "@/offline/basemap";
+import * as offlineStore from "@/offline/store";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
@@ -69,11 +69,12 @@ function useBasemapStyle(id: BasemapId) {
         basemapProtocolReady = true;
         maplibregl.addProtocol("basemap", basemapProtocol);
       }
-      const [style, files] = await Promise.all([
+      // The store fills the protocol's set of saved archives; wait for its first read, or the first
+      // tiles offline would be asked of the network.
+      const [style] = await Promise.all([
         fetch(spec).then((r): Promise<unknown> => r.json()).catch(() => null),
-        opfs.list(),
+        offlineStore.whenReady(),
       ]);
-      setStoredBasemaps(files.map((f) => f.url));
       return isStyle(style) ? rerouteStyle(style) : BLANK_STYLE;
     },
     staleTime: Infinity,

@@ -12,7 +12,8 @@ import { BASEMAP_BASE, overviewUrl, quadsInBbox, quadUrl, redundantWithState, st
 import { isRecord } from "./guards";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
-import { useJobs, useStoredLayers } from "./use-offline";
+import { useOffline } from "./store";
+import { useJobs } from "./use-offline";
 
 // Past this many quads the view is a region, not a work area; the statewide save covers that.
 const MAX_QUADS = 40;
@@ -60,11 +61,11 @@ export function BasemapDownload({ bbox, onSaveArea }: {
   onSaveArea?: () => void;
 }) {
   const index = useBasemapIndex();
-  const stored = useStoredLayers();
+  const { files } = useOffline();
   const jobs = useJobs();
   const pendingBasemap = jobs.filter((j) => j.kind === "file" && j.url.startsWith(BASEMAP_BASE) && j.state !== "failed").length;
 
-  const have = new Set(stored.data?.files.map((f) => f.url));
+  const have = new Set(files.map((f) => f.url));
   const quads = bbox && index.data ? quadsInBbox(bbox).filter((q) => q.code in index.data.quads) : [];
   const area: Part[] = [
     ...(have.has(overviewUrl()) ? [] : [{ url: overviewUrl(), bytes: index.data?.overview.bytes ?? 0 }]),

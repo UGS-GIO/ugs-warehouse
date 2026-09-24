@@ -127,7 +127,14 @@ describe("a save queued as the queue finishes", () => {
     // the moment the lock is released.
     Object.defineProperty(navigator, "locks", {
       configurable: true,
-      value: { request: async (_: string, fn: () => Promise<void>) => { await fn(); late ??= q.enqueue([file("b")]); await late; } },
+      value: {
+        request: async (name: string, fn: () => Promise<void>) => {
+          await fn();
+          if (name !== "ugs-offline-queue") return;   // the runner's lock, not the queue file's
+          late ??= q.enqueue([file("b")]);
+          await late;
+        },
+      },
     });
     try {
       await q.enqueue([file("a")]);
@@ -136,6 +143,33 @@ describe("a save queued as the queue finishes", () => {
       expect(q.snapshot()).toEqual([]);
     } finally {
       Object.defineProperty(navigator, "locks", { configurable: true, value: undefined });
+    }
+  });
+});
+
+describe("two tabs", () => {
+  it("each adds to the queue on disk, so neither drops the other's save", async () => {
+    // One queue.json both tabs read and write, as OPFS is shared across an origin's tabs.
+    let disk: string | null = null;
+    const handle = {
+      getFile: async () => { if (disk === null) throw new DOMException("missing", "NotFoundError"); return new File([disk], "q"); },
+      createWritable: async () => ({ write: async (t: string) => { disk = t; }, close: async () => {} }),
+    };
+    Object.defineProperty(navigator, "storage", {
+      configurable: true, value: { getDirectory: async () => ({ getFileHandle: async () => handle }) },
+    });
+    const { onlineManager } = await import("@tanstack/react-query");
+    onlineManager.setOnline(false);   // queued, not run
+    try {
+      const a = await fresh();
+      const b = await fresh();
+      await a.enqueue([file("a")]);
+      await b.enqueue([file("b")]);
+      await a.enqueue([file("c")]);   // tab A has not seen B's save; it must not write over it
+      expect(JSON.parse(disk ?? "[]").map((j: { url: string }) => j.url)).toEqual(["a", "b", "c"]);
+    } finally {
+      onlineManager.setOnline(true);
+      Object.defineProperty(navigator, "storage", { configurable: true, value: undefined });
     }
   });
 });

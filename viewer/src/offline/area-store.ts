@@ -2,7 +2,7 @@
 // answering the pmtiles protocol from them. Apart from area.ts (planning and saving, which needs
 // maplibre's projection) because the offline store and the Offline data page load this, and they
 // have no map.
-import { type Bbox, bboxesOf, folderSize, isBbox, isDirectory, isRecord, optionalNumber, optionalString, readJson } from "./guards";
+import { type Bbox, bboxesOf, finished, folderSize, isBbox, isDirectory, isRecord, optionalNumber, optionalString, prune } from "./guards";
 import { Compression } from "pmtiles";
 import { fileNameFor } from "./opfs-name";
 
@@ -19,6 +19,7 @@ export type AreaMeta = {
 };
 
 const AREAS = "areas";
+/** An archive's folder, holding a folder per version of it (guards.ts). */
 export async function areaDir(url: string, create: boolean): Promise<FileSystemDirectoryHandle | null> {
   try {
     const root = await navigator.storage.getDirectory();
@@ -55,9 +56,12 @@ export function parseAreaMeta(v: unknown): AreaMeta | null {
   };
 }
 
-export async function readAreaMeta(url: string): Promise<AreaMeta | null> {
-  const dir = await areaDir(url, false);
-  return dir ? parseAreaMeta(await readJson(dir, "meta.json")) : null;
+/** An archive's finished saved version: its folder and meta, or null. */
+async function finishedArea(url: string): Promise<{ dir: FileSystemDirectoryHandle; meta: AreaMeta } | null> {
+  const parent = await areaDir(url, false);
+  const done = parent && await finished(parent);
+  const meta = done && parseAreaMeta(done.meta);
+  return done && meta ? { dir: done.dir, meta } : null;
 }
 
 /** Forget every tile saved for an archive. */
@@ -85,10 +89,12 @@ export async function loadStoredAreas(): Promise<StoredArea[]> {
   const root = await navigator.storage?.getDirectory?.().catch(() => null);
   const areas = await root?.getDirectoryHandle(AREAS).catch(() => null);
   if (!areas) return out;
-  for await (const [name, dir] of areas) {
-    if (!isDirectory(dir)) continue;
-    const meta = parseAreaMeta(await readJson(dir, "meta.json"));
-    if (!meta) continue;
+  for await (const [name, parent] of areas) {
+    if (!isDirectory(parent)) continue;
+    const done = await finished(parent);
+    const meta = done && parseAreaMeta(done.meta);
+    if (!done || !meta) continue;
+    const dir = done.dir;
     // Saves record their size; one from before that is counted here instead.
     const { files: tiles, bytes } = meta.tiles !== undefined && meta.bytes !== undefined
       ? { files: meta.tiles, bytes: meta.bytes } : await folderSize(dir);
@@ -116,10 +122,9 @@ export async function areaResponse(url: string, kind: "json" | "tile", signal?: 
   const m = kind === "tile" ? /^pmtiles:\/\/(.+)\/(\d+)\/(\d+)\/(\d+)$/.exec(url) : null;
   const archive = kind === "tile" ? m?.[1] : url.slice("pmtiles://".length);
   if (!archive || !stored.has(archive)) return null;
-  const dir = await areaDir(archive, false);
-  if (!dir) return null;
-  const meta = parseAreaMeta(await readJson(dir, "meta.json"));
-  if (!meta) return null;
+  const saved = await finishedArea(archive);
+  if (!saved) return null;
+  const { dir, meta } = saved;
   if (kind === "json") {
     if (!network) return { data: meta.tilejson };
     try { return await network(); } catch { return { data: meta.tilejson }; }
@@ -130,4 +135,14 @@ export async function areaResponse(url: string, kind: "json" | "tile", signal?: 
   if (signal?.aborted) throw new DOMException("aborted", "AbortError");
   if (file) return { data: new Uint8Array(await inflate(await file.arrayBuffer(), meta.compression)) };
   return null;
+}
+
+/** Remove the unfinished versions of every archive no queued save is working on (`busy`). */
+export async function sweepAreas(busy: Set<string>): Promise<void> {
+  const root = await navigator.storage?.getDirectory?.().catch(() => null);
+  const areas = await root?.getDirectoryHandle(AREAS).catch(() => null);
+  if (!areas) return;
+  for await (const [name, parent] of areas) {
+    if (isDirectory(parent) && !busy.has(decodeURIComponent(name))) await prune(parent, null);
+  }
 }

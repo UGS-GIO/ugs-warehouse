@@ -1,10 +1,10 @@
 // Files saved by area as fixed-size blocks: COG plates (cog-area.ts plans them) and GeoParquet
-// tables (table-area.ts). One directory per file under cogs/, a block per file, and meta.json last,
-// so a half-finished save is ignored. Free of geotiff, so listing what is saved stays light.
+// tables (table-area.ts). One directory per file under cogs/, one per version inside it (guards.ts),
+// a block per file, and meta.json last, so a half-finished save is ignored. Free of geotiff, so listing what is saved stays light.
 import type { Bbox } from "./guards";
 import { type BlockMeta, parseBlockMeta } from "./cog-blocks";
-import { folderSize, isDirectory, namesIn, readJson, sameVersion, stampVersion } from "./guards";
-import { currentVersion, FileChangedError, fileNameFor, live, versionOf } from "./opfs-name";
+import { finished, folderSize, isDirectory, namesIn, prune, readJson, versionKey } from "./guards";
+import { FileChangedError, fileNameFor, live, versionOf } from "./opfs-name";
 
 const DIR = "cogs";
 
@@ -32,12 +32,10 @@ async function cogDir(url: string, create: boolean) {
  */
 export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: number) => void): Promise<void> {
   return (async () => {
-    // Blocks cut from another version of the file are byte ranges of a different file: drop them.
-    const old = await cogDir(plan.url, false);
-    if (old && !await sameVersion(old, plan.version, (await readMeta(old))?.version ?? null)) await removeCogArea(plan.url);
-    const dir = await cogDir(plan.url, true);
-    if (!dir) throw new Error("This browser cannot store data offline.");
-    await stampVersion(dir, plan.version);
+    const parent = await cogDir(plan.url, true);
+    if (!parent) throw new Error("This browser cannot store data offline.");
+    const key = versionKey(plan.version);
+    const dir = await parent.getDirectoryHandle(key, { create: true });
     // One read of the folder, not a lookup per block.
     const have = await namesIn(dir);
     const missing = plan.blocks.filter((b) => !have.has(String(b)));
@@ -78,6 +76,8 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
       size: plan.size, block: plan.block, bboxes, version: plan.version, savedAt: Date.now(), bytes,
     } satisfies BlockMeta));
     await meta.close();
+    // The previous version served until now; this one replaces it.
+    await prune(parent, key);
   })();
 }
 
@@ -87,19 +87,9 @@ async function readMeta(dir: FileSystemDirectoryHandle): Promise<BlockMeta | nul
 
 /** The areas saved of a file stored by blocks, or null when none is. */
 export async function savedAreasOf(url: string): Promise<Bbox[] | null> {
-  const dir = await cogDir(url, false);
-  const meta = dir && await readMeta(dir);
-  return meta ? meta.bboxes : null;
-}
-
-/** Remove a saved copy cut from a version of `url` other than the live one (`now`, when the
- *  caller has already asked; otherwise one HEAD). */
-export async function dropIfStale(url: string, now?: string): Promise<void> {
-  const dir = await cogDir(url, false);
-  const meta = dir && await readMeta(dir);
-  if (!meta) return;
-  now ??= await currentVersion(url).catch(() => undefined);
-  if (now && meta.version !== now) await removeCogArea(url);
+  const parent = await cogDir(url, false);
+  const done = parent && await finished(parent);
+  return parseBlockMeta(done?.meta)?.bboxes ?? null;
 }
 
 /** Forget a saved COG area. */
@@ -119,11 +109,22 @@ export async function listCogAreas(): Promise<StoredBlocks[]> {
   if (!dir) return out;
   for await (const [name, handle] of dir) {
     if (!isDirectory(handle)) continue;
-    const meta = await readMeta(handle);
-    if (!meta) continue;
+    const done = await finished(handle);
+    const meta = parseBlockMeta(done?.meta);
+    if (!done || !meta) continue;
     // Saves record their size; one from before that is counted here instead.
-    const bytes = meta.bytes ?? (await folderSize(handle)).bytes;
+    const bytes = meta.bytes ?? (await folderSize(done.dir)).bytes;
     out.push({ url: decodeURIComponent(name), bytes, version: meta.version, bboxes: meta.bboxes, savedAt: meta.savedAt });
   }
   return out;
+}
+
+/** Remove the unfinished versions of every file no queued save is working on (`busy`). */
+export async function sweepCogAreas(busy: Set<string>): Promise<void> {
+  const root = await navigator.storage?.getDirectory?.().catch(() => null);
+  const dir = await root?.getDirectoryHandle(DIR).catch(() => null);
+  if (!dir) return;
+  for await (const [name, handle] of dir) {
+    if (isDirectory(handle) && !busy.has(decodeURIComponent(name))) await prune(handle, null);
+  }
 }

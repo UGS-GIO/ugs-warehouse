@@ -29,12 +29,12 @@ export async function namesIn(dir: FileSystemDirectoryHandle): Promise<Set<strin
   return out;
 }
 
-/** How many files a saved folder holds, and their bytes, not counting its meta.json or version.json. */
+/** How many files a saved folder holds, and their bytes, not counting its meta.json. */
 export async function folderSize(dir: FileSystemDirectoryHandle): Promise<{ files: number; bytes: number }> {
   let files = 0;
   let bytes = 0;
   for await (const [name, h] of dir) {
-    if (name.endsWith(".json") || !isFile(h)) continue;
+    if (name === "meta.json" || !isFile(h)) continue;
     files++;
     bytes += (await h.getFile()).size;
   }
@@ -55,20 +55,36 @@ export async function readJson(dir: Readable, name: string): Promise<unknown> {
   }
 }
 
-/**
- * Whether a folder of parts may be added to by a save of `version`. The folder's version is
- * written before its first part (`stampVersion`), so an unfinished save of another version is
- * caught too, not only a finished one. A folder from before the stamp falls back to its meta's.
- */
-export async function sameVersion(dir: Readable, version: string | undefined,
-  metaVersion: string | undefined | null): Promise<boolean> {
-  const stamp = await readJson(dir, "version.json");
-  const was = isRecord(stamp) ? optionalString(stamp.version) ?? "" : metaVersion === null ? null : metaVersion ?? "";
-  return was === (version ?? "");
+
+// ---- files saved by area: a folder per file, holding a folder per version of it ----
+//
+// An update saves the new version beside the copy it replaces, which keeps working until the new
+// one is finished, and parts of two versions never share a folder.
+
+export const versionKey = (version: string | undefined) => encodeURIComponent(version ?? "-");
+
+/** A file's finished version (the newest meta.json among its version folders), or null. */
+export async function finished(parent: FileSystemDirectoryHandle):
+  Promise<{ dir: FileSystemDirectoryHandle; meta: Record<string, unknown> } | null> {
+  let best: { dir: FileSystemDirectoryHandle; meta: Record<string, unknown> } | null = null;
+  for await (const [, h] of parent) {
+    if (!isDirectory(h)) continue;
+    const meta = await readJson(h, "meta.json");
+    if (isRecord(meta) && (!best || (optionalNumber(meta.savedAt) ?? 0) >= (optionalNumber(best.meta.savedAt) ?? 0))) {
+      best = { dir: h, meta };
+    }
+  }
+  return best;
 }
 
-export async function stampVersion(dir: FileSystemDirectoryHandle, version: string | undefined): Promise<void> {
-  const out = await (await dir.getFileHandle("version.json", { create: true })).createWritable();
-  await out.write(JSON.stringify({ version: version ?? "" }));
-  await out.close();
+/**
+ * Clear out a file's folder: everything but version `keep` once that version is finished, or, with
+ * `keep` null, the versions no save finished (a save removed from the queue, or one that failed).
+ */
+export async function prune(parent: FileSystemDirectoryHandle, keep: string | null): Promise<void> {
+  const drop: string[] = [];
+  for await (const [name, h] of parent) {
+    if (keep !== null ? name !== keep : !isDirectory(h) || !isRecord(await readJson(h, "meta.json"))) drop.push(name);
+  }
+  for (const name of drop) await parent.removeEntry(name, { recursive: true }).catch(() => {});
 }

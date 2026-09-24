@@ -12,7 +12,7 @@ import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from
 import { NavigationRoute, registerRoute } from "workbox-routing";
 import { StaleWhileRevalidate } from "workbox-strategies";
 import { assemble, parseBlockMeta } from "./offline/cog-blocks";
-import { readJson } from "./offline/guards";
+import { finished } from "./offline/guards";
 import { fileNameFor, isLive, versionOf } from "./offline/opfs-name";
 import { contentTypeFor, rangeHeaders, rangeStatus, resolveRange, STORABLE } from "./offline/range";
 import { isCatalogJson } from "./sw-routes";
@@ -86,9 +86,9 @@ async function storedFile(url: string): Promise<File | null> {
 async function storedCogArea(url: string) {
   try {
     const root = await navigator.storage.getDirectory();
-    const dir = await (await root.getDirectoryHandle("cogs")).getDirectoryHandle(fileNameFor(url));
-    const meta = parseBlockMeta(await readJson(dir, "meta.json"));
-    return meta && { dir, ...meta };
+    const done = await finished(await (await root.getDirectoryHandle("cogs")).getDirectoryHandle(fileNameFor(url)));
+    const meta = done && parseBlockMeta(done.meta);
+    return meta && { dir: done.dir, ...meta };
   } catch {
     return null;
   }

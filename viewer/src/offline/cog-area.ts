@@ -14,7 +14,6 @@ import { MercatorCoordinate } from "maplibre-gl";
 import type { Bbox } from "./area";
 import { live, versionOf } from "./opfs-name";
 
-import { dropIfStale } from "./block-store";
 import { blocksOf } from "./cog-blocks";
 
 export { assemble } from "./cog-blocks";
@@ -58,11 +57,11 @@ export async function planCogArea(url: string, bbox: Bbox,
   // Planning reads the file through the service worker; a saved copy of an older version would
   // hand it the old directory. Drop that copy first, so the plan is cut from the live file.
   const head = opts.size ? { size: opts.size, version: undefined } : await fileHead(url);
-  if (!opts.tiff) await dropIfStale(url, head.version);
   // Read in the reader's own block size, so planning warms the same blocks drawing will ask for.
   // fromUrl passes its options on to the blocked source, whose options type carries blockSize.
   const options: RemoteSourceOptions & BlockedSourceOptions = { blockSize: COG_BLOCK };
-  const tiff = opts.tiff ?? await fromUrl(url, options);
+  // Read past the service worker: a saved copy of an older version would plan the wrong offsets.
+  const tiff = opts.tiff ?? await fromUrl(live(url), options);
   const size = head.size;
   const count = await tiff.getImageCount();
   const [minX, minY, maxX, maxY] = (await tiff.getImage(0)).getBoundingBox();

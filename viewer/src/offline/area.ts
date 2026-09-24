@@ -11,9 +11,9 @@
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
 import { Compression, EtagMismatch, findTile, PMTiles, zxyToTileId } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
-import { type AreaMeta, areaDir, markStored, readAreaMeta, removeArea, tileName, writeFile } from "./area-store";
-import { folderSize, namesIn, sameVersion, stampVersion } from "./guards";
-import { FileChangedError } from "./opfs-name";
+import { type AreaMeta, areaDir, markStored, parseAreaMeta, tileName, writeFile } from "./area-store";
+import { folderSize, namesIn, prune, readJson, versionKey } from "./guards";
+import { FileChangedError, live } from "./opfs-name";
 import type { Bbox } from "./guards";
 
 export type { Bbox } from "./guards";
@@ -40,7 +40,8 @@ export function tilesAt([w, s, e, n]: Bbox, z: number): [number, number][] {
 const archives = new Map<string, PMTiles>();
 const archiveFor = (url: string) => {
   let a = archives.get(url);
-  if (!a) archives.set(url, (a = new PMTiles(url)));
+  // Read past the service worker: a saved copy of an older version would plan the wrong offsets.
+  if (!a) archives.set(url, (a = new PMTiles(live(url))));
   return a;
 };
 
@@ -111,15 +112,13 @@ async function planWith(p: PMTiles, url: string, bbox: Bbox): Promise<AreaPlan> 
 export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: number) => void,
   source?: PMTiles): Promise<void> {
   return (async () => {
-    // Tiles cut from an older version of the archive are dropped, not mixed with the new ones.
-    const before = await readAreaMeta(plan.url);
-    const old = await areaDir(plan.url, false);
-    if (old && !await sameVersion(old, plan.meta.version, before ? before.version : null)) await removeArea(plan.url);
-    const dir = await areaDir(plan.url, true);
-    if (!dir) throw new Error("This browser cannot store data offline.");
-    await stampVersion(dir, plan.meta.version);
+    const parent = await areaDir(plan.url, true);
+    if (!parent) throw new Error("This browser cannot store data offline.");
+    const key = versionKey(plan.meta.version);
+    const dir = await parent.getDirectoryHandle(key, { create: true });
+    // Areas accumulate: a second save of the same version adds its tiles and its area to the first.
+    const same = parseAreaMeta(await readJson(dir, "meta.json"));
     const p = source ?? archiveFor(plan.url);
-    const same = before && before.version === plan.meta.version ? before : null;
     let done = 0;
     // One read of the folder, not a lookup per tile.
     const stored = await namesIn(dir);
@@ -144,6 +143,8 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
       ...plan.meta, bboxes: [...(same?.bboxes ?? []), ...(plan.bbox ? [plan.bbox] : [])], savedAt: Date.now(),
       tiles, bytes,
     } satisfies AreaMeta));
+    // The previous version served until now; this one replaces it.
+    await prune(parent, key);
     markStored(plan.url);
   })();
 }

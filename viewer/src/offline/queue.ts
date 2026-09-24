@@ -113,21 +113,39 @@ function isJob(v: unknown): v is Job {
   return false;
 }
 
+/**
+ * Change the queue as it is on disk, under a lock: another tab may have changed it since this one
+ * last read it, and writing this tab's copy back would drop that tab's jobs or revive finished ones.
+ */
+async function change(fn: () => void): Promise<void> {
+  const apply = async () => {
+    // Progress lives only in memory (persist leaves it out); keep it across the re-read.
+    const progress = new Map(jobs.map((j) => [j.id, { done: j.done, total: j.total }]));
+    loaded = null;
+    await load();
+    jobs = jobs.map((j) => ({ ...j, ...progress.get(j.id) }));
+    fn();
+    emit();
+    await persist();
+  };
+  if (navigator.locks) await navigator.locks.request("ugs-offline-queue-file", apply);
+  else await apply();
+}
+
 /** Add saves to the end of the queue. One already queued for the same thing is not added twice. */
 export async function enqueue(specs: JobSpec[]): Promise<void> {
-  await load();
-  const have = new Set(jobs.map(keyOf));
-  for (const s of specs) {
-    const k = keyOf(s);
-    if (have.has(k)) {
-      jobs = jobs.map((j) => (keyOf(j) === k && j.state === "failed" ? { ...j, state: "queued", error: undefined } : j));
-      continue;
+  await change(() => {
+    const have = new Set(jobs.map(keyOf));
+    for (const s of specs) {
+      const k = keyOf(s);
+      if (have.has(k)) {
+        jobs = jobs.map((j) => (keyOf(j) === k && j.state === "failed" ? { ...j, state: "queued", error: undefined } : j));
+        continue;
+      }
+      have.add(k);
+      jobs.push({ ...s, id: crypto.randomUUID(), state: "queued" });
     }
-    have.add(k);
-    jobs.push({ ...s, id: crypto.randomUUID(), state: "queued" });
-  }
-  emit();
-  await persist();
+  });
   // Without persistent storage the browser may clear these files under pressure, which is the trip
   // they were saved for.
   await navigator.storage?.persist?.().catch(() => false);
@@ -136,26 +154,38 @@ export async function enqueue(specs: JobSpec[]): Promise<void> {
 
 export async function retry(id: string): Promise<void> {
   misses.delete(id);
-  jobs = jobs.map((j) => (j.id === id ? { ...j, state: "queued", error: undefined } : j));
-  emit();
-  await persist();
+  await change(() => { jobs = jobs.map((j) => (j.id === id ? { ...j, state: "queued", error: undefined } : j)); });
   void run();
 }
 
-/** Take a job off the queue. A partial whole-file download is discarded with it. */
+/** Take a job off the queue, with what it had saved so far. */
 export async function remove(id: string): Promise<void> {
-  const job = jobs.find((j) => j.id === id);
-  if (!job || job.state === "running") return;
-  jobs = jobs.filter((j) => j.id !== id);
-  emit();
-  await persist();
+  let job: Job | undefined;
+  await change(() => {
+    job = jobs.find((j) => j.id === id);
+    if (job && job.state !== "running") jobs = jobs.filter((j) => j.id !== id);
+    else job = undefined;
+  });
+  if (!job) return;
   if (job.kind === "file") await opfs.discardPartial(job.url);
+  // An area save's unfinished version goes too, unless another queued save is still filling it.
+  if ("plan" in job) await sweepAreaSaves();
+}
+
+/** Remove area saves no queued job will finish. */
+async function sweepAreaSaves(): Promise<void> {
+  const busy = (kinds: Job["kind"][]) => new Set(jobs.flatMap((j) => ("plan" in j && kinds.includes(j.kind) ? [j.plan.url] : [])));
+  await (await import("./block-store")).sweepCogAreas(busy(["cog", "table"])).catch(() => {});
+  await (await import("./area-store")).sweepAreas(busy(["area"])).catch(() => {});
 }
 
 type Status = Pick<Job, "state" | "error" | "done" | "total">;
 
-function update(id: string, patch: Partial<Status>) {
-  jobs = jobs.map((j) => (j.id === id ? { ...j, ...patch } : j));
+const patch = (id: string, p: Partial<Status>) => { jobs = jobs.map((j) => (j.id === id ? { ...j, ...p } : j)); };
+
+/** Progress: this tab's memory only. */
+function update(id: string, p: Partial<Status>) {
+  patch(id, p);
   emit();
 }
 
@@ -229,17 +259,18 @@ async function work(): Promise<void> {
   // Another tab may have run jobs while this one waited for the lock: start from what is on disk.
   loaded = null;
   await load();
-  // Once per visit, under the lock so no other tab is mid-download: partials no job will resume.
+  // Once per visit, under the lock so no other tab is mid-download: partials no job will resume,
+  // and area saves that were removed from the queue or failed part-way.
   if (!swept) {
     swept = true;
     await opfs.sweepPartials(new Set(jobs.flatMap((j) => (j.kind === "file" ? [j.url] : [])))).catch(() => 0);
+    await sweepAreaSaves();
   }
   for (;;) {
     const job = jobs.find((j) => j.state === "queued");
     if (!job) break;
     if (!onlineManager.isOnline()) break;   // resumed when the connection returns (below)
-    update(job.id, { state: "running", error: undefined });
-    await persist();
+    await change(() => patch(job.id, { state: "running", error: undefined }));
     try {
       try {
         await perform(job);
@@ -247,32 +278,27 @@ async function work(): Promise<void> {
         // Republished mid-save: cut the same area again from the new version, once.
         const again = e instanceof FileChangedError ? await replan(job) : null;
         if (!again) throw e;
-        jobs = jobs.map((j) => (j.id === job.id ? again : j));
-        emit();
-        await persist();
+        await change(() => { jobs = jobs.map((j) => (j.id === job.id ? again : j)); });
         await perform(again);
       }
       misses.delete(job.id);
-      jobs = jobs.filter((j) => j.id !== job.id);
-      emit();
+      await change(() => { jobs = jobs.filter((j) => j.id !== job.id); });
     } catch (e) {
       const tries = (misses.get(job.id) ?? 0) + 1;
       if (isNetworkError(e) && tries < MAX_MISSES) {
         // Lost the connection, or the server is out of reach: back in line, and try again when
         // the browser says it is online, or after a pause (a dead hotspot still reads as online).
         misses.set(job.id, tries);
-        update(job.id, { state: "queued" });
-        await persist();
+        await change(() => patch(job.id, { state: "queued" }));
         setTimeout(() => { void run(); }, 15_000 * 2 ** tries);
         rerun = false;   // a deliberate pause: the timer or the connection returning resumes it
         break;
       }
       misses.delete(job.id);
-      update(job.id, { state: "failed", error: e instanceof Error ? e.message : String(e) });
+      await change(() => patch(job.id, { state: "failed", error: e instanceof Error ? e.message : String(e) }));
     } finally {
       settled.forEach((fn) => fn(job));
     }
-    await persist();
   }
 }
 

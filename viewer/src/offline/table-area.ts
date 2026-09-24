@@ -50,12 +50,9 @@ export async function planTableArea(url: string, bbox: Bbox): Promise<CogPlan & 
   if (tail.status !== 206) throw new Error(`The server did not answer a range request (${tail.status}).`);
   const size = Number(tail.headers.get("content-range")?.split("/")[1]);
   const version = versionOf(tail.headers);
-  // As for a COG (cog-area.ts): DuckDB reads the footer through the service worker, so a saved
-  // copy of an older version goes first. The tail read above already named the live version.
-  await (await import("./block-store")).dropIfStale(url, version);
   const footerLength = new DataView(await tail.arrayBuffer()).getUint32(0, true);
   const { rowGroupSpans } = await import("@/data/download");
-  const groups = await rowGroupSpans(url);
+  const groups = await rowGroupSpans(live(url));   // the published file, not a saved copy
   if (groups.some((g) => !Number.isFinite(g.xmin))) throw new Error("This table has no bbox columns to cut by.");
   return { ...planTableBlocks(url, size, footerLength, groups, bbox), version };
 }

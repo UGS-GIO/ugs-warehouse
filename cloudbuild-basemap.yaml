@@ -56,7 +56,12 @@ steps:
         cache="public, max-age=86400"
         gcloud storage rsync "$$out/quads" "$$dest/quads" --recursive \
           --delete-unmatched-destination-objects --cache-control="$$cache"
-        gcloud storage cp "$$out/utah.pmtiles" "$$out/overview.pmtiles" "$$dest/" --cache-control="$$cache"
+        # One explicit destination object per call, not a multi-source `cp a b dest/`: the latter
+        # has gcloud storage list the bucket to check dest/ is a directory, which needs
+        # storage.objects.list on the whole bucket — the basemap SA only has it scoped to the
+        # basemap/ prefix (infra/basemap-refresh.tf), so that form 403s.
+        gcloud storage cp "$$out/utah.pmtiles" "$$dest/utah.pmtiles" --cache-control="$$cache"
+        gcloud storage cp "$$out/overview.pmtiles" "$$dest/overview.pmtiles" --cache-control="$$cache"
         gcloud storage cp "$$out/index.json" "$$dest/index.json" \
           --cache-control="no-cache" --content-type="application/json"
 

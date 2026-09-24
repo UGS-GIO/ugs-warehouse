@@ -8,15 +8,16 @@
 // The URL is the filename (percent-encoded, so no "/" survives), so a directory listing IS the
 // manifest and there is no second store to keep in sync.
 
-import { isFile, isRecord, optionalString, readJson } from "./guards";
+import { isFile, isRecord, optionalNumber, optionalString, readJson } from "./guards";
 import { fileNameFor, live, urlFromFileName, versionOf } from "./opfs-name";
 
 export { fileNameFor, urlFromFileName };
 
 const DIR = "layers";
 
-/** Stored artifact: where it came from, what it costs, and when it was saved (epoch ms). */
-export type StoredFile = { url: string; bytes: number; savedAt: number };
+/** Stored artifact: where it came from, what it costs, when it was saved and when the copy saved
+ *  was published (epoch ms; its Last-Modified, absent on saves from before it was kept). */
+export type StoredFile = { url: string; bytes: number; savedAt: number; publishedAt?: number };
 
 export type SaveOptions = {
   signal?: AbortSignal;
@@ -61,8 +62,13 @@ export function resumeFrom(have: number, status: number, contentRange: string | 
   return { start: 0, total: Number(contentLength) || undefined };
 }
 
-/** Commit written bytes this often, so a closed tab or dropped connection loses at most this much. */
-const COMMIT_EVERY = 8 * 1024 * 1024;
+// Written bytes are committed as they come, so a closed tab or dropped connection keeps most of
+// them. Chrome starts each reopened writer from a copy of the file so far, so commits come at
+// doubling sizes, capped: a 300 MB layer copies about 0.7 GB in all rather than 5.6 GB, and loses
+// at most one step (64 MB).
+const COMMIT_MIN = 8 * 1024 * 1024;
+const COMMIT_MAX = 64 * 1024 * 1024;
+const nextCommit = (written: number) => written + Math.min(COMMIT_MAX, Math.max(COMMIT_MIN, written));
 
 /**
  * Download `url` into OPFS, streaming so a 300 MB layer never sits in memory whole, and resuming
@@ -116,7 +122,7 @@ export async function save(url: string, { signal, onProgress }: SaveOptions = {}
   let out = await handle.createWritable({ keepExistingData: start > 0 });
   if (start > 0) await out.seek(start);
   let written = start;
-  let sinceCommit = 0;
+  let commitAt = nextCommit(written);
   try {
     const reader = res.body.getReader();
     for (;;) {
@@ -124,14 +130,13 @@ export async function save(url: string, { signal, onProgress }: SaveOptions = {}
       if (done) break;
       await out.write(value);
       written += value.byteLength;
-      sinceCommit += value.byteLength;
       onProgress?.(written, total);
-      if (sinceCommit >= COMMIT_EVERY) {
+      if (written >= commitAt) {
         // Nothing reaches disk until the writer closes; commit and carry on where we were.
         await out.close();
         out = await handle.createWritable({ keepExistingData: true });
         await out.seek(written);
-        sinceCommit = 0;
+        commitAt = nextCommit(written);
       }
     }
     await out.close();
@@ -154,7 +159,13 @@ export async function save(url: string, { signal, onProgress }: SaveOptions = {}
     await d.removeEntry(tmp).catch(() => {});
   }
   await d.removeEntry(side).catch(() => {});
-  return { url, bytes: written, savedAt: Date.now() };
+  // When the copy was published, for the update check: a save can come from a CDN edge still
+  // holding an older build, so the time it was saved says nothing about which build it is.
+  const published = Date.parse(res.headers.get("last-modified") ?? "");
+  const w = await (await d.getFileHandle(`${name}.json`, { create: true })).createWritable();
+  await w.write(JSON.stringify({ publishedAt: Number.isFinite(published) ? published : undefined }));
+  await w.close();
+  return { url, bytes: written, savedAt: Date.now(), publishedAt: Number.isFinite(published) ? published : undefined };
 }
 
 /** OPFS `move`, which renames in place; not in TypeScript's DOM types, and not in every browser. */
@@ -209,6 +220,7 @@ export async function sweepPartials(keep: ReadonlySet<string>): Promise<number> 
 export async function remove(url: string): Promise<void> {
   const d = await dir();
   await d?.removeEntry(fileNameFor(url)).catch(() => {});
+  await d?.removeEntry(`${fileNameFor(url)}.json`).catch(() => {});
 }
 
 /** Every stored artifact, newest-first order not guaranteed. Skips in-flight `.part` files. */
@@ -219,10 +231,12 @@ export async function list(): Promise<StoredFile[]> {
   // Iterating the handle yields [name, handle] PAIRS, not bare handles. Treating an entry as a
   // handle type-checks and then fails at runtime with "h.getFile is not a function".
   for await (const [name, h] of d) {
-    if (!isFile(h) || name.endsWith(".part") || name.endsWith(".part.json")) continue;
+    if (!isFile(h) || name.endsWith(".part") || name.endsWith(".json")) continue;
     try {
       const file = await h.getFile();
-      out.push({ url: urlFromFileName(name), bytes: file.size, savedAt: file.lastModified });
+      const meta = await readJson(d, `${name}.json`);
+      const publishedAt = isRecord(meta) ? optionalNumber(meta.publishedAt) : undefined;
+      out.push({ url: urlFromFileName(name), bytes: file.size, savedAt: file.lastModified, publishedAt });
     } catch {
       // One locked or unreadable entry must not take down the listing, which is what every
       // offline control in the UI renders from.

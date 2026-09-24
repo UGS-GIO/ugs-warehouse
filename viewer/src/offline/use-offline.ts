@@ -104,7 +104,7 @@ export function useStaleBasemaps(files: opfs.StoredFile[]) {
       const stale = new Set<string>();
       await Promise.all(saved.map(async (f) => {
         const at = built ?? await publishedAt(f.url).catch(() => undefined);
-        if (at !== undefined && f.savedAt < at) stale.add(f.url);
+        if (at !== undefined && (f.publishedAt ?? f.savedAt) < at) stale.add(f.url);
       }));
       return stale;
     },

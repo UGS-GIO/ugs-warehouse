@@ -36,9 +36,10 @@ function writeCam({ longitude, latitude, zoom }: Cam): void {
 
 const ofm = (s: string) => `https://tiles.openfreemap.org/styles/${s}`;
 // Ours, so it names glyphs itself (the OpenFreeMap basemaps bring their own) — else no labels (#116).
+const GLYPHS = "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf";
 const SATELLITE: maplibregl.StyleSpecification = {
   version: 8,
-  glyphs: "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf",
+  glyphs: GLYPHS,
   sources: { sat: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, attribution: "Imagery © Esri" } },
   layers: [{ id: "sat", type: "raster", source: "sat" }],
 };
@@ -67,7 +68,8 @@ async function streetsWithoutRelief(): Promise<maplibregl.StyleSpecification | s
   return { ...style, sources, layers: style.layers.filter((l) => !("source" in l && l.source === "ne2_shaded")) };
 }
 
-const EMPTY_STYLE: maplibregl.StyleSpecification = { version: 8, sources: {}, layers: [] };
+// Glyphs too, so a labelled overlay added before Streets arrives is not refused.
+const EMPTY_STYLE: maplibregl.StyleSpecification = { version: 8, glyphs: GLYPHS, sources: {}, layers: [] };
 const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
 
 // The footprint "Open item →" popup is the only popup left on the map — a data-feature click docks

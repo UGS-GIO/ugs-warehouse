@@ -308,6 +308,8 @@ export interface Page {
   // plain bbox covering columns — present iff the file carries them. Powers row→map zoom
   // without loading the spatial extension (no geometry decode).
   bboxes: ([number, number, number, number] | null)[];
+  // False while a search is still scanning: `total` is then how many matched so far, not all.
+  complete?: boolean;
 }
 
 

@@ -90,6 +90,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // related-rows exact match.
   const plain = !sort && !applied.search.trim() && !applied.filters.length
     && (!presetFilter || presetFilter.kind === "exact");
+  const searchOnly = !sort && !!applied.search.trim() && !applied.filters.length && !presetFilter;
   const filterKey = JSON.stringify(applied.filters);
   const presetKey = JSON.stringify(presetFilter);
   // Scoped to what the rows are OF, so a change reads back as page 0 in the same render — one fetch.
@@ -104,6 +105,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
       const range = { limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize };
       // The plain view (file order, or a related-rows match) reads rows with hyparquet; only
       // search, column filters and sorting need DuckDB, whose engine is a 36 MB download.
+      // Search alone scans in a worker, a row group at a time, and answers as soon as the page fills.
+      if (searchOnly) return (await import("./parquet-search")).searchPage(href, applied.search, range);
       if (plain) {
         const lite = await import("./parquet-lite");
         return presetFilter?.kind === "exact"
@@ -143,7 +146,9 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   });
 
   const total = page?.total ?? 0;
-  const pageCount = showAll ? 1 : Math.max(1, Math.ceil(total / pageSize));
+  // A search still scanning knows only a floor: "25+". Paging on asks the scan for more.
+  const more = page?.complete === false ? "+" : "";
+  const pageCount = showAll ? 1 : Math.max(1, Math.ceil(total / pageSize) + (more ? 1 : 0));
 
   // Virtualize the rows so "All" (up to ALL_CAP) renders only the visible window. Works for paged
   // views too (small counts → negligible overhead). Scroll viewport = the resizable box (scrollRef).
@@ -223,7 +228,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           <span aria-hidden>{collapsed ? "▸" : "▾"}</span>
           Data
           <span className="font-normal">
-            · {page ? `${total.toLocaleString()} row${total === 1 ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
+            · {page ? `${total.toLocaleString()}${more} row${total === 1 && !more ? "" : "s"}` : "…"}{loading ? " · loading" : ""}
           </span>
         </button>
         {!collapsed && (
@@ -386,7 +391,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
       <div className={`mt-1.5 flex flex-wrap items-center gap-1.5 text-xs ${collapsed ? "hidden" : ""}`}>
         <button className={btn} disabled={pageIndex === 0} onClick={() => setPageIndex(0)}>«</button>
         <button className={btn} disabled={pageIndex === 0} onClick={() => setPageIndex((i) => i - 1)}>‹ Prev</button>
-        <span className="px-1 text-muted-foreground">Page {pageIndex + 1} of {pageCount}</span>
+        <span className="px-1 text-muted-foreground">Page {pageIndex + 1} of {pageCount}{more}</span>
         <button className={btn} disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex((i) => i + 1)}>Next ›</button>
         <button className={btn} disabled={pageIndex + 1 >= pageCount} onClick={() => setPageIndex(pageCount - 1)}>»</button>
         <label className="ml-1 flex items-center gap-1 text-muted-foreground">
@@ -416,7 +421,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
             {showAll
               ? `1–${rowModel.length.toLocaleString()}${rowModel.length < total ? ` (capped at ${ALL_CAP.toLocaleString()})` : ""}`
               : `${(pageIndex * pageSize + 1).toLocaleString()}–${Math.min((pageIndex + 1) * pageSize, total).toLocaleString()}`}
-            {" "}of {total.toLocaleString()}
+            {" "}of {total.toLocaleString()}{more}
           </span>
         )}
       </div>

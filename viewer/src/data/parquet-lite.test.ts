@@ -72,3 +72,46 @@ describe("parquet-lite", () => {
     expect(await ordinalOf(URL_, 999999)).toBeNull();
   });
 });
+
+describe("search scan", () => {
+  const opened = async () => {
+    const lite = await import("./parquet-lite");
+    const { asyncBufferFromUrl } = await import("hyparquet");
+    return { lite, o: await lite.openWith(await asyncBufferFromUrl({ url: URL_ })) };
+  };
+
+  it("stops at the row group that fills the page, and carries on for a later one", async () => {
+    const { lite, o } = await opened();
+    const scan = lite.newScan("DAVIS");   // case does not matter; every third row matches
+    await lite.scanUntil(o, scan, 25);
+    expect(scan.nextGroup).toBe(1);        // row group 1 held 683 matches: enough
+    const first = lite.scanPage(o, scan, { limit: 25, offset: 0 });
+    expect(first.complete).toBe(false);
+    expect(first.rows.map((r) => r.feature_id).slice(0, 3)).toEqual([1, 4, 7]);
+    await lite.scanUntil(o, scan, 1000);
+    expect(scan.nextGroup).toBe(2);
+  });
+
+  it("finishes with the exact total when the term is rare", async () => {
+    const { lite, o } = await opened();
+    const scan = lite.newScan("fan 4999");
+    await lite.scanUntil(o, scan, 25);
+    const page = lite.scanPage(o, scan, { limit: 25, offset: 0 });
+    expect(page).toMatchObject({ total: 1, complete: true });
+    expect(page.rows[0]).toMatchObject({ name: "fan 4999", feature_id: 5000 });
+  });
+
+  it("matches numbers as text, as the DuckDB search did", async () => {
+    const { lite, o } = await opened();
+    const scan = lite.newScan("4998000");   // big = i * 1000
+    await lite.scanUntil(o, scan, 25);
+    expect(lite.scanPage(o, scan, { limit: 25, offset: 0 }).rows.map((r) => r.feature_id)).toEqual([4999]);
+  });
+
+  it("stops a scan that has been replaced", async () => {
+    const { lite, o } = await opened();
+    const scan = lite.newScan("nothing matches this");
+    await lite.scanUntil(o, scan, 25, () => false);
+    expect(scan.nextGroup).toBe(0);
+  });
+});

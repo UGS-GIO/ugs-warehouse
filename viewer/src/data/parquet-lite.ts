@@ -12,10 +12,16 @@ import { CappedMap } from "@/lib/lru";
 import { BBOX_COLS, GEOM_NAMES, ID_COL, sanitize } from "./columns";
 import type { ColType, Page } from "./download";
 
-type Opened = { file: AsyncBuffer; metadata: FileMetaData; columns: SchemaElement[] };
+export type Opened = { file: AsyncBuffer; metadata: FileMetaData; columns: SchemaElement[] };
 
 // A few recent files stay open, so paging back and forth re-reads no footer.
 const opened = new CappedMap<string, Promise<Opened>>(8);
+
+/** A file's footer and columns, read through `file` (the scan passes one that caches nothing). */
+export async function openWith(file: AsyncBuffer): Promise<Opened> {
+  const metadata = await parquetMetadataAsync(file);
+  return { file, metadata, columns: parquetSchema(metadata).children.map((c) => c.element) };
+}
 
 function open(url: string): Promise<Opened> {
   let o = opened.get(url);
@@ -23,15 +29,13 @@ function open(url: string): Promise<Opened> {
     o = (async () => {
       const cached = cachedAsyncBuffer(await asyncBufferFromUrl({ url }));
       // The cache keeps a failed range too, so a failed read closes the file and a retry reopens it.
-      const file: AsyncBuffer = {
+      return openWith({
         byteLength: cached.byteLength,
         slice: (start, end) => Promise.resolve(cached.slice(start, end)).catch((e: unknown) => {
           opened.delete(url);
           throw e;
         }),
-      };
-      const metadata = await parquetMetadataAsync(file);
-      return { file, metadata, columns: parquetSchema(metadata).children.map((c) => c.element) };
+      });
     })();
     // A failed open is not kept, or one network blip would break the table until reload.
     o.catch(() => opened.delete(url));
@@ -186,4 +190,41 @@ export async function ordinalOf(url: string, featureId: number, only?: { col: st
   if (!only) return row;
   const pos = (await matching(o, only.col, only.value)).indexOf(row);
   return pos < 0 ? null : pos;
+}
+
+// ---- search: a progressive scan, row group by row group ----
+//
+// Free-text search matches a term anywhere in any shown column, case-insensitively, as DuckDB's
+// ILIKE '%term%' did. Nothing in a parquet file can answer that without reading the text, so the
+// scan reads one row group at a time (never the geometry) and stops as soon as the page asked for
+// is full; asking for a later page carries on from where it stopped. The matched rows are kept,
+// so paging back costs nothing. It runs in a worker (parquet-scan.worker.ts).
+
+export type Scan = { term: string; rows: Record<string, unknown>[]; nextGroup: number; done: boolean };
+
+export const newScan = (term: string): Scan => ({ term: term.trim().toLowerCase(), rows: [], nextGroup: 0, done: false });
+
+const matches = (row: Record<string, unknown>, columns: string[], term: string) =>
+  columns.some((c) => row[c] != null && String(sanitize(row[c])).toLowerCase().includes(term));
+
+/** Scan on until `want` rows have matched or the file ends. `alive` stops a superseded scan. */
+export async function scanUntil(o: Opened, scan: Scan, want: number, alive: () => boolean = () => true): Promise<void> {
+  const l = layout(o.columns);
+  const groups = o.metadata.row_groups;
+  while (!scan.done && scan.rows.length < want && alive()) {
+    if (scan.nextGroup >= groups.length) { scan.done = true; break; }
+    const start = groups.slice(0, scan.nextGroup).reduce((n, g) => n + Number(g.num_rows), 0);
+    const end = start + Number(groups[scan.nextGroup].num_rows);
+    const rows = await parquetReadObjects({
+      file: prefetched(o, l.read, start, end), metadata: o.metadata, compressors, columns: l.read, rowStart: start, rowEnd: end,
+    });
+    for (const r of rows) if (matches(r, l.shown, scan.term)) scan.rows.push(r);
+    scan.nextGroup++;
+    if (scan.nextGroup >= groups.length) scan.done = true;
+  }
+}
+
+/** A page of a scan's matches. Until the scan is done, `total` is a floor and `complete` is false. */
+export function scanPage(o: Opened, scan: Scan, { limit, offset }: { limit: number; offset: number }): Page {
+  return { ...toPage(scan.rows.slice(offset, offset + limit), scan.rows.length, layout(o.columns)), complete: scan.done };
 }

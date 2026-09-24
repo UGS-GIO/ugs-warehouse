@@ -204,8 +204,16 @@ export type Scan = { term: string; rows: Record<string, unknown>[]; nextGroup: n
 
 export const newScan = (term: string): Scan => ({ term: term.trim().toLowerCase(), rows: [], nextGroup: 0, done: false });
 
+// Text as DuckDB's VARCHAR cast writes it, so a search finds what the DuckDB path found:
+// "2026-01-02 10:00:00" for a timestamp (a date matches as its prefix), JSON for a nested value.
+function searchText(v: unknown): string {
+  if (v instanceof Date) return v.toISOString().slice(0, 19).replace("T", " ");
+  const clean = sanitize(v);
+  return typeof clean === "object" ? JSON.stringify(clean, (_, x: unknown) => sanitize(x)) : String(clean);
+}
+
 const matches = (row: Record<string, unknown>, columns: string[], term: string) =>
-  columns.some((c) => row[c] != null && String(sanitize(row[c])).toLowerCase().includes(term));
+  columns.some((c) => row[c] != null && searchText(row[c]).toLowerCase().includes(term));
 
 /** Scan on until `want` rows have matched or the file ends. `alive` stops a superseded scan. */
 export async function scanUntil(o: Opened, scan: Scan, want: number, alive: () => boolean = () => true): Promise<void> {
@@ -225,6 +233,10 @@ export async function scanUntil(o: Opened, scan: Scan, want: number, alive: () =
     if (scan.nextGroup >= groups.length) scan.done = true;
   }
 }
+
+/** Position of the feature among a scan's matches so far, or -1. */
+export const scanOrdinal = (scan: Scan, featureId: number) =>
+  scan.rows.findIndex((r) => r[ID_COL] != null && Number(sanitize(r[ID_COL])) === featureId);
 
 /** A page of a scan's matches. Until the scan is done, `total` is a floor and `complete` is false. */
 export function scanPage(o: Opened, scan: Scan, { limit, offset }: { limit: number; offset: number }): Page {

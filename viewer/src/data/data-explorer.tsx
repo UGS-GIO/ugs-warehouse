@@ -148,7 +148,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const total = page?.total ?? 0;
   // A search still scanning knows only a floor: "25+". Paging on asks the scan for more.
   const more = page?.complete === false ? "+" : "";
-  const pageCount = showAll ? 1 : Math.max(1, Math.ceil(total / pageSize) + (more ? 1 : 0));
+  // The scan reads one row past the page, so an unfinished total already counts the next page.
+  const pageCount = showAll ? 1 : Math.max(1, Math.ceil(total / pageSize));
 
   // Virtualize the rows so "All" (up to ALL_CAP) renders only the visible window. Works for paged
   // views too (small counts → negligible overhead). Scroll viewport = the resizable box (scrollRef).
@@ -202,7 +203,9 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     (async () => {
       // No parquet geometry read on map-click. The clicked feature is already on the map and
       // preview-map highlights it from the tile. We only page the table to it here. (ALL-6001)
-      const pos = plain
+      const pos = searchOnly
+        ? await (await import("./parquet-search")).searchOrdinal(href, applied.search, mapPick.id)
+        : plain
         ? await (await import("./parquet-lite")).ordinalOf(href, mapPick.id,
           presetFilter?.kind === "exact" ? { col: presetFilter.col, value: presetFilter.value } : undefined)
         : await (await import("./download")).ordinalByFeatureId(href, mapPick.id, {

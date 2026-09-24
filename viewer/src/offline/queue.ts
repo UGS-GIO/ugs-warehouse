@@ -13,6 +13,7 @@ export type JobSpec =
   | { kind: "file"; url: string; label: string; bytes?: number; replaces?: string[] }
   | { kind: "area"; plan: AreaPlan; label: string; bytes: number }
   | { kind: "cog"; plan: CogPlan; label: string; bytes: number }
+  | { kind: "table"; plan: CogPlan; label: string; bytes: number }
   | { kind: "engine"; label: string; bytes?: number };
 
 export type Job = JobSpec & {
@@ -43,8 +44,9 @@ export const snapshot = () => jobs;
 /** Called after each job completes, so the app can refresh what it lists as stored. */
 export const onFinished = (fn: (job: Job) => void) => { finished.add(fn); };
 
+// An area save is keyed by its size too, so saving a second area of the same layer is its own job.
 export const keyOf = (s: JobSpec) =>
-  s.kind === "file" ? `file:${s.url}` : s.kind === "engine" ? "engine" : `${s.kind}:${s.plan.url}`;
+  s.kind === "file" ? `file:${s.url}` : s.kind === "engine" ? "engine" : `${s.kind}:${s.plan.url}:${s.bytes}`;
 
 async function root() {
   return navigator.storage?.getDirectory?.().catch(() => null) ?? null;
@@ -132,7 +134,7 @@ async function perform(job: Job) {
   } else if (job.kind === "area") {
     const { saveArea } = await import("./area");
     await saveArea(job.plan, progress);
-  } else if (job.kind === "cog") {
+  } else if (job.kind === "cog" || job.kind === "table") {
     const { saveCogArea } = await import("./cog-area");
     await saveCogArea(job.plan, progress);
   } else {

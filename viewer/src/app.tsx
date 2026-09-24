@@ -13,7 +13,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, childLinks, cogRenderAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, childLinks, cogRenderAsset, cubeVariables, itemLinks, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 
@@ -56,6 +56,7 @@ export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
     return {
       id, title,
       pmHref: pm.href,
+      tableHref: parquetAsset(ref.data)?.href,
       pmLayer: pm["pmtiles:layers"]?.[0] ?? id,
       bbox: ref.data.bbox,
       styleUrl: defaultStyleUrl(ref.data),

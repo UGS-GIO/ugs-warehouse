@@ -89,6 +89,7 @@ export type FocusSel = { bbox?: [number, number, number, number]; featureId?: nu
 export type ActiveLayer = {
   id: string; title: string; bbox?: number[];
   pmHref?: string; pmLayer?: string; styleUrl?: string;
+  tableHref?: string;   // the layer's GeoParquet, for saving its table offline
   cogHref?: string;
   rasterPmHref?: string;
   // Zarr datacube — one object, because the store is useless without the variable and the dims to

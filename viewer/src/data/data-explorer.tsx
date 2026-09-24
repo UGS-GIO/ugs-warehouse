@@ -20,6 +20,7 @@ import { useIsDesktop } from "@/ui/use-breakpoint";
 import { Unavailable } from "@/offline/offline-notice";
 import { isNetworkError, useOnline } from "@/offline/online";
 import { TableOffline } from "@/offline/table-offline";
+import { useStoredLayers } from "@/offline/use-offline";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
@@ -92,21 +93,37 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
   // The query key IS the dependency list, so a stale response can no longer land after a newer one
   // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
   // screen while the next one loads, so paging does not blank the table between fetches.
+  // A table saved by area has only that area's row groups on the device. When the whole table
+  // can't be read (offline, or a connection that reaches nothing, which navigator.onLine misses),
+  // read it clipped to those areas, so DuckDB touches only saved row groups (offline/table-area.ts).
+  const online = useOnline();
+  const stored = useStoredLayers();
+  const areas = useQuery({ queryKey: ["offline-areas", href], queryFn: async () => (await import("@/offline/cog-area")).savedAreasOf(href) });
+  const wholeSaved = !!stored.data?.files.some((f) => f.url === href);
+  const saved = !wholeSaved && areas.data?.length ? areas.data : undefined;
   const { data: page, error, isFetching: loading } = useQuery({
     queryKey: qk.parquetPage(href, [pageIndex, pageSize, showAll,
-                              sort?.id, sort?.desc, applied.search, filterKey, presetKey]),
+                              sort?.id, sort?.desc, applied.search, filterKey, presetKey, saved?.length ?? 0, online]),
     queryFn: async () => {
       const { queryParquet } = await import("./download");
-      return queryParquet(href, {
+      const read = (clip?: typeof saved) => queryParquet(href, {
         limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
         orderBy: sort?.id, desc: sort?.desc, search: applied.search,
         filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
+        clip,
       });
+      if (!saved) return { ...(await read()), clipped: false };
+      if (!online) return { ...(await read(saved)), clipped: true };
+      try {
+        return { ...(await read()), clipped: false };
+      } catch {
+        return { ...(await read(saved)), clipped: true };
+      }
     },
+    enabled: !areas.isPending,
     placeholderData: keepPreviousData,   // paging back is served from cache
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
-  const online = useOnline();
 
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
@@ -188,6 +205,7 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
         // Same combined filters as the page query, or the computed ordinal is over a different set
         // than the table shows and the jump lands on the wrong page.
         filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
+        clip: page?.clipped ? saved : undefined,   // the same rows the table is showing
       });
       if (live && pos != null) setPageIndex(Math.floor(pos / pageSize));
     })();
@@ -221,6 +239,7 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
             </button>
             {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
             <TableOffline href={href} title={title ?? href.split("/").pop() ?? href} />
+            {page?.clipped && <span className="text-xs text-muted-foreground">Offline: rows in your saved area only</span>}
             {presetFilter && (
               <span className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary">
                 Showing rows for the clicked feature

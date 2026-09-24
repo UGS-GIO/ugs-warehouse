@@ -30,7 +30,7 @@ const PAGE_SIZE = PAGE_SIZES[0];
 // OOM the tab; the largest layers (e.g. wetlandsoutline ~426k) exceed it, so "All" truncates them
 // (surfaced as "capped at 100,000") and paging is the way through the full table.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill }: {
+export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill, startCollapsed = false }: {
   href: string; onPick?: (sel: FocusSel) => void;
   mapPick?: { id: number; nonce: number } | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
@@ -39,6 +39,9 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   presetFilter?: ColFilter;  // exact-match filter ANDed ahead of the user's own filters (e.g. clicked feature's FK)
   onClearPreset?: () => void;  // clears presetFilter — wired to the chip's ✕
   fill?: boolean;  // fill the parent's height (docked contexts) instead of the fixed h-112
+  // Start closed, reading nothing until opened: a layer page should cost little more than itself,
+  // so someone on a poor connection can reach the download without loading rows they don't want.
+  startCollapsed?: boolean;
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
   // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
@@ -46,7 +49,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // differs from the map viewer). A pk resolves to the same row across apps.
   const [selPks, setSelPks] = useState<Set<string>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(startCollapsed);
   // Callers key this component by href, so a new dataset arrives as a fresh mount — no reset effect.
   const togglePk = (pk: string) => setSelPks((prev) => {
     const next = new Set(prev);
@@ -73,7 +76,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // From the schema, not a page: a page is fetched WITH these filters, so that would be circular.
   const { data: types } = useQuery({
     queryKey: qk.parquetTypes(href),
-    queryFn: async () => (await import("./download")).columnTypes(href),
+    enabled: !collapsed,
+    queryFn: async () => (await import("./parquet-lite")).columnTypes(href),
     staleTime: Infinity,
   });
   const applied = useMemo(
@@ -82,6 +86,10 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   );
 
   const sort = sorting[0];
+  // Nothing a query engine is needed for: no sort, search or column filter, and at most the
+  // related-rows exact match.
+  const plain = !sort && !applied.search.trim() && !applied.filters.length
+    && (!presetFilter || presetFilter.kind === "exact");
   const filterKey = JSON.stringify(applied.filters);
   const presetKey = JSON.stringify(presetFilter);
   // Scoped to what the rows are OF, so a change reads back as page 0 in the same render — one fetch.
@@ -93,13 +101,22 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     queryKey: qk.parquetPage(href, [pageIndex, pageSize, showAll,
                               sort?.id, sort?.desc, applied.search, filterKey, presetKey]),
     queryFn: async () => {
+      const range = { limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize };
+      // The plain view (file order, or a related-rows match) reads rows with hyparquet; only
+      // search, column filters and sorting need DuckDB, whose engine is a 36 MB download.
+      if (plain) {
+        const lite = await import("./parquet-lite");
+        return presetFilter?.kind === "exact"
+          ? lite.readMatching(href, presetFilter.col, presetFilter.value, range)
+          : lite.readPage(href, range);
+      }
       const { queryParquet } = await import("./download");
       return queryParquet(href, {
-        limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
-        orderBy: sort?.id, desc: sort?.desc, search: applied.search,
+        ...range, orderBy: sort?.id, desc: sort?.desc, search: applied.search,
         filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
       });
     },
+    enabled: !collapsed,
     placeholderData: keepPreviousData,   // paging back is served from cache
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
@@ -175,11 +192,15 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
     if (!mapPick) return;
     let live = true;
     setHighlightId(mapPick.id);
+    // A collapsed table shows no page, so it reads nothing to find one.
+    if (collapsed) return;
     (async () => {
       // No parquet geometry read on map-click. The clicked feature is already on the map and
       // preview-map highlights it from the tile. We only page the table to it here. (ALL-6001)
-      const { ordinalByFeatureId } = await import("./download");
-      const pos = await ordinalByFeatureId(href, mapPick.id, {
+      const pos = plain
+        ? await (await import("./parquet-lite")).ordinalOf(href, mapPick.id,
+          presetFilter?.kind === "exact" ? { col: presetFilter.col, value: presetFilter.value } : undefined)
+        : await (await import("./download")).ordinalByFeatureId(href, mapPick.id, {
         orderBy: sort?.id, desc: sort?.desc, search: applied.search,
         // Same combined filters as the page query, or the computed ordinal is over a different set
         // than the table shows and the jump lands on the wrong page.

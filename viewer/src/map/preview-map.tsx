@@ -5,6 +5,7 @@ import { createContext, lazy, Suspense, useCallback, useContext, useEffect, useM
 import { type FocusSel, type MapPick, nextPick } from "./map-model";
 import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { rendersOf } from "@/stac";
+import { useDataSaver } from "@/lib/data-saver";
 import { usePerItem } from "@/lib/use-per-item";
 
 export { footprintSpecOf } from "./preview-spec";
@@ -99,14 +100,32 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
 // the ONLY thing that mounts/unmounts per item — a cheap DOM node, no WebGL.
 export function PreviewMapSlot({ spec }: { spec: PreviewSpec }) {
   const { setSpec, registerSlot } = usePreviewMap();
+  // Data saver holds the map back (no map code, no tiles) until asked for. Local to the slot, which
+  // mounts per item, so each item asks again.
+  const saver = useDataSaver();
+  const [asked, setAsked] = useState(false);
+  const held = saver && !asked && spec !== null;
 
   // Publish spec on change. Kept in an effect so render stays pure.
-  useEffect(() => { setSpec(spec); }, [spec, setSpec]);
+  useEffect(() => { setSpec(held ? null : spec); }, [spec, setSpec, held]);
   // React 19 runs a ref callback's cleanup on unmount, so no mount/unmount effect is needed.
   const slotRef = useCallback((el: HTMLDivElement | null) => {
     registerSlot(el);
     return () => { registerSlot(null); setSpec(null); };
   }, [registerSlot, setSpec]);
 
+  if (held) {
+    return (
+      <div className="flex h-64 flex-col items-center justify-center gap-2 rounded-md border border-dashed border-border bg-muted/40 p-4 text-center">
+        <button type="button" onClick={() => setAsked(true)}
+          className="rounded-md bg-primary px-5 py-3 text-base font-semibold text-primary-foreground shadow hover:bg-primary/90">
+          Show map
+        </button>
+        <p className="max-w-72 text-xs text-muted-foreground">
+          Data saver is on, so the map is not loaded. Downloads below work without it.
+        </p>
+      </div>
+    );
+  }
   return <div ref={slotRef} />;
 }

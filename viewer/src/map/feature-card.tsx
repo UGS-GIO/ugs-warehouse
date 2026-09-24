@@ -15,10 +15,8 @@ function PeekRow({ join, value, onOpen }: {
   const { data, isFetching, error } = useQuery({
     enabled: v !== undefined,
     queryKey: qk.featureRelated(join.href, join.childField, v!),
-    queryFn: async () => {
-      const { queryParquet } = await import("@/data/download");
-      return queryParquet(join.href, { limit: 6, offset: 0, filters: [{ col: join.childField, kind: "exact", value: v! }] });
-    },
+    // An exact match read with hyparquet (parquet-lite.ts): a click should not start DuckDB.
+    queryFn: async () => (await import("@/data/parquet-lite")).readMatching(join.href, join.childField, v!, { limit: 6, offset: 0 }),
   });
   if (v === undefined) return null;
   const total = data?.total ?? 0;

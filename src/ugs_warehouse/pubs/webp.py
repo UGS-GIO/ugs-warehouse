@@ -64,7 +64,9 @@ def encode(src: str, dst: str, *, fit: int | None = None, quality: int = QUALITY
         # own, each as gdal_translate `-scale_<band>`; never a band's own min/max, which would
         # stretch the colors and shift the hue.
         maxes = [b["computedMax"] for b in json.loads(_gdal("gdalinfo", "-json", "-mm", src))["bands"]]
-        tops = [_range(maxes[:3])] * 3 + [_range(maxes[3:])] * (len(maxes) - 3)
+        tops = [_range(maxes[:3])] * 3
+        if len(maxes) == 4:
+            tops.append(_range(maxes[3:]))
         for i, top in enumerate(tops, start=1):
             args += [f"-scale_{i}", "0", str(top), "0", "255"]
         args += ["-ot", "Byte"]

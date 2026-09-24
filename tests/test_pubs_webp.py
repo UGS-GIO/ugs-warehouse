@@ -79,13 +79,16 @@ def _raster(path, w: int, h: int, *, ot: str = "Byte", burn=(200, 150, 100, 255)
     return str(path)
 
 
-def _png(path, w: int, h: int, color: tuple[int, int, int], *, depth: int = 8, frame: int = 8) -> str:
+def _png(path, w: int, h: int, color: tuple[int, int, int], *, depth: int = 8, frame: int = 8,
+         alpha: bool = True) -> str:
     """An RGBA PNG shaped like a plate thumbnail: `color` inside, transparent in a `frame`-pixel
-    margin. A 16-bit one keeps `color` as is and puts only its alpha at 65535, as OFR-688's does.
-    Built by hand so the test controls that exact 16-bit layout."""
-    fmt = ">4B" if depth == 8 else ">4H"
-    inside = struct.pack(fmt, *color, 255 if depth == 8 else 65535)
-    clear = struct.pack(fmt, 0, 0, 0, 0)
+    margin (black, with `alpha=False`, which writes RGB). A 16-bit one keeps `color` as is and puts
+    only its alpha at 65535, as OFR-688's does. Built by hand so the test controls that exact
+    16-bit layout."""
+    samples = 4 if alpha else 3
+    fmt = f">{samples}{'B' if depth == 8 else 'H'}"
+    inside = struct.pack(fmt, *color, *([255 if depth == 8 else 65535] if alpha else []))
+    clear = struct.pack(fmt, *[0] * samples)
     edge = b"\x00" + clear * w
     middle = b"\x00" + clear * frame + inside * (w - 2 * frame) + clear * frame
     rows = edge * frame + middle * (h - 2 * frame) + edge * frame
@@ -93,7 +96,9 @@ def _png(path, w: int, h: int, color: tuple[int, int, int], *, depth: int = 8, f
     def chunk(kind: bytes, data: bytes) -> bytes:
         return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data))
 
-    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, depth, 6, 0, 0, 0))
+    color_type = 6 if alpha else 2
+    path.write_bytes(b"\x89PNG\r\n\x1a\n"
+                     + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, depth, color_type, 0, 0, 0))
                      + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
     return str(path)
 
@@ -155,6 +160,13 @@ def test_a_true_16_bit_plate_keeps_its_hue_when_one_channel_is_dark(tmp_path):
     out = tmp_path / "out.webp"
     webp.encode(_png(tmp_path / "src.png", 64, 64, (50000, 40000, 600), depth=16), str(out))
     assert _pixel(out, 32, 32) == pytest.approx([195, 156, 2, 255], abs=5)
+
+
+@needs_gdal
+def test_a_16_bit_plate_without_alpha_encodes(tmp_path):
+    out = tmp_path / "out.webp"
+    webp.encode(_png(tmp_path / "src.png", 64, 64, (200, 150, 100), depth=16, alpha=False), str(out))
+    assert _pixel(out, 32, 32)[:3] == pytest.approx([200, 150, 100], abs=5)
 
 
 @needs_gdal

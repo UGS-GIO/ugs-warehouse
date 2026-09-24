@@ -123,7 +123,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, onPickAt }: {
   item?: StacDoc; layers: ActiveLayer[];
   // "What's here" at a point: a long press on phones, a right-click on desktop. Optional.
-  onPickAt?: (lon: number, lat: number) => void;
+  onPickAt?: (lon: number, lat: number, zoom: number) => void;
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
   // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
   // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
@@ -363,14 +363,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         // Swallow the click the browser synthesises after a touch: it would land on the picker
         // that just opened under the finger and toggle whichever row is there.
         e.originalEvent.preventDefault();
-        onPickAt?.(p.lng, p.lat);
+        onPickAt?.(p.lng, p.lat, mapRef.current?.getZoom() ?? 12);
       }}
       onMouseDown={(e) => { if (e.originalEvent.button === 2) press.current = { x: e.point.x, y: e.point.y }; }}
       onMouseUp={(e) => {
         if (e.originalEvent.button !== 2 || !press.current) return;
         const still = !moved(e.point.x, e.point.y);
         press.current = null;
-        if (still) onPickAt?.(e.lngLat.lng, e.lngLat.lat);
+        if (still) onPickAt?.(e.lngLat.lng, e.lngLat.lat, mapRef.current?.getZoom() ?? 12);
       }}
     >
       <MapControl position="top-left">

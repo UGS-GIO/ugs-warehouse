@@ -30,3 +30,19 @@ export async function engineBytes(): Promise<number> {
   const r = await caches.match(ENGINE_WASM, { cacheName: ENGINE_CACHE }).catch(() => undefined);
   return Number(r?.headers.get("content-length")) || 0;
 }
+
+/**
+ * Drop a saved engine this app no longer loads. Its file name carries a content hash, so after a
+ * deploy that changed duckdb-wasm the saved one is never asked for and offline tables stop opening.
+ * True when one was dropped, so the caller can save the current one.
+ */
+export async function dropOldEngine(): Promise<boolean> {
+  const cache = await caches.open(ENGINE_CACHE).catch(() => null);
+  if (!cache) return false;
+  const current = new URL(ENGINE_WASM, self.location.href).href;
+  let dropped = false;
+  for (const r of await cache.keys()) {
+    if (r.url !== current) dropped = (await cache.delete(r)) || dropped;
+  }
+  return dropped;
+}

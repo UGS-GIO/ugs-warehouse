@@ -1,13 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { archiveFor, OVERVIEW_MAXZOOM, overviewUrl, pickArchive, quadAt, quadsInBbox, quadUrl, redundantWithState,
-  rerouteStyle, tileCenter } from "./basemap";
+import { MercatorCoordinate } from "maplibre-gl";
+import { OVERVIEW_MAXZOOM, overviewUrl, quadAt, quadsInBbox, quadUrl, redundantWithState, rerouteStyle } from "./basemap";
+import { archiveFor, pickArchive, tileCenter } from "./basemap-protocol";
 
 /** The z/x/y tile containing a point (standard web-mercator XYZ). */
-const tileAt = (lon: number, lat: number, z: number): [number, number, number] => {
-  const n = 2 ** z;
-  const r = (lat * Math.PI) / 180;
-  return [z, Math.floor(((lon + 180) / 360) * n),
-    Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n)];
+const tileAt = (lng: number, lat: number, z: number): [number, number, number] => {
+  const { x, y } = MercatorCoordinate.fromLngLat({ lng, lat });
+  return [z, Math.floor(x * 2 ** z), Math.floor(y * 2 ** z)];
 };
 const SLC = tileAt(-111.89, 40.76, 14);   // downtown Salt Lake City, inside 40111g8
 

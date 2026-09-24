@@ -4,6 +4,10 @@
 // that do not look like range bugs: pmtiles' FetchSource throws outright when a 200 arrives with a
 // content-length larger than it asked for, and duckdb-wasm reads a parquet footer by a suffix range
 // before it reads anything else. Getting this wrong makes a downloaded layer look corrupt.
+//
+// Not workbox-range-requests: it answers 416 to a range that runs past the end of the file, where
+// HTTP says to send what exists. pmtiles opens every archive by asking for its first 16 KiB, so a
+// smaller archive would not open, and a suffix longer than the file would fail the same way.
 
 /** A resolved range over a file of known size. `end` is INCLUSIVE, as the HTTP header is. */
 export type Resolved =

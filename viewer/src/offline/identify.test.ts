@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { VectorTile } from "@mapbox/vector-tile";
 import Pbf from "pbf";
 import { FileSource, PMTiles } from "pmtiles";
+import { MercatorCoordinate } from "maplibre-gl";
 import { describe, expect, it } from "vitest";
 import { hitLabel, hits, identifyAt, inRings, toSegment } from "./identify";
 
@@ -57,9 +58,9 @@ describe("identifyAt (real PMTiles)", () => {
     const z = Math.min(h.maxZoom, 14);
     // any z14 tile in the archive with a line in it
     const n = 2 ** z;
-    const toTile = (lon: number, lat: number) => {
-      const r = (lat * Math.PI) / 180;
-      return [Math.floor(((lon + 180) / 360) * n), Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n)];
+    const toTile = (lng: number, lat: number) => {
+      const { x, y } = MercatorCoordinate.fromLngLat({ lng, lat });
+      return [Math.floor(x * n), Math.floor(y * n)];
     };
     const [tx, ty] = toTile((h.minLon + h.maxLon) / 2, (h.minLat + h.maxLat) / 2);
     const tile = await p.getZxy(z, tx, ty);
@@ -72,8 +73,7 @@ describe("identifyAt (real PMTiles)", () => {
         const f = layer.feature(i);
         if (f.type !== 2) continue;
         const v = f.loadGeometry()[0][0];
-        const lon = ((tx + v.x / layer.extent) / n) * 360 - 180;
-        const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (ty + v.y / layer.extent)) / n))) * 180) / Math.PI;
+        const { lng: lon, lat } = new MercatorCoordinate((tx + v.x / layer.extent) / n, (ty + v.y / layer.extent) / n).toLngLat();
         if (lon > h.minLon && lon < h.maxLon && lat > h.minLat && lat < h.maxLat) found = { layer: name, lon, lat };
       }
     }

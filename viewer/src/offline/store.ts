@@ -5,7 +5,8 @@
 // control re-renders from the same snapshot. Network questions about saved things (is a newer
 // version published, what would this cost) stay TanStack queries; this is the local half.
 import { useSyncExternalStore } from "react";
-import { type Bbox, loadStoredAreas, removeArea } from "./area";
+import { loadStoredAreas, removeArea } from "./area-store";
+import type { Bbox } from "./guards";
 import { setStoredBasemaps } from "./basemap";
 import { listCogAreas, removeCogArea } from "./block-store";
 import { engineBytes, removeEngine as dropEngine } from "./engine";

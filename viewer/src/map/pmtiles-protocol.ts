@@ -9,7 +9,7 @@
 import maplibregl from "maplibre-gl";
 import { Protocol } from "pmtiles";
 import { CappedMap } from "@/lib/lru";
-import { areaResponse } from "@/offline/area";
+import { areaResponse } from "@/offline/area-store";
 
 const PMTILES_ARCHIVE_CAP = 32;
 let registered = false;

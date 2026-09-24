@@ -10,6 +10,7 @@
 // service worker assembles a requested range from stored blocks (cogs/<encoded url>/<index>), and
 // a range that needs a block we did not save goes to the network, or fails cleanly offline.
 import { type BlockedSourceOptions, fromUrl, type GeoTIFF, type RemoteSourceOptions, type TypedArray } from "geotiff";
+import { MercatorCoordinate } from "maplibre-gl";
 import type { Bbox } from "./area";
 import { versionOf } from "./opfs-name";
 
@@ -24,10 +25,13 @@ import type { CogPlan } from "./block-store";
 
 export type { CogPlan };
 
-const merc = (lon: number, lat: number): [number, number] => [
-  (lon * 20037508.342789244) / 180,
-  Math.log(Math.tan(Math.PI / 4 + (Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 360)) * 6378137,
-];
+// EPSG:3857's full width in metres: the plates' bounding boxes are in it, maplibre's projection
+// is normalised to 0..1, and this is the scale between the two.
+const WORLD = 2 * 20037508.342789244;
+const merc = (lng: number, lat: number): [number, number] => {
+  const { x, y } = MercatorCoordinate.fromLngLat({ lng, lat: Math.max(-85.0511, Math.min(85.0511, lat)) });
+  return [(x - 0.5) * WORLD, (0.5 - y) * WORLD];
+};
 
 async function fileHead(url: string): Promise<{ size: number; version?: string }> {
   const r = await fetch(url, { method: "HEAD", cache: "no-store" });   // the live file, not a saved copy

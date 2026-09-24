@@ -1,4 +1,6 @@
-// Offline basemap: which archive a basemap tile lives in, and the protocol that reads it.
+// Offline basemap: the archives, the quad grid they are cut on, and the style that points at them.
+// The protocol that reads them is basemap-protocol.ts, apart because it needs maplibre's projection
+// and this module is also loaded by pages with no map (Offline data).
 //
 // The basemap is one statewide overview archive for low zooms plus one archive per 7.5-minute quad
 // for high zooms (scripts/build_basemap.py). The style keeps a SINGLE source, `basemap://{z}/{x}/{y}`,
@@ -15,7 +17,6 @@
 // The quad arithmetic mirrors src/ugs_warehouse/basemap.py; both are tested against the same
 // USGS codes so the viewer never asks for an archive the build did not name.
 import type { StyleSpecification } from "maplibre-gl";
-import { PMTiles } from "pmtiles";
 import { isRecord } from "./guards";
 
 export const BASEMAP_BASE =
@@ -44,30 +45,6 @@ export function quadAt(lon: number, lat: number): Quad {
   return { code, west: east - CELL, south, east, north: south + CELL };
 }
 
-/** Lon/lat of a web-mercator tile's centre. */
-export function tileCenter(z: number, x: number, y: number): [number, number] {
-  const n = 2 ** z;
-  const lon = ((x + 0.5) / n) * 360 - 180;
-  const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / n))) * 180) / Math.PI;
-  return [lon, lat];
-}
-
-/** The archive a tile would live in, if we had built it. */
-export function archiveFor(z: number, x: number, y: number, base = BASEMAP_BASE): string {
-  if (z <= OVERVIEW_MAXZOOM) return overviewUrl(base);
-  const [lon, lat] = tileCenter(z, x, y);
-  return quadUrl(quadAt(lon, lat).code, base);
-}
-
-/**
- * The archive to read a tile from, given what is stored: the statewide file whenever it is saved
- * (it holds every zoom everywhere), otherwise the overview or quad the tile falls in.
- */
-export function pickArchive(z: number, x: number, y: number, saved: ReadonlySet<string>,
-  base = BASEMAP_BASE): string {
-  return saved.has(stateUrl(base)) ? stateUrl(base) : archiveFor(z, x, y, base);
-}
-
 /** Stored partial-basemap files the statewide one makes redundant: the overview and every quad. */
 export function redundantWithState(saved: Iterable<string>, base = BASEMAP_BASE): string[] {
   return [...saved].filter((u) => u === overviewUrl(base) || u.startsWith(`${base}quads/`));
@@ -87,61 +64,12 @@ export function quadsInBbox([w, s, e, n]: [number, number, number, number]): Qua
 
 // ---- protocol ----
 
-/** Archive URLs downloaded to this device. Kept current by the offline query (see use-offline). */
+/** Archive URLs downloaded to this device. Kept current by the offline store (store.ts). */
 const stored = new Set<string>();
+export const storedBasemaps: ReadonlySet<string> = stored;
 export function setStoredBasemaps(urls: Iterable<string>): void {
   stored.clear();
   for (const u of urls) if (u.startsWith(BASEMAP_BASE)) stored.add(u);
-}
-
-const archives = new Map<string, PMTiles>();
-const archive = (url: string) => {
-  let a = archives.get(url);
-  if (!a) archives.set(url, (a = new PMTiles(url)));
-  return a;
-};
-
-let fallbackTemplate: Promise<string | null> | null = null;
-/** OpenFreeMap's current tile URL template. Versioned weekly, so it is read from their TileJSON. */
-const fallback = () => (fallbackTemplate ??= fetch("https://tiles.openfreemap.org/planet")
-  .then(async (r) => {
-    // A bad status or a TileJSON with no template is a failure, not an answer: throw so it is not
-    // cached, or one 500 would disable the network basemap until the page reloads.
-    if (!r.ok) throw new Error(`OpenFreeMap TileJSON: ${r.status}`);
-    const tilejson: unknown = await r.json();
-    const tpl = isRecord(tilejson) && Array.isArray(tilejson.tiles) ? tilejson.tiles[0] : undefined;
-    if (typeof tpl !== "string") throw new Error("OpenFreeMap TileJSON has no tile template");
-    return tpl;
-  })
-  .catch(() => { fallbackTemplate = null; return null; }));    // retry on the next tile
-
-const EMPTY = { data: new Uint8Array() };
-
-/** MapLibre protocol handler for `basemap://{z}/{x}/{y}`. */
-export async function basemapProtocol(
-  params: { url: string }, abort: AbortController,
-): Promise<{ data: ArrayBuffer | Uint8Array }> {
-  const m = /^basemap:\/\/(\d+)\/(\d+)\/(\d+)/.exec(params.url);
-  if (!m) throw new Error(`bad basemap URL: ${params.url}`);
-  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-
-  const url = pickArchive(z, x, y, stored);
-  if (stored.has(url)) {
-    try {
-      const t = await archive(url).getZxy(z, x, y, abort.signal);
-      if (t) return { data: new Uint8Array(t.data) };
-    } catch { /* fall through to the network basemap */ }
-  }
-
-  const tpl = await fallback();
-  if (!tpl) return EMPTY;
-  try {
-    const r = await fetch(tpl.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y)),
-      { signal: abort.signal });
-    return r.ok ? { data: await r.arrayBuffer() } : EMPTY;
-  } catch {
-    return EMPTY;   // offline and not stored: blank, not an error overlay
-  }
 }
 
 // ---- style ----

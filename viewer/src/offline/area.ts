@@ -10,23 +10,16 @@
 // protocol would have built, plus the tile compression) and one file per tile, raw as published.
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
 import { findTile, PMTiles, zxyToTileId } from "pmtiles";
-import { currentVersion, FileChangedError, fileNameFor } from "./opfs-name";
-import { type Bbox, bboxesOf, isBbox, isDirectory, isFile, isRecord, optionalNumber, optionalString, readJson } from "./guards";
+import { MercatorCoordinate } from "maplibre-gl";
+import { type AreaMeta, areaDir, markStored, readAreaMeta, removeArea, tileName, writeFile } from "./area-store";
+import { currentVersion, FileChangedError } from "./opfs-name";
+import type { Bbox } from "./guards";
 import { track } from "./in-flight";
 
 export type { Bbox } from "./guards";
+export type { AreaMeta } from "./area-store";
 export type TileRef = { z: number; x: number; y: number; offset: number; length: number };
 export type AreaPlan = { url: string; tiles: TileRef[]; bytes: number; meta: AreaMeta; bbox?: Bbox };
-export type AreaMeta = {
-  tilejson: { tiles: string[]; minzoom: number; maxzoom: number; bounds: Bbox };
-  compression: number;     // pmtiles Compression: 1 none, 2 gzip
-  /** The archive version the tiles were cut from, the areas saved, and when (for update checks). */
-  version?: string;
-  bboxes?: Bbox[];
-  savedAt?: number;
-};
-
-const AREAS = "areas";
 // Gzip and uncompressed cover every archive we publish (tippecanoe and Planetiler both gzip MVT;
 // raster mosaics are uncompressed images). Anything else is refused rather than stored unreadable.
 const SUPPORTED = new Set([1, 2]);
@@ -34,13 +27,13 @@ const SUPPORTED = new Set([1, 2]);
 /** XYZ tiles covering a bbox at one zoom (web mercator, clamped to the valid range). */
 export function tilesAt([w, s, e, n]: Bbox, z: number): [number, number][] {
   const count = 2 ** z;
-  const x = (lon: number) => Math.min(count - 1, Math.max(0, Math.floor(((lon + 180) / 360) * count)));
-  const y = (lat: number) => {
-    const r = (Math.max(-85.0511, Math.min(85.0511, lat)) * Math.PI) / 180;
-    return Math.min(count - 1, Math.max(0, Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * count)));
-  };
+  const tile = (v: number) => Math.min(count - 1, Math.max(0, Math.floor(v * count)));
+  // Mercator is undefined at the poles; clamp to the web-mercator limit before projecting.
+  const at = (lng: number, lat: number) =>
+    MercatorCoordinate.fromLngLat({ lng, lat: Math.max(-85.0511, Math.min(85.0511, lat)) });
+  const nw = at(w, n), se = at(e, s);
   const out: [number, number][] = [];
-  for (let tx = x(w); tx <= x(e); tx++) for (let ty = y(n); ty <= y(s); ty++) out.push([tx, ty]);
+  for (let tx = tile(nw.x); tx <= tile(se.x); tx++) for (let ty = tile(nw.y); ty <= tile(se.y); ty++) out.push([tx, ty]);
   return out;
 }
 
@@ -105,24 +98,6 @@ export async function planArea(url: string, bbox: Bbox, source?: PMTiles): Promi
   };
 }
 
-async function areaDir(url: string, create: boolean): Promise<FileSystemDirectoryHandle | null> {
-  try {
-    const root = await navigator.storage.getDirectory();
-    const areas = await root.getDirectoryHandle(AREAS, { create });
-    return await areas.getDirectoryHandle(fileNameFor(url), { create });
-  } catch {
-    return null;
-  }
-}
-
-const tileName = (z: number, x: number, y: number) => `${z}-${x}-${y}`;
-
-async function write(dir: FileSystemDirectoryHandle, name: string, data: BlobPart) {
-  const out = await (await dir.getFileHandle(name, { create: true })).createWritable();
-  await out.write(data);
-  await out.close();
-}
-
 /**
  * Save a planned area. Tiles already stored (from an overlapping earlier save) are skipped, so
  * saving a neighbouring area only downloads what is new. meta.json is written last: an archive
@@ -149,110 +124,15 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
           archives.delete(plan.url);   // so the re-plan reads the new directory
           throw new FileChangedError(plan.url);
         }
-        await write(dir, name, got.data);
+        await writeFile(dir, name, got.data);
       }
       onProgress?.(++done, plan.tiles.length);
     }
     const kept = before && before.version === plan.meta.version ? before.bboxes ?? [] : [];
-    await write(dir, "meta.json", JSON.stringify({
+    await writeFile(dir, "meta.json", JSON.stringify({
       ...plan.meta, bboxes: [...kept, ...(plan.bbox ? [plan.bbox] : [])], savedAt: Date.now(),
     } satisfies AreaMeta));
-    stored.add(plan.url);
+    markStored(plan.url);
   })());
 }
 
-/** A saved area's meta.json, checked field by field; null when missing or not one. */
-export function parseAreaMeta(v: unknown): AreaMeta | null {
-  if (!isRecord(v) || !isRecord(v.tilejson)) return null;
-  const { tiles, minzoom, maxzoom, bounds } = v.tilejson;
-  const compression = optionalNumber(v.compression);
-  if (!Array.isArray(tiles) || !tiles.every((t) => typeof t === "string") || !isBbox(bounds)
-    || typeof minzoom !== "number" || typeof maxzoom !== "number" || compression === undefined) return null;
-  return {
-    tilejson: { tiles, minzoom, maxzoom, bounds },
-    compression,
-    version: optionalString(v.version),
-    bboxes: bboxesOf(v.bboxes),
-    savedAt: optionalNumber(v.savedAt),
-  };
-}
-
-async function readAreaMeta(url: string): Promise<AreaMeta | null> {
-  const dir = await areaDir(url, false);
-  return dir ? parseAreaMeta(await readJson(dir, "meta.json")) : null;
-}
-
-/** Forget every tile saved for an archive. */
-export async function removeArea(url: string): Promise<void> {
-  stored.delete(url);
-  const root = await navigator.storage.getDirectory().catch(() => null);
-  const areas = await root?.getDirectoryHandle(AREAS).catch(() => null);
-  await areas?.removeEntry(fileNameFor(url), { recursive: true }).catch(() => {});
-}
-
-// ---- serving ----
-
-/** Archives with a saved area, so the protocol only looks on disk for layers that have one. */
-const stored = new Set<string>();
-// Read from disk on the protocol's first request rather than at startup: a map that mounts first
-// would otherwise ask for tiles before the set is filled and miss a saved area when offline.
-let loaded: Promise<unknown> | null = null;
-export const hasArea = (url: string) => stored.has(url);
-
-export type StoredArea = { url: string; tiles: number; bytes: number; version?: string; bboxes: Bbox[]; savedAt?: number };
-
-export async function loadStoredAreas(): Promise<StoredArea[]> {
-  const out: StoredArea[] = [];
-  const root = await navigator.storage?.getDirectory?.().catch(() => null);
-  const areas = await root?.getDirectoryHandle(AREAS).catch(() => null);
-  if (!areas) return out;
-  for await (const [name, dir] of areas) {
-    if (!isDirectory(dir)) continue;
-    const meta = parseAreaMeta(await readJson(dir, "meta.json"));
-    if (!meta) continue;
-    let tiles = 0;
-    let bytes = 0;
-    for await (const [n, h] of dir) {
-      if (n === "meta.json" || !isFile(h)) continue;
-      tiles++;
-      bytes += (await h.getFile()).size;
-    }
-    const url = decodeURIComponent(name);
-    stored.add(url);
-    out.push({ url, tiles, bytes, version: meta.version, bboxes: meta.bboxes ?? [], savedAt: meta.savedAt });
-  }
-  return out;
-}
-
-async function inflate(data: ArrayBuffer, compression: number): Promise<ArrayBuffer> {
-  if (compression === 1) return data;
-  const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("gzip"));
-  return new Response(stream).arrayBuffer();
-}
-
-/**
- * Answer a pmtiles:// request from a saved area, or null to let the network path handle it.
- * Tiles are stored-first (identical data, and it keeps working offline); the TileJSON is asked of
- * the network first, falling back to the stored copy, so online bounds stay the full archive's.
- */
-export async function areaResponse(url: string, kind: "json" | "tile", signal?: AbortSignal,
-  network?: () => Promise<{ data: unknown }>): Promise<{ data: unknown } | null> {
-  await (loaded ??= loadStoredAreas().catch(() => []));   // once, before the first answer
-  const m = kind === "tile" ? /^pmtiles:\/\/(.+)\/(\d+)\/(\d+)\/(\d+)$/.exec(url) : null;
-  const archive = kind === "tile" ? m?.[1] : url.slice("pmtiles://".length);
-  if (!archive || !stored.has(archive)) return null;
-  const dir = await areaDir(archive, false);
-  if (!dir) return null;
-  const meta = parseAreaMeta(await readJson(dir, "meta.json"));
-  if (!meta) return null;
-  if (kind === "json") {
-    if (!network) return { data: meta.tilejson };
-    try { return await network(); } catch { return { data: meta.tilejson }; }
-  }
-  if (!m) return null;
-  const [, , z, x, y] = m;
-  const file = await dir.getFileHandle(tileName(+z, +x, +y)).then((h) => h.getFile(), () => null);
-  if (signal?.aborted) throw new DOMException("aborted", "AbortError");
-  if (file) return { data: new Uint8Array(await inflate(await file.arrayBuffer(), meta.compression)) };
-  return null;
-}

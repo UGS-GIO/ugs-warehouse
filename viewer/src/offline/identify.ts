@@ -6,6 +6,7 @@
 // when something of it is actually there, not merely because its extent covers the point.
 import { VectorTile } from "@mapbox/vector-tile";
 import Pbf from "pbf";
+import { MercatorCoordinate } from "maplibre-gl";
 import { PMTiles } from "pmtiles";
 
 export type Hit = { layer: string; properties: Record<string, string | number | boolean> };
@@ -69,9 +70,8 @@ export async function identifyAt(url: string, lon: number, lat: number, mapZoom:
   const z = Math.min(h.maxZoom, MAX_READ_ZOOM);
   if (z < h.minZoom) return [];
   const n = 2 ** z;
-  const fx = ((lon + 180) / 360) * n;
-  const r = (lat * Math.PI) / 180;
-  const fy = ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n;
+  const at = MercatorCoordinate.fromLngLat({ lng: lon, lat });
+  const fx = at.x * n, fy = at.y * n;
   const x = Math.floor(fx), y = Math.floor(fy);
   const tile = await p.getZxy(z, x, y);
   if (!tile) return [];

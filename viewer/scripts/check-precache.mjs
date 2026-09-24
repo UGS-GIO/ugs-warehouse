@@ -27,10 +27,13 @@ const sw = readFileSync(at("sw.js"), "utf8");
 const precached = new Set([...sw.matchAll(/"?url"?:"([^"]+)"/g)].map((m) => m[1]));
 
 const js = readdirSync(at("assets")).filter((f) => f.endsWith(".js"));
+// Listed, not all installed: sw.ts installs the shell and fetches the rest on a save for offline,
+// both from this list.
 const missing = js.filter((f) => !EXPECTED_ABSENT.test(f) && !precached.has(`assets/${f}`));
 if (missing.length) {
-  fail(`${missing.length} app chunk(s) not precached, so their routes break offline:\n  ${missing.join("\n  ")}`);
+  fail(`${missing.length} app chunk(s) not in the manifest, so their routes break offline:\n  ${missing.join("\n  ")}`);
 }
+if (![...precached].some((u) => /^assets\/index-[^/]+\.js$/.test(u))) fail("no assets/index-*.js entry chunk: sw-routes isShell installs nothing to boot from");
 
 const present = js.filter((f) => EXPECTED_ABSENT.test(f) && precached.has(`assets/${f}`));
 if (present.length) fail(`mvp engine chunks precached, though offline tables never use them: ${present.join(", ")}`);

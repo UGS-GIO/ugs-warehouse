@@ -27,7 +27,7 @@ export async function removeEngine(): Promise<void> {
 }
 
 export async function engineBytes(): Promise<number> {
-  const r = await caches.match(ENGINE_WASM, { cacheName: ENGINE_CACHE }).catch(() => undefined);
+  const r = await caches.match(ENGINE_WASM, { cacheName: ENGINE_CACHE, ignoreVary: true }).catch(() => undefined);
   return Number(r?.headers.get("content-length")) || 0;
 }
 

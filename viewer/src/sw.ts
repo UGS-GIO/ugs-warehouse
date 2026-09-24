@@ -10,12 +10,12 @@ import { clientsClaim } from "workbox-core";
 import { ExpirationPlugin } from "workbox-expiration";
 import { cleanupOutdatedCaches, createHandlerBoundToURL, precacheAndRoute } from "workbox-precaching";
 import { NavigationRoute, registerRoute } from "workbox-routing";
-import { StaleWhileRevalidate } from "workbox-strategies";
+import { CacheFirst, StaleWhileRevalidate } from "workbox-strategies";
 import { assemble, parseBlockMeta } from "./offline/cog-blocks";
 import { finished } from "./offline/guards";
 import { fileNameFor, isLive, versionOf } from "./offline/opfs-name";
 import { contentTypeFor, rangeHeaders, rangeStatus, resolveRange, STORABLE } from "./offline/range";
-import { isCatalogJson } from "./sw-routes";
+import { isAppAsset, isCatalogJson, isShell } from "./sw-routes";
 
 declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<{ url: string; revision: string | null }> };
 
@@ -24,8 +24,48 @@ declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<{ url: str
 self.skipWaiting();
 clientsClaim();
 
-precacheAndRoute(self.__WB_MANIFEST);
+// Read once: the build inlines the list at this one reference.
+const MANIFEST = self.__WB_MANIFEST.map((e) => (typeof e === "string" ? { url: e, revision: null } : e));
+precacheAndRoute(MANIFEST.filter((e) => isShell(e.url)));
 cleanupOutdatedCaches();
+
+// The rest of the app: cached as it loads, and all of it when someone saves something for offline
+// (the page posts "warm-app"), so every view opens with no connection. Chunks of an older deploy
+// are dropped when this worker takes over.
+const APP_CACHE = "ugs-app";
+const appUrls = () => MANIFEST.filter((e) => !isShell(e.url))
+  .map((e) => new URL(e.url, self.registration.scope).href);
+
+/** Fetch the app files not yet cached, a few at a time so a save running beside it keeps going. */
+async function warmApp(): Promise<void> {
+  const cache = await caches.open(APP_CACHE);
+  const have = new Set((await cache.keys()).map((r) => r.url));
+  const need = appUrls().filter((u) => !have.has(u));
+  for (let i = 0; i < need.length; i += 6) {
+    await Promise.all(need.slice(i, i + 6).map((u) => cache.add(u).catch(() => {})));
+  }
+}
+
+/** Whether anything is saved for offline, or queued to be: the app must then open offline too. */
+async function anythingSaved(): Promise<boolean> {
+  const root = await navigator.storage.getDirectory().catch(() => null);
+  if (!root) return false;
+  for await (const [name] of root) if (["layers", "areas", "cogs", "queue.json"].includes(name)) return true;
+  return false;
+}
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil((async () => {
+    const keep = new Set(appUrls());
+    const cache = await caches.open(APP_CACHE);
+    for (const r of await cache.keys()) if (!keep.has(r.url)) await cache.delete(r);
+    // A new deploy, or a warm cut off last visit: whoever has saved things gets the whole app again.
+    if (await anythingSaved()) await warmApp();
+  })());
+});
+self.addEventListener("message", (event) => {
+  if (event.data === "warm-app") event.waitUntil(warmApp());
+});
 
 // SPA deep links. `/api/` is denied because the review deploy serves comments from this origin.
 registerRoute(new NavigationRoute(createHandlerBoundToURL("index.html"), { denylist: [/^\/api\//] }));
@@ -60,8 +100,14 @@ registerRoute(
 // this cache). Never cached on the way past: at 36 MB it is kept only for people who asked.
 registerRoute(
   ({ url }) => url.origin === self.location.origin && /\/assets\/duckdb-eh-[^/]+\.wasm$/.test(url.pathname),
-  async ({ request }) => (await caches.match(request, { cacheName: "ugs-engine" })) ?? fetch(request),
+  async ({ request }) => (await caches.match(request, { cacheName: "ugs-engine", ignoreVary: true })) ?? fetch(request),
 );
+
+// ignoreVary: the host varies on encoding and host headers, so the copy the worker fetched never
+// matches the page's request; the file names carry a content hash, so the copy is always right.
+registerRoute((m) => isAppAsset(m, self.location.origin), new CacheFirst({
+  cacheName: APP_CACHE, matchOptions: { ignoreVary: true }, plugins: [new CacheableResponsePlugin({ statuses: [200] })],
+}));
 
 // ---- Offline artifacts: serve a downloaded file, Range and all ----
 //

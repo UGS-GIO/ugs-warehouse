@@ -149,6 +149,8 @@ export async function enqueue(specs: JobSpec[]): Promise<void> {
   // Without persistent storage the browser may clear these files under pressure, which is the trip
   // they were saved for.
   await navigator.storage?.persist?.().catch(() => false);
+  // Only the app's shell is installed for every visitor; saving for offline fetches the rest.
+  navigator.serviceWorker?.controller?.postMessage("warm-app");
   void run();
 }
 
@@ -265,6 +267,12 @@ async function work(): Promise<void> {
     swept = true;
     await opfs.sweepPartials(new Set(jobs.flatMap((j) => (j.kind === "file" ? [j.url] : [])))).catch(() => 0);
     await sweepAreaSaves();
+    // Saved tables need the engine this deploy loads, not the one they were saved with.
+    if (await (await import("./engine")).dropOldEngine().catch(() => false)) {
+      await change(() => {
+        if (!jobs.some((j) => j.kind === "engine")) jobs.push({ kind: "engine", label: "Table engine", id: crypto.randomUUID(), state: "queued" });
+      });
+    }
   }
   for (;;) {
     const job = jobs.find((j) => j.state === "queued");

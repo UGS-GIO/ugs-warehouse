@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isCatalogJson } from "./sw-routes";
+import { isCatalogJson, isShell } from "./sw-routes";
 
 const match = (href: string, headers?: Record<string, string>) =>
   isCatalogJson({ url: new URL(href), request: new Request(href, { headers }) });
@@ -34,5 +34,14 @@ describe("isCatalogJson", () => {
   // required); `request` is optional here only so this test can call the predicate without one.
   it("survives a match with no request", () => {
     expect(isCatalogJson({ url: new URL(`${CDN}/warehouse/stac/catalog.json`) })).toBe(true);
+  });
+});
+
+describe("isShell", () => {
+  it("installs the page, its entry chunk and styles, and the files beside it", () => {
+    expect(["index.html", "favicon.svg", "assets/index-Ab12.js", "assets/index-Ab12.css"].every(isShell)).toBe(true);
+  });
+  it("leaves route chunks to load when used", () => {
+    expect(["assets/map-Cd34.js", "assets/katex-Ef56.js", "assets/KaTeX_Main.woff2"].some(isShell)).toBe(false);
   });
 });

@@ -16,3 +16,15 @@ export const isCatalogJson = ({ url, request }: RouteMatch): boolean =>
   url.pathname.includes("/stac/")
   && url.pathname.endsWith(".json")
   && !request?.headers.has("range");
+
+/**
+ * What the service worker installs up front: the page, its entry chunk and styles, and the small
+ * files beside it (icons, logo). Every other chunk is cached when first loaded, and all of them
+ * once someone saves something for offline (sw.ts), so a visitor who never goes offline downloads
+ * only what they use. Manifest URLs are relative to the app's base.
+ */
+export const isShell = (url: string): boolean => !url.includes("/") || /^assets\/index-[^/]+\.(js|css)$/.test(url);
+
+/** A built chunk or asset: content-hashed, so a cached copy never goes stale. */
+export const isAppAsset = ({ url }: RouteMatch, origin: string): boolean =>
+  url.origin === origin && url.pathname.includes("/assets/") && !url.pathname.endsWith(".wasm");

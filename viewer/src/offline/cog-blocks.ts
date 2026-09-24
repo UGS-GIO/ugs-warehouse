@@ -14,6 +14,13 @@ export function parseBlockMeta(v: unknown): BlockMeta | null {
   return { size, block, bboxes: bboxesOf(v.bboxes), version: optionalString(v.version), savedAt: optionalNumber(v.savedAt) };
 }
 
+/** The indices of the fixed-size blocks covering [start, start + length). */
+export function blocksOf(start: number, length: number, block: number): number[] {
+  const out: number[] = [];
+  for (let b = Math.floor(start / block); b <= Math.floor((start + length - 1) / block); b++) out.push(b);
+  return out;
+}
+
 /** A requested byte range [start, end] (inclusive) out of stored blocks, or null if one is missing. */
 export function assemble(start: number, end: number, block: number,
   get: (index: number) => Uint8Array | null): Uint8Array<ArrayBuffer> | null {

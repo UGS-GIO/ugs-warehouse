@@ -3,11 +3,12 @@
 // maplibre's projection) because the offline store and the Offline data page load this, and they
 // have no map.
 import { type Bbox, bboxesOf, isBbox, isDirectory, isFile, isRecord, optionalNumber, optionalString, readJson } from "./guards";
+import { Compression } from "pmtiles";
 import { fileNameFor } from "./opfs-name";
 
 export type AreaMeta = {
   tilejson: { tiles: string[]; minzoom: number; maxzoom: number; bounds: Bbox };
-  compression: number;     // pmtiles Compression: 1 none, 2 gzip
+  compression: Compression;   // Compression.None or Compression.Gzip (area.ts refuses others)
   /** The archive version the tiles were cut from, the areas saved, and when (for update checks). */
   version?: string;
   bboxes?: Bbox[];
@@ -37,7 +38,7 @@ export async function writeFile(dir: FileSystemDirectoryHandle, name: string, da
 export function parseAreaMeta(v: unknown): AreaMeta | null {
   if (!isRecord(v) || !isRecord(v.tilejson)) return null;
   const { tiles, minzoom, maxzoom, bounds } = v.tilejson;
-  const compression = optionalNumber(v.compression);
+  const compression = v.compression === Compression.None || v.compression === Compression.Gzip ? v.compression : undefined;
   if (!Array.isArray(tiles) || !tiles.every((t) => typeof t === "string") || !isBbox(bounds)
     || typeof minzoom !== "number" || typeof maxzoom !== "number" || compression === undefined) return null;
   return {
@@ -97,8 +98,8 @@ export async function loadStoredAreas(): Promise<StoredArea[]> {
   return out;
 }
 
-async function inflate(data: ArrayBuffer, compression: number): Promise<ArrayBuffer> {
-  if (compression === 1) return data;
+async function inflate(data: ArrayBuffer, compression: Compression): Promise<ArrayBuffer> {
+  if (compression === Compression.None) return data;
   const stream = new Blob([data]).stream().pipeThrough(new DecompressionStream("gzip"));
   return new Response(stream).arrayBuffer();
 }

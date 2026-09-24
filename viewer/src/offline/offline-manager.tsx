@@ -3,6 +3,7 @@
 // The per-layer download button and the map's "Save basemap" each see only their own file. This
 // is the one place that sees all of it — and the only way to delete a saved basemap quad, which
 // has no control of its own on the map.
+import { Meter } from "@base-ui/react/meter";
 import { useMutation } from "@tanstack/react-query";
 import { useViewCtx } from "@/app";
 import { BasemapDownload } from "./basemap-download";
@@ -60,10 +61,12 @@ export function OfflineManager() {
           {quota ? <span className="text-sm text-muted-foreground">of {opfs.formatBytes(quota)} this browser allows</span> : null}
         </div>
         {quota ? (
-          <div className="h-1.5 overflow-hidden rounded bg-muted" role="progressbar"
-            aria-valuenow={used} aria-valuemin={0} aria-valuemax={quota}>
-            <div className="h-full bg-primary" style={{ width: `${Math.max(1, Math.min(100, (used / quota) * 100))}%` }} />
-          </div>
+          <Meter.Root value={Math.min(used, quota)} max={quota} aria-label="Storage used on this device"
+            getAriaValueText={() => `${opfs.formatBytes(used)} of ${opfs.formatBytes(quota)}`}>
+            <Meter.Track className="block h-1.5 overflow-hidden rounded bg-muted">
+              <Meter.Indicator className="block h-full bg-primary" />
+            </Meter.Track>
+          </Meter.Root>
         ) : null}
         <p className="text-sm text-muted-foreground">
           {device.persisted

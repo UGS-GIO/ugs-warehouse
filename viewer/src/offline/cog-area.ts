@@ -15,6 +15,7 @@ import type { Bbox } from "./area";
 import { versionOf } from "./opfs-name";
 
 import { dropIfStale } from "./block-store";
+import { blocksOf } from "./cog-blocks";
 
 export { assemble } from "./cog-blocks";
 
@@ -46,11 +47,6 @@ function tagNumbers(v: number | number[] | TypedArray | undefined, tag: string):
 }
 
 /** Blocks covering [start, start + length). */
-function blocksOf(start: number, length: number, block: number): number[] {
-  const out: number[] = [];
-  for (let b = Math.floor(start / block); b <= Math.floor((start + length - 1) / block); b++) out.push(b);
-  return out;
-}
 
 /**
  * The blocks of a COG needed to draw `bbox` at every overview level, priced exactly. Reads only

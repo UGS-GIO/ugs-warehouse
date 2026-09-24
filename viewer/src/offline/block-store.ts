@@ -4,7 +4,6 @@
 import type { Bbox } from "./guards";
 import { type BlockMeta, parseBlockMeta } from "./cog-blocks";
 import { isDirectory, isFile, readJson } from "./guards";
-import { track } from "./in-flight";
 import { currentVersion, FileChangedError, fileNameFor, versionOf } from "./opfs-name";
 
 const DIR = "cogs";
@@ -32,7 +31,7 @@ async function cogDir(url: string, create: boolean) {
  * earlier, overlapping save are skipped. meta.json goes last, so a half-finished save is ignored.
  */
 export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: number) => void): Promise<void> {
-  return track((async () => {
+  return (async () => {
     // Blocks cut from another version of the file are byte ranges of a different file: drop them.
     const old = await cogDir(plan.url, false);
     const prior = old && await readMeta(old);
@@ -76,7 +75,7 @@ export function saveCogArea(plan: CogPlan, onProgress?: (done: number, total: nu
       size: plan.size, block: plan.block, bboxes, version: plan.version, savedAt: Date.now(),
     } satisfies BlockMeta));
     await meta.close();
-  })());
+  })();
 }
 
 async function readMeta(dir: FileSystemDirectoryHandle): Promise<BlockMeta | null> {

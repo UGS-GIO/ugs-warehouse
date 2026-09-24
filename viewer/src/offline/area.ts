@@ -9,12 +9,11 @@
 // Stored per archive under areas/<encoded archive URL>/: meta.json (the TileJSON the pmtiles
 // protocol would have built, plus the tile compression) and one file per tile, raw as published.
 // Raw keeps the stored size equal to the quoted size; the protocol decompresses when it serves.
-import { findTile, PMTiles, zxyToTileId } from "pmtiles";
+import { Compression, findTile, PMTiles, zxyToTileId } from "pmtiles";
 import { MercatorCoordinate } from "maplibre-gl";
 import { type AreaMeta, areaDir, markStored, readAreaMeta, removeArea, tileName, writeFile } from "./area-store";
 import { currentVersion, FileChangedError } from "./opfs-name";
 import type { Bbox } from "./guards";
-import { track } from "./in-flight";
 
 export type { Bbox } from "./guards";
 export type { AreaMeta } from "./area-store";
@@ -22,7 +21,7 @@ export type TileRef = { z: number; x: number; y: number; offset: number; length:
 export type AreaPlan = { url: string; tiles: TileRef[]; bytes: number; meta: AreaMeta; bbox?: Bbox };
 // Gzip and uncompressed cover every archive we publish (tippecanoe and Planetiler both gzip MVT;
 // raster mosaics are uncompressed images). Anything else is refused rather than stored unreadable.
-const SUPPORTED = new Set([1, 2]);
+const SUPPORTED = new Set([Compression.None, Compression.Gzip]);
 
 /** XYZ tiles covering a bbox at one zoom (web mercator, clamped to the valid range). */
 export function tilesAt([w, s, e, n]: Bbox, z: number): [number, number][] {
@@ -105,7 +104,7 @@ export async function planArea(url: string, bbox: Bbox, source?: PMTiles): Promi
  */
 export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: number) => void,
   source?: PMTiles): Promise<void> {
-  return track((async () => {
+  return (async () => {
     // Tiles cut from an older version of the archive are dropped, not mixed with the new ones.
     const before = await readAreaMeta(plan.url);
     if (before && before.version !== plan.meta.version) await removeArea(plan.url);
@@ -133,6 +132,6 @@ export function saveArea(plan: AreaPlan, onProgress?: (done: number, total: numb
       ...plan.meta, bboxes: [...kept, ...(plan.bbox ? [plan.bbox] : [])], savedAt: Date.now(),
     } satisfies AreaMeta));
     markStored(plan.url);
-  })());
+  })();
 }
 

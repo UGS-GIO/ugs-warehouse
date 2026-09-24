@@ -6,6 +6,7 @@
 // waits for the connection to come back; any other failure stays listed with its reason, for retry.
 import type { AreaPlan } from "./area";
 import type { CogPlan } from "./block-store";
+import { onlineManager } from "@tanstack/react-query";
 import { isNetworkError } from "./online";
 import * as opfs from "./opfs";
 import { FileChangedError } from "./opfs-name";
@@ -221,7 +222,7 @@ async function work(): Promise<void> {
   for (;;) {
     const job = jobs.find((j) => j.state === "queued");
     if (!job) break;
-    if (navigator.onLine === false) break;   // the "online" listener resumes
+    if (!onlineManager.isOnline()) break;   // resumed when the connection returns (below)
     update(job.id, { state: "running", error: undefined });
     await persist();
     try {
@@ -259,6 +260,16 @@ async function work(): Promise<void> {
   }
 }
 
-if (typeof window !== "undefined" && typeof navigator !== "undefined") {
-  window.addEventListener("online", () => { void run(); });
+onlineManager.subscribe((online) => { if (online) void run(); });
+
+// Closing, reloading or leaving the page stops a download; the next visit resumes it, but only
+// once someone opens the app again. So while one is running, ask the browser to confirm first.
+// Browsers show their own wording, and iOS Safari often skips the prompt; the on-screen notice
+// (saving-notice.tsx) says it too.
+if (typeof window !== "undefined") {
+  window.addEventListener("beforeunload", (e) => {
+    if (!jobs.some((j) => j.state === "running")) return;
+    e.preventDefault();
+    e.returnValue = "";   // older Chromium needs this set to show the prompt at all
+  });
 }

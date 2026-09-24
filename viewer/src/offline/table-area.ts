@@ -8,6 +8,8 @@
 // Stored like a COG saved by area (cog-area.ts): fixed blocks, served by the service worker.
 import type { Bbox } from "./area";
 import type { CogPlan } from "./block-store";
+import { overlaps } from "@/lib/bbox";
+import { blocksOf } from "./cog-blocks";
 import { versionOf } from "./opfs-name";
 
 /** Bigger than a COG block: row groups are contiguous runs of MB, not scattered 64 KB tiles. */
@@ -15,11 +17,6 @@ export const TABLE_BLOCK = 256 * 1024;
 
 export type TableGroup = { xmin: number; ymin: number; xmax: number; ymax: number; start: number; end: number };
 
-const overlaps = (g: TableGroup, [w, s, e, n]: Bbox) => g.xmin <= e && g.xmax >= w && g.ymin <= n && g.ymax >= s;
-
-function blocksOf(start: number, end: number, block: number, into: Set<number>) {
-  for (let b = Math.floor(start / block); b <= Math.floor((end - 1) / block); b++) into.add(b);
-}
 
 // DuckDB opens a parquet file by reading its last 64 KiB in one go, footer or not.
 const TAIL_READ = 64 * 1024;
@@ -32,13 +29,14 @@ const TAIL_READ = 64 * 1024;
 export function planTableBlocks(url: string, size: number, footerLength: number, groups: TableGroup[],
   bbox: Bbox, block = TABLE_BLOCK): CogPlan & { bbox: Bbox } {
   const need = new Set<number>();
-  blocksOf(0, 4, block, need);
-  blocksOf(Math.max(0, size - Math.max(footerLength + 8, TAIL_READ)), size, block, need);
+  const add = (start: number, end: number) => { for (const b of blocksOf(start, end - start, block)) need.add(b); };
+  add(0, 4);
+  add(Math.max(0, size - Math.max(footerLength + 8, TAIL_READ)), size);
   let tiles = 0;
   for (const g of groups) {
-    if (!overlaps(g, bbox)) continue;
+    if (!overlaps([g.xmin, g.ymin, g.xmax, g.ymax], bbox)) continue;
     tiles++;
-    blocksOf(g.start, g.end, block, need);
+    add(g.start, g.end);
   }
   const blocks = [...need].sort((a, b) => a - b);
   const bytes = blocks.reduce((n, b) => n + Math.min(block, size - b * block), 0);

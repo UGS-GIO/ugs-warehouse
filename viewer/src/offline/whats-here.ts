@@ -3,6 +3,7 @@
 import type { ActiveLayer } from "@/map/map-model";
 import { quadAt, quadsInBbox } from "./basemap";
 import type { Bbox } from "./area";
+import { contains, overlaps } from "@/lib/bbox";
 
 /** A long press lands on a point; "Save this area" covers the view. */
 export type Target = { kind: "area"; bbox: Bbox } | { kind: "point"; lon: number; lat: number; zoom?: number };
@@ -31,8 +32,6 @@ export function saveBbox(t: Target): Bbox {
 /** The quads a save covers, for the basemap row and the dialog title. */
 export const quadsFor = (t: Target) => (t.kind === "point" ? [quadAt(t.lon, t.lat)] : quadsInBbox(t.bbox));
 
-const overlaps = (b: number[], [w, s, e, n]: Bbox) => b[0] <= e && b[2] >= w && b[1] <= n && b[3] >= s;
-const contains = (b: number[], lon: number, lat: number) => b[0] <= lon && lon <= b[2] && b[1] <= lat && lat <= b[3];
 
 /**
  * Every layer whose footprint covers the target, sorted data layers first then by title.
@@ -42,9 +41,18 @@ const contains = (b: number[], lon: number, lat: number) => b[0] <= lon && lon <
  * since whole plates run to hundreds of MB and the statewide one to 2.9 GB. A datacube has no
  * offline form yet, so it is listed for showing but not for saving.
  */
+/** A STAC bbox as 2D: [w, s, e, n], or the 3D form [w, s, zmin, e, n, zmax] without its heights. */
+function flat(b: number[]): Bbox | null {
+  if (b.length === 4) return [b[0], b[1], b[2], b[3]];
+  if (b.length === 6) return [b[0], b[1], b[3], b[4]];
+  return null;
+}
+
 export function whatsHere(layers: ActiveLayer[], t: Target): Here[] {
-  const hit = (b?: number[]) => !!b && b.length >= 4
-    && (t.kind === "point" ? contains(b, t.lon, t.lat) : overlaps(b, t.bbox));
+  const hit = (b?: number[]) => {
+    const box = b && flat(b);
+    return !!box && (t.kind === "point" ? contains(box, t.lon, t.lat) : overlaps(box, t.bbox));
+  };
   const rank = { layer: 0, table: 1, map: 2 };
   return layers.filter((l) => hit(l.bbox)).flatMap((l): Here[] => [{
     id: l.id,

@@ -7,7 +7,7 @@
 import { VectorTile } from "@mapbox/vector-tile";
 import Pbf from "pbf";
 import { MercatorCoordinate } from "maplibre-gl";
-import { PMTiles } from "pmtiles";
+import { PMTiles, TileType } from "pmtiles";
 
 export type Hit = { layer: string; properties: Record<string, string | number | boolean> };
 
@@ -66,7 +66,7 @@ export async function identifyAt(url: string, lon: number, lat: number, mapZoom:
   source?: PMTiles): Promise<Hit[]> {
   const p = source ?? archiveFor(url);
   const h = await p.getHeader();
-  if (h.tileType !== 1) return [];                        // raster archive: nothing to hit
+  if (h.tileType !== TileType.Mvt) return [];            // raster archive: nothing to hit
   const z = Math.min(h.maxZoom, MAX_READ_ZOOM);
   if (z < h.minZoom) return [];
   const n = 2 ** z;

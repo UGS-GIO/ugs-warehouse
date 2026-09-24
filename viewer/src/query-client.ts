@@ -1,4 +1,4 @@
-import { QueryClient } from "@tanstack/react-query";
+import { onlineManager, QueryClient } from "@tanstack/react-query";
 
 /** One client, shared by the app and the router context (so a loader can prefetch into it).
  *
@@ -10,6 +10,10 @@ import { QueryClient } from "@tanstack/react-query";
 // the service worker may answer it from cache, and only then pause. The default ("online") pauses
 // first, so a page opened or refreshed after the connection drops would sit on a spinner forever
 // even for catalog JSON already stored on this device.
+// onlineManager starts out "online" and only learns otherwise from an offline event, which never
+// fires for an app opened with no connection; start it from what the browser says now.
+if (typeof navigator !== "undefined") onlineManager.setOnline(navigator.onLine !== false);
+
 export const queryClient = new QueryClient({
   defaultOptions: { queries: { staleTime: 5 * 60_000, retry: 1, networkMode: "offlineFirst" } },
 });

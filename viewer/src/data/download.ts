@@ -14,6 +14,7 @@
 //     is ~40 MB (wasm+data), so it's dynamically imported only when one is requested.
 
 import { BBOX_COLS, COVERING_COL, GEOM_NAMES, ID_COL, sanitize } from "./columns";
+import { overlaps } from "@/lib/bbox";
 import { newDuckDb } from "./duckdb";
 import {
   beginExport, consumeIfCancelled, endRun, isCancelled, startRun,
@@ -196,9 +197,8 @@ export type RowGroup = { bytes: number; xmin: number; xmax: number; ymin: number
  *  a file written as one big group is read whole however small the area. */
 export function estimateReadBytes(groups: RowGroup[], clip?: [number, number, number, number]): number {
   if (!clip) return groups.reduce((n, g) => n + g.bytes, 0);
-  const [w, s, e, n] = clip;
   return groups
-    .filter((g) => g.xmin <= e && g.xmax >= w && g.ymin <= n && g.ymax >= s)
+    .filter((g) => overlaps([g.xmin, g.ymin, g.xmax, g.ymax], clip))
     .reduce((acc, g) => acc + g.bytes, 0);
 }
 

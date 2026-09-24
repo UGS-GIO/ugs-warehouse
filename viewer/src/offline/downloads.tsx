@@ -1,4 +1,5 @@
 // The download queue as a list: what is saving, what is waiting, what failed and why.
+import { useQuery } from "@tanstack/react-query";
 import { useJobs } from "./use-offline";
 import * as opfs from "./opfs";
 import * as queue from "./queue";
@@ -13,8 +14,19 @@ export function jobProgress(j: Job): string {
   return j.total ? `${Math.round((j.done / j.total) * 100)}%` : "";
 }
 
+export const PARTIALS_KEY = ["offline-partials"] as const;
+
 export function Downloads() {
   const jobs = useJobs();
+  // What a stopped download already holds on the device, so keeping or removing it is an informed
+  // choice. Re-read when the queue changes shape (a job added, finished or removed).
+  const partials = useQuery({
+    queryKey: [...PARTIALS_KEY, jobs.map((j) => `${j.id}:${j.state}`).join(",")],
+    queryFn: opfs.listPartials,
+    enabled: jobs.length > 0,
+  });
+  const partialOf = (j: Job) => (j.kind === "file" && j.state !== "running"
+    ? partials.data?.find((p) => p.url === j.url)?.bytes ?? 0 : 0);
   if (!jobs.length) return null;
   return (
     <section className="flex flex-col gap-1">
@@ -35,6 +47,7 @@ export function Downloads() {
                   : j.state === "running" ? `Saving ${jobProgress(j)}`
                   : "Waiting"}
                 {j.bytes ? ` · ${opfs.formatBytes(j.bytes)}` : ""}
+                {partialOf(j) > 0 && ` · ${opfs.formatBytes(partialOf(j))} saved so far`}
               </div>
             </div>
             {j.state === "failed" && (

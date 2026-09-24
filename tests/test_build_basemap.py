@@ -14,7 +14,8 @@ def test_extract_covers_the_whole_quad_grid():
 
 
 def test_latest_build_is_the_newest_daily_key(monkeypatch):
-    builds = [{"key": "20260922.pmtiles"}, {"key": "20260924.pmtiles"}, {"key": "20260923.pmtiles"}]
+    builds = [{"key": "20260922.pmtiles"}, {"key": "20260924.pmtiles"}, {"key": "20260923.pmtiles"},
+              {"key": "zz-notes.txt"}, {"size": 1}]
     seen = {}
 
     def fake_urlopen(req, timeout):

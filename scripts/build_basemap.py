@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -40,7 +41,10 @@ def latest_build() -> str:
     req = urllib.request.Request(BUILDS_URL, headers={"User-Agent": "ugs-warehouse-basemap"})
     with urllib.request.urlopen(req, timeout=60) as r:
         builds = json.load(r)
-    return max(b["key"] for b in builds)     # YYYYMMDD.pmtiles
+    keys = [k for b in builds if re.fullmatch(r"\d{8}\.pmtiles", k := str(b.get("key", "")))]
+    if not keys:
+        raise RuntimeError(f"no YYYYMMDD.pmtiles build listed at {BUILDS_URL}")
+    return max(keys)
 
 
 def grid_bbox(quads: list[Quad]) -> str:

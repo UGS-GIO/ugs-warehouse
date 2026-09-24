@@ -36,9 +36,10 @@ function writeCam({ longitude, latitude, zoom }: Cam): void {
 
 const ofm = (s: string) => `https://tiles.openfreemap.org/styles/${s}`;
 // Ours, so it names glyphs itself (the OpenFreeMap basemaps bring their own) — else no labels (#116).
+const GLYPHS = "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf";
 const SATELLITE: maplibregl.StyleSpecification = {
   version: 8,
-  glyphs: "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf",
+  glyphs: GLYPHS,
   sources: { sat: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, attribution: "Imagery © Esri" } },
   layers: [{ id: "sat", type: "raster", source: "sat" }],
 };
@@ -46,6 +47,29 @@ const BASEMAPS = {
   Streets: ofm("liberty"), Light: ofm("positron"), Satellite: SATELLITE,
 } satisfies Record<string, string | maplibregl.StyleSpecification>;
 type BasemapId = keyof typeof BASEMAPS;
+
+const isStyle = (v: unknown): v is maplibregl.StyleSpecification =>
+  typeof v === "object" && v !== null && "version" in v && v.version === 8
+  && "sources" in v && typeof v.sources === "object" && "layers" in v && Array.isArray(v.layers);
+
+/**
+ * Streets without OpenFreeMap's Natural Earth relief: raster tiles of about 300 KB each (six of
+ * them made up most of a first map load) that fade to 10% by zoom 6, which is where a view of Utah
+ * sits. Everything else in the style is vector, so the map keeps its land cover, water and roads.
+ * Falls back to the style as published if it cannot be read.
+ */
+async function streetsWithoutRelief(): Promise<maplibregl.StyleSpecification | string> {
+  const url = ofm("liberty");
+  const r = await fetch(url).catch(() => null);
+  // A body that is not JSON falls back too: a failed query would leave the map on EMPTY_STYLE.
+  const style: unknown = r?.ok ? await r.json().catch(() => null) : null;
+  if (!isStyle(style)) return url;
+  const sources = Object.fromEntries(Object.entries(style.sources).filter(([id]) => id !== "ne2_shaded"));
+  return { ...style, sources, layers: style.layers.filter((l) => !("source" in l && l.source === "ne2_shaded")) };
+}
+
+// Glyphs too, so a labelled overlay added before Streets arrives is not refused.
+const EMPTY_STYLE: maplibregl.StyleSpecification = { version: 8, glyphs: GLYPHS, sources: {}, layers: [] };
 const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
 
 // The footprint "Open item →" popup is the only popup left on the map — a data-feature click docks
@@ -113,6 +137,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // Scoped to the shown item.
   const [hlGeom, setHlGeom] = usePerItem<GeoJSON.Geometry | null>(item?.id ?? "", null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
+  const { data: streets } = useQuery({ queryKey: ["basemap", "streets-no-relief"], queryFn: streetsWithoutRelief, staleTime: Infinity });
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
   const highlight = validBbox(highlightBbox);
@@ -277,7 +302,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       ref={mapRef}
       mapLib={maplibregl}
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
-      mapStyle={BASEMAPS[basemap]}
+      mapStyle={basemap === "Streets" ? streets ?? EMPTY_STYLE : BASEMAPS[basemap]}
       style={{ width: "100%", height: "100%" }}
       interactiveLayerIds={allInteractiveIds}
       cursor={cursor}

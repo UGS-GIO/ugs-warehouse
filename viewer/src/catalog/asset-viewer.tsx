@@ -9,8 +9,12 @@ import { FeatureCard } from "@/map/feature-card";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
 import { type Asset, type AssetKind, assetKind, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
   summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
-import { ThreeDViewer } from "@/data/three-d-viewer";
 import { C, toggle } from "@/ui/ui";
+import { useDataSaver } from "@/lib/data-saver";
+
+// deck.gl's mesh layers and the terrain builder: only items with a 3D asset need them, so they load
+// with the first one rather than with every catalog page.
+const ThreeDViewer = lazy(() => import("@/data/three-d-viewer").then((m) => ({ default: m.ThreeDViewer })));
 
 // deck.gl-zarr drags in luma.gl + the reprojection stack; only datacube items pay for it.
 const ZarrMap = lazy(() => import("@/zarr/zarr-map").then((m) => ({ default: m.ZarrMap })));
@@ -128,7 +132,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
           <ZarrMap asset={asset} item={item} />
         </Suspense>
       );
-    case "threeD": return <ThreeDViewer asset={asset} item={item} />;
+    case "threeD": return <Suspense fallback={<p className="text-sm text-muted-foreground">Loading the 3D viewer…</p>}><ThreeDViewer asset={asset} item={item} /></Suspense>;
     case "parquet": return <DataExplorer key={asset.href} href={asset.href} />;
     case "image":
       return (
@@ -150,6 +154,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
 // 50–70MB, cross-origin) PDF only embeds when asked. Avoids a heavy auto-download + a blank box
 // while a big file streams in. The cover + open-in-tab link always work regardless.
 function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   const [show, setShow] = useState(false);
   const poster = thumbnailAsset(item)?.href;
   if (show) {
@@ -166,7 +171,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
     <div className="mt-2">
       <button onClick={() => setShow(true)} title="Load the full PDF preview"
         className="group relative block w-full overflow-hidden rounded-md border border-border bg-muted">
-        {poster
+        {poster && !saver
           ? <img src={poster} alt={asset.title ?? "PDF cover"} className="max-h-160 w-full object-contain" />
           : <div className="flex h-64 items-center justify-center text-xs text-muted-foreground">PDF</div>}
         <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/20">

@@ -60,7 +60,8 @@ const isStyle = (v: unknown): v is maplibregl.StyleSpecification =>
 async function streetsWithoutRelief(): Promise<maplibregl.StyleSpecification | string> {
   const url = ofm("liberty");
   const r = await fetch(url).catch(() => null);
-  const style: unknown = r?.ok ? await r.json() : null;
+  // A body that is not JSON falls back too: a failed query would leave the map on EMPTY_STYLE.
+  const style: unknown = r?.ok ? await r.json().catch(() => null) : null;
   if (!isStyle(style)) return url;
   const sources = Object.fromEntries(Object.entries(style.sources).filter(([id]) => id !== "ne2_shaded"));
   return { ...style, sources, layers: style.layers.filter((l) => !("source" in l && l.source === "ne2_shaded")) };

@@ -10,8 +10,15 @@ export type ScanRequest = { id: number; url: string; term: string; offset: numbe
 type Current = { url: string; term: string; opened: Promise<Opened>; scan: Scan; queue: Promise<unknown> };
 let current: Current | null = null;
 
+// The matched rows are let go after a minute with no search, so a table left behind holds no memory.
+const IDLE_MS = 60_000;
+let pending = 0;
+let idle: ReturnType<typeof setTimeout> | undefined;
+
 self.onmessage = (e: MessageEvent<ScanRequest>) => {
   const { id, url, term, offset, limit, featureId } = e.data;
+  pending++;
+  clearTimeout(idle);
   if (!current || current.url !== url || current.term !== term) {
     // Not cached: a scan can read hundreds of MB, which a byte cache would keep in memory.
     current = { url, term, opened: asyncBufferFromUrl({ url }).then(openWith), scan: newScan(term), queue: Promise.resolve() };
@@ -36,5 +43,6 @@ self.onmessage = (e: MessageEvent<ScanRequest>) => {
       if (current === mine) current = null;
       self.postMessage({ id, error: err instanceof Error ? err.message : String(err) });
     }
+    if (--pending === 0) idle = setTimeout(() => { current = null; }, IDLE_MS);
   });
 };

@@ -32,7 +32,8 @@ class Job:
     tasks: int | None = None  # override task_count (parallel shards) at run time; None = job default
     tiers: tuple[tuple[str, str], ...] | None = None  # per-variant regen (value, label); e.g. mosaic scale tiers
     force_toggle: bool = False  # render a "force rebuild" checkbox (ingest: override the default skip-unchanged)
-    modes: tuple[tuple[str, str], ...] | None = None  # read-only variants (value, label); rendered as secondary buttons
+    modes: tuple[tuple[str, str], ...] | None = None  # variants (value, label); rendered as secondary buttons
+    modes_label: str = "Look first:"  # the text before the mode buttons
 
 
 # Pipeline stages mirror the Architecture page (docs/ARCHITECTURE.md + viewer Architecture.tsx) so
@@ -79,7 +80,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Skips topics whose content + tiling is unchanged; tick Force to rebuild every topic.",
         danger=True, force_toggle=True),
     Job("restyle", "ugs-warehouse-restyle", "Rebind styles",
-        "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
+        "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest). "
+        "Refresh catalog only rebuilds catalog.json and every collection.json from the items: run "
+        "it after a change to how the catalog is written.",
+        modes=(("refresh", "Refresh catalog"),), modes_label="Only:"),
     Job("ducklake-maintain", "ugs-warehouse-ducklake-maintain", "DuckLake maintenance",
         "Expire snapshots older than 7 days, compact small parquet, and GC orphaned files from GCS. "
         "Keeps the append-only DuckLake catalog fast + bounded — small files are billed per scan as "
@@ -185,20 +189,23 @@ def run_ingest(force: bool = False) -> dict:
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 
 
-# Read-only variants of the maintenance job. Unlike the mosaics job (command=python), this one is
-# deployed with command=cloudrun_entrypoint.sh and no args, and the entrypoint execs
-# `python -m $RUN_MODULE "$@"` — so the override is just the CLI flag.
-#   --report   prints per-table file counts + catalog options; touches nothing.
-#   --dry-run  reports what expire/cleanup WOULD remove, and skips compaction entirely.
-MAINTAIN_MODE_ARGS = {"report": ["--report"], "dry-run": ["--dry-run"]}
+# A job's variants: args that replace its configured ones. ducklake-maintain's entrypoint runs
+# `python -m $RUN_MODULE "$@"`, so its modes are read-only CLI flags. restyle runs `python`, so its
+# mode names a module: the catalog rebuild an ingest ends with.
+MODE_ARGS = {
+    "ducklake-maintain": {"report": ["--report"], "dry-run": ["--dry-run"]},
+    "restyle": {"refresh": ["-m", "scripts.refresh_stac"]},
+}
 
 
-def run_maintain(mode: str) -> dict:
-    """Run DuckLake maintenance in a read-only mode. Neither mode rewrites or deletes anything."""
-    job = JOBS.get("ducklake-maintain")
-    args = MAINTAIN_MODE_ARGS.get(mode)
-    if not job or not args:
-        return {"ok": False, "message": f"unknown maintenance mode {mode!r}"}
+def run_mode(key: str, mode: str) -> dict:
+    """Run a job with a variant's args in place of its configured ones."""
+    job = JOBS.get(key)
+    args = MODE_ARGS.get(key, {}).get(mode)
+    if not job:
+        return {"ok": False, "message": f"unknown job {key!r}"}
+    if not args:
+        return {"ok": False, "message": f"unknown mode {mode!r} for {key!r}"}
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name} {' '.join(args)}",
                 "dry_run": True}

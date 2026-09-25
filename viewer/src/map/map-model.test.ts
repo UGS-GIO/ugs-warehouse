@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type ActiveLayer, boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam,
-  mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
+  mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
   validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
 
@@ -147,6 +147,21 @@ describe("contentTakesDrag", () => {
 
   it("leaves a sideways swipe alone", () => {
     expect(contentTakesDrag(6, 5, true, 1)).toBe(false);
+  });
+});
+
+describe("the `sheet` param", () => {
+  it("round-trips every tab and detent", () => {
+    for (const tab of ["layers", "info"] as const) {
+      for (const detent of [0, 1, 2]) expect(parseSheet(sheetParam({ tab, detent }))).toEqual({ tab, detent });
+    }
+  });
+
+  it("leaves the default out of the URL, and reads junk as the default", () => {
+    expect(sheetParam({ tab: "layers", detent: 0 })).toBeUndefined();
+    expect(sheetParam({ tab: "info", detent: 2 })).toBe("info-full");
+    expect(parseSheet("info-sideways")).toEqual({ tab: "info", detent: 0 });
+    expect(parseSheet(undefined)).toEqual({ tab: "layers", detent: 0 });
   });
 });
 

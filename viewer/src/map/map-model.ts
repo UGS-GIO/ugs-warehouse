@@ -70,6 +70,22 @@ export function nearestDetent(frac: number): number {
   return best;
 }
 
+// The phone sheet in the URL (`sheet`): its tab, then how far up it is. `layers` is Layers at half,
+// `info-full` is Info at full, `info-peek` is Info lowered. Absent, or anything unknown, is a
+// Layers peek, so the default map URL stays bare.
+export type SheetTab = "layers" | "info";
+export type SheetState = { tab: SheetTab; detent: number };
+const SHEET_AT = ["peek", "", "full"];
+export function parseSheet(v: string | undefined): SheetState {
+  const [tab, at = ""] = (v ?? "").split("-");
+  const detent = SHEET_AT.indexOf(at);
+  return { tab: tab === "info" ? "info" : "layers", detent: v && detent >= 0 ? detent : 0 };
+}
+export function sheetParam({ tab, detent }: SheetState): string | undefined {
+  if (tab === "layers" && detent === 0) return undefined;
+  return [tab, SHEET_AT[detent]].filter(Boolean).join("-");
+}
+
 // Where a released drag settles. A flick (speed in sheet-heights per second, + is up) goes one
 // detent past where the sheet is, in the flick's direction, however short the drag was.
 export const FLICK_SPEED = 0.8;

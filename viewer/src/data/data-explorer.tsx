@@ -1,4 +1,5 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { sameFeature } from "@/lib/same-feature";
 import { qk } from "@/query-keys";
 import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
@@ -10,7 +11,7 @@ import { CommentsPanel } from "@/review/comments-panel";
 import { buildFilters } from "./build-filters";
 import type { ColFilter } from "./download";
 import { PAGE_SIZES } from "./paging";
-import type { FocusSel } from "@/map/map-model";
+import type { FocusSel, MapPick } from "@/map/map-model";
 import { IS_REVIEW } from "@/stac";
 import { C } from "@/ui/ui";
 import { RecordCards } from "@/catalog/record-cards";
@@ -39,7 +40,7 @@ const NO_ROWS: Record<string, unknown>[] = [];
 const ALL_CAP = 100_000;
 export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill, startCollapsed = false }: {
   href: string; title?: string; onPick?: (sel: FocusSel) => void;
-  mapPick?: { id: number; nonce: number } | null;
+  mapPick?: MapPick | null;
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
   rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
   summaryFields?: readonly string[];   // item's `ugs:summary_fields` — leads the record cards
@@ -205,8 +206,15 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
   // carries a per-click nonce so clicking the same row again still re-fires both effects. (ALL-6001)
   const pick = (i: number, bbox: [number, number, number, number], featureId?: number) => {
     if (!onPick) return;
-    onPick({ bbox, featureId, key: `row:${pageIndex * pageSize + i}#${pickSeq.current++}` });
+    onPick({ bbox, featureId, props: page?.rows[i], key: `row:${pageIndex * pageSize + i}#${pickSeq.current++}` });
   };
+
+  // The row a map click found by id, unless it is another record: the map and this table are
+  // then different versions of the layer (a saved area beside a newer table, or the reverse).
+  const pickedRow = mapPick ? page?.rows.find((r) => Number(r.feature_id) === mapPick.id) : undefined;
+  const versionsDiffer = !!(pickedRow && mapPick?.props && !sameFeature(mapPick.props, pickedRow));
+  const isHighlighted = (row: Record<string, unknown>) =>
+    row.feature_id != null && Number(row.feature_id) === highlightId && !(versionsDiffer && row === pickedRow);
 
   // Map-feature click → highlight + fly to the real feature (looked up by id, independent of the
   // current filter) AND page the table to it under the current sort/filter. Paging is skipped if
@@ -283,6 +291,11 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
           )}
         </div>
       )}
+      {versionsDiffer && (
+        <div className="mb-1.5 text-xs text-muted-foreground">
+          The map and this table are different versions of the layer, so a map click can't pick its row here. Update the saved copy on Offline data.
+        </div>
+      )}
       {err && (online && !isNetworkError(error)
         ? <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>
         : <div className="mb-1.5"><Unavailable what="the data table" error={error} /></div>)}
@@ -300,10 +313,7 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
         <RecordCards
           rows={rowModel}
           summaryFields={summaryFields}
-          highlight={(r) => {
-            const fid = r.original.feature_id;
-            return fid != null && Number(fid) === highlightId;
-          }}
+          highlight={(r) => isHighlighted(r.original)}
           onPick={onPick ? (r) => {
             const bbox = page?.bboxes[r.index] ?? null;
             if (!bbox) return;
@@ -382,7 +392,7 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
               const nfid = fid != null ? Number(fid) : null;
               const pkRaw = r.original[rowKey];
               const pkStr = pkRaw != null ? String(pkRaw) : null;
-              const hl = nfid != null && nfid === highlightId;
+              const hl = isHighlighted(r.original);
               return (
                 <tr key={r.id} data-index={vi.index} ref={rowVirt.measureElement}
                   className={`${hl ? "bg-amber-100 dark:bg-amber-900/40" : ""} ${clickable ? "cursor-pointer hover:bg-hover" : ""}`.trim() || undefined}

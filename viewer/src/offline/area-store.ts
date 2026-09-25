@@ -117,7 +117,8 @@ async function inflate(data: ArrayBuffer, compression: Compression): Promise<Arr
  * the network first, falling back to the stored copy, so online bounds stay the full archive's.
  */
 export async function areaResponse(url: string, kind: "json" | "tile", signal?: AbortSignal,
-  network?: () => Promise<{ data: unknown }>): Promise<{ data: unknown } | null> {
+  network?: () => Promise<{ data: unknown }>, liveVersion?: (archive: string) => Promise<string | undefined>,
+): Promise<{ data: unknown } | null> {
   await (loaded ??= loadStoredAreas().catch(() => []));   // once, before the first answer
   const m = kind === "tile" ? /^pmtiles:\/\/(.+)\/(\d+)\/(\d+)\/(\d+)$/.exec(url) : null;
   const archive = kind === "tile" ? m?.[1] : url.slice("pmtiles://".length);
@@ -130,6 +131,11 @@ export async function areaResponse(url: string, kind: "json" | "tile", signal?: 
     try { return await network(); } catch { return { data: meta.tilejson }; }
   }
   if (!m) return null;
+  // A republished archive makes the saved area stale: tiles from both would be mixed on one map, and
+  // their feature ids number different rows. Online, the live archive answers every tile; offline
+  // (the version cannot be asked), the saved tiles do.
+  const now = await liveVersion?.(archive).catch(() => undefined);
+  if (now && meta.version && now !== meta.version) return null;
   const [, , z, x, y] = m;
   const file = await dir.getFileHandle(tileName(+z, +x, +y)).then((h) => h.getFile(), () => null);
   if (signal?.aborted) throw new DOMException("aborted", "AbortError");

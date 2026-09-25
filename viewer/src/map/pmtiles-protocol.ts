@@ -7,9 +7,10 @@
 // Nothing here knows about offline layers. A downloaded archive is served by the service worker,
 // which answers this protocol's range requests out of OPFS, so the reader is unchanged either way.
 import maplibregl from "maplibre-gl";
-import { Protocol } from "pmtiles";
+import { PMTiles, Protocol } from "pmtiles";
 import { CappedMap } from "@/lib/lru";
 import { areaResponse } from "@/offline/area-store";
+import { live } from "@/offline/opfs-name";
 
 const PMTILES_ARCHIVE_CAP = 32;
 let registered = false;
@@ -23,9 +24,20 @@ export function ensurePmtilesProtocol(): void {
   // before. A layer with no saved area never touches the disk.
   type Handler = Parameters<typeof maplibregl.addProtocol>[1];
   const network: Handler = (params, abort) => protocol.tile(params, abort);
+  // The published archive's version (its ETag), asked once per archive, for areaResponse.
+  const versions = new CappedMap<string, Promise<string | undefined>>(PMTILES_ARCHIVE_CAP);
+  const liveVersion = (archive: string) => {
+    let v = versions.get(archive);
+    if (!v) {
+      v = new PMTiles(live(archive)).getHeader().then((h) => h.etag);
+      v.catch(() => versions.delete(archive));   // offline now is not offline for good
+      versions.set(archive, v);
+    }
+    return v;
+  };
   const handler: Handler = async (params, abort) => {
     const kind = params.type === "json" ? "json" : "tile";
-    const hit = await areaResponse(params.url, kind, abort.signal, () => network(params, abort));
+    const hit = await areaResponse(params.url, kind, abort.signal, () => network(params, abort), liveVersion);
     return hit ?? network(params, abort);
   };
   maplibregl.addProtocol("pmtiles", handler);

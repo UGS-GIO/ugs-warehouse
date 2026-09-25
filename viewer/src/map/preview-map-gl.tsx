@@ -2,6 +2,7 @@
 // draw one. Mounted once by PreviewMapProvider and NEVER torn down: its DOM is portaled into
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
 import { useEffect, useRef, useState } from "react";
+import { sameFeature } from "@/lib/same-feature";
 import { createPortal } from "react-dom";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -55,7 +56,7 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
 export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
-  focus: FocusSel | null; onFeatureClick: (id: number) => void;
+  focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
   onFeatureSelect?: (props: Record<string, unknown>, fid: number | null) => void;
   onClearSelection?: () => void;
@@ -191,7 +192,21 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   // it; on itemId (source swap) so a stale id can't light a same-id feature in the next dataset; on
   // mapLoaded so a focus set before the map is ready applies once it is. Map clicks call
   // highlightFeature directly (below) without touching focus, so they don't retrigger this.
-  useEffect(() => { highlightFeature(focus?.featureId ?? null); },
+  // Once the tiles are in, the lit feature must be the row's record: a map and table from
+  // different ingests number rows differently (lib/same-feature). A mismatch is left unlit.
+  useEffect(() => {
+    const fid = focus?.featureId ?? null;
+    highlightFeature(fid);
+    const map = mapRef.current?.getMap();
+    const props = focus?.props;
+    if (!map || fid == null || !props || !sourceLayer) return;
+    const check = () => {
+      const [f] = map.querySourceFeatures("pm-prev", { sourceLayer, filter: ["==", ["id"], fid] });
+      if (f && !sameFeature(f.properties ?? {}, props)) highlightFeature(null);
+    };
+    map.once("idle", check);
+    return () => { map.off("idle", check); };
+  },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [itemId, focusKey, mapLoaded]);
 
@@ -203,7 +218,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     const fid = f.id != null ? Number(f.id) : null;
     highlightFeature(fid);  // exact outline via the tile's feature-state, no parquet read
     onFeatureSelect?.(props, fid);
-    if (fid != null) onFeatureClick(fid);
+    if (fid != null) onFeatureClick(fid, props);
   };
 
   const cluster = (

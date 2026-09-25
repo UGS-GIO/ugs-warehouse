@@ -19,7 +19,7 @@ type Ctx = {
   focus: FocusSel | null;
   setFocus: (f: FocusSel | null) => void;
   pick: MapPick | null;
-  onFeatureClick: (id: number) => void;
+  onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   featureRelated: { relatedKey: string; value: string } | null;
   openRelated: (relatedKey: string, value: string) => void;
   clearRelated: () => void;
@@ -65,7 +65,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
 
   const setSpec = useCallback((s: PreviewSpec) => { setSpecState(s); if (s) setArmed(true); }, []);
   const registerSlot = useCallback((el: HTMLElement | null) => setSlotEl(el), []);
-  const onFeatureClick = useCallback((id: number) => setPick((p) => nextPick(p, id)), [setPick]);
+  const onFeatureClick = useCallback((id: number, props?: Record<string, unknown>) => setPick((p) => nextPick(p, id, props)), [setPick]);
   const selectFeature = useCallback((props: Record<string, unknown>, fid: number | null) => setSel({ feature: { props, fid }, related: null }), [setSel]);
   const clearSelection = useCallback(() => setSel(null), [setSel]);
   const openRelated = useCallback((relatedKey: string, value: string) => setSel((s) => (s ? { ...s, related: { relatedKey, value } } : s)), [setSel]);

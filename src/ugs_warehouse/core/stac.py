@@ -459,7 +459,7 @@ def _collection_assets(path: str, items: list[dict], mirror: object | None = Non
     The item is the most recent one that has a thumbnail, ties broken by id, so the preview tracks
     what was published last instead of whichever item happened to sort first.
     """
-    is_raster = path.startswith(f"{RASTER_CATALOG}/")
+    is_raster = path.split("/", 1)[0] == RASTER_CATALOG
     if not is_raster and path.split("/", 1)[0] not in PUB_SERIES_CATALOGS:
         return {}
     mirror_asset = item_mirror.asset(path, mirror) if is_raster else {}

@@ -10,11 +10,11 @@
  * surface is an item's metadata, not a chart.
  */
 import type { ReactNode, RefObject } from "react";
-import { useRef, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 
 import { LegalFooter } from "@/shell/legal-footer";
 import { CATALOG_URL } from "@/stac";
-import { clampSize, DETENTS, nearestDetent } from "./map-model";
+import { clampSize, DETENTS, releaseDetent } from "./map-model";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
@@ -62,6 +62,7 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
 }
 
 const icon = "h-5 w-5";
+const SLOP = 8;
 // No "Map" tab: the map is never hidden, it's what the sheet sits on. Tapping the open tab drops
 // the sheet back to a peek, which is the move a Map button was standing in for.
 const TABS: { id: Tab; label: string; path: ReactNode }[] = [
@@ -84,26 +85,94 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
   };
 
   const selectTab = (t: Tab) => {
+    if (dragged.current) return;
     if (t === tab && !collapsed) return setDetent(0);   // tap the open tab to get the map back
     setTab(t);
     setDetent((d) => Math.max(d, 1));
   };
 
-  const startDrag = (e: React.PointerEvent) => {
-    const startY = e.clientY;
+  // One drag, whatever started it: the handle, a tab, or the sheet's own content. It only counts
+  // once it moves SLOP px, so a tap on a tab stays a tap.
+  const drag = useRef<{ y0: number; h0: number; height: number; y: number; t: number; speed: number; moved: boolean } | null>(null);
+  const dragged = useRef(false);
+  const clampH = (h: number, height: number, fallback: number) => clampSize(h, height * 0.06, height * 0.94, fallback);
+
+  const begin = (y: number) => {
     const height = areaRef.current?.clientHeight ?? window.innerHeight;
-    const startH = height * DETENTS[detent];
-    const clamp = (h: number) => clampSize(h, height * 0.06, height * 0.94, startH);
-    const move = (ev: PointerEvent) => setDragH(clamp(startH + (startY - ev.clientY)));
-    const up = (ev: PointerEvent) => {
-      setDetent(nearestDetent(clamp(startH + (startY - ev.clientY)) / height));
-      setDragH(null);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+    drag.current = { y0: y, h0: height * DETENTS[detent], height, y, t: performance.now(), speed: 0, moved: false };
+    dragged.current = false;
   };
+  const move = (y: number) => {
+    const d = drag.current;
+    if (!d || (!d.moved && Math.abs(y - d.y0) < SLOP)) return;
+    const now = performance.now();
+    d.speed = 0.7 * ((d.y - y) / d.height / Math.max(now - d.t, 1)) * 1000 + 0.3 * d.speed;
+    Object.assign(d, { y, t: now, moved: true });
+    setDragH(clampH(d.h0 + d.y0 - y, d.height, d.h0));
+  };
+  const end = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (!d?.moved) return;
+    dragged.current = true;   // swallows the click a drag that ended on a tab would fire
+    setDetent(releaseDetent(clampH(d.h0 + d.y0 - d.y, d.height, d.h0) / d.height, d.speed));
+    setDragH(null);
+  };
+
+  const startPointerDrag = (e: React.PointerEvent) => {
+    begin(e.clientY);
+    const onMove = (ev: PointerEvent) => move(ev.clientY);
+    const onUp = () => {
+      end();
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+    window.addEventListener("pointercancel", onUp);
+  };
+
+  // The content scrolls natively, so it drags the sheet only where a scroll can't go: down from
+  // the top, or up while the sheet can still grow. Touch events, not pointer, because only a
+  // non-passive touchmove can stop the browser taking the gesture for a scroll.
+  const gesture = useRef({ begin, move, end, detent });
+  gesture.current = { begin, move, end, detent };
+  const contentRef = useCallback((el: HTMLDivElement | null) => {
+    if (!el) return;
+    let x0 = 0, y0 = 0, decided = false, dragging = false;
+    const atTop = (t: EventTarget | null) => {
+      for (let n = t as HTMLElement | null; n && n !== el.parentElement; n = n.parentElement) if (n.scrollTop > 0) return false;
+      return true;
+    };
+    const onStart = (e: TouchEvent) => {
+      ({ clientX: x0, clientY: y0 } = e.touches[0]);
+      decided = dragging = false;
+    };
+    const onMove = (e: TouchEvent) => {
+      const { clientX: x, clientY: y } = e.touches[0];
+      if (!decided) {
+        decided = true;
+        const down = y > y0, vertical = Math.abs(y - y0) > Math.abs(x - x0);
+        dragging = vertical && (down ? atTop(e.target) : gesture.current.detent < DETENTS.length - 1);
+        if (dragging) gesture.current.begin(y0);
+      }
+      if (!dragging) return;
+      e.preventDefault();
+      gesture.current.move(y);
+    };
+    const onEnd = () => { if (dragging) gesture.current.end(); dragging = false; };
+    el.addEventListener("touchstart", onStart, { passive: true });
+    el.addEventListener("touchmove", onMove, { passive: false });
+    el.addEventListener("touchend", onEnd);
+    el.addEventListener("touchcancel", onEnd);
+    return () => {
+      el.removeEventListener("touchstart", onStart);
+      el.removeEventListener("touchmove", onMove);
+      el.removeEventListener("touchend", onEnd);
+      el.removeEventListener("touchcancel", onEnd);
+    };
+  }, []);
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -114,20 +183,18 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           className={"absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl "
             + (dragH == null ? "transition-[height] duration-300 ease-out" : "")}
         >
-          {/* The bar is small; what a thumb can grab is not: 46px, 16 of them above the sheet's edge. */}
-          <div onPointerDown={startDrag}
-            className="relative flex shrink-0 cursor-grab touch-none items-center justify-center py-3 before:absolute before:inset-x-0 before:-top-4 before:h-4">
+          <div onPointerDown={startPointerDrag} className="flex shrink-0 cursor-grab touch-none items-center justify-center py-3">
             <span className="h-1.5 w-10 rounded-full bg-border" />
           </div>
           {!collapsed && (
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               <div className="px-3 pb-3">{tab === "layers" ? layers : info}</div>
               <LegalFooter catalogUrl={CATALOG_URL} />
             </div>
           )}
         </div>
       </div>
-      <nav aria-label="Map views" className="z-30 flex shrink-0 border-t border-border" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <nav aria-label="Map views" onPointerDown={startPointerDrag} className="z-30 flex shrink-0 touch-none border-t border-border" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         {TABS.map((t) => (
           <button
             key={t.id}

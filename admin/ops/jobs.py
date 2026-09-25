@@ -202,7 +202,9 @@ def run_mode(key: str, mode: str) -> dict:
     """Run a job with a variant's args in place of its configured ones."""
     job = JOBS.get(key)
     args = MODE_ARGS.get(key, {}).get(mode)
-    if not job or not args:
+    if not job:
+        return {"ok": False, "message": f"unknown job {key!r}"}
+    if not args:
         return {"ok": False, "message": f"unknown mode {mode!r} for {key!r}"}
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name} {' '.join(args)}",

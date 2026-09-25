@@ -70,6 +70,22 @@ export function nearestDetent(frac: number): number {
   return best;
 }
 
+// Where a released drag settles. A flick (speed in sheet-heights per second, + is up) goes one
+// detent past where the sheet is, in the flick's direction, however short the drag was.
+export const FLICK_SPEED = 0.8;
+export function releaseDetent(frac: number, speed: number): number {
+  if (speed > FLICK_SPEED) return Math.min(DETENTS.filter((d) => d <= frac + 1e-9).length, DETENTS.length - 1);
+  if (speed < -FLICK_SPEED) return Math.max(DETENTS.filter((d) => d < frac - 1e-9).length - 1, 0);
+  return nearestDetent(frac);
+}
+
+// Whether a swipe on the sheet's content moves the sheet instead of scrolling it, from its first
+// move (dy + is down): down only from the top, up only while the sheet can still grow.
+export function contentTakesDrag(dx: number, dy: number, atTop: boolean, detent: number): boolean {
+  if (Math.abs(dy) <= Math.abs(dx)) return false;
+  return dy > 0 ? atTop : detent < DETENTS.length - 1;
+}
+
 // Resizable pane size, clamped. Non-finite (a stored value from an older build, or NaN off a
 // pointer event) falls back to the default rather than collapsing the pane to zero.
 export function clampSize(n: number, min: number, max: number, fallback: number): number {

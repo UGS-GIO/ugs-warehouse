@@ -14,7 +14,8 @@ import { useRef, useState } from "react";
 
 import { LegalFooter } from "@/shell/legal-footer";
 import { CATALOG_URL } from "@/stac";
-import { clampSize, DETENTS, nearestDetent } from "./map-model";
+import { DETENTS } from "./map-model";
+import { useSheetDrag } from "./use-sheet-drag";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
@@ -62,6 +63,10 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
 }
 
 const icon = "h-5 w-5";
+// What drags the sheet: a long press there must not select, highlight, or open a callout menu.
+const GRAB = "touch-none select-none [-webkit-touch-callout:none] [-webkit-tap-highlight-color:transparent]";
+const SHEET_LABEL = ["Expand panel", "Expand panel to full height", "Collapse panel"];
+const noMenu = (e: React.MouseEvent) => e.preventDefault();
 // No "Map" tab: the map is never hidden, it's what the sheet sits on. Tapping the open tab drops
 // the sheet back to a peek, which is the move a Map button was standing in for.
 const TABS: { id: Tab; label: string; path: ReactNode }[] = [
@@ -74,8 +79,8 @@ const TABS: { id: Tab; label: string; path: ReactNode }[] = [
 function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
   const [tab, setTab] = useState<Tab>("layers");
   const [detent, setDetent] = useState(0);
-  const [dragH, setDragH] = useState<number | null>(null);
   const areaRef = useRef<HTMLDivElement>(null);
+  const { sheetRef, onPointerDown, contentRef, wasDrag } = useSheetDrag(areaRef, detent, setDetent);
   const collapsed = detent === 0;
 
   revealInfo.current = () => {
@@ -83,54 +88,50 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
     setDetent((d) => Math.max(d, 1));
   };
 
-  const selectTab = (t: Tab) => {
+  const selectTab = (e: React.MouseEvent, t: Tab) => {
+    if (wasDrag(e)) return;
     if (t === tab && !collapsed) return setDetent(0);   // tap the open tab to get the map back
     setTab(t);
     setDetent((d) => Math.max(d, 1));
   };
 
-  const startDrag = (e: React.PointerEvent) => {
-    const startY = e.clientY;
-    const height = areaRef.current?.clientHeight ?? window.innerHeight;
-    const startH = height * DETENTS[detent];
-    const clamp = (h: number) => clampSize(h, height * 0.06, height * 0.94, startH);
-    const move = (ev: PointerEvent) => setDragH(clamp(startH + (startY - ev.clientY)));
-    const up = (ev: PointerEvent) => {
-      setDetent(nearestDetent(clamp(startH + (startY - ev.clientY)) / height));
-      setDragH(null);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+  // Tap the grabber: peek → half → full → peek.
+  const stepSheet = (e: React.MouseEvent) => {
+    if (!wasDrag(e)) setDetent((detent + 1) % DETENTS.length);
+  };
+  const arrowSheet = (e: React.KeyboardEvent) => {
+    const step = e.key === "ArrowUp" ? 1 : e.key === "ArrowDown" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    setDetent(Math.min(Math.max(detent + step, 0), DETENTS.length - 1));
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div ref={areaRef} className="relative min-h-0 flex-1">
         <div className="absolute inset-0">{map}</div>
-        <div
-          style={dragH != null ? { height: `${dragH}px` } : { height: `${DETENTS[detent] * 100}%` }}
-          className={"absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl "
-            + (dragH == null ? "transition-[height] duration-300 ease-out" : "")}
-        >
-          <div onPointerDown={startDrag} className="flex shrink-0 cursor-grab touch-none items-center justify-center py-2.5">
+        <div ref={sheetRef} style={{ height: `${DETENTS[detent] * 100}%` }}
+          className="absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl transition-[height] duration-300 ease-out">
+          {/* A button too, so each detent is a tap or an arrow key away, not only a drag (WCAG 2.5.7). */}
+          <button type="button" onPointerDown={onPointerDown} onContextMenu={noMenu} onClick={stepSheet} onKeyDown={arrowSheet}
+            aria-label={SHEET_LABEL[detent]}
+            className={`flex shrink-0 cursor-grab items-center justify-center py-3 ${GRAB}`}>
             <span className="h-1.5 w-10 rounded-full bg-border" />
-          </div>
+          </button>
           {!collapsed && (
-            <div className="min-h-0 flex-1 overflow-y-auto">
+            <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
               <div className="px-3 pb-3">{tab === "layers" ? layers : info}</div>
               <LegalFooter catalogUrl={CATALOG_URL} />
             </div>
           )}
         </div>
       </div>
-      <nav aria-label="Map views" className="z-30 flex shrink-0 border-t border-border" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <nav aria-label="Map views" onPointerDown={onPointerDown} onContextMenu={noMenu} className={`z-30 flex shrink-0 border-t border-border ${GRAB}`} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         {TABS.map((t) => (
           <button
             key={t.id}
             type="button"
-            onClick={() => selectTab(t.id)}
+            onClick={(e) => selectTab(e, t.id)}
             aria-expanded={tab === t.id && !collapsed}
             className={"flex flex-1 flex-col items-center gap-0.5 py-2 text-sm font-medium "
               + (tab === t.id && !collapsed ? "text-primary" : "text-muted-foreground hover:text-foreground")}

@@ -67,7 +67,7 @@ def _geo_metadata(con: duckdb.DuckDBPyConnection, view: str) -> str:
     The CRS is left out, which GeoParquet reads as OGC:CRS84: the transform writes lon/lat WGS84."""
     rows = con.execute(f"SELECT DISTINCT ST_GeometryType(geom)::VARCHAR, ST_HasZ(geom) FROM {view} "
                        f"WHERE geom IS NOT NULL").fetchall()
-    types = sorted({_GEOMETRY_TYPES.get(t, t) + (" Z" if z else "") for t, z in rows})
+    types = sorted({_GEOMETRY_TYPES.get(t, t) + (" Z" if z else "") for t, z in rows if t})
     covering = {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}
     return json.dumps({"version": "1.1.0", "primary_column": "geom", "columns": {"geom": {
         "encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})

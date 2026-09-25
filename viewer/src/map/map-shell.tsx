@@ -80,7 +80,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
   const [tab, setTab] = useState<Tab>("layers");
   const [detent, setDetent] = useState(0);
   const areaRef = useRef<HTMLDivElement>(null);
-  const { dragH, onPointerDown, contentRef, wasDrag } = useSheetDrag(areaRef, detent, setDetent);
+  const { sheetRef, onPointerDown, contentRef, wasDrag } = useSheetDrag(areaRef, detent, setDetent);
   const collapsed = detent === 0;
 
   revealInfo.current = () => {
@@ -110,11 +110,8 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
     <div className="flex h-full min-h-0 flex-col">
       <div ref={areaRef} className="relative min-h-0 flex-1">
         <div className="absolute inset-0">{map}</div>
-        <div
-          style={dragH != null ? { height: `${dragH}px` } : { height: `${DETENTS[detent] * 100}%` }}
-          className={"absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl "
-            + (dragH == null ? "transition-[height] duration-300 ease-out" : "")}
-        >
+        <div ref={sheetRef} style={{ height: `${DETENTS[detent] * 100}%` }}
+          className="absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl transition-[height] duration-300 ease-out">
           {/* A button too, so each detent is a tap or an arrow key away, not only a drag (WCAG 2.5.7). */}
           <button type="button" onPointerDown={onPointerDown} onContextMenu={noMenu} onClick={stepSheet} onKeyDown={arrowSheet}
             aria-label={SHEET_LABEL[detent]}

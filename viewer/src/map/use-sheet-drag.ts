@@ -2,7 +2,7 @@
 // and the sheet's own scrolling content (touch events). It only counts once it moves SLOP px, so a
 // tap on a tab stays a tap, and on release a flick carries it one detent further.
 import type { MouseEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useRef } from "react";
 
 import { clampSize, contentTakesDrag, DETENTS, releaseDetent } from "./map-model";
 
@@ -10,8 +10,10 @@ const SLOP = 8;
 
 type Drag = { y0: number; h0: number; height: number; y: number; t: number; speed: number; moved: boolean };
 
+// The drag writes the sheet's height straight to the DOM: no React render per frame. On release
+// it hands back to the `height: N%` the shell renders for the detent.
 export function useSheetDrag(areaRef: RefObject<HTMLDivElement | null>, detent: number, setDetent: (d: number) => void) {
-  const [dragH, setDragH] = useState<number | null>(null);
+  const sheetRef = useRef<HTMLDivElement>(null);
   const drag = useRef<Drag | null>(null);
   const dragged = useRef(false);
 
@@ -28,15 +30,21 @@ export function useSheetDrag(areaRef: RefObject<HTMLDivElement | null>, detent: 
     const now = performance.now();
     const speed = (d.y - y) / d.height / Math.max(now - d.t, 1) * 1000;   // sheet-heights/s, + is up
     Object.assign(d, { y, t: now, speed: 0.7 * speed + 0.3 * d.speed, moved: true });
-    setDragH(heightOf(d, y));
+    const el = sheetRef.current;
+    if (!el) return;
+    el.style.transition = "none";
+    el.style.height = `${heightOf(d, y)}px`;
   };
   const end = () => {
     const d = drag.current;
     drag.current = null;
     if (!d?.moved) return;
     dragged.current = true;
-    setDetent(releaseDetent(heightOf(d, d.y) / d.height, d.speed));
-    setDragH(null);
+    const next = releaseDetent(heightOf(d, d.y) / d.height, d.speed);
+    // Set here too: when the detent doesn't change, React has no new style to write.
+    const el = sheetRef.current;
+    if (el) Object.assign(el.style, { transition: "", height: `${DETENTS[next] * 100}%` });
+    setDetent(next);
   };
 
   const onPointerDown = (e: ReactPointerEvent) => {
@@ -82,7 +90,7 @@ export function useSheetDrag(areaRef: RefObject<HTMLDivElement | null>, detent: 
   // The click a drag ending on a tab fires is not a tap. A keyboard click (detail 0) always is.
   const wasDrag = (e: MouseEvent) => e.detail > 0 && dragged.current;
 
-  return { dragH, onPointerDown, contentRef, wasDrag };
+  return { sheetRef, onPointerDown, contentRef, wasDrag };
 }
 
 // Nested scrollers count too: a table scrolled down inside the sheet should scroll, not drag.

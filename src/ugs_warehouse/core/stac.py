@@ -438,8 +438,7 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             # STAC *item* ids (`hazards_qfaults`), so a per-collection path never existed on any
             # host. The queryable per-layer link lives on the item instead (vector.sink_stac).
             *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections", "type": "application/json", "title": "OGC API Features service"}] if service else []),
-            # Titled so a client can list a collection without fetching all N items for names. An
-            # untitled item falls back to its id: the Portolan profile requires a title on the link.
+            # Titled, so listing a collection needs no fetch per item; Portolan requires one.
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json",
                "title": (item_titles or {}).get(i) or i}
               for i in sorted(item_ids)],

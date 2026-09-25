@@ -79,7 +79,7 @@ const SHEET_AT = ["peek", "", "full"];
 export function parseSheet(v: string | undefined): SheetState {
   const [tab, at = ""] = (v ?? "").split("-");
   const detent = SHEET_AT.indexOf(at);
-  return { tab: tab === "info" ? "info" : "layers", detent: v && detent >= 0 ? detent : 0 };
+  return { tab: tab === "info" ? "info" : "layers", detent: !!v && detent >= 0 ? detent : 0 };
 }
 export function sheetParam({ tab, detent }: SheetState): string | undefined {
   if (tab === "layers" && detent === 0) return undefined;

@@ -13,6 +13,7 @@ import { areaResponse } from "@/offline/area-store";
 import { live } from "@/offline/opfs-name";
 
 const PMTILES_ARCHIVE_CAP = 32;
+const VERSION_WAIT_MS = 3000;
 let registered = false;
 
 export function ensurePmtilesProtocol(): void {
@@ -29,8 +30,13 @@ export function ensurePmtilesProtocol(): void {
   const liveVersion = (archive: string) => {
     let v = versions.get(archive);
     if (!v) {
-      v = new PMTiles(live(archive)).getHeader().then((h) => h.etag);
-      v.catch(() => versions.delete(archive));   // offline now is not offline for good
+      // Capped: on a dead hotspot the browser still reads online and the request hangs, and every
+      // saved tile waits on this answer. Unanswered in time counts as unknown: the saved tiles draw.
+      const timeout = new Promise<undefined>((resolve) => { setTimeout(() => resolve(undefined), VERSION_WAIT_MS); });
+      v = Promise.race([new PMTiles(live(archive)).getHeader().then((h) => h.etag), timeout]);
+      // A failure is asked again (offline now is not offline for good); a timeout is not, or every
+      // tile would open another hanging request.
+      v.catch(() => versions.delete(archive));
       versions.set(archive, v);
     }
     return v;

@@ -13,7 +13,7 @@
 //     write these correctly (incl. Esri .gdb — OpenFileGDB write, GDAL ≥ 3.6). gdal3.js
 //     is ~40 MB (wasm+data), so it's dynamically imported only when one is requested.
 
-import { BBOX_COLS, GEOM_NAMES, ID_COL, sanitize } from "./columns";
+import { BBOX_COLS, COVERING_COL, GEOM_NAMES, ID_COL, sanitize } from "./columns";
 import { newDuckDb } from "./duckdb";
 import {
   beginExport, consumeIfCancelled, endRun, isCancelled, startRun,
@@ -386,7 +386,7 @@ function typesOf(descRows: { column_name?: unknown; column_type?: unknown }[]): 
   const allCols = descRows.map((r) => String(r.column_name));
   const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
   const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-  const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
+  const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), COVERING_COL, ID_COL]);
   const types: Record<string, ColType> = {};
   for (const r of descRows) {
     const name = String(r.column_name);
@@ -410,7 +410,7 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
     // Row object drops geometry + bbox (noise) but KEEPS feature_id so the table can highlight a
     // map-picked row. Displayed columns additionally drop feature_id (synthetic, not user data).
-    const rowHidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : [])]);
+    const rowHidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), COVERING_COL]);
     const colHidden = new Set([...rowHidden, ID_COL]);
     const columns = allCols.filter((c) => !colHidden.has(c));
     const types = typesOf(descRows);
@@ -462,7 +462,7 @@ export async function ordinalByFeatureId(
     const allCols = desc.toArray().map((r) => String(r.column_name));
     if (!allCols.includes(ID_COL)) return null;
     const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-    const colHidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
+    const colHidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : []), COVERING_COL, ID_COL]);
     const columns = allCols.filter((c) => !colHidden.has(c));
     const full: PageOpts = { ...opts, limit: 1, offset: 0 };
     const where = buildWhere(columns, full);
@@ -590,14 +590,15 @@ export async function exportItem(
       // this the transform reads longitude as latitude and returns inf.
       const wkt = srs === 4326 ? `ST_AsText(${geom})`
         : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${srs}', always_xy := true))`;
-      await conn.query(`COPY (SELECT * REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
+      const drop = cols0.includes(COVERING_COL) ? ` EXCLUDE (${ident(COVERING_COL)})` : "";
+      await conn.query(`COPY (SELECT *${drop} REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
       deliver([await db.copyFileToBuffer(csvOut)], `${stem}.csv`, "text/csv");
       return;
     }
 
     // One Feature per line, written straight to a DuckDB file — the features never exist as a
     // JS value or string, so peak memory is one buffer instead of Arrow rows + string + MEMFS copy.
-    const cols = descRows.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
+    const cols = descRows.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c) && c !== COVERING_COL);
     seqOut = `o${id}.geojsonl`;
     await conn.query(`COPY (${featureSeqSql(cols, geom, t)}) TO '${seqOut}' (FORMAT JSON, ARRAY false);`);
     const seqBytes = await db.copyFileToBuffer(seqOut);

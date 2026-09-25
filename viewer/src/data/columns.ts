@@ -8,6 +8,10 @@ export const GEOM_NAMES = ["geom", "geometry", "wkb_geometry"];
 // zoom, hidden from the displayed table (noise) like the geometry column.
 export const BBOX_COLS = ["bbox_xmin", "bbox_ymin", "bbox_xmax", "bbox_ymax"];
 
+// The same extent as GeoParquet 1.1's covering struct, for spec-aware readers. Hidden and not
+// exported: it repeats the geometry's bounds.
+export const COVERING_COL = "bbox";
+
 // Stable per-row id the transform stamps (1..N, hilbert order) into BOTH the GeoParquet and the
 // PMTiles (as the MVT feature id). It's the join key for map↔table linking. Hidden from the
 // displayed columns (synthetic noise) but kept on each row object so the table can highlight a

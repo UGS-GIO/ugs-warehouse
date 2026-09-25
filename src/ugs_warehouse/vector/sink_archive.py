@@ -10,6 +10,7 @@ GCS IO + bucket/prefix/CDN come from `core` (shared with the pubs producer).
 from __future__ import annotations
 
 import datetime
+import json
 import os
 import tempfile
 
@@ -55,29 +56,45 @@ def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
     return max(ROW_GROUP_MIN, min(ROW_GROUP_MAX, int(TARGET_ROW_GROUP_BYTES / per_row)))
 
 
+# ST_GeometryType names → GeoParquet's.
+_GEOMETRY_TYPES = {"POINT": "Point", "LINESTRING": "LineString", "POLYGON": "Polygon",
+                   "MULTIPOINT": "MultiPoint", "MULTILINESTRING": "MultiLineString",
+                   "MULTIPOLYGON": "MultiPolygon", "GEOMETRYCOLLECTION": "GeometryCollection"}
+
+
+def _geo_metadata(con: duckdb.DuckDBPyConnection, view: str) -> str:
+    """The GeoParquet 1.1 `geo` key: WKB in `geom`, the types present, and `bbox` as its covering.
+    The CRS is left out, which GeoParquet reads as OGC:CRS84: the transform writes lon/lat WGS84."""
+    rows = con.execute(f"SELECT DISTINCT ST_GeometryType(geom)::VARCHAR, ST_HasZ(geom) FROM {view} "
+                       f"WHERE geom IS NOT NULL").fetchall()
+    types = sorted({_GEOMETRY_TYPES.get(t, t) + (" Z" if z else "") for t, z in rows if t})
+    covering = {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}
+    return json.dumps({"version": "1.1.0", "primary_column": "geom", "columns": {"geom": {
+        "encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})
+
+
 def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
     """COPY the transformed `view` to a GeoParquet file.
 
-    DuckDB's spatial extension auto-writes GeoParquet metadata (version 1.0.0) when a GEOMETRY
-    column is present. For spatial pruning we add the per-row extent as four plain numeric columns
-    (bbox_xmin/ymin/xmax/ymax); combined with the hilbert ordering (transform), their per-row-group
-    min/max stats let our consumers (DuckDB, DuckDB-WASM, OGC API) prune row groups on a bbox
-    without decoding geometry.
+    GeoParquet 1.1, written by hand: DuckDB writes 1.0, and its 2.0 (Parquet's native GEOMETRY
+    type) does not open in GDAL before 3.12, which is every QGIS release today. The `bbox` struct is
+    the 1.1 covering column; its per-row-group min/max lets any spec-aware reader skip row groups on
+    a bbox (Portolan PTL-DAT-007, -012).
 
-    NOTE: these are plain columns, NOT the standardized GeoParquet 1.1 `covering` bbox struct.
-    DuckDB doesn't emit `covering` at any version (still unimplemented upstream), and the ingest is
-    deliberately pyarrow-free + memory-bounded (no post-process rewrite). So spec-aware external
-    readers (GDAL/pyarrow) won't auto-detect the bbox column — pushdown still works for our consumers
-    via row-group stats. For strict 1.1 covering, post-process with `gpio convert` (geoparquet-io).
+    The extent also goes out as four plain columns (bbox_xmin/ymin/xmax/ymax), which the viewer
+    and ugs-map-viewer already read.
     """
     rows_per_group = _row_group_size(con, view)
     print(f"[archive] row group size: {rows_per_group} rows (~{TARGET_ROW_GROUP_BYTES // 1024**2} MB)")
+    geo = _geo_metadata(con, view)
     con.execute(
-        f"COPY (SELECT *, "
+        f"COPY (SELECT * REPLACE (ST_AsWKB(geom) AS geom), "
         f"ST_XMin(geom) AS bbox_xmin, ST_YMin(geom) AS bbox_ymin, "
-        f"ST_XMax(geom) AS bbox_xmax, ST_YMax(geom) AS bbox_ymax "
+        f"ST_XMax(geom) AS bbox_xmax, ST_YMax(geom) AS bbox_ymax, "
+        f"{{'xmin': ST_XMin(geom), 'ymin': ST_YMin(geom), 'xmax': ST_XMax(geom), 'ymax': ST_YMax(geom)}} AS bbox "
         f"FROM {view}) TO '{path}' "
-        f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {rows_per_group})"
+        f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {rows_per_group}, "
+        f"GEOPARQUET_VERSION 'NONE', KV_METADATA {{geo: '{geo}'}})"
     )
 
 

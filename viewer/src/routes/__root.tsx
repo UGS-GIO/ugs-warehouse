@@ -1,5 +1,6 @@
 // The layout route. Search params that are STATE ABOUT A VIEW rather than the view itself:
 //   c/i  selected collection / item      l  active layer ids      s  series selection
+//   sheet  the phone map sheet (map-model parseSheet)
 // Any other param (catalog, m, ftsdb, vssdb, models, extrepo, features, and the Discover filter
 // keys) passes through untouched so override and deep links keep working.
 import type { QueryClient } from "@tanstack/react-query";
@@ -14,6 +15,7 @@ export type ViewerSearch = {
   i?: string;
   l?: string;
   s?: string;
+  sheet?: string;
   [key: string]: unknown;
 };
 
@@ -40,5 +42,6 @@ export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
     i: str(s.i),
     l: str(s.l),
     s: str(s.s),
+    sheet: str(s.sheet),
   }),
 });

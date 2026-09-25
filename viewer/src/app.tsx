@@ -147,7 +147,7 @@ function useViewState() {
       to: VIEW_PATH[next.view],
       replace: !push,
       search: (prev) => {
-        const { view: _v, c: _c, i: _i, l: _l, s: _s,
+        const { view: _v, c: _c, i: _i, l: _l, s: _s, sheet,
           q, collections, category, types, formats, geometry, sort, layout, density, area,
           ...rest } = prev;  // keep override params (rest); Discover keys re-added only when staying
         // Preview is only ever reached from Discover, so carry the filter state through it → Back
@@ -157,6 +157,7 @@ function useViewState() {
         return {
           ...rest,
           ...discover,
+          sheet: next.view === "map" ? sheet : undefined,   // the map's own; it doesn't follow you out
           c: next.c || undefined,
           i: next.i || undefined,
           l: layerParam(next.l),
@@ -408,7 +409,7 @@ function useViewState() {
       search: (prev) => {
         const { view: _v, c: _c, i: _i, l: _l, s: _s,
           q: _q, collections: _co, category: _ca, types: _ty, formats: _fo, geometry: _ge,
-          sort: _so, layout: _la, density: _de, area: _ar, ...rest } = prev;
+          sort: _so, layout: _la, density: _de, area: _ar, sheet: _sh, ...rest } = prev;
         return { ...rest, q: opts.q || undefined, category: opts.category || undefined };
       },
     });

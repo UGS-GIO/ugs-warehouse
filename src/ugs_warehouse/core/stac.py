@@ -37,6 +37,8 @@ ROOT_DESCRIPTION = ("UGS warehouse — cloud-native serving catalog across all p
 INDEX_REL = "ugs-items-index"
 
 STAC_VERSION = "1.1.0"  # 1.1 promotes `bands` + data_type/nodata to common metadata (no raster ext)
+# The Portolan profile every catalog and collection declares conformance to (rashid PTL-CNF-001).
+PORTOLAN_SCHEMA = "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json"
 # web-map-links: lets STAC Browser v4+ render the layer (not just the footprint).
 WEB_MAP_LINKS_EXT = "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json"
 # projection: v2.0.0 → `proj:code` ("EPSG:xxxx"), replacing the deprecated `proj:epsg`.
@@ -399,6 +401,7 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
     doc = {
         "type": "Collection",
         "stac_version": STAC_VERSION,
+        "stac_extensions": [PORTOLAN_SCHEMA],
         "id": collection,
         "title": title or prettify(collection),
         "description": description or f"UGS warehouse — {title or collection}.",
@@ -435,9 +438,10 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             # STAC *item* ids (`hazards_qfaults`), so a per-collection path never existed on any
             # host. The queryable per-layer link lives on the item instead (vector.sink_stac).
             *([{"rel": "service", "href": f"{PGF_BASE_URL}/collections", "type": "application/json", "title": "OGC API Features service"}] if service else []),
-            # Titled so a client can list a collection without fetching all N items for names.
+            # Titled so a client can list a collection without fetching all N items for names. An
+            # untitled item falls back to its id: the Portolan profile requires a title on the link.
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json",
-               **({"title": (item_titles or {}).get(i)} if (item_titles or {}).get(i) else {})}
+               "title": (item_titles or {}).get(i) or i}
               for i in sorted(item_ids)],
         ],
     }
@@ -448,17 +452,18 @@ def _collection_assets(path: str, items: list[dict], mirror: object | None = Non
     """Collection-level assets derived from the collection's own items.
 
     Portolan requires a thumbnail on a geospatial collection (PTL-VIZ-001), and a collection whose
-    items are scenes of ONE dataset can borrow a scene's. Restricted to raster collections on
-    purpose: a serving-topic collection is a dbt schema holding unrelated layers, so one layer's
-    preview would misrepresent the other eleven. That is the grain question (#257), not something a
-    thumbnail should paper over.
+    items are all one kind of thing can borrow an item's: the scenes of a raster dataset, or the
+    publications of one series. Not a serving-topic collection: that is a dbt schema holding
+    unrelated layers, so one layer's preview would misrepresent the other eleven. That is the grain
+    question (#257), not something a thumbnail should paper over.
 
-    The scene is the most recent one that has a thumbnail, ties broken by id, so the preview tracks
+    The item is the most recent one that has a thumbnail, ties broken by id, so the preview tracks
     what was published last instead of whichever item happened to sort first.
     """
-    if not path.startswith(f"{RASTER_CATALOG}/"):
+    is_raster = path.startswith(f"{RASTER_CATALOG}/")
+    if not is_raster and path.split("/", 1)[0] not in PUB_SERIES_CATALOGS:
         return {}
-    mirror_asset = item_mirror.asset(path, mirror)
+    mirror_asset = item_mirror.asset(path, mirror) if is_raster else {}
     with_thumbs = [it for it in items if (it.get("assets") or {}).get("thumbnail", {}).get("href")]
     if not with_thumbs:
         return mirror_asset
@@ -467,7 +472,7 @@ def _collection_assets(path: str, items: list[dict], mirror: object | None = Non
     title = newest.get("properties", {}).get("title") or prettify(newest["id"])
     return {"thumbnail": {"href": thumb["href"], "type": thumb.get("type", "image/png"),
                           "roles": ["thumbnail"], "title": f"Preview: {title}"},
-            **item_mirror.asset(path, mirror)}
+            **mirror_asset}
 
 
 def _is_mappable(item: dict) -> bool:
@@ -507,6 +512,7 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
     return {
         "type": "Catalog",
         "stac_version": STAC_VERSION,
+        "stac_extensions": [PORTOLAN_SCHEMA],
         "id": catalog_id,
         "title": title or prettify(catalog_id),
         "description": description or f"UGS warehouse — {catalog_id}, by data series.",
@@ -602,6 +608,7 @@ def _root_doc(children: list[dict]) -> dict:
     return {
         "type": "Catalog",
         "stac_version": STAC_VERSION,
+        "stac_extensions": [PORTOLAN_SCHEMA],
         "id": config.CATALOG_ID,
         "title": config.CATALOG_TITLE,
         "description": ROOT_DESCRIPTION,

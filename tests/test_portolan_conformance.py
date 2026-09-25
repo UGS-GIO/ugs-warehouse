@@ -4,9 +4,8 @@ This checks OUR CODE, not the published bucket. The builders write a small catal
 directory through the same `core.stac` path an ingest uses, and rashid reads it back.
 
 `GUARDED` names the rules we have actually fixed. Anything outside that set is reported but not
-enforced, because the remaining failures are open decisions rather than regressions — the missing
-`AGENTS.md`/`README.md` per collection (#250), the Portolan schema URI we deliberately withhold
-until we pass, and the collection-level thumbnails that depend on the layout question. Widen
+enforced, because the remaining failures are open decisions rather than regressions, such as the
+collection-level thumbnails and single-file collections that depend on the layout question (#257). Widen
 `GUARDED` as those land; never widen it to something we have not fixed, or the fence stops meaning
 anything.
 """
@@ -26,6 +25,8 @@ rashid = pytest.importorskip("rashid", reason="rashid is an optional dev depende
 # Rules this repo has fixed and must not break again. Each maps to work already merged.
 GUARDED = {
     "PTL-GEN-000",  # a readable root catalog.json
+    "PTL-CNF-001",  # every catalog and collection declares the Portolan profile
+    "PTL-SCH-001",  # and validates against it
     "PTL-STR-001",  # valid STAC 1.1.0 — the keyword list and the empty-string properties (#246)
     "PTL-TTL-001",  # every catalog and collection has a title and description (#216)
     "PTL-TTL-003",  # every child and item link carries a title (#216)
@@ -124,7 +125,7 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
 def test_the_builders_produce_a_catalog_that_passes_the_rules_we_have_fixed(monkeypatch, tmp_path):
     root = _catalog_on_disk(monkeypatch, tmp_path)
 
-    report = rashid.validate(root, data=False)
+    report = rashid.validate(root, data=False, schema=True)
     broken = [f for f in report.findings if f.rule_id in GUARDED]
 
     assert not broken, "\n".join(

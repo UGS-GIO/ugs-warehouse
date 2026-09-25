@@ -655,8 +655,8 @@ def test_collection_doc_titles_its_item_links():
     )
     items = {lnk["href"]: lnk for lnk in doc["links"] if lnk["rel"] == "item"}
     assert items["./qfaults/qfaults.json"]["title"] == "Quaternary Faults"
-    # A failed fetch has no title: emit the link anyway, without an empty title attribute.
-    assert "title" not in items["./landslides/landslides.json"]
+    # A failed fetch has no title: the link falls back to the id, since Portolan requires one.
+    assert items["./landslides/landslides.json"]["title"] == "landslides"
 
 
 def test_pub_keywords_are_a_list_and_reach_the_iso_record():
@@ -941,6 +941,25 @@ def test_raster_collection_borrows_its_newest_scene_thumbnail(monkeypatch):
     assert coll["assets"]["thumbnail"]["roles"] == ["thumbnail"]
     # Named for the scene it came from, so nobody mistakes it for a rendering of the whole series.
     assert coll["assets"]["thumbnail"]["title"] == "Preview: Map fort_douglas_2024"
+
+
+def test_a_publication_series_borrows_its_newest_cover(monkeypatch):
+    """A series collection holds publications of one kind, so its newest cover can stand for it.
+    It gets no item mirror: that is for raster scenes."""
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    for iid, dt in (("M-100", "2001-01-01T00:00:00Z"), ("M-200", "2011-01-01T00:00:00Z")):
+        stac.write_item(stac.build_item(
+            item_id=iid, collection="M", collection_path="ugs-publications/M",
+            geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3], datetime_iso=dt,
+            properties={"title": f"Map {iid}"},
+            assets={"thumbnail": {"href": f"https://x/{iid}.webp", "type": "image/webp",
+                                  "roles": ["thumbnail"]}}))
+    stac.refresh_catalog()
+
+    coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-publications/M/collection.json"])
+    assert coll["assets"] == {"thumbnail": {"href": "https://x/M-200.webp", "type": "image/webp",
+                                            "roles": ["thumbnail"], "title": "Preview: Map M-200"}}
 
 
 def test_a_serving_topic_collection_borrows_no_thumbnail(monkeypatch):

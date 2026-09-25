@@ -79,6 +79,13 @@ export function releaseDetent(frac: number, speed: number): number {
   return nearestDetent(frac);
 }
 
+// Whether a swipe on the sheet's content moves the sheet instead of scrolling it, from its first
+// move (dy + is down): down only from the top, up only while the sheet can still grow.
+export function contentTakesDrag(dx: number, dy: number, atTop: boolean, detent: number): boolean {
+  if (Math.abs(dy) <= Math.abs(dx)) return false;
+  return dy > 0 ? atTop : detent < DETENTS.length - 1;
+}
+
 // Resizable pane size, clamped. Non-finite (a stored value from an older build, or NaN off a
 // pointer event) falls back to the default rather than collapsing the pane to zero.
 export function clampSize(n: number, min: number, max: number, fallback: number): number {

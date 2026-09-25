@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type ActiveLayer, boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam,
-  mapKindOf, nearestDetent, releaseDetent, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
+  mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
   validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
 
@@ -131,6 +131,22 @@ describe("releaseDetent", () => {
   it("stays at the end when a flick has nowhere further to go", () => {
     expect(releaseDetent(DETENTS[2], 2)).toBe(2);
     expect(releaseDetent(DETENTS[0], -2)).toBe(0);
+  });
+});
+
+describe("contentTakesDrag", () => {
+  it("drags down only from the top of the content", () => {
+    expect(contentTakesDrag(0, 5, true, 2)).toBe(true);
+    expect(contentTakesDrag(0, 5, false, 2)).toBe(false);
+  });
+
+  it("drags up only while the sheet can grow", () => {
+    expect(contentTakesDrag(0, -5, false, 1)).toBe(true);
+    expect(contentTakesDrag(0, -5, true, 2)).toBe(false);
+  });
+
+  it("leaves a sideways swipe alone", () => {
+    expect(contentTakesDrag(6, 5, true, 1)).toBe(false);
   });
 });
 

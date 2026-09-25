@@ -114,7 +114,9 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           className={"absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl "
             + (dragH == null ? "transition-[height] duration-300 ease-out" : "")}
         >
-          <div onPointerDown={startDrag} className="flex shrink-0 cursor-grab touch-none items-center justify-center py-2.5">
+          {/* The bar is small; what a thumb can grab is not: 46px, 16 of them above the sheet's edge. */}
+          <div onPointerDown={startDrag}
+            className="relative flex shrink-0 cursor-grab touch-none items-center justify-center py-3 before:absolute before:inset-x-0 before:-top-4 before:h-4">
             <span className="h-1.5 w-10 rounded-full bg-border" />
           </div>
           {!collapsed && (

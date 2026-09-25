@@ -50,8 +50,10 @@ the Dockerfile — `git apply` fails the build if upstream drifts, which is the 
 
 The id column is resolved by convention — first match of `feature_id`, `fid`, `ogc_fid`, `objectid`,
 `gid`, `id`. DuckDB views have no primary key, so there is nothing authoritative to read; every
-warehouse topic carries `feature_id` (minted in `vector/transform.py`, stable across ingests and
-already the MVT feature id in PMTiles), so the OGC `id` and the PMTiles `id` are the same value.
+warehouse topic carries `feature_id` (minted in `vector/transform.py`, repeatable for unchanged data
+and already the MVT feature id in PMTiles), so the OGC `id` and the PMTiles `id` are the same value.
+It is a row number, not a durable key: any change to a topic's rows, or to the sort, renumbers
+its features, so a client must not store it across ingests.
 
 **Known cost:** the first `/collections` on a cold container resolves an extent per collection
 against remote parquet — ~18s, then cached for the life of the process (~0.03s). Collections are

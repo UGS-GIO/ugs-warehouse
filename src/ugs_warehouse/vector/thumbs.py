@@ -1,5 +1,6 @@
-"""Styled-preview thumbnails for vector serving-topics — a PNG of the PMTiles layer rendered with its
-bound MapLibre style (or a neutral "sand" style when unstyled), so the catalog shows a real preview.
+"""Styled-preview thumbnails for vector serving-topics — a small WebP of the PMTiles layer rendered
+with its bound MapLibre style (or a neutral "sand" style when unstyled), so the catalog shows a real
+preview.
 
 Pubs get cover thumbnails from a PDF page (`pubs/thumbs.py`); topics are vector + style, so they can't
 be rasterised the same way. MapLibre needs WebGL, so we render in headless Chromium — but driven from
@@ -9,10 +10,11 @@ exactly like the viewer (viewer/src/Map.tsx): the ugs-styles JSON is layers-ONLY
 version-8 style with a vector source over `pmtiles://`, a sand background, and `source`/`source-layer`
 injected per layer.
 
-Content-addressed + idempotent: each PNG carries a `.sha` sidecar of `RENDERER_VERSION + style bytes`.
-A run skips a topic whose sidecar matches → a NEW layer renders (no PNG yet), a SYMBOLOGY change
-re-renders (style bytes change), an unchanged topic is skipped. So it's safe to chain after every
-vector ingest AND every restyle; it only does work when something changed. Sharded via
+Content-addressed + idempotent: each image carries a `.sha` sidecar of `RENDERER_VERSION + the data
+fingerprint + the layers it draws`. A run skips a topic whose sidecar matches → a NEW layer renders (no
+image yet), new DATA or a SYMBOLOGY change re-renders, an unchanged topic is skipped. The vector ingest
+starts it for the topic it just published and restyle starts it after a rebind (core/jobs.py); a
+nightly Cloud Scheduler run (scripts/provision.sh) is the backstop. Sharded via
 CLOUD_RUN_TASK_INDEX/COUNT, same as the pubs jobs.
 """
 from __future__ import annotations
@@ -20,34 +22,52 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import random
 import sys
 import tempfile
+import time
+import traceback
 import urllib.request
 
 from ..core import config, gcs, stac
 from ..pubs.harvest import _series_ctx, hlog, outcome_category
 
 CATALOG = stac.SERVING_TOPICS_CATALOG  # items nest one level under it, per mart schema
-# Bump to force a global re-render (renderer/style-composition change) without touching style bytes.
-RENDERER_VERSION = "1"
+# Bump to force a global re-render for a renderer change the drawn layers don't show (the hash
+# already covers the layers, so a restyle or a SAND_LAYERS edit needs no bump).
+RENDERER_VERSION = "2"
 RENDER_TIMEOUT_MS = int(os.environ.get("TOPIC_THUMB_TIMEOUT_MS", "30000"))
+# Re-reads allowed when another writer keeps changing an item between the stamp's read and write.
+STAMP_ATTEMPTS = 5
+# Rendered at 1x, so the image is exactly THUMB_W x THUMB_H: previews load on every catalog page,
+# including on a weak connection in the field (#372).
 THUMB_W = int(os.environ.get("TOPIC_THUMB_W", "480"))
 THUMB_H = int(os.environ.get("TOPIC_THUMB_H", "320"))
+THUMB_QUALITY = int(os.environ.get("TOPIC_THUMB_QUALITY", "80"))  # WebP, 0-100
+if not 0 <= THUMB_QUALITY <= 100:
+    raise ValueError(f"TOPIC_THUMB_QUALITY must be 0-100, got {THUMB_QUALITY}")
 
 _ASSETS = os.path.join(os.path.dirname(__file__), "render_assets")
+
+# The viewer's geometry gates for its unstyled fallback (GEOM_FILTER, viewer/src/map/map-model.ts).
+# Without them the circle layer puts a dot on every polygon and line vertex.
+GEOM_FILTER = {
+    "fill": ["match", ["geometry-type"], ["Polygon", "MultiPolygon"], True, False],
+    "line": ["match", ["geometry-type"], ["LineString", "MultiLineString", "Polygon", "MultiPolygon"], True, False],
+    "point": ["match", ["geometry-type"], ["Point", "MultiPoint"], True, False],
+}
 
 # Neutral fallback cartography (sand) — used when a topic has no bound style, or its style is purely
 # symbol/label layers (dropped below). Covers fill / line / circle so any geometry type shows.
 SAND_LAYERS = [
-    {"id": "d-fill", "type": "fill", "paint": {"fill-color": "#d8c39a", "fill-opacity": 0.55, "fill-outline-color": "#7a5c2e"}},
-    {"id": "d-line", "type": "line", "paint": {"line-color": "#7a5c2e", "line-width": 1.1}},
-    {"id": "d-circle", "type": "circle", "paint": {"circle-color": "#9c6b30", "circle-radius": 3.2,
-                                                   "circle-stroke-width": 0.5, "circle-stroke-color": "#4a2f12", "circle-opacity": 0.9}},
+    {"id": "d-fill", "type": "fill", "filter": GEOM_FILTER["fill"],
+     "paint": {"fill-color": "#d8c39a", "fill-opacity": 0.55, "fill-outline-color": "#7a5c2e"}},
+    {"id": "d-line", "type": "line", "filter": GEOM_FILTER["line"],
+     "paint": {"line-color": "#7a5c2e", "line-width": 1.1}},
+    {"id": "d-circle", "type": "circle", "filter": GEOM_FILTER["point"],
+     "paint": {"circle-color": "#9c6b30", "circle-radius": 3.2,
+               "circle-stroke-width": 0.5, "circle-stroke-color": "#4a2f12", "circle-opacity": 0.9}},
 ]
-
-
-def thumb_object(stem: str) -> str:
-    return f"{config.THUMBS_PREFIX}/{stem}/{stem}.png"
 
 
 def sha_object(stem: str) -> str:
@@ -78,31 +98,32 @@ def _source_layer(item: dict) -> str:
     return item["id"]
 
 
-def _style_hash(style_url: str | None) -> tuple[str, bytes | None]:
-    """(content hash, fetched style bytes). Unstyled — or a style URL that won't fetch — hashes the
-    'sand' sentinel, matching what the renderer actually draws."""
-    h = hashlib.sha256()
-    h.update(RENDERER_VERSION.encode())
-    style_bytes = None
-    if style_url:
-        try:
-            style_bytes = _fetch(style_url)
-        except Exception:  # noqa: BLE001 — unreachable style → sand
-            style_bytes = None
-    h.update(style_bytes if style_bytes is not None else b"sand")
-    return h.hexdigest(), style_bytes
+def _drawn_layers(style_url: str | None) -> list[dict]:
+    """The layers a thumbnail draws: the bound style's minus symbol/label layers (they need glyphs and
+    sprites we don't carry), else the sand fallback, which a symbol-only style also gets. A bound
+    style that won't fetch, or isn't a style object (an error page served with a 200), raises instead:
+    a sand preview would replace the real one on a CDN blip and swap back the next night."""
+    if not style_url:
+        return SAND_LAYERS
+    doc = json.loads(_fetch(style_url))
+    layers = doc.get("layers") if isinstance(doc, dict) else None
+    if not isinstance(layers, list):
+        raise ValueError("not a style: no layer list")
+    # Rejected rather than filtered out: dropping bad entries would quietly draw a partial style.
+    bad = [i for i, lyr in enumerate(layers) if not isinstance(lyr, dict)]
+    if bad:
+        raise ValueError(f"not a style: layer(s) {bad} are not objects")
+    return [lyr for lyr in layers if lyr.get("type") != "symbol"] or SAND_LAYERS
 
 
-def _layers_from(style_bytes: bytes | None) -> list[dict]:
-    """Style layers minus symbol/label layers (need glyphs/sprites we don't carry → drop for thumbnails).
-    Empty/unparseable → the sand fallback."""
-    if not style_bytes:
-        return SAND_LAYERS
-    try:
-        layers = [lyr for lyr in (json.loads(style_bytes).get("layers") or []) if lyr.get("type") != "symbol"]
-        return layers or SAND_LAYERS
-    except Exception:  # noqa: BLE001
-        return SAND_LAYERS
+def _thumb_hash(item: dict, layers: list[dict]) -> str:
+    """Content address of a thumbnail: the renderer version, the data drawn (the ingest's
+    `ugs:content_hash`, which changes exactly when the data or tiling does) and exactly the layers
+    drawn, so new data, a restyle or an edit to the fallback re-renders the topics it affects and
+    nothing else."""
+    data = (item.get("properties") or {}).get(stac.CONTENT_HASH_PROP) or ""
+    drawn = json.dumps(layers, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(f"{RENDERER_VERSION}\n{data}\n{drawn}".encode()).hexdigest()
 
 
 def _compose_style(layers: list[dict], pmtiles_url: str, source_layer: str) -> dict:
@@ -115,8 +136,8 @@ def _compose_style(layers: list[dict], pmtiles_url: str, source_layer: str) -> d
     }
 
 
-def _render_png(style: dict, bbox: list[float], out: str) -> None:
-    """Render the composed style at the bbox → PNG via headless Chromium (Playwright). Raises on failure."""
+def _render_webp(style: dict, bbox: list[float], out: str) -> None:
+    """Render the composed style at the bbox → WebP via headless Chromium (Playwright). Raises on failure."""
     from playwright.sync_api import sync_playwright
 
     bb = json.dumps([bbox[0], bbox[1], bbox[2], bbox[3]])
@@ -143,99 +164,150 @@ def _render_png(style: dict, bbox: list[float], out: str) -> None:
             "--use-gl=angle", "--use-angle=swiftshader", "--enable-unsafe-swiftshader", "--ignore-gpu-blocklist",
         ])
         try:
-            page = browser.new_page(viewport={"width": THUMB_W, "height": THUMB_H}, device_scale_factor=2)
+            page = browser.new_page(viewport={"width": THUMB_W, "height": THUMB_H},
+                                    device_scale_factor=1)  # 1x on purpose, see THUMB_W
             page.set_default_timeout(RENDER_TIMEOUT_MS)
             page.set_content(html, wait_until="domcontentloaded")
             page.add_style_tag(content=_asset("maplibre-gl.css"))
             page.add_script_tag(content=_asset("pmtiles.js"))
             page.add_script_tag(content=_asset("maplibre-gl.js"))
             page.evaluate(script)
-            page.locator("#map").screenshot(path=out)
+            # WebP screenshots need playwright>=1.62 (the thumbs extra in pyproject.toml).
+            page.locator("#map").screenshot(path=out, type="webp", quality=THUMB_QUALITY)
         finally:
             browser.close()
 
 
-def thumb_one(item: dict, force: bool = False) -> str:
-    stem = item.get("id")
-    if not stem:
-        return "skip"
+def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dict | None]:
+    """Render + stamp one topic whose item lives at `stac_path`. Returns (outcome code, the thumbnail
+    asset now on the item: set for "ok" and "skip:exists", else None). main() checks every returned
+    asset against the rollup index, so the up-to-date path returns it too."""
+    stem = item["id"]
     _series_ctx.set(stem)
     pmtiles = ((item.get("assets") or {}).get("pmtiles") or {}).get("href")
     bbox = item.get("bbox")
     if not pmtiles or not bbox or len(bbox) < 4:
         hlog("no pmtiles/bbox — cannot render", step="resolve", level="NOTICE", category="expected")
-        return "skip:nodata"
+        return "skip:nodata", None
 
-    # Validate bounding box coordinates to prevent MapLibre fitBounds uncaught exceptions
+    # A bbox outside lon/lat means the item's CRS is mislabeled (the viewer would misplace it too),
+    # and it would throw in MapLibre's fitBounds.
     west, south, east, north = bbox[0], bbox[1], bbox[2], bbox[3]
     if (west is None or south is None or east is None or north is None or
             not (-180.1 <= west <= 180.1) or not (-90.1 <= south <= 90.1) or
             not (-180.1 <= east <= 180.1) or not (-90.1 <= north <= 90.1)):
-        hlog(f"invalid bbox coordinates: {bbox} (latitudes must be [-90, 90])",
-             step="resolve", level="WARNING", category="attention")
-        return "skip:invalid_bbox"
+        hlog(f"FAIL invalid bbox coordinates: {bbox} (must be WGS84 lon/lat)",
+             step="resolve", level="ERROR", category="attention", err=True)
+        return "fail:invalid_bbox", None
 
     style_url = _style_url(item)
-    want_hash, style_bytes = _style_hash(style_url)
-    png_obj, sha_obj = thumb_object(stem), sha_object(stem)
+    try:
+        layers = _drawn_layers(style_url)
+    except Exception as e:  # noqa: BLE001 — reported as a failure, never rendered as sand
+        hlog(f"FAIL style {style_url}: {_first_line(e)}",
+             step="resolve", level="ERROR", category="attention", err=True)
+        return "fail:style", None
+    want_hash = _thumb_hash(item, layers)
+    img_obj, sha_obj = config.topic_thumbnail_path(stem), sha_object(stem)
+    # Legacy mis-write to clean up: an earlier build stamped a flat item the catalog never references,
+    # at the path it derived from ugs:dbt_schema.
+    flat_stray = f"{config.STAC_PREFIX}/{_collection_path(item)}/{stem}.json"
 
-    # Items live NESTED at <catalog>/<schema>/<id>/<id>.json — not flat. Writing a flatter path
-    # stamps a stray object the catalog never references (so the viewer never sees the thumbnail).
-    coll_path = _collection_path(item)
-    stac_path = f"{config.STAC_PREFIX}/{coll_path}/{stem}/{stem}.json"
-    flat_stray = f"{config.STAC_PREFIX}/{coll_path}/{stem}.json"  # legacy mis-write to clean up
-    thumb_href = config.public_url(png_obj)
-
-    def ensure_stac_thumbnail(meta: gcs.FileMeta | None = None) -> None:
-        assets = item.setdefault("assets", {})
-        current = assets.get("thumbnail") or {}
-        # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
-        # the file:size/file:checksum an earlier render stamped instead of dropping them.
-        want = {**current, "href": thumb_href, "type": "image/png", "roles": ["thumbnail"],
-                "title": "Styled preview", **stac.file_fields(meta)}
-        if current != want:
+    def ensure_stac_thumbnail(meta: gcs.FileMeta | None = None) -> tuple[str, dict | None]:
+        """Stamp onto the item as it is in GCS, and only if it is still that version when the write
+        lands (a GCS generation match). A write in between (an ingest, a restyle, an ops-console
+        edit) is re-read and merged instead of reverted, and a topic retired meanwhile is never
+        re-created. Returns ("stamped" | "current" | "gone", the thumbnail asset)."""
+        for _ in range(STAMP_ATTEMPTS):
+            try:
+                raw, version = gcs.get_bytes_versioned(stac_path)
+            except FileNotFoundError:
+                return "gone", None
+            fresh = json.loads(raw.decode())
+            assets = fresh.setdefault("assets", {})
+            current = assets.get("thumbnail") or {}
+            # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
+            # the file:size/file:checksum an earlier render stamped instead of dropping them. Same
+            # asset the ingest stamps (vector/sink_stac.py).
+            want = {**current, **stac.topic_thumbnail_asset(stem), **stac.file_fields(meta)}
+            if current == want:
+                state = "current"
+                break
             assets["thumbnail"] = want
-            hlog(f"stamping thumbnail asset on STAC item JSON -> {stac_path}", step="stac")
-            gcs.put_bytes(
-                json.dumps(item, indent=2).encode("utf-8"),
-                stac_path,
-                content_type="application/json",
-                cache_control=gcs.CACHE_MUTABLE,
-            )
+            try:
+                # Same headers as stac.write_item, so a stamped item doesn't flip to no-cache.
+                gcs.put_bytes_if_unchanged(json.dumps(fresh, indent=2).encode("utf-8"), stac_path, version,
+                                           content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
+            except gcs.Changed:
+                hlog(f"{stac_path} changed between read and write; re-reading", step="stac", level="NOTICE")
+                continue
+            hlog(f"stamped thumbnail asset on STAC item JSON -> {stac_path}", step="stac")
+            state = "stamped"
+            break
+        else:
+            raise RuntimeError(f"{stac_path} kept changing under the stamp; gave up after {STAMP_ATTEMPTS} tries")
         # Self-heal: drop the flat stray an earlier build mis-wrote. `stem` is a topic id, never
         # "collection", so collection.json (same level) is never touched.
         if gcs.exists(flat_stray):
             gcs.delete(flat_stray)
             hlog(f"removed stray flat item {flat_stray}", step="stac")
+        return state, want
 
-    if not force and gcs.exists(png_obj) and gcs.exists(sha_obj):
+    up_to_date = False
+    if not force and gcs.exists(img_obj) and gcs.exists(sha_obj):
         try:
-            if gcs.get_bytes(sha_obj).decode().strip() == want_hash:
-                hlog("thumbnail up to date (style unchanged)", step="resolve", level="NOTICE", category="expected")
-                ensure_stac_thumbnail()
-                return "skip:exists"
-        except Exception:  # noqa: BLE001 — unreadable sidecar → re-render
-            pass
+            up_to_date = gcs.get_bytes(sha_obj).decode().strip() == want_hash
+        except Exception as e:  # noqa: BLE001 — logged; the re-render rewrites the sidecar
+            hlog(f"unreadable sidecar {sha_obj}: {_first_line(e)}; re-rendering", step="resolve",
+                 level="WARNING")
+    if up_to_date:
+        hlog("thumbnail up to date (data and style unchanged)", step="resolve", level="NOTICE",
+             category="expected")
+        state, asset = ensure_stac_thumbnail()
+        return ("skip:gone", None) if state == "gone" else ("skip:exists", asset)
 
-    style = _compose_style(_layers_from(style_bytes), pmtiles, _source_layer(item))
+    style = _compose_style(layers, pmtiles, _source_layer(item))
     work = tempfile.mkdtemp(prefix=f"tt_{stem}_")
     try:
-        out = os.path.join(work, "thumb.png")
-        hlog(f"rendering ({'styled' if style_bytes else 'sand'})", step="render")
+        out = os.path.join(work, "thumb.webp")
+        hlog(f"rendering ({'sand' if layers is SAND_LAYERS else 'styled'})", step="render")
         try:
-            _render_png(style, bbox, out)
+            _render_webp(style, bbox, out)
         except Exception as e:  # noqa: BLE001
             hlog(f"FAIL render: {str(e).strip()[-300:]}", step="render", level="ERROR", category="attention", err=True)
-            return "fail:render"
+            return "fail:render", None
         if not os.path.exists(out) or os.path.getsize(out) == 0:
-            hlog("FAIL no PNG produced", step="render", level="ERROR", category="attention", err=True)
-            return "fail:nopng"
+            hlog("FAIL no image produced", step="render", level="ERROR", category="attention", err=True)
+            return "fail:noimage", None
+        with open(out, "rb") as f:
+            head = f.read(12)
+        # Uploaded and stamped as image/webp, so the bytes have to be WebP.
+        if head[:4] != b"RIFF" or head[8:12] != b"WEBP":
+            hlog(f"FAIL render is not WebP (starts {head!r})", step="render", level="ERROR",
+                 category="attention", err=True)
+            return "fail:format", None
 
-        meta = gcs.upload(out, png_obj, content_type="image/png", cache_control=gcs.CACHE_MUTABLE)
+        # Drop the old sidecar first: a --force re-render of an unchanged style would otherwise leave
+        # one that still matches, and a stamp that then failed would never be redone.
+        gcs.delete(sha_obj)
+        meta = gcs.upload(out, img_obj, content_type=config.WEBP_MIME, cache_control=gcs.CACHE_MUTABLE)
+        state, asset = ensure_stac_thumbnail(meta)
+        if state == "gone":
+            # Retired while rendering: take back the thumbnail so nothing outlives the topic (a later
+            # topic with this id would otherwise be bound to it). gcs.delete swallows errors, so check.
+            gcs.delete(img_obj)
+            gcs.delete(sha_obj)
+            if gcs.exists(img_obj) or gcs.exists(sha_obj):
+                hlog(f"FAIL topic retired mid-render but its thumbnail would not delete: {img_obj}",
+                     step="result", level="ERROR", category="attention", err=True)
+                return "fail:cleanup", None
+            hlog("topic retired mid-render; dropped its new thumbnail", step="result",
+                 level="NOTICE", category="expected")
+            return "skip:gone", None
+        # The sidecar marks this render as done, so it goes last: a stamp that failed renders again.
         gcs.put_bytes(want_hash.encode(), sha_obj, content_type="text/plain", cache_control=gcs.CACHE_MUTABLE)
-        hlog(f"OK thumbnail → {png_obj}", step="result", category="ok")
-        ensure_stac_thumbnail(meta)
-        return "ok"
+        hlog(f"OK thumbnail → {img_obj}", step="result", category="ok")
+        return "ok", asset
     finally:
         import shutil
         shutil.rmtree(work, ignore_errors=True)
@@ -250,21 +322,91 @@ def _collection_path(item: dict) -> str:
     return f"{CATALOG}/{schema}" if schema else CATALOG
 
 
-def _topic_items() -> list[dict]:
-    """Read every published serving-topic item.json (skip catalog/collection/items docs).
+def _stem(path: str) -> str:
+    return path.split("/")[-2]
 
-    Items are at `<catalog>/<schema>/<id>/<id>.json`; anything else under the prefix is a
-    generated index document."""
-    out = []
-    for path in gcs.list_paths(f"{config.STAC_PREFIX}/{CATALOG}/"):
-        parts = path.split("/")
-        if not path.endswith(".json") or len(parts) < 2 or parts[-1] != f"{parts[-2]}.json":
-            continue
-        try:
-            out.append(json.loads(gcs.get_bytes(path).decode()))
-        except Exception:  # noqa: BLE001
-            continue
-    return out
+
+def _topic_item_paths() -> list[str]:
+    """Every published serving-topic item.json, in topic-id order. Items are exactly
+    `<catalog>/<schema>/<id>/<id>.json`; anything else under the prefix is an index document, a
+    sidecar, or a copy the pre-split layout left behind (scripts/prune_flat_topic_items.py)."""
+    root = f"{config.STAC_PREFIX}/{CATALOG}/"
+    paths = []
+    for path in gcs.list_paths(root):
+        parts = path.removeprefix(root).split("/")  # <schema>/<id>/<id>.json
+        if len(parts) == 3 and parts[2] == f"{parts[1]}.json":
+            paths.append(path)
+    return sorted(paths, key=_stem)
+
+
+def thumb_path(path: str, force: bool = False) -> tuple[str, dict | None]:
+    """Read one topic's item and thumbnail it where it lives. Gone since the listing means it was
+    retired; an item that won't read or parse, or whose id isn't its path's, is a failure, because
+    skipping it quietly lets a run pass while topics go without previews."""
+    stem = _stem(path)
+    _series_ctx.set(stem)
+    try:
+        item = json.loads(gcs.get_bytes(path).decode())
+    except FileNotFoundError:
+        hlog("item gone since the listing (retired)", step="resolve", level="NOTICE", category="expected")
+        return "skip:gone", None
+    except Exception as e:  # noqa: BLE001 — reported as a failure, never skipped
+        hlog(f"FAIL unreadable item {path}: {_first_line(e)}",
+             step="resolve", level="ERROR", category="attention", err=True)
+        return "fail:unreadable", None
+    if item.get("id") != stem:
+        hlog(f"FAIL item id {item.get('id')!r} does not match its path {path}",
+             step="resolve", level="ERROR", category="attention", err=True)
+        return "fail:layout", None
+    return thumb_one(item, path, force=force)
+
+
+# The rollup the viewer lists layers from.
+ROLLUP_INDEX = f"{config.STAC_PREFIX}/{CATALOG}/items.json"
+# A burst of promotes starts one run per layer and each refreshes the catalog, so a refresh that
+# listed before this run's stamp can land last. Retried a few times before it counts as a failure.
+REFRESH_ATTEMPTS = 3
+REFRESH_RETRY_SECONDS = 20
+
+
+def _index_lags(thumbnails: dict[str, dict]) -> bool:
+    """Whether the rollup index is missing any of these thumbnails, keyed by item path. Checked
+    against GCS, not against what this run wrote: a crash before the refresh, or another shard's
+    refresh landing last, leaves the index behind while every item is current. A re-render that only
+    changed file:size needs no refresh, since the index doesn't carry it. An index that won't read
+    counts as behind, because the refresh is what rewrites it."""
+    if not thumbnails:
+        return False
+    try:
+        index = json.loads(gcs.get_bytes(ROLLUP_INDEX).decode())
+        listed = {e.get("id"): (e.get("assets") or {}).get("thumbnail") or {} for e in index.get("items") or []}
+    except FileNotFoundError:
+        return True
+    except Exception as e:  # noqa: BLE001 — logged; the refresh repairs it or fails loudly itself
+        hlog(f"unreadable {ROLLUP_INDEX}: {_first_line(e)}",
+             step="catalog", level="ERROR", category="attention", err=True)
+        return True
+    keys = stac.INDEX_ASSET_KEYS
+    return any({k: listed.get(_stem(path), {}).get(k) for k in keys} != {k: asset.get(k) for k in keys}
+               for path, asset in thumbnails.items())
+
+
+def _first_line(e: BaseException) -> str:
+    """The exception type and the first line of its message, for a one-line log entry."""
+    return f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}"
+
+
+def _error_tail(e: BaseException) -> str:
+    """The exception type plus the end of its traceback, short enough for one log line."""
+    tail = "".join(traceback.format_exception(e)[-3:]).strip()
+    return f"{type(e).__name__}: {tail[-800:]}"
+
+
+def _still_lags(thumbnails: dict[str, dict]) -> bool:
+    """`_index_lags` after a refresh: a topic retired since its stamp is rightly absent from the
+    rebuilt index, so only topics still published count. The existence lookups only run once the
+    index is found behind for some topic, which is rare."""
+    return _index_lags(thumbnails) and _index_lags({p: a for p, a in thumbnails.items() if gcs.exists(p)})
 
 
 def main() -> int:
@@ -274,33 +416,80 @@ def main() -> int:
     ap.add_argument("item_id", nargs="*", default=[], help="Topic item id(s); default all")
     ap.add_argument("--all", action="store_true", help="All topics (default when no ids given)")
     ap.add_argument("--limit", type=int, default=None)
-    ap.add_argument("--force", action="store_true", help="Re-render even if the style is unchanged")
+    ap.add_argument("--force", action="store_true",
+                    help="Re-render even if the data and style are unchanged")
     args = ap.parse_args()
 
-    items = _topic_items()
+    paths = _topic_item_paths()
     if args.item_id:
         want = {s.strip() for s in args.item_id}
-        items = [it for it in items if it.get("id") in want]
-    items.sort(key=lambda it: it.get("id") or "")
-    hlog(f"{len(items)} topics", step="startup")
+        paths = [p for p in paths if _stem(p) in want]
+    hlog(f"{len(paths)} topics", step="startup")
 
     n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
     i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
     if n > 1:
-        items = items[i::n]
-        hlog(f"shard {i + 1}/{n}: {len(items)} topics", step="shard")
+        paths = paths[i::n]
+        hlog(f"shard {i + 1}/{n}: {len(paths)} topics", step="shard")
     if args.limit:
-        items = items[:args.limit]
+        paths = paths[:args.limit]
 
     tally = {"ok": 0, "expected": 0, "attention": 0}
-    for it in items:
-        res = thumb_one(it, force=args.force)
+    rc = 0
+    thumbnails: dict[str, dict] = {}
+    for path in paths:
+        try:
+            res, asset = thumb_path(path, force=args.force)
+        except Exception as e:  # noqa: BLE001 — one topic's failure must not stop the rest of the shard
+            hlog(f"FAIL {_error_tail(e)}", step="error", level="ERROR", category="attention", err=True)
+            res, asset = "fail:error", None
         tally[outcome_category(res)] += 1
+        if res.startswith("fail"):
+            rc = 1
+        if asset:
+            thumbnails[path] = asset
     _series_ctx.set("")
+    if _index_lags(thumbnails):
+        # Only refresh_catalog rebuilds items.json; without this a new thumbnail waits for whichever
+        # ingest happens to run next.
+        hlog("items.json is missing thumbnails; refreshing the catalog", step="catalog")
+        caught_up = False
+        refresh_error = None  # set when the latest attempt's refresh raised
+        for attempt in range(1, REFRESH_ATTEMPTS + 1):
+            if attempt > 1:
+                # Jittered so runs started by one burst don't retry in step, then re-checked first: a
+                # refresh another run made meanwhile already carries this run's stamp.
+                time.sleep(random.uniform(0.5, 1.5) * REFRESH_RETRY_SECONDS)
+                if not _still_lags(thumbnails):
+                    caught_up = True
+                    break
+            try:
+                stac.refresh_catalog()
+                refresh_error = None
+            except Exception as e:  # noqa: BLE001 — concurrent refreshes can rate-limit each other
+                refresh_error = _error_tail(e)
+                hlog(f"catalog refresh {attempt}/{REFRESH_ATTEMPTS} failed: {refresh_error}",
+                     step="catalog", level="WARNING")
+                continue
+            # Checked again so a mismatch a refresh can't fix alerts instead of repeating every night.
+            if not _still_lags(thumbnails):
+                caught_up = True
+                break
+            hlog(f"items.json still behind after refresh {attempt}/{REFRESH_ATTEMPTS} "
+                 "(another run's refresh landing last?)", step="catalog", level="WARNING")
+        # A last attempt whose refresh raised was never checked; another run's may have landed.
+        if not caught_up and refresh_error and not _still_lags(thumbnails):
+            caught_up = True
+        if not caught_up:
+            why = f"; the last refresh raised {refresh_error}" if refresh_error else ""
+            hlog(f"FAIL items.json still missing thumbnails after {REFRESH_ATTEMPTS} refresh attempts{why}",
+                 step="catalog", level="ERROR", category="attention", err=True)
+            tally["attention"] += 1
+            rc = 1
     hlog(f"thumbnails complete: {tally['ok']} ok, {tally['expected']} skipped, "
          f"{tally['attention']} need attention", step="summary",
          level="WARNING" if tally["attention"] else "NOTICE")
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

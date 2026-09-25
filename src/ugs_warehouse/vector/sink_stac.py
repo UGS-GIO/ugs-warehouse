@@ -154,7 +154,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     # Content fingerprint (skip-unchanged ingest). Lets a later `--skip-unchanged` run detect that
     # nothing changed and skip the rebuild. Absent when the caller didn't compute one.
     if content_hash:
-        props["ugs:content_hash"] = content_hash
+        props[stac.CONTENT_HASH_PROP] = content_hash
     # registry `description` → STAC `description` (ISO export renames it to <gmd:abstract>).
     # Preserve-on-empty: registry descriptions are often missing, so when this submit has none, keep
     # whatever the published item already had instead of blanking it (last-non-empty wins).
@@ -206,14 +206,13 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
         assets["ducklake"] = {"href": ducklake_uri, "type": "application/x-ducklake-table",
                               "roles": ["data"], "title": "DuckLake table (native geometry)",
                               "description": stac.USAGE_DUCKLAKE}
-    # Rendered preview PNG (styled PMTiles → image), written independently by the ugs-topics-thumbs
-    # job. Presence-driven, exactly like the pubs cover/thumbnail: stamp the asset iff the PNG exists,
+    # Rendered preview (styled PMTiles → WebP), written independently by the ugs-topics-thumbs job.
+    # Presence-driven, exactly like the pubs cover/thumbnail: stamp the asset iff the image exists,
     # so the catalog shows a real styled preview for topics that have one (sand placeholder otherwise).
-    thumb_path = f"{config.THUMBS_PREFIX}/{topic.stem}/{topic.stem}.png"
-    if gcs.exists(thumb_path):
-        assets["thumbnail"] = {"href": config.public_url(thumb_path), "type": "image/png",
-                               "roles": ["thumbnail"], "title": "Styled preview",
-                               "description": stac.USAGE_THUMBNAIL}
+    # A topic whose image isn't rendered yet gets it from the thumbs run the ingest starts right after
+    # publishing (vector/ingest.py).
+    if gcs.exists(config.topic_thumbnail_path(topic.stem)):
+        assets["thumbnail"] = stac.topic_thumbnail_asset(topic.stem)
     # file:size / file:checksum. This run's writes win; anything they didn't write (a skipped data
     # sink, the thumbnail another job renders) keeps what the published item already carries.
     carried = stac.prior_file_fields(collection_path(topic.schema), topic.stem)

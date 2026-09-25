@@ -48,7 +48,8 @@ STAGES = [
     {"n": "④", "title": "Styling", "jobs": ["restyle", "topics-thumbs"],
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt. "
               "Then render each topic's styled PMTiles → preview thumbnail (content-hash skip; "
-              "re-renders only changed styles)."},
+              "re-renders only changed data or styles). Restyle and each vector ingest start the "
+              "thumbnails on their own; the button is for a manual re-run."},
     {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest",
                                                  "graph", "fts", "embed"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
@@ -100,9 +101,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "(GDAL warp + tile). Use the per-tier buttons to regenerate just one scale.",
         danger=True, tiers=(("24k", "1:24,000"), ("250k", "1:250,000"), ("500k", "1:500,000"))),
     Job("topics-thumbs", "ugs-topics-thumbs", "Topic thumbnails",
-        "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
-        "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "
-        "Run a Vector reingest after to bind the new thumbnail assets. 3 shards.", tasks=3),
+        "Render each vector serving-topic's styled PMTiles → preview WebP (headless MapLibre; a neutral "
+        "sand style when unstyled). Content-hash skip — re-renders only topics whose data or style "
+        "changed. Starts on its own after each vector ingest and restyle, and nightly as a backstop; "
+        "stamps the thumbnail assets and refreshes the catalog itself. 3 shards.", tasks=3),
     Job("graph", "ugs-pubs-graph", "Build knowledge graph",
         "Rebuild the publications knowledge graph (nodes/edges Parquet) — citation + co-author + "
         "semantic edges. Reads pub metadata + embeddings; safe to re-run."),

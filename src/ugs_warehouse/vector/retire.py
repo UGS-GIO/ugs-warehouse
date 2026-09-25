@@ -44,7 +44,7 @@ def artifact_paths(topic: Topic) -> list[str]:
     prefixes = (
         f"{config.ARCHIVE_PREFIX}/{stem}/",   # latest pointer + every dated parquet
         f"{config.PMTILES_PREFIX}/{stem}/",
-        f"{config.THUMBS_PREFIX}/{stem}/",    # png + its style-hash sidecar
+        f"{config.THUMBS_PREFIX}/{stem}/",    # the preview image + its content-hash sidecar
         f"{config.STAC_PREFIX}/{CATALOG}/{topic.schema}/{stem}/",  # item.json + iso.xml
     )
     return [path for prefix in prefixes for path in gcs.list_paths(prefix)]

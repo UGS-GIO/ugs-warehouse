@@ -112,6 +112,13 @@ def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
     return link
 
 
+def topic_thumbnail_asset(stem: str) -> dict:
+    """A serving topic's styled-preview asset. The thumbs job and the vector ingest both stamp it,
+    so both build it here."""
+    return {"href": config.public_url(config.topic_thumbnail_path(stem)), "type": config.WEBP_MIME,
+            "roles": ["thumbnail"], "title": "Styled preview", "description": USAGE_THUMBNAIL}
+
+
 # ---------------------------------------------------------------- items
 
 def file_fields(meta: gcs.FileMeta | None) -> dict:
@@ -537,6 +544,12 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
 _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
                     "ugs:topic", "ugs:scale", "ugs:author", "ugs:county", "ugs:dbt_schema",
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
+# The asset fields an index entry keeps. Public: the topic-thumbnail job compares against them.
+INDEX_ASSET_KEYS = ("href", "type", "roles", "title")
+# The vector ingest's content fingerprint property (vector/fingerprint.py); it changes exactly when a
+# topic's data or tiling does. Read by the ingest's skip check, the thumbnail job's content hash, and
+# tiles/app.py (as a literal, from its own image) to version tile URLs, so a rename must change all.
+CONTENT_HASH_PROP = "ugs:content_hash"
 
 
 def _index_entry(item: dict, *, rollup: bool = False) -> dict:
@@ -558,7 +571,7 @@ def _index_entry(item: dict, *, rollup: bool = False) -> dict:
     if props.get("ugs:renders"):  # bound GL style → lets the map view style from the index alone
         entry["properties"]["ugs:renders"] = props["ugs:renders"]
     assets = {
-        k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
+        k: {kk: a[kk] for kk in INDEX_ASSET_KEYS if a.get(kk) is not None}
         for k, a in (item.get("assets") or {}).items()
     }
     if assets:

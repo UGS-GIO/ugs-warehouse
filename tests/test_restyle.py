@@ -201,3 +201,64 @@ def test_restyle_verify_reports_drift_when_the_item_holds_an_older_legend(monkey
     store[obj] = json.dumps(item).encode()
 
     assert R._verify(R._scoped_groups("ugs-serving-topics")) == ["ugs-serving-topics/enmin_ucrc_wells"]
+
+
+def _styled_wells(monkeypatch) -> list:
+    """A styled wells item in an in-memory bucket; returns the recorded thumbnail-job starts."""
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, _wells_item(store, [{"label": "Core", "color": "#5E3C99"}]))
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    return kicked
+
+
+def test_a_restyle_that_rebinds_starts_the_thumbnail_job(monkeypatch):
+    """A style change is a preview change; the thumbnail job re-renders what it affects."""
+    kicked = _styled_wells(monkeypatch)
+    R.restyle()
+    assert kicked == [None]
+
+
+def test_a_dry_run_restyle_starts_nothing(monkeypatch):
+    kicked = _styled_wells(monkeypatch)
+    R.restyle(dry_run=True)
+    assert kicked == []
+
+
+def test_a_restyle_of_a_topic_in_a_schema_collection_starts_the_thumbnail_job(monkeypatch):
+    """Topics live one level down, at ugs-serving-topics/<schema>/<id>/<id>.json (sink_stac)."""
+    _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [{"itemId": "hazards_qfaults", "render": "default", "kind": "vector",
+                                  "assets": ["pmtiles"], "path": "styles/q/default.json"}])
+    stac.write_item(stac.build_item(
+        item_id="hazards_qfaults", collection="hazards", collection_path="ugs-serving-topics/hazards",
+        geometry=None, bbox=None, datetime_iso=None, properties={"title": "Q"},
+        assets={"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}}))
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    assert R.restyle() == 1
+    assert kicked == [None]
+
+
+def test_a_restyle_that_rebinds_no_topic_starts_nothing(monkeypatch):
+    """Only serving-topic previews are drawn from styles, so a raster-only rebind has none to redo."""
+    _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [{"itemId": "geolmap_500k", "render": "default", "kind": "raster",
+                                  "assets": ["cog"], "path": "styles/x/default.json"}])
+    stac.write_item(stac.build_item(
+        item_id="geolmap_500k", collection="geolmap", collection_path="ugs-rasters/geolmap",
+        geometry=None, bbox=[0, 1, 2, 3], datetime_iso=None, properties={"title": "500k"},
+        assets={"cog": {"href": "h", "type": "image/tiff; application=geotiff"}}))
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    assert R.restyle(collection="ugs-rasters") == 1
+    assert kicked == []
+
+
+def test_a_restyle_with_nothing_styled_starts_nothing(monkeypatch):
+    _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [])
+    kicked: list = []
+    monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
+    R.restyle()
+    assert kicked == []

@@ -23,7 +23,7 @@ from ..core import config, gcs, stac
 from . import introspect, sink_pmtiles, sink_stac
 from .topics import Topic
 
-CONTENT_HASH_PROP = "ugs:content_hash"
+CONTENT_HASH_PROP = stac.CONTENT_HASH_PROP
 
 
 def compute(con: duckdb.DuckDBPyConnection, view: str) -> str:

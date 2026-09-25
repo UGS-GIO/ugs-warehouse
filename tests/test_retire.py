@@ -94,7 +94,7 @@ def _published() -> list[str]:
         f"{config.ARCHIVE_PREFIX}/{stem}/{stem}.parquet",
         f"{config.ARCHIVE_PREFIX}/{stem}/{stem}_20260901.parquet",
         f"{config.PMTILES_PREFIX}/{stem}/{stem}.pmtiles",
-        f"{config.THUMBS_PREFIX}/{stem}/{stem}.png",
+        f"{config.THUMBS_PREFIX}/{stem}/{stem}.webp",
         f"{config.THUMBS_PREFIX}/{stem}/{stem}.sha",
         f"{config.STAC_PREFIX}/{CATALOG}/{TOPIC.schema}/{stem}/{stem}.json",
         f"{config.STAC_PREFIX}/{CATALOG}/{TOPIC.schema}/{stem}/{stem}.iso.xml",

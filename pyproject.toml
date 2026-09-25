@@ -34,8 +34,10 @@ dependencies = [
 # install deliberately avoids — the cost is ~400MB in CI and nothing in the runtime images. The
 # test skips when it is absent, so a lean local env still runs the rest of the suite.
 # geopandas/shapely: without them, test_pubs_vectors.py importorskips the GeoParquet writer away.
+# pyyaml: tests/test_thumbs_trigger.py parses cloudbuild.yaml to pin the thumbs job's deploy args
+# to what core/jobs.py sends; declared, not left to pre-commit's dependency, so it can't vanish.
 dev = ["pytest>=8", "ruff==0.16.0", "pre-commit>=3.7", "pystac[validation]>=1.11", "httpx>=0.27",
-       "rashid>=0.1.8", "geopandas>=1.0", "shapely>=2.0"]
+       "rashid>=0.1.8", "geopandas>=1.0", "shapely>=2.0", "pyyaml>=6"]
 # pubs/COG producer — heavy raster deps; installed in Dockerfile.harvest (needs system
 # GDAL CLI + poppler too). duckdb is in the base deps.
 pubs = [
@@ -51,11 +53,12 @@ pubs = [
   "pymysql>=1.1",        # optional: live pub metadata from MySQL (else vendored CSV snapshot)
   "fastembed>=0.3",      # semantic-search embeddings (bge-small via ONNX, no torch) — pubs/embed.py
 ]
-# topics-thumbnail job — headless MapLibre render of styled PMTiles → PNG (vector/thumbs.py).
+# topics-thumbnail job — headless MapLibre render of styled PMTiles → WebP (vector/thumbs.py).
 # Installed in Dockerfile.topics-thumbs, which also runs `playwright install --with-deps chromium`.
+# playwright 1.62 (2026-07-31) is the first release whose screenshot() writes WebP.
 # requests: pulled in transitively by pubs.harvest's logging helpers (hlog) that this job reuses.
 thumbs = [
-  "playwright>=1.40",
+  "playwright>=1.62",
   "requests>=2.31",
 ]
 

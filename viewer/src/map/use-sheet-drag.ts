@@ -1,7 +1,7 @@
 // The phone sheet's drag. One gesture, three ways in: the handle and the tab bar (pointer events)
 // and the sheet's own scrolling content (touch events). It only counts once it moves SLOP px, so a
 // tap on a tab stays a tap, and on release a flick carries it one detent further.
-import type { PointerEvent as ReactPointerEvent, RefObject } from "react";
+import type { MouseEvent, PointerEvent as ReactPointerEvent, RefObject } from "react";
 import { useCallback, useRef, useState } from "react";
 
 import { clampSize, contentTakesDrag, DETENTS, releaseDetent } from "./map-model";
@@ -59,7 +59,8 @@ export function useSheetDrag(areaRef: RefObject<HTMLDivElement | null>, detent: 
     const off = new AbortController();
     el.addEventListener("touchstart", (e) => {
       ({ clientX: x0, clientY: y0 } = e.touches[0]);
-      decided = dragging = false;
+      dragging = false;
+      decided = handlesOwnTouch(e.target, el);
     }, { passive: true, signal: off.signal });
     el.addEventListener("touchmove", (e) => {
       const { clientX: x, clientY: y } = e.touches[0];
@@ -78,8 +79,8 @@ export function useSheetDrag(areaRef: RefObject<HTMLDivElement | null>, detent: 
     return () => off.abort();
   }, []);
 
-  // True from a drag's end to the next gesture: the click a drag ending on a tab fires is not a tap.
-  const wasDrag = () => dragged.current;
+  // The click a drag ending on a tab fires is not a tap. A keyboard click (detail 0) always is.
+  const wasDrag = (e: MouseEvent) => e.detail > 0 && dragged.current;
 
   return { dragH, onPointerDown, contentRef, wasDrag };
 }
@@ -90,4 +91,12 @@ function scrolledToTop(target: EventTarget | null, root: HTMLElement) {
     if (n.scrollTop > 0) return false;
   }
   return true;
+}
+
+// A touch-action: none element (a reorder grip) runs its own drag; the sheet stays out of it.
+function handlesOwnTouch(target: EventTarget | null, root: HTMLElement) {
+  for (let n = target as HTMLElement | null; n && n !== root; n = n.parentElement) {
+    if (getComputedStyle(n).touchAction === "none") return true;
+  }
+  return false;
 }

@@ -84,8 +84,8 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
     setDetent((d) => Math.max(d, 1));
   };
 
-  const selectTab = (t: Tab) => {
-    if (wasDrag()) return;
+  const selectTab = (e: React.MouseEvent, t: Tab) => {
+    if (wasDrag(e)) return;
     if (t === tab && !collapsed) return setDetent(0);   // tap the open tab to get the map back
     setTab(t);
     setDetent((d) => Math.max(d, 1));
@@ -116,7 +116,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           <button
             key={t.id}
             type="button"
-            onClick={() => selectTab(t.id)}
+            onClick={(e) => selectTab(e, t.id)}
             aria-expanded={tab === t.id && !collapsed}
             className={"flex flex-1 flex-col items-center gap-0.5 py-2 text-sm font-medium "
               + (tab === t.id && !collapsed ? "text-primary" : "text-muted-foreground hover:text-foreground")}

@@ -54,9 +54,10 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
+  onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
   onFeatureSelect?: (props: Record<string, unknown>, fid: number | null) => void;
   onClearSelection?: () => void;
@@ -202,7 +203,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     if (!map || fid == null || !props || !sourceLayer) return;
     const check = () => {
       const [f] = map.querySourceFeatures("pm-prev", { sourceLayer, filter: ["==", ["id"], fid] });
-      if (f && !sameFeature(f.properties ?? {}, props)) highlightFeature(null);
+      if (f && !sameFeature(f.properties ?? {}, props)) { highlightFeature(null); onMismatch?.(); }
     };
     map.once("idle", check);
     return () => { map.off("idle", check); };

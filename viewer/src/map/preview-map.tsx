@@ -26,6 +26,8 @@ type Ctx = {
   selectedFeature: { props: Record<string, unknown>; fid: number | null } | null;
   selectFeature: (props: Record<string, unknown>, fid: number | null) => void;
   clearSelection: () => void;
+  // Set when the map finds a row's id on another record: the map and table are different versions.
+  mapMismatch: boolean;
   // Which `ugs:renders` entry the "Symbolize by" picker is on, so the endpoints panel can hand out
   // the style/ArcGIS URL for the symbology you are looking at rather than the first one.
   render: string;
@@ -56,6 +58,8 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const [focus, setFocus] = usePerItem<FocusSel | null>(itemId, null);
   const [pick, setPick] = usePerItem<MapPick | null>(itemId, null);
   const [sel, setSel] = usePerItem<Sel>(itemId, null);
+  const [mapMismatch, setMapMismatch] = usePerItem(itemId, false);
+  const reportMismatch = useCallback(() => setMapMismatch(true), [setMapMismatch]);
 
   // Owned here, not mirrored up out of the map: the endpoints panel hands out the URL for the
   // symbology on screen, so both need the same copy.
@@ -75,11 +79,11 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
     () => ({
       setSpec, registerSlot, focus, setFocus, pick, onFeatureClick,
       featureRelated: sel?.related ?? null, openRelated, clearRelated,
-      selectedFeature: sel?.feature ?? null, selectFeature, clearSelection, render,
+      selectedFeature: sel?.feature ?? null, selectFeature, clearSelection, render, mapMismatch,
     }),
     [
       setSpec, focus, setFocus, pick, registerSlot, onFeatureClick, sel, openRelated, clearRelated,
-      selectFeature, clearSelection, render,
+      selectFeature, clearSelection, render, mapMismatch,
     ],
   );
 
@@ -88,7 +92,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
       {children}
       {armed && (
         <Suspense fallback={null}>
-          <PreviewMapGL spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick}
+          <PreviewMapGL spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick} onMismatch={reportMismatch}
             onFeatureSelect={selectFeature} onClearSelection={clearSelection} renders={renders} sel={render} onSel={setChosen} />
         </Suspense>
       )}

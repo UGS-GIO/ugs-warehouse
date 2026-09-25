@@ -38,9 +38,10 @@ const NO_ROWS: Record<string, unknown>[] = [];
 // OOM the tab; the largest layers (e.g. wetlandsoutline ~426k) exceed it, so "All" truncates them
 // (surfaced as "capped at 100,000") and paging is the way through the full table.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill, startCollapsed = false }: {
+export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill, startCollapsed = false }: {
   href: string; title?: string; onPick?: (sel: FocusSel) => void;
   mapPick?: MapPick | null;
+  mapMismatch?: boolean;   // the map found a row's id on another record (preview-map)
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
   rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
   summaryFields?: readonly string[];   // item's `ugs:summary_fields` — leads the record cards
@@ -291,9 +292,9 @@ export function DataExplorer({ href, title, onPick, mapPick, reviewItemId, rowKe
           )}
         </div>
       )}
-      {versionsDiffer && (
+      {(versionsDiffer || mapMismatch) && (
         <div className="mb-1.5 text-xs text-muted-foreground">
-          The map and this table are different versions of the layer, so a map click can't pick its row here. Update the saved copy on Offline data.
+          The map and this table are different versions of the layer, so rows and map features can't be matched. Update the saved copy on Offline data.
         </div>
       )}
       {err && (online && !isNetworkError(error)

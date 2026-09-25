@@ -76,7 +76,7 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const pm = pmtilesLink(item);
-  const { setFocus, pick } = usePreviewMap();
+  const { setFocus, pick, mapMismatch } = usePreviewMap();
   const spec: PreviewSpec = pm
     ? { kind: "vector", item, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "") }
     : null;
@@ -85,7 +85,7 @@ function VectorPreview({ item }: { item: StacDoc }) {
       <PreviewMapSlot spec={spec} />
       <SelectedFeatureCard item={item} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer key={pq.href} href={pq.href} title={String(item.properties?.title ?? item.id ?? "")} startCollapsed onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
+      {pq && <DataExplorer key={pq.href} href={pq.href} title={String(item.properties?.title ?? item.id ?? "")} startCollapsed onPick={setFocus} mapPick={pick} mapMismatch={mapMismatch} reviewItemId={String(item.id ?? "")}
         rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}
     </>
   );

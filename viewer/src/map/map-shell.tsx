@@ -63,6 +63,9 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
 }
 
 const icon = "h-5 w-5";
+// What drags the sheet: a long press there must not select, highlight, or open a callout menu.
+const GRAB = "touch-none select-none [-webkit-touch-callout:none] [-webkit-tap-highlight-color:transparent]";
+const noMenu = (e: React.MouseEvent) => e.preventDefault();
 // No "Map" tab: the map is never hidden, it's what the sheet sits on. Tapping the open tab drops
 // the sheet back to a peek, which is the move a Map button was standing in for.
 const TABS: { id: Tab; label: string; path: ReactNode }[] = [
@@ -100,7 +103,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           className={"absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl "
             + (dragH == null ? "transition-[height] duration-300 ease-out" : "")}
         >
-          <div onPointerDown={onPointerDown} className="flex shrink-0 cursor-grab touch-none items-center justify-center py-3">
+          <div onPointerDown={onPointerDown} onContextMenu={noMenu} className={`flex shrink-0 cursor-grab items-center justify-center py-3 ${GRAB}`}>
             <span className="h-1.5 w-10 rounded-full bg-border" />
           </div>
           {!collapsed && (
@@ -111,7 +114,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           )}
         </div>
       </div>
-      <nav aria-label="Map views" onPointerDown={onPointerDown} className="z-30 flex shrink-0 touch-none border-t border-border" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <nav aria-label="Map views" onPointerDown={onPointerDown} onContextMenu={noMenu} className={`z-30 flex shrink-0 border-t border-border ${GRAB}`} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         {TABS.map((t) => (
           <button
             key={t.id}

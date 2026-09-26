@@ -22,3 +22,10 @@ describe("locate", () => {
     await expect(locate({ text: "x", magicKey: "k" })).rejects.toThrow("not found");
   });
 });
+
+describe("service errors", () => {
+  it("rejects an ArcGIS error sent with a 200", async () => {
+    vi.stubGlobal("fetch", reply({ error: { code: 500, message: "Unable to complete operation." } }));
+    await expect(locate({ text: "x", magicKey: "k" })).rejects.toThrow("Unable to complete operation.");
+  });
+});

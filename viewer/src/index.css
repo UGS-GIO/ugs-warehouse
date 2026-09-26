@@ -112,6 +112,13 @@ body {
   header.utah-design-system.utds-header { display: none; }
   .app-emblem { display: flex; }   /* unlayered, so it beats the `hidden` utility */
 }
+/* Phone map (map-shell.tsx): the sheet's peek covers the map's bottom edge, so the bottom corner
+   controls (attribution) sit above it; the search spans the top, so the top-right controls start
+   below it. Unlayered, to beat maplibre-gl.css. */
+.phone-map .maplibregl-ctrl-bottom-left,
+.phone-map .maplibregl-ctrl-bottom-right { bottom: var(--peek); }
+.phone-map .maplibregl-ctrl-top-right { top: 3rem; }
+
 /* The DS ships no dark header — `.utds-header` hardcodes `background-color: white`, with no CSS
    variable to flip — so a dark app sat under a full-width white slab. We theme it ourselves: the
    band follows our card token, and the emblem (one navy ink, its detail carved by alpha) is driven

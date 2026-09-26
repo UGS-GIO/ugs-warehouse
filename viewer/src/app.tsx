@@ -10,7 +10,6 @@ import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetPar
 import { flyTo, queueFocus, setPin } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
 import { MapSearch } from "./shell/map-search";
-import { useIsDesktop } from "./ui/use-breakpoint";
 import { LegalFooter } from "./shell/legal-footer";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
@@ -549,7 +548,6 @@ export function MapSearchFor({ state, className }: { state: ViewCtx; className?:
 export function AppLayout() {
   const state = useViewState();
   const { view, setView, catalog, lockedView, pending } = state;
-  const isDesktop = useIsDesktop();
   return (
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
@@ -572,8 +570,6 @@ export function AppLayout() {
         </Link>
         {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
         <StacUrlChip url={CATALOG_URL} />
-        {/* On a phone the map search sits in the top bar; on desktop it floats on the map. */}
-        {view === "map" && !isDesktop && <MapSearchFor state={state} className="order-last w-full" />}
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
               below md — five tabs and a phone don't share a row. */}

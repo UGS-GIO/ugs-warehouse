@@ -40,7 +40,7 @@ function MapView() {
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       relatedFor={relatedFor}
-      search={isDesktop ? <MapSearchFor state={c} className="w-80" /> : undefined} showPin
+      search={<MapSearchFor state={c} className={isDesktop ? "w-80" : "w-[calc(100vw-20px)]"} />} showPin
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
     info={dock.kind === "related"
       ? <RelatedTable key={`${dock.related.itemHref}::${dock.related.relatedKey}`}

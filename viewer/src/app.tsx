@@ -6,7 +6,10 @@ import { type CatalogDoc } from "./discover/search-index";
 import utahLogo from "./assets/utah-logo.png";
 import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/browse";
 import { layerCollectionIds } from "./catalog/catalog";
-import { type ActiveLayer, type Footprint, layerParam, parseLayerParam } from "./map/map-model";
+import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetParam } from "./map/map-model";
+import { flyTo, queueFocus, setPin } from "./map/camera";
+import type { Bounds } from "./map/place-locator";
+import { MapSearch } from "./shell/map-search";
 import { LegalFooter } from "./shell/legal-footer";
 import { SavingNotice } from "./offline/saving-notice";
 import { OfflineBadge } from "./offline/offline-notice";
@@ -35,7 +38,7 @@ const VIEW_PATH = {
   review: "/review", offline: "/offline",
 } satisfies Record<View, string>;
 const isView = (v: string): v is View => v !== "landing" && v in VIEW_PATH;
-export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
+export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[]; sheet?: string };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
 // null when the item carries none of them — it isn't a layer.
@@ -147,6 +150,7 @@ function useViewState() {
   // (q/collections/category/…) are stripped when leaving Discover so its filters don't linger on
   // another view, and preserved when staying in Discover (open/close a drawer over the filtered set).
   const go = (next: Nav, push = true) => {
+    if (next.view !== "map") setPin(null);   // the search's place pin belongs to this map visit
     navigate({
       to: VIEW_PATH[next.view],
       replace: !push,
@@ -161,7 +165,7 @@ function useViewState() {
         return {
           ...rest,
           ...discover,
-          sheet: next.view === "map" ? sheet : undefined,   // the map's own; it doesn't follow you out
+          sheet: next.view === "map" ? next.sheet ?? sheet : undefined,   // the map's own; it doesn't follow you out
           c: next.c || undefined,
           i: next.i || undefined,
           l: layerParam(next.l),
@@ -193,6 +197,7 @@ function useViewState() {
         logo: { htmlString: `<img src="${utahLogo}" alt="" />` },
         mainMenu: false,
         utahId: false,
+        size: "SMALL",   // MEDIUM (the default) took about 100 px above every view
       };
       let email = "";
       if (IS_REVIEW) {
@@ -445,6 +450,24 @@ function useViewState() {
   // the explicit set the add/remove controls manage; the implicit open-item fallback stays a
   // map-view rendering nicety, unaffected here.
   const addLayer = (id: string) => toggleLayers([id], true);
+  // Header search picks. Both land on the map: a place flies there; an item opens its detail, joins
+  // the layers when it draws as one, and the map zooms to it rather than to every layer.
+  const searchIsLayer = (r: ItemRef) => layerCollIds.includes(r.collId) || !!zarrAsset(r.data);
+  const pickPlace = (b: Bounds, label: string) => {
+    setPin({ lng: (b[0] + b[2]) / 2, lat: (b[1] + b[3]) / 2, label });
+    if (view === "map") flyTo(b);
+    else { queueFocus(b); go({ view: "map", l: layerIds, s: seriesSel }); }
+  };
+  const pickSearchItem = ({ href, bbox }: { href: string; bbox?: Bounds }) => {
+    setPin(null);   // an item marks itself with its footprint
+    const id = idOf(href);
+    const cur = layerIds ?? [];
+    const adds = !cur.includes(id) && drawsAsLayer(mapItems.find((r) => r.href === href)?.data);
+    if (bbox) { if (view === "map" && !adds) flyTo(bbox); else queueFocus(bbox); }
+    revealInfo.current?.();
+    go({ view: "map", c: collKeyOf(href), i: id, l: adds ? [id, ...cur] : layerIds, s: seriesSel,
+         sheet: sheetParam({ tab: "info", detent: 1 }) });
+  };
   const removeLayer = (id: string) => toggleLayers([id], false);
   const isActive = (id: string) => (layerIds ?? []).includes(id);
   // Commit a dragged draw-order back to ?l= (the whole active set stays shareable in the URL).
@@ -499,6 +522,7 @@ function useViewState() {
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
     catalogDocs, mapItems, mapLoadKey, mapItemsLoading,
+    searchIsLayer, pickPlace, pickSearchItem,
     openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, collectionId, collectionUrl, layerIds, seriesSel,
     rootChildren, cardsWithCovers, allItems, itemsLoading, leafColl, crumbs,
@@ -519,6 +543,13 @@ export const useViewCtx = (): ViewCtx => {
   return ctx;
 };
 
+/** The map search, wired to the view state. */
+export function MapSearchFor({ state, className }: { state: ViewCtx; className?: string }) {
+  return <MapSearch items={state.mapItems} loadKey={state.mapLoadKey} isLayer={state.searchIsLayer}
+    onPlace={state.pickPlace} onItem={state.pickSearchItem}
+    onSearchAll={(q) => state.openDiscoverSearch({ q })} className={className} />;
+}
+
 /** Root layout route: owns the data + shell, renders the matched view through <Outlet />. */
 export function AppLayout() {
   const state = useViewState();
@@ -534,9 +565,13 @@ export function AppLayout() {
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
         <Link to="/" title="Home — catalog root"
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
-          {/* The mark only on phones: on desktop the state header above carries it, and a second
-              copy 60px below read as a duplicate. Phones hide that header (index.css). */}
-          <img src={utahLogo} alt="" className="h-7 w-auto md:hidden dark:brightness-0 dark:invert" />
+          {/* The emblem shows only where index.css hides the state band (phones, short screens). Where
+              the band shows it already carries the beehive, and a second copy read as a duplicate. */}
+          <span className="app-emblem shrink-0 items-center gap-2">
+            <img src={utahLogo} alt="Utah Geological Survey" className="h-5 w-auto dark:brightness-0 dark:invert" />
+            <span aria-hidden className="hidden text-sm font-semibold text-muted-foreground md:inline">Utah Geological Survey</span>
+            <span aria-hidden className="mr-1 hidden h-4 w-px bg-border md:inline" />
+          </span>
           <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </Link>
         {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}

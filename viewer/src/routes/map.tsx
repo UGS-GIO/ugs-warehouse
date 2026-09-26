@@ -1,7 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useState } from "react";
 
-import { idOf, useViewCtx } from "@/app";
+import { idOf, MapSearchFor, useViewCtx } from "@/app";
+import { useIsDesktop } from "@/ui/use-breakpoint";
 import { FeatureDetail, ItemMap, type OpenRelated, type RelatedTablesInfo, type SelectedFeature } from "@/map/map";
 import { MapDetail } from "@/map/map-detail";
 import { LayerList } from "@/map/layer-list";
@@ -15,7 +16,6 @@ import { BasemapDownload } from "@/offline/basemap-download";
 import { isSupported } from "@/offline/opfs";
 import { WhatsHerePicker } from "@/offline/whats-here-picker";
 import type { Target } from "@/offline/whats-here";
-import { useIsDesktop } from "@/ui/use-breakpoint";
 import { useZarrProblems } from "@/zarr/use-zarr-layers";
 
 // The Info dock shows one of three things, strictly nested: a related table is only reachable from a
@@ -28,6 +28,7 @@ const DOCK_ITEM: Dock = { kind: "item" };
 
 function MapView() {
   const c = useViewCtx();
+  const isDesktop = useIsDesktop();
   // Scoped to the open item (usePerItem): opening a footprint changes the item and the dock reads
   // back as `item` in the same render — no reset effect, so no frame where a stale feature shows.
   const [dock, setDock] = usePerItem<Dock>(c.itemUrl ?? "", DOCK_ITEM);
@@ -36,7 +37,6 @@ function MapView() {
   // The "What's here" picker. `canSave`: the explicit "Save this area…" always saves; a long press
   // or right-click saves on phones only, and on desktop is for showing what is there.
   const [pick, setPick] = useState<{ target: Target; canSave: boolean } | null>(null);
-  const isDesktop = useIsDesktop();
   // A datacube that can't open says so in its row instead of sitting "on" and blank.
   const zarrProblems = useZarrProblems(c.activeLayers.flatMap((l) => (l.zarr
     ? [{ id: l.id, href: l.zarr.href, variable: l.zarr.variable }] : [])));
@@ -62,6 +62,7 @@ function MapView() {
       onBoundsChange={setView}
       onPickAt={(lon, lat, zoom) => setPick({ target: { kind: "point", lon, lat, zoom }, canSave: !isDesktop && isSupported() })}
       relatedFor={relatedFor}
+      search={<MapSearchFor state={c} className={isDesktop ? "w-80" : "w-[calc(100vw-20px)]"} />} showPin
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
     info={dock.kind === "related"
       ? <RelatedTable key={`${dock.related.itemHref}::${dock.related.relatedKey}`}

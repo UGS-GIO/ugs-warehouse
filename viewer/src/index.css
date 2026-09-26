@@ -108,9 +108,10 @@ body {
 /* The DS title band shows only on tall desktop screens. On a phone or a short screen (most laptops)
    it costs 60-90px of a map-first view, so it drops and our bar carries the UGS emblem instead, as in
    the BASIN viewer. The "official website of Utah" strip is a separate element and always stays. */
+.app-emblem { display: none; }
 @media (max-width: 767px), (max-height: 900px) {
   header.utah-design-system.utds-header { display: none; }
-  .app-emblem { display: flex; }   /* unlayered, so it beats the `hidden` utility */
+  .app-emblem { display: flex; }
 }
 /* Phone map (map-shell.tsx): the sheet's peek covers the map's bottom edge, so the bottom corner
    controls (attribution) sit above it; the search spans the top, so the top-right controls start

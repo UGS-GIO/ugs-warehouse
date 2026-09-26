@@ -561,8 +561,8 @@ export function AppLayout() {
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
           {/* The emblem shows only where index.css hides the state band (phones, short screens). Where
               the band shows it already carries the beehive, and a second copy read as a duplicate. */}
-          <span className="app-emblem hidden shrink-0 items-center gap-2">
-            <img src={utahLogo} alt="Utah Geological Survey" className="h-5 w-auto dark:[filter:brightness(0)_invert(1)]" />
+          <span className="app-emblem shrink-0 items-center gap-2">
+            <img src={utahLogo} alt="Utah Geological Survey" className="h-5 w-auto dark:brightness-0 dark:invert" />
             <span aria-hidden className="hidden text-sm font-semibold text-muted-foreground md:inline">Utah Geological Survey</span>
             <span aria-hidden className="mr-1 hidden h-4 w-px bg-border md:inline" />
           </span>

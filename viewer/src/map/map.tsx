@@ -2,7 +2,7 @@ import { Toggle } from "@base-ui/react/toggle";
 import { qk } from "@/query-keys";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
@@ -12,6 +12,7 @@ import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { UiSegmented } from "@/ui/segmented";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
+import { PlaceSearch } from "./place-search";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -314,7 +315,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onClick={onClick}
     >
       <MapControl position="top-left">
-        <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
+        <PlaceSearch onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
       </MapControl>
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
@@ -449,35 +450,6 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Popup>
       )}
     </MapGL>
-  );
-}
-
-// Keyless place search via Nominatim (OSM). US-biased; flies the map to the first hit.
-function Geocoder({ onPick }: { onPick: (b: [number, number, number, number]) => void }) {
-  const [q, setQ] = useState("");
-  // The pending/error pair is what useMutation is: one call, no cache, state that follows it.
-  const search = useMutation({
-    mutationFn: async (place: string): Promise<[number, number, number, number]> => {
-      const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&q=${encodeURIComponent(place)}`;
-      const hits = await (await fetch(u)).json();
-      if (!hits.length) throw new Error("not found");
-      const bb = hits[0].boundingbox.map(Number); // [south, north, west, east]
-      return [bb[2], bb[0], bb[3], bb[1]];        // → [w, s, e, n]
-    },
-    onSuccess: onPick,
-  });
-  const err = search.error ? (search.error.message === "not found" ? "not found" : "search failed") : undefined;
-
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); if (q.trim()) search.mutate(q); }}
-      className="flex items-center gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search place…"
-        className="w-24 sm:w-40 rounded bg-transparent px-1.5 py-0.5 text-foreground placeholder:text-muted-foreground focus:outline-none" />
-      <button type="submit" disabled={search.isPending} className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50">
-        {search.isPending ? "…" : "Go"}
-      </button>
-      {err && <span className="px-1 text-destructive">{err}</span>}
-    </form>
   );
 }
 

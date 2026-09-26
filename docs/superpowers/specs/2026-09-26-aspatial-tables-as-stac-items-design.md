@@ -153,7 +153,9 @@ This design does not stand alone; it intersects a partly-shipped, partly-in-flig
 
 **Two producers, one model.** The vector producer already does item-per-table (this design is native there). The pubs producer does publication-item-with-layer-assets (ALL-5913). So making aspatial tables first-class items is a change in **both** producers, and in pubs it means the companion tables join the publication's members under the ALL-5922 whole/members shape.
 
-**Subsumes:** the pending #347 follow-up (drop the dangling data-asset `reference.href` on a materialized target: moot once the target is its own item) and the never-filed "OGC API Features for aspatial tables" question (folded into §7).
+**Subsumes two loose ends:**
+- An **unfiled residual from #347 (ALL-6011, Done).** That ticket's primary fix (PR #354) materialized aspatial outgoing FK targets as related-table assets, killing the broken `rel:related` *link*. But the parent's own `data`-asset `ugs:foreign_keys.reference.href` still points at the target's *standalone* archive path (`.../geoparquet/<target>/<target>.parquet`), which 404s for an aspatial target — the data only exists at the materialized `.../<parent>/related/<target>.parquet`. Verified live on `wetlands_plants_site` (2026-09-26): the data-asset FK href returns 404; the materialized asset and the inverted FK both return 200. It's a `ugs:foreign_keys` reference, not a STAC `links` entry, so it doesn't trip Portolan CORE-035 and the viewer's related-table UX (which reads the asset) is unaffected — which is why #347 could close. Moot once the target is its own item with a real standalone archive. A one-line interim guard (point the FK href at the materialized path, or drop the data-asset FK for aspatial targets) is possible if we want the 404 gone before this design lands.
+- The never-filed "OGC API Features for aspatial tables" question (folded into §7).
 
 ---
 

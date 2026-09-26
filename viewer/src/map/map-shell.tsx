@@ -126,7 +126,16 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           </button>
           {!collapsed && (
             <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-              <div className="px-3 pb-3">{tab === "layers" ? layers : info}</div>
+              <div className="px-3 pb-3">
+                {/* The detail's way back: an installed app has no browser Back button. */}
+                {tab === "info" && (
+                  <button type="button" onClick={() => setSheet({ tab: "layers", detent }, true)}
+                    className="-ml-1 mb-1 inline-flex items-center gap-1 rounded px-1 text-sm text-primary hover:underline">
+                    <span aria-hidden>‹</span> Layers
+                  </button>
+                )}
+                {tab === "layers" ? layers : info}
+              </div>
               <LegalFooter catalogUrl={CATALOG_URL} />
             </div>
           )}

@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/* A finger needs a 44 px target (WCAG 2.5.5); a mouse keeps the dense layout. min-* wins over a
+   fixed height or width, so small icon buttons grow too. */
+@media (pointer: coarse) {
+  :is(button, summary, [role="button"], select, input:not([type="checkbox"], [type="radio"], [type="range"])):not(.maplibregl-ctrl-attrib-button) {
+    min-height: 44px;
+  }
+  :is(button, [role="button"]):not(.maplibregl-ctrl-attrib-button) { min-width: 44px; }
+  .maplibregl-ctrl.maplibregl-ctrl-group button { width: 44px; height: 44px; }
+}
+
 /* Tailwind v4 dropped the pointer cursor from buttons; a click target should still look like one. */
 @layer base {
   :is(button, [role="button"]):not(:disabled, [aria-disabled="true"]) {

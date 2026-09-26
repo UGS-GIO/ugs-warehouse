@@ -43,7 +43,7 @@ function Fold({ id, label, action, indent, forceOpen, closed, setClosed, childre
           return next;
         });
       }}>
-      <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+      <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground pointer-coarse:min-h-11">
         <span className="inline-block w-3 shrink-0 transition-transform [details[open]>summary_&]:rotate-90">▸</span>
         <span className="min-w-0 truncate">{label}</span>
         {action && <span className="ml-auto pl-2">{action}</span>}
@@ -67,11 +67,12 @@ function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove, offlineHrefOf
   const style = { transform: CSS.Transform.toString(transform), transition };
   return (
     <div ref={setNodeRef} style={style}
-      className={`group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-hover ${isDragging ? "opacity-60" : ""} ${r.id === openId ? "bg-muted" : ""}`}>
+      // On a touch screen its controls take a second line, so 44 px targets leave the name room.
+      className={`group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:flex-wrap pointer-coarse:py-0 ${isDragging ? "opacity-60" : ""} ${r.id === openId ? "bg-muted" : ""}`}>
       <button type="button" {...attributes} {...listeners} aria-label={`Reorder ${r.title}`} title="Drag to reorder"
-        className="shrink-0 cursor-grab touch-none px-0.5 text-muted-foreground/60 hover:text-foreground"><span aria-hidden>⠿</span></button>
+        className="flex shrink-0 cursor-grab touch-none items-center justify-center px-0.5 text-muted-foreground/60 hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-8 pointer-coarse:text-lg"><span aria-hidden>⠿</span></button>
       <button type="button" onClick={() => onToggle(r.id)} aria-pressed={true}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        className="flex min-w-0 flex-1 items-center gap-2 text-left pointer-coarse:min-h-11 pointer-coarse:basis-[calc(100%-3.5rem)]">
         <span className="h-3 w-3 shrink-0 rounded-sm border" style={{ background: colorOf(r.id), borderColor: colorOf(r.id) }} />
         <span className="min-w-0">
           <span className="block truncate" title={r.title}>{r.title}</span>
@@ -80,7 +81,7 @@ function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove, offlineHrefOf
       </button>
       {/* Taps for what the grip does by drag: a drag must never be the only way (WCAG 2.5.7). */}
       <button type="button" onClick={onMove.up} disabled={!onMove.up} aria-label={`Move ${r.title} up`} title="Move up"
-        className={MOVE_CLASS}><span aria-hidden>▲</span></button>
+        className={`${MOVE_CLASS} pointer-coarse:ml-auto`}><span aria-hidden>▲</span></button>
       <button type="button" onClick={onMove.down} disabled={!onMove.down} aria-label={`Move ${r.title} down`} title="Move down"
         className={MOVE_CLASS}><span aria-hidden>▼</span></button>
       {offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
@@ -90,11 +91,14 @@ function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove, offlineHrefOf
   );
 }
 
-// Hover-revealed, except where there is no hover (a phone): there it is always shown.
+// Hover-revealed, except where there is no hover (a phone): there it is always shown. On a touch
+// screen every control here is a 44 px target; a mouse keeps the dense rows.
 const INFO_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 "
-  + "hover:text-foreground focus:opacity-100 group-hover:opacity-100 pointer-coarse:opacity-100";
-const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-25";
-const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal hover:bg-hover";
+  + "hover:text-foreground focus:opacity-100 group-hover:opacity-100 pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-lg pointer-coarse:opacity-100";
+const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-25 "
+  + "pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-sm";
+const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal hover:bg-hover "
+  + "pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
 
 export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf, problemOf }: {
   rows: LayerRow[];
@@ -151,9 +155,9 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
   });
 
   const Row = ({ r, on }: { r: LayerRow; on: boolean }) => (
-    <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-hover ${r.id === openId ? "bg-muted" : ""}`}>
+    <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:py-0 ${r.id === openId ? "bg-muted" : ""}`}>
       <button type="button" onClick={() => onToggle(r.id)} aria-pressed={on}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        className="flex min-w-0 flex-1 items-center gap-2 text-left pointer-coarse:min-h-11">
         <span className="h-3 w-3 shrink-0 rounded-sm border border-muted-foreground/50"
           style={on ? { background: colorOf(r.id), borderColor: colorOf(r.id) } : undefined} />
         <span className="min-w-0">

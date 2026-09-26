@@ -10,7 +10,10 @@ import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
-import { UiSegmented } from "@/ui/segmented";
+import { BasemapMenu } from "./basemap-menu";
+import lightThumb from "@/assets/basemaps/light.webp";
+import satelliteThumb from "@/assets/basemaps/satellite.webp";
+import streetsThumb from "@/assets/basemaps/streets.webp";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
@@ -71,7 +74,8 @@ async function streetsWithoutRelief(): Promise<maplibregl.StyleSpecification | s
 
 // Glyphs too, so a labelled overlay added before Streets arrives is not refused.
 const EMPTY_STYLE: maplibregl.StyleSpecification = { version: 8, glyphs: GLYPHS, sources: {}, layers: [] };
-const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
+const BASEMAP_IDS = Object.keys(BASEMAPS) as BasemapId[];
+const BASEMAP_THUMBS: Record<BasemapId, string> = { Streets: streetsThumb, Light: lightThumb, Satellite: satelliteThumb };
 
 // The footprint "Open item →" popup is the only popup left on the map — a data-feature click docks
 // its detail instead (see SelectedFeature/onSelectFeature below), so this never carries feature props.
@@ -346,8 +350,6 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
       <MapControl position="top-right" className="flex gap-1 text-xs">
-        <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
-          className="bg-card/95 shadow" />
         {footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"
@@ -357,6 +359,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         )}
       </MapControl>
 
+      <MapControl position="top-right">
+        <BasemapMenu value={basemap} onValueChange={setBasemap} items={BASEMAP_IDS} thumbs={BASEMAP_THUMBS} />
+      </MapControl>
       <GeolocateControl position="top-right" trackUserLocation
         positionOptions={{ enableHighAccuracy: true }} />
 

@@ -10,7 +10,6 @@ import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetPar
 import { flyTo, queueFocus, setPin } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
 import { MapSearch } from "./shell/map-search";
-import { useIsDesktop } from "./ui/use-breakpoint";
 import { LegalFooter } from "./shell/legal-footer";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
@@ -194,6 +193,7 @@ function useViewState() {
         logo: { htmlString: `<img src="${utahLogo}" alt="" />` },
         mainMenu: false,
         utahId: false,
+        size: "SMALL",   // MEDIUM (the default) took about 100 px above every view
       };
       let email = "";
       if (IS_REVIEW) {
@@ -548,7 +548,6 @@ export function MapSearchFor({ state, className }: { state: ViewCtx; className?:
 export function AppLayout() {
   const state = useViewState();
   const { view, setView, catalog, lockedView, pending } = state;
-  const isDesktop = useIsDesktop();
   return (
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
@@ -559,15 +558,18 @@ export function AppLayout() {
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
         <Link to="/" title="Home — catalog root"
-          className="flex items-center whitespace-nowrap hover:opacity-80">
-          {/* Wordmark only — the state header above already carries the UGS beehive mark, and a
-              second copy 60px below it read as a duplicate (and, in dark mode, as a white sticker). */}
+          className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
+          {/* The emblem shows only where index.css hides the state band (phones, short screens). Where
+              the band shows it already carries the beehive, and a second copy read as a duplicate. */}
+          <span className="app-emblem shrink-0 items-center gap-2">
+            <img src={utahLogo} alt="Utah Geological Survey" className="h-5 w-auto dark:brightness-0 dark:invert" />
+            <span aria-hidden className="hidden text-sm font-semibold text-muted-foreground md:inline">Utah Geological Survey</span>
+            <span aria-hidden className="mr-1 hidden h-4 w-px bg-border md:inline" />
+          </span>
           <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </Link>
         {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
         <StacUrlChip url={CATALOG_URL} />
-        {/* On a phone the map search sits in the top bar; on desktop it floats on the map. */}
-        {view === "map" && !isDesktop && <MapSearchFor state={state} className="order-last w-full" />}
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
               below md — five tabs and a phone don't share a row. */}

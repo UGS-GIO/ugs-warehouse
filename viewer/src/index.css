@@ -105,12 +105,21 @@ body {
 #utah-design-system { flex: none; }
 #root { flex: 1 1 auto; min-height: 0; }
 
-/* The DS title band stays on desktop — it is the state identity. On a phone it costs ~90px of a
-   map-first screen, and our own bar already carries the logo + app name, so it drops there only.
-   The "official website of Utah" strip is a separate element and always stays. */
-@media (max-width: 767px) {
+/* The DS title band shows only on tall desktop screens. On a phone or a short screen (most laptops)
+   it costs 60-90px of a map-first view, so it drops and our bar carries the UGS emblem instead, as in
+   the BASIN viewer. The "official website of Utah" strip is a separate element and always stays. */
+.app-emblem { display: none; }
+@media (max-width: 767px), (max-height: 900px) {
   header.utah-design-system.utds-header { display: none; }
+  .app-emblem { display: flex; }
 }
+/* Phone map (map-shell.tsx): the sheet's peek covers the map's bottom edge, so the bottom corner
+   controls (attribution) sit above it; the search spans the top, so the top-right controls start
+   below it. Unlayered, to beat maplibre-gl.css. */
+.phone-map .maplibregl-ctrl-bottom-left,
+.phone-map .maplibregl-ctrl-bottom-right { bottom: var(--peek); }
+.phone-map .maplibregl-ctrl-top-right { top: 3rem; }
+
 /* The DS ships no dark header — `.utds-header` hardcodes `background-color: white`, with no CSS
    variable to flip — so a dark app sat under a full-width white slab. We theme it ourselves: the
    band follows our card token, and the emblem (one navy ink, its detail carved by alpha) is driven

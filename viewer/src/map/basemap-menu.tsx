@@ -3,7 +3,7 @@ import { Menu } from "@base-ui/react/menu";
 const ITEM = "flex cursor-pointer select-none items-center gap-2 rounded px-1.5 py-1.5 text-sm outline-none data-[highlighted]:bg-muted";
 
 /** The basemap picker as one map control button (maplibre's own control look, like geolocate), so it
- *  does not take a row of the map. `thumbs` are small captures of each basemap over Salt Lake City. */
+ *  does not take a row of the map. `thumbs` are 64x40 captures of each basemap at Liberty Park, SLC. */
 export function BasemapMenu<T extends string>({ value, onValueChange, items, thumbs }: {
   value: T;
   onValueChange: (v: T) => void;
@@ -25,13 +25,13 @@ export function BasemapMenu<T extends string>({ value, onValueChange, items, thu
       </div>
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
-          <Menu.Popup className="min-w-44 rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
+          <Menu.Popup className="min-w-48 rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
             <div className="px-2 pb-1 pt-1.5 text-[11px] font-bold uppercase tracking-wider text-muted-foreground">Basemap</div>
             <Menu.RadioGroup value={value} onValueChange={(v) => onValueChange(v as T)}>
               {items.map((b) => (
                 <Menu.RadioItem key={b} value={b} className={ITEM} closeOnClick>
-                  <img src={thumbs[b]} alt="" width={48} height={32}
-                    className="h-8 w-12 shrink-0 rounded-sm border border-border object-cover" />
+                  <img src={thumbs[b]} alt="" width={64} height={40}
+                    className="h-10 w-16 shrink-0 rounded-sm border border-border object-cover" />
                   <span className="flex-1">{b}</span>
                   <Menu.RadioItemIndicator className="text-primary">✓</Menu.RadioItemIndicator>
                 </Menu.RadioItem>

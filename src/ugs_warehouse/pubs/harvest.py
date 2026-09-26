@@ -431,8 +431,9 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
     import html
     escaped_srs = html.escape(srs)
     srs_el = f"<SRS>{escaped_srs}</SRS>"
-    xml = (re.sub(r"<SRS[^>]*>.*?</SRS>", srs_el, xml, flags=re.S)
-           if "<SRS" in xml else xml.replace("</VRTDataset>", srs_el + "</VRTDataset>"))
+    xml, n = re.subn(r"<SRS[^>]*>.*?</SRS>", srs_el, xml, flags=re.S)
+    if not n:
+        xml = xml.replace("</VRTDataset>", srs_el + "</VRTDataset>")
     gtx = "<GeoTransform>%.12g, %.12g, %.12g, %.12g, %.12g, %.12g</GeoTransform>" % gt
     xml = (re.sub(r"<GeoTransform>.*?</GeoTransform>", gtx, xml, flags=re.S)
            if "<GeoTransform>" in xml else xml.replace("</VRTDataset>", gtx + "</VRTDataset>"))

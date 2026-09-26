@@ -108,12 +108,18 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
           <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
         </svg>
-        <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Search places, layers and publications"
+        <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Search places, layers and publications" title="Press / to search"
           aria-label="Search places, layers and publications"
           className="min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none" />
         {busy && <span className="text-xs text-muted-foreground" aria-hidden="true">…</span>}
         {place.isError && <span className="text-xs text-destructive">place not found</span>}
-        <kbd className="hidden rounded border border-border px-1.5 text-xs text-muted-foreground md:inline">/</kbd>
+        {q && (
+          <button type="button" aria-label="Clear the search"
+            onClick={() => { setQ(""); document.getElementById(INPUT_ID)?.focus(); }}
+            className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
+            <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+          </button>
+        )}
       </div>
       <Combobox.Portal>
         <Combobox.Positioner sideOffset={6} align="start" className="z-50">

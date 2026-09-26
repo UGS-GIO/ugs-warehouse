@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 
-import { idOf, useViewCtx } from "@/app";
+import { idOf, MapSearchFor, useViewCtx } from "@/app";
+import { useIsDesktop } from "@/ui/use-breakpoint";
 import { FeatureDetail, ItemMap, type OpenRelated, type RelatedTablesInfo, type SelectedFeature } from "@/map/map";
 import { MapDetail } from "@/map/map-detail";
 import { LayerList } from "@/map/layer-list";
@@ -21,6 +22,7 @@ const DOCK_ITEM: Dock = { kind: "item" };
 
 function MapView() {
   const c = useViewCtx();
+  const isDesktop = useIsDesktop();
   // Scoped to the open item (usePerItem): opening a footprint changes the item and the dock reads
   // back as `item` in the same render — no reset effect, so no frame where a stale feature shows.
   const [dock, setDock] = usePerItem<Dock>(c.itemUrl ?? "", DOCK_ITEM);
@@ -38,6 +40,7 @@ function MapView() {
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
       relatedFor={relatedFor}
+      search={isDesktop ? <MapSearchFor state={c} className="w-80" /> : undefined} showPin
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
     info={dock.kind === "related"
       ? <RelatedTable key={`${dock.related.itemHref}::${dock.related.relatedKey}`}

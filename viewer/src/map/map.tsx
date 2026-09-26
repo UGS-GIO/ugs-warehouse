@@ -2,9 +2,9 @@ import { Toggle } from "@base-ui/react/toggle";
 import { qk } from "@/query-keys";
 import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { useQuery } from "@tanstack/react-query";
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
+import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Marker, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
@@ -12,6 +12,7 @@ import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { UiSegmented } from "@/ui/segmented";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
+import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -110,8 +111,11 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
 }
 
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
-  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature }: {
+  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, search,
+  showPin = false }: {
   item?: StacDoc; layers: ActiveLayer[];
+  search?: ReactNode;   // drawn in the top-left corner (the desktop map search)
+  showPin?: boolean;    // the map view shows the search's place pin; Discover's map does not
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
   // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
   // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
@@ -129,6 +133,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   coverageDefault?: boolean;
 }) {
   const mapRef = useRef<MapRef>(null);
+  const pin = usePin();
+  const shownPin = showPin ? pin : null;
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
@@ -202,6 +208,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
     setPopup(null);
+    // A search pick that also added a layer: zoom to the pick, not to every layer on the map.
+    const focus = takeFocus();
+    if (focus) { honorCam.current = false; fitTo(mapRef.current, focus); return; }
     if (honorCam.current) { honorCam.current = false; return; }
     const [w, s, e, n] = fitBox;
     mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
@@ -309,13 +318,31 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onMouseEnter={() => setCursor("pointer")}
       onMouseLeave={() => { setCursor(""); emitHover(null); }}
       onMouseMove={onHover}
-      onLoad={() => { setMapLoaded(true); reportBounds(); }}
+      onLoad={() => {
+        setMapLoaded(true); reportBounds();
+        setMapTarget(mapRef);
+        const focus = takeFocus();
+        if (focus && mapRef.current) fitTo(mapRef.current, focus);
+      }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
       onClick={onClick}
     >
-      <MapControl position="top-left">
-        <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
-      </MapControl>
+      {search && <MapControl position="top-left">{search}</MapControl>}
+      {shownPin && (
+        <Marker longitude={shownPin.lng} latitude={shownPin.lat} anchor="bottom">
+          <div className="flex flex-col items-center">
+            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground shadow">
+              {shownPin.label}
+              <button type="button" aria-label="Remove the pin" onClick={() => setPin(null)}
+                className="text-muted-foreground hover:text-foreground">×</button>
+            </span>
+            <svg aria-hidden="true" width="26" height="34" viewBox="0 0 24 32" className="text-primary drop-shadow">
+              <path fill="currentColor" stroke="white" strokeWidth="1.5" d="M12 1C6 1 1.5 5.5 1.5 11.3 1.5 19 12 31 12 31s10.5-12 10.5-19.7C22.5 5.5 18 1 12 1z" />
+              <circle cx="12" cy="11.5" r="4" fill="white" />
+            </svg>
+          </div>
+        </Marker>
+      )}
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
       <MapControl position="top-right" className="flex gap-1 text-xs">
@@ -449,35 +476,6 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Popup>
       )}
     </MapGL>
-  );
-}
-
-// Keyless place search via Nominatim (OSM). US-biased; flies the map to the first hit.
-function Geocoder({ onPick }: { onPick: (b: [number, number, number, number]) => void }) {
-  const [q, setQ] = useState("");
-  // The pending/error pair is what useMutation is: one call, no cache, state that follows it.
-  const search = useMutation({
-    mutationFn: async (place: string): Promise<[number, number, number, number]> => {
-      const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&q=${encodeURIComponent(place)}`;
-      const hits = await (await fetch(u)).json();
-      if (!hits.length) throw new Error("not found");
-      const bb = hits[0].boundingbox.map(Number); // [south, north, west, east]
-      return [bb[2], bb[0], bb[3], bb[1]];        // → [w, s, e, n]
-    },
-    onSuccess: onPick,
-  });
-  const err = search.error ? (search.error.message === "not found" ? "not found" : "search failed") : undefined;
-
-  return (
-    <form onSubmit={(e) => { e.preventDefault(); if (q.trim()) search.mutate(q); }}
-      className="flex items-center gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search place…"
-        className="w-24 sm:w-40 rounded bg-transparent px-1.5 py-0.5 text-foreground placeholder:text-muted-foreground focus:outline-none" />
-      <button type="submit" disabled={search.isPending} className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50">
-        {search.isPending ? "…" : "Go"}
-      </button>
-      {err && <span className="px-1 text-destructive">{err}</span>}
-    </form>
   );
 }
 

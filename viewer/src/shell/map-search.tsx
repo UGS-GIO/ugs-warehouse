@@ -13,7 +13,7 @@ type Row =
   | { type: "try"; key: string; label: string; sub: string };
 type Group = { value: string; items: Row[] };
 
-const INPUT_ID = "header-search";
+const INPUT_ID = "map-search";
 const TRY = ["Moab", "faults", "landslides", "OFR-598"];
 
 // "/" focuses the search from anywhere, unless the key is being typed into a field. The input's ref
@@ -34,24 +34,23 @@ function bindSlash(el: HTMLInputElement | null) {
 
 const itemRow = (hit: ItemHit): Row => ({ type: "item", key: hit.href, label: hit.label, sub: hit.sub, hit });
 
-export function HeaderSearch({ items, loadKey, isLayer, onWarm, onPlace, onItem, onSearchAll }: {
+export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAll, className = "" }: {
   items: ItemRef[];
   loadKey: string;
   isLayer: (r: ItemRef) => boolean;
-  onWarm: () => void;                              // load the catalog indexes the search needs
   onPlace: (b: Bounds) => void;
   onItem: (hit: { href: string; bbox?: Bounds }) => void;
   onSearchAll: (q: string) => void;
+  className?: string;
 }) {
   const [q, setQ] = useState("");
-  const [warm, setWarm] = useState(false);
   const text = q.trim();
   const recent = useRecent();
 
   const catalog = useQuery({
     queryKey: ["header-search-index", loadKey],
     queryFn: () => buildCatalogSearch(items, isLayer),
-    enabled: warm && items.length > 0,
+    enabled: items.length > 0,
     placeholderData: keepPreviousData,
     staleTime: Infinity,
   });
@@ -105,13 +104,12 @@ export function HeaderSearch({ items, loadKey, isLayer, onWarm, onPlace, onItem,
       onValueChange={(row) => { if (row) pick(row); }}
       itemToStringLabel={(row) => row.label}
     >
-      <div className="order-last flex w-full items-center gap-2 rounded-full border border-input bg-background px-3 py-1 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 md:order-none md:w-auto md:max-w-xl md:flex-1">
+      <div className={`flex items-center gap-2 rounded-full border border-input bg-background px-3 py-1 shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 ${className}`}>
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
           <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
         </svg>
         <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Search places, layers and publications"
           aria-label="Search places, layers and publications"
-          onFocus={() => { if (!warm) { setWarm(true); onWarm(); } }}
           className="min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none" />
         {busy && <span className="text-xs text-muted-foreground" aria-hidden="true">…</span>}
         {place.isError && <span className="text-xs text-destructive">place not found</span>}

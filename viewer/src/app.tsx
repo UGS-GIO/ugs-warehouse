@@ -9,7 +9,8 @@ import { layerCollectionIds } from "./catalog/catalog";
 import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetParam } from "./map/map-model";
 import { flyTo, queueFocus } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
-import { HeaderSearch } from "./shell/header-search";
+import { MapSearch } from "./shell/map-search";
+import { useIsDesktop } from "./ui/use-breakpoint";
 import { LegalFooter } from "./shell/legal-footer";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
@@ -326,9 +327,7 @@ function useViewState() {
 
   // The Map, Discover AND Landing views load every leaf collection's index (all items → the map +
   // facets + the landing tiles/recent strip). Landing reuses this exact cached set — no extra fetch.
-  // The header search needs the same set on any view, so focusing it loads them.
-  const [searchWarm, setSearchWarm] = useState(false);
-  const mapColls = view === "map" || view === "discover" || view === "landing" || searchWarm ? leafColls : [];
+  const mapColls = view === "map" || view === "discover" || view === "landing" ? leafColls : [];
   const mapIdx = useIndexes(mapColls.map((c) => ({ id: c.id, href: c.href })));
   // Same collection.json → item-links fallback the browse list uses. Without it a federated
   // catalog contributes no layers at all: it publishes no items.json, so the index is empty and
@@ -514,7 +513,7 @@ function useViewState() {
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
     catalogDocs, mapItems, mapLoadKey, mapItemsLoading,
-    setSearchWarm, searchIsLayer, pickPlace, pickSearchItem,
+    searchIsLayer, pickPlace, pickSearchItem,
     openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, collectionId, collectionUrl, layerIds, seriesSel,
     rootChildren, cardsWithCovers, allItems, itemsLoading, leafColl, crumbs,
@@ -535,10 +534,18 @@ export const useViewCtx = (): ViewCtx => {
   return ctx;
 };
 
+/** The map search, wired to the view state. */
+export function MapSearchFor({ state, className }: { state: ViewCtx; className?: string }) {
+  return <MapSearch items={state.mapItems} loadKey={state.mapLoadKey} isLayer={state.searchIsLayer}
+    onPlace={state.pickPlace} onItem={state.pickSearchItem}
+    onSearchAll={(q) => state.openDiscoverSearch({ q })} className={className} />;
+}
+
 /** Root layout route: owns the data + shell, renders the matched view through <Outlet />. */
 export function AppLayout() {
   const state = useViewState();
   const { view, setView, catalog, lockedView, pending } = state;
+  const isDesktop = useIsDesktop();
   return (
     // One persistent preview map lives in this provider (mounted once, above the view/list/item
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
@@ -556,9 +563,8 @@ export function AppLayout() {
         </Link>
         {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
         <StacUrlChip url={CATALOG_URL} />
-        <HeaderSearch items={state.mapItems} loadKey={state.mapLoadKey} isLayer={state.searchIsLayer}
-          onWarm={() => state.setSearchWarm(true)} onPlace={state.pickPlace} onItem={state.pickSearchItem}
-          onSearchAll={(q) => state.openDiscoverSearch({ q })} />
+        {/* On a phone the map search sits in the top bar; on desktop it floats on the map. */}
+        {view === "map" && !isDesktop && <MapSearchFor state={state} className="order-last w-full" />}
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
               below md — five tabs and a phone don't share a row. */}

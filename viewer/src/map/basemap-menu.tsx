@@ -14,8 +14,9 @@ export function BasemapMenu<T extends string>({ value, onValueChange, items, thu
     <Menu.Root>
       {/* The MapControl wrapper already spaces it; maplibre's own .maplibregl-ctrl margin would double that. */}
       <div className="maplibregl-ctrl maplibregl-ctrl-group" style={{ margin: 0 }}>
-        <Menu.Trigger aria-label={`Basemap: ${value}`} title="Basemap"
-          className="flex items-center justify-center text-foreground data-[popup-open]:bg-muted">
+        {/* Inline display: maplibre's unlayered `button { display: block }` beats the flex utility. */}
+        <Menu.Trigger aria-label={`Basemap: ${value}`} title="Basemap" style={{ display: "flex" }}
+          className="items-center justify-center text-foreground data-[popup-open]:bg-muted">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"
             strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M12 3l9 5-9 5-9-5z" /><path d="M3 13l9 5 9-5" />

@@ -1,7 +1,7 @@
 # Design: Aspatial tables as first-class STAC Items, with a uniform relationship model
 
 - **Jira:** TBD (proposed; related to the grouping/relationships thread ALL-5557 and the OGC-API-Features question)
-- **Related:** ALL-5557 (canonical dataset+grouping), ALL-5922 (scale-tier grouped items via `derived_from`/`related`), warehouse #347 (dangling `projects` link), #348 (nested-collection related link)
+- **Related:** ALL-5550 / ALL-5557 (canonical dataset+grouping model, in progress), ALL-5837 (land-raw+curate re-arch, GeMS target, in progress), ALL-5911 (geomap corpus load, parent task, in progress), ALL-5913 (companion tables shipped as STAC **assets**, Done — its item-model conclusion is superseded here), ALL-5922 (scale-tier whole/members + `derived_from`, Done — extended here), warehouse #347 / #348 (the bugs this grew from). See §9 for how they reconcile.
 - **Date:** 2026-09-26
 - **Status:** Draft for review
 - **Decision owner:** marshallrobinson. Reviewer: clintonlunn (warehouse).
@@ -137,7 +137,27 @@ The inline `roles:["data","related"]` asset on a parent can stay as a viewing co
 
 ---
 
-## 9. References
+## 9. Relationship to prior work
+
+This design does not stand alone; it intersects a partly-shipped, partly-in-flight body of work and should be sequenced against it, not merged in isolation.
+
+**Supersedes a shipped conclusion:**
+- **ALL-5913 (Done): companion tables (DMU/CMU) exposed as STAC assets.** The pubs producer today attaches the GeMS non-spatial companion tables (`DescriptionOfMapUnits`, `CorrelationOfMapUnits`, which are the "unit descriptions" authority tables) as `roles:["data"]` assets on the publication item, not as their own items. This design changes the canonical shape: those companion tables become their own Items (members of the publication), with the asset kept only as an optional same-href inline convenience. It preserves ALL-5913's data (raw schema verbatim) and supersedes only its item-model conclusion.
+
+**Extends an accepted direction:**
+- **ALL-5922 (Done): scale-tier layers as first-class grouped items (whole/members).** The pubs producer already promotes layers to first-class grouped items with `derived_from`/`related` linkage. This design applies the same "first-class item, grouped" treatment to the aspatial companion/authority tables and reuses `derived_from` for mosaic lineage exactly as ALL-5922 does.
+
+**Fits within two larger workstreams (align, do not duplicate):**
+- **Canonical dataset + grouping model (ALL-5550, ALL-5557):** groups are STAC Collections, members are Items, backed by a `catalog.groups` spine and a manifest. Aspatial items here are member Items, consistent with that model. Keep two "related" mechanisms distinct: the **FK `rel:related` + `ugs:foreign_keys`** graph is the *derived join* between tables; a **"related-set" group** in ALL-5550 is a *curated bundle*. They answer different questions and must not be collapsed.
+- **Land-raw + curate re-architecture (ALL-5837):** targets GeMS as the model (so "unit descriptions" is GeMS `DescriptionOfMapUnits`) and treats STAC as derived. This is the serving-layer STAC-modeling detail of that "STAC is derived" output; it can be built on the current producers now and stays forward-compatible.
+
+**Two producers, one model.** The vector producer already does item-per-table (this design is native there). The pubs producer does publication-item-with-layer-assets (ALL-5913). So making aspatial tables first-class items is a change in **both** producers, and in pubs it means the companion tables join the publication's members under the ALL-5922 whole/members shape.
+
+**Subsumes:** the pending #347 follow-up (drop the dangling data-asset `reference.href` on a materialized target: moot once the target is its own item) and the never-filed "OGC API Features for aspatial tables" question (folded into §7).
+
+---
+
+## 10. References
 
 - STAC 1.1.0 Item spec (geometry nullable; `bbox` REQUIRED if geometry non-null, PROHIBITED if null; JSON schema `item.json` null branch `"bbox": {"not": {}}`); PR radiantearth/stac-spec#854 "Null geometry clarification."
 - STAC Best Practices, "Unlocated Items" / "Data that is not spatial" (discourages null geometry; points at OGC API - Records).

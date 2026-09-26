@@ -117,10 +117,9 @@ body {
 
 /* The DS title band stays on desktop — it is the state identity. On a phone it costs ~90px of a
    map-first screen, and our own bar already carries the logo + app name, so it drops there only.
-   The "official website of Utah" strip goes too; its statement and the state's links move into the
-   app menu (nav-menu.tsx) along with the footer's. */
+   The "official website of Utah" strip stays; the footer's links move into the app menu. */
 @media (max-width: 767px) {
-  .utds-official-website__wrapper, header.utah-design-system.utds-header { display: none; }
+  header.utah-design-system.utds-header { display: none; }
 }
 /* The DS ships no dark header — `.utds-header` hardcodes `background-color: white`, with no CSS
    variable to flip — so a dark app sat under a full-width white slab. We theme it ourselves: the

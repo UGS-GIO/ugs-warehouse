@@ -116,13 +116,9 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                 <Menu.Separator className="my-1 h-px bg-border" />
               </div>
             )}
-            {/* Phones hide the state banner and the footer (index.css, legal-footer.tsx); what
-                they said lives here instead. */}
+            {/* Phones hide the footer (legal-footer.tsx); its links live here instead. */}
             <div className="md:hidden">
               <div className={HEADING}>About</div>
-              <p className="px-2 py-1 text-xs text-muted-foreground">
-                An official website of the state of Utah · © state of Utah
-              </p>
               {[{ href: "https://geology.utah.gov", label: "Utah Geological Survey" }, ...LEGAL_LINKS].map((l) => (
                 <Menu.Item key={l.label} className={ITEM} nativeButton={false}
                   render={<a href={l.href} target="_blank" rel="noreferrer" />}>

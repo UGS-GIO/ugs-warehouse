@@ -91,3 +91,20 @@ def test_sidecar_does_not_match_a_different_stem(monkeypatch):
 def test_sidecar_does_not_match_a_prefix(monkeypatch):
     monkeypatch.setattr(harvest.os, "listdir", lambda _d: ["plate_v2.tfw"])
     assert harvest._sidecar("/bundle/plate", (".tfw",)) is None
+
+
+def test_source_crs_georeferences_a_plate_with_only_a_world_file(tmp_path, monkeypatch):
+    import numpy as np
+    import rasterio
+
+    tif = tmp_path / "plate.tif"
+    with rasterio.open(tif, "w", driver="GTiff", width=4, height=4, count=1, dtype="uint8") as ds:
+        ds.write(np.zeros((1, 4, 4), "uint8"))
+    (tmp_path / "plate.tfw").write_text("5\n0\n0\n-5\n245681\n4654971\n")
+    monkeypatch.setitem(harvest.SOURCE_CRS, "OFR-TEST", "EPSG:26712")
+    monkeypatch.setattr(harvest, "run", lambda cmd: __import__("subprocess").run(cmd, check=True))
+    harvest._series_ctx.set("OFR-TEST")
+
+    with rasterio.open(harvest.corrected_georef(str(tif), str(tmp_path))) as ds:
+        assert ds.crs.to_epsg() == 26712
+        assert ds.bounds.left == pytest.approx(245678.5)

@@ -5,6 +5,7 @@ export type Suggestion = { text: string; magicKey: string };
 export type Bounds = [number, number, number, number];
 
 const wait = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, reject) => {
+  if (signal.aborted) return reject(signal.reason);
   const onAbort = () => { clearTimeout(t); reject(signal.reason); };
   const t = setTimeout(() => { signal.removeEventListener("abort", onAbort); resolve(); }, ms);
   signal.addEventListener("abort", onAbort, { once: true });

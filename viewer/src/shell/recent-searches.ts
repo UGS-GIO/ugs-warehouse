@@ -14,6 +14,14 @@ const NONE: RecentPick[] = [];
 // useSyncExternalStore needs the same array back until storage changes.
 let cache: { raw: string | null; picks: RecentPick[] } = { raw: null, picks: NONE };
 
+const isPick = (p: unknown): p is RecentPick => {
+  if (!p || typeof p !== "object") return false;
+  const r = p as Record<string, unknown>;
+  if (typeof r.label !== "string") return false;
+  return r.kind === "place" ? Array.isArray(r.bounds) && r.bounds.length === 4
+    : (r.kind === "layer" || r.kind === "publication") && typeof r.href === "string";
+};
+
 const keyOf = (p: RecentPick) => (p.kind === "place" ? `place:${p.label}` : `item:${p.href}`);
 
 export function getRecent(): RecentPick[] {
@@ -21,7 +29,10 @@ export function getRecent(): RecentPick[] {
   try { raw = localStorage.getItem(KEY); } catch { return NONE; }
   if (raw !== cache.raw) {
     let picks = NONE;
-    try { picks = raw ? (JSON.parse(raw) as RecentPick[]).slice(0, MAX) : NONE; } catch { /* corrupt */ }
+    try {
+      const parsed: unknown = raw ? JSON.parse(raw) : null;
+      if (Array.isArray(parsed)) picks = parsed.filter(isPick).slice(0, MAX);
+    } catch { /* corrupt */ }
     cache = { raw, picks };
   }
   return cache.picks;

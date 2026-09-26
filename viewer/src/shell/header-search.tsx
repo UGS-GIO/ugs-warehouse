@@ -16,16 +16,20 @@ type Group = { value: string; items: Row[] };
 const INPUT_ID = "header-search";
 const TRY = ["Moab", "faults", "landslides", "OFR-598"];
 
-// "/" focuses the search from anywhere, unless the key is being typed into a field.
-if (typeof window !== "undefined") {
-  window.addEventListener("keydown", (e) => {
-    if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
-    if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable='true']")) return;
-    const input = document.getElementById(INPUT_ID);
-    if (!input) return;
-    e.preventDefault();
-    input.focus();
-  });
+// "/" focuses the search from anywhere, unless the key is being typed into a field. The input's ref
+// adds the listener when it mounts and removes it when it unmounts.
+function onSlash(e: KeyboardEvent) {
+  if (e.key !== "/" || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable='true']")) return;
+  const input = document.getElementById(INPUT_ID);
+  if (!input) return;
+  e.preventDefault();
+  input.focus();
+}
+function bindSlash(el: HTMLInputElement | null) {
+  if (!el) return;
+  window.addEventListener("keydown", onSlash);
+  return () => window.removeEventListener("keydown", onSlash);
 }
 
 const itemRow = (hit: ItemHit): Row => ({ type: "item", key: hit.href, label: hit.label, sub: hit.sub, hit });
@@ -106,7 +110,7 @@ export function HeaderSearch({ items, loadKey, isLayer, onWarm, onPlace, onItem,
         <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
           <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
         </svg>
-        <Combobox.Input id={INPUT_ID} placeholder="Search places, layers and publications"
+        <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Search places, layers and publications"
           aria-label="Search places, layers and publications"
           onFocus={() => { if (!warm) { setWarm(true); onWarm(); } }}
           className="min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none" />

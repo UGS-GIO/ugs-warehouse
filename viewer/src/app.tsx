@@ -6,7 +6,10 @@ import { type CatalogDoc } from "./discover/search-index";
 import utahLogo from "./assets/utah-logo.png";
 import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/browse";
 import { layerCollectionIds } from "./catalog/catalog";
-import { type ActiveLayer, type Footprint, layerParam, parseLayerParam } from "./map/map-model";
+import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetParam } from "./map/map-model";
+import { flyTo, queueFocus } from "./map/camera";
+import type { Bounds } from "./map/place-locator";
+import { HeaderSearch } from "./shell/header-search";
 import { LegalFooter } from "./shell/legal-footer";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
@@ -33,7 +36,7 @@ const VIEW_PATH = {
   review: "/review",
 } satisfies Record<View, string>;
 const isView = (v: string): v is View => v !== "landing" && v in VIEW_PATH;
-export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[] };
+export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[]; sheet?: string };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
 // null when the item carries none of them — it isn't a layer.
@@ -157,7 +160,7 @@ function useViewState() {
         return {
           ...rest,
           ...discover,
-          sheet: next.view === "map" ? sheet : undefined,   // the map's own; it doesn't follow you out
+          sheet: next.view === "map" ? next.sheet ?? sheet : undefined,   // the map's own; it doesn't follow you out
           c: next.c || undefined,
           i: next.i || undefined,
           l: layerParam(next.l),
@@ -323,7 +326,9 @@ function useViewState() {
 
   // The Map, Discover AND Landing views load every leaf collection's index (all items → the map +
   // facets + the landing tiles/recent strip). Landing reuses this exact cached set — no extra fetch.
-  const mapColls = view === "map" || view === "discover" || view === "landing" ? leafColls : [];
+  // The header search needs the same set on any view, so focusing it loads them.
+  const [searchWarm, setSearchWarm] = useState(false);
+  const mapColls = view === "map" || view === "discover" || view === "landing" || searchWarm ? leafColls : [];
   const mapIdx = useIndexes(mapColls.map((c) => ({ id: c.id, href: c.href })));
   // Same collection.json → item-links fallback the browse list uses. Without it a federated
   // catalog contributes no layers at all: it publishes no items.json, so the index is empty and
@@ -439,6 +444,22 @@ function useViewState() {
   // the explicit set the add/remove controls manage; the implicit open-item fallback stays a
   // map-view rendering nicety, unaffected here.
   const addLayer = (id: string) => toggleLayers([id], true);
+  // Header search picks. Both land on the map: a place flies there; an item opens its detail, joins
+  // the layers when it draws as one, and the map zooms to it rather than to every layer.
+  const searchIsLayer = (r: ItemRef) => layerCollIds.includes(r.collId) || !!zarrAsset(r.data);
+  const pickPlace = (b: Bounds) => {
+    if (view === "map") flyTo(b);
+    else { queueFocus(b); go({ view: "map", l: layerIds, s: seriesSel }); }
+  };
+  const pickSearchItem = ({ href, bbox }: { href: string; bbox?: Bounds }) => {
+    const id = idOf(href);
+    const cur = layerIds ?? [];
+    const adds = !cur.includes(id) && drawsAsLayer(mapItems.find((r) => r.href === href)?.data);
+    if (bbox) { if (view === "map" && !adds) flyTo(bbox); else queueFocus(bbox); }
+    revealInfo.current?.();
+    go({ view: "map", c: collKeyOf(href), i: id, l: adds ? [id, ...cur] : layerIds, s: seriesSel,
+         sheet: sheetParam({ tab: "info", detent: 1 }) });
+  };
   const removeLayer = (id: string) => toggleLayers([id], false);
   const isActive = (id: string) => (layerIds ?? []).includes(id);
   // Commit a dragged draw-order back to ?l= (the whole active set stays shareable in the URL).
@@ -493,6 +514,7 @@ function useViewState() {
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
     catalogDocs, mapItems, mapLoadKey, mapItemsLoading,
+    setSearchWarm, searchIsLayer, pickPlace, pickSearchItem,
     openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, collectionId, collectionUrl, layerIds, seriesSel,
     rootChildren, cardsWithCovers, allItems, itemsLoading, leafColl, crumbs,
@@ -534,6 +556,9 @@ export function AppLayout() {
         </Link>
         {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
         <StacUrlChip url={CATALOG_URL} />
+        <HeaderSearch items={state.mapItems} loadKey={state.mapLoadKey} isLayer={state.searchIsLayer}
+          onWarm={() => state.setSearchWarm(true)} onPlace={state.pickPlace} onItem={state.pickSearchItem}
+          onSearchAll={(q) => state.openDiscoverSearch({ q })} />
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
               below md — five tabs and a phone don't share a row. */}

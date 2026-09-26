@@ -1,4 +1,8 @@
-from unittest.mock import patch
+import json
+import sqlite3
+from unittest.mock import MagicMock, patch
+
+import pytest
 
 from ugs_warehouse.pubs import geolmap_mosaics as gm
 from ugs_warehouse.pubs import identity
@@ -211,3 +215,109 @@ def test_vrt_order_puts_unparseable_years_at_the_bottom_and_breaks_ties_by_sid()
         "M-4": {"pub_year": "2022"},   # ties with M-1 -> broken by sid
     }
     assert gm._vrt_order(["M-1", "M-2", "M-3", "M-4"], by_sid) == ["M-2", "M-3", "M-1", "M-4"]
+
+
+def test_pack_tiles_to_mbtiles_flips_y_verbatim_and_skips_sidecars(tmp_path):
+    """The packer copies `gdal raster tile`'s XYZ tree into MBTiles byte-for-byte (no re-encode) and
+    flips y to TMS. Non-tile sidecars (.aux.xml) are skipped; metadata carries format/zoom/bounds so
+    `pmtiles convert` can read it."""
+    tiles = {(14, 3, 6): b"webp-A", (14, 3, 7): b"webp-B", (13, 1, 2): b"webp-C"}
+    for (z, x, y), blob in tiles.items():
+        d = tmp_path / "t" / str(z) / str(x)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / f"{y}.webp").write_bytes(blob)
+    (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")   # sidecar, must be skipped
+
+    mb = tmp_path / "out.mbtiles"
+    n, minz, maxz = gm._pack_tiles_to_mbtiles(
+        str(tmp_path / "t"), str(mb), bounds=[-114.0, 37.0, -109.0, 42.0], name="geologic-maps-24k")
+    assert (n, minz, maxz) == (3, 13, 14)
+
+    con = sqlite3.connect(str(mb))
+    rows = {(z, x, y): blob for z, x, y, blob in
+            con.execute("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles")}
+    meta = dict(con.execute("SELECT name, value FROM metadata"))
+    con.close()
+    # y flipped XYZ->TMS: (14,3,6) -> row 2^14-1-6, blob byte-identical
+    assert rows[(14, 3, (1 << 14) - 1 - 6)] == b"webp-A"
+    assert rows[(14, 3, (1 << 14) - 1 - 7)] == b"webp-B"
+    assert rows[(13, 1, (1 << 13) - 1 - 2)] == b"webp-C"
+    assert meta["format"] == "webp"
+    assert meta["minzoom"] == "13" and meta["maxzoom"] == "14"
+    assert meta["bounds"] == "-114.0,37.0,-109.0,42.0"
+
+
+def test_pack_tiles_to_mbtiles_raises_on_empty_tree(tmp_path):
+    (tmp_path / "empty").mkdir()
+    with pytest.raises(RuntimeError):
+        gm._pack_tiles_to_mbtiles(str(tmp_path / "empty"), str(tmp_path / "x.mbtiles"),
+                                  bounds=[-1, -1, 1, 1], name="x")
+
+
+def test_vrt_zoom_and_bounds_reads_zoom_and_real_extent():
+    """_vrt_zoom_and_bounds derives the native web-mercator zoom from the finest pixel size AND the
+    real [W,S,E,N] footprint from wgs84Extent, both from one gdalinfo -json. A realistic (non-exact)
+    resolution must still round to the right zoom — a real reprojected scan never lands exactly on a
+    zoom's pixel size."""
+    xres = (gm._WEBMERC_Z0_MPP / (2 ** 17)) * 1.02   # ~2% off exact z17 m/px -> must still round to 17
+    stdout = json.dumps({
+        "geoTransform": [0, xres, 0, 0, 0, -xres],
+        "wgs84Extent": {"type": "Polygon", "coordinates": [[
+            [-112.0, 39.0], [-111.5, 39.0], [-111.5, 39.4], [-112.0, 39.4], [-112.0, 39.0]]]},
+    })
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
+        zoom, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
+    assert zoom == 17
+    assert bounds == [-112.0, 39.0, -111.5, 39.4]
+
+
+def test_vrt_zoom_and_bounds_falls_back_to_utah_without_extent():
+    """A VRT that reports no wgs84Extent falls back to the statewide clip instead of crashing."""
+    xres = gm._WEBMERC_Z0_MPP / (2 ** 14)
+    stdout = json.dumps({"geoTransform": [0, xres, 0, 0, 0, -xres]})
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
+        zoom, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
+    assert zoom == 14
+    assert bounds == list(gm.UTAH_BBOX)
+
+
+def test_build_tier_tiling_argv_resampling_and_real_bounds():
+    """build_tier's `gdal raster tile` argv: -r nearest at/above the mosaic's native zoom (the aligned
+    masters copy through pixel-exact), -r average when a tier caps BELOW native; the full provisional
+    flag set is always passed (guards a silent typo on a GDAL bump); and the mosaic's REAL bounds
+    (not the statewide UTAH_BBOX) reach the packer."""
+    by_sid = {"M-1": {"pub_year": "2022"}}
+    extent = [-112.0, 39.0, -111.5, 39.4]
+    calls: list[list[str]] = []
+    captured: dict = {}
+
+    def rec(cmd, *a, **k):
+        calls.append(cmd)
+        return MagicMock(returncode=0, stdout="", stderr="")
+
+    def fake_pack(tiledir, mbtiles, *, bounds, name):
+        captured["bounds"] = bounds
+        return (10, min(gm.MOSAIC_MINZOOM, 17), 17)
+
+    def tile_argv(maxz):
+        calls.clear()
+        with patch.object(gm.subprocess, "run", side_effect=rec), \
+             patch.object(gm, "_vrt_zoom_and_bounds", return_value=(17, extent)), \
+             patch.object(gm, "_pack_tiles_to_mbtiles", side_effect=fake_pack), \
+             patch.object(gm.os.path, "getsize", return_value=1 << 20), \
+             patch.object(gm.os, "remove"), patch.object(gm.shutil, "rmtree"), \
+             patch.object(gm.gcs, "upload"):
+            gm.build_tier("24k", ["M-1"], by_sid, maxz=maxz, write_stac_item=False)
+        return next(c for c in calls if c[:3] == ["gdal", "raster", "tile"])
+
+    tile = tile_argv(17)
+    assert tile[tile.index("--resampling") + 1] == "nearest"          # at native
+    for flag in ("--overview-resampling", "--skip-blank", "--min-zoom", "--max-zoom", "-f", "--co"):
+        assert flag in tile, f"missing {flag}"
+    assert tile[tile.index("-f") + 1] == "WEBP"
+    assert tile[tile.index("--co") + 1] == f"QUALITY={gm.TILE_QUALITY}"
+    assert tile[tile.index("--max-zoom") + 1] == "17"
+    assert captured["bounds"] == extent                               # real footprint, not UTAH_BBOX
+
+    t12 = tile_argv(12)
+    assert t12[t12.index("--resampling") + 1] == "average"            # capped below native

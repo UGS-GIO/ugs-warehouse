@@ -2,6 +2,7 @@ import { Combobox } from "@base-ui/react/combobox";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import type { ItemRef } from "@/catalog/browse";
+import { setPin } from "@/map/camera";
 import { type Bounds, locate, suggest, type Suggestion } from "@/map/place-locator";
 import { buildCatalogSearch, type ItemHit } from "./header-search-model";
 import { addRecent, clearRecent, type RecentPick, useRecent } from "./recent-searches";
@@ -118,7 +119,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         {place.isError && <span className="text-xs text-destructive">place not found</span>}
         {q && (
           <button type="button" aria-label="Clear the search"
-            onClick={() => { setQ(""); document.getElementById(INPUT_ID)?.focus(); }}
+            onClick={() => { setQ(""); setPin(null); document.getElementById(INPUT_ID)?.focus(); }}
             className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
             <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>

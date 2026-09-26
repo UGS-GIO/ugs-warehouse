@@ -12,7 +12,7 @@ import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { UiSegmented } from "@/ui/segmented";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
-import { setFlyer, takeFocus } from "./camera";
+import { fitTo, setMapTarget, takeFocus } from "./camera";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -199,15 +199,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
   const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
   const fitBox = unionBbox(activeBoxes) ?? (item?.bbox?.slice(0, 4) as [number, number, number, number] | undefined);
-  const flyToBounds = ([w, s, e, n]: [number, number, number, number]) =>
-    mapRef.current?.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 14, duration: 800 });
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
     setPopup(null);
     // A search pick that also added a layer: zoom to the pick, not to every layer on the map.
     const focus = takeFocus();
-    if (focus) { honorCam.current = false; flyToBounds(focus); return; }
+    if (focus) { honorCam.current = false; fitTo(mapRef.current, focus); return; }
     if (honorCam.current) { honorCam.current = false; return; }
     const [w, s, e, n] = fitBox;
     mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
@@ -317,9 +315,9 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onMouseMove={onHover}
       onLoad={() => {
         setMapLoaded(true); reportBounds();
-        setFlyer((b) => { if (!mapRef.current) return false; flyToBounds(b); return true; });
+        setMapTarget(mapRef);
         const focus = takeFocus();
-        if (focus) flyToBounds(focus);
+        if (focus && mapRef.current) fitTo(mapRef.current, focus);
       }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
       onClick={onClick}

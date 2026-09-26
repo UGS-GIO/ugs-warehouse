@@ -1,18 +1,26 @@
+import type { MapRef } from "react-map-gl/maplibre";
 import type { Bounds } from "./place-locator";
 
-// How code outside the map (the header search) moves it. The mounted map registers a flyer on
-// load. A target set while no map can take it (the view is still switching to /map, or a layer is
-// being added and the map will re-fit) waits in `queued` until the map reads it.
-let flyer: ((b: Bounds) => boolean) | null = null;
+// How code outside the map (the header search) moves it. The map registers its ref object on load;
+// react-map-gl empties the ref on unmount, so nothing of an unmounted map stays reachable. A target
+// set while no map can take it (the view is still switching to /map, or a layer is being added and
+// the map will re-fit) waits in `queued` until the map reads it.
+let target: { current: MapRef | null } | null = null;
 let queued: Bounds | null = null;
 
-export function setFlyer(f: ((b: Bounds) => boolean) | null): void {
-  flyer = f;
+export function setMapTarget(ref: { current: MapRef | null }): void {
+  target = ref;
 }
 
-/** Fly now if a loaded map is there, else queue it for the next map that loads or re-fits. */
+export function fitTo(map: MapRef, [w, s, e, n]: Bounds): void {
+  map.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 14, duration: 800 });
+}
+
+/** Fly now if a map is mounted, else queue it for the next map that loads or re-fits. */
 export function flyTo(b: Bounds): void {
-  if (!flyer?.(b)) queued = b;
+  const map = target?.current;
+  if (map) fitTo(map, b);
+  else queued = b;
 }
 
 /** Queue a target for the map's next fit, which it takes instead of fitting its layers. */

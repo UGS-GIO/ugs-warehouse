@@ -40,6 +40,10 @@ DATAPHP = "https://geology.utah.gov/apps/pubs_landing/data.php"
 # Optional pre-built manifest (inventory.py); else fall back to data.php per series.
 MANIFEST = os.environ.get("GEOLMAP_MANIFEST", "")
 SKIP_EXISTING = os.environ.get("SKIP_EXISTING", "1") != "0"
+# CRS for source rasters that ship with no CRS or .prj, read from the published map collar.
+SOURCE_CRS = {
+    "OFR-598": "EPSG:26712",  # "Projection: UTM Zone 12 Datum: NAD 1927"
+}
 THUMBS = os.environ.get("THUMBS", "1") != "0"
 # deflate = lossless master: the plate is the archival source of truth (and re-tiled downstream
 # into the mosaic), so it must not be lossy — webp-lossy frays the fine linework. webp still selectable.
@@ -434,6 +438,10 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
         srs = _prj_srs(work)
         if srs:
             hlog(f"georef SRS from bundle .prj: {srs}", step="georef")
+    if not srs:
+        srs = SOURCE_CRS.get(_series_ctx.get())
+        if srs:
+            hlog(f"georef SRS from SOURCE_CRS: {srs}", step="georef")
     if not (wf and srs):
         hlog(f"WARN georef sidecars missing (wf={bool(wf)} srs={bool(srs)}) "
              f"for {os.path.basename(gtif)}", step="georef", level="WARNING")
@@ -446,7 +454,9 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
     xml = open(vrt).read()
     import html
     escaped_srs = html.escape(srs)
-    xml = re.sub(r"<SRS[^>]*>.*?</SRS>", f"<SRS>{escaped_srs}</SRS>", xml, flags=re.S)
+    srs_el = f"<SRS>{escaped_srs}</SRS>"
+    xml = (re.sub(r"<SRS[^>]*>.*?</SRS>", srs_el, xml, flags=re.S)
+           if "<SRS" in xml else xml.replace("</VRTDataset>", srs_el + "</VRTDataset>"))
     gtx = "<GeoTransform>%.12g, %.12g, %.12g, %.12g, %.12g, %.12g</GeoTransform>" % gt
     xml = (re.sub(r"<GeoTransform>.*?</GeoTransform>", gtx, xml, flags=re.S)
            if "<GeoTransform>" in xml else xml.replace("</VRTDataset>", gtx + "</VRTDataset>"))
@@ -887,6 +897,11 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
             hlog("FAIL no plate (had a bundle but no usable raster)", step="plate",
                  level="ERROR", category="attention", err=True)
             return "fail:noplate"
+        # gdalwarp copies coordinates unchanged from a source with no CRS, then labels them 3857.
+        if _is_unreferenced(plate):
+            hlog("FAIL plate has no usable CRS", step="georef",
+                 level="ERROR", category="attention", err=True)
+            return "fail:nocrs"
 
         # Every COG is 8-bit: WEBP needs it, the mosaic VRT keeps only sources matching the first one's
         # type, and browsers draw 16-bit plates almost black.

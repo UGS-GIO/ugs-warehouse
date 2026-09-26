@@ -100,7 +100,9 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
       filter={null}
       value={null}
       inputValue={q}
-      onInputValueChange={setQ}
+      // Only typing and picking change the text. Closing the list (Esc, a click on the map) would
+      // otherwise reset it, since the box never holds a selected value.
+      onInputValueChange={(v, d) => { if (d.reason === "input-change" || d.reason === "item-press") setQ(v); }}
       onValueChange={(row) => { if (row) pick(row); }}
       itemToStringLabel={(row) => row.label}
     >
@@ -111,7 +113,8 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Search places, layers and publications" title="Press / to search"
           aria-label="Search places, layers and publications"
           className="min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none" />
-        {busy && <span className="text-xs text-muted-foreground" aria-hidden="true">…</span>}
+        {busy && <span role="status" aria-label="Searching"
+          className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-primary" />}
         {place.isError && <span className="text-xs text-destructive">place not found</span>}
         {q && (
           <button type="button" aria-label="Clear the search"

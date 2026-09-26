@@ -104,8 +104,10 @@ def test_source_crs_georeferences_a_plate_with_only_a_world_file(tmp_path, monke
     (tmp_path / "plate.tfw").write_text("5\n0\n0\n-5\n245681\n4654971\n")
     monkeypatch.setitem(harvest.SOURCE_CRS, "OFR-TEST", "EPSG:26712")
     monkeypatch.setattr(harvest, "run", lambda cmd: __import__("subprocess").run(cmd, check=True))
-    harvest._series_ctx.set("OFR-TEST")
-
-    with rasterio.open(harvest.corrected_georef(str(tif), str(tmp_path))) as ds:
-        assert ds.crs.to_epsg() == 26712
-        assert ds.bounds.left == pytest.approx(245678.5)
+    token = harvest._series_ctx.set("OFR-TEST")
+    try:
+        with rasterio.open(harvest.corrected_georef(str(tif), str(tmp_path))) as ds:
+            assert ds.crs.to_epsg() == 26712
+            assert ds.bounds.left == pytest.approx(245678.5)
+    finally:
+        harvest._series_ctx.reset(token)

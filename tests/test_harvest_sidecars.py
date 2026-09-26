@@ -94,6 +94,7 @@ def test_sidecar_does_not_match_a_prefix(monkeypatch):
 
 
 def test_source_crs_georeferences_a_plate_with_only_a_world_file(tmp_path, monkeypatch):
+    pytest.importorskip("rasterio")
     import numpy as np
     import rasterio
 

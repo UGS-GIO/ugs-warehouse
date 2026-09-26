@@ -644,6 +644,7 @@ def test_cog_zoom_strategy_reaches_lzw_fallback(monkeypatch, tmp_path):
     assert calls[1]["zoom_level_strategy"] == "upper"  # the lzw retry carries the strategy too
 
 
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
 def test_harvest_attempt_fails_on_a_plate_without_crs(monkeypatch, tmp_path):
     import numpy as np
     import rasterio

@@ -59,7 +59,6 @@ export function HeaderSearch({ items, loadKey, isLayer, onWarm, onPlace, onItem,
     queryKey: ["place-suggest", text],
     queryFn: ({ signal }) => suggest(text, signal),
     enabled: text.length >= 2,
-    placeholderData: keepPreviousData,
     staleTime: Infinity,
   });
   const place = useMutation({

@@ -14,9 +14,10 @@ const wait = (ms: number, signal: AbortSignal) => new Promise<void>((resolve, re
 // ArcGIS reports some failures as a 200 with an `error` body.
 async function read(r: Response, what: string): Promise<Record<string, unknown>> {
   if (!r.ok) throw new Error(`${what} ${r.status}`);
-  const body = await r.json();
-  if (body?.error) throw new Error(`${what}: ${body.error.message ?? "service error"}`);
-  return body;
+  const body: unknown = await r.json();
+  if (!body || typeof body !== "object") throw new Error(`${what}: unexpected response`);
+  if ("error" in body && body.error) throw new Error(`${what}: ${(body.error as { message?: string }).message ?? "service error"}`);
+  return body as Record<string, unknown>;
 }
 
 export async function suggest(text: string, signal: AbortSignal): Promise<Suggestion[]> {

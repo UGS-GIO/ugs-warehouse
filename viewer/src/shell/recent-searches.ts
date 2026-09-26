@@ -52,9 +52,12 @@ export function addRecent(pick: RecentPick): void {
 
 export const clearRecent = (): void => save([]);
 
+// Other tabs change the list through the storage event; this tab's own writes go through save().
 function subscribe(fn: () => void) {
+  const onStorage = (e: StorageEvent) => { if (e.key === KEY || e.key === null) fn(); };
   listeners.add(fn);
-  return () => { listeners.delete(fn); };
+  window.addEventListener("storage", onStorage);
+  return () => { listeners.delete(fn); window.removeEventListener("storage", onStorage); };
 }
 
 export const useRecent = (): RecentPick[] => useSyncExternalStore(subscribe, getRecent, () => NONE);

@@ -1060,6 +1060,7 @@ def test_units_only_extracts_the_units_and_picks_no_plate(monkeypatch, tmp_path)
     render.assert_not_called()
 
 
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
 def test_harvest_attempt_fails_on_a_plate_without_crs(monkeypatch, tmp_path):
     import numpy as np
     import rasterio

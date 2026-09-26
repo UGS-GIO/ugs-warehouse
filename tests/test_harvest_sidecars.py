@@ -120,6 +120,7 @@ def test_aux_srs_none_without_a_usable_wkt(tmp_path):
 
 
 def test_source_crs_georeferences_a_plate_with_only_a_world_file(tmp_path, monkeypatch):
+    pytest.importorskip("rasterio")
     import numpy as np
     import rasterio
 

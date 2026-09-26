@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, catalogItemHref, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, relatedJoins } from "./stac";
+import { assetUsages, catalogItemHref, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -180,5 +180,17 @@ describe("catalogItemHref", () => {
   it("leaves a foreign (non-catalog) href as a direct link", () => {
     const foreign = "https://ubm-assets.geology.utah.gov/stac/ubm-x/item/item.json";
     expect(catalogItemHref(foreign)).toBe(foreign);
+  });
+});
+
+describe("rasterTilesAsset", () => {
+  const pm = (extra: Record<string, unknown>) => ({ href: "https://x/a.pmtiles", type: "application/vnd.pmtiles", roles: ["visual"], ...extra });
+  it("finds the raster mosaic by its ugs:render mark", () => {
+    const d: StacDoc = { assets: { tiles: pm({ "ugs:render": "raster" }) } };
+    expect(rasterTilesAsset(d)?.href).toBe("https://x/a.pmtiles");
+  });
+  it("leaves a vector layer's visual PMTiles alone", () => {
+    const d: StacDoc = { assets: { pmtiles: pm({}) } };
+    expect(rasterTilesAsset(d)).toBeUndefined();
   });
 });

@@ -7,7 +7,7 @@ import utahLogo from "./assets/utah-logo.png";
 import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/browse";
 import { layerCollectionIds } from "./catalog/catalog";
 import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetParam } from "./map/map-model";
-import { flyTo, queueFocus } from "./map/camera";
+import { flyTo, queueFocus, setPin } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
 import { MapSearch } from "./shell/map-search";
 import { useIsDesktop } from "./ui/use-breakpoint";
@@ -147,6 +147,7 @@ function useViewState() {
   // (q/collections/category/…) are stripped when leaving Discover so its filters don't linger on
   // another view, and preserved when staying in Discover (open/close a drawer over the filtered set).
   const go = (next: Nav, push = true) => {
+    if (next.view !== "map") setPin(null);   // the search's place pin belongs to this map visit
     navigate({
       to: VIEW_PATH[next.view],
       replace: !push,
@@ -446,11 +447,13 @@ function useViewState() {
   // Header search picks. Both land on the map: a place flies there; an item opens its detail, joins
   // the layers when it draws as one, and the map zooms to it rather than to every layer.
   const searchIsLayer = (r: ItemRef) => layerCollIds.includes(r.collId) || !!zarrAsset(r.data);
-  const pickPlace = (b: Bounds) => {
+  const pickPlace = (b: Bounds, label: string) => {
+    setPin({ lng: (b[0] + b[2]) / 2, lat: (b[1] + b[3]) / 2, label });
     if (view === "map") flyTo(b);
     else { queueFocus(b); go({ view: "map", l: layerIds, s: seriesSel }); }
   };
   const pickSearchItem = ({ href, bbox }: { href: string; bbox?: Bounds }) => {
+    setPin(null);   // an item marks itself with its footprint
     const id = idOf(href);
     const cur = layerIds ?? [];
     const adds = !cur.includes(id) && drawsAsLayer(mapItems.find((r) => r.href === href)?.data);

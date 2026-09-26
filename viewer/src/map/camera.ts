@@ -1,3 +1,4 @@
+import { useSyncExternalStore } from "react";
 import type { MapRef } from "react-map-gl/maplibre";
 import type { Bounds } from "./place-locator";
 
@@ -33,3 +34,20 @@ export function takeFocus(): Bounds | null {
   queued = null;
   return b;
 }
+
+// The pin a place pick leaves on the map, so the spot the map flew to stays marked.
+export type Pin = { lng: number; lat: number; label: string };
+let pin: Pin | null = null;
+const pinListeners = new Set<() => void>();
+
+export function setPin(next: Pin | null): void {
+  pin = next;
+  pinListeners.forEach((fn) => fn());
+}
+
+function subscribePin(fn: () => void) {
+  pinListeners.add(fn);
+  return () => { pinListeners.delete(fn); };
+}
+
+export const usePin = (): Pin | null => useSyncExternalStore(subscribePin, () => pin, () => null);

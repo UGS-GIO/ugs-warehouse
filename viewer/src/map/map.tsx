@@ -4,7 +4,7 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useQuery } from "@tanstack/react-query";
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
-import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Marker, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
@@ -12,7 +12,7 @@ import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { UiSegmented } from "@/ui/segmented";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
-import { fitTo, setMapTarget, takeFocus } from "./camera";
+import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -111,9 +111,11 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
 }
 
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
-  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, search }: {
+  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, search,
+  showPin = false }: {
   item?: StacDoc; layers: ActiveLayer[];
   search?: ReactNode;   // drawn in the top-left corner (the desktop map search)
+  showPin?: boolean;    // the map view shows the search's place pin; Discover's map does not
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
   // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
   // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
@@ -131,6 +133,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   coverageDefault?: boolean;
 }) {
   const mapRef = useRef<MapRef>(null);
+  const pin = usePin();
+  const shownPin = showPin ? pin : null;
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
@@ -324,6 +328,21 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onClick={onClick}
     >
       {search && <MapControl position="top-left">{search}</MapControl>}
+      {shownPin && (
+        <Marker longitude={shownPin.lng} latitude={shownPin.lat} anchor="bottom">
+          <div className="flex flex-col items-center">
+            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground shadow">
+              {shownPin.label}
+              <button type="button" aria-label="Remove the pin" onClick={() => setPin(null)}
+                className="text-muted-foreground hover:text-foreground">×</button>
+            </span>
+            <svg aria-hidden="true" width="26" height="34" viewBox="0 0 24 32" className="text-primary drop-shadow">
+              <path fill="currentColor" stroke="white" strokeWidth="1.5" d="M12 1C6 1 1.5 5.5 1.5 11.3 1.5 19 12 31 12 31s10.5-12 10.5-19.7C22.5 5.5 18 1 12 1z" />
+              <circle cx="12" cy="11.5" r="4" fill="white" />
+            </svg>
+          </div>
+        </Marker>
+      )}
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
       <MapControl position="top-right" className="flex gap-1 text-xs">

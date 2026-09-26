@@ -38,7 +38,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
   items: ItemRef[];
   loadKey: string;
   isLayer: (r: ItemRef) => boolean;
-  onPlace: (b: Bounds) => void;
+  onPlace: (b: Bounds, label: string) => void;
   onItem: (hit: { href: string; bbox?: Bounds }) => void;
   onSearchAll: (q: string) => void;
   className?: string;
@@ -62,7 +62,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
   });
   const place = useMutation({
     mutationFn: locate,
-    onSuccess: (bounds, s) => { addRecent({ kind: "place", label: s.text, bounds }); onPlace(bounds); },
+    onSuccess: (bounds, s) => { addRecent({ kind: "place", label: s.text, bounds }); onPlace(bounds, s.text); },
   });
 
   const found = text.length >= 2 ? catalog.data?.(text) : undefined;
@@ -90,7 +90,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
     if (row.type === "place") place.mutate(row.place);
     else if (row.type === "item") pickItem(row.hit);
     else if (row.type === "try") setQ(row.label);
-    else if (row.pick.kind === "place") { addRecent(row.pick); onPlace(row.pick.bounds); }
+    else if (row.pick.kind === "place") { addRecent(row.pick); onPlace(row.pick.bounds, row.pick.label); }
     else { addRecent(row.pick); onItem(row.pick); }
   };
 

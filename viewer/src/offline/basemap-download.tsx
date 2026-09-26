@@ -100,7 +100,7 @@ export function BasemapDownload({ bbox, onSaveArea }: {
   // A panel section, not map chrome: it used to float over the map and covered the controls
   // there. Same heading style as the layer panel's other sections.
   const section = (body: React.ReactNode) => (
-    <section className="flex flex-col gap-1">
+    <section className="mb-3 flex flex-col gap-1">
       <div className="px-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">Offline basemap</div>
       <div className="flex flex-wrap items-center gap-1.5 px-1.5">{body}</div>
     </section>

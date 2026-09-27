@@ -1,6 +1,6 @@
 # Design: Aspatial tables as first-class STAC Items, with a uniform relationship model
 
-- **Jira:** TBD (proposed; related to the grouping/relationships thread ALL-5557 and the OGC-API-Features question)
+- **Jira:** ALL-6049 (umbrella: decision + rollout; GH issue #413, under epic ALL-3865). Relates: ALL-5913 (superseded conclusion), ALL-5922, ALL-5550, ALL-5557, ALL-5837, ALL-5861 (builder-ownership dependency).
 - **Related:** ALL-5550 / ALL-5557 (canonical dataset+grouping model, in progress), ALL-5837 (land-raw+curate re-arch, GeMS target, in progress), ALL-5911 (geomap corpus load, parent task, in progress), ALL-5913 (companion tables shipped as STAC **assets**, Done — its item-model conclusion is superseded here), ALL-5922 (scale-tier whole/members + `derived_from`, Done — extended here), warehouse #347 / #348 (the bugs this grew from). See §9 for how they reconcile.
 - **Date:** 2026-09-26
 - **Status:** Draft for review

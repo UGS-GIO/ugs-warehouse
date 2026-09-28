@@ -11,10 +11,12 @@ import { flyTo, queueFocus, setPin } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
 import { MapSearch } from "./shell/map-search";
 import { LegalFooter } from "./shell/legal-footer";
+import { SavingNotice } from "./offline/saving-notice";
+import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
@@ -27,20 +29,20 @@ export { idOf } from "./stac";
 
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review";
+export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review" | "offline";
 // `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
 // route tree — a computed `/${view}` string would not, which is what the old cast papered over.
 const VIEW_PATH = {
   landing: "/", catalog: "/catalog", map: "/map", discover: "/discover", arch: "/arch",
   guide: "/guide", developers: "/developers", preview: "/preview",
-  review: "/review",
+  review: "/review", offline: "/offline",
 } satisfies Record<View, string>;
 const isView = (v: string): v is View => v !== "landing" && v in VIEW_PATH;
 export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[]; sheet?: string };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
 // null when the item carries none of them — it isn't a layer.
-function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
+export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   if (!ref?.data) return null;
   const id = idOf(ref.href);
   const title = String(ref.data.properties?.title ?? id);
@@ -49,6 +51,7 @@ function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
     return {
       id, title,
       pmHref: pm.href,
+      tableHref: parquetAsset(ref.data)?.href,
       pmLayer: pm["pmtiles:layers"]?.[0] ?? id,
       bbox: ref.data.bbox,
       styleUrl: defaultStyleUrl(ref.data),
@@ -88,6 +91,7 @@ const OVERFLOW_VIEWS: { id: View; label: string }[] = [
   { id: "arch", label: "Architecture" },
   { id: "guide", label: "Guide" },
   { id: "developers", label: "Developers" },
+  { id: "offline", label: "Offline data" },
   ...(IS_REVIEW ? [{ id: "review" as const, label: "Review" }] : []),
 ];
 
@@ -328,7 +332,9 @@ function useViewState() {
 
   // The Map, Discover AND Landing views load every leaf collection's index (all items → the map +
   // facets + the landing tiles/recent strip). Landing reuses this exact cached set — no extra fetch.
-  const mapColls = view === "map" || view === "discover" || view === "landing" ? leafColls : [];
+  // Offline data needs it too, to name what is saved; it is the same cached set.
+  const mapColls = view === "map" || view === "discover" || view === "landing" || view === "offline"
+    ? leafColls : [];
   const mapIdx = useIndexes(mapColls.map((c) => ({ id: c.id, href: c.href })));
   // Same collection.json → item-links fallback the browse list uses. Without it a federated
   // catalog contributes no layers at all: it publishes no items.json, so the index is empty and
@@ -580,6 +586,7 @@ export function AppLayout() {
             ))}
           </div>
           <DataSaverBadge />
+          <OfflineBadge />
           {IS_REVIEW && <NotifBell onClick={() => setView("review")} />}
           {/* Always mounted: it carries the theme picker + the overflow views, and below md the
               primary tabs as well. */}
@@ -594,6 +601,7 @@ export function AppLayout() {
       <Suspense fallback={<div className="flex items-center justify-center p-16 text-sm text-muted-foreground">Loading…</div>}>
       <ViewContext.Provider value={state}>
         <Outlet />
+        <SavingNotice />
       </ViewContext.Provider>
       </Suspense>
       {!lockedView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}

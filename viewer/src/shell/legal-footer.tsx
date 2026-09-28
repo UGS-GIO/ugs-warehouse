@@ -1,6 +1,7 @@
 // The state's required links as one line. Replaces the Design System's own footer, which is 269px
-// of stacked links — most of a phone's map (index.css hides it).
-const LINKS = [
+// of stacked links — most of a phone's map (index.css hides it). Desktop only: on a phone the same
+// links live in the app menu (nav-menu.tsx), so no screen space goes to them.
+export const LEGAL_LINKS = [
   { href: "https://www.utah.gov/index.html", label: "Utah.gov Home" },
   { href: "https://www.utah.gov/support/disclaimer.html", label: "Terms of Use" },
   { href: "https://www.utah.gov/support/privacypolicy.html", label: "Privacy Policy" },
@@ -9,9 +10,9 @@ const LINKS = [
 
 export function LegalFooter({ className = "", catalogUrl }: { className?: string; catalogUrl?: string }) {
   return (
-    <footer className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground ${className}`}>
+    <footer className={`hidden flex-wrap items-center gap-x-3 gap-y-1 border-t border-border px-3 py-1.5 text-xs text-muted-foreground md:flex ${className}`}>
       <span>An official website of the state of Utah · © state of Utah</span>
-      {LINKS.map((l) => (
+      {LEGAL_LINKS.map((l) => (
         <a key={l.label} href={l.href} target="_blank" rel="noreferrer" className="hover:text-foreground hover:underline">
           {l.label}
         </a>

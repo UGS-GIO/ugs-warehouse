@@ -50,9 +50,10 @@ export function boundsOf(item: StacDoc | undefined): [[number, number], [number,
 
 // Map feature-click → table selection. The nonce bumps on every click so re-clicking the SAME
 // feature id still re-fires the downstream table effect (a bare id wouldn't change, so it wouldn't).
-export type MapPick = { id: number; nonce: number };
-export function nextPick(prev: MapPick | null, id: number): MapPick {
-  return { id, nonce: (prev?.nonce ?? 0) + 1 };
+// `props` are the tile feature's attributes, checked against the row the id finds (lib/same-feature).
+export type MapPick = { id: number; nonce: number; props?: Record<string, unknown> };
+export function nextPick(prev: MapPick | null, id: number, props?: Record<string, unknown>): MapPick {
+  return { id, nonce: (prev?.nonce ?? 0) + 1, props };
 }
 
 // Mobile sheet snap points, as a fraction of the map area: peek / half / full.
@@ -113,7 +114,10 @@ export function clampSize(n: number, min: number, max: number, fallback: number)
 // so the map re-flies on every distinct pick, even two features at the same lat/lon (identical
 // bbox). `featureId` is the feature to outline via setFeatureState on the PMTiles tile (the exact
 // geometry is already on the map, so nothing is read from the parquet). `bbox` drives the fly.
-export type FocusSel = { bbox?: [number, number, number, number]; featureId?: number; key?: string | number };
+export type FocusSel = {
+  bbox?: [number, number, number, number]; featureId?: number; key?: string | number;
+  props?: Record<string, unknown>;   // the row's attributes, checked against the tile feature
+};
 
 // A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
 // layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
@@ -121,6 +125,7 @@ export type FocusSel = { bbox?: [number, number, number, number]; featureId?: nu
 export type ActiveLayer = {
   id: string; title: string; bbox?: number[];
   pmHref?: string; pmLayer?: string; styleUrl?: string;
+  tableHref?: string;   // the layer's GeoParquet, for saving its table offline
   cogHref?: string;
   rasterPmHref?: string;
   // Zarr datacube — one object, because the store is useless without the variable and the dims to

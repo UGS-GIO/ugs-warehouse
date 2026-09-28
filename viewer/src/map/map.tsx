@@ -4,8 +4,12 @@ import maplibregl from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useQuery } from "@tanstack/react-query";
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
-import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Marker, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { GeolocateControl, Layer, NavigationControl, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Marker, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
+import { BLANK_STYLE } from "@/offline/basemap";
+import { type Flavor, GLYPHS, protomapsStyle } from "./basemap-style";
+import { basemapProtocol } from "@/offline/basemap-protocol";
+import * as offlineStore from "@/offline/store";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
@@ -17,6 +21,7 @@ import streetsThumb from "@/assets/basemaps/streets.webp";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+import { useIsDesktop } from "@/ui/use-breakpoint";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
 const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
@@ -38,9 +43,7 @@ function writeCam({ longitude, latitude, zoom }: Cam): void {
   history.replaceState(null, "", `${location.pathname}?${p}`);
 }
 
-const ofm = (s: string) => `https://tiles.openfreemap.org/styles/${s}`;
-// Ours, so it names glyphs itself (the OpenFreeMap basemaps bring their own) — else no labels (#116).
-const GLYPHS = "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf";
+// Names glyphs itself, so data-layer labels still draw over imagery — else no labels (#116).
 const SATELLITE: maplibregl.StyleSpecification = {
   version: 8,
   glyphs: GLYPHS,
@@ -48,34 +51,34 @@ const SATELLITE: maplibregl.StyleSpecification = {
   layers: [{ id: "sat", type: "raster", source: "sat" }],
 };
 const BASEMAPS = {
-  Streets: ofm("liberty"), Light: ofm("positron"), Satellite: SATELLITE,
-} satisfies Record<string, string | maplibregl.StyleSpecification>;
+  Streets: "light", Light: "white", Satellite: SATELLITE,
+} satisfies Record<string, Flavor | maplibregl.StyleSpecification>;
 type BasemapId = keyof typeof BASEMAPS;
 
-const isStyle = (v: unknown): v is maplibregl.StyleSpecification =>
-  typeof v === "object" && v !== null && "version" in v && v.version === 8
-  && "sources" in v && typeof v.sources === "object" && "layers" in v && Array.isArray(v.layers);
-
-/**
- * Streets without OpenFreeMap's Natural Earth relief: raster tiles of about 300 KB each (six of
- * them made up most of a first map load) that fade to 10% by zoom 6, which is where a view of Utah
- * sits. Everything else in the style is vector, so the map keeps its land cover, water and roads.
- * Falls back to the style as published if it cannot be read.
- */
-async function streetsWithoutRelief(): Promise<maplibregl.StyleSpecification | string> {
-  const url = ofm("liberty");
-  const r = await fetch(url).catch(() => null);
-  // A body that is not JSON falls back too: a failed query would leave the map on EMPTY_STYLE.
-  const style: unknown = r?.ok ? await r.json().catch(() => null) : null;
-  if (!isStyle(style)) return url;
-  const sources = Object.fromEntries(Object.entries(style.sources).filter(([id]) => id !== "ne2_shaded"));
-  return { ...style, sources, layers: style.layers.filter((l) => !("source" in l && l.source === "ne2_shaded")) };
-}
-
-// Glyphs too, so a labelled overlay added before Streets arrives is not refused.
-const EMPTY_STYLE: maplibregl.StyleSpecification = { version: 8, glyphs: GLYPHS, sources: {}, layers: [] };
 const BASEMAP_IDS = Object.keys(BASEMAPS) as BasemapId[];
 const BASEMAP_THUMBS: Record<BasemapId, string> = { Streets: streetsThumb, Light: lightThumb, Satellite: satelliteThumb };
+
+let basemapProtocolReady = false;
+
+// Streets and Light read through basemap:// (offline/basemap-protocol.ts), so a saved archive draws
+// from disk. The protocol has to know what is on disk before the map asks for its first tile, so
+// the style waits for the store's first read.
+function useBasemapStyle(id: BasemapId) {
+  return useQuery({
+    queryKey: qk.basemapStyle(id),
+    queryFn: async (): Promise<maplibregl.StyleSpecification> => {
+      const spec = BASEMAPS[id];
+      if (typeof spec !== "string") return spec;
+      if (!basemapProtocolReady) {
+        basemapProtocolReady = true;
+        maplibregl.addProtocol("basemap", basemapProtocol);
+      }
+      await offlineStore.whenReady();
+      return protomapsStyle(spec);
+    },
+    staleTime: Infinity,
+  });
+}
 
 // The footprint "Open item →" popup is the only popup left on the map — a data-feature click docks
 // its detail instead (see SelectedFeature/onSelectFeature below), so this never carries feature props.
@@ -116,10 +119,12 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
 
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, search,
-  showPin = false }: {
+  showPin = false, onPickAt }: {
   item?: StacDoc; layers: ActiveLayer[];
   search?: ReactNode;   // drawn in the top-left corner (the desktop map search)
   showPin?: boolean;    // the map view shows the search's place pin; Discover's map does not
+  // "What's here" at a point: a long press on phones, a right-click on desktop. Optional.
+  onPickAt?: (lon: number, lat: number, zoom: number) => void;
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
   // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
   // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
@@ -147,11 +152,32 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // Scoped to the shown item.
   const [hlGeom, setHlGeom] = usePerItem<GeoJSON.Geometry | null>(item?.id ?? "", null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
-  const { data: streets } = useQuery({ queryKey: ["basemap", "streets-no-relief"], queryFn: streetsWithoutRelief, staleTime: Infinity });
+  const basemapStyle = useBasemapStyle(basemap);
+  const isDesktop = useIsDesktop();
+  // What's-here gestures, without an effect: refs hold the press in progress.
+  //  - Touch: a timer. iOS Safari never fires contextmenu on a long press, so a timer is the one
+  //    method that works on every phone. Holding arms it (with a short buzz where the phone can);
+  //    LIFTING opens it. Opening while the finger is still down let the lift land on the picker's
+  //    new backdrop as a tap outside, which closed it again at once. Panning cancels.
+  //  - Mouse: open on right-button UP without movement. Opening on contextmenu would fire at the
+  //    start of every right-drag rotation on macOS and Linux, where it arrives on mousedown.
+  const press = useRef<{
+    timer?: ReturnType<typeof setTimeout>; x: number; y: number; lng?: number; lat?: number; armed?: boolean;
+  } | null>(null);
+  const cancelPress = () => { clearTimeout(press.current?.timer); press.current = null; };
+  const moved = (x: number, y: number) => !!press.current && Math.hypot(x - press.current.x, y - press.current.y) > 8;
+  // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
+  // when it flips, so a twist gesture's stream of rotate events does not re-render the map each frame.
+  const [offNorth, setOffNorth] = useState(false);
+  const trackNorth = ({ viewState: v }: ViewStateChangeEvent) => {
+    const off = Math.abs(v.bearing) > 0.5 || v.pitch > 0.5;
+    if (off !== offNorth) setOffNorth(off);
+  };
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
   const highlight = validBbox(highlightBbox);
-  // Report the viewport bbox on load + after every move, for the panel's "Search this area".
+  // Report the viewport bbox on load + after every move: for Discover's "Search this area", and
+  // for the map view's "Save basemap" panel, which downloads the quads in view.
   const reportBounds = () => {
     const m = mapRef.current?.getMap();
     if (!m || !onBoundsChange) return;
@@ -315,7 +341,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       ref={mapRef}
       mapLib={maplibregl}
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
-      mapStyle={basemap === "Streets" ? streets ?? EMPTY_STYLE : BASEMAPS[basemap]}
+      mapStyle={basemapStyle.data ?? BLANK_STYLE}
       style={{ width: "100%", height: "100%" }}
       interactiveLayerIds={allInteractiveIds}
       cursor={cursor}
@@ -329,7 +355,34 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         if (focus && mapRef.current) fitTo(mapRef.current, focus);
       }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
+      onRotate={trackNorth}
+      onPitch={trackNorth}
       onClick={onClick}
+      onTouchStart={(e) => {
+        if (!onPickAt || e.originalEvent.touches.length !== 1) return cancelPress();
+        const p = { x: e.point.x, y: e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat, armed: false };
+        press.current = { ...p, timer: setTimeout(() => {
+          if (press.current) press.current.armed = true;
+          navigator.vibrate?.(15);
+        }, 550) };
+      }}
+      onTouchMove={(e) => { if (moved(e.point.x, e.point.y)) cancelPress(); }}
+      onTouchEnd={(e) => {
+        const p = press.current;
+        cancelPress();
+        if (!p?.armed || p.lng === undefined || p.lat === undefined) return;
+        // Swallow the click the browser synthesises after a touch: it would land on the picker
+        // that just opened under the finger and toggle whichever row is there.
+        e.originalEvent.preventDefault();
+        onPickAt?.(p.lng, p.lat, mapRef.current?.getZoom() ?? 12);
+      }}
+      onMouseDown={(e) => { if (e.originalEvent.button === 2) press.current = { x: e.point.x, y: e.point.y }; }}
+      onMouseUp={(e) => {
+        if (e.originalEvent.button !== 2 || !press.current) return;
+        const still = !moved(e.point.x, e.point.y);
+        press.current = null;
+        if (still) onPickAt?.(e.lngLat.lng, e.lngLat.lat, mapRef.current?.getZoom() ?? 12);
+      }}
     >
       {search && <MapControl position="top-left">{search}</MapControl>}
       {shownPin && (
@@ -359,11 +412,17 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         )}
       </MapControl>
 
+      {/* Phones follow the Google/Apple Maps layout. Locate goes bottom-right, in thumb reach: it is
+          the control used most in the field, and top-right is the hardest spot to reach one-handed.
+          (MapLibre stacks bottom controls upward, so it sits just above the attribution.) The compass
+          stays top-right and appears only off north-up, where it earns its space; a tap resets
+          bearing and pitch. No +/-: phones pinch to zoom. */}
       <MapControl position="top-right">
         <BasemapMenu value={basemap} onValueChange={setBasemap} items={BASEMAP_IDS} thumbs={BASEMAP_THUMBS} />
       </MapControl>
-      <GeolocateControl position="top-right" trackUserLocation
+      <GeolocateControl position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
         positionOptions={{ enableHighAccuracy: true }} />
+      {!isDesktop && offNorth && <NavigationControl position="top-right" showZoom={false} visualizePitch />}
 
       {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
           them all. */}

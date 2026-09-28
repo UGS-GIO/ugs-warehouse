@@ -5,10 +5,10 @@ import { describe, expect, it } from "vitest";
 
 // The route tree is GENERATED from src/routes/ by @tanstack/router-plugin, so nothing in the app
 // imports a route by name — delete a route file and the app still builds, just without that URL.
-// These are the ten the nav, the docs and the Firebase rewrites (firebase.json) all assume exist.
+// These are the eleven the nav, the docs and the Firebase rewrites (firebase.json) all assume exist.
 // /search folded into Discover — one search box, articles as their own result group.
 const EXPECTED = ["/", "/arch", "/catalog", "/developers", "/discover",
-                  "/guide", "/map", "/preview", "/review"];
+                  "/guide", "/map", "/offline", "/preview", "/review"];
 
 const routeDir = fileURLToPath(new URL("./routes", import.meta.url));
 

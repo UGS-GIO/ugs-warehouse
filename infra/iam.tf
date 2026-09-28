@@ -116,6 +116,13 @@ resource "google_service_account_iam_member" "deploy_can_actas_preview_trigger_s
   member             = "serviceAccount:${var.deploy_service_account}"
 }
 
+resource "google_service_account_iam_member" "deploy_can_actas_ci_trigger_sa" {
+  count              = var.deploy_service_account != "" && var.ci_trigger_service_account != "" ? 1 : 0
+  service_account_id = var.ci_trigger_service_account
+  role               = "roles/iam.serviceAccountUser"
+  member             = "serviceAccount:${var.deploy_service_account}"
+}
+
 # serviceAccountUser (above) covers actAs at create/update time but not the getIamPolicy read every
 # `tofu plan`/apply does to refresh these two google_service_account_iam_member resources — without
 # it, every subsequent plan 403s on IAM_PERMISSION_DENIED even though nothing changed. Read-only,
@@ -123,6 +130,13 @@ resource "google_service_account_iam_member" "deploy_can_actas_preview_trigger_s
 resource "google_service_account_iam_member" "deploy_can_read_trigger_sa_iam" {
   count              = var.deploy_service_account != "" && var.trigger_service_account != "" ? 1 : 0
   service_account_id = var.trigger_service_account
+  role               = "roles/iam.securityReviewer"
+  member             = "serviceAccount:${var.deploy_service_account}"
+}
+
+resource "google_service_account_iam_member" "deploy_can_read_ci_trigger_sa_iam" {
+  count              = var.deploy_service_account != "" && var.ci_trigger_service_account != "" ? 1 : 0
+  service_account_id = var.ci_trigger_service_account
   role               = "roles/iam.securityReviewer"
   member             = "serviceAccount:${var.deploy_service_account}"
 }

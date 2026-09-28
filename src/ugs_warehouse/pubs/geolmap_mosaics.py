@@ -59,9 +59,6 @@ PMTILES_MIME = config.PMTILES_MIME
 COLLECTION = "ugs-geologic-maps"
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
-UTAH_GEOM = {"type": "Polygon", "coordinates": [[
-    [-114.053, 36.998], [-109.041, 36.998], [-109.041, 42.002],
-    [-114.053, 42.002], [-114.053, 36.998]]]}
 # Scale tiers (denominator upper bounds), matching the old MD_* mosaics. A map's scale is binned by
 # its 1:N denominator: <=62.5k detail, <=350k intermediate, else overview.
 TIERS = ("24k", "250k", "500k")
@@ -177,17 +174,24 @@ def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
 
 
 _WEBMERC_Z0_MPP = 156543.03392804097  # web-mercator m/px at zoom 0 (256 px tiles)
-# How close the VRT m/px must be to a zoom's m/px to count as on that grid. Web-optimized COGs
-# land on it exactly; anything off by more is resampled, not copied.
-ZOOM_MATCH_TOL = 0.01
-# z22 is ~3.7 cm/px in web-mercator. A finer implied zoom is a sanity-bound failure (e.g. an EPSG:4326
-# VRT whose pixel size is in degrees), not a full CRS check; the harvest writes EPSG:3857 COGs.
+_WEBMERC_ORIGIN = 20037508.342789244  # web-mercator half-extent; the tile grid starts at (-o, +o)
+# How far (in pixels) the VRT may drift off a zoom's tile grid and still count as on it: origin offset,
+# and pixel-size error accumulated across the whole raster. Web-optimized COGs land on it to float
+# precision; any real drift makes `nearest` duplicate or drop pixels, which breaks 1-px linework.
+ZOOM_MATCH_TOL = 1e-6
+# z22 is ~3.7 cm/px. A finer native zoom means a member COG with a bad georeference, not real detail.
 MAX_NATIVE_ZOOM = 22
 
 
+def _grid_offset(v: float, res: float) -> float:
+    """How far `v` (metres from the grid origin) is from the nearest pixel edge, in pixels."""
+    f = v / res
+    return abs(f - round(f))
+
+
 def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
-    """From one `gdalinfo -json` on the VRT: (native web-mercator max zoom, whether the VRT's pixel size
-    matches that zoom's, [W, S, E, N] in EPSG:4326). `gdalbuildvrt -resolution highest` puts the VRT at
+    """From one `gdalinfo -json` on the VRT: (native web-mercator max zoom, whether the VRT's pixels sit
+    on that zoom's tile grid, [W, S, E, N] in EPSG:4326). `gdalbuildvrt -resolution highest` puts the VRT at
     the finest member COG's m/px; the nearest zoom is the mosaic's native max zoom, but only a source
     ON that zoom's pixel grid copies through pixel-exact under `nearest` (a 0.9 m/px COG rounds to z17
     yet has to be downsampled). The WGS84 extent is the mosaic's REAL footprint, so the packed
@@ -197,15 +201,30 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
                                      stdout=subprocess.PIPE, text=True, check=True).stdout)
     if not isinstance(info, dict):
         raise RuntimeError(f"gdalinfo -json on {vrt} returned {type(info).__name__}, not an object")
+    stac_info = info.get("stac")
+    epsg = stac_info.get("proj:epsg") if isinstance(stac_info, dict) else None
+    if epsg != 3857:
+        raise RuntimeError(f"{vrt} reports proj:epsg={epsg!r}, not EPSG:3857; "
+                           "the zoom math needs web-mercator metres")
     gt = info.get("geoTransform")
-    if not (isinstance(gt, list) and len(gt) >= 2 and isinstance(gt[1], (int, float))
-            and gt[1] and math.isfinite(gt[1])):
+    # type(), not isinstance(): bool is an int subclass. json.loads yields exact int/float.
+    if not (isinstance(gt, list) and len(gt) == 6
+            and all(type(v) in (int, float) and math.isfinite(v) for v in gt) and gt[1] and gt[5]):
         raise RuntimeError(f"gdalinfo on {vrt} reported no usable geoTransform: {gt!r}")
+    size = info.get("size")
+    if not (isinstance(size, list) and len(size) == 2 and all(type(v) is int and v > 0 for v in size)):
+        raise RuntimeError(f"gdalinfo on {vrt} reported no usable size: {size!r}")
     xres = abs(gt[1])
     zoom = max(0, round(math.log2(_WEBMERC_Z0_MPP / xres)))
     if zoom > MAX_NATIVE_ZOOM:
-        raise RuntimeError(f"{vrt}: pixel size {xres} implies z{zoom}; is the VRT in EPSG:3857 metres?")
-    aligned = abs(xres / (_WEBMERC_Z0_MPP / 2 ** zoom) - 1) <= ZOOM_MATCH_TOL
+        raise RuntimeError(f"{vrt}: {xres} m/px implies z{zoom}; check the finest member COG's georeference")
+    res = _WEBMERC_Z0_MPP / 2 ** zoom
+    # gdalbuildvrt rejects rotated sources; north-up writes an exact 0.
+    aligned = (abs(xres - res) * size[0] / res <= ZOOM_MATCH_TOL
+               and abs(abs(gt[5]) - res) * size[1] / res <= ZOOM_MATCH_TOL
+               and gt[2] == 0 and gt[4] == 0
+               and _grid_offset(gt[0] + _WEBMERC_ORIGIN, res) <= ZOOM_MATCH_TOL
+               and _grid_offset(_WEBMERC_ORIGIN - gt[3], res) <= ZOOM_MATCH_TOL)
     extent = info.get("wgs84Extent")
     ring = extent.get("coordinates") if isinstance(extent, dict) else None
     if ring and ring[0]:
@@ -350,7 +369,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
         if write_stac_item:
-            _write_item(tier, sids, obj, by_sid)
+            _write_item(tier, sids, obj, by_sid, bounds=bounds)
         else:
             print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
                   f"inspect tiles directly at {config.public_url(obj)}")
@@ -358,9 +377,11 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         return True
 
 
-def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -> None:
-    """STAC item for one mosaic tier. The raster PMTiles is a `visual` pmtiles ASSET (a vector layer
-    would be a web-map LINK instead) — that's how the viewer tells a raster mosaic from vector tiles.
+def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,
+                bounds: list[float]) -> None:
+    """STAC item for one mosaic tier, footprinted by the mosaic's real [W, S, E, N] `bounds`. The
+    raster PMTiles is a `visual` pmtiles ASSET (a vector layer would be a web-map LINK instead) —
+    that's how the viewer tells a raster mosaic from vector tiles.
 
     The mosaic is derived by stitching the member COGs, so each member gets a STAC
     `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
@@ -375,6 +396,7 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
 
     label = SCALE_LABEL.get(tier, tier)
     n_maps = len(sids)
+    w, s, e, n = bounds
     derived_from: list[dict] = []
     for sid in sids:                      # sids are UPPER (from _cog_sids)
         p = by_sid.get(sid)
@@ -392,7 +414,9 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
     item = stac.build_item(
         item_id=f"geologic-maps-{tier}",
         collection=COLLECTION,
-        geometry=UTAH_GEOM, bbox=UTAH_BBOX,
+        geometry={"type": "Polygon", "coordinates": [[
+            [w, s], [e, s], [e, n], [w, n], [w, s]]]},
+        bbox=[w, s, e, n],
         datetime_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         properties={"title": f"Utah Geologic Maps — {label} seamless mosaic",
                     "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic"},

@@ -84,7 +84,7 @@ def test_mosaic_is_valid_and_derived_from_hrefs_match_member_item_locations():
     captured: dict = {}
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         gm._write_item("24k", ["GQ-968", "BYU-1"], gm.mosaic_object("24k"),
-                       {"GQ-968": ugs, "BYU-1": ext})
+                       {"GQ-968": ugs, "BYU-1": ext}, bounds=[-114.0, 37.0, -109.0, 42.0])
     mosaic = captured["item"]
 
     _validate(mosaic)  # derived_from is a plain link; the mosaic must still be spec-valid

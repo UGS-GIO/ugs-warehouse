@@ -18,8 +18,11 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     captured = {}
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         # ORPHAN-9 has a COG but no pub record -> must be skipped (no item to link to)
-        gm._write_item("24k", ["GQ-968", "BYU-1", "ORPHAN-9"], gm.mosaic_object("24k"), by_sid)
+        gm._write_item("24k", ["GQ-968", "BYU-1", "ORPHAN-9"], gm.mosaic_object("24k"), by_sid,
+                       bounds=[-112.0, 39.0, -111.5, 39.4])
     item = captured["item"]
+    assert item["bbox"] == [-112.0, 39.0, -111.5, 39.4]   # the mosaic's real footprint, not all of Utah
+    assert item["geometry"]["coordinates"][0][0] == [-112.0, 39.0]
     assert item["properties"]["ugs:topic"] == "geologic"
     assert item["properties"]["ugs:map_count"] == 3   # count still reflects every stitched COG
     # The mosaic is derived from its member maps -> STAC provenance rel, not generic "related".
@@ -290,7 +293,7 @@ def test_vrt_zoom_and_bounds_reads_zoom_and_real_extent():
     z17 still rounds to z17, but it is not on z17's grid."""
     xres = (gm._WEBMERC_Z0_MPP / (2 ** 17)) * 1.02
     stdout = json.dumps({
-        "geoTransform": [0, xres, 0, 0, 0, -xres],
+        "stac": {"proj:epsg": 3857}, "size": [256, 256], "geoTransform": [0, xres, 0, 0, 0, -xres],
         "wgs84Extent": {"type": "Polygon", "coordinates": [[
             [-112.0, 39.0], [-111.5, 39.0], [-111.5, 39.4], [-112.0, 39.4], [-112.0, 39.0]]]},
     })
@@ -303,11 +306,13 @@ def test_vrt_zoom_and_bounds_reads_zoom_and_real_extent():
 
 @pytest.mark.parametrize("xres,zoom,aligned", [
     (gm._WEBMERC_Z0_MPP / 2 ** 17, 17, True),            # web-optimized COG: exactly on z17
-    (gm._WEBMERC_Z0_MPP / 2 ** 17 * 1.005, 17, True),    # within tolerance
+    (gm._WEBMERC_Z0_MPP / 2 ** 17 * (1 + 1e-9), 17, True),  # float noise: 256e-9 px drift
+    (gm._WEBMERC_Z0_MPP / 2 ** 17 * (1 + 1e-5), 17, False),  # 0.0026 px drift across 256 px
+    (gm._WEBMERC_Z0_MPP / 2 ** 17 * 1.005, 17, False),   # 0.5% off: nearest would drop pixels
     (0.9, 17, False),                                     # 0.9 m/px rounds to z17 but is finer
 ])
 def test_vrt_zoom_and_bounds_flags_whether_the_source_is_on_the_zoom_grid(xres, zoom, aligned):
-    stdout = json.dumps({"geoTransform": [0, xres, 0, 0, 0, -xres]})
+    stdout = json.dumps({"stac": {"proj:epsg": 3857}, "size": [256, 256], "geoTransform": [0, xres, 0, 0, 0, -xres]})
     with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
         z, a, _ = gm._vrt_zoom_and_bounds("x.vrt", {})
     assert (z, a) == (zoom, aligned)
@@ -316,7 +321,7 @@ def test_vrt_zoom_and_bounds_flags_whether_the_source_is_on_the_zoom_grid(xres, 
 def test_vrt_zoom_and_bounds_falls_back_to_utah_without_extent():
     """A VRT that reports no wgs84Extent falls back to the statewide clip instead of crashing."""
     xres = gm._WEBMERC_Z0_MPP / (2 ** 14)
-    stdout = json.dumps({"geoTransform": [0, xres, 0, 0, 0, -xres]})
+    stdout = json.dumps({"stac": {"proj:epsg": 3857}, "size": [256, 256], "geoTransform": [0, xres, 0, 0, 0, -xres]})
     with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
         zoom, aligned, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
     assert zoom == 14
@@ -391,8 +396,11 @@ def test_main_exit_code_requires_every_requested_tier(built, scales, rc):
     {"geoTransform": [0, 0, 0, 0, 0, 0]},          # zero pixel size would divide by zero
     {"geoTransform": [0, float("nan"), 0, 0, 0, 0]},
     {"geoTransform": [0, float("inf"), 0, 0, 0, 0]},
+    {"geoTransform": [0, 1.0, 0]},                 # truncated
+    {"geoTransform": [0, True, 0, 0, 0, -1]},      # bool is an int subclass
 ])
 def test_vrt_zoom_and_bounds_raises_without_a_usable_geotransform(info):
+    info = {"stac": {"proj:epsg": 3857}, "size": [256, 256], **info}
     with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=json.dumps(info))), \
          pytest.raises(RuntimeError, match="geoTransform"):
         gm._vrt_zoom_and_bounds("x.vrt", {})
@@ -401,7 +409,8 @@ def test_vrt_zoom_and_bounds_raises_without_a_usable_geotransform(info):
 @pytest.mark.parametrize("extent", [{"coordinates": []}, {"coordinates": [[]]}])
 def test_vrt_zoom_and_bounds_falls_back_to_utah_on_an_empty_extent_ring(extent):
     xres = gm._WEBMERC_Z0_MPP / (2 ** 14)
-    stdout = json.dumps({"geoTransform": [0, xres, 0, 0, 0, -xres], "wgs84Extent": extent})
+    stdout = json.dumps({"stac": {"proj:epsg": 3857}, "size": [256, 256], "geoTransform": [0, xres, 0, 0, 0, -xres],
+                         "wgs84Extent": extent})
     with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
         _, _, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
     assert bounds == list(gm.UTAH_BBOX)
@@ -421,9 +430,45 @@ def test_vrt_zoom_and_bounds_rejects_a_non_object_response():
         gm._vrt_zoom_and_bounds("x.vrt", {})
 
 
-def test_vrt_zoom_and_bounds_rejects_a_degree_pixel_size():
-    """A VRT in EPSG:4326 (xres ~1e-5 degrees) would imply ~z34; fail loud instead of tiling it."""
-    stdout = json.dumps({"geoTransform": [0, 1e-5, 0, 0, 0, -1e-5]})
+@pytest.mark.parametrize("stac_info", [{"proj:epsg": 4326}, {"proj:epsg": None}, None])
+def test_vrt_zoom_and_bounds_rejects_a_non_web_mercator_vrt(stac_info):
+    """The zoom math assumes web-mercator metres; a degree-unit (or unknown-CRS) VRT fails loud."""
+    stdout = json.dumps({"stac": stac_info, "geoTransform": [0, 1e-5, 0, 0, 0, -1e-5]})
     with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)), \
-         pytest.raises(RuntimeError, match="EPSG:3857"):
+         pytest.raises(RuntimeError, match="not EPSG:3857"):
+        gm._vrt_zoom_and_bounds("x.vrt", {})
+
+
+@pytest.mark.parametrize("dx,dy,rot,aligned", [
+    (0.0, 0.0, 0.0, True),
+    (0.5, 0.0, 0.0, False),     # origin half a pixel off the tile grid in x
+    (0.0, 0.25, 0.0, False),    # ... or in y
+    (3.0, -7.0, 0.0, True),     # whole-pixel offsets are still on the grid
+    (0.0, 0.0, 1e-3, False),    # rotated
+])
+def test_vrt_zoom_and_bounds_checks_the_origin_is_on_the_tile_grid(dx, dy, rot, aligned):
+    res = gm._WEBMERC_Z0_MPP / 2 ** 17
+    gt = [-12467782.0 // res * res + dx * res, res, rot, 4865942.0 // res * res + dy * res, 0, -res]
+    stdout = json.dumps({"stac": {"proj:epsg": 3857}, "size": [256, 256], "geoTransform": gt})
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
+        z, a, _ = gm._vrt_zoom_and_bounds("x.vrt", {})
+    assert (z, a) == (17, aligned)
+
+
+def test_vrt_zoom_and_bounds_rejects_an_implausibly_fine_pixel_size():
+    """1 mm/px in EPSG:3857 implies ~z27: a bad georeference, which must not become --max-zoom 27."""
+    stdout = json.dumps({"stac": {"proj:epsg": 3857}, "size": [256, 256],
+                         "geoTransform": [0, 1e-3, 0, 0, 0, -1e-3]})
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)), \
+         pytest.raises(RuntimeError, match="georeference"):
+        gm._vrt_zoom_and_bounds("x.vrt", {})
+
+
+@pytest.mark.parametrize("size", [None, [256], [0, 256], [256.0, 256]])
+def test_vrt_zoom_and_bounds_raises_without_a_usable_size(size):
+    xres = gm._WEBMERC_Z0_MPP / 2 ** 17
+    stdout = json.dumps({"stac": {"proj:epsg": 3857}, "size": size,
+                         "geoTransform": [0, xres, 0, 0, 0, -xres]})
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)), \
+         pytest.raises(RuntimeError, match="size"):
         gm._vrt_zoom_and_bounds("x.vrt", {})

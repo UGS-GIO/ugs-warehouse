@@ -234,11 +234,8 @@ tracked follow-up.
 - `MODE=table` (env) materializes layers into the db instead of views — a full snapshot (bigger image,
   and it duplicates the data), fallback if a future featureserv drops view support. Incremental
   rebinding is skipped in this mode: an unchanged URL doesn't mean the materialized rows are current.
-- **Paging is a floor, not a fix.** `LimitMax = 100000` clears every topic we serve today
-  (`enmin_plss_sections` is the largest at 84,756), but featureserv emits no `numberMatched` and no
-  `rel="next"` link — neither exists anywhere in its source — so truncation stays *undetectable*. A
-  layer that grows past the cap fails the same silent way. The real fix is an upstream patch that
-  sets `NumberMatched` and emits next links (ALL-5402).
+- **Paging.** `LimitMax = 10000`; larger layers page with the `numberMatched` and `rel="next"` that
+  `patches/0001-ogc-conformance.patch` adds.
 - Still upstream, still unfixed: `geometrytype` is always the literal `GEOMETRY` and `srid` the
   literal `4326` (harmless for us — every topic is 4326 and homogeneous, verified across all 27);
   `orderby=` and `crs=` are accepted and silently ignored; `precision=` and `groupby=` 500;

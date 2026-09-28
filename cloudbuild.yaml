@@ -38,7 +38,7 @@ substitutions:
   # deploy so check_limits.py can refuse an unmeasured pairing rather than let it OOM in prod.
   # 8Gi (was 2Gi): a pre-merge parallel-load test (ALL-5869) showed 4Gi OOM-kills the container
   # under concurrent full-layer pulls (silent truncation + 503s); 8Gi with cpu=2 and DuckDB
-  # memory_limit=3GB (the featureserv patch) serves them cleanly. (8Gi, LimitMax 100000) is covered
+  # memory_limit=3GB (the featureserv patch) serves them cleanly. (8Gi, LimitMax 10000) is covered
   # by the measured (2Gi, 100000) pair via monotonicity. Feeds the image build AND the deploy.
   _FEATURES_MEMORY: 8Gi
   _SERVICE: ugs-warehouse-service

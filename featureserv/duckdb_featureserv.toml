@@ -50,19 +50,14 @@ TransformFunctions = [
 #   1Gi    OOM on a single full pull; survives paged 20k requests
 #   2Gi    survives repeated full pulls (11.5s cold, ~3s warm), no OOM
 #
-# 2Gi is deployed, so 100000 is honest again — it clears the largest topic with room.
-#
-# Exposure, accepted deliberately: this service is --allow-unauthenticated with maxScale=100, so one
-# caller can request a 122MB response repeatedly. A higher cap makes each such request costlier; it
-# does not change the shape of the exposure, which is unbounded either way absent auth or rate
-# limiting. The real fix is streaming the response rather than buffering it — memory would become
-# roughly constant and this whole coupling would go away. That is an upstream change.
+# LimitMax keeps one response small (~15MB on the largest layer at 10000); clients page past it
+# with the `next` link.
 #
 # LimitDefault=1000 is a separate judgement call: a bare /items with no params on the largest layer
 # costs ~1.45MB instead of 10 features. Real clients (Arc Pro, QGIS) always send an explicit limit
 # and the HTML UI pages its own view, so this lands on naive curl/browser hits only.
 LimitDefault = 1000
-LimitMax = 100000
+LimitMax = 10000
 
 [Metadata]
 # Surfaced as the service title/description on `/` and in the generated OpenAPI at `/api` — this

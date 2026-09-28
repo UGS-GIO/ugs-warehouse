@@ -38,6 +38,7 @@ export default defineConfig({
     // need a fetch handler that answers HTTP Range from local storage, which no Workbox strategy
     // expresses. The routes are the same either way; only the authoring moves.
     VitePWA({
+      disable: process.env.VITE_OFFLINE === "0",
       strategies: "injectManifest",
       srcDir: "src",
       filename: "sw.ts",

@@ -19,6 +19,8 @@ const fail = (msg) => {
   process.exit(1);
 };
 
+// The review builds ship no service worker (vite.config.ts `disable`), and write to their own outDir.
+if (process.env.VITE_OFFLINE === "0") process.exit(0);
 if (!existsSync(at("sw.js"))) fail("dist/sw.js missing — did VitePWA run?");
 
 const sw = readFileSync(at("sw.js"), "utf8");

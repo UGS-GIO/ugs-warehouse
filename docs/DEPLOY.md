@@ -53,10 +53,8 @@ gcloud iam service-accounts create warehouse-admin-run \
   --display-name="Warehouse Admin Console Runtime" --project=$DEPLOY_PROJECT
 
 # Admin Console SA roles:
-#   trigger and monitor Cloud Run jobs
-gcloud projects add-iam-policy-binding $DEPLOY_PROJECT \
-  --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
-  --role=roles/run.developer
+#   trigger and monitor its Cloud Run jobs: job-level run.developer + project run.viewer,
+#   granted by scripts/provision.sh
 #   act as the runtime SA to launch the jobs
 gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
   --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \

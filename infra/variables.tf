@@ -100,7 +100,6 @@ variable "alert_emails" {
     2026 cost incident ran ~17 days partly because the only pipeline alerts in the org went to one
     person's inbox. Each becomes its own notification channel in project_id.
   EOT
-  default     = ["clunn@utah.gov", "marshallrobinson@utah.gov"]
 }
 
 variable "bucket_ops_alert_threshold" {

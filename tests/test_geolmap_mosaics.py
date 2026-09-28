@@ -245,10 +245,36 @@ def test_pack_tiles_to_mbtiles_flips_y_verbatim_and_skips_sidecars(tmp_path):
     assert meta["format"] == "webp"
     assert meta["minzoom"] == "13" and meta["maxzoom"] == "14"
     assert meta["bounds"] == "-114.0,37.0,-109.0,42.0"
+    assert meta["center"] == "-111.5,39.5,13"               # opens at the coarsest zoom, not maxz
     con = sqlite3.connect(str(mb))
     with pytest.raises(sqlite3.IntegrityError):             # MBTiles spec: metadata.name is unique
         con.execute("INSERT INTO metadata VALUES ('format', 'png')")
     con.close()
+
+
+def test_pack_tiles_to_mbtiles_raises_when_every_zoom_dir_is_empty(tmp_path):
+    """A fully blank build can leave only empty zoom dirs; that must not become an empty MBTiles."""
+    (tmp_path / "t" / "14" / "3").mkdir(parents=True)
+    (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")
+    with pytest.raises(RuntimeError, match="no tile files"):
+        gm._pack_tiles_to_mbtiles(str(tmp_path / "t"), str(tmp_path / "x.mbtiles"),
+                                  bounds=[-1, -1, 1, 1], name="x")
+
+
+def test_pack_tiles_to_mbtiles_raises_when_the_tile_dir_is_missing(tmp_path):
+    with pytest.raises(RuntimeError, match="no output dir"):
+        gm._pack_tiles_to_mbtiles(str(tmp_path / "nope"), str(tmp_path / "x.mbtiles"),
+                                  bounds=[-1, -1, 1, 1], name="x")
+
+
+def test_pack_tiles_to_mbtiles_rejects_a_tile_in_another_format(tmp_path):
+    """Metadata says webp, so a .png tile would be silently mislabelled; refuse it."""
+    d = tmp_path / "t" / "14" / "3"
+    d.mkdir(parents=True)
+    (d / "6.png").write_bytes(b"b")
+    with pytest.raises(RuntimeError, match="expected .webp"):
+        gm._pack_tiles_to_mbtiles(str(tmp_path / "t"), str(tmp_path / "x.mbtiles"),
+                                  bounds=[-1, -1, 1, 1], name="x")
 
 
 def test_pack_tiles_to_mbtiles_raises_on_empty_tree(tmp_path):
@@ -298,7 +324,7 @@ def test_vrt_zoom_and_bounds_falls_back_to_utah_without_extent():
     assert bounds == list(gm.UTAH_BBOX)
 
 
-def test_build_tier_tiling_argv_resampling_and_real_bounds():
+def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
     """build_tier's `gdal raster tile` argv: -r nearest at/above the mosaic's native zoom (the aligned
     masters copy through pixel-exact), -r average when a tier caps BELOW native; the full provisional
     flag set is always passed (guards a silent typo on a GDAL bump); and the mosaic's REAL bounds
@@ -323,14 +349,16 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds():
              patch.object(gm, "_pack_tiles_to_mbtiles", side_effect=fake_pack), \
              patch.object(gm.os.path, "getsize", return_value=1 << 20), \
              patch.object(gm.os, "remove"), patch.object(gm.shutil, "rmtree"), \
-             patch.object(gm.gcs, "upload"):
+             patch.object(gm.gcs, "upload"), patch.object(gm, "MOSAIC_WORK_DIR", str(tmp_path)):
             gm.build_tier("24k", ["M-1"], by_sid, maxz=maxz, write_stac_item=False)
         return next(c for c in calls if c[:3] == ["gdal", "raster", "tile"])
 
     tile = tile_argv(17)
     assert tile[tile.index("--resampling") + 1] == "nearest"          # at native
-    for flag in ("--overview-resampling", "--skip-blank", "--min-zoom", "--max-zoom", "-f", "--co"):
+    for flag in ("--overview-resampling", "--skip-blank", "--convention", "--min-zoom", "--max-zoom",
+                 "-f", "--co"):
         assert flag in tile, f"missing {flag}"
+    assert tile[tile.index("--convention") + 1] == "xyz"               # the packer's y-flip assumes XYZ
     assert tile[tile.index("-f") + 1] == "WEBP"
     assert tile[tile.index("--co") + 1] == f"QUALITY={gm.TILE_QUALITY}"
     assert tile[tile.index("--max-zoom") + 1] == "17"
@@ -355,3 +383,47 @@ def test_main_exit_code_requires_every_requested_tier(built, scales, rc):
     argv = ["geolmap_mosaics", "--scale", "all" if len(scales) > 1 else scales[0]]
     with patch.object(gm.sys, "argv", argv), patch.object(gm, "build", return_value=built):
         assert gm.main() == rc
+
+
+@pytest.mark.parametrize("info", [
+    {},                                            # no geoTransform at all
+    {"geoTransform": None},
+    {"geoTransform": [0, 0, 0, 0, 0, 0]},          # zero pixel size would divide by zero
+    {"geoTransform": [0, float("nan"), 0, 0, 0, 0]},
+    {"geoTransform": [0, float("inf"), 0, 0, 0, 0]},
+])
+def test_vrt_zoom_and_bounds_raises_without_a_usable_geotransform(info):
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=json.dumps(info))), \
+         pytest.raises(RuntimeError, match="geoTransform"):
+        gm._vrt_zoom_and_bounds("x.vrt", {})
+
+
+@pytest.mark.parametrize("extent", [{"coordinates": []}, {"coordinates": [[]]}])
+def test_vrt_zoom_and_bounds_falls_back_to_utah_on_an_empty_extent_ring(extent):
+    xres = gm._WEBMERC_Z0_MPP / (2 ** 14)
+    stdout = json.dumps({"geoTransform": [0, xres, 0, 0, 0, -xres], "wgs84Extent": extent})
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
+        _, _, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
+    assert bounds == list(gm.UTAH_BBOX)
+
+
+@pytest.mark.parametrize("built,rc", [(1, 0), (0, 1)])
+def test_main_scoped_quads_build_passes_when_any_tier_built(built, rc):
+    """--quads under the default --scale all: tiers the quads don't touch are empty, not failures."""
+    argv = ["geolmap_mosaics", "--quads", "Park City East Quad"]
+    with patch.object(gm.sys, "argv", argv), patch.object(gm, "build", return_value=built):
+        assert gm.main() == rc
+
+
+def test_vrt_zoom_and_bounds_rejects_a_non_object_response():
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout="[]")), \
+         pytest.raises(RuntimeError, match="not an object"):
+        gm._vrt_zoom_and_bounds("x.vrt", {})
+
+
+def test_vrt_zoom_and_bounds_rejects_a_degree_pixel_size():
+    """A VRT in EPSG:4326 (xres ~1e-5 degrees) would imply ~z34; fail loud instead of tiling it."""
+    stdout = json.dumps({"geoTransform": [0, 1e-5, 0, 0, 0, -1e-5]})
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)), \
+         pytest.raises(RuntimeError, match="EPSG:3857"):
+        gm._vrt_zoom_and_bounds("x.vrt", {})

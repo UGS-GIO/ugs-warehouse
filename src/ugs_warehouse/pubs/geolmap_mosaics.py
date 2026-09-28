@@ -180,6 +180,9 @@ _WEBMERC_Z0_MPP = 156543.03392804097  # web-mercator m/px at zoom 0 (256 px tile
 # How close the VRT m/px must be to a zoom's m/px to count as on that grid. Web-optimized COGs
 # land on it exactly; anything off by more is resampled, not copied.
 ZOOM_MATCH_TOL = 0.01
+# z22 is ~3.7 cm/px in web-mercator. A finer implied zoom is a sanity-bound failure (e.g. an EPSG:4326
+# VRT whose pixel size is in degrees), not a full CRS check; the harvest writes EPSG:3857 COGs.
+MAX_NATIVE_ZOOM = 22
 
 
 def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
@@ -189,18 +192,30 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
     ON that zoom's pixel grid copies through pixel-exact under `nearest` (a 0.9 m/px COG rounds to z17
     yet has to be downsampled). The WGS84 extent is the mosaic's REAL footprint, so the packed
     MBTiles/PMTiles metadata describes the actual coverage instead of always claiming the whole state."""
-    info = json.loads(subprocess.run(["gdalinfo", "-json", vrt], env=env,
-                                     capture_output=True, text=True, check=True).stdout)
-    xres = abs(info["geoTransform"][1])
+    # stdout only: stderr streams to the job log, so a failed /vsigs read shows GDAL's real reason.
+    info = json.loads(subprocess.run(["gdalinfo", "-json", "-nofl", vrt], env=env,
+                                     stdout=subprocess.PIPE, text=True, check=True).stdout)
+    if not isinstance(info, dict):
+        raise RuntimeError(f"gdalinfo -json on {vrt} returned {type(info).__name__}, not an object")
+    gt = info.get("geoTransform")
+    if not (isinstance(gt, list) and len(gt) >= 2 and isinstance(gt[1], (int, float))
+            and gt[1] and math.isfinite(gt[1])):
+        raise RuntimeError(f"gdalinfo on {vrt} reported no usable geoTransform: {gt!r}")
+    xres = abs(gt[1])
     zoom = max(0, round(math.log2(_WEBMERC_Z0_MPP / xres)))
+    if zoom > MAX_NATIVE_ZOOM:
+        raise RuntimeError(f"{vrt}: pixel size {xres} implies z{zoom}; is the VRT in EPSG:3857 metres?")
     aligned = abs(xres / (_WEBMERC_Z0_MPP / 2 ** zoom) - 1) <= ZOOM_MATCH_TOL
-    ring = (info.get("wgs84Extent") or {}).get("coordinates")
-    if ring:
+    extent = info.get("wgs84Extent")
+    ring = extent.get("coordinates") if isinstance(extent, dict) else None
+    if ring and ring[0]:
         lons = [pt[0] for pt in ring[0]]
         lats = [pt[1] for pt in ring[0]]
         bounds = [min(lons), min(lats), max(lons), max(lats)]
     else:
-        bounds = list(UTAH_BBOX)   # VRT with no reported WGS84 extent -> fall back to the statewide clip
+        print(f"[mosaics] WARNING: {vrt} has no usable wgs84Extent; using the statewide bbox",
+              file=sys.stderr)
+        bounds = list(UTAH_BBOX)
     return zoom, aligned, bounds
 
 
@@ -209,6 +224,8 @@ def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], 
     """Pack a `gdal raster tile` XYZ tree ({z}/{x}/{y}.{ext}) into an MBTiles so `pmtiles convert` can
     read it (go-pmtiles takes MBTiles, not a tile directory). Tiles are copied VERBATIM — no re-encode,
     zero added loss. MBTiles rows are TMS (y flipped from the XYZ tree). Returns (n_tiles, minz, maxz)."""
+    if not os.path.isdir(tile_dir):
+        raise RuntimeError(f"gdal raster tile produced no output dir {tile_dir}")
     zdirs = sorted(int(d) for d in os.listdir(tile_dir)
                    if d.isdigit() and os.path.isdir(os.path.join(tile_dir, d)))
     if not zdirs:
@@ -216,6 +233,9 @@ def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], 
     minz, maxz = zdirs[0], zdirs[-1]
     con = sqlite3.connect(mbtiles)
     try:
+        # A throwaway temp file: skip the rollback journal and fsyncs; a crash just reruns the bake.
+        con.execute("PRAGMA journal_mode = OFF")
+        con.execute("PRAGMA synchronous = OFF")
         cur = con.cursor()
         cur.execute("CREATE TABLE metadata (name text NOT NULL UNIQUE, value text)")
         cur.execute("CREATE TABLE tiles (zoom_level int, tile_column int, tile_row int, tile_data blob)")
@@ -234,19 +254,24 @@ def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], 
                         ystr, ext = os.path.splitext(yf)
                         if not ystr.isdigit() or not ext:
                             continue                    # skip sidecars (.aux.xml etc.)
+                        if ext.lower() != f".{tile_format}":
+                            raise RuntimeError(f"unexpected tile {xpath}/{yf}; expected .{tile_format}")
                         with open(os.path.join(xpath, yf), "rb") as fh:
                             blob = fh.read()
                         counted[0] += 1
                         yield z, int(xd), (1 << z) - 1 - int(ystr), blob   # XYZ (top) -> TMS (bottom)
 
-        cur.executemany("INSERT OR REPLACE INTO tiles VALUES (?,?,?,?)", rows())
+        # Plain INSERT, not OR REPLACE: the unique index makes any duplicate z/x/y fail loud.
+        cur.executemany("INSERT INTO tiles VALUES (?,?,?,?)", rows())
         n = counted[0]
+        if n == 0:
+            raise RuntimeError(f"no tile files under {tile_dir} (zoom dirs {zdirs} were empty)")
         w, s, e, nth = bounds
         cur.executemany("INSERT INTO metadata VALUES (?,?)", (
             ("name", name), ("format", tile_format), ("type", "overlay"),
             ("minzoom", str(minz)), ("maxzoom", str(maxz)),
             ("bounds", f"{w},{s},{e},{nth}"),
-            ("center", f"{(w + e) / 2},{(s + nth) / 2},{maxz}")))
+            ("center", f"{(w + e) / 2},{(s + nth) / 2},{minz}")))
         con.commit()
     finally:
         con.close()
@@ -305,7 +330,8 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         subprocess.run(
             ["gdal", "raster", "tile", "--resampling", base_resampling,
              "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
-             "--skip-blank", "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
+             "--skip-blank", "--convention", "xyz",
+             "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
              vrt, tiledir], env=gdal_env, check=True)
 
         # go-pmtiles converts an MBTiles (not a tile tree), so pack the XYZ tree first (verbatim copy).
@@ -314,7 +340,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         print(f"[mosaics] {tier}: packing tiles -> MBTiles")
         n_tiles, minz, maxz_built = _pack_tiles_to_mbtiles(
             tiledir, mbtiles, bounds=bounds, name=f"geologic-maps-{tier}")
-        shutil.rmtree(tiledir, ignore_errors=True)
+        shutil.rmtree(tiledir)
         print(f"[mosaics] {tier}: {n_tiles} tiles (z{minz}-{maxz_built}) -> PMTiles")
         subprocess.run(["pmtiles", "convert", mbtiles, pmtiles], check=True)
         os.remove(mbtiles)
@@ -427,7 +453,8 @@ def main() -> int:
         ap.error("--quads contained no usable quad names")
     scales = list(TIERS) if args.scale == "all" else [args.scale]
     built = build(scales, maxz=args.maxzoom, edition_mode=args.editions, quads=args.quads)
-    return 0 if built == len(scales) else 1
+    # A scoped --quads build under the default --scale all legitimately leaves tiers with no members.
+    return 0 if built == len(scales) or (args.quads and built > 0) else 1
 
 
 if __name__ == "__main__":

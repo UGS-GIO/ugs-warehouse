@@ -44,7 +44,7 @@ substitutions:
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
-  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # runtime SA — run.developer (trigger/status) + logging.viewer (live + per-pub logs) + storage.objectViewer on the COG bucket (registry harvest status)
+  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # runtime SA — job-level run.developer + run.viewer (provision.sh) + logging.viewer (live + per-pub logs) + storage.objectViewer on the COG bucket (registry harvest status)
   _ADMIN_HOSTS: .run.app                                                           # ALLOWED_HOSTS; add the LB/custom domain once IAP is fronted
   _ADMIN_SECRET: warehouse-admin-secret-key                                        # Secret Manager secret — stable Django SECRET_KEY across workers/instances
   # Pub/Sub topic/subscription names live in scripts/provision.sh now (not build inputs).

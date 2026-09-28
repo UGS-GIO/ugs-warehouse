@@ -10,7 +10,7 @@ Cloud Build, no GHA workflows).
 [`cloudbuild-ci.yaml`](https://github.com/UGS-GIO/ugs-warehouse/blob/main/cloudbuild-ci.yaml) — PR validation, test-only (no push/deploy):
 
 - **backend** (`python:3.11`): `pip install -e ".[dev]"` → `ruff check .` → `pytest -q`
-- **viewer** (`node:20`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run`
+- **viewer** (`node:22`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run`
 
 Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build → the PR check goes red.
 

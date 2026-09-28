@@ -245,6 +245,10 @@ def test_pack_tiles_to_mbtiles_flips_y_verbatim_and_skips_sidecars(tmp_path):
     assert meta["format"] == "webp"
     assert meta["minzoom"] == "13" and meta["maxzoom"] == "14"
     assert meta["bounds"] == "-114.0,37.0,-109.0,42.0"
+    con = sqlite3.connect(str(mb))
+    with pytest.raises(sqlite3.IntegrityError):             # MBTiles spec: metadata.name is unique
+        con.execute("INSERT INTO metadata VALUES ('format', 'png')")
+    con.close()
 
 
 def test_pack_tiles_to_mbtiles_raises_on_empty_tree(tmp_path):
@@ -256,19 +260,31 @@ def test_pack_tiles_to_mbtiles_raises_on_empty_tree(tmp_path):
 
 def test_vrt_zoom_and_bounds_reads_zoom_and_real_extent():
     """_vrt_zoom_and_bounds derives the native web-mercator zoom from the finest pixel size AND the
-    real [W,S,E,N] footprint from wgs84Extent, both from one gdalinfo -json. A realistic (non-exact)
-    resolution must still round to the right zoom — a real reprojected scan never lands exactly on a
-    zoom's pixel size."""
-    xres = (gm._WEBMERC_Z0_MPP / (2 ** 17)) * 1.02   # ~2% off exact z17 m/px -> must still round to 17
+    real [W,S,E,N] footprint from wgs84Extent, both from one gdalinfo -json. A resolution ~2% off
+    z17 still rounds to z17, but it is not on z17's grid."""
+    xres = (gm._WEBMERC_Z0_MPP / (2 ** 17)) * 1.02
     stdout = json.dumps({
         "geoTransform": [0, xres, 0, 0, 0, -xres],
         "wgs84Extent": {"type": "Polygon", "coordinates": [[
             [-112.0, 39.0], [-111.5, 39.0], [-111.5, 39.4], [-112.0, 39.4], [-112.0, 39.0]]]},
     })
     with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
-        zoom, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
+        zoom, aligned, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
     assert zoom == 17
+    assert aligned is False
     assert bounds == [-112.0, 39.0, -111.5, 39.4]
+
+
+@pytest.mark.parametrize("xres,zoom,aligned", [
+    (gm._WEBMERC_Z0_MPP / 2 ** 17, 17, True),            # web-optimized COG: exactly on z17
+    (gm._WEBMERC_Z0_MPP / 2 ** 17 * 1.005, 17, True),    # within tolerance
+    (0.9, 17, False),                                     # 0.9 m/px rounds to z17 but is finer
+])
+def test_vrt_zoom_and_bounds_flags_whether_the_source_is_on_the_zoom_grid(xres, zoom, aligned):
+    stdout = json.dumps({"geoTransform": [0, xres, 0, 0, 0, -xres]})
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
+        z, a, _ = gm._vrt_zoom_and_bounds("x.vrt", {})
+    assert (z, a) == (zoom, aligned)
 
 
 def test_vrt_zoom_and_bounds_falls_back_to_utah_without_extent():
@@ -276,8 +292,9 @@ def test_vrt_zoom_and_bounds_falls_back_to_utah_without_extent():
     xres = gm._WEBMERC_Z0_MPP / (2 ** 14)
     stdout = json.dumps({"geoTransform": [0, xres, 0, 0, 0, -xres]})
     with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)):
-        zoom, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
+        zoom, aligned, bounds = gm._vrt_zoom_and_bounds("x.vrt", {})
     assert zoom == 14
+    assert aligned is True
     assert bounds == list(gm.UTAH_BBOX)
 
 
@@ -299,10 +316,10 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds():
         captured["bounds"] = bounds
         return (10, min(gm.MOSAIC_MINZOOM, 17), 17)
 
-    def tile_argv(maxz):
+    def tile_argv(maxz, aligned=True):
         calls.clear()
         with patch.object(gm.subprocess, "run", side_effect=rec), \
-             patch.object(gm, "_vrt_zoom_and_bounds", return_value=(17, extent)), \
+             patch.object(gm, "_vrt_zoom_and_bounds", return_value=(17, aligned, extent)), \
              patch.object(gm, "_pack_tiles_to_mbtiles", side_effect=fake_pack), \
              patch.object(gm.os.path, "getsize", return_value=1 << 20), \
              patch.object(gm.os, "remove"), patch.object(gm.shutil, "rmtree"), \
@@ -321,3 +338,20 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds():
 
     t12 = tile_argv(12)
     assert t12[t12.index("--resampling") + 1] == "average"            # capped below native
+
+    off = tile_argv(17, aligned=False)
+    assert off[off.index("--resampling") + 1] == "average"            # native zoom, but off-grid source
+
+    up = tile_argv(18)
+    assert up[up.index("--resampling") + 1] == "nearest"              # on-grid, upsampled past native
+
+
+@pytest.mark.parametrize("built,scales,rc", [
+    (3, ["24k", "250k", "500k"], 0),
+    (2, ["24k", "250k", "500k"], 1),    # one empty tier fails the job instead of reporting success
+    (0, ["24k"], 1),
+])
+def test_main_exit_code_requires_every_requested_tier(built, scales, rc):
+    argv = ["geolmap_mosaics", "--scale", "all" if len(scales) > 1 else scales[0]]
+    with patch.object(gm.sys, "argv", argv), patch.object(gm, "build", return_value=built):
+        assert gm.main() == rc

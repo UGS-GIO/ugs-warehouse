@@ -1,53 +1,35 @@
-# Cloud Run Job image for the statewide raster-mosaic bake (pubs/geolmap_mosaics.py).
-#
-# Its own image, NOT the shared ugs-harvest one: the bake uses `gdal raster tile` (GDAL 3.11+), and
-# the harvest image ships Debian GDAL ~3.10 (no `gdal raster tile`). Base is the OSGeo GDAL image,
-# which carries a full-driver GDAL (WebP-in-TIFF + the unified `gdal` CLI).
-#
-# PINNED on purpose: the unified `gdal` CLI is officially PROVISIONAL — GDAL reserves the right to
-# rename/reorganize flags until it is frozen by a PSC vote (3.13 already renamed ~15). 3.11.3 is the
-# version geolmap_mosaics' flags were validated against. Bump this tag deliberately and re-check the
-# `gdal raster tile` flags (see the module docstring) before shipping a new one.
+# Raster-mosaic bake (pubs/geolmap_mosaics.py). Needs `gdal raster tile` (GDAL 3.11+); pinned because
+# the unified `gdal` CLI is provisional, so re-check its flags before bumping the tag.
 FROM ghcr.io/osgeo/gdal:ubuntu-full-3.11.3
 
 ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# The OSGeo base bundles the Apache Arrow apt repo, whose signing key rotates and breaks apt-get
-# update (NO_PUBKEY ...). We install no Arrow packages here, so drop that repo before updating.
+# The base's Arrow apt repo has a rotating key that breaks apt-get update; nothing here uses it.
 RUN rm -f /etc/apt/sources.list.d/*arrow* \
     && apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl python3-venv libsqlite3-0 \
     && rm -rf /var/lib/apt/lists/*
 
-# go-pmtiles CLI — converts the packed raster MBTiles into PMTiles (pubs/geolmap_mosaics.py). Same
-# pin as Dockerfile.harvest; this build only uses `pmtiles convert`.
 ARG PMTILES_VERSION=1.22.3
 RUN arch="$(dpkg --print-architecture)"; case "$arch" in amd64) a=x86_64;; arm64) a=arm64;; *) a="$arch";; esac; \
     curl -fsSL "https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VERSION}/go-pmtiles_${PMTILES_VERSION}_Linux_${a}.tar.gz" \
       | tar -xz -C /usr/local/bin pmtiles \
     && chmod +x /usr/local/bin/pmtiles && pmtiles version
 
-# App in an isolated venv so pip never touches the base image's system GDAL Python bindings. The
-# mosaics job shells out to the GDAL CLIs (still on PATH from the base image); at runtime it needs
-# only the base deps plus `requests` (editions.py hits the AGOL footprints service). We install the
-# full `.[pubs]` extra anyway — the exact set the current mosaics job already runs with on the shared
-# harvest image, so parity is zero-risk — minus that image's fastembed pre-warm. A slimmer mosaics-only
-# extra would cut the image (rio/geopandas/etc. go unused here); tracked as an ALL-5993 follow-up.
+# A venv keeps pip away from the base image's GDAL Python bindings.
 ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
 RUN python3 -m venv "$VIRTUAL_ENV"
 
 WORKDIR /app
-# Deps layer — cached until pyproject.toml changes. Install against an empty skeleton, then drop it.
+# Full .[pubs] extra for parity with the harvest image; a slimmer mosaics-only extra is an ALL-5993 follow-up.
 COPY pyproject.toml ./
 RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
     && pip install --upgrade pip && pip install .[pubs] \
     && rm -rf src
 
-# App layer — only this rebuilds on a source change.
 COPY src ./src
 RUN pip install --no-deps --force-reinstall .
 
-# Cloud Run Job runs the CLI; default to the full statewide build (deploy-mosaics-job overrides args).
 CMD ["python", "-m", "ugs_warehouse.pubs.geolmap_mosaics", "--scale", "all"]

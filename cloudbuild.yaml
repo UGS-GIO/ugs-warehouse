@@ -109,10 +109,9 @@ steps:
           --cache-from "$$IMG:latest" \
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
-  # Statewide raster-mosaic bake image (pubs/geolmap_mosaics.py): pinned OSGeo GDAL (has
-  # `gdal raster tile`, GDAL 3.11+) + the go-pmtiles CLI — NOT the Debian-GDAL harvest image.
+  # Mosaic bake image: pinned GDAL 3.11+ for `gdal raster tile` (the harvest image's GDAL is older).
   - id: build-mosaics
-    waitFor: ['-']   # independent image: run in parallel, don't gate the serial build-* chain
+    waitFor: ['-']
     name: gcr.io/cloud-builders/docker
     entrypoint: bash
     args:
@@ -645,13 +644,8 @@ steps:
       - --cpu=4
       - --memory=8Gi
 
-  # Per-scale raster PMTiles mosaics of the published geologic maps (old ArcGIS MD_* equivalent).
-  # Dedicated ugs-mosaics image (pinned OSGeo GDAL 3.11+ with `gdal raster tile` + go-pmtiles), NOT
-  # the Debian-GDAL harvest image. Reads the COGs in place over /vsigs; the tile tree + MBTiles land
-  # in the work dir (MOSAIC_WORK_DIR, default the RAM-backed /tmp). Defaults to --scale all.
-  # NOTE: statewide 24k z17 needs a real disk for the work dir (tens of GB); Cloud Run exposes no
-  # ephemeral-disk volume here yet, so z17 is the tile-sharded / disk-host follow-up (ALL-5993). The
-  # coarse tiers + the default caps fit /tmp. One heavy tier: --args ...,--scale,24k[,--maxzoom,N].
+  # Per-scale raster PMTiles mosaics of the geologic maps. Statewide 24k at z17 needs a real disk for
+  # MOSAIC_WORK_DIR, which this Cloud Run job lacks; running it on Cloud Batch is tracked in ALL-6048.
   - id: deploy-mosaics-job
     waitFor: [push-mosaics]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

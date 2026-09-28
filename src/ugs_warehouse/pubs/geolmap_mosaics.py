@@ -177,19 +177,23 @@ def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
 
 
 _WEBMERC_Z0_MPP = 156543.03392804097  # web-mercator m/px at zoom 0 (256 px tiles)
+# How close the VRT m/px must be to a zoom's m/px to count as on that grid. Web-optimized COGs
+# land on it exactly; anything off by more is resampled, not copied.
+ZOOM_MATCH_TOL = 0.01
 
 
-def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, list[float]]:
-    """From one `gdalinfo -json` on the VRT: (native web-mercator max zoom, [W, S, E, N] in EPSG:4326).
-    `gdalbuildvrt -resolution highest` puts the VRT at the finest member COG's m/px, so the zoom whose
-    256 px tiles match that pixel size is the mosaic's native max zoom (used to pick base resampling:
-    nearest at/above native is a pixel-exact copy, below native downsamples). The WGS84 extent is the
-    mosaic's REAL footprint, so the packed MBTiles/PMTiles metadata describes the actual coverage (a
-    --quads scoped build, or partial statewide coverage) instead of always claiming the whole state."""
+def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
+    """From one `gdalinfo -json` on the VRT: (native web-mercator max zoom, whether the VRT's pixel size
+    matches that zoom's, [W, S, E, N] in EPSG:4326). `gdalbuildvrt -resolution highest` puts the VRT at
+    the finest member COG's m/px; the nearest zoom is the mosaic's native max zoom, but only a source
+    ON that zoom's pixel grid copies through pixel-exact under `nearest` (a 0.9 m/px COG rounds to z17
+    yet has to be downsampled). The WGS84 extent is the mosaic's REAL footprint, so the packed
+    MBTiles/PMTiles metadata describes the actual coverage instead of always claiming the whole state."""
     info = json.loads(subprocess.run(["gdalinfo", "-json", vrt], env=env,
                                      capture_output=True, text=True, check=True).stdout)
     xres = abs(info["geoTransform"][1])
     zoom = max(0, round(math.log2(_WEBMERC_Z0_MPP / xres)))
+    aligned = abs(xres / (_WEBMERC_Z0_MPP / 2 ** zoom) - 1) <= ZOOM_MATCH_TOL
     ring = (info.get("wgs84Extent") or {}).get("coordinates")
     if ring:
         lons = [pt[0] for pt in ring[0]]
@@ -197,7 +201,7 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, list[float]]:
         bounds = [min(lons), min(lats), max(lons), max(lats)]
     else:
         bounds = list(UTAH_BBOX)   # VRT with no reported WGS84 extent -> fall back to the statewide clip
-    return zoom, bounds
+    return zoom, aligned, bounds
 
 
 def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], name: str,
@@ -213,32 +217,36 @@ def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], 
     con = sqlite3.connect(mbtiles)
     try:
         cur = con.cursor()
-        cur.execute("CREATE TABLE metadata (name text, value text)")
+        cur.execute("CREATE TABLE metadata (name text NOT NULL UNIQUE, value text)")
         cur.execute("CREATE TABLE tiles (zoom_level int, tile_column int, tile_row int, tile_data blob)")
         cur.execute("CREATE UNIQUE INDEX tile_index ON tiles (zoom_level, tile_column, tile_row)")
-        n = 0
-        for z in zdirs:
-            zdir = os.path.join(tile_dir, str(z))
-            for xd in os.listdir(zdir):
-                xpath = os.path.join(zdir, xd)
-                if not (xd.isdigit() and os.path.isdir(xpath)):
-                    continue
-                x = int(xd)
-                for yf in os.listdir(xpath):
-                    ystr, ext = os.path.splitext(yf)
-                    if not ystr.isdigit() or not ext:
-                        continue                    # skip sidecars (.aux.xml etc.)
-                    with open(os.path.join(xpath, yf), "rb") as fh:
-                        blob = fh.read()
-                    cur.execute("INSERT OR REPLACE INTO tiles VALUES (?,?,?,?)",
-                                (z, x, (1 << z) - 1 - int(ystr), blob))   # XYZ (top) -> TMS (bottom)
-                    n += 1
+        counted = [0]
+
+        def rows():
+            # A generator, not a list: a statewide tree is millions of tiles.
+            for z in zdirs:
+                zdir = os.path.join(tile_dir, str(z))
+                for xd in os.listdir(zdir):
+                    xpath = os.path.join(zdir, xd)
+                    if not (xd.isdigit() and os.path.isdir(xpath)):
+                        continue
+                    for yf in os.listdir(xpath):
+                        ystr, ext = os.path.splitext(yf)
+                        if not ystr.isdigit() or not ext:
+                            continue                    # skip sidecars (.aux.xml etc.)
+                        with open(os.path.join(xpath, yf), "rb") as fh:
+                            blob = fh.read()
+                        counted[0] += 1
+                        yield z, int(xd), (1 << z) - 1 - int(ystr), blob   # XYZ (top) -> TMS (bottom)
+
+        cur.executemany("INSERT OR REPLACE INTO tiles VALUES (?,?,?,?)", rows())
+        n = counted[0]
         w, s, e, nth = bounds
-        for k, v in (("name", name), ("format", tile_format), ("type", "overlay"),
-                     ("minzoom", str(minz)), ("maxzoom", str(maxz)),
-                     ("bounds", f"{w},{s},{e},{nth}"),
-                     ("center", f"{(w + e) / 2},{(s + nth) / 2},{maxz}")):
-            cur.execute("INSERT INTO metadata VALUES (?,?)", (k, v))
+        cur.executemany("INSERT INTO metadata VALUES (?,?)", (
+            ("name", name), ("format", tile_format), ("type", "overlay"),
+            ("minzoom", str(minz)), ("maxzoom", str(maxz)),
+            ("bounds", f"{w},{s},{e},{nth}"),
+            ("center", f"{(w + e) / 2},{(s + nth) / 2},{maxz}")))
         con.commit()
     finally:
         con.close()
@@ -285,12 +293,11 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
                         "-input_file_list", listfile, vrt], env=gdal_env, check=True)
 
         # `gdal raster tile` (GDAL 3.11+) tiles the VRT multithreaded and builds the overview pyramid in
-        # one pass — replacing the old serial `gdal_translate -of MBTILES` + `gdaladdo` that timed out
-        # statewide. nearest is a pixel-exact copy at/above the native zoom; a tier capped BELOW native
-        # must downsample, so it falls back to average. --skip-blank drops fully-transparent tiles.
-        native, bounds = _vrt_zoom_and_bounds(vrt, gdal_env)
+        # one pass. nearest is a pixel-exact copy only when the source sits on the native zoom's grid
+        # and the tier isn't capped below it; anything else is resampled with average.
+        native, aligned, bounds = _vrt_zoom_and_bounds(vrt, gdal_env)
         base_maxz = maxz if maxz is not None else native
-        base_resampling = "nearest" if base_maxz >= native else "average"
+        base_resampling = "nearest" if aligned and base_maxz >= native else "average"
         minz_arg = min(MOSAIC_MINZOOM, base_maxz)      # never emit --min-zoom > --max-zoom
         zdesc = f"z{minz_arg}-{base_maxz}" + ("" if maxz is not None else " (native)")
         print(f"[mosaics] {tier}: gdal raster tile -> {zdesc}, WebP q{TILE_QUALITY}, "
@@ -419,8 +426,8 @@ def main() -> int:
     if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
         ap.error("--quads contained no usable quad names")
     scales = list(TIERS) if args.scale == "all" else [args.scale]
-    return 0 if build(scales, maxz=args.maxzoom, edition_mode=args.editions,
-                       quads=args.quads) >= 0 else 1
+    built = build(scales, maxz=args.maxzoom, edition_mode=args.editions, quads=args.quads)
+    return 0 if built == len(scales) else 1
 
 
 if __name__ == "__main__":

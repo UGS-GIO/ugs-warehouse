@@ -89,14 +89,12 @@ VIEWER_INDEX = f"{VIEWER_PREFIX}/index.html"
 # review bucket, served behind the same IAP. Each SPA needs its own index for client-side-route fallback,
 # so an unknown route under /review/app/ serves the app shell, not the internal viewer's.
 APP_PREFIX = os.environ.get("REVIEW_APP_PREFIX", "review/app").strip("/")
-# A per-PR preview is its own SPA and must fall back to ITS OWN index.html — one that served a
-# different build's shell would silently render something other than the URL promises. On the
-# previews service every path is a preview (`<app>/pr-<n>/…`); on the review service the review
-# app's own previews still live under <APP_PREFIX>/pr-<n>/.
+# On the previews service every path is a preview (`<app>/pr-<n>/…`), and each falls back to ITS
+# OWN index.html. The review service refuses preview paths outright (#155): preview JS served from
+# this origin would run with the reviewer's IAP session against /api.
 _PREVIEW_SUBTREE = r"[A-Za-z0-9._-]+/pr-[A-Za-z0-9._-]+"
-_PR_PREVIEW_RE = re.compile(
-    rf"^({_PREVIEW_SUBTREE})(?:/|$)" if STATIC_ONLY
-    else rf"^({re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+)(?:/|$)")
+_PR_PREVIEW_RE = re.compile(rf"^({_PREVIEW_SUBTREE})(?:/|$)")
+_APP_PREVIEW_RE = re.compile(rf"^{re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+(?:/|$)")
 # (prefix, index) longest-prefix-first so a nested prefix wins over a shorter one.
 _SPA_INDEXES = sorted(
     [(APP_PREFIX, f"{APP_PREFIX}/index.html"), (VIEWER_PREFIX, VIEWER_INDEX)],
@@ -107,13 +105,12 @@ _SPA_PREFIXES = {APP_PREFIX, VIEWER_PREFIX}
 
 
 def _spa_index_for(path: str) -> str:
-    """The SPA index.html for a client-side route path — the app shell whose prefix owns it. A per-PR
-    preview subtree (<APP_PREFIX>/pr-<n>/…) serves its own shell; otherwise the live app or the internal
-    viewer (the default for root/unprefixed paths)."""
-    m = _PR_PREVIEW_RE.match(path)
-    if m:
-        return f"{m.group(1)}/index.html"
+    """The SPA index.html for a client-side route path: on the previews service the preview's own
+    shell, otherwise the live app or the internal viewer (the default for root/unprefixed paths)."""
     if STATIC_ONLY:
+        m = _PR_PREVIEW_RE.match(path)
+        if m:
+            return f"{m.group(1)}/index.html"
         # Nothing else exists on this service. Returning a live shell here is what we are avoiding.
         raise HTTPException(status_code=404, detail="not found")
     for prefix, index in _SPA_INDEXES:
@@ -227,6 +224,8 @@ def serve(object_path: str, request: Request) -> Response:
         raise HTTPException(status_code=404, detail="not found")
 
     object_path = object_path.lstrip("/")
+    if not STATIC_ONLY and _APP_PREVIEW_RE.match(object_path):
+        raise HTTPException(status_code=404, detail="not found")
 
     # Root / directory-style paths → the matching SPA shell (internal viewer or the hazards-review app).
     if not object_path or object_path.endswith("/") or object_path in _SPA_PREFIXES:

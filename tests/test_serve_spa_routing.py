@@ -1,7 +1,7 @@
 """Which SPA shell a client-side route falls back to, in both of serve.py's deployments.
 
-The same image runs twice. On the REVIEW service it hosts the review app, the internal viewer, the
-review app's own PR previews, and the /api/* routes. On the PREVIEWS service (`REVIEW_STATIC_ONLY`)
+The same image runs twice. On the REVIEW service it hosts the review app, the internal viewer and the
+/api/* routes, and refuses PR preview paths. On the PREVIEWS service (`REVIEW_STATIC_ONLY`)
 it hosts per-PR bundles and nothing else — a separate origin, so preview JavaScript (unmerged
 branch code a reviewer is invited to load) cannot act as that reviewer against the review API.
 
@@ -31,13 +31,15 @@ def previews(monkeypatch):
 
 # --- the review service (default) ---------------------------------------------------------------
 
-@pytest.mark.parametrize("path, expected", [
-    (f"{serve.APP_PREFIX}/pr-154/assets/x.js", f"{serve.APP_PREFIX}/pr-154/index.html"),
-    (f"{serve.APP_PREFIX}/pr-154/", f"{serve.APP_PREFIX}/pr-154/index.html"),
-    (f"{serve.APP_PREFIX}/pr-154", f"{serve.APP_PREFIX}/pr-154/index.html"),
+@pytest.mark.parametrize("path", [
+    f"{serve.APP_PREFIX}/pr-154/assets/x.js", f"{serve.APP_PREFIX}/pr-154/", f"{serve.APP_PREFIX}/pr-154",
 ])
-def test_the_review_app_preview_serves_its_own_shell(path, expected):
-    assert serve._spa_index_for(path) == expected
+def test_the_review_service_refuses_preview_paths(path):
+    # Preview JS on this origin would act as the reviewer against /api (#155).
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException) as exc:
+        serve.serve(path, request=None)
+    assert exc.value.status_code == 404
 
 
 @pytest.mark.parametrize("path", [

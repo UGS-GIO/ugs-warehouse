@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import functools
 import logging
+import math
 import os
 import threading
 import time
@@ -27,30 +28,35 @@ _CERTS_URL = "https://www.gstatic.com/iap/verify/public_key"
 _ISSUER = "https://cloud.google.com/iap"
 _METADATA = "http://metadata.google.internal/computeMetadata/v1/"
 _CERTS_TTL_S = 3600
-_REFRESH_MIN_S = 60  # an unknown key id refetches at most this often, so forged tokens can't hammer gstatic
+_REFRESH_MIN_S = 60  # gstatic is asked at most this often, so forged tokens or an outage can't stall us
 _CLOCK_SKEW_S = 30  # Google's guide allows 30 s between IAP's clock and ours
 
 _lock = threading.Lock()
 _certs: dict[str, str] = {}
-_certs_at = 0.0
+_certs_at = -math.inf    # when the keys we hold were fetched
+_attempt_at = -math.inf  # when we last asked gstatic, successful or not
 
 
 def _iap_certs(refresh: bool = False) -> dict[str, str]:
-    global _certs, _certs_at
+    """Google's IAP public keys by key id. `refresh` asks for a refetch (a token signed with a key we
+    don't hold yet, since IAP rotates keys); either way gstatic is asked at most every _REFRESH_MIN_S,
+    and a failed fetch keeps serving the keys already held rather than rejecting every user."""
+    global _certs, _certs_at, _attempt_at
     with _lock:
-        age = time.monotonic() - _certs_at
-        if not _certs or age > _CERTS_TTL_S or (refresh and age > _REFRESH_MIN_S):
+        now = time.monotonic()
+        wanted = refresh or not _certs or now - _certs_at > _CERTS_TTL_S
+        if wanted and now - _attempt_at > _REFRESH_MIN_S:
+            _attempt_at = now
             try:
                 resp = requests.get(_CERTS_URL, timeout=5)
                 resp.raise_for_status()
-                _certs, _certs_at = resp.json(), time.monotonic()
+                _certs, _certs_at = resp.json(), now
             except Exception:
                 if not _certs:
                     raise
-                # Keys we already hold stay valid across a gstatic blip; don't reject every user,
-                # and retry in _REFRESH_MIN_S rather than on every request.
                 log.warning("IAP key refresh failed; keeping the keys already fetched", exc_info=True)
-                _certs_at = time.monotonic() - _CERTS_TTL_S + _REFRESH_MIN_S
+        if not _certs:
+            raise RuntimeError("IAP public keys unavailable (last fetch failed)")
         return _certs
 
 

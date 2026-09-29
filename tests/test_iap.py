@@ -1,6 +1,7 @@
 """The review services' IAP identity: audience derivation, key caching, and what counts as a token."""
 import base64
 import json
+import math
 
 import pytest
 
@@ -66,7 +67,8 @@ class _CertsResp:
 @pytest.fixture
 def fresh_certs(monkeypatch):
     monkeypatch.setattr(iap, "_certs", {})
-    monkeypatch.setattr(iap, "_certs_at", 0.0)
+    monkeypatch.setattr(iap, "_certs_at", -math.inf)
+    monkeypatch.setattr(iap, "_attempt_at", -math.inf)
 
 
 def test_keys_survive_a_failed_refresh_and_back_off(monkeypatch, fresh_certs):
@@ -86,15 +88,26 @@ def test_keys_survive_a_failed_refresh_and_back_off(monkeypatch, fresh_certs):
     assert iap._iap_certs() == {"k1": "pem"}         # the keys we hold still verify
     assert iap._iap_certs() == {"k1": "pem"}         # ...without refetching on every request
     assert len(calls) == 2
+    assert iap._iap_certs(refresh=True) == {"k1": "pem"}  # a bad token's retry can't refetch either
+    assert len(calls) == 2
     clock[0] += iap._REFRESH_MIN_S + 1
     iap._iap_certs()
     assert len(calls) == 3
 
 
-def test_first_key_fetch_failure_is_not_hidden(monkeypatch, fresh_certs):
-    monkeypatch.setattr(iap.requests, "get", lambda url, timeout=None: _CertsResp(fail=True))
+def test_first_key_fetch_failure_is_not_hidden_and_not_retried_per_request(monkeypatch, fresh_certs):
+    calls = []
+
+    def fake_get(url, timeout=None):
+        calls.append(url)
+        return _CertsResp(fail=True)
+
+    monkeypatch.setattr(iap.requests, "get", fake_get)
     with pytest.raises(iap.requests.HTTPError):
         iap._iap_certs()
+    with pytest.raises(RuntimeError):
+        iap._iap_certs(refresh=True)
+    assert len(calls) == 1
 
 
 def test_only_es256_tokens_are_considered(monkeypatch, fake_iap):

@@ -55,6 +55,7 @@ _child_lock = threading.Lock()
 _last_restart = 0.0
 RESTART_DEBOUNCE = 5.0  # seconds; a restart already picks up every topic's current archive
 _rechecked: dict[str, float] = {}     # topic -> when an unrecognised version last forced a refetch
+UNVERSIONED = "0"  # a topic whose version is unknown: served, but never forever-cached or restarted for
 VERSION_RECHECK = 30.0  # seconds; bounds the CDN GETs a stream of made-up versions can cause
 
 
@@ -117,15 +118,17 @@ def _is_current(topic: str, version: str) -> bool:
     """Is `version` the topic's published version? Another instance can mint a re-ingest's new URL
     before our TTL'd copy moves, so a mismatch refetches once, but at most every VERSION_RECHECK
     per topic: anyone can put any string in the URL."""
+    if version == UNVERSIONED:
+        return False
     if version == _version(topic):
         return True
     now = time.monotonic()
-    if now - _rechecked.get(topic, 0.0) < VERSION_RECHECK:
+    if now - _rechecked.get(topic, -math.inf) < VERSION_RECHECK:
         return False
     _rechecked[topic] = now
     key = f"version:{topic}"
     if key in _cache:
-        _cache[key] = (0.0, _cache[key][1])  # expire, but keep it for _cached's stale-on-error
+        _cache[key] = (-math.inf, _cache[key][1])  # expire, but keep it for _cached's stale-on-error
     return version == _version(topic)
 
 
@@ -172,6 +175,8 @@ def _cached(key: str, produce):
         value = produce()
     except Exception:
         if hit:
+            # Serve it again for VERSION_RECHECK before retrying, not a blocking GET per request.
+            _cache[key] = (time.monotonic() - CACHE_TTL + VERSION_RECHECK, hit[1])
             return hit[1]
         raise
     _cache[key] = (time.monotonic(), value)
@@ -216,11 +221,15 @@ def _version(topic: str) -> str:
                 raise  # a CDN blip: _cached keeps serving the last good version
             # A topic listed in a cached index but since removed.
             print(f"[tiles] no item doc for {topic} ({e}); serving it unversioned", flush=True)
-            return "0"
+            return UNVERSIONED
         raw = props.get("ugs:content_hash") or props.get("datetime") or "0"
         # The raw hash carries a ':' and is long; a digest keeps it opaque and path-safe.
         return hashlib.sha1(str(raw).encode()).hexdigest()[:12]  # noqa: S324 (cache key, not crypto)
-    return _cached(f"version:{topic}", load)
+    try:
+        return _cached(f"version:{topic}", load)
+    except Exception as e:  # noqa: BLE001 (no version ever fetched and the CDN is failing)
+        print(f"[tiles] no version for {topic} yet ({e}); serving it unversioned", flush=True)
+        return UNVERSIONED  # not cached, so the next request tries again
 
 
 def _pick_render(topic: str, name: str | None) -> tuple[str, dict]:

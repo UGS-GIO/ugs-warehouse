@@ -99,3 +99,15 @@ def test_a_cdn_blip_keeps_the_last_good_version(state):
     client.get(f"/tiles/{TOPIC}/junk/1/1/1.mvt")            # forces a recheck during the outage
     assert _current() == good                              # not "0", which would mint new URLs
     assert restarts == []
+
+
+def test_no_version_yet_and_cdn_down_serves_unversioned_not_500(state):
+    client, item, restarts, _ = state
+    item["cdn_down"] = True
+    assert app_mod._version(TOPIC) == app_mod.UNVERSIONED
+    r = client.get(f"/tiles/{TOPIC}/{app_mod.UNVERSIONED}/1/1/1.mvt")
+    assert r.status_code == 200
+    assert "immutable" not in r.headers["cache-control"]
+    assert restarts == []
+    item["cdn_down"] = False
+    assert app_mod._version(TOPIC) != app_mod.UNVERSIONED  # the failure wasn't cached

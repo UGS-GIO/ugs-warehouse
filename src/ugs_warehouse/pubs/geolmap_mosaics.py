@@ -48,6 +48,8 @@ import sqlite3
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from ..core import config, gcs, stac
@@ -297,6 +299,43 @@ def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], 
     return n, minz, maxz
 
 
+def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
+    """Each member COG's band data types, from one header read per COG (parallel: I/O bound over
+    /vsigs). A failed read raises rather than guessing."""
+    def one(sid: str) -> list[str]:
+        out = subprocess.run(["gdalinfo", "-json", "-nofl", "-nomd", "-noct", _vsigs(sid)], env=env,
+                             stdout=subprocess.PIPE, text=True, check=True).stdout
+        return [b["type"] for b in json.loads(out)["bands"]]
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        return dict(zip(sids, ex.map(one, sids)))
+
+
+def _byte_members(tier: str, sids: list[str], env: dict) -> list[str]:
+    """`sids` minus any COG whose bands aren't all Byte, order kept. gdalbuildvrt keeps only sources
+    matching the FIRST source's data type and just warns about the rest, so one 16-bit COG in the
+    list would silently drop maps (or, listed first, nearly the whole tier). Excluded COGs are named
+    on stderr so the gap is visible."""
+    types = _band_types(sids, env)
+    bad = {s: t for s, t in types.items() if not t or any(bt != "Byte" for bt in t)}
+    if bad:
+        detail = ", ".join(f"{s} ({'/'.join(sorted(set(t)))})" for s, t in bad.items())
+        print(f"[mosaics] WARNING {tier}: excluding {len(bad)} non-8-bit COG(s) that gdalbuildvrt "
+              f"would silently drop or let displace the tier: {detail}", file=sys.stderr)
+    return [s for s in sids if s not in bad]
+
+
+def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
+    """Raise if gdalbuildvrt skipped any input. It only warns when it drops a source (type or band
+    mismatch, unreadable file), so compare band 1's sources against the input list. Non-8-bit COGs
+    are already excluded by `_byte_members`; any other drop is unexpected and stops the tier."""
+    band = ET.parse(vrt).getroot().find("VRTRasterBand")   # our own gdalbuildvrt output
+    got = {el.text for el in band.iter("SourceFilename")} if band is not None else set()
+    missing = [p for p in expected if p not in got]
+    if missing:
+        raise RuntimeError(f"gdalbuildvrt dropped {len(missing)} of {len(expected)} source(s) from "
+                           f"{vrt}: {', '.join(missing[:10])}" + (" ..." if len(missing) > 10 else ""))
+
+
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
                 *, suffix: str = "", write_stac_item: bool = True) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
@@ -306,27 +345,31 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
+    # Performance-tuned GDAL environment for reading the COGs in place over /vsigs.
+    gdal_env = os.environ.copy()
+    gdal_env.update({
+        "GDAL_CACHEMAX": "4096",                         # 4 GB block cache
+        "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
+        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
+        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
+        "VSI_CACHE": "TRUE",
+        "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
+        "GDAL_HTTP_MAX_RETRY": "10",
+        "GDAL_HTTP_RETRY_DELAY": "1",
+    })
+    sids = _byte_members(tier, sids, gdal_env)
+    if not sids:
+        print(f"[mosaics] {tier}: no 8-bit COGs left — skipping", file=sys.stderr)
+        return False
     with tempfile.TemporaryDirectory(dir=MOSAIC_WORK_DIR) as tmp:
         listfile = os.path.join(tmp, "cogs.txt")
+        members = [_vsigs(s) for s in _vrt_order(sids, by_sid)]
         with open(listfile, "w") as fh:
-            fh.write("\n".join(_vsigs(s) for s in _vrt_order(sids, by_sid)) + "\n")
+            fh.write("\n".join(members) + "\n")
         vrt = os.path.join(tmp, f"{tier}.vrt")
         tiledir = os.path.join(tmp, f"{tier}-tiles")
         mbtiles = os.path.join(tmp, f"{tier}.mbtiles")
         pmtiles = os.path.join(tmp, f"{tier}.pmtiles")
-
-        # Performance-tuned GDAL environment for reading the COGs in place over /vsigs.
-        gdal_env = os.environ.copy()
-        gdal_env.update({
-            "GDAL_CACHEMAX": "4096",                         # 4 GB block cache
-            "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
-            "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
-            "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
-            "VSI_CACHE": "TRUE",
-            "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
-            "GDAL_HTTP_MAX_RETRY": "10",
-            "GDAL_HTTP_RETRY_DELAY": "1",
-        })
 
         # `-resolution highest` keeps the VRT at the finest member COG's m/px, so at the mosaic's
         # native zoom the tile-grid-aligned masters tile 1:1. `-addalpha` gives transparent gaps where
@@ -335,6 +378,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         print(f"[mosaics] {tier}: VRT over {len(sids)} COGs")
         subprocess.run(["gdalbuildvrt", "-q", "-resolution", "highest", "-addalpha",
                         "-input_file_list", listfile, vrt], env=gdal_env, check=True)
+        _check_vrt_sources(vrt, members)
 
         # `gdal raster tile` (GDAL 3.11+) tiles the VRT multithreaded and builds the overview pyramid in
         # one pass. nearest is a pixel-exact copy only when the source sits on the native zoom's grid

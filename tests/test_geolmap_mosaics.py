@@ -351,11 +351,14 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
         calls.clear()
         with patch.object(gm.subprocess, "run", side_effect=rec), \
              patch.object(gm, "_vrt_zoom_and_bounds", return_value=(17, aligned, extent)), \
+             patch.object(gm, "_band_types", return_value={"M-1": ["Byte"] * 4}), \
+             patch.object(gm, "_check_vrt_sources") as check, \
              patch.object(gm, "_pack_tiles_to_mbtiles", side_effect=fake_pack), \
              patch.object(gm.os.path, "getsize", return_value=1 << 20), \
              patch.object(gm.os, "remove"), patch.object(gm.shutil, "rmtree"), \
              patch.object(gm.gcs, "upload"), patch.object(gm, "MOSAIC_WORK_DIR", str(tmp_path)):
             gm.build_tier("24k", ["M-1"], by_sid, maxz=maxz, write_stac_item=False)
+        assert check.call_args.args[1] == [gm._vsigs("M-1")]     # the VRT is checked against its inputs
         return next(c for c in calls if c[:3] == ["gdal", "raster", "tile"])
 
     tile = tile_argv(17)
@@ -472,3 +475,53 @@ def test_vrt_zoom_and_bounds_raises_without_a_usable_size(size):
     with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=stdout)), \
          pytest.raises(RuntimeError, match="size"):
         gm._vrt_zoom_and_bounds("x.vrt", {})
+
+
+def test_byte_members_excludes_non_8bit_cogs_and_names_them(capsys):
+    """gdalbuildvrt drops sources whose type differs from the first one, so non-Byte COGs are left
+    out up front, loudly, keeping the caller's order."""
+    types = {"A": ["Byte"] * 4, "OFR-688": ["UInt16"] * 4, "B": ["Byte"] * 4, "SS-144": ["Int32"] * 4}
+    with patch.object(gm, "_band_types", return_value=types):
+        kept = gm._byte_members("24k", ["A", "OFR-688", "B", "SS-144"], {})
+    assert kept == ["A", "B"]
+    err = capsys.readouterr().err
+    assert "OFR-688 (UInt16)" in err and "SS-144 (Int32)" in err
+
+
+def test_build_tier_skips_a_tier_with_no_8bit_cogs(capsys):
+    with patch.object(gm, "_band_types", return_value={"X": ["Int16"] * 4}), \
+         patch.object(gm.subprocess, "run") as run:
+        assert gm.build_tier("24k", ["X"], {"X": {}}, write_stac_item=False) is False
+    run.assert_not_called()                                  # no VRT, no tiling, no upload
+    assert "X (Int16)" in capsys.readouterr().err
+
+
+def test_band_types_reads_each_cog_header():
+    out = json.dumps({"bands": [{"type": "Byte"}, {"type": "Byte"}, {"type": "Byte"}, {"type": "Byte"}]})
+    with patch.object(gm.subprocess, "run", return_value=MagicMock(stdout=out)) as run:
+        assert gm._band_types(["M-1"], {}) == {"M-1": ["Byte"] * 4}
+    assert run.call_args.args[0][-1] == gm._vsigs("M-1")
+
+
+_VRT_TWO_SOURCES = """<VRTDataset rasterXSize="1" rasterYSize="1">
+  <VRTRasterBand dataType="Byte" band="1">
+    <ColorInterp>Red</ColorInterp>
+    <ComplexSource><SourceFilename relativeToVRT="0">/vsigs/b/a.cog.tif</SourceFilename></ComplexSource>
+    <ComplexSource><SourceFilename relativeToVRT="0">/vsigs/b/b.cog.tif</SourceFilename></ComplexSource>
+  </VRTRasterBand>
+</VRTDataset>
+"""
+
+
+def test_check_vrt_sources_passes_when_every_input_is_kept(tmp_path):
+    vrt = tmp_path / "m.vrt"
+    vrt.write_text(_VRT_TWO_SOURCES)
+    gm._check_vrt_sources(str(vrt), ["/vsigs/b/a.cog.tif", "/vsigs/b/b.cog.tif"])
+
+
+def test_check_vrt_sources_raises_naming_a_dropped_input(tmp_path):
+    """gdalbuildvrt only warns when it skips a source; the bake must fail instead of shipping a hole."""
+    vrt = tmp_path / "m.vrt"
+    vrt.write_text(_VRT_TWO_SOURCES)
+    with pytest.raises(RuntimeError, match="dropped 1 of 3.*c.cog.tif"):
+        gm._check_vrt_sources(str(vrt), ["/vsigs/b/a.cog.tif", "/vsigs/b/b.cog.tif", "/vsigs/b/c.cog.tif"])

@@ -25,6 +25,13 @@ steps:
         ruff check .
         python -m pytest -q
 
+  # ---- docs: every relative Markdown link resolves. Offline, so external URLs never flake the PR;
+  # links inside docs/ are also checked by `mkdocs build --strict` in cloudbuild-docs.yaml. ----
+  - id: docs-links
+    name: lycheeverse/lychee:0.24.2
+    waitFor: ["-"]
+    args: ["--offline", "--no-progress", "README.md", "AGENTS.md", "GEMINI.md", "docs/**/*.md", "*/README.md"]
+
   # ---- viewer: typecheck + lint + unit tests + build ----
   # The build is part of CI because the viewer is the deployed artifact and tsc alone does not catch
   # what breaks it (a bad import resolution, a missing asset, a Vite/Rolldown plugin failure).

@@ -3,7 +3,7 @@ default:
     @just --list
 
 ingest:
-    python -m ugs_warehouse.ingest --all
+    python -m ugs_warehouse.vector.ingest --all
 
 refresh:
     python -m scripts.refresh_stac
@@ -15,7 +15,7 @@ test:
 test-styles:
     pytest tests/test_styles.py tests/test_restyle.py
 
-# Rebind ugs-styles renders into STAC, no reingest (see STYLING.md §10)
+# Rebind ugs-styles renders into STAC, no reingest (see the "Operating" section of docs/STYLING.md)
 restyle:
     python -m ugs_warehouse.restyle
 

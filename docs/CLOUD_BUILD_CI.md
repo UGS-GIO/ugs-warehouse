@@ -10,9 +10,10 @@ Cloud Build, no GHA workflows).
 [`cloudbuild-ci.yaml`](https://github.com/UGS-GIO/ugs-warehouse/blob/main/cloudbuild-ci.yaml) — PR validation, test-only (no push/deploy):
 
 - **backend** (`python:3.11`): `pip install -e ".[dev]"` → `ruff check .` → `pytest -q`
-- **viewer** (`node:22`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run`
+- **docs-links** (`lycheeverse/lychee`): every relative Markdown link in the repo resolves (offline)
+- **viewer** (`node:22`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run` → `npm run build`
 
-Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build → the PR check goes red.
+All steps run in parallel (`waitFor: ["-"]`); any failing fails the build → the PR check goes red.
 
 ## One-time setup
 
@@ -46,7 +47,7 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build �
    already grants `run.admin` + `serviceAccountUser` there, but only to whatever
    `var.build_service_account` in `infra/terraform.tfvars` names, and that's the default Compute SA
    (a prior, already-documented finding from 2026-07-10: `gcloud builds submit` with no
-   `--service-account`, which is what GHA's `deploy.yml`/`viewer.yml` do, runs the build's *steps* as
+   `--service-account`, which is what the since-removed GHA `deploy.yml`/`viewer.yml` did, runs the build's *steps* as
    the project's default Compute SA regardless of which identity authenticated the API call). Matching
    the trigger's SA to that existing grant was the fix — no Terraform/IAM change needed.
 

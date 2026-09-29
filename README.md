@@ -7,7 +7,7 @@ bucket, served read-only through the maps-assets CDN and a static STAC viewer.
 - **vector** — Postgres `{schema}.{topic}_current` serving tables → DuckLake table, GeoParquet
   archive, PMTiles, STAC item.
 - **pubs** — UGS publications → COG (geologic plates), footprints + unit polygons, cover
-  thumbnails, STAC item. See `docs/INTEGRATION_GEOLMAP.md`.
+  thumbnails, STAC item. See `docs/ARCHITECTURE.md`.
 
 One STAC catalog spans both, laid out with collections (`ugs-serving-topics`, `ugs-publications`,
 `ugs-rasters`). `ugs-serving-topics` and `ugs-publications` nest one level — per dbt mart schema
@@ -96,5 +96,5 @@ python -m ugs_warehouse.vector.ingest --topic hazards.hazards_qfaults_current --
 python -m ugs_warehouse.vector.ingest --all
 ```
 
-The pubs producer + ops console have their own entrypoints — see `docs/INTEGRATION_GEOLMAP.md`
-and `admin/`. CI + dedicated service accounts come at deploy time (`docs/DEPLOY.md`).
+The pubs producer runs as `python -m ugs_warehouse.pubs.ingest` (each `pubs/` stage takes `--help`);
+the ops console lives in `admin/`. CI + dedicated service accounts come at deploy time (`docs/DEPLOY.md`).

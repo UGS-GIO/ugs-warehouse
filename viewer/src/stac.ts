@@ -231,12 +231,11 @@ export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined =>
   Object.values(d?.assets ?? {}).find((a) => isDrawableCog(a, d));
 
 // A RASTER PMTiles asset (the per-scale geologic-map mosaics) — rendered as raster tiles via the
-// pmtiles:// protocol. Distinguished from VECTOR PMTiles, which are declared as a web-map LINK
-// (see pmtilesLink), not an asset: a `visual` pmtiles ASSET is a raster mosaic.
+// pmtiles:// protocol. Marked `ugs:render: raster`: a vector layer's PMTiles is an asset with the
+// `visual` role too (besides its web-map link), so the role says nothing about the tile type.
 export const rasterTilesAsset = (d: StacDoc | undefined): Asset | undefined =>
   Object.values(d?.assets ?? {}).find(
-    (a) => a.type?.includes("pmtiles")
-      && (a.roles?.includes("visual") || (a as { "ugs:render"?: string })["ugs:render"] === "raster"),
+    (a) => a.type?.includes("pmtiles") && (a as { "ugs:render"?: string })["ugs:render"] === "raster",
   );
 
 // STAC Table extension: the GeoParquet `data` asset's column schema (name + type). Undefined

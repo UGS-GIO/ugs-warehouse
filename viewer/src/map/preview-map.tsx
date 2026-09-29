@@ -19,13 +19,15 @@ type Ctx = {
   focus: FocusSel | null;
   setFocus: (f: FocusSel | null) => void;
   pick: MapPick | null;
-  onFeatureClick: (id: number) => void;
+  onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   featureRelated: { relatedKey: string; value: string } | null;
   openRelated: (relatedKey: string, value: string) => void;
   clearRelated: () => void;
   selectedFeature: { props: Record<string, unknown>; fid: number | null } | null;
   selectFeature: (props: Record<string, unknown>, fid: number | null) => void;
   clearSelection: () => void;
+  // Set when the map finds a row's id on another record: the map and table are different versions.
+  mapMismatch: boolean;
   // Which `ugs:renders` entry the "Symbolize by" picker is on, so the endpoints panel can hand out
   // the style/ArcGIS URL for the symbology you are looking at rather than the first one.
   render: string;
@@ -56,6 +58,8 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const [focus, setFocus] = usePerItem<FocusSel | null>(itemId, null);
   const [pick, setPick] = usePerItem<MapPick | null>(itemId, null);
   const [sel, setSel] = usePerItem<Sel>(itemId, null);
+  const [mapMismatch, setMapMismatch] = usePerItem(itemId, false);
+  const reportMismatch = useCallback(() => setMapMismatch(true), [setMapMismatch]);
 
   // Owned here, not mirrored up out of the map: the endpoints panel hands out the URL for the
   // symbology on screen, so both need the same copy.
@@ -65,7 +69,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
 
   const setSpec = useCallback((s: PreviewSpec) => { setSpecState(s); if (s) setArmed(true); }, []);
   const registerSlot = useCallback((el: HTMLElement | null) => setSlotEl(el), []);
-  const onFeatureClick = useCallback((id: number) => setPick((p) => nextPick(p, id)), [setPick]);
+  const onFeatureClick = useCallback((id: number, props?: Record<string, unknown>) => setPick((p) => nextPick(p, id, props)), [setPick]);
   const selectFeature = useCallback((props: Record<string, unknown>, fid: number | null) => setSel({ feature: { props, fid }, related: null }), [setSel]);
   const clearSelection = useCallback(() => setSel(null), [setSel]);
   const openRelated = useCallback((relatedKey: string, value: string) => setSel((s) => (s ? { ...s, related: { relatedKey, value } } : s)), [setSel]);
@@ -75,11 +79,11 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
     () => ({
       setSpec, registerSlot, focus, setFocus, pick, onFeatureClick,
       featureRelated: sel?.related ?? null, openRelated, clearRelated,
-      selectedFeature: sel?.feature ?? null, selectFeature, clearSelection, render,
+      selectedFeature: sel?.feature ?? null, selectFeature, clearSelection, render, mapMismatch,
     }),
     [
       setSpec, focus, setFocus, pick, registerSlot, onFeatureClick, sel, openRelated, clearRelated,
-      selectFeature, clearSelection, render,
+      selectFeature, clearSelection, render, mapMismatch,
     ],
   );
 
@@ -88,7 +92,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
       {children}
       {armed && (
         <Suspense fallback={null}>
-          <PreviewMapGL spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick}
+          <PreviewMapGL spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick} onMismatch={reportMismatch}
             onFeatureSelect={selectFeature} onClearSelection={clearSelection} renders={renders} sel={render} onSel={setChosen} />
         </Suspense>
       )}

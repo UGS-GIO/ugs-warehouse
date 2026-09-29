@@ -9,7 +9,7 @@ import { asyncBufferFromUrl, cachedAsyncBuffer, type AsyncBuffer, type FileMetaD
   parquetMetadataAsync, parquetReadObjects, parquetSchema, type SchemaElement } from "hyparquet";
 import { compressors } from "hyparquet-compressors";
 import { CappedMap } from "@/lib/lru";
-import { BBOX_COLS, GEOM_NAMES, ID_COL, sanitize } from "./columns";
+import { BBOX_COLS, COVERING_COL, GEOM_NAMES, ID_COL, sanitize } from "./columns";
 import type { ColType, Page } from "./download";
 
 type Opened = { file: AsyncBuffer; metadata: FileMetaData; columns: SchemaElement[] };
@@ -58,9 +58,9 @@ function layout(columns: SchemaElement[]) {
   const names = columns.map((c) => c.name);
   const geom = new Set(GEOM_NAMES.filter((g) => names.includes(g)));
   const hasBbox = BBOX_COLS.every((c) => names.includes(c));
-  const hidden = new Set([...geom, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
+  const hidden = new Set([...geom, ...(hasBbox ? BBOX_COLS : []), COVERING_COL, ID_COL]);
   const shown = columns.filter((c) => !hidden.has(c.name));
-  const read = names.filter((n) => !geom.has(n));   // never the geometry: the map draws that
+  const read = names.filter((n) => !geom.has(n) && n !== COVERING_COL);   // never the geometry: the map draws that
   const types: Record<string, ColType> = Object.fromEntries(shown.map((c) => [c.name, colType(c)]));
   return { shown: shown.map((c) => c.name), read, hasBbox, types };
 }

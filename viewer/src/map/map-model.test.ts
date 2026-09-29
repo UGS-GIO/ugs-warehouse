@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { type ActiveLayer, boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam,
-  mapKindOf, nearestDetent, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
+  mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
   validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
 
@@ -111,6 +111,57 @@ describe("nearestDetent", () => {
   it("breaks a tie toward the lower detent, which shows more map", () => {
     const mid = (DETENTS[0] + DETENTS[1]) / 2;
     expect(nearestDetent(mid)).toBe(0);
+  });
+});
+
+describe("releaseDetent", () => {
+  it("snaps to the nearest detent on a slow release", () => {
+    expect(releaseDetent(0.5, 0.2)).toBe(1);
+  });
+
+  it("goes one detent further on a flick, even a short one", () => {
+    expect(releaseDetent(0.1, 2)).toBe(1);
+    expect(releaseDetent(0.6, 2)).toBe(2);
+    expect(releaseDetent(0.5, -2)).toBe(0);
+    expect(releaseDetent(0.9, -2)).toBe(1);
+    expect(releaseDetent(DETENTS[1], -2)).toBe(0);
+    expect(releaseDetent(DETENTS[1], 2)).toBe(2);
+  });
+
+  it("stays at the end when a flick has nowhere further to go", () => {
+    expect(releaseDetent(DETENTS[2], 2)).toBe(2);
+    expect(releaseDetent(DETENTS[0], -2)).toBe(0);
+  });
+});
+
+describe("contentTakesDrag", () => {
+  it("drags down only from the top of the content", () => {
+    expect(contentTakesDrag(0, 5, true, 2)).toBe(true);
+    expect(contentTakesDrag(0, 5, false, 2)).toBe(false);
+  });
+
+  it("drags up only while the sheet can grow", () => {
+    expect(contentTakesDrag(0, -5, false, 1)).toBe(true);
+    expect(contentTakesDrag(0, -5, true, 2)).toBe(false);
+  });
+
+  it("leaves a sideways swipe alone", () => {
+    expect(contentTakesDrag(6, 5, true, 1)).toBe(false);
+  });
+});
+
+describe("the `sheet` param", () => {
+  it("round-trips every tab and detent", () => {
+    for (const tab of ["layers", "info"] as const) {
+      for (const detent of [0, 1, 2]) expect(parseSheet(sheetParam({ tab, detent }))).toEqual({ tab, detent });
+    }
+  });
+
+  it("leaves the default out of the URL, and reads junk as the default", () => {
+    expect(sheetParam({ tab: "layers", detent: 0 })).toBeUndefined();
+    expect(sheetParam({ tab: "info", detent: 2 })).toBe("info-full");
+    expect(parseSheet("info-sideways")).toEqual({ tab: "info", detent: 0 });
+    expect(parseSheet(undefined)).toEqual({ tab: "layers", detent: 0 });
   });
 });
 

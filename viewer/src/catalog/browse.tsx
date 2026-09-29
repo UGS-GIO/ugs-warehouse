@@ -669,7 +669,7 @@ export function Browse() {
   if (c.collectionId && c.itemUrl) {
     return (
       <div className={C.wrap}>
-        <ItemDetail collectionId={c.collectionId} item={c.item.data} layout="page"
+        <ItemDetail collectionId={c.collectionId} item={c.item.data} error={c.item.error} layout="page"
           onBack={() => c.go({ view: "catalog", c: c.collectionUrl, s: c.seriesSel })}
           onMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl,
                               l: c.itemUrl ? [idOf(c.itemUrl)] : c.layerIds })} />

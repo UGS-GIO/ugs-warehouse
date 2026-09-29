@@ -43,4 +43,13 @@ export default tseslint.config(
       }],
     },
   },
+  {
+    // Offline storage reads files the app wrote in earlier versions, or that got damaged. Type them
+    // by checking (offline/guards.ts), never by asserting: no `as`, no `!`. `as const` stays allowed.
+    files: ["src/offline/**/*.{ts,tsx}", "src/sw.ts", "src/map/pmtiles-protocol.ts", "src/map/map-shell.tsx"],
+    rules: {
+      "@typescript-eslint/consistent-type-assertions": ["error", { assertionStyle: "never" }],
+      "@typescript-eslint/no-non-null-assertion": "error",
+    },
+  },
 );

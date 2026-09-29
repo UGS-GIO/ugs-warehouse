@@ -14,6 +14,7 @@ return <DiscoveryView
   onOpenPub={(collId, itemId) => c.go({ view: "catalog", c: collId, i: itemId })}
   itemSelected={Boolean(c.itemUrl)}
   selectedItem={c.item.data}
+  selectedItemError={c.item.error}
   selectedCollectionId={c.collectionId}
   onCloseItem={() => c.go({ view: "discover" })}
   onViewOnMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl, l: c.itemUrl ? [idOf(c.itemUrl)] : c.layerIds })}

@@ -45,6 +45,7 @@ steps:
         export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
         export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
         export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
+        export VITE_OFFLINE=0
         cd viewer
         npm ci
         npm run build -- --base=/${_REVIEW_VIEWER_PREFIX}/ --outDir dist-review

@@ -50,9 +50,10 @@ export function boundsOf(item: StacDoc | undefined): [[number, number], [number,
 
 // Map feature-click → table selection. The nonce bumps on every click so re-clicking the SAME
 // feature id still re-fires the downstream table effect (a bare id wouldn't change, so it wouldn't).
-export type MapPick = { id: number; nonce: number };
-export function nextPick(prev: MapPick | null, id: number): MapPick {
-  return { id, nonce: (prev?.nonce ?? 0) + 1 };
+// `props` are the tile feature's attributes, checked against the row the id finds (lib/same-feature).
+export type MapPick = { id: number; nonce: number; props?: Record<string, unknown> };
+export function nextPick(prev: MapPick | null, id: number, props?: Record<string, unknown>): MapPick {
+  return { id, nonce: (prev?.nonce ?? 0) + 1, props };
 }
 
 // Mobile sheet snap points, as a fraction of the map area: peek / half / full.
@@ -70,6 +71,38 @@ export function nearestDetent(frac: number): number {
   return best;
 }
 
+// The phone sheet in the URL (`sheet`): its tab, then how far up it is. `layers` is Layers at half,
+// `info-full` is Info at full, `info-peek` is Info lowered. Absent, or anything unknown, is a
+// Layers peek, so the default map URL stays bare.
+export type SheetTab = "layers" | "info";
+export type SheetState = { tab: SheetTab; detent: number };
+const SHEET_AT = ["peek", "", "full"];
+export function parseSheet(v: string | undefined): SheetState {
+  const [tab, at = ""] = (v ?? "").split("-");
+  const detent = SHEET_AT.indexOf(at);
+  return { tab: tab === "info" ? "info" : "layers", detent: !!v && detent >= 0 ? detent : 0 };
+}
+export function sheetParam({ tab, detent }: SheetState): string | undefined {
+  if (tab === "layers" && detent === 0) return undefined;
+  return [tab, SHEET_AT[detent]].filter(Boolean).join("-");
+}
+
+// Where a released drag settles. A flick (speed in sheet-heights per second, + is up) goes one
+// detent past where the sheet is, in the flick's direction, however short the drag was.
+export const FLICK_SPEED = 0.8;
+export function releaseDetent(frac: number, speed: number): number {
+  if (speed > FLICK_SPEED) return Math.min(DETENTS.filter((d) => d <= frac + 1e-9).length, DETENTS.length - 1);
+  if (speed < -FLICK_SPEED) return Math.max(DETENTS.filter((d) => d < frac - 1e-9).length - 1, 0);
+  return nearestDetent(frac);
+}
+
+// Whether a swipe on the sheet's content moves the sheet instead of scrolling it, from its first
+// move (dy + is down): down only from the top, up only while the sheet can still grow.
+export function contentTakesDrag(dx: number, dy: number, atTop: boolean, detent: number): boolean {
+  if (Math.abs(dy) <= Math.abs(dx)) return false;
+  return dy > 0 ? atTop : detent < DETENTS.length - 1;
+}
+
 // Resizable pane size, clamped. Non-finite (a stored value from an older build, or NaN off a
 // pointer event) falls back to the default rather than collapsing the pane to zero.
 export function clampSize(n: number, min: number, max: number, fallback: number): number {
@@ -81,7 +114,10 @@ export function clampSize(n: number, min: number, max: number, fallback: number)
 // so the map re-flies on every distinct pick, even two features at the same lat/lon (identical
 // bbox). `featureId` is the feature to outline via setFeatureState on the PMTiles tile (the exact
 // geometry is already on the map, so nothing is read from the parquet). `bbox` drives the fly.
-export type FocusSel = { bbox?: [number, number, number, number]; featureId?: number; key?: string | number };
+export type FocusSel = {
+  bbox?: [number, number, number, number]; featureId?: number; key?: string | number;
+  props?: Record<string, unknown>;   // the row's attributes, checked against the tile feature
+};
 
 // A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
 // layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
@@ -89,6 +125,7 @@ export type FocusSel = { bbox?: [number, number, number, number]; featureId?: nu
 export type ActiveLayer = {
   id: string; title: string; bbox?: number[];
   pmHref?: string; pmLayer?: string; styleUrl?: string;
+  tableHref?: string;   // the layer's GeoParquet, for saving its table offline
   cogHref?: string;
   rasterPmHref?: string;
   // Zarr datacube — one object, because the store is useless without the variable and the dims to

@@ -20,7 +20,10 @@ fastapi_testclient = pytest.importorskip("fastapi.testclient")
 app_mod = pytest.importorskip("app")
 
 TOPIC = "hazards_qfaults"
-_ITEMS = json.dumps({"items": [{"id": TOPIC, "assets": {"pmtiles": {"href": "x"}}}]}).encode()
+# Items nest by mart schema under the collection; the index's self link is the only honest path.
+_SELF = f"./hazards/{TOPIC}/{TOPIC}.json"
+_ITEMS = json.dumps({"items": [{"id": TOPIC, "assets": {"pmtiles": {"href": "x"}},
+                                "links": [{"rel": "self", "href": _SELF}]}]}).encode()
 
 
 @pytest.fixture
@@ -34,6 +37,8 @@ def state(monkeypatch):
             return _ITEMS
         if item.get("cdn_down"):
             raise urllib.error.HTTPError(url, 503, "unavailable", {}, None)
+        if not url.endswith(_SELF[1:]):
+            raise urllib.error.HTTPError(url, 404, "not found", {}, None)
         return json.dumps(item).encode()
 
     restarts = []
@@ -111,3 +116,15 @@ def test_no_version_yet_and_cdn_down_serves_unversioned_not_500(state):
     assert restarts == []
     item["cdn_down"] = False
     assert app_mod._version(TOPIC) != app_mod.UNVERSIONED  # the failure wasn't cached
+
+
+def test_the_version_comes_from_the_nested_item_doc(state):
+    _, _, _, fetches = state
+    assert _current() == app_mod.hashlib.sha1(b"sha256:v1").hexdigest()[:12]
+    assert any(u.endswith(f"/hazards/{TOPIC}/{TOPIC}.json") for u in fetches)
+
+
+def test_an_index_entry_without_a_self_link_is_unversioned(state, monkeypatch):
+    bare = json.dumps({"items": [{"id": TOPIC, "assets": {"pmtiles": {"href": "x"}}}]}).encode()
+    monkeypatch.setattr(app_mod, "_get", lambda url: bare)
+    assert _current() == app_mod.UNVERSIONED

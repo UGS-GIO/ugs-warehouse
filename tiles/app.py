@@ -28,7 +28,7 @@ import time
 import urllib.error
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
-from urllib.parse import quote
+from urllib.parse import quote, urljoin
 
 from fastapi import APIRouter, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -213,14 +213,22 @@ def _version(topic: str) -> str:
     Falls back to the item's datetime, which also moves on re-ingest, if the hash is ever absent.
     """
     def load():
-        base = COLLECTION_URL.rsplit("/", 1)[0]
+        # The index knows where each item lives; the path nests by mart schema, so don't guess it.
+        links = (_topics().get(topic) or {}).get("links") or []
+        href = next((ln.get("href") for ln in links if ln.get("rel") == "self"), None)
+        if not href:
+            print(f"[tiles] index entry for {topic} has no self link; serving it unversioned",
+                  flush=True)
+            return UNVERSIONED
+        url = urljoin(COLLECTION_URL, href)
         try:
-            props = json.loads(_get(f"{base}/{topic}/{topic}.json")).get("properties") or {}
+            props = json.loads(_get(url)).get("properties") or {}
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 raise  # a CDN blip: _cached keeps serving the last good version
             # A topic listed in a cached index but since removed.
-            print(f"[tiles] no item doc for {topic} ({e}); serving it unversioned", flush=True)
+            print(f"[tiles] no item doc for {topic} at {url} ({e}); serving it unversioned",
+                  flush=True)
             return UNVERSIONED
         raw = props.get("ugs:content_hash") or props.get("datetime") or "0"
         # The raw hash carries a ':' and is long; a digest keeps it opaque and path-safe.

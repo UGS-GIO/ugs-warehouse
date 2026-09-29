@@ -842,3 +842,17 @@ def test_lineart_to_byte_keeps_gcp_georeferencing(tmp_path):
     with rasterio.open(out) as ds:
         got, crs = ds.gcps
         assert len(got) == 3 and crs.to_epsg() == 26712
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_an_unreadable_plate_fails_only_that_pub(monkeypatch, tmp_path):
+    """A probe error becomes that pub's fail:* (logged for attention), never a raise that ends the run."""
+    from ugs_warehouse.pubs import harvest
+
+    def boom(p):
+        raise RuntimeError("cannot open plate")
+    _attempt_with(monkeypatch, tmp_path, "byte")          # installs the other stubs
+    monkeypatch.setattr(harvest, "_plate_kind", boom)
+    res = _harvest_attempt(identity.Pub(series_id="M-8"), ["http://x/m-8.zip"])
+    assert res == "fail:RuntimeError"
+    assert harvest.exit_code({"ok": 0, "expected": 0, "attention": 1}) == 0

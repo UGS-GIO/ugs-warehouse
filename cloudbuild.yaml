@@ -824,10 +824,8 @@ steps:
   # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).
   # Memory is small: it holds PMTiles directories, never tile data. Behind the CDN this only
   # ever sees cache misses, so concurrency matters more than instance count.
-  # A PR preview (cloudbuild-service-preview.yaml) deploys onto this service with --no-traffic,
-  # which pins traffic to the revision serving at that moment, so a plain deploy here would get
-  # 0%. The `prod` tag moves to the revision this deploy creates, and traffic follows the tag.
-  # Not --to-latest: a preview deployed meanwhile would be the latest revision.
+  # Route by the `prod` tag, which moves to this deploy's revision, so it goes live even when traffic
+  # was pinned to an older revision (a rollback or manual reroute pins it; a plain deploy gets 0%).
   - id: deploy-tiles
     waitFor: [push-tiles]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

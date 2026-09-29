@@ -55,6 +55,6 @@ Mobile: ✅ responsive layout (map view stacks, header trims, tables scroll-x).
   covers recurring per-topic ingest; batch jobs are rare + run by hand.
 
 ## Tracked elsewhere
-- Raster consumer COG promote (pending ugs-ingest #169) — see `RASTER_SPEC.md` / `HANDOFF.md`.
+- Raster consumer COG promote (pending ugs-ingest #169) — see `RASTER_SPEC.md`.
 - Deploy / perms handoff — `DEPLOY.md`.
 - DuckLake 2026 production-readiness — unverified; revisit.

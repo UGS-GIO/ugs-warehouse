@@ -54,6 +54,8 @@ _child: subprocess.Popen | None = None
 _child_lock = threading.Lock()
 _last_restart = 0.0
 RESTART_DEBOUNCE = 5.0  # seconds; a restart already picks up every topic's current archive
+_rechecked: dict[str, float] = {}     # topic -> when an unrecognised version last forced a refetch
+VERSION_RECHECK = 30.0  # seconds; bounds the CDN GETs a stream of made-up versions can cause
 
 
 def _spawn() -> subprocess.Popen:
@@ -111,9 +113,26 @@ def _restart_child(reason: str) -> None:
     _wait_ready()
 
 
+def _is_current(topic: str, version: str) -> bool:
+    """Is `version` the topic's published version? Another instance can mint a re-ingest's new URL
+    before our TTL'd copy moves, so a mismatch refetches once, but at most every VERSION_RECHECK
+    per topic: anyone can put any string in the URL."""
+    if version == _version(topic):
+        return True
+    now = time.monotonic()
+    if now - _rechecked.get(topic, 0.0) < VERSION_RECHECK:
+        return False
+    _rechecked[topic] = now
+    key = f"version:{topic}"
+    if key in _cache:
+        _cache[key] = (0.0, _cache[key][1])  # expire, but keep it for _cached's stale-on-error
+    return version == _version(topic)
+
+
 def _note_version(topic: str, version: str) -> None:
     """A tile asked for under a version we have not served means the archive was re-ingested since
-    this process cached its directory. Restart before serving, or the answer is silently stale."""
+    this process cached its directory. Restart before serving, or the answer is silently stale.
+    Only call it with a published version (_is_current), or a made-up one restarts the server."""
     if _served.setdefault(topic, version) != version:
         _served[topic] = version
         _restart_child(f"{topic} changed version")
@@ -192,7 +211,10 @@ def _version(topic: str) -> str:
         base = COLLECTION_URL.rsplit("/", 1)[0]
         try:
             props = json.loads(_get(f"{base}/{topic}/{topic}.json")).get("properties") or {}
-        except Exception as e:  # noqa: BLE001 — a topic listed in a cached index but since removed
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                raise  # a CDN blip: _cached keeps serving the last good version
+            # A topic listed in a cached index but since removed.
             print(f"[tiles] no item doc for {topic} ({e}); serving it unversioned", flush=True)
             return "0"
         raw = props.get("ugs:content_hash") or props.get("datetime") or "0"
@@ -408,7 +430,14 @@ def _proxy_tile(topic: str, z: int, x: int, y: int, cache: str) -> Response:
 @app.get("/tiles/{topic}/{version}/{z}/{x}/{y}.mvt")
 def tile(topic: str, version: str, z: int, x: int, y: int) -> Response:
     """The URL the generated styles hand out. `version` is a content token, so these bytes can be
-    cached forever — a re-ingest mints new URLs rather than invalidating old ones."""
+    cached forever — a re-ingest mints new URLs rather than invalidating old ones. Any other
+    version (a stale style, or a made-up string) gets today's bytes, briefly cached."""
+    if topic not in _topics():
+        raise HTTPException(status_code=404, detail=f"unknown topic {topic}")
+    if not _is_current(topic, version):
+        # Short-lived: if this is a re-ingest's new URL we haven't recognised yet, the bytes may be
+        # the old archive's, and they must not outlive the next recheck.
+        return _proxy_tile(topic, z, x, y, f"public, max-age={VERSION_RECHECK:.0f}")
     _note_version(topic, version)
     return _proxy_tile(topic, z, x, y, "public, max-age=31536000, immutable")
 

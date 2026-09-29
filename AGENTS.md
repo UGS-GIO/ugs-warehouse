@@ -4,7 +4,7 @@ Single agent-instructions file for this repo (`AGENTS.md` standard). If tool def
 
 ## What this is
 
-DuckLake lakehouse for UGS. Fork at dataELT published gold contract — Postgres `{schema}.{layer}_current` serving tables — emit 4 artifacts per topic: DuckLake table (native geom), GeoParquet archive, PMTiles, STAC item. No re-derive silver/gold. Add serving shape on top of existing dbt mart contract owned upstream (marshallrobinson). See `docs/HANDOFF.md` for live working state, blockers, decision history (not committed).
+DuckLake lakehouse for UGS. Fork at dataELT published gold contract — Postgres `{schema}.{layer}_current` serving tables — emit 4 artifacts per topic: DuckLake table (native geom), GeoParquet archive, PMTiles, STAC item. No re-derive silver/gold. Add serving shape on top of existing dbt mart contract owned upstream (marshallrobinson).
 
 ## Commands
 

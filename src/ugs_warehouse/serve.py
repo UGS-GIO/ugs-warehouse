@@ -27,7 +27,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from obstore.store import GCSStore
 
-from ugs_warehouse import comments, review_catalog
+from ugs_warehouse import comments, iap, review_catalog
 from ugs_warehouse.core import config, gcs
 
 app = FastAPI(title="ugs-warehouse-review-serving")
@@ -161,12 +161,10 @@ def healthz() -> dict[str, str]:
 
 @app.get("/whoami")
 def whoami(request: Request) -> dict[str, str]:
-    """The IAP-authenticated user, for the viewer's logged-in badge. IAP injects
-    `X-Goog-Authenticated-User-Email` as `accounts.google.com:user@domain` on every request that
-    passes it. 404 when absent (e.g. hit outside IAP) so the badge simply hides. Display-only — not
-    used for authorization (IAP already gated the request)."""
-    raw = request.headers.get("x-goog-authenticated-user-email", "")
-    email = raw.split(":", 1)[-1] if raw else ""
+    """The IAP-authenticated user, for the viewer's logged-in badge. 404 when there is no verified IAP
+    identity (e.g. hit outside IAP) so the badge simply hides. Display-only: not used for
+    authorization (IAP already gated the request)."""
+    email = iap.verified_email(request.headers)
     if not email:
         raise HTTPException(status_code=404, detail="no IAP identity")
     return {"email": email, "user": email.split("@")[0]}

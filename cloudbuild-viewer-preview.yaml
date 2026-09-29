@@ -11,7 +11,7 @@
 # code, and on that origin it would inherit the reviewer's IAP session (post/delete comments as
 # them, pull signed URLs to private review assets). Different host → different cookie, plus CORS.
 #
-# `--base=/viewer/pr-<n>/` is both the asset prefix and the router basepath (src/mount.ts): the
+# `--base=/viewer/pr-<n>/` is both the asset prefix and the router basepath (src/lib/mount.ts): the
 # viewer has real path routes, so a bundle mounted under a prefix has to be told which one.
 # serve.py serves this bundle's own index.html for an unknown path under the subtree.
 #

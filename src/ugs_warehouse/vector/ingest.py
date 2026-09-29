@@ -190,7 +190,7 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="exercise source + transform only; skip all sinks "
-             "(no GCS / Iceberg writes — safe smoke against real _current)",
+             "(no GCS / DuckLake writes; safe smoke against real _current)",
     )
     ap.add_argument(
         "--parallel",

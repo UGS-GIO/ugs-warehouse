@@ -1,20 +1,12 @@
-# Per-PR preview of the tiles service, as a TAGGED REVISION carrying no traffic.
-# Trigger: pull request touching tiles/** (infra/cloudbuild-triggers.tf).
+# Per-PR tiles preview: a tagged, no-traffic revision of ugs-warehouse-tiles-preview. The trigger
+# runs this file from the PR branch, so its build identity can reach only this service, the
+# previews image repo, and a runtime SA with no roles (tiles reads only the public CDN, so public
+# invoke exposes nothing). The tag is removed on PR close (cloudbuild-preview-cleanup.yaml).
 #
-#   https://pr-123---ugs-warehouse-tiles-preview-<hash>.a.run.app
-#
-# Why its own service: a preview runs UNMERGED branch code, and the trigger reads this file from
-# the PR branch, so whatever the preview build identity can do, a PR can do. It therefore reaches
-# only ugs-warehouse-tiles-preview, whose runtime SA (tiles-preview-run) holds no roles (tiles
-# reads nothing but the public CDN), and pushes only to the ugs-warehouse-previews repo. The
-# revision is a tag, not a new service per PR: `--no-traffic` leaves the service URL alone, and a
-# tagged revision scales to zero, so an idle preview costs nothing.
-#
-# One-time setup, outside Terraform like the other build-project identities (basemap-refresh.tf):
-# the deploy SA has no admin role in the build project, and should not, since prod lives there too.
+# One-time setup, by hand like basemap-refresh.tf: the deploy SA has no admin role in this project.
 # BP=ut-dnr-ugs-backend-tools R=us-central1 PB=ugs-warehouse-preview-build@$BP.iam.gserviceaccount.com
 # RUN=tiles-preview-run@$BP.iam.gserviceaccount.com
-#   gcloud iam service-accounts create tiles-preview-run --project=$BP --display-name="tiles PR previews runtime (no roles)"
+#   gcloud iam service-accounts create tiles-preview-run --project=$BP
 #   gcloud artifacts repositories create ugs-warehouse-previews --project=$BP --location=$R --repository-format=docker
 #   # cleanup.json: [{"name":"delete-old-previews","action":{"type":"Delete"},"condition":{"olderThan":"30d"}}]
 #   gcloud artifacts repositories set-cleanup-policies ugs-warehouse-previews --project=$BP --location=$R --policy=cleanup.json
@@ -25,11 +17,6 @@
 #   gcloud run services add-iam-policy-binding ugs-warehouse-tiles-preview --project=$BP --region=$R \
 #     --member=serviceAccount:$PB --role=roles/run.developer
 #   gcloud iam service-accounts add-iam-policy-binding $RUN --project=$BP --member=serviceAccount:$PB --role=roles/iam.serviceAccountUser
-# Public invoke is safe: everything tiles serves is already public, and the runtime SA has no roles.
-#
-# Expiry: Cloud Run's own caps are a backstop, not a policy (1,000 revisions / 2,000 tags per
-# service, oldest first). The tag is removed when the PR closes — see the untag step in
-# cloudbuild-preview-cleanup.yaml.
 substitutions:
   _REGION: us-central1
   _SERVICE: ugs-warehouse-tiles-preview

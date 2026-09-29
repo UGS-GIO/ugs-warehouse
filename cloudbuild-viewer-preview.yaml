@@ -26,8 +26,7 @@ substitutions:
   # AND cross-project run.viewer for the preview-build SA, just to print a URL. Not worth either:
   # the service's *.run.app URL is stable for its lifetime, so it's a substitution instead.
   _PREVIEWS_BASE_URL: https://ugs-warehouse-previews-ufyuidl4mq-uc.a.run.app
-  # Prod features/tiles URLs are static for the same reason: the preview-build SA holds no run.*
-  # role on the prod services, so it cannot `describe` them, and their *.run.app URLs are stable.
+  # Static: the preview build identity can't read the prod services to look these up.
   _TILES_BASE_URL: https://ugs-warehouse-tiles-xedvkyurga-uc.a.run.app
   _FEATURES_BASE_URL: https://ugs-warehouse-features-xedvkyurga-uc.a.run.app
   _PREVIEW_PATH: viewer/pr-

@@ -1,18 +1,38 @@
-# Per-PR preview of a Cloud Run service, as a TAGGED REVISION carrying no traffic.
-# Trigger: pull request touching the service's sources (tiles/**, api/**, src/**).
+# Per-PR preview of the tiles service, as a TAGGED REVISION carrying no traffic.
+# Trigger: pull request touching tiles/** (infra/cloudbuild-triggers.tf).
 #
-#   https://pr-123---ugs-warehouse-tiles-<hash>.a.run.app
+#   https://pr-123---ugs-warehouse-tiles-preview-<hash>.a.run.app
 #
-# Why a tag rather than a separate service: same service means same IAM, same env, same secrets —
-# the preview differs from prod only in the image. `--no-traffic` keeps prod serving its current
-# revision, and a tagged revision scales to zero, so an idle preview costs nothing.
+# Why its own service: a preview runs UNMERGED branch code, and the trigger reads this file from
+# the PR branch, so whatever the preview build identity can do, a PR can do. It therefore reaches
+# only ugs-warehouse-tiles-preview, whose runtime SA (tiles-preview-run) holds no roles (tiles
+# reads nothing but the public CDN), and pushes only to the ugs-warehouse-previews repo. The
+# revision is a tag, not a new service per PR: `--no-traffic` leaves the service URL alone, and a
+# tagged revision scales to zero, so an idle preview costs nothing.
+#
+# One-time setup, outside Terraform like the other build-project identities (basemap-refresh.tf):
+# the deploy SA has no admin role in the build project, and should not, since prod lives there too.
+# BP=ut-dnr-ugs-backend-tools R=us-central1 PB=ugs-warehouse-preview-build@$BP.iam.gserviceaccount.com
+# RUN=tiles-preview-run@$BP.iam.gserviceaccount.com
+#   gcloud iam service-accounts create tiles-preview-run --project=$BP --display-name="tiles PR previews runtime (no roles)"
+#   gcloud artifacts repositories create ugs-warehouse-previews --project=$BP --location=$R --repository-format=docker
+#   # cleanup.json: [{"name":"delete-old-previews","action":{"type":"Delete"},"condition":{"olderThan":"30d"}}]
+#   gcloud artifacts repositories set-cleanup-policies ugs-warehouse-previews --project=$BP --location=$R --policy=cleanup.json
+#   gcloud run deploy ugs-warehouse-tiles-preview --project=$BP --region=$R --image=us-docker.pkg.dev/cloudrun/container/hello \
+#     --service-account=$RUN --allow-unauthenticated --cpu=1 --memory=512Mi --timeout=60 --max-instances=5
+#   gcloud artifacts repositories add-iam-policy-binding ugs-warehouse-previews --project=$BP --location=$R \
+#     --member=serviceAccount:$PB --role=roles/artifactregistry.writer
+#   gcloud run services add-iam-policy-binding ugs-warehouse-tiles-preview --project=$BP --region=$R \
+#     --member=serviceAccount:$PB --role=roles/run.developer
+#   gcloud iam service-accounts add-iam-policy-binding $RUN --project=$BP --member=serviceAccount:$PB --role=roles/iam.serviceAccountUser
+# Public invoke is safe: everything tiles serves is already public, and the runtime SA has no roles.
 #
 # Expiry: Cloud Run's own caps are a backstop, not a policy (1,000 revisions / 2,000 tags per
 # service, oldest first). The tag is removed when the PR closes — see the untag step in
 # cloudbuild-preview-cleanup.yaml.
 substitutions:
   _REGION: us-central1
-  _SERVICE: ugs-warehouse-tiles
+  _SERVICE: ugs-warehouse-tiles-preview
   _CONTEXT: tiles          # build context / Dockerfile dir for this service
 
 steps:
@@ -21,14 +41,14 @@ steps:
     args:
       - build
       - -t
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse/${_SERVICE}:pr-$_PR_NUMBER
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse-previews/${_SERVICE}:pr-$_PR_NUMBER
       - ${_CONTEXT}
 
   - id: push-image
     name: gcr.io/cloud-builders/docker
     args:
       - push
-      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse/${_SERVICE}:pr-$_PR_NUMBER
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse-previews/${_SERVICE}:pr-$_PR_NUMBER
 
   # `--no-traffic` + `--tag`: the revision is addressable at its own URL and receives nothing from
   # the live URL. Prod is unaffected even if the preview crashloops.
@@ -41,7 +61,8 @@ steps:
         set -e
         gcloud run deploy ${_SERVICE} \
           --region=${_REGION} \
-          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse/${_SERVICE}:pr-$_PR_NUMBER \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/ugs-warehouse-previews/${_SERVICE}:pr-$_PR_NUMBER \
+          --service-account=tiles-preview-run@$PROJECT_ID.iam.gserviceaccount.com \
           --no-traffic \
           --tag=pr-$_PR_NUMBER
         gcloud run services describe ${_SERVICE} --region=${_REGION} \

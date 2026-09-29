@@ -20,3 +20,5 @@ which one — `npm run build -- --base=/review/viewer/` — because that base is
 basepath (`src/lib/mount.ts`). Deploy is `firebase deploy --only hosting`; see `docs/DEPLOY.md` §5.
 
 **Next:** DuckDB-WASM panel — search over stac-geoparquet + on-demand export (GPKG/SHP/GeoJSON), client-side.
+
+<!-- preview smoke test, not for merge -->

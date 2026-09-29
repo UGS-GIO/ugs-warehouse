@@ -222,3 +222,5 @@ rather than the cached old one.
 - **Raster XYZ is a different build.** PNG tiles mean server-side rendering (tileserver-gl or
   maplibre-native + the GL style), which doesn't idle cheaply. For the geologic-map COGs
   specifically, `titiler` is the standard answer and needs no pre-rendering.
+
+<!-- preview smoke test, not for merge -->

@@ -224,3 +224,4 @@ rather than the cached old one.
   specifically, `titiler` is the standard answer and needs no pre-rendering.
 
 <!-- preview smoke test, not for merge -->
+<!-- retrigger -->

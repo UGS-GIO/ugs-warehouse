@@ -133,3 +133,45 @@ def test_whoami_shows_only_a_verified_identity(monkeypatch, fake_iap):
     with pytest.raises(HTTPException) as e:
         serve.whoami(_Req(forged))
     assert e.value.status_code == 404
+
+
+def test_a_bad_token_for_a_known_key_does_not_refetch_keys(monkeypatch, fake_iap, other_iap):
+    refreshes = []
+
+    def certs(refresh=False):
+        refreshes.append(refresh)
+        return fake_iap.certs
+
+    monkeypatch.setattr(iap, "_iap_certs", certs)
+    monkeypatch.setattr(iap, "_audience", lambda: fake_iap.audience)
+    # Same key id, different key: a forged signature, not a rotated key.
+    assert iap.verified_email({iap.JWT_HEADER: other_iap.token("a@utah.gov")}) == ""
+    assert iap.verified_email({iap.JWT_HEADER: fake_iap.token("a@utah.gov", ttl=-120)}) == ""
+    assert refreshes and True not in refreshes
+
+
+def test_a_rotated_key_is_fetched_once_and_then_verifies(monkeypatch, fake_iap):
+    refreshes = []
+
+    def certs(refresh=False):
+        refreshes.append(refresh)
+        return fake_iap.certs if refresh else {"retired-kid": "pem"}
+
+    monkeypatch.setattr(iap, "_iap_certs", certs)
+    monkeypatch.setattr(iap, "_audience", lambda: fake_iap.audience)
+    assert iap.verified_email({iap.JWT_HEADER: fake_iap.token("a@utah.gov")}) == "a@utah.gov"
+    assert refreshes == [False, True]
+
+
+def test_fresh_keys_skip_the_lock(monkeypatch):
+    class _NoLock:
+        def __enter__(self):
+            raise AssertionError("took the lock for fresh keys")
+
+        def __exit__(self, *exc):
+            return False
+
+    monkeypatch.setattr(iap, "_certs", {"k1": "pem"})
+    monkeypatch.setattr(iap, "_certs_at", iap.time.monotonic())
+    monkeypatch.setattr(iap, "_lock", _NoLock())
+    assert iap._iap_certs() == {"k1": "pem"}

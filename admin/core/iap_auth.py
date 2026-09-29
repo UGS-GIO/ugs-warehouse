@@ -45,6 +45,8 @@ def _iap_certs(refresh: bool = False) -> dict[str, str]:
     don't hold yet, since IAP rotates keys); either way gstatic is asked at most every _REFRESH_MIN_S,
     and a failed fetch keeps serving the keys already held rather than rejecting every user."""
     global _certs, _certs_at, _attempt_at
+    if not refresh and _certs and time.monotonic() - _certs_at <= _CERTS_TTL_S:
+        return _certs  # the common case: fresh keys, no lock
     with _lock:
         now = time.monotonic()
         wanted = refresh or not _certs or now - _certs_at > _CERTS_TTL_S
@@ -79,16 +81,15 @@ def _audience() -> str | None:
 
 
 def _decode(token: str, audience: str) -> dict:
+    header = jwt.decode_header(token)
     # IAP signs with ES256 only; refuse anything else before choosing a verifier by `alg`.
-    if jwt.decode_header(token).get("alg") != "ES256":
+    if header.get("alg") != "ES256":
         raise ValueError("IAP token is not ES256")
-    try:
-        return jwt.decode(token, certs=_iap_certs(), audience=audience,
-                          clock_skew_in_seconds=_CLOCK_SKEW_S)
-    except ValueError:
-        # IAP rotates keys; a token signed with one we haven't fetched yet is retried once.
-        return jwt.decode(token, certs=_iap_certs(refresh=True), audience=audience,
-                          clock_skew_in_seconds=_CLOCK_SKEW_S)
+    certs = _iap_certs()
+    if header.get("kid") not in certs:
+        # IAP rotates keys: only a key id we don't hold is worth a refetch, not every bad token.
+        certs = _iap_certs(refresh=True)
+    return jwt.decode(token, certs=certs, audience=audience, clock_skew_in_seconds=_CLOCK_SKEW_S)
 
 
 def verified_email(meta) -> str:

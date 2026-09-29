@@ -348,7 +348,6 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
     # Performance-tuned GDAL environment for reading the COGs in place over /vsigs.
     gdal_env = os.environ.copy()
     gdal_env.update({
-        "GDAL_CACHEMAX": "4096",                         # 4 GB block cache
         "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
         "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
         "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
@@ -357,6 +356,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         "GDAL_HTTP_MAX_RETRY": "10",
         "GDAL_HTTP_RETRY_DELAY": "1",
     })
+    gdal_env.setdefault("GDAL_CACHEMAX", "4096")   # MB; the Batch VM sets its own
     sids = _byte_members(tier, sids, gdal_env)
     if not sids:
         print(f"[mosaics] {tier}: no 8-bit COGs left — skipping", file=sys.stderr)

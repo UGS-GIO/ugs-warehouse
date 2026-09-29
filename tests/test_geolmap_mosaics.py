@@ -525,3 +525,24 @@ def test_check_vrt_sources_raises_naming_a_dropped_input(tmp_path):
     vrt.write_text(_VRT_TWO_SOURCES)
     with pytest.raises(RuntimeError, match="dropped 1 of 3.*c.cog.tif"):
         gm._check_vrt_sources(str(vrt), ["/vsigs/b/a.cog.tif", "/vsigs/b/b.cog.tif", "/vsigs/b/c.cog.tif"])
+
+
+@pytest.mark.parametrize("env_value,expected", [(None, "4096"), ("8192", "8192")])
+def test_build_tier_gdal_cache_follows_the_environment(monkeypatch, env_value, expected):
+    """The Batch VM (32 GB) sets GDAL_CACHEMAX itself; the Cloud Run job keeps the 4 GB default."""
+    if env_value is None:
+        monkeypatch.delenv("GDAL_CACHEMAX", raising=False)
+    else:
+        monkeypatch.setenv("GDAL_CACHEMAX", env_value)
+    seen: dict = {}
+
+    class _Seen(Exception):
+        pass
+
+    def stop(sids, env):
+        seen["cachemax"] = env["GDAL_CACHEMAX"]
+        raise _Seen
+
+    with patch.object(gm, "_band_types", side_effect=stop), pytest.raises(_Seen):
+        gm.build_tier("24k", ["M-1"], {"M-1": {"pub_year": "2022"}}, write_stac_item=False)
+    assert seen["cachemax"] == expected

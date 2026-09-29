@@ -5,15 +5,22 @@ MD_24K ImageServers): the per-map COGs (geolmap/cogs/<series_id>.cog.tif, from p
 grouped by their publication scale into three tiers and stitched into one raster PMTiles per tier —
 geolmap/mosaics/geologic-maps-{tier}.pmtiles. The viewer toggles them like the old portal.
 
-Pipeline per tier (GDAL, no full download — COGs are read in place over /vsigs):
-  gdalbuildvrt (over /vsigs/<bucket>/...)  ->  gdal_translate -of MBTILES (WebP q90 tiles)
-  ->  gdaladdo (overview = lower zooms)  ->  `pmtiles convert` (MBTiles -> PMTiles)  ->  upload
+Pipeline per tier (GDAL, COGs read in place over /vsigs):
+  gdalbuildvrt (-resolution highest, over /vsigs/<bucket>/...)  ->  `gdal raster tile`
+  (multithreaded WebP tiles; GDAL owns adjacent-quad overlap via VRT last-wins + alpha-collar
+  fallthrough)  ->  pack the tile tree into MBTiles  ->  `pmtiles convert`  ->  upload
 
-Tiles are WebP q90 — the derived display product, downsampled + anti-aliased, so lossy WebP is
-visually indistinguishable here (~9x smaller than PNG) and it is NOT the color-authority (that is
-the lossless master COG). Source-COG fidelity is whatever the harvest wrote (COG_COMPRESS —
-deflate-lossless going forward); COGs are write-once, so pubs harvested before that switch keep
-their original codec until re-harvested as a new edition.
+`gdal raster tile` (GDAL 3.11+) replaces the old serial `gdal_translate -of MBTILES` + `gdaladdo`,
+which read every COG per tile from one thread and timed out statewide. The base renders with
+`-r nearest` when the target zoom is at/above the COGs' native zoom (the tile-grid-aligned masters
+copy through pixel-exact); a tier capped BELOW native downsamples with `-r average`. Overviews
+always resample. NOTE: the unified `gdal` CLI is provisional (GDAL may rename flags between
+releases) — the mosaics image pins a GDAL tag; bump it deliberately and re-check the flags.
+
+Tiles are WebP q90 — the derived display product, so lossy WebP is visually indistinguishable here
+(~9x smaller than PNG) and it is NOT the color-authority (that is the lossless master COG). Source-
+COG fidelity is whatever the harvest wrote (COG_COMPRESS — deflate-lossless going forward); COGs are
+write-once, so pubs harvested before that switch keep their original codec until re-harvested.
 
 By default (`--editions current`) a superseded edition of a quad (per `editions.py`'s edition
 graph) is dropped before the VRT — the mosaic shows one current map per quad. `--editions all`
@@ -33,10 +40,16 @@ clobbering the other or the real tier:
 from __future__ import annotations
 
 import argparse
+import json
+import math
 import os
+import shutil
+import sqlite3
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from ..core import config, gcs, stac
@@ -48,23 +61,27 @@ PMTILES_MIME = config.PMTILES_MIME
 COLLECTION = "ugs-geologic-maps"
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
-UTAH_GEOM = {"type": "Polygon", "coordinates": [[
-    [-114.053, 36.998], [-109.041, 36.998], [-109.041, 42.002],
-    [-114.053, 42.002], [-114.053, 36.998]]]}
 # Scale tiers (denominator upper bounds), matching the old MD_* mosaics. A map's scale is binned by
 # its 1:N denominator: <=62.5k detail, <=350k intermediate, else overview.
 TIERS = ("24k", "250k", "500k")
-# Max web-mercator zoom per tier for a STATEWIDE build — a 600 DPI COG's native max zoom is ~z17-18,
-# and tiling every 24k map statewide to native is astronomically many tiles (build hang/OOM). This
-# per-tier cap is the DEFAULT for a full statewide/--scale build; a scoped --quads build renders at
-# native zoom (full detail on a few maps); an explicit --maxzoom overrides either (see build()).
-# (Historically these were passed as -co ZOOM_LEVEL, which the MBTiles driver silently ignores, so
-# the cap never took effect — build() now enforces it by pre-resampling the VRT.)
+# Max web-mercator zoom per tier for a STATEWIDE build. `gdal raster tile --max-zoom` enforces this
+# directly (the old bake passed -co ZOOM_LEVEL, which the MBTiles driver silently ignored, then
+# worked around it by resampling the VRT). The 24k tier is the flagship and its TARGET is z17 (the
+# 600 DPI COGs' native detail), BUT a statewide z17 build produces ~tens of GB of tiles, which does
+# not fit the RAM-backed /tmp of the current job — so the default stays at a RAM-safe cap until the
+# disk-backed / tile-sharded statewide build lands (the ALL-5993 scale follow-up). Run a higher zoom
+# explicitly with --maxzoom (and MOSAIC_WORK_DIR on a real disk) once that is in place. A scoped
+# --quads build renders at native zoom (full detail on a few maps).
 TIER_MAXZOOM = {"24k": 14, "250k": 12, "500k": 12}
-# WebP tile quality, clamped to WebP's valid 1-100 (out-of-range crashes the GDAL MBTiles driver).
+# Lowest zoom to build overviews down to (off the base tiles). A statewide extent is ~1 tile at low
+# zoom, so a full pyramid to MOSAIC_MINZOOM is cheap and lets the layer draw when zoomed out.
+MOSAIC_MINZOOM = max(0, int(os.environ.get("MOSAIC_MINZOOM", "4")))
+# WebP tile quality, clamped to WebP's valid 1-100 (out-of-range crashes the GDAL WebP driver).
 TILE_QUALITY = max(1, min(100, int(os.environ.get("MOSAIC_WEBP_QUALITY", "90"))))
-# How far down to build overviews (lower zoom levels) off the base tiles.
-OVERVIEW_LEVELS = ("2", "4", "8", "16", "32", "64", "128", "256", "512", "1024", "2048")
+# Work dir for the (large) intermediate tile tree + MBTiles. Unset -> the system temp (/tmp, which is
+# RAM on Cloud Run — fine for the small tiers, NOT for statewide z17). Point it at a mounted disk for
+# the big builds; None lets tempfile use the default.
+MOSAIC_WORK_DIR = os.environ.get("MOSAIC_WORK_DIR") or None
 
 
 def mosaic_object(tier: str, *, suffix: str = "") -> str:
@@ -158,6 +175,167 @@ def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
     return sorted(sids, key=lambda s: (_yr(s), s))
 
 
+_WEBMERC_Z0_MPP = 156543.03392804097  # web-mercator m/px at zoom 0 (256 px tiles)
+_WEBMERC_ORIGIN = 20037508.342789244  # web-mercator half-extent; the tile grid starts at (-o, +o)
+# How far (in pixels) the VRT may drift off a zoom's tile grid and still count as on it: origin offset,
+# and pixel-size error accumulated across the whole raster. Web-optimized COGs land on it to float
+# precision; any real drift makes `nearest` duplicate or drop pixels, which breaks 1-px linework.
+ZOOM_MATCH_TOL = 1e-6
+# z22 is ~3.7 cm/px. A finer native zoom means a member COG with a bad georeference, not real detail.
+MAX_NATIVE_ZOOM = 22
+
+
+def _grid_offset(v: float, res: float) -> float:
+    """How far `v` (metres from the grid origin) is from the nearest pixel edge, in pixels."""
+    f = v / res
+    return abs(f - round(f))
+
+
+def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
+    """From one `gdalinfo -json` on the VRT: (native web-mercator max zoom, whether the VRT's pixels sit
+    on that zoom's tile grid, [W, S, E, N] in EPSG:4326). `gdalbuildvrt -resolution highest` puts the VRT at
+    the finest member COG's m/px; the nearest zoom is the mosaic's native max zoom, but only a source
+    ON that zoom's pixel grid copies through pixel-exact under `nearest` (a 0.9 m/px COG rounds to z17
+    yet has to be downsampled). The WGS84 extent is the mosaic's REAL footprint, so the packed
+    MBTiles/PMTiles metadata describes the actual coverage instead of always claiming the whole state."""
+    # stdout only: stderr streams to the job log, so a failed /vsigs read shows GDAL's real reason.
+    info = json.loads(subprocess.run(["gdalinfo", "-json", "-nofl", vrt], env=env,
+                                     stdout=subprocess.PIPE, text=True, check=True).stdout)
+    if not isinstance(info, dict):
+        raise RuntimeError(f"gdalinfo -json on {vrt} returned {type(info).__name__}, not an object")
+    stac_info = info.get("stac")
+    epsg = stac_info.get("proj:epsg") if isinstance(stac_info, dict) else None
+    if epsg != 3857:
+        raise RuntimeError(f"{vrt} reports proj:epsg={epsg!r}, not EPSG:3857; "
+                           "the zoom math needs web-mercator metres")
+    gt = info.get("geoTransform")
+    # type(), not isinstance(): bool is an int subclass. json.loads yields exact int/float.
+    if not (isinstance(gt, list) and len(gt) == 6
+            and all(type(v) in (int, float) and math.isfinite(v) for v in gt) and gt[1] and gt[5]):
+        raise RuntimeError(f"gdalinfo on {vrt} reported no usable geoTransform: {gt!r}")
+    size = info.get("size")
+    if not (isinstance(size, list) and len(size) == 2 and all(type(v) is int and v > 0 for v in size)):
+        raise RuntimeError(f"gdalinfo on {vrt} reported no usable size: {size!r}")
+    xres = abs(gt[1])
+    zoom = max(0, round(math.log2(_WEBMERC_Z0_MPP / xres)))
+    if zoom > MAX_NATIVE_ZOOM:
+        raise RuntimeError(f"{vrt}: {xres} m/px implies z{zoom}; check the finest member COG's georeference")
+    res = _WEBMERC_Z0_MPP / 2 ** zoom
+    # gdalbuildvrt rejects rotated sources; north-up writes an exact 0.
+    aligned = (abs(xres - res) * size[0] / res <= ZOOM_MATCH_TOL
+               and abs(abs(gt[5]) - res) * size[1] / res <= ZOOM_MATCH_TOL
+               and gt[2] == 0 and gt[4] == 0
+               and _grid_offset(gt[0] + _WEBMERC_ORIGIN, res) <= ZOOM_MATCH_TOL
+               and _grid_offset(_WEBMERC_ORIGIN - gt[3], res) <= ZOOM_MATCH_TOL)
+    extent = info.get("wgs84Extent")
+    ring = extent.get("coordinates") if isinstance(extent, dict) else None
+    if ring and ring[0]:
+        lons = [pt[0] for pt in ring[0]]
+        lats = [pt[1] for pt in ring[0]]
+        bounds = [min(lons), min(lats), max(lons), max(lats)]
+    else:
+        print(f"[mosaics] WARNING: {vrt} has no usable wgs84Extent; using the statewide bbox",
+              file=sys.stderr)
+        bounds = list(UTAH_BBOX)
+    return zoom, aligned, bounds
+
+
+def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], name: str,
+                           tile_format: str = "webp") -> tuple[int, int, int]:
+    """Pack a `gdal raster tile` XYZ tree ({z}/{x}/{y}.{ext}) into an MBTiles so `pmtiles convert` can
+    read it (go-pmtiles takes MBTiles, not a tile directory). Tiles are copied VERBATIM — no re-encode,
+    zero added loss. MBTiles rows are TMS (y flipped from the XYZ tree). Returns (n_tiles, minz, maxz)."""
+    if not os.path.isdir(tile_dir):
+        raise RuntimeError(f"gdal raster tile produced no output dir {tile_dir}")
+    zdirs = sorted(int(d) for d in os.listdir(tile_dir)
+                   if d.isdigit() and os.path.isdir(os.path.join(tile_dir, d)))
+    if not zdirs:
+        raise RuntimeError(f"gdal raster tile produced no tiles under {tile_dir}")
+    minz, maxz = zdirs[0], zdirs[-1]
+    con = sqlite3.connect(mbtiles)
+    try:
+        # A throwaway temp file: skip the rollback journal and fsyncs; a crash just reruns the bake.
+        con.execute("PRAGMA journal_mode = OFF")
+        con.execute("PRAGMA synchronous = OFF")
+        cur = con.cursor()
+        cur.execute("CREATE TABLE metadata (name text NOT NULL UNIQUE, value text)")
+        cur.execute("CREATE TABLE tiles (zoom_level int, tile_column int, tile_row int, tile_data blob)")
+        cur.execute("CREATE UNIQUE INDEX tile_index ON tiles (zoom_level, tile_column, tile_row)")
+        counted = [0]
+
+        def rows():
+            # A generator, not a list: a statewide tree is millions of tiles.
+            for z in zdirs:
+                zdir = os.path.join(tile_dir, str(z))
+                for xd in os.listdir(zdir):
+                    xpath = os.path.join(zdir, xd)
+                    if not (xd.isdigit() and os.path.isdir(xpath)):
+                        continue
+                    for yf in os.listdir(xpath):
+                        ystr, ext = os.path.splitext(yf)
+                        if not ystr.isdigit() or not ext:
+                            continue                    # skip sidecars (.aux.xml etc.)
+                        if ext.lower() != f".{tile_format}":
+                            raise RuntimeError(f"unexpected tile {xpath}/{yf}; expected .{tile_format}")
+                        with open(os.path.join(xpath, yf), "rb") as fh:
+                            blob = fh.read()
+                        counted[0] += 1
+                        yield z, int(xd), (1 << z) - 1 - int(ystr), blob   # XYZ (top) -> TMS (bottom)
+
+        # Plain INSERT, not OR REPLACE: the unique index makes any duplicate z/x/y fail loud.
+        cur.executemany("INSERT INTO tiles VALUES (?,?,?,?)", rows())
+        n = counted[0]
+        if n == 0:
+            raise RuntimeError(f"no tile files under {tile_dir} (zoom dirs {zdirs} were empty)")
+        w, s, e, nth = bounds
+        cur.executemany("INSERT INTO metadata VALUES (?,?)", (
+            ("name", name), ("format", tile_format), ("type", "overlay"),
+            ("minzoom", str(minz)), ("maxzoom", str(maxz)),
+            ("bounds", f"{w},{s},{e},{nth}"),
+            ("center", f"{(w + e) / 2},{(s + nth) / 2},{minz}")))
+        con.commit()
+    finally:
+        con.close()
+    return n, minz, maxz
+
+
+def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
+    """Each member COG's band data types, from one header read per COG (parallel: I/O bound over
+    /vsigs). A failed read raises rather than guessing."""
+    def one(sid: str) -> list[str]:
+        out = subprocess.run(["gdalinfo", "-json", "-nofl", "-nomd", "-noct", _vsigs(sid)], env=env,
+                             stdout=subprocess.PIPE, text=True, check=True).stdout
+        return [b["type"] for b in json.loads(out)["bands"]]
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        return dict(zip(sids, ex.map(one, sids)))
+
+
+def _byte_members(tier: str, sids: list[str], env: dict) -> list[str]:
+    """`sids` minus any COG whose bands aren't all Byte, order kept. gdalbuildvrt keeps only sources
+    matching the FIRST source's data type and just warns about the rest, so one 16-bit COG in the
+    list would silently drop maps (or, listed first, nearly the whole tier). Excluded COGs are named
+    on stderr so the gap is visible."""
+    types = _band_types(sids, env)
+    bad = {s: t for s, t in types.items() if not t or any(bt != "Byte" for bt in t)}
+    if bad:
+        detail = ", ".join(f"{s} ({'/'.join(sorted(set(t)))})" for s, t in bad.items())
+        print(f"[mosaics] WARNING {tier}: excluding {len(bad)} non-8-bit COG(s) that gdalbuildvrt "
+              f"would silently drop or let displace the tier: {detail}", file=sys.stderr)
+    return [s for s in sids if s not in bad]
+
+
+def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
+    """Raise if gdalbuildvrt skipped any input. It only warns when it drops a source (type or band
+    mismatch, unreadable file), so compare band 1's sources against the input list. Non-8-bit COGs
+    are already excluded by `_byte_members`; any other drop is unexpected and stops the tier."""
+    band = ET.parse(vrt).getroot().find("VRTRasterBand")   # our own gdalbuildvrt output
+    got = {el.text for el in band.iter("SourceFilename")} if band is not None else set()
+    missing = [p for p in expected if p not in got]
+    if missing:
+        raise RuntimeError(f"gdalbuildvrt dropped {len(missing)} of {len(expected)} source(s) from "
+                           f"{vrt}: {', '.join(missing[:10])}" + (" ..." if len(missing) > 10 else ""))
+
+
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
                 *, suffix: str = "", write_stac_item: bool = True) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
@@ -167,60 +345,75 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
-    with tempfile.TemporaryDirectory() as tmp:
+    # Performance-tuned GDAL environment for reading the COGs in place over /vsigs.
+    gdal_env = os.environ.copy()
+    gdal_env.update({
+        "GDAL_CACHEMAX": "4096",                         # 4 GB block cache
+        "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
+        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
+        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
+        "VSI_CACHE": "TRUE",
+        "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
+        "GDAL_HTTP_MAX_RETRY": "10",
+        "GDAL_HTTP_RETRY_DELAY": "1",
+    })
+    sids = _byte_members(tier, sids, gdal_env)
+    if not sids:
+        print(f"[mosaics] {tier}: no 8-bit COGs left — skipping", file=sys.stderr)
+        return False
+    with tempfile.TemporaryDirectory(dir=MOSAIC_WORK_DIR) as tmp:
         listfile = os.path.join(tmp, "cogs.txt")
+        members = [_vsigs(s) for s in _vrt_order(sids, by_sid)]
         with open(listfile, "w") as fh:
-            fh.write("\n".join(_vsigs(s) for s in _vrt_order(sids, by_sid)) + "\n")
+            fh.write("\n".join(members) + "\n")
         vrt = os.path.join(tmp, f"{tier}.vrt")
+        tiledir = os.path.join(tmp, f"{tier}-tiles")
         mbtiles = os.path.join(tmp, f"{tier}.mbtiles")
         pmtiles = os.path.join(tmp, f"{tier}.pmtiles")
 
-        # Performance-tuned GDAL environment variables for high-throughput cloud storage reading.
-        gdal_env = os.environ.copy()
-        gdal_env.update({
-            "GDAL_CACHEMAX": "4096",                         # Use 4 GB cache (out of 16 GB available on runner)
-            "GDAL_NUM_THREADS": "ALL_CPUS",                  # Parallelize tile rendering and compression
-            "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # Prevent redundant sequential GCS directory scans
-            "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt", # Limit seeking of non-existent sidecar files
-            "VSI_CACHE": "TRUE",                             # Enable GDAL VSI file caching
-            "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
-            "GDAL_HTTP_MAX_RETRY": "10",                     # Keep connections resilient against transient hiccups
-            "GDAL_HTTP_RETRY_DELAY": "1",
-        })
-
+        # `-resolution highest` keeps the VRT at the finest member COG's m/px, so at the mosaic's
+        # native zoom the tile-grid-aligned masters tile 1:1. `-addalpha` gives transparent gaps where
+        # no map covers, and is what lets GDAL's VRT drop an upper COG's nodata collar through to the
+        # map beneath at a quad seam (last-wins + mask fallthrough — no custom compositing needed).
         print(f"[mosaics] {tier}: VRT over {len(sids)} COGs")
-        subprocess.run(["gdalbuildvrt", "-q", "-addalpha", "-input_file_list", listfile, vrt],
-                       env=gdal_env, check=True)
+        subprocess.run(["gdalbuildvrt", "-q", "-resolution", "highest", "-addalpha",
+                        "-input_file_list", listfile, vrt], env=gdal_env, check=True)
+        _check_vrt_sources(vrt, members)
 
-        # WebP tiles (alpha → transparent gaps where no map covers). By default the base renders at the
-        # member COGs' NATIVE zoom; pass --maxzoom to cap (a statewide build should — see TIER_MAXZOOM).
-        # The MBTiles driver ignores -co ZOOM_LEVEL, so a real cap must lower the INPUT resolution:
-        # resample the VRT to the target web-mercator zoom's m/px before tiling.
-        src = vrt
-        if maxz is not None:
-            res = 156543.03392804097 / (2 ** maxz)   # web-mercator m/px at zoom maxz
-            capped = os.path.join(tmp, f"{tier}.capped.vrt")
-            subprocess.run(["gdalwarp", "-q", "-overwrite", "-of", "VRT", "-tr", str(res), str(res),
-                            "-r", "bilinear", vrt, capped], env=gdal_env, check=True)
-            src = capped
-        tr = ["gdal_translate", "-of", "MBTILES", "-r", "bilinear",
-              "-co", "TILE_FORMAT=WEBP", "-co", f"QUALITY={TILE_QUALITY}"]
-        zdesc = f"max zoom {maxz}" if maxz is not None else "native COG zoom"
-        print(f"[mosaics] {tier}: rendering base tiles -> MBTiles (WebP q{TILE_QUALITY}, {zdesc})")
-        subprocess.run([*tr, src, mbtiles], env=gdal_env, check=True)
+        # `gdal raster tile` (GDAL 3.11+) tiles the VRT multithreaded and builds the overview pyramid in
+        # one pass. nearest is a pixel-exact copy only when the source sits on the native zoom's grid
+        # and the tier isn't capped below it; anything else is resampled with average.
+        native, aligned, bounds = _vrt_zoom_and_bounds(vrt, gdal_env)
+        base_maxz = maxz if maxz is not None else native
+        base_resampling = "nearest" if aligned and base_maxz >= native else "average"
+        minz_arg = min(MOSAIC_MINZOOM, base_maxz)      # never emit --min-zoom > --max-zoom
+        zdesc = f"z{minz_arg}-{base_maxz}" + ("" if maxz is not None else " (native)")
+        print(f"[mosaics] {tier}: gdal raster tile -> {zdesc}, WebP q{TILE_QUALITY}, "
+              f"base={base_resampling} (native z{native})")
+        subprocess.run(
+            ["gdal", "raster", "tile", "--resampling", base_resampling,
+             "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
+             "--skip-blank", "--convention", "xyz",
+             "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
+             vrt, tiledir], env=gdal_env, check=True)
 
-        print(f"[mosaics] {tier}: building overviews (lower zooms)")
-        subprocess.run(["gdaladdo", "-r", "bilinear", mbtiles, *OVERVIEW_LEVELS], env=gdal_env, check=True)
-
-        print(f"[mosaics] {tier}: MBTiles -> PMTiles")
+        # go-pmtiles converts an MBTiles (not a tile tree), so pack the XYZ tree first (verbatim copy).
+        # Free each stage as it's consumed: the work dir defaults to the RAM-backed /tmp, so keeping the
+        # tile tree + MBTiles + PMTiles all alive at once would triple peak usage for no reason.
+        print(f"[mosaics] {tier}: packing tiles -> MBTiles")
+        n_tiles, minz, maxz_built = _pack_tiles_to_mbtiles(
+            tiledir, mbtiles, bounds=bounds, name=f"geologic-maps-{tier}")
+        shutil.rmtree(tiledir)
+        print(f"[mosaics] {tier}: {n_tiles} tiles (z{minz}-{maxz_built}) -> PMTiles")
         subprocess.run(["pmtiles", "convert", mbtiles, pmtiles], check=True)
+        os.remove(mbtiles)
 
         obj = mosaic_object(tier, suffix=suffix)
         size_mb = os.path.getsize(pmtiles) // 1024 // 1024
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
         if write_stac_item:
-            _write_item(tier, sids, obj, by_sid)
+            _write_item(tier, sids, obj, by_sid, bounds=bounds)
         else:
             print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
                   f"inspect tiles directly at {config.public_url(obj)}")
@@ -228,9 +421,11 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         return True
 
 
-def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -> None:
-    """STAC item for one mosaic tier. The raster PMTiles is a `visual` pmtiles ASSET (a vector layer
-    would be a web-map LINK instead) — that's how the viewer tells a raster mosaic from vector tiles.
+def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,
+                bounds: list[float]) -> None:
+    """STAC item for one mosaic tier, footprinted by the mosaic's real [W, S, E, N] `bounds`. The
+    raster PMTiles is a `visual` pmtiles ASSET (a vector layer would be a web-map LINK instead) —
+    that's how the viewer tells a raster mosaic from vector tiles.
 
     The mosaic is derived by stitching the member COGs, so each member gets a STAC
     `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
@@ -245,6 +440,7 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
 
     label = SCALE_LABEL.get(tier, tier)
     n_maps = len(sids)
+    w, s, e, n = bounds
     derived_from: list[dict] = []
     for sid in sids:                      # sids are UPPER (from _cog_sids)
         p = by_sid.get(sid)
@@ -262,7 +458,9 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict]) -
     item = stac.build_item(
         item_id=f"geologic-maps-{tier}",
         collection=COLLECTION,
-        geometry=UTAH_GEOM, bbox=UTAH_BBOX,
+        geometry={"type": "Polygon", "coordinates": [[
+            [w, s], [e, s], [e, n], [w, n], [w, s]]]},
+        bbox=[w, s, e, n],
         datetime_iso=datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         properties={"title": f"Utah Geologic Maps — {label} seamless mosaic",
                     "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic"},
@@ -322,8 +520,9 @@ def main() -> int:
     if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
         ap.error("--quads contained no usable quad names")
     scales = list(TIERS) if args.scale == "all" else [args.scale]
-    return 0 if build(scales, maxz=args.maxzoom, edition_mode=args.editions,
-                       quads=args.quads) >= 0 else 1
+    built = build(scales, maxz=args.maxzoom, edition_mode=args.editions, quads=args.quads)
+    # A scoped --quads build under the default --scale all legitimately leaves tiers with no members.
+    return 0 if built == len(scales) or (args.quads and built > 0) else 1
 
 
 if __name__ == "__main__":

@@ -109,6 +109,21 @@ steps:
           --cache-from "$$IMG:latest" \
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
+  # Mosaic bake image: pinned GDAL 3.11+ for `gdal raster tile` (the harvest image's GDAL is older).
+  - id: build-mosaics
+    waitFor: ['-']
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics
+        docker pull "$$IMG:latest" || true
+        DOCKER_BUILDKIT=1 docker build -f Dockerfile.mosaics \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "$$IMG:latest" \
+          -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
+
   # Thin orchestrator (cloud-sdk + scripts/pipeline.sh) for the one-click publications refresh.
   - id: build-pipeline
     name: gcr.io/cloud-builders/docker
@@ -208,6 +223,11 @@ steps:
     waitFor: [build-harvest]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest']
+
+  - id: push-mosaics
+    waitFor: [build-mosaics]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics']
 
   - id: push-pipeline
     waitFor: [build-pipeline]
@@ -624,13 +644,10 @@ steps:
       - --cpu=4
       - --memory=8Gi
 
-  # Per-scale raster PMTiles mosaics of the published geologic maps (old ArcGIS MD_* equivalent).
-  # Harvest image (GDAL CLI + the go-pmtiles binary). Reads the COGs in place over /vsigs (no full
-  # download), but the rendered MBTiles lands in RAM-backed /tmp — so the 24k tier is the heavy one.
-  # Defaults to --scale all; for the big 24k tier, execute with --args override + more memory, e.g.
-  #   gcloud run jobs execute ugs-geolmap-mosaics --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,24k
+  # Per-scale raster PMTiles mosaics of the geologic maps. Statewide 24k at z17 needs a real disk for
+  # MOSAIC_WORK_DIR, which this Cloud Run job lacks; running it on Cloud Batch is tracked in ALL-6048.
   - id: deploy-mosaics-job
-    waitFor: [push-harvest]
+    waitFor: [push-mosaics]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -638,7 +655,7 @@ steps:
       - jobs
       - deploy
       - ${_MOSAICS_JOB}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
@@ -840,6 +857,7 @@ images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-topics-thumbs
 

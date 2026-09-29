@@ -53,6 +53,7 @@ digest="$(gcloud artifacts docker images describe "${IMAGE}:${TAG}" \
   --format='value(image_summary.fully_qualified_digest)')"
 [ -n "$digest" ] || { echo "cannot resolve ${IMAGE}:${TAG}" >&2; exit 1; }
 
+# Not `jq --args`: jq would parse the bake's own flags (-m, --scale) as jq options.
 job="$(jq -n \
   --arg image "$digest" --arg timeout "$timeout" --arg run "$run" \
   --argjson cmd "$(printf '%s\n' "${args[@]}" | jq -R . | jq -s .)" \

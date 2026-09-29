@@ -1,8 +1,9 @@
 """ugs-warehouse-admin — minimal Django + HTMX ops console behind Google Cloud IAP.
 
-Stateless: no domain DB (SQLite is ephemeral, only for Django's own tables). AuthN is IAP
-(the load balancer verifies the user before the request arrives); authZ is an email allowlist
-(`ADMIN_EMAILS`). The app reads the STAC catalog and triggers Cloud Run jobs — it stores nothing.
+Stateless: no domain DB (SQLite is ephemeral, only for Django's own tables). AuthN and authZ are
+direct Cloud Run IAP: only principals granted IAP access on the service get through, and the app
+verifies IAP's signed JWT (core/iap_auth.py). It reads the STAC catalog and triggers Cloud Run
+jobs; it stores nothing.
 """
 import os
 from pathlib import Path
@@ -21,6 +22,9 @@ CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
 # In DEBUG with DEV_IAP_EMAIL set, that email is treated as the logged-in user.
 DEV_IAP_EMAIL = env("DEV_IAP_EMAIL", default="")
+# The aud IAP stamps on its JWT. Unset on Cloud Run it is derived from the metadata server
+# (/projects/NUMBER/locations/REGION/services/K_SERVICE); set it only to override that.
+IAP_AUDIENCE = env("IAP_AUDIENCE", default="")
 
 # GCP — the project/region the warehouse Cloud Run jobs live in, and the STAC catalog base.
 GCP_PROJECT = env("GCP_PROJECT", default="ut-dnr-ugs-backend-tools")

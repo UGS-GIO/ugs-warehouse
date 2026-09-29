@@ -19,7 +19,7 @@ theme:
     - search.suggest
     - content.code.copy   # copy button on every code block (matters for the user guide)
 
-# Explicit nav = the user + ops doc set. Internal/transient docs (HANDOFF, ROADMAP, specs) stay in
+# Explicit nav = the user + ops doc set. Internal/transient docs (ROADMAP, specs) stay in
 # docs/ but are intentionally out of the published site.
 nav:
   - Home: index.md
@@ -32,10 +32,9 @@ nav:
       - Raster: RASTER.md
 
 # Internal / transient / infra docs stay in the repo but are NOT published to the public CDN site
-# (DEPLOY carries SA emails + grants; HANDOFF/ROADMAP are working notes; specs are design drafts).
+# (DEPLOY carries SA emails + grants; ROADMAP is working notes; specs are design drafts).
 exclude_docs: |
   DEPLOY.md
-  HANDOFF.md
   ROADMAP.md
   RASTER_SPEC.md
   INTEGRATION_GEOLMAP.md

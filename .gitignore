@@ -68,3 +68,6 @@ infra/.terraform.lock.hcl
 
 # Claude Code worktrees
 .claude/worktrees/
+
+# Personal working notes (session handoffs) stay local.
+docs/HANDOFF.md

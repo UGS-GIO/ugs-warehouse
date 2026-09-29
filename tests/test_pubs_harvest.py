@@ -856,3 +856,14 @@ def test_an_unreadable_plate_fails_only_that_pub(monkeypatch, tmp_path):
     res = _harvest_attempt(identity.Pub(series_id="M-8"), ["http://x/m-8.zip"])
     assert res == "fail:RuntimeError"
     assert harvest.exit_code({"ok": 0, "expected": 0, "attention": 1}) == 0
+
+
+def test_plate_kind_and_saturation_treat_a_bandless_dataset_as_not_a_map(monkeypatch):
+    from unittest.mock import MagicMock
+
+    from ugs_warehouse.pubs import harvest
+    ds = MagicMock(count=0, dtypes=(), colorinterp=())
+    cm = MagicMock(__enter__=MagicMock(return_value=ds), __exit__=MagicMock(return_value=False))
+    monkeypatch.setattr("rasterio.open", lambda p: cm)
+    assert harvest._plate_kind("empty.tif") == "grid"
+    assert harvest._source_saturation("empty.tif") == -1.0

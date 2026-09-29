@@ -471,6 +471,8 @@ def _plate_kind(path) -> str:
     import rasterio
     from rasterio.enums import ColorInterp, Resampling
     with rasterio.open(path) as ds:
+        if ds.count == 0:                 # a container (e.g. subdatasets) with no raster bands
+            return "grid"
         if all(str(t) == "uint8" for t in ds.dtypes):
             return "byte"
         if (not np.issubdtype(np.dtype(ds.dtypes[0]), np.integer)
@@ -545,6 +547,8 @@ def _source_saturation(path) -> float:
                     spreads = [max(c[:3]) - min(c[:3]) for c in cmap.values()]
                     return float(sum(spreads) / len(spreads)) if spreads else 0.0
                 return 255.0
+            if ds.count == 0:
+                return -1.0                       # no raster bands: not a map candidate
             if ds.count < 3 and str(ds.dtypes[0]) != "uint8":
                 # 1-2 band non-Byte: a 0/1 line scan is a (grayscale) map; anything else is a data grid.
                 return 0.0 if _plate_kind(path) == "lineart" else -1.0

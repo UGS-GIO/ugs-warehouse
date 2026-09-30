@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "python",
+      "package-name": "ugs-warehouse",
+      "extra-files": [
+        "src/ugs_warehouse/__init__.py"
+      ],
+      "release-as": "1.0.0"
+    }
+  }
+}

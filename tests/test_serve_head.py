@@ -83,5 +83,14 @@ def test_head_on_an_app_route_describes_the_viewer_shell(client):
     assert r.headers["content-type"].startswith("text/html")
 
 
+def test_head_on_a_json_doc_sends_its_length_but_no_body(monkeypatch):
+    # Called directly: the test client drops a HEAD body on its own, so it can't see one being sent.
+    monkeypatch.setattr(serve.gcs, "get_bytes", lambda path: b'{"type": "Catalog"}')
+    r = serve._serve_object("review/stac/catalog.json", SimpleNamespace(method="HEAD", headers={}))
+    assert r.body == b""
+    assert r.headers["content-length"] == "19"
+    assert r.headers["cache-control"] == "private, no-cache"
+
+
 def test_head_on_a_missing_file_is_404(client):
     assert client.head("/review/geoparquet/nope/nope.parquet").status_code == 404

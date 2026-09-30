@@ -192,6 +192,9 @@ def _serve_object(object_path: str, request: Request) -> Response:
             body = gcs.get_bytes(object_path)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="not found") from None
+        if request.method == "HEAD":
+            return Response(media_type=_content_type(object_path),
+                            headers={"Cache-Control": _CACHE_CONTROL, "Content-Length": str(len(body))})
         return Response(content=body, media_type=_content_type(object_path),
                         headers={"Cache-Control": _CACHE_CONTROL})
     try:

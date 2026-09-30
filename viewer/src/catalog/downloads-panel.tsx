@@ -32,6 +32,7 @@ const HINTS: Record<ExportFormat, string> = {
   fgb: "streaming · web",
   geojson: "web · always WGS 84",
   csv: "spreadsheet · WKT geometry",
+  parquet: "clipped · always WGS 84",
 };
 
 /** `…/thing.parquet?x=1` → `parquet` */
@@ -156,6 +157,22 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const data = files.filter(([, a]) => isParquetAsset(a));
   const sidecars = files.filter(([, a]) => !isParquetAsset(a));
 
+  const formatTile = (fmt: ExportFormat, label: string) => (
+    <button key={fmt} aria-disabled={run.isPending} aria-busy={busy === fmt}
+      onClick={(e) => {
+        if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
+        invoker.current = e.currentTarget;
+        run.mutate({ fmt });
+      }}
+      aria-label={`Download ${label}`} className={TILE}>
+      <span className="font-medium">
+        {label}
+        <span className={SUB}>{HINTS[fmt]}</span>
+      </span>
+      <span aria-hidden className="shrink-0 text-primary">{busy === fmt ? "…" : "↓"}</span>
+    </button>
+  );
+
   const assetTile = ([key, a]: [string, Asset]) => (
     <a key={key} href={a.href} target="_blank" rel="noopener" className={TILE}>
       <span className="font-medium">
@@ -170,22 +187,11 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
     <section className="mt-3 rounded-lg border border-border bg-muted p-3">
       <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Downloads</h3>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {data.map(assetTile)}
-        {parquet && FORMATS.map((f) => (
-          <button key={f.id} aria-disabled={run.isPending} aria-busy={busy === f.id}
-            onClick={(e) => {
-              if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
-              invoker.current = e.currentTarget;
-              run.mutate({ fmt: f.id });
-            }}
-            aria-label={`Download ${f.label}`} className={TILE}>
-            <span className="font-medium">
-              {f.label}
-              <span className={SUB}>{HINTS[f.id]}</span>
-            </span>
-            <span aria-hidden className="shrink-0 text-primary">{busy === f.id ? "…" : "↓"}</span>
-          </button>
-        ))}
+        {/* The archive is the whole file; under a clip, the same tile exports just the clipped rows. */}
+        {data.map((entry) => (clip && entry[1] === parquet
+          ? formatTile("parquet", entry[1].title ?? "GeoParquet")
+          : assetTile(entry)))}
+        {parquet && FORMATS.map((f) => formatTile(f.id, f.label))}
         {sidecars.map(assetTile)}
       </div>
       {/* Always mounted: a live region created with its text is announced unreliably. Announces

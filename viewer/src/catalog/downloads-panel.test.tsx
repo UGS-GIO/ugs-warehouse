@@ -409,4 +409,16 @@ describe("DownloadsPanel", () => {
     );
     expect(document.activeElement).toBe(screen.getByLabelText("W"));
   });
+
+  it("links the whole archive when there is no clip", () => {
+    show();
+    expect(screen.getByText("GeoParquet archive").closest("a")?.getAttribute("href")).toBe(HREF);
+  });
+
+  it("exports only the clipped rows from the archive tile under a clip", async () => {
+    url.search = { clip: [-112, 40, -111, 41] };
+    show();
+    await userEvent.click(screen.getByLabelText("Download GeoParquet archive"));
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "parquet", [-112, 40, -111, 41], 4326, 7);
+  });
 });

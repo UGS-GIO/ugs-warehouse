@@ -21,6 +21,7 @@ import streetsThumb from "@/assets/basemaps/streets.webp";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+import { bboxRing } from "@/lib/bbox";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
@@ -99,10 +100,6 @@ function unionBbox(bs: number[][]): [number, number, number, number] | null {
   return [Math.min(...bs.map((b) => b[0])), Math.min(...bs.map((b) => b[1])),
           Math.max(...bs.map((b) => b[2])), Math.max(...bs.map((b) => b[3]))];
 }
-
-// A [w,s,e,n] bbox → a closed rectangle ring (GeoJSON Polygon coordinates).
-const bboxRing = (b: number[]): GeoJSON.Position[][] =>
-  [[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]], [b[0], b[1]]]];
 
 // All footprints → one FeatureCollection of bbox rectangles (properties carry href/title for the
 // click-to-open + hover popup). Built once per footprints set; MapLibre handles thousands of rects.

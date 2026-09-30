@@ -17,6 +17,8 @@ import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers }
 import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
+import { useSearch } from "@tanstack/react-router";
+import { bboxRing } from "@/lib/bbox";
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 
@@ -64,6 +66,8 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
   onBoundsChange?: (b: [number, number, number, number]) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
+  // The downloads panel's clip, drawn so the user sees the area the export will keep.
+  const { clip } = useSearch({ from: "__root__" });
   // Four decimals is about 10 m, plenty for a clip, and keeps the URL short.
   const reportBounds = () => {
     const b = mapRef.current?.getMap().getBounds();
@@ -323,6 +327,14 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
           {spec?.kind === "cog" && cogReady && (
             <Source id="cog" type="raster" url={`cog://${spec.href}`} tileSize={256}>
               <Layer id="cog-raster" type="raster" />
+            </Source>
+          )}
+
+          {clip && (
+            <Source id="export-clip" type="geojson"
+              data={{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: bboxRing(clip) } }}>
+              <Layer id="export-clip-fill" type="fill" paint={{ "fill-color": "#d1491c", "fill-opacity": 0.08 }} />
+              <Layer id="export-clip-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 2, "line-dasharray": [2, 1] }} />
             </Source>
           )}
 

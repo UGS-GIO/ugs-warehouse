@@ -17,3 +17,7 @@ export function toBbox(v: unknown): [number, number, number, number] | undefined
   const [w, s, e, n] = v;
   return [w, s, e, n].every(Number.isFinite) ? [w, s, e, n] : undefined;
 }
+
+/** A [w,s,e,n] box as a closed rectangle ring (GeoJSON Polygon coordinates). */
+export const bboxRing = (b: readonly number[]): GeoJSON.Position[][] =>
+  [[[b[0], b[1]], [b[2], b[1]], [b[2], b[3]], [b[0], b[3]], [b[0], b[1]]]];

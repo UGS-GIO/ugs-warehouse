@@ -5,7 +5,7 @@
  * the pickers).
  */
 import type { Device } from "@luma.gl/core";
-import maplibregl from "maplibre-gl";
+import maplibregl from "@/map/maplibre-lib";
 import { useMemo, useState } from "react";
 import { Map as MapGL, NavigationControl } from "react-map-gl/maplibre";
 

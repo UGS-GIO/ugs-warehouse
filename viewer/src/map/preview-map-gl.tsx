@@ -4,7 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { sameFeature } from "@/lib/same-feature";
 import { createPortal } from "react-dom";
-import maplibregl from "maplibre-gl";
+import maplibregl from "@/map/maplibre-lib";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
 import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";

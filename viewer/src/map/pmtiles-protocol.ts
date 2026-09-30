@@ -6,7 +6,7 @@
 //
 // Nothing here knows about offline layers. A downloaded archive is served by the service worker,
 // which answers this protocol's range requests out of OPFS, so the reader is unchanged either way.
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 import { PMTiles, Protocol } from "pmtiles";
 import { CappedMap } from "@/lib/lru";
 import { areaResponse } from "@/offline/area-store";

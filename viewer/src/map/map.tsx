@@ -1,6 +1,6 @@
 import { Toggle } from "@base-ui/react/toggle";
 import { qk } from "@/query-keys";
-import maplibregl from "maplibre-gl";
+import maplibregl from "@/map/maplibre-lib";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useQuery } from "@tanstack/react-query";
 import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";

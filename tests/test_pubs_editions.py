@@ -141,7 +141,8 @@ def test_build_catalog_wires_edition_into_build_item():
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.editions.quad_by_series", return_value={}), \
+         patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[
+             ("M-1", "", "geomaps_24k", ""), ("M-2", "", "geomaps_100k", "30x60_Quads")]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
@@ -165,3 +166,5 @@ def test_build_catalog_wires_edition_into_build_item():
         assert by_sid["M-1"]["successor_href"].endswith("/M-2/M-2.json")
         assert by_sid["M-2"]["deprecated"] is False
         assert by_sid["M-2"]["predecessor_href"].endswith("/M-1/M-1.json")
+        tiers = {c.args[0]["series_id"]: c.kwargs["mosaic_tier"] for c in mock_build.call_args_list}
+        assert tiers == {"M-1": "24k", "M-2": "100k"}   # from each footprint's portal layer

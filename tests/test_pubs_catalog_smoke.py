@@ -48,7 +48,7 @@ def test_fully_loaded_pub_item_is_spec_valid():
     item = _build_pub(
         {"series_id": "GQ-968", "series": "GQ", "pub_name": "Geologic map of Foo",
          "pub_scale": "1:24,000", "pub_year": "1990", "pub_publisher": "USGS"},
-        has_cog=True, has_units=True, geom=geom, bbox=bbox,
+        has_cog=True, has_units=True, geom=geom, bbox=bbox, mosaic_tier="24k",
         vector_layers=["gems__ContactsAndFaults", "gems__MapUnitPolys"],
         companion_tables=[{"label": "gems__DescriptionOfMapUnits",
                            "columns": [{"name": "MapUnit"}, {"name": "Age"}]}],

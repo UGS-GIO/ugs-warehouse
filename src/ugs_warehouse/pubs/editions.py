@@ -105,11 +105,11 @@ def _link_group(members: list[dict], out: dict[str, dict], *, quad: str, tier: s
         }
 
 
-def quad_by_series() -> dict[str, str]:
-    """{UPPER series_id -> quad_name} from the staged footprints parquet (built by pubs.footprints).
-    Read via gcs.get_bytes (obstore/ADC — the repo's GCS IO path, no httpfs) + a local duckdb read,
-    the same way footprints.py reads it. Fail loud if the parquet is absent — without it edition
-    detection can't group quads (the silent-no-op bug this fixes)."""
+def footprint_rows() -> list[tuple[str, str, str, str]]:
+    """(UPPER series_id, quad_name, geomaps_service, servName) for every row of the staged footprints
+    parquet (built by pubs.footprints). Read via gcs.get_bytes (obstore/ADC, the repo's GCS IO path,
+    no httpfs) + a local duckdb read, the same way footprints.py reads it. Fail loud if the parquet is
+    absent: without it neither edition detection nor mosaic tiering can work."""
     import os
     import tempfile
 
@@ -132,11 +132,31 @@ def quad_by_series() -> dict[str, str]:
         tmp.close()
         with duckdb.connect() as con:
             rows = con.execute(
-                "SELECT upper(series_id), quad_name FROM read_parquet(?) "
-                "WHERE coalesce(quad_name, '') <> ''", [tmp.name]).fetchall()
+                "SELECT upper(trim(series_id)), coalesce(quad_name, ''), "
+                "coalesce(trim(geomaps_service), ''), coalesce(trim(servName), '') "
+                "FROM read_parquet(?) WHERE coalesce(trim(series_id), '') <> ''", [tmp.name]).fetchall()
     finally:
         os.unlink(tmp.name)
-    return {str(s): str(q) for s, q in rows if s and q}
+    return [(str(s), str(q), str(g), str(n)) for s, q, g, n in rows]
+
+
+def quad_by_series(rows: list[tuple[str, str, str, str]] | None = None) -> dict[str, str]:
+    """{UPPER series_id -> quad_name} from the footprints (see `footprint_rows`)."""
+    return {s: q for s, q, _, _ in (rows if rows is not None else footprint_rows()) if q}
+
+
+def layers_by_series(rows: list[tuple[str, str, str, str]] | None = None
+                     ) -> dict[str, tuple[frozenset[str], frozenset[str]]]:
+    """{UPPER series_id -> (geomaps_service values, servName values)} across that map's footprint
+    rows: the geologic map portal layer(s) a map belongs to. A map can have several footprint rows."""
+    svc: dict[str, set[str]] = {}
+    names: dict[str, set[str]] = {}
+    for s, _, g, n in (rows if rows is not None else footprint_rows()):
+        if g:
+            svc.setdefault(s, set()).add(g)
+        if n:
+            names.setdefault(s, set()).add(n)
+    return {s: (frozenset(svc.get(s, ())), frozenset(names.get(s, ()))) for s in svc.keys() | names.keys()}
 
 
 def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None) -> dict[str, dict]:

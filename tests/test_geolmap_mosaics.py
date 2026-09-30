@@ -51,6 +51,21 @@ _PARK_CITY_GRAPH = {
 }
 
 
+# (series_id, quad_name, geomaps_service, servName) rows standing in for the footprints parquet.
+_FOOTPRINTS = [
+    ("GQ-852", "Park City East Quad", "geomaps_24k", "MD_24K"),
+    ("OFR-677", "Park City East Quad", "geomaps_24k", "MD_24K"),
+    ("M-296DM", "Park City East Quad", "geomaps_24k", "7_5_Quads"),
+    ("M-1", "Some Other Quad", "geomaps_24k", ""),
+]
+
+
+@pytest.fixture(autouse=True)
+def _footprints(monkeypatch):
+    """Never read the real footprints parquet from GCS in these tests."""
+    monkeypatch.setattr(gm.editions, "footprint_rows", lambda: list(_FOOTPRINTS))
+
+
 def test_group_by_tier_current_drops_deprecated_editions():
     """--editions current (default): only the newest map per (quad, scale) group survives —
     superseded editions of the same quad are dropped before the tier bins ever see them, so the
@@ -72,17 +87,43 @@ def test_group_by_tier_current_drops_deprecated_editions():
 
 
 def test_group_by_tier_all_keeps_every_edition_and_skips_the_graph():
-    """--editions all reproduces today's behavior (every COG, every edition) and must not pay for
-    a footprints/CDN read at all — no --quads means no reason to touch the network."""
+    """--editions all keeps every COG and every edition: no deprecation graph. The footprints are
+    still read, since they decide each map's tier."""
     with patch.object(gm, "_cog_sids", return_value=set(_PARK_CITY_QMAP)), \
          patch.object(gm.source, "read_pubs", return_value=_PARK_CITY_PUBS), \
-         patch.object(gm.editions, "quad_by_series") as mock_qmap, \
          patch.object(gm.editions, "edition_graph") as mock_graph:
         groups, _ = gm._group_by_tier(edition_mode="all")
 
     assert set(groups["24k"]) == {"GQ-852", "OFR-677", "M-296DM"}
     mock_graph.assert_not_called()
-    mock_qmap.assert_not_called()
+
+
+def test_group_by_tier_follows_the_portal_layer_not_the_scale(monkeypatch, capsys):
+    """Tiers are the portal's layers (footprint geomaps_service): a 1:62,500 30' x 60' map is
+    intermediate, a 1 x 2 degree sheet is 250k, the state map is 500k. Irregular maps, maps with no
+    footprint, and maps whose footprints disagree are left out and named."""
+    monkeypatch.setattr(gm.editions, "footprint_rows", lambda: [
+        ("M-254DM", "Tooele", "geomaps_100k", "30x60_Quads"),
+        ("I-1176", "Thomas Range", "geomaps_100k", ""),            # blank servName, still intermediate
+        ("I-1132", "Tooele", "geomaps_1x2", ""),
+        ("M-179DM", "Utah State 500k Map", "", "500k_Statewide"),
+        ("OFR-530", "Some Quad", "geomaps_24k", ""),
+        ("OFR-530", "Some Quad", "", ""),                           # extra blank row: still 24k
+        ("MP-09-4DM", "Irregular Area", "geomaps_irreg", "Other_Quads"),
+        ("X-2", "Split Quad", "geomaps_24k", ""),
+        ("X-2", "Split Quad", "geomaps_100k", ""),                  # two tiers: ambiguous
+    ])
+    sids = {"M-254DM", "I-1176", "I-1132", "M-179DM", "OFR-530", "MP-09-4DM", "X-2", "M-205DM"}
+    pubs = [{"series_id": s, "pub_scale": "1:62,500", "pub_year": "2000"} for s in sids]
+    with patch.object(gm, "_cog_sids", return_value=sids), \
+         patch.object(gm.source, "read_pubs", return_value=pubs):
+        groups, _ = gm._group_by_tier(edition_mode="all")
+
+    assert groups == {"24k": ["OFR-530"], "100k": ["I-1176", "M-254DM"], "250k": ["I-1132"],
+                      "500k": ["M-179DM"]}
+    err = capsys.readouterr().err
+    assert "no footprint): M-205DM" in err
+    assert "MP-09-4DM" in err and "X-2" in err
 
 
 def test_group_by_tier_quads_filter_restricts_membership():
@@ -383,8 +424,8 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
 
 
 @pytest.mark.parametrize("built,scales,rc", [
-    (3, ["24k", "250k", "500k"], 0),
-    (2, ["24k", "250k", "500k"], 1),    # one empty tier fails the job instead of reporting success
+    (4, ["24k", "100k", "250k", "500k"], 0),
+    (3, ["24k", "100k", "250k", "500k"], 1),    # one empty tier fails the job instead of reporting success
     (0, ["24k"], 1),
 ])
 def test_main_exit_code_requires_every_requested_tier(built, scales, rc):
@@ -549,10 +590,10 @@ def test_build_tier_gdal_cache_follows_the_environment(monkeypatch, env_value, e
 
 
 @pytest.mark.parametrize("argv,expected", [
-    ([], ["24k", "250k", "500k"]),
-    (["--scale", "all"], ["24k", "250k", "500k"]),
-    (["--scale", "250k", "--scale", "500k"], ["250k", "500k"]),
-    (["--scale=250k", "--scale=500k"], ["250k", "500k"]),   # the Cloud Run job's args (cloudbuild.yaml)
+    ([], ["24k", "100k", "250k", "500k"]),
+    (["--scale", "all"], ["24k", "100k", "250k", "500k"]),
+    (["--scale", "100k", "--scale", "500k"], ["100k", "500k"]),
+    (["--scale=100k", "--scale=500k"], ["100k", "500k"]),   # the Cloud Run job's args (cloudbuild.yaml)
     (["--scale", "500k", "--scale", "500k"], ["500k"]),
 ])
 def test_main_scale_is_repeatable(argv, expected):

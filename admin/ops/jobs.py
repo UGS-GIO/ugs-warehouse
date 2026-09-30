@@ -57,8 +57,8 @@ STAGES = [
               "semantic) rebuild from the same pub set."},
     {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
      "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
-              "The 250k and 500k tiers build here; the statewide 24k tier runs on Cloud Batch "
-              "(scripts/submit_mosaics_batch.sh --statewide)."},
+              "One mosaic per portal layer. The intermediate, 250k and 500k tiers build here; the "
+              "statewide 24k tier runs on Cloud Batch (scripts/submit_mosaics_batch.sh --statewide)."},
 ]
 
 
@@ -96,11 +96,11 @@ JOBS: dict[str, Job] = {j.key: j for j in [
     Job("embed", "ugs-pubs-embed", "Build semantic search",
         "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
         "classification changes.", danger=True),
-    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (250k + 500k)",
-        "Rebuild the 1:250,000 and 1:500,000 raster PMTiles mosaics of the published geologic maps. "
-        "Use the per-tier buttons to regenerate just one. The 24k tier is not built here: it runs "
-        "on Cloud Batch, and a Cloud Run build would overwrite its z17 mosaic with a z14 one.",
-        danger=True, tiers=(("250k", "1:250,000"), ("500k", "1:500,000"))),
+    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (intermediate + 500k)",
+        "Rebuild the intermediate-scale and 1:500,000 raster PMTiles mosaics of the published geologic "
+        "maps. Use the per-tier buttons to regenerate just one. The 24k tier is not built here: it "
+        "runs on Cloud Batch, and a Cloud Run build would overwrite its z17 mosaic with a z14 one.",
+        danger=True, tiers=(("100k", "Intermediate"), ("250k", "1:250,000"), ("500k", "1:500,000"))),
     Job("topics-thumbs", "ugs-topics-thumbs", "Topic thumbnails",
         "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
         "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "

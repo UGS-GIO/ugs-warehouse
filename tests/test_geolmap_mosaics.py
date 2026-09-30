@@ -606,3 +606,35 @@ def test_main_scale_is_repeatable(argv, expected):
     with patch.object(gm.sys, "argv", ["geolmap_mosaics", *argv]), patch.object(gm, "build", side_effect=fake_build):
         assert gm.main() == 0
     assert seen["scales"] == expected
+
+
+def test_a_review_bake_reads_public_cogs_and_links_members_to_the_public_catalog(monkeypatch):
+    """--review writes to the review bucket and catalog, but the COGs and the pub items only exist
+    in the public warehouse: reads go to SOURCE_BUCKET, member links to the public catalog."""
+    monkeypatch.setattr(gm.config, "BUCKET", "ut-dnr-ugs-maps-prod-review")
+    monkeypatch.setattr(gm.config, "SOURCE_BUCKET", "ut-dnr-ugs-maps-prod-public")
+    monkeypatch.setattr(gm.config, "STAC_PREFIX", "review/stac")
+    monkeypatch.setattr(gm.config, "PUBLIC_BASE_URL", "https://review.example")
+    assert gm._vsigs("M-1").startswith("/vsigs/ut-dnr-ugs-maps-prod-public/")
+    seen = {}
+
+    def fake_list(prefix, *, bucket=None):
+        seen["bucket"] = bucket
+        return [f"{prefix}/M-1.cog.tif"]
+
+    monkeypatch.setattr(gm.gcs, "list_paths", fake_list)
+    assert gm._cog_sids() == {"M-1"} and seen["bucket"] == "ut-dnr-ugs-maps-prod-public"
+    href = gm._public_item_href("ugs-publications/GQ", "GQ-968")
+    assert href == ("https://maps-assets.geology.utah.gov/warehouse/stac/"
+                    "ugs-publications/GQ/GQ-968/GQ-968.json")
+
+
+def test_public_item_href_matches_the_public_item_path_in_a_public_bake():
+    assert gm._public_item_href("ugs-publications/GQ", "GQ-968") == gm.config.public_url(
+        gm.stac.item_object_path("ugs-publications/GQ", "GQ-968"))
+
+
+def test_public_item_href_with_an_empty_stac_prefix(monkeypatch):
+    monkeypatch.setattr(gm.config, "STAC_PREFIX", "")
+    assert gm._public_item_href("ugs-publications/GQ", "GQ-968").endswith(
+        "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968.json")

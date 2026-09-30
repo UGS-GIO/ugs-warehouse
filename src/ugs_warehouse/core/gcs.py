@@ -61,15 +61,15 @@ def _file_meta(local_path: str) -> FileMeta:
     return FileMeta(size, multihash_sha256(h.digest()))
 
 
-_cached_store: GCSStore | None = None
+_cached_stores: dict[str, GCSStore] = {}
 _cached_gcs_client: gcloud_storage.Client | None = None
 
 
-def _store() -> GCSStore:
-    global _cached_store
-    if _cached_store is None:
-        _cached_store = GCSStore(bucket=config.BUCKET)
-    return _cached_store
+def _store(bucket: str | None = None) -> GCSStore:
+    name = bucket or config.BUCKET
+    if name not in _cached_stores:
+        _cached_stores[name] = GCSStore(bucket=name)
+    return _cached_stores[name]
 
 
 def _gcs_client() -> gcloud_storage.Client:
@@ -134,8 +134,8 @@ def _gunzip(raw: bytes) -> bytes:
         return raw
 
 
-def get_bytes(object_path: str) -> bytes:
-    """Download an object's bytes from `gs://{BUCKET}/{object_path}`.
+def get_bytes(object_path: str, *, bucket: str | None = None) -> bytes:
+    """Download an object's bytes from `gs://{bucket or BUCKET}/{object_path}`.
 
     Gunzips when the body still carries the gzip magic. GCS decompresses a `Content-Encoding: gzip`
     object for clients that don't ask for it, but whether obstore asks is a detail of its HTTP
@@ -149,7 +149,7 @@ def get_bytes(object_path: str) -> bytes:
     refresh_catalog / prior_property / overrides. (#341)
     """
     try:
-        raw = bytes(obs.get(_store(), object_path).bytes())
+        raw = bytes(obs.get(_store(bucket), object_path).bytes())
     except FileNotFoundError:
         raise  # genuine 404 — preserve the type callers catch; the fallback would only 404 again
     except Exception as e:  # noqa: BLE001 — obstore chokes on the stripped Content-Length; fall back
@@ -160,7 +160,8 @@ def get_bytes(object_path: str) -> bytes:
               f"({type(e).__name__}: {(str(e).splitlines() or [''])[0]}); reading via google-cloud-storage",
               file=sys.stderr)
         try:
-            raw = _gcs_client().bucket(config.BUCKET).blob(object_path).download_as_bytes(raw_download=True)
+            raw = (_gcs_client().bucket(bucket or config.BUCKET).blob(object_path)
+                   .download_as_bytes(raw_download=True))
         except NotFound as nf:
             # google-cloud-storage raises NotFound, not FileNotFoundError; translate it so the fallback
             # keeps get_bytes' one 404 contract — serve/refresh_catalog treat an absent object as a 404,
@@ -254,9 +255,10 @@ def delete(object_path: str) -> None:
         pass
 
 
-def list_paths(prefix: str) -> list[str]:
-    """All object paths under `prefix` (obstore yields batches of metadata dicts)."""
+def list_paths(prefix: str, *, bucket: str | None = None) -> list[str]:
+    """All object paths under `prefix` in `bucket` (default BUCKET); obstore yields batches of
+    metadata dicts."""
     out: list[str] = []
-    for batch in obs.list(_store(), prefix=prefix):
+    for batch in obs.list(_store(bucket), prefix=prefix):
         out.extend(m["path"] for m in batch)
     return out

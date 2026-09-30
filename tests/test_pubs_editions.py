@@ -2,6 +2,8 @@
 ingest wiring that hands each pub's edition to `sink_stac.build_item`."""
 from unittest.mock import patch
 
+import pytest
+
 from ugs_warehouse.pubs import editions
 
 
@@ -206,3 +208,19 @@ def test_a_scale_band_never_matches_a_mosaic_tier():
     qmap = {"I-1132": "Tooele", "X-9": "Tooele"}
     g = editions.edition_graph(pubs, quad_by_sid=qmap, tier_by_sid={"I-1132": "250k"})
     assert g["I-1132"]["deprecated"] is False and g["I-1132"]["successor_href"] is None
+
+
+def test_footprint_rows_reads_the_source_bucket(monkeypatch):
+    """A review bake writes elsewhere but reads the footprints from the source (public) bucket."""
+    from ugs_warehouse.core import config, gcs
+    seen = {}
+
+    def fake_get(obj, *, bucket=None):
+        seen["bucket"] = bucket
+        raise FileNotFoundError(obj)
+
+    monkeypatch.setattr(config, "SOURCE_BUCKET", "ut-dnr-ugs-maps-prod-public")
+    monkeypatch.setattr(gcs, "get_bytes", fake_get)
+    with pytest.raises(RuntimeError, match="unreadable"):
+        editions.footprint_rows()
+    assert seen["bucket"] == "ut-dnr-ugs-maps-prod-public"

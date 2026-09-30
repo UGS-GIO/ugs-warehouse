@@ -123,10 +123,10 @@ def footprint_rows() -> list[tuple[str, str, str, str]]:
 
     obj = f"{identity.FOOTPRINTS_PREFIX}/footprints.parquet"  # == footprints.PARQUET_OBJECT
     try:
-        data = gcs.get_bytes(obj)  # obstore; raises if absent
+        data = gcs.get_bytes(obj, bucket=config.SOURCE_BUCKET)  # obstore; raises if absent
     except Exception as e:  # noqa: BLE001 — surface it, don't silently degrade
         raise RuntimeError(
-            f"[editions] staged footprints parquet gs://.../{obj} unreadable "
+            f"[editions] staged footprints parquet gs://{config.SOURCE_BUCKET}/{obj} unreadable "
             f"({e}); run `python -m ugs_warehouse.pubs.footprints` first") from e
 
     tmp = tempfile.NamedTemporaryFile(suffix=".parquet", delete=False)
@@ -141,7 +141,7 @@ def footprint_rows() -> list[tuple[str, str, str, str]]:
                     "FROM read_parquet(?) WHERE coalesce(trim(series_id), '') <> ''",
                     [tmp.name]).fetchall()
             except duckdb.Error as e:  # e.g. a parquet staged before geomaps_service existed
-                raise RuntimeError(f"[editions] footprints parquet gs://.../{obj} unusable: {e}") from e
+                raise RuntimeError(f"[editions] footprints parquet gs://{config.SOURCE_BUCKET}/{obj} unusable: {e}") from e
     finally:
         os.unlink(tmp.name)
     return [(str(s), str(q), str(g), str(n)) for s, q, g, n in rows]

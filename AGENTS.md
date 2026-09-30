@@ -48,6 +48,7 @@ uvicorn service.main:app --host 0.0.0.0 --port 8080
 | `DUCKLAKE_METADATA_SCHEMA` | `vector/ducklake.py` | Postgres schema for DuckLake metadata tables (default `ducklake_catalog`) |
 | `OVERRIDE_DATA_PATH` | `vector/ducklake.py` | `True` adds `OVERRIDE_DATA_PATH TRUE` to ATTACH, for when DATA_PATH differs from the catalog record |
 | `WAREHOUSE_BUCKET` | `core/config.py` | GCS bucket for artifacts (private; served via CDN) |
+| `WAREHOUSE_SOURCE_BUCKET` | `core/config.py` | Where a producer reads existing artifacts (COGs, footprints) when writing elsewhere, e.g. a review mosaic bake; defaults to `WAREHOUSE_BUCKET` |
 | `WAREHOUSE_{ARCHIVE,PMTILES,STAC}_PREFIX` | `core/config.py` | per-artifact object prefixes |
 | `WAREHOUSE_PUBLIC_BASE_URL` | `core/config.py` | https base for asset hrefs (defaults to `https://maps-assets.geology.utah.gov`) |
 | `TIPPECANOE_BIN` / `TIPPECANOE_OPTS` | `vector/sink_pmtiles.py` | binary path + extra flags |

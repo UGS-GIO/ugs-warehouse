@@ -90,7 +90,7 @@ def _cog_sids() -> set[str]:
     """Series ids that have a harvested COG (geolmap/cogs/<sid>.cog.tif)."""
     pfx = identity.COG_PREFIX.rstrip("/") + "/"
     out: set[str] = set()
-    for path in gcs.list_paths(identity.COG_PREFIX):
+    for path in gcs.list_paths(identity.COG_PREFIX, bucket=config.SOURCE_BUCKET):
         name = path[len(pfx):] if path.startswith(pfx) else path
         if name.endswith(".cog.tif"):
             out.add(name[: -len(".cog.tif")].upper())
@@ -169,7 +169,7 @@ def _group_by_tier(edition_mode: str = "current",
 
 def _vsigs(sid: str) -> str:
     """GDAL /vsigs path to a COG — read in place from the (private) bucket, no download."""
-    return f"/vsigs/{config.BUCKET}/{identity.COG_PREFIX}/{sid}.cog.tif"
+    return f"/vsigs/{config.SOURCE_BUCKET}/{identity.COG_PREFIX}/{sid}.cog.tif"
 
 
 def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
@@ -429,6 +429,14 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         return True
 
 
+def _public_item_href(collection_path: str, item_id: str) -> str:
+    """A member map's item in the PUBLIC catalog. Pub items live only there, so a mosaic baked into
+    the review catalog still links its members to the public CDN rather than to review paths that
+    don't exist."""
+    rel = stac.item_object_path(collection_path, item_id).removeprefix(config.STAC_PREFIX).lstrip("/")
+    return f"{config.PUBLIC_CATALOG_URL.rsplit('/', 1)[0]}/{rel}"
+
+
 def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,
                 bounds: list[float]) -> None:
     """STAC item for one mosaic tier, footprinted by the mosaic's real [W, S, E, N] `bounds`. The
@@ -459,7 +467,7 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
         coll = f"{sink_stac.collection_group(p)}/{sink_stac.series_code(real_sid)}"
         derived_from.append({
             "rel": "derived_from",
-            "href": config.public_url(stac.item_object_path(coll, sink_stac.item_id_for(real_sid))),
+            "href": _public_item_href(coll, sink_stac.item_id_for(real_sid)),
             "type": "application/geo+json",
             "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
 

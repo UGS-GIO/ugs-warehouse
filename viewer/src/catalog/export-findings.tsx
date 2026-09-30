@@ -3,9 +3,7 @@ import type { ReactNode } from "react";
 
 import type { ShapefileWarnings } from "@/data/download";
 import { SLOW_READ_BYTES } from "@/data/download";
-import { type ExportFormat, FORMATS } from "@/data/export-formats";
-
-export const FORMAT_LABEL = Object.fromEntries(FORMATS.map((f) => [f.id, f.label])) as Record<ExportFormat, string>;
+import { type ExportFormat, FORMAT_LABEL } from "@/data/export-formats";
 
 const fmtBytes = (n: number) =>
   n >= 1024 ** 3 ? `${(n / 1024 ** 3).toFixed(1)} GB` : `${Math.round(n / 1024 ** 2)} MB`;

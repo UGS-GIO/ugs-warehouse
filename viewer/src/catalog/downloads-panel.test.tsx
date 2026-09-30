@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { DownloadsPanel } from "./downloads-panel";
+import type { ShapefileWarnings } from "@/data/download";
 import type { StacDoc } from "@/stac";
 
 // `vi.mock` is hoisted above the file's consts, so the spies have to be hoisted with it.
@@ -49,9 +50,9 @@ const item: StacDoc = {
   },
 };
 
-const CLEAN = {
-  mixedGeometry: [] as string[], longNames: [] as string[],
-  collisions: [] as [string, string][], tooManyFields: false, over2gb: false, fieldCount: 3,
+const CLEAN: ShapefileWarnings = {
+  mixedGeometry: [], longNames: [],
+  collisions: [], tooManyFields: false, over2gb: false, fieldCount: 3,
   estShpBytes: 10, estDbfBytes: 10, estPeakBytes: 10, overBrowserLimit: false,
   widthsEstimated: false, estReadBytes: 1000, rowGroups: 12, minClipBytes: 1000,
   rowCount: 7_000,

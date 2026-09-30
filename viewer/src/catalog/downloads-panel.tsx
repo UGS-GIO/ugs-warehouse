@@ -58,6 +58,9 @@ const TILE = "flex items-start justify-between gap-2 rounded-md border border-bo
 const SUB = "mt-0.5 block text-xs font-normal text-muted-foreground";
 const BBOX_LABELS = ["W", "S", "E", "N"];
 
+// Carries its own format, so rendering it never reaches back into the mutation's variables.
+type Warning = { fmt: ExportFormat; findings: Finding[] };
+
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
   const fullBbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
@@ -74,7 +77,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const ticket = useRef<number | null>(null);
 
   const run = useMutation({
-    mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }): Promise<Finding[] | undefined> => {
+    mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }): Promise<Warning | undefined> => {
       const clip = clipOn ? bbox : undefined;
       const { beginExport, endRun, exportItem, exportWarnings, startRun } = await import("@/data/download");
       // The ticket is taken BEFORE the pre-flight, which is the slow part — a cancel during it
@@ -89,7 +92,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         const w = await exportWarnings(parquet!.href, fmt, clip)
           .catch((e) => { console.warn("export pre-flight failed", e); return null; });
         const found = w ? exportFindings(w, fmt) : [];
-        if (found.length) { endRun(epoch); return found; }   // no export follows, so release the ticket
+        if (found.length) { endRun(epoch); return { fmt, findings: found }; }   // no export follows, so release the ticket
       }
       await exportItem(parquet!.href, String(item.id ?? "export"), fmt, clip, epsg, epoch);
     },
@@ -106,8 +109,8 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const focusWarning = useCallback((el: HTMLDivElement | null) => { el?.focus(); }, []);
   // Dismissing puts focus back on the button that opened the warning, not on <body>.
   const dismiss = () => { run.reset(); invoker.current?.focus(); };
-  const findings = run.data?.length ? run.data : undefined;
-  const tooBig = findings?.some((f) => f.level === "too-big");
+  const warn = run.data;
+  const tooBig = warn?.findings.some((f) => f.level === "too-big");
 
   const files = fileAssets(item);
   if (!files.length) return null;
@@ -153,7 +156,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       <p role="status" aria-live="polite" className={`mt-1.5 ${C.muted} ${busy ? "" : "sr-only"}`}>
         {busy
           ? `preparing in your browser · the first one loads DuckDB${GDAL_FORMATS.has(busy) ? " and GDAL (~40 MB)" : " (~a few MB)"}`
-          : run.isSuccess && !findings ? "export ready" : ""}
+          : run.isSuccess && !warn ? "export ready" : ""}
       </p>
       <div role="alert" className={run.error ? `mt-1.5 text-sm text-destructive` : "sr-only"}>
         {run.error ? `Download failed: ${run.error.message}` : ""}
@@ -213,27 +216,27 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         </details>
       )}
 
-      {findings && (
+      {warn && (
         <div aria-labelledby="dl-warn-title" aria-describedby="dl-warn-why" tabIndex={-1} ref={focusWarning}
           onKeyDown={(e) => { if (e.key === "Escape") dismiss(); }}
           className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
           <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
-            {findingsHeading(findings, run.variables!.fmt)}
+            {findingsHeading(warn.findings, warn.fmt)}
           </div>
           <ul id="dl-warn-why" className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
-            {findings.map((f) => <li key={f.id}><b>{f.title}</b> {f.detail}</li>)}
+            {warn.findings.map((f) => <li key={f.id}><b>{f.title}</b> {f.detail}</li>)}
           </ul>
           <div className="mt-2 flex flex-wrap gap-2">
             {/* GeoPackage shares the tab and the wasm instance, so it is no way out of a memory
                 ceiling — only out of the limits the single-geometry formats impose. */}
-            {!tooBig && holdsOneGeomType(run.variables!.fmt) && (
+            {!tooBig && holdsOneGeomType(warn.fmt) && (
               <button onClick={() => run.mutate({ fmt: "gpkg" })}
                 className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
                 Use GeoPackage instead
               </button>
             )}
-            {!findings.some((f) => f.noForce) && (
-              <button onClick={() => run.mutate({ fmt: run.variables!.fmt, force: true })}
+            {!warn.findings.some((f) => f.noForce) && (
+              <button onClick={() => run.mutate({ fmt: warn.fmt, force: true })}
                 className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
                 Download anyway
               </button>

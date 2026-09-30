@@ -632,3 +632,9 @@ def test_a_review_bake_reads_public_cogs_and_links_members_to_the_public_catalog
 def test_public_item_href_matches_the_public_item_path_in_a_public_bake():
     assert gm._public_item_href("ugs-publications/GQ", "GQ-968") == gm.config.public_url(
         gm.stac.item_object_path("ugs-publications/GQ", "GQ-968"))
+
+
+def test_public_item_href_with_an_empty_stac_prefix(monkeypatch):
+    monkeypatch.setattr(gm.config, "STAC_PREFIX", "")
+    assert gm._public_item_href("ugs-publications/GQ", "GQ-968").endswith(
+        "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968.json")

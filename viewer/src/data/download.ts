@@ -709,7 +709,6 @@ export interface ShapefileWarnings {
   estReadBytes: number;                // bytes the export fetches, after row-group pruning
   rowGroups: number;                   // how finely the file is grouped — what pruning can work with
   minClipBytes: number;                // the least any clip could read: the largest single group
-  any: boolean;                        // true if anything worth warning about
 }
 
 /** Geometry types off the GeoParquet `geo` key — present on anything our transform wrote, and
@@ -877,9 +876,6 @@ export async function exportWarnings(
       mixedGeometry, rowCount, estShpBytes, estDbfBytes, over2gb: shp && over2gb,
       estPeakBytes, overBrowserLimit, widthsEstimated,
       estReadBytes, rowGroups: groups.length, minClipBytes,
-      any: longNames.length > 0 || collisions.length > 0 || tooManyFields
-        || mixedGeometry.length > 0 || (shp && over2gb) || overBrowserLimit
-        || estReadBytes > SLOW_READ_BYTES || widthsEstimated,
     };
   } finally {
     if (borrowed !== undefined) release(borrowed);

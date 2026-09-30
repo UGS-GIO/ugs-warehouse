@@ -2,10 +2,11 @@
 // "Services" — see `endpoints-panel.tsx`.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
-import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { type InputHTMLAttributes, useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
+import { toBbox } from "@/lib/bbox";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
@@ -61,51 +62,46 @@ const BBOX_LABELS = ["W", "S", "E", "N"];
 
 type Clip = [number, number, number, number];
 
-const toClip = (xs: number[] | undefined): Clip | undefined => {
-  if (!xs || xs.length < 4 || !xs.slice(0, 4).every(Number.isFinite)) return undefined;
-  const [w, s, e, n] = xs;
-  return [w, s, e, n];
-};
 const isPreset = (epsg: number) => EPSG_ITEMS.some((o) => o.value === String(epsg));
-const parseCrs = (v: unknown) => (typeof v === "string" && /^\d{4,6}$/.test(v) ? Number(v) : undefined);
-const parseClip = (v: unknown) => {
-  const parts = typeof v === "string" ? v.split(",") : [];
-  return parts.length === 4 && parts.every((p) => p.trim()) ? toClip(parts.map(Number)) : undefined;
-};
+
+/** Keeps its own text while typing and commits on blur or Enter. Keyed by the committed value, so
+ *  a change from outside (reset, back/forward) remounts it showing the new number. */
+function NumberField({ value, valid = Number.isFinite, onCommit, ...rest }:
+  { value: number; valid?: (n: number) => boolean; onCommit: (n: number) => void }
+  & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "defaultValue" | "onBlur" | "onKeyDown">) {
+  const commit = (el: HTMLInputElement) => {
+    const n = Number(el.value);
+    if (el.value.trim() && valid(n)) onCommit(n);
+    else el.value = String(value);
+  };
+  return (
+    <input key={value} type="number" defaultValue={value} {...rest}
+      onBlur={(e) => commit(e.currentTarget)}
+      onKeyDown={(e) => { if (e.key === "Enter") commit(e.currentTarget); }}
+      className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+  );
+}
 
 // Carries its own format, so rendering it never reaches back into the mutation's variables.
 type Warning = { fmt: ExportFormat; findings: Finding[] };
 
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
-  const fullBbox = toClip(item.bbox);
-  // CRS and clip live in the URL (`crs`, `clip=w,s,e,n`), so a reload or a shared link keeps them.
-  const search = useSearch({ from: "__root__" });
+  const fullBbox = toBbox(item.bbox);
+  // CRS and clip live in the URL, so a reload or a shared link keeps them.
+  const { crs: epsg = 4326, clip } = useSearch({ from: "__root__" });
   const navigate = useNavigate();
-  const epsg = parseCrs(search.crs) ?? 4326;
-  const clip = parseClip(search.clip);
   const setSearch = (next: { crs?: number; clip?: Clip }) =>
     void navigate({
       to: ".", replace: true,
       search: (prev) => ({
         ...prev,
-        ...("crs" in next && { crs: next.crs === 4326 ? undefined : next.crs?.toString() }),
-        ...("clip" in next && { clip: next.clip?.join(",") }),
+        ...("crs" in next && { crs: next.crs === 4326 ? undefined : next.crs }),
+        ...("clip" in next && { clip: next.clip }),
       }),
     });
-  // Typing buffer: a half-typed "-11" is not a number yet, and the URL only takes whole bboxes.
-  const [draft, setDraft] = useState(() => clip?.map(String) ?? []);
-  const editClip = (next: Clip | undefined) => { setDraft(next?.map(String) ?? []); setSearch({ clip: next }); };
-  const [crsDraft, setCrsDraft] = useState(() => String(epsg));
-  const [customEpsg, setCustomEpsg] = useState(!isPreset(epsg));
-  // The URL can change under the panel (back/forward, an edited link). Reset the buffers then, but
-  // not on the panel's own write: that would eat the "." of a half-typed "-111.".
-  const [seen, setSeen] = useState({ crs: search.crs, clip: search.clip });
-  if (seen.crs !== search.crs || seen.clip !== search.clip) {
-    setSeen({ crs: search.crs, clip: search.clip });
-    if (parseClip(draft.join(","))?.join(",") !== clip?.join(",")) setDraft(clip?.map(String) ?? []);
-    if (parseCrs(crsDraft) !== epsg) { setCrsDraft(String(epsg)); setCustomEpsg(!isPreset(epsg)); }
-  }
+  const [pickedOther, setPickedOther] = useState(false);
+  const customEpsg = pickedOther || !isPreset(epsg);
   const queryClient = useQueryClient();
 
   // The export outlives this component: the panel is keyed per item, so switching items remounts
@@ -220,21 +216,17 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
               Output CRS
               <UiSelect value={customEpsg ? "other" : String(epsg)} className="px-1.5 py-0.5"
                 onValueChange={(v) => {
-                  if (v === "other") setCustomEpsg(true);
-                  else { setCustomEpsg(false); setSearch({ crs: Number(v) }); }
+                  if (v === "other") setPickedOther(true);
+                  else { setPickedOther(false); setSearch({ crs: Number(v) }); }
                 }}
                 items={EPSG_ITEMS} />
             </label>
             {customEpsg && (
               <label className="flex items-center gap-1">
                 EPSG:
-                <input type="number" min={1024} max={999999} value={crsDraft} autoFocus
-                  onChange={(e) => {
-                    setCrsDraft(e.target.value);
-                    const crs = parseCrs(e.target.value);
-                    if (crs) setSearch({ crs });
-                  }}
-                  className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+                <NumberField value={epsg} min={1024} max={999999} autoFocus
+                  valid={(n) => Number.isInteger(n) && n >= 1024 && n <= 999999}
+                  onCommit={(crs) => setSearch({ crs })} />
               </label>
             )}
           </div>
@@ -242,25 +234,22 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             <div className="mt-2 text-sm">
               <label className="flex items-center gap-1.5 text-muted-foreground">
                 <input type="checkbox" checked={!!clip}
-                  onChange={(e) => editClip(e.target.checked ? fullBbox : undefined)} />
+                  onChange={(e) => setSearch({ clip: e.target.checked ? fullBbox : undefined })} />
                 Clip to an area (bbox, EPSG:4326)
               </label>
               {clip && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {draft.map((v, i) => (
+                  {clip.map((v, i) => (
                     <label key={i} className="flex items-center gap-1 text-muted-foreground">
                       {BBOX_LABELS[i]}
-                      <input type="number" step="0.01" value={v}
-                        onChange={(e) => {
-                          const next = draft.map((x, j) => (j === i ? e.target.value : x));
-                          setDraft(next);
-                          const parsed = parseClip(next.join(","));
-                          if (parsed) setSearch({ clip: parsed });
-                        }}
-                        className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+                      <NumberField value={v} step="0.01" onCommit={(n) => {
+                        const next: Clip = [...clip];
+                        next[i] = n;
+                        setSearch({ clip: next });
+                      }} />
                     </label>
                   ))}
-                  <button onClick={() => editClip(fullBbox)} className="text-primary">reset</button>
+                  <button onClick={() => setSearch({ clip: fullBbox })} className="text-primary">reset</button>
                 </div>
               )}
             </div>

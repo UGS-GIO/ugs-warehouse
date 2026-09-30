@@ -316,7 +316,7 @@ describe("DownloadsPanel", () => {
   });
 
   it("exports in the CRS and clip the URL carries", async () => {
-    url.search = { crs: "26912", clip: "-112,40,-111,41" };
+    url.search = { crs: 26912, clip: [-112, 40, -111, 41] };
     show();
     await userEvent.click(screen.getByLabelText("Download GeoPackage"));
     expect(exportItem).toHaveBeenCalledWith(HREF, "x", "gpkg", [-112, 40, -111, 41], 26912, 7);
@@ -326,7 +326,7 @@ describe("DownloadsPanel", () => {
     show();
     await userEvent.click(screen.getByText("Projection & area"));
     await userEvent.click(screen.getByLabelText(/clip/i));
-    expect(url.search.clip).toBe("-114,37,-109,42");
+    expect(url.search.clip).toEqual([-114, 37, -109, 42]);
   });
 
   it("reuses the pre-flight when the same export is asked for again", async () => {
@@ -339,26 +339,41 @@ describe("DownloadsPanel", () => {
     expect(exportWarnings).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps a half-typed clip value while the URL takes the number", async () => {
-    url.search = { clip: "-114,37,-109,42" };
+  it("writes a typed clip value to the URL on blur", async () => {
+    url.search = { clip: [-114, 37, -109, 42] };
     show();
     await userEvent.click(screen.getByText("Projection & area"));
     const west = screen.getByLabelText("W");
     await userEvent.clear(west);
     await userEvent.type(west, "-111.5");
-    expect(url.search.clip).toBe("-111.5,37,-109,42");
+    expect(url.search.clip).toEqual([-114, 37, -109, 42]);
+    await userEvent.tab();
+    expect(url.search.clip).toEqual([-111.5, 37, -109, 42]);
   });
 
   it("shows a clip that changed in the URL without a remount", async () => {
-    url.search = { clip: "-114,37,-109,42" };
+    url.search = { clip: [-114, 37, -109, 42] };
     const { rerender } = show();
     await userEvent.click(screen.getByText("Projection & area"));
-    url.search = { clip: "-112,40,-111,41" };
+    url.search = { clip: [-112, 40, -111, 41] };
     rerender(
       <QueryClientProvider client={new QueryClient()}>
         <DownloadsPanel item={item} />
       </QueryClientProvider>,
     );
     expect(screen.getByLabelText<HTMLInputElement>("W").value).toBe("-112");
+  });
+
+  it("puts the committed value back when the typed one is not a code", async () => {
+    url.search = { crs: 26912 };
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(await screen.findByText("Other (any EPSG)…"));
+    const code = screen.getByLabelText<HTMLInputElement>("EPSG:");
+    await userEvent.clear(code);
+    await userEvent.type(code, "12{Enter}");
+    expect(url.search.crs).toBe(26912);
+    expect(code.value).toBe("26912");
   });
 });

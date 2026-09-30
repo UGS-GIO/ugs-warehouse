@@ -8,7 +8,10 @@ single IAP session cookie covers every fetch (viewer shell + catalog + range rea
 Read-only by construction: the only GCS verbs used are head + ranged get. The service account
 (infra/iam.tf) holds `objectViewer` on the review bucket and nothing else.
 
-HTTP Range is honored (206 + Content-Range) so PMTiles/COG range reads work directly.
+HTTP Range is honored (206 + Content-Range) so PMTiles/COG range reads work directly. HEAD is answered
+from object metadata with the same headers GCS sends (size, ETag, Last-Modified), because the viewer's
+readers that work against the public CDN (hyparquet's file-size probe, the offline version checks) send
+HEAD first and treat a 405 as a failed read.
 
 Routing: real objects stream from the bucket. The viewer is a client-side-routed SPA, so a not-found
 path with NO file extension (an app route like `/map`) falls back to the viewer's index.html; a
@@ -21,6 +24,7 @@ from __future__ import annotations
 
 import os
 import re
+from email.utils import format_datetime
 
 import obstore as obs
 from fastapi import FastAPI, HTTPException, Request, Response
@@ -143,6 +147,11 @@ _MIME = {
 
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 
+# Review objects are rewritten in place (republished data, a redeployed viewer shell), and a
+# Last-Modified with no Cache-Control lets browsers cache heuristically, so every response says to
+# revalidate. `private` keeps IAP-gated bytes out of shared caches.
+_CACHE_CONTROL = "private, no-cache"
+
 
 def _content_type(path: str) -> str:
     _, dot, ext = path.rpartition(".")
@@ -183,14 +192,23 @@ def _serve_object(object_path: str, request: Request) -> Response:
             body = gcs.get_bytes(object_path)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="not found") from None
-        return Response(content=body, media_type=_content_type(object_path))
+        return Response(content=body, media_type=_content_type(object_path),
+                        headers={"Cache-Control": _CACHE_CONTROL})
     try:
         meta = obs.head(_store, object_path)  # ObjectMeta is a TypedDict
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="not found") from None
     size = meta["size"]
     ctype = _content_type(object_path)
-    headers = {"Accept-Ranges": "bytes", "Content-Type": ctype}
+    headers = {"Accept-Ranges": "bytes", "Content-Type": ctype, "Cache-Control": _CACHE_CONTROL,
+               "Last-Modified": format_datetime(meta["last_modified"], usegmt=True)}
+    if meta.get("e_tag"):
+        headers["ETag"] = meta["e_tag"]
+
+    # Range applies only to GET (RFC 9110 §14.2), so HEAD always describes the whole object.
+    if request.method == "HEAD":
+        headers["Content-Length"] = str(size)
+        return Response(status_code=200, headers=headers)
 
     range_header = request.headers.get("range")
     if range_header:
@@ -213,7 +231,7 @@ def _serve_object(object_path: str, request: Request) -> Response:
     return StreamingResponse(resp.stream(), status_code=200, headers=headers, media_type=ctype)
 
 
-@app.get("/{object_path:path}")
+@app.api_route("/{object_path:path}", methods=["GET", "HEAD"])
 def serve(object_path: str, request: Request) -> Response:
     # The non-IAP twin (public, Firebase-token-auth) must NOT stream the private review bucket — it
     # exists only for the /api/* review routes. Everything else 404s there.

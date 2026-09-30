@@ -551,7 +551,8 @@ def test_build_tier_gdal_cache_follows_the_environment(monkeypatch, env_value, e
 @pytest.mark.parametrize("argv,expected", [
     ([], ["24k", "250k", "500k"]),
     (["--scale", "all"], ["24k", "250k", "500k"]),
-    (["--scale", "250k", "--scale", "500k"], ["250k", "500k"]),   # the Cloud Run job's args
+    (["--scale", "250k", "--scale", "500k"], ["250k", "500k"]),
+    (["--scale=250k", "--scale=500k"], ["250k", "500k"]),   # the Cloud Run job's args (cloudbuild.yaml)
     (["--scale", "500k", "--scale", "500k"], ["500k"]),
 ])
 def test_main_scale_is_repeatable(argv, expected):

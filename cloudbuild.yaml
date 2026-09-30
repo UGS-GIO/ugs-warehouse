@@ -663,7 +663,8 @@ steps:
       - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
       - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
-      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,250k,--scale,500k
+      # --scale=<tier> form: gcloud rejects a repeated bare "--scale" item in --args.
+      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale=250k,--scale=500k
       - --task-timeout=14400
       - --max-retries=1
       - --cpu=4

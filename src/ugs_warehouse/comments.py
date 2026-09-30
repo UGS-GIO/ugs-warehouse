@@ -2,7 +2,7 @@
 
 Served by the IAP review app (serve.py), stored in `review.comments` in mapping-db, connected as the
 least-privilege `review_writer` role (owns the `review` schema, can touch nothing else). The author of
-every comment is the IAP identity (X-Goog-Authenticated-User-Email), never trusted from the client.
+every comment is the verified IAP identity (see iap.py), never trusted from the client.
 Reports read this table via DuckDB later.
 
 DB config comes from the same Cloud SQL socket the ingest uses (`--set-cloudsql-instances` mounts it at
@@ -18,6 +18,8 @@ import re
 
 from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field
+
+from ugs_warehouse import iap
 
 log = logging.getLogger("ugs-warehouse.comments")
 router = APIRouter(prefix="/api/comments", tags=["comments"])
@@ -200,18 +202,18 @@ def _verify_firebase_email(token: str) -> str | None:
 
 def _author(request: Request) -> str:
     """The authenticated reviewer's email, from either trusted source (IAP first):
-    1. IAP header `X-Goog-Authenticated-User-Email` — the internal review viewer (Google IAP).
+    1. IAP's signed JWT, verified for this service (iap.verified_email): the internal review viewer.
     2. `Authorization: Bearer <firebase idToken>` — the hazards-review app in ugs-map-viewer (Firebase
        Auth / Entra OIDC). Emails match across both IdPs (confirmed), so the same person's rows line up.
     401 if neither is present/valid."""
-    raw = request.headers.get("x-goog-authenticated-user-email", "")
-    email = raw.split(":", 1)[-1] if raw else ""
-    if email:
-        return email
-    token = _bearer_token(request)
-    if token and (email := _verify_firebase_email(token)):
+    if email := iap.verified_email(request.headers) or _bearer_email(request):
         return email
     raise HTTPException(status_code=401, detail="no IAP identity or valid bearer token")
+
+
+def _bearer_email(request: Request) -> str | None:
+    token = _bearer_token(request)
+    return _verify_firebase_email(token) if token else None
 
 
 # WRITE authorization. READS (list comments/notifications, view catalog) are open to any authenticated
@@ -229,9 +231,11 @@ _EDITOR_DOMAINS = {d.strip().lower() for d in os.environ.get("REVIEW_EDITOR_DOMA
 def _require_editor(request: Request) -> str:
     """The author email, but only if authorized to WRITE (see policy above). 401 if unauthenticated,
     403 if authenticated-but-not-an-editor."""
-    email = _author(request)  # 401 if neither IAP identity nor a valid bearer
-    if request.headers.get("x-goog-authenticated-user-email"):  # IAP-gated → already the review group
+    if email := iap.verified_email(request.headers):  # IAP-gated, so already the review group
         return email
+    email = _bearer_email(request)
+    if not email:
+        raise HTTPException(status_code=401, detail="no IAP identity or valid bearer token")
     lower = email.lower()
     domain = lower.rsplit("@", 1)[-1] if "@" in lower else ""
     if lower in _EDITOR_EMAILS or any(domain == d or domain.endswith("." + d) for d in _EDITOR_DOMAINS):

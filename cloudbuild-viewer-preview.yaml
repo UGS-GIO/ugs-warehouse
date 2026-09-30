@@ -11,7 +11,7 @@
 # code, and on that origin it would inherit the reviewer's IAP session (post/delete comments as
 # them, pull signed URLs to private review assets). Different host → different cookie, plus CORS.
 #
-# `--base=/viewer/pr-<n>/` is both the asset prefix and the router basepath (src/mount.ts): the
+# `--base=/viewer/pr-<n>/` is both the asset prefix and the router basepath (src/lib/mount.ts): the
 # viewer has real path routes, so a bundle mounted under a prefix has to be told which one.
 # serve.py serves this bundle's own index.html for an unknown path under the subtree.
 #
@@ -19,8 +19,6 @@
 # prefix to mis-target and a build that dies halfway still gets swept.
 substitutions:
   _REGION: us-central1
-  _FEATURES_SERVICE: ugs-warehouse-features
-  _TILES_SERVICE: ugs-warehouse-tiles
   _PREVIEWS_BUCKET: ut-dnr-ugs-maps-prod-previews
   # Static, not resolved at build time: ugs-warehouse-previews lives in ut-dnr-ugs-maps-prod, a
   # DIFFERENT project from where this build runs (ut-dnr-ugs-backend-tools). A `gcloud run services
@@ -28,26 +26,15 @@ substitutions:
   # AND cross-project run.viewer for the preview-build SA, just to print a URL. Not worth either:
   # the service's *.run.app URL is stable for its lifetime, so it's a substitution instead.
   _PREVIEWS_BASE_URL: https://ugs-warehouse-previews-ufyuidl4mq-uc.a.run.app
+  # Static: the preview build identity can't read the prod services to look these up.
+  _TILES_BASE_URL: https://ugs-warehouse-tiles-xedvkyurga-uc.a.run.app
+  _FEATURES_BASE_URL: https://ugs-warehouse-features-xedvkyurga-uc.a.run.app
   _PREVIEW_PATH: viewer/pr-
   # The review catalog this preview reads. stac.ts derives IS_REVIEW from the "/review/" in it, so
   # this one variable is what makes the bundle the review flavour.
   _REVIEW_SERVING_URL: https://ugs-warehouse-review-serving-ufyuidl4mq-uc.a.run.app
 
 steps:
-  # Same service-URL resolution as the prod build, so the preview's endpoint links aren't dead.
-  - id: resolve-service-urls
-    name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: bash
-    args:
-      - -c
-      - |
-        gcloud run services describe ${_FEATURES_SERVICE} --region=${_REGION} \
-          --format='value(status.url)' > /workspace/features_url 2>/dev/null \
-          || printf '' > /workspace/features_url
-        gcloud run services describe ${_TILES_SERVICE} --region=${_REGION} \
-          --format='value(status.url)' > /workspace/tiles_url 2>/dev/null \
-          || printf '' > /workspace/tiles_url
-
   - id: build-viewer
     name: node:22
     entrypoint: bash
@@ -55,8 +42,8 @@ steps:
       - -c
       - |
         set -e
-        export VITE_FEATURES_BASE="$$(cat /workspace/features_url 2>/dev/null || true)"
-        export VITE_TILES_BASE="$$(cat /workspace/tiles_url 2>/dev/null || true)"
+        export VITE_FEATURES_BASE="${_FEATURES_BASE_URL}"
+        export VITE_TILES_BASE="${_TILES_BASE_URL}"
         export VITE_CATALOG_URL="${_REVIEW_SERVING_URL}/review/stac/catalog.json"
         export VITE_OFFLINE=0
         cd viewer

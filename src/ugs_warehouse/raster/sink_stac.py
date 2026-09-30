@@ -1,8 +1,8 @@
 """STAC item for a raster COG — built through the shared `core.stac` so rasters land in
 the same collections-layout catalog as vector topics + publications.
 
-The COG asset gets the standard `data`+`visual` roles (media type `…;profile=cloud-optimized`),
-which STAC Browser and our viewer render natively — no web-map-links `cog` link, because that
+The native COG asset gets the `data` role and a Web Mercator derivative, when present, gets
+`visual` (media type `…;profile=cloud-optimized`), which STAC Browser and our viewer render natively — no web-map-links `cog` link, because that
 extension defines no `cog` rel (its rels are xyz/wms/wmts/tilejson/pmtiles/3d-tiles) and declaring
 it would force one of those. An optional thumbnail asset is added when present.
 """

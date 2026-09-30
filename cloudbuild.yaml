@@ -823,22 +823,27 @@ steps:
   # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).
   # Memory is small: it holds PMTiles directories, never tile data. Behind the CDN this only
   # ever sees cache misses, so concurrency matters more than instance count.
+  # Route by the `prod` tag, which moves to this deploy's revision, so it goes live even when traffic
+  # was pinned to an older revision (a rollback or manual reroute pins it; a plain deploy gets 0%).
   - id: deploy-tiles
     waitFor: [push-tiles]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - ${_TILES_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
-      - --region=${_REGION}
-      - --service-account=${_RUNTIME_SA}
-      - --allow-unauthenticated
-      - --port=8080
-      - --cpu=1
-      - --memory=512Mi
-      - --timeout=60
+      - -c
+      - |
+        set -euo pipefail
+        gcloud run deploy ${_TILES_SERVICE} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG} \
+          --region=${_REGION} \
+          --service-account=${_RUNTIME_SA} \
+          --allow-unauthenticated \
+          --port=8080 \
+          --cpu=1 \
+          --memory=512Mi \
+          --timeout=60 \
+          --tag=prod
+        gcloud run services update-traffic ${_TILES_SERVICE} --region=${_REGION} --to-tags=prod=100
 
   # No resolve-features-url / resolve-tiles-url here any more: they existed only to bake
   # VITE_FEATURES_BASE / VITE_TILES_BASE into the viewer build, and nothing in this config builds

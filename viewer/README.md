@@ -17,6 +17,6 @@ Views are real path routes (`/map`, `/discover`, `/catalog`, …), so every host
 unknown path to `index.html`: Firebase Hosting does it via `firebase.json`, the IAP review app and
 the previews service via `serve.py`'s SPA fallback. A build mounted under a prefix must be told
 which one — `npm run build -- --base=/review/viewer/` — because that base is also the router's
-basepath (`src/mount.ts`). Deploy is `firebase deploy --only hosting`; see `docs/DEPLOY.md` §5.
+basepath (`src/lib/mount.ts`). Deploy is `firebase deploy --only hosting`; see `docs/DEPLOY.md` §5.
 
 **Next:** DuckDB-WASM panel — search over stac-geoparquet + on-demand export (GPKG/SHP/GeoJSON), client-side.

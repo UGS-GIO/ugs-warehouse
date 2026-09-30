@@ -546,3 +546,21 @@ def test_build_tier_gdal_cache_follows_the_environment(monkeypatch, env_value, e
     with patch.object(gm, "_band_types", side_effect=stop), pytest.raises(_Seen):
         gm.build_tier("24k", ["M-1"], {"M-1": {"pub_year": "2022"}}, write_stac_item=False)
     assert seen["cachemax"] == expected
+
+
+@pytest.mark.parametrize("argv,expected", [
+    ([], ["24k", "250k", "500k"]),
+    (["--scale", "all"], ["24k", "250k", "500k"]),
+    (["--scale", "250k", "--scale", "500k"], ["250k", "500k"]),   # the Cloud Run job's args
+    (["--scale", "500k", "--scale", "500k"], ["500k"]),
+])
+def test_main_scale_is_repeatable(argv, expected):
+    seen = {}
+
+    def fake_build(scales, **k):
+        seen["scales"] = scales
+        return len(scales)
+
+    with patch.object(gm.sys, "argv", ["geolmap_mosaics", *argv]), patch.object(gm, "build", side_effect=fake_build):
+        assert gm.main() == 0
+    assert seen["scales"] == expected

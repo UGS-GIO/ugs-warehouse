@@ -503,9 +503,9 @@ def build(scales: list[str], maxz: int | None = None,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build per-scale raster PMTiles mosaics of geologic maps")
-    ap.add_argument("--scale", choices=(*TIERS, "all"), default="all",
-                    help="Which scale tier to build (default all). 24k is the largest — run it alone "
-                         "with more memory if needed.")
+    ap.add_argument("--scale", choices=(*TIERS, "all"), action="append",
+                    help="Scale tier to build; repeat for several (default all). The statewide 24k tier "
+                         "at z17 runs on Cloud Batch (scripts/submit_mosaics_batch.sh).")
     ap.add_argument("--maxzoom", type=int, default=None,
                     help="Cap the base (native) zoom level; default lets GDAL pick from resolution.")
     ap.add_argument("--editions", choices=("current", "all"), default="current",
@@ -519,7 +519,8 @@ def main() -> int:
     args = ap.parse_args()
     if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
         ap.error("--quads contained no usable quad names")
-    scales = list(TIERS) if args.scale == "all" else [args.scale]
+    picked = args.scale or ["all"]
+    scales = list(TIERS) if "all" in picked else list(dict.fromkeys(picked))
     built = build(scales, maxz=args.maxzoom, edition_mode=args.editions, quads=args.quads)
     # A scoped --quads build under the default --scale all legitimately leaves tiers with no members.
     return 0 if built == len(scales) or (args.quads and built > 0) else 1

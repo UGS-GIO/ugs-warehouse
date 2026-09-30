@@ -646,8 +646,8 @@ steps:
 
   # Raster PMTiles mosaics of the geologic maps, one per portal layer: intermediate (100k) and 500k
   # here. The 24k tier needs a real disk and runs on Cloud Batch (scripts/submit_mosaics_batch.sh);
-  # building it here too would overwrite that z17 object with a z14 one. 250k (the 1 x 2 degree
-  # sheets) joins once any of those maps has a COG; until then its build has no members.
+  # building it here too would overwrite that z17 object with a z14 one. Add --scale 250k (the 1 x 2
+  # degree sheets) here and in the admin console once one of those maps has a COG; none does yet.
   - id: deploy-mosaics-job
     waitFor: [push-mosaics]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk

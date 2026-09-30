@@ -58,8 +58,8 @@ STAGES = [
     {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
      "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
               "One mosaic per portal layer. The intermediate and 500k tiers build here; the statewide "
-              "24k tier runs on Cloud Batch (scripts/submit_mosaics_batch.sh --statewide). The 250k "
-              "(1 x 2 degree) tier joins once one of those sheets has a COG."},
+              "24k tier runs on Cloud Batch (scripts/submit_mosaics_batch.sh --statewide). Add the 250k "
+              "(1 x 2 degree) tier to this console and the job's args once one of those sheets has a COG."},
 ]
 
 

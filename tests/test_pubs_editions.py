@@ -194,3 +194,15 @@ def test_a_blank_scale_map_with_a_tier_still_joins_its_editions():
     qmap = {"M-1": "Bryce Canyon Quad", "OFR-780DM": "Bryce Canyon Quad"}
     g = editions.edition_graph(pubs, quad_by_sid=qmap, tier_by_sid={"M-1": "24k", "OFR-780DM": "24k"})
     assert g["M-1"]["deprecated"] is True and g["OFR-780DM"]["deprecated"] is False
+
+
+def test_a_scale_band_never_matches_a_mosaic_tier():
+    """An untiered 1:100,000 map (band "250k") must not supersede a tiered 1 x 2 sheet (mosaic
+    "250k") that shares its quad name: the two key spaces never meet."""
+    pubs = [
+        {"series_id": "I-1132", "pub_year": "1980", "pub_scale": "1:250,000"},
+        {"series_id": "X-9", "pub_year": "2015", "pub_scale": "1:100,000"},
+    ]
+    qmap = {"I-1132": "Tooele", "X-9": "Tooele"}
+    g = editions.edition_graph(pubs, quad_by_sid=qmap, tier_by_sid={"I-1132": "250k"})
+    assert g["I-1132"]["deprecated"] is False and g["I-1132"]["successor_href"] is None

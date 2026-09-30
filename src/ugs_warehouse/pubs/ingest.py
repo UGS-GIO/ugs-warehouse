@@ -17,7 +17,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs, stac
-from . import editions, identity, scale, sink_stac, source, threed, topic, vectors
+from . import editions, identity, sink_stac, source, threed, topic, vectors
 
 
 def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
@@ -174,14 +174,14 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     try:
         fp_rows = editions.footprint_rows()
         layers = editions.layers_by_series(fp_rows)
-        tier_by_sid = {s: t for s, v in layers.items() if (t := scale.mosaic_tier_of(*v))}
+        tier_by_sid = editions.mosaic_tier_by_series(layers)
         edition_graph = editions.edition_graph(pubs, quad_by_sid=editions.quad_by_series(fp_rows),
                                                tier_by_sid=tier_by_sid)
     except RuntimeError as e:
         print(f"[ingest] WARNING: edition detection skipped — {e}. Items will carry no "
               "version/deprecated/predecessor/successor/latest or mosaic links until the "
               "footprints parquet is built.", file=sys.stderr)
-        edition_graph, layers = {}, {}
+        edition_graph, tier_by_sid = {}, {}
     if series:
         series_upper = series.strip().upper()
         pubs = [p for p in pubs if sink_stac.series_code(p.get("series_id")) == series_upper]
@@ -222,7 +222,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             companion_tables=[{"label": t, "columns": None} for t in manifest["tables"]],
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
             edition=edition_graph.get(sid),
-            mosaic_tier=scale.mosaic_tier_of(*layers.get(up, (frozenset(), frozenset()))),
+            mosaic_tier=tier_by_sid.get(up),
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)

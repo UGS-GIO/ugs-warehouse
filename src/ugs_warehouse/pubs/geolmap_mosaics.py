@@ -56,7 +56,6 @@ from ..core import config, gcs, stac
 from . import editions, identity, scale, source
 from .scale import MOSAIC_TIER_LABEL as TIER_LABEL
 from .scale import MOSAIC_TIERS as TIERS
-from .scale import mosaic_tier_of
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
@@ -120,7 +119,7 @@ def _group_by_tier(edition_mode: str = "current",
     rows = editions.footprint_rows()
     qmap = editions.quad_by_series(rows)
     layers = editions.layers_by_series(rows)
-    tier_by_sid = {s: t for s, v in layers.items() if (t := mosaic_tier_of(*v))}
+    tier_by_sid = editions.mosaic_tier_by_series(layers)
 
     deprecated_upper: set[str] = set()
     if edition_mode == "current":
@@ -148,7 +147,7 @@ def _group_by_tier(edition_mode: str = "current",
         services, serv_names = layers.get(sid, (frozenset(), frozenset()))
         t = tier_by_sid.get(sid)
         if t is None:
-            n_tiers = len({scale.SERVICE_TIER[s] for s in services if s in scale.SERVICE_TIER})
+            n_tiers = len(scale.mosaic_tiers(services, serv_names))
             layer_ids = "/".join(sorted(services | serv_names))
             why = ("no footprint" if not services and not serv_names
                    else f"footprints in {n_tiers} tiers: {layer_ids}" if n_tiers > 1

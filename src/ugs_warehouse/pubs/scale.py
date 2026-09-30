@@ -53,10 +53,16 @@ MOSAIC_TIER_LABEL = {"24k": "1:24,000", "100k": "intermediate-scale (30' x 60')"
                      "250k": "1:250,000 (1 x 2 degree)", "500k": "1:500,000"}
 
 
-def mosaic_tier_of(services: frozenset[str], serv_names: frozenset[str]) -> str | None:
-    """The mosaic tier for a map's portal layer(s) (see `editions.layers_by_series`), or None when it
-    has no tiered layer (irregular maps, no footprint) or its footprints point at two tiers."""
+def mosaic_tiers(services: frozenset[str], serv_names: frozenset[str]) -> set[str]:
+    """Every mosaic tier a map's portal layer(s) (see `editions.layers_by_series`) point at."""
     tiers = {SERVICE_TIER[s] for s in services if s in SERVICE_TIER}
     if STATEWIDE_SERVNAME in serv_names:
         tiers.add("500k")
+    return tiers
+
+
+def mosaic_tier_of(services: frozenset[str], serv_names: frozenset[str]) -> str | None:
+    """The map's mosaic tier, or None when it has no tiered layer (irregular maps, no footprint) or
+    its footprints point at two tiers."""
+    tiers = mosaic_tiers(services, serv_names)
     return next(iter(tiers)) if len(tiers) == 1 else None

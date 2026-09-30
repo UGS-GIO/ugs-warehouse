@@ -66,6 +66,7 @@ const toClip = (xs: number[] | undefined): Clip | undefined => {
   const [w, s, e, n] = xs;
   return [w, s, e, n];
 };
+const isPreset = (epsg: number) => EPSG_ITEMS.some((o) => o.value === String(epsg));
 const parseCrs = (v: unknown) => (typeof v === "string" && /^\d{4,6}$/.test(v) ? Number(v) : undefined);
 const parseClip = (v: unknown) => {
   const parts = typeof v === "string" ? v.split(",") : [];
@@ -95,7 +96,16 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   // Typing buffer: a half-typed "-11" is not a number yet, and the URL only takes whole bboxes.
   const [draft, setDraft] = useState(() => clip?.map(String) ?? []);
   const editClip = (next: Clip | undefined) => { setDraft(next?.map(String) ?? []); setSearch({ clip: next }); };
-  const [customEpsg, setCustomEpsg] = useState(!EPSG_ITEMS.some((o) => o.value === String(epsg)));
+  const [crsDraft, setCrsDraft] = useState(() => String(epsg));
+  const [customEpsg, setCustomEpsg] = useState(!isPreset(epsg));
+  // The URL can change under the panel (back/forward, an edited link). Reset the buffers then, but
+  // not on the panel's own write: that would eat the "." of a half-typed "-111.".
+  const [seen, setSeen] = useState({ crs: search.crs, clip: search.clip });
+  if (seen.crs !== search.crs || seen.clip !== search.clip) {
+    setSeen({ crs: search.crs, clip: search.clip });
+    if (parseClip(draft.join(","))?.join(",") !== clip?.join(",")) setDraft(clip?.map(String) ?? []);
+    if (parseCrs(crsDraft) !== epsg) { setCrsDraft(String(epsg)); setCustomEpsg(!isPreset(epsg)); }
+  }
   const queryClient = useQueryClient();
 
   // The export outlives this component: the panel is keyed per item, so switching items remounts
@@ -218,8 +228,9 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             {customEpsg && (
               <label className="flex items-center gap-1">
                 EPSG:
-                <input type="number" min={1024} max={999999} defaultValue={epsg} autoFocus
+                <input type="number" min={1024} max={999999} value={crsDraft} autoFocus
                   onChange={(e) => {
+                    setCrsDraft(e.target.value);
                     const crs = parseCrs(e.target.value);
                     if (crs) setSearch({ crs });
                   }}

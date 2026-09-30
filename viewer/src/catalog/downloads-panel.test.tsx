@@ -338,4 +338,27 @@ describe("DownloadsPanel", () => {
     await screen.findByText("Download anyway");
     expect(exportWarnings).toHaveBeenCalledTimes(1);
   });
+
+  it("keeps a half-typed clip value while the URL takes the number", async () => {
+    url.search = { clip: "-114,37,-109,42" };
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    const west = screen.getByLabelText("W");
+    await userEvent.clear(west);
+    await userEvent.type(west, "-111.5");
+    expect(url.search.clip).toBe("-111.5,37,-109,42");
+  });
+
+  it("shows a clip that changed in the URL without a remount", async () => {
+    url.search = { clip: "-114,37,-109,42" };
+    const { rerender } = show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    url.search = { clip: "-112,40,-111,41" };
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <DownloadsPanel item={item} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByLabelText<HTMLInputElement>("W").value).toBe("-112");
+  });
 });

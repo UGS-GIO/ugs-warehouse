@@ -163,7 +163,7 @@ function useViewState() {
         const discover = next.view === "discover" || next.view === "preview"
           ? { q, collections, category, types, formats, geometry, sort, layout, density, area } : {};
         // Export settings belong to the item they were set on.
-        const exportSettings = next.i === prev.i ? { crs, clip } : {};
+        const exportSettings = next.i && next.i === prev.i ? { crs, clip } : {};
         return {
           ...rest,
           ...discover,

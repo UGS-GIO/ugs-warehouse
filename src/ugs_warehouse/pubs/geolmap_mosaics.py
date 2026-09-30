@@ -433,8 +433,8 @@ def _public_item_href(collection_path: str, item_id: str) -> str:
     """A member map's item in the PUBLIC catalog. Pub items live only there, so a mosaic baked into
     the review catalog still links its members to the public CDN rather than to review paths that
     don't exist."""
-    root = config.PUBLIC_CATALOG_URL.rsplit("/", 1)[0]
-    return f"{root}/{collection_path}/{item_id}/{item_id}.json"
+    rel = stac.item_object_path(collection_path, item_id)[len(config.STAC_PREFIX) + 1:]
+    return f"{config.PUBLIC_CATALOG_URL.rsplit('/', 1)[0]}/{rel}"
 
 
 def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,

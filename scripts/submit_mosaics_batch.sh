@@ -95,8 +95,11 @@ echo "image:  ${digest}"
 echo "cmd:    ${args[*]}"
 if [ "$statewide" = 1 ]; then
   # Two statewide runs into the same warehouse would race on its object and STAC item.
+  # A live job submitted before the target label existed has no label at all.
+  tfilter="labels.target=${target}"
+  [ "$target" = live ] && tfilter="(labels.target=live OR -labels.target:*)"
   active="$(gcloud batch jobs list --location "$REGION" \
-    --filter="labels.run=full AND labels.target=${target} AND status.state:(QUEUED OR SCHEDULED OR RUNNING)" \
+    --filter="labels.run=full AND ${tfilter} AND status.state:(QUEUED OR SCHEDULED OR RUNNING)" \
     --format='value(name)')"
   [ -z "$active" ] || { echo "a statewide ${target} mosaics job is already active: ${active}" >&2; exit 1; }
 fi

@@ -2,6 +2,8 @@
 ingest wiring that hands each pub's edition to `sink_stac.build_item`."""
 from unittest.mock import patch
 
+import pytest
+
 from ugs_warehouse.pubs import editions
 
 
@@ -219,7 +221,6 @@ def test_footprint_rows_reads_the_source_bucket(monkeypatch):
 
     monkeypatch.setattr(config, "SOURCE_BUCKET", "ut-dnr-ugs-maps-prod-public")
     monkeypatch.setattr(gcs, "get_bytes", fake_get)
-    import pytest
     with pytest.raises(RuntimeError, match="unreadable"):
         editions.footprint_rows()
     assert seen["bucket"] == "ut-dnr-ugs-maps-prod-public"

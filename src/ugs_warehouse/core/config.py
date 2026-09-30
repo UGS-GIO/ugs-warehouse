@@ -13,7 +13,8 @@ import os
 BUCKET = os.environ.get("WAREHOUSE_BUCKET", "ut-dnr-ugs-maps-prod-public")
 # Where a producer READS existing warehouse artifacts (the geologic-map COGs and footprints) when it
 # writes somewhere else: a review mosaic bake reads the public COGs but writes to the review bucket.
-SOURCE_BUCKET = os.environ.get("WAREHOUSE_SOURCE_BUCKET", BUCKET)
+# Writes, and the catalog refresh, stay on BUCKET. An empty value means BUCKET, not a blank bucket.
+SOURCE_BUCKET = os.environ.get("WAREHOUSE_SOURCE_BUCKET") or BUCKET
 
 # Buckets a raster promote may copy FROM. `staged_cog_uri` is a catalog value, and whatever it
 # names gets copied into BUCKET, which the CDN serves — so the source is allowlisted, not trusted.

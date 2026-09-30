@@ -31,6 +31,14 @@ const { exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun,
       runs,
     };
   });
+// The panel keeps CRS and clip in the URL. A plain object stands in for the location search.
+const url = vi.hoisted(() => ({ search: {} as Record<string, unknown> }));
+vi.mock("@tanstack/react-router", () => ({
+  useSearch: () => url.search,
+  useNavigate: () => ({ search }: { search: (prev: Record<string, unknown>) => Record<string, unknown> }) => {
+    url.search = search(url.search);
+  },
+}));
 vi.mock("@/data/download", () => ({
   exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun,
   holdsOneGeomType: (fmt: string) => fmt === "shp" || fmt === "gdb",
@@ -74,6 +82,7 @@ const show = () => render(
 );
 
 beforeEach(() => {
+  url.search = {};
   exportItem.mockClear();
   cancelExport.mockClear();
   startRun.mockClear();
@@ -304,5 +313,29 @@ describe("DownloadsPanel", () => {
     show();
     await userEvent.click(screen.getByLabelText("Download GeoJSON"));
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Download failed: gdal exploded");
+  });
+
+  it("exports in the CRS and clip the URL carries", async () => {
+    url.search = { crs: "26912", clip: "-112,40,-111,41" };
+    show();
+    await userEvent.click(screen.getByLabelText("Download GeoPackage"));
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "gpkg", [-112, 40, -111, 41], 26912, 7);
+  });
+
+  it("writes the clip to the URL when the box is ticked", async () => {
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    await userEvent.click(screen.getByLabelText(/clip/i));
+    expect(url.search.clip).toBe("-114,37,-109,42");
+  });
+
+  it("reuses the pre-flight when the same export is asked for again", async () => {
+    exportWarnings.mockResolvedValue(TRUNCATED);
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    await userEvent.click(await screen.findByText("Cancel"));
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    await screen.findByText("Download anyway");
+    expect(exportWarnings).toHaveBeenCalledTimes(1);
   });
 });

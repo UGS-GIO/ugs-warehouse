@@ -1,6 +1,7 @@
 // Every way to save a file, as one grid. Assets read over HTTP instead of saved belong in
 // "Services" — see `endpoints-panel.tsx`.
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
@@ -58,16 +59,44 @@ const TILE = "flex items-start justify-between gap-2 rounded-md border border-bo
 const SUB = "mt-0.5 block text-xs font-normal text-muted-foreground";
 const BBOX_LABELS = ["W", "S", "E", "N"];
 
+type Clip = [number, number, number, number];
+
+const toClip = (xs: number[] | undefined): Clip | undefined => {
+  if (!xs || xs.length < 4 || !xs.slice(0, 4).every(Number.isFinite)) return undefined;
+  const [w, s, e, n] = xs;
+  return [w, s, e, n];
+};
+const parseCrs = (v: unknown) => (typeof v === "string" && /^\d{4,6}$/.test(v) ? Number(v) : undefined);
+const parseClip = (v: unknown) => {
+  const parts = typeof v === "string" ? v.split(",") : [];
+  return parts.length === 4 && parts.every((p) => p.trim()) ? toClip(parts.map(Number)) : undefined;
+};
+
 // Carries its own format, so rendering it never reaches back into the mutation's variables.
 type Warning = { fmt: ExportFormat; findings: Finding[] };
 
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
-  const fullBbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
-  const [clipOn, setClipOn] = useState(false);
-  const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
-  const [epsg, setEpsg] = useState(4326);
-  const [customEpsg, setCustomEpsg] = useState(false);
+  const fullBbox = toClip(item.bbox);
+  // CRS and clip live in the URL (`crs`, `clip=w,s,e,n`), so a reload or a shared link keeps them.
+  const search = useSearch({ from: "__root__" });
+  const navigate = useNavigate();
+  const epsg = parseCrs(search.crs) ?? 4326;
+  const clip = parseClip(search.clip);
+  const setSearch = (next: { crs?: number; clip?: Clip }) =>
+    void navigate({
+      to: ".", replace: true,
+      search: (prev) => ({
+        ...prev,
+        ...("crs" in next && { crs: next.crs === 4326 ? undefined : next.crs?.toString() }),
+        ...("clip" in next && { clip: next.clip?.join(",") }),
+      }),
+    });
+  // Typing buffer: a half-typed "-11" is not a number yet, and the URL only takes whole bboxes.
+  const [draft, setDraft] = useState(() => clip?.map(String) ?? []);
+  const editClip = (next: Clip | undefined) => { setDraft(next?.map(String) ?? []); setSearch({ clip: next }); };
+  const [customEpsg, setCustomEpsg] = useState(!EPSG_ITEMS.some((o) => o.value === String(epsg)));
+  const queryClient = useQueryClient();
 
   // The export outlives this component: the panel is keyed per item, so switching items remounts
   // it while the run continues. Reading the module's own state keeps the indicator and Cancel on
@@ -78,7 +107,6 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
 
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }): Promise<Warning | undefined> => {
-      const clip = clipOn ? bbox : undefined;
       const { beginExport, endRun, exportItem, exportWarnings, startRun } = await import("@/data/download");
       // The ticket is taken BEFORE the pre-flight, which is the slow part — a cancel during it
       // has to suppress the delivery too.
@@ -89,8 +117,12 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       // Every format reads the whole GeoParquet into the tab, so every format is pre-flighted.
       // A failed pre-flight just proceeds to the export.
       if (!force) {
-        const w = await exportWarnings(parquet!.href, fmt, clip)
-          .catch((e) => { console.warn("export pre-flight failed", e); return null; });
+        // Cached per file, format and clip: a second click on the same export skips the read.
+        const w = await queryClient.fetchQuery({
+          queryKey: ["export-preflight", parquet!.href, fmt, clip ?? null],
+          queryFn: () => exportWarnings(parquet!.href, fmt, clip),
+          staleTime: Infinity,
+        }).catch((e) => { console.warn("export pre-flight failed", e); return null; });
         const found = w ? exportFindings(w, fmt) : [];
         if (found.length) { endRun(epoch); return { fmt, findings: found }; }   // no export follows, so release the ticket
       }
@@ -179,15 +211,18 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
               <UiSelect value={customEpsg ? "other" : String(epsg)} className="px-1.5 py-0.5"
                 onValueChange={(v) => {
                   if (v === "other") setCustomEpsg(true);
-                  else { setCustomEpsg(false); setEpsg(Number(v)); }
+                  else { setCustomEpsg(false); setSearch({ crs: Number(v) }); }
                 }}
                 items={EPSG_ITEMS} />
             </label>
             {customEpsg && (
               <label className="flex items-center gap-1">
                 EPSG:
-                <input type="number" min={1024} max={999999} value={epsg} autoFocus
-                  onChange={(e) => setEpsg(Number(e.target.value))}
+                <input type="number" min={1024} max={999999} defaultValue={epsg} autoFocus
+                  onChange={(e) => {
+                    const crs = parseCrs(e.target.value);
+                    if (crs) setSearch({ crs });
+                  }}
                   className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
               </label>
             )}
@@ -195,20 +230,26 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           {fullBbox && (
             <div className="mt-2 text-sm">
               <label className="flex items-center gap-1.5 text-muted-foreground">
-                <input type="checkbox" checked={clipOn} onChange={(e) => setClipOn(e.target.checked)} />
+                <input type="checkbox" checked={!!clip}
+                  onChange={(e) => editClip(e.target.checked ? fullBbox : undefined)} />
                 Clip to an area (bbox, EPSG:4326)
               </label>
-              {clipOn && (
+              {clip && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {bbox.map((v, i) => (
+                  {draft.map((v, i) => (
                     <label key={i} className="flex items-center gap-1 text-muted-foreground">
                       {BBOX_LABELS[i]}
                       <input type="number" step="0.01" value={v}
-                        onChange={(e) => setBbox((b) => b.map((x, j) => (j === i ? Number(e.target.value) : x)) as typeof b)}
+                        onChange={(e) => {
+                          const next = draft.map((x, j) => (j === i ? e.target.value : x));
+                          setDraft(next);
+                          const parsed = parseClip(next.join(","));
+                          if (parsed) setSearch({ clip: parsed });
+                        }}
                         className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
                     </label>
                   ))}
-                  <button onClick={() => setBbox(fullBbox)} className="text-primary">reset</button>
+                  <button onClick={() => editClip(fullBbox)} className="text-primary">reset</button>
                 </div>
               )}
             </div>

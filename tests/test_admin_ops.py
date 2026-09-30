@@ -68,6 +68,6 @@ def test_get_harvest_status():
 def test_console_cannot_rebuild_the_24k_mosaic_on_cloud_run():
     """24k runs on Cloud Batch at z17; a Cloud Run rebuild would overwrite it with a z14 mosaic."""
     from ops import jobs
-    assert {t for t, _ in jobs.JOBS["mosaics"].tiers} == {"250k", "500k"}
+    assert {t for t, _ in jobs.JOBS["mosaics"].tiers} == {"100k", "500k"}
     res = jobs.rebuild_mosaic("24k")
     assert res["ok"] is False and "unknown mosaic tier" in res["message"]

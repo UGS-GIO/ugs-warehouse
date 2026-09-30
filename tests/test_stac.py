@@ -449,7 +449,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.editions.quad_by_series", return_value={}), \
+         patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
@@ -490,7 +490,7 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.editions.edition_graph",
+         patch("ugs_warehouse.pubs.editions.footprint_rows",
                side_effect=RuntimeError("footprints missing")), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
@@ -509,6 +509,7 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          assert count == 2
          assert mock_build.call_count == 2
          assert all(c.kwargs["edition"] is None for c in mock_build.call_args_list)
+         assert all(c.kwargs["mosaic_tier"] is None for c in mock_build.call_args_list)
 
          err = capsys.readouterr().err
          assert "WARNING" in err and "edition detection skipped" in err and "footprints missing" in err
@@ -597,7 +598,7 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
-         patch("ugs_warehouse.pubs.editions.quad_by_series", return_value={}), \
+         patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_iso"), \
@@ -717,23 +718,32 @@ def _build(p, **kw):
         return pubs_sink.build_item(p, [], **kw)
 
 
-def test_cog_map_links_to_its_scale_tier_mosaic():
+def test_cog_map_links_to_its_portal_layer_mosaic():
     # The tier is the mosaic's identity, not pub metadata: a COG map carries no `ugs:scale_tier`,
     # only its raw `ugs:scale`, and reaches its tier via a `rel:related` link to the mosaic.
-    item = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"}, has_cog=True)
+    item = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"},
+                  has_cog=True, mosaic_tier="24k")
     assert "ugs:scale_tier" not in item["properties"]
     assert item["properties"]["ugs:scale"] == "1:24,000"   # raw scale stays as per-item metadata
     rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
     assert len(rel) == 1
     assert rel[0]["href"].endswith("/ugs-geologic-maps/geologic-maps-24k/geologic-maps-24k.json")
 
-    # COG map, UNPARSEABLE scale: still linked to the default tier (mirrors _group_by_tier's fallback).
-    item = _build({"series_id": "M-1", "series": "M", "pub_scale": "n/a"}, has_cog=True)
+    # A 1:62,500 30' x 60' map is in the intermediate layer, whatever its scale says.
+    item = _build({"series_id": "M-254DM", "series": "M", "pub_scale": "1:62,500"},
+                  has_cog=True, mosaic_tier="100k")
     rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
-    assert len(rel) == 1 and rel[0]["href"].endswith("/geologic-maps-24k/geologic-maps-24k.json")
+    assert len(rel) == 1 and rel[0]["href"].endswith("/geologic-maps-100k/geologic-maps-100k.json")
+    assert "intermediate-scale" in rel[0]["title"]
+
+    # COG map in no tiered layer (irregular, or no footprint): no mosaic, so no member link.
+    item = _build({"series_id": "M-1", "series": "M", "pub_scale": "1:50,000"},
+                  has_cog=True, mosaic_tier=None)
+    assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
 
     # non-COG pub: not stitched into any mosaic, so no member link.
-    item = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"}, has_cog=False)
+    item = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"},
+                  has_cog=False, mosaic_tier="500k")
     assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
 
 
@@ -743,20 +753,20 @@ def test_deprecated_edition_drops_the_mosaic_related_link():
     drops superseded editions before stitching, so the link would otherwise claim membership in a
     mosaic whose own `derived_from` omits it (catalog self-contradiction, ALL-5954 final review)."""
     item = _build({"series_id": "GQ-852", "series": "GQ", "pub_scale": "1:24,000"},
-                  has_cog=True, edition={"deprecated": True, "version": "1971"})
+                  has_cog=True, mosaic_tier="24k", edition={"deprecated": True, "version": "1971"})
     assert not [lnk for lnk in item["links"]
                if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
 
     # no edition info at all -> not known to be superseded -> still current -> keeps the link.
     item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
-                  has_cog=True, edition=None)
+                  has_cog=True, mosaic_tier="24k", edition=None)
     rel = [lnk for lnk in item["links"]
           if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
     assert len(rel) == 1
 
     # explicitly current (not deprecated) -> keeps the link too.
     item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
-                  has_cog=True, edition={"deprecated": False, "version": "2022"})
+                  has_cog=True, mosaic_tier="24k", edition={"deprecated": False, "version": "2022"})
     rel = [lnk for lnk in item["links"]
           if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
     assert len(rel) == 1

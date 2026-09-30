@@ -17,7 +17,7 @@ import urllib.parse
 
 from ..core import config, stac
 from . import counties, identity, topic
-from .scale import DEFAULT_TIER, SCALE_LABEL, tier_of
+from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
 from .vectors import VECTORS_PREFIX
 
@@ -173,7 +173,8 @@ def build_item(p: dict, attachments: list[dict], *,
                override: dict | None = None,
                contents: list[dict] | None = None,
                mirrored: set[str] | None = None,
-               edition: dict | None = None) -> dict:
+               edition: dict | None = None,
+               mosaic_tier: str | None = None) -> dict:
     """Build a pub STAC Item (collection-nested, via core.stac.build_item).
 
     `mirrored` is the set of object paths the warehouse holds copies of (see pubs/mirror.py).
@@ -320,18 +321,17 @@ def build_item(p: dict, attachments: list[dict], *,
         extra_links.append({"rel": "latest-version", "href": ed["latest_href"],
                             "type": "application/geo+json"})
 
-    # A COG map is stitched into its tier's seamless raster mosaic (geolmap_mosaics.py); a
-    # non-COG pub has no mosaic to belong to. The tier is the mosaic's identity, not the pub's — the
-    # pub carries only its raw `ugs:scale` and reaches its tier through this link. Tier here mirrors
-    # `_group_by_tier`'s own fallback exactly, so an unparseable scale still links to DEFAULT_TIER.
-    if has_cog and not ed.get("deprecated"):
-        link_tier = tier_of(p.get("pub_scale")) or DEFAULT_TIER
+    # A COG map is stitched into its portal layer's seamless raster mosaic (geolmap_mosaics.py); the
+    # caller passes that tier (`scale.mosaic_tier_of` over the map's footprints), or None for a map
+    # in no tiered layer. The pub carries only its raw `ugs:scale` and reaches its tier through this link.
+    if has_cog and mosaic_tier and not ed.get("deprecated"):
+        link_tier = mosaic_tier
         extra_links.append({
             "rel": "related",
             "href": config.public_url(stac.item_object_path("ugs-geologic-maps",
                                                              f"geologic-maps-{link_tier}")),
             "type": "application/geo+json",
-            "title": f"Utah geologic maps — {SCALE_LABEL.get(link_tier, link_tier)} seamless mosaic"})
+            "title": f"Utah geologic maps — {MOSAIC_TIER_LABEL.get(link_tier, link_tier)} seamless mosaic"})
 
     # No web-map-links here: that extension's rels are [xyz, wms, wmts, tilejson, pmtiles, 3d-tiles]
     # — it has no `cog`, and declaring it forces one of those (which a raster pub lacks). The COG is

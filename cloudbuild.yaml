@@ -644,9 +644,10 @@ steps:
       - --cpu=4
       - --memory=8Gi
 
-  # Per-scale raster PMTiles mosaics of the geologic maps: the 250k and 500k tiers only. The statewide
-  # 24k tier needs a real disk and runs on Cloud Batch (scripts/submit_mosaics_batch.sh); building it
-  # here too would overwrite that z17 object with a z14 one.
+  # Raster PMTiles mosaics of the geologic maps, one per portal layer: intermediate (100k) and 500k
+  # here. The 24k tier needs a real disk and runs on Cloud Batch (scripts/submit_mosaics_batch.sh);
+  # building it here too would overwrite that z17 object with a z14 one. Add --scale 250k (the 1 x 2
+  # degree sheets) here and in the admin console once one of those maps has a COG; none does yet.
   - id: deploy-mosaics-job
     waitFor: [push-mosaics]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -664,7 +665,7 @@ steps:
       - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
       # --scale=<tier> form: gcloud rejects a repeated bare "--scale" item in --args.
-      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale=250k,--scale=500k
+      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale=100k,--scale=500k
       - --task-timeout=14400
       - --max-retries=1
       - --cpu=4

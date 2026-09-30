@@ -53,17 +53,15 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
 from ..core import config, gcs, stac
-from . import editions, identity, source
-from .scale import DEFAULT_TIER, SCALE_LABEL, tier_of
+from . import editions, identity, scale, source
+from .scale import MOSAIC_TIER_LABEL as TIER_LABEL
+from .scale import MOSAIC_TIERS as TIERS
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
 COLLECTION = "ugs-geologic-maps"
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
-# Scale tiers (denominator upper bounds), matching the old MD_* mosaics. A map's scale is binned by
-# its 1:N denominator: <=62.5k detail, <=350k intermediate, else overview.
-TIERS = ("24k", "250k", "500k")
 # Max web-mercator zoom per tier for a STATEWIDE build. `gdal raster tile --max-zoom` enforces this
 # directly (the old bake passed -co ZOOM_LEVEL, which the MBTiles driver silently ignored, then
 # worked around it by resampling the VRT). The 24k tier is the flagship and its TARGET is z17 (the
@@ -72,7 +70,7 @@ TIERS = ("24k", "250k", "500k")
 # disk-backed / tile-sharded statewide build lands (the ALL-5993 scale follow-up). Run a higher zoom
 # explicitly with --maxzoom (and MOSAIC_WORK_DIR on a real disk) once that is in place. A scoped
 # --quads build renders at native zoom (full detail on a few maps).
-TIER_MAXZOOM = {"24k": 14, "250k": 12, "500k": 12}
+TIER_MAXZOOM = {"24k": 14, "100k": 12, "250k": 12, "500k": 12}
 # Lowest zoom to build overviews down to (off the base tiles). A statewide extent is ~1 tile at low
 # zoom, so a full pyramid to MOSAIC_MINZOOM is cheap and lets the layer draw when zoomed out.
 MOSAIC_MINZOOM = max(0, int(os.environ.get("MOSAIC_MINZOOM", "4")))
@@ -101,30 +99,32 @@ def _cog_sids() -> set[str]:
 
 def _group_by_tier(edition_mode: str = "current",
                     quads: str | None = None) -> tuple[dict[str, list[str]], dict[str, dict]]:
-    """{tier -> [series_id, ...]} for every map that has a COG, binned by its publication scale —
-    plus {UPPER series_id -> pub record}, so `_write_item` can build member links without a
-    second `source.read_pubs()` pass.
+    """{tier -> [series_id, ...]} for every map that has a COG, by its footprint's portal layer
+    (`scale.mosaic_tier_of`), plus {UPPER series_id -> pub record}, so `_write_item` can build member
+    links without a second `source.read_pubs()` pass. A COG with no footprint, or in no tiered
+    layer, is left out and named on stderr.
 
     `edition_mode`: "current" (default) drops superseded quad editions before the tier bins fill,
     using the edition graph from `editions.py` — the authoritative mosaic should show one map per
     quad, not every historical revision stacked on top of each other. "all" reproduces the legacy
-    behavior (every COG, every edition) and skips the footprints/edition-graph read entirely (no
-    reason to pay for a CDN round trip when nothing will be filtered).
+    behavior (every COG, every edition) and skips the edition graph.
 
     `quads`: comma-separated quad names (matched casefolded) restricting membership to those
     quads — the scoped/demo build path driven by `--quads` in `main()`.
 
-    The footprints quad map is loaded AT MOST once and reused for both the deprecation graph and
-    the `--quads` filter, whichever of the two apply."""
+    The footprints are read once and serve the tiering, the deprecation graph and the `--quads`
+    filter."""
     pubs_by_sid = {(p.get("series_id") or "").strip().upper(): p for p in source.read_pubs()}
 
-    qmap: dict[str, str] = {}
-    if edition_mode == "current" or quads:
-        qmap = editions.quad_by_series()
+    rows = editions.footprint_rows()
+    qmap = editions.quad_by_series(rows)
+    layers = editions.layers_by_series(rows)
+    tier_by_sid = editions.mosaic_tier_by_series(layers)
 
     deprecated_upper: set[str] = set()
     if edition_mode == "current":
-        graph = editions.edition_graph(list(pubs_by_sid.values()), quad_by_sid=qmap)
+        graph = editions.edition_graph(list(pubs_by_sid.values()), quad_by_sid=qmap,
+                                       tier_by_sid=tier_by_sid)
         deprecated_upper = {s.upper() for s, e in graph.items() if e["deprecated"]}
 
     requested_quads: set[str] | None = None
@@ -132,7 +132,7 @@ def _group_by_tier(edition_mode: str = "current",
         requested_quads = {q.strip().casefold() for q in quads.split(",") if q.strip()}
 
     groups: dict[str, list[str]] = {t: [] for t in TIERS}
-    unparsed = 0
+    untiered: dict[str, list[str]] = {}
     n_deprecated = 0
     n_outside_quads = 0
     for sid in sorted(_cog_sids()):
@@ -144,18 +144,26 @@ def _group_by_tier(edition_mode: str = "current",
             if quad_name is None or quad_name.casefold() not in requested_quads:
                 n_outside_quads += 1
                 continue
-        raw_scale = (pubs_by_sid.get(sid, {}).get("pub_scale") or "")
-        t = tier_of(raw_scale) or DEFAULT_TIER
-        if tier_of(raw_scale) is None:
-            unparsed += 1
+        services, serv_names = layers.get(sid, (frozenset(), frozenset()))
+        t = tier_by_sid.get(sid)
+        if t is None:
+            n_tiers = len(scale.mosaic_tiers(services, serv_names))
+            layer_ids = "/".join(sorted(services | serv_names))
+            why = ("no footprint" if not services and not serv_names
+                   else f"footprints in {n_tiers} tiers: {layer_ids}" if n_tiers > 1
+                   else f"no tiered layer: {layer_ids}")
+            untiered.setdefault(why, []).append(sid)
+            continue
         groups[t].append(sid)
     counts = ", ".join(f"{t}={len(groups[t])}" for t in TIERS)
-    detail = f"unparseable -> {DEFAULT_TIER}: {unparsed}"
+    detail = f"untiered: {sum(len(v) for v in untiered.values())}"
     if edition_mode == "current":
         detail += f", deprecated editions dropped: {n_deprecated}"
     if requested_quads is not None:
         detail += f", outside --quads: {n_outside_quads}"
-    print(f"[mosaics] COGs grouped by scale: {counts}  ({detail})")
+    print(f"[mosaics] COGs grouped by portal layer: {counts}  ({detail})")
+    for why, sids in sorted(untiered.items()):
+        print(f"[mosaics] WARNING: {len(sids)} COG(s) left out ({why}): {', '.join(sids)}", file=sys.stderr)
     return groups, pubs_by_sid
 
 
@@ -438,7 +446,7 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
     reverse of `derived_from`."""
     from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
 
-    label = SCALE_LABEL.get(tier, tier)
+    label = TIER_LABEL.get(tier, tier)
     n_maps = len(sids)
     w, s, e, n = bounds
     derived_from: list[dict] = []

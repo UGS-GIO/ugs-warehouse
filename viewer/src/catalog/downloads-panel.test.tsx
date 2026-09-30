@@ -50,20 +50,20 @@ const item: StacDoc = {
 };
 
 const CLEAN = {
-  any: false, mixedGeometry: [] as string[], longNames: [] as string[],
+  mixedGeometry: [] as string[], longNames: [] as string[],
   collisions: [] as [string, string][], tooManyFields: false, over2gb: false, fieldCount: 3,
   estShpBytes: 10, estDbfBytes: 10, estPeakBytes: 10, overBrowserLimit: false,
   widthsEstimated: false, estReadBytes: 1000, rowGroups: 12, minClipBytes: 1000,
   rowCount: 7_000,
 };
-const MANGLED = { ...CLEAN, any: true, mixedGeometry: ["POINT", "LINESTRING"] };
+const MANGLED = { ...CLEAN, mixedGeometry: ["POINT", "LINESTRING"] };
 // Truncation mangles data but still produces a file, so forcing past it is the user's call.
-const TRUNCATED = { ...CLEAN, any: true, longNames: ["metadata_publication_id"] };
+const TRUNCATED = { ...CLEAN, longNames: ["metadata_publication_id"] };
 // Past the tab's memory ceiling: GeoPackage runs in the same wasm instance, so it is no way out.
-const TOO_BIG = { ...CLEAN, any: true, overBrowserLimit: true, estPeakBytes: 7.2 * 1024 ** 3 };
+const TOO_BIG = { ...CLEAN, overBrowserLimit: true, estPeakBytes: 7.2 * 1024 ** 3 };
 // Two Utah-wide row groups: a clip cannot narrow what the export has to read.
 const SLOW_READ = {
-  ...CLEAN, any: true, estReadBytes: 1_351_235_892, rowGroups: 2, minClipBytes: 1_100_000_000,
+  ...CLEAN, estReadBytes: 1_351_235_892, rowGroups: 2, minClipBytes: 1_100_000_000,
 };
 
 const show = () => render(
@@ -175,7 +175,7 @@ describe("DownloadsPanel", () => {
 
   // An estimate the user cannot tell is an estimate is worse than no estimate.
   it("says so when the sizes are approximate, even with nothing else wrong", async () => {
-    exportWarnings.mockResolvedValue({ ...CLEAN, any: true, widthsEstimated: true });
+    exportWarnings.mockResolvedValue({ ...CLEAN, widthsEstimated: true });
     show();
     await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
     expect(await screen.findByText(/Sizes are approximate/i)).toBeDefined();

@@ -4,7 +4,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { type InputHTMLAttributes, useCallback, useRef, useState, useSyncExternalStore } from "react";
 
-import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
+import { currentExports, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
 import { toBbox } from "@/lib/bbox";
 import { usePreviewBounds } from "@/map/preview-map";
@@ -12,7 +12,8 @@ import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } fro
 import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
 
-import { exportFindings, type Finding, findingsHeading } from "./export-findings";
+import { exportFindings, type Warning } from "./export-findings";
+import { ExportWarning } from "./export-warning";
 
 const SERVICE_KEYS = new Set(["pmtiles", "style", "xyz", "ducklake", "tiles"]);
 
@@ -88,9 +89,6 @@ function NumberField({ value, valid = Number.isFinite, onCommit, ...rest }:
   );
 }
 
-// Carries its own format, so rendering it never reaches back into the mutation's variables.
-type Warning = { fmt: ExportFormat; findings: Finding[] };
-
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
   const fullBbox = toBbox(item.bbox);
@@ -149,13 +147,9 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
     void import("@/data/download").then((m) => m.cancelExport(id));
     if (id === ticket.current) { ticket.current = null; run.reset(); }
   };
-  // Stable identity: an inline arrow is a new ref every commit, so React would re-run it on each
-  // render and steal focus back from the clip and CRS inputs the warning tells the user to use.
-  const focusWarning = useCallback((el: HTMLDivElement | null) => { el?.focus(); }, []);
   // Dismissing puts focus back on the button that opened the warning, not on <body>.
   const dismiss = () => { run.reset(); invoker.current?.focus(); };
   const warn = run.data;
-  const tooBig = warn?.findings.some((f) => f.level === "too-big");
 
   const files = fileAssets(item);
   if (!files.length) return null;
@@ -270,33 +264,9 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       )}
 
       {warn && (
-        <div aria-labelledby="dl-warn-title" aria-describedby="dl-warn-why" tabIndex={-1} ref={focusWarning}
-          onKeyDown={(e) => { if (e.key === "Escape") dismiss(); }}
-          className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
-          <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
-            {findingsHeading(warn.findings, warn.fmt)}
-          </div>
-          <ul id="dl-warn-why" className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
-            {warn.findings.map((f) => <li key={f.id}><b>{f.title}</b> {f.detail}</li>)}
-          </ul>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {/* GeoPackage shares the tab and the wasm instance, so it is no way out of a memory
-                ceiling — only out of the limits the single-geometry formats impose. */}
-            {!tooBig && holdsOneGeomType(warn.fmt) && (
-              <button onClick={() => run.mutate({ fmt: "gpkg" })}
-                className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
-                Use GeoPackage instead
-              </button>
-            )}
-            {!warn.findings.some((f) => f.noForce) && (
-              <button onClick={() => run.mutate({ fmt: warn.fmt, force: true })}
-                className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
-                Download anyway
-              </button>
-            )}
-            <button onClick={dismiss} className="text-muted-foreground hover:underline">Cancel</button>
-          </div>
-        </div>
+        <ExportWarning warn={warn} onDismiss={dismiss}
+          onUseGeoPackage={() => run.mutate({ fmt: "gpkg" })}
+          onForce={() => run.mutate({ fmt: warn.fmt, force: true })} />
       )}
     </section>
   );

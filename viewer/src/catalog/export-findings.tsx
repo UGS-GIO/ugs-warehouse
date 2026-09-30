@@ -1,4 +1,4 @@
-// What the export pre-flight found, as a flat list the panel renders without knowing each check.
+// What the export pre-flight found, as a flat list the warning box renders without knowing each check.
 import type { ReactNode } from "react";
 
 import type { ShapefileWarnings } from "@/data/download";
@@ -85,3 +85,6 @@ const ORDER: FindingLevel[] = ["too-big", "mangle", "slow"];
 
 export const findingsHeading = (fs: Finding[], fmt: ExportFormat) =>
   HEADINGS[ORDER.find((l) => fs.some((f) => f.level === l)) ?? "slow"](FORMAT_LABEL[fmt]);
+
+// Carries its own format, so rendering it never reaches back into the mutation's variables.
+export type Warning = { fmt: ExportFormat; findings: Finding[] };

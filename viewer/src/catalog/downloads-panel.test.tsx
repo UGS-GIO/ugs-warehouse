@@ -39,6 +39,8 @@ vi.mock("@tanstack/react-router", () => ({
     url.search = search(url.search);
   },
 }));
+const preview = vi.hoisted(() => ({ bounds: null as [number, number, number, number] | null }));
+vi.mock("@/map/preview-map", () => ({ usePreviewBounds: () => preview.bounds }));
 vi.mock("@/data/download", () => ({
   exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun,
   holdsOneGeomType: (fmt: string) => fmt === "shp" || fmt === "gdb",
@@ -83,6 +85,7 @@ const show = () => render(
 
 beforeEach(() => {
   url.search = {};
+  preview.bounds = null;
   exportItem.mockClear();
   cancelExport.mockClear();
   startRun.mockClear();
@@ -375,5 +378,19 @@ describe("DownloadsPanel", () => {
     await userEvent.type(code, "12{Enter}");
     expect(url.search.crs).toBe(26912);
     expect(code.value).toBe("26912");
+  });
+
+  it("clips to the preview map's extent on request", async () => {
+    preview.bounds = [-111.9, 40.6, -111.7, 40.8];
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    await userEvent.click(screen.getByText("Use map view"));
+    expect(url.search.clip).toEqual([-111.9, 40.6, -111.7, 40.8]);
+  });
+
+  it("offers no map view when there is no preview map", async () => {
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    expect(screen.queryByText("Use map view")).toBeNull();
   });
 });

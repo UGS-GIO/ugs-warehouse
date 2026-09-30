@@ -31,6 +31,8 @@ type Ctx = {
   // Which `ugs:renders` entry the "Symbolize by" picker is on, so the endpoints panel can hand out
   // the style/ArcGIS URL for the symbology you are looking at rather than the first one.
   render: string;
+  // The preview's visible extent after its last move, for the downloads panel's "Use map view".
+  viewBounds: [number, number, number, number] | null;
 };
 const PreviewMapCtx = createContext<Ctx | null>(null);
 
@@ -39,6 +41,9 @@ export function usePreviewMap(): Ctx {
   if (!c) throw new Error("usePreviewMap must be used within <PreviewMapProvider>");
   return c;
 }
+
+/** The preview's extent, or null outside a provider (the panel also renders without a map). */
+export const usePreviewBounds = () => useContext(PreviewMapCtx)?.viewBounds ?? null;
 
 // Held as one value, exposed as the derived `selectedFeature` + `featureRelated` pair so consumers
 // didn't change. Nesting `related` is what makes a new feature drop an open related table.
@@ -59,6 +64,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const [pick, setPick] = usePerItem<MapPick | null>(itemId, null);
   const [sel, setSel] = usePerItem<Sel>(itemId, null);
   const [mapMismatch, setMapMismatch] = usePerItem(itemId, false);
+  const [viewBounds, setViewBounds] = usePerItem<[number, number, number, number] | null>(itemId, null);
   const reportMismatch = useCallback(() => setMapMismatch(true), [setMapMismatch]);
 
   // Owned here, not mirrored up out of the map: the endpoints panel hands out the URL for the
@@ -79,11 +85,11 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
     () => ({
       setSpec, registerSlot, focus, setFocus, pick, onFeatureClick,
       featureRelated: sel?.related ?? null, openRelated, clearRelated,
-      selectedFeature: sel?.feature ?? null, selectFeature, clearSelection, render, mapMismatch,
+      selectedFeature: sel?.feature ?? null, selectFeature, clearSelection, render, mapMismatch, viewBounds,
     }),
     [
       setSpec, focus, setFocus, pick, registerSlot, onFeatureClick, sel, openRelated, clearRelated,
-      selectFeature, clearSelection, render, mapMismatch,
+      selectFeature, clearSelection, render, mapMismatch, viewBounds,
     ],
   );
 
@@ -93,7 +99,8 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
       {armed && (
         <Suspense fallback={null}>
           <PreviewMapGL spec={spec} slotEl={slotEl} focus={focus} onFeatureClick={onFeatureClick} onMismatch={reportMismatch}
-            onFeatureSelect={selectFeature} onClearSelection={clearSelection} renders={renders} sel={render} onSel={setChosen} />
+            onFeatureSelect={selectFeature} onClearSelection={clearSelection} renders={renders} sel={render} onSel={setChosen}
+            onBoundsChange={setViewBounds} />
         </Suspense>
       )}
     </PreviewMapCtx.Provider>

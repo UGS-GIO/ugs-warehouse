@@ -54,15 +54,22 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection, onBoundsChange }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
   onFeatureSelect?: (props: Record<string, unknown>, fid: number | null) => void;
   onClearSelection?: () => void;
+  onBoundsChange?: (b: [number, number, number, number]) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
+  // Four decimals is about 10 m, plenty for a clip, and keeps the URL short.
+  const reportBounds = () => {
+    const b = mapRef.current?.getMap().getBounds();
+    const r = (n: number) => Math.round(n * 1e4) / 1e4;
+    if (b) onBoundsChange?.([r(b.getWest()), r(b.getSouth()), r(b.getEast()), r(b.getNorth())]);
+  };
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
   // <MapGL> subtree (and its WebGL context) is created once and never torn down. We then move that
   // container element between the active slot and a hidden parking holder with plain appendChild —
@@ -235,7 +242,8 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
         <MapGL
           ref={mapRef}
           mapLib={maplibregl}
-          onLoad={() => setMapLoaded(true)}
+          onLoad={() => { setMapLoaded(true); reportBounds(); }}
+          onMoveEnd={reportBounds}
           initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
           mapStyle={LIGHT_BASEMAP}
           interactiveLayerIds={isVector ? layerIds : undefined}

@@ -7,6 +7,7 @@ import { type InputHTMLAttributes, useCallback, useRef, useState, useSyncExterna
 import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
 import { toBbox } from "@/lib/bbox";
+import { usePreviewBounds } from "@/map/preview-map";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
@@ -100,6 +101,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         ...("clip" in next && { clip: next.clip }),
       }),
     });
+  const view = usePreviewBounds();
   const [pickedOther, setPickedOther] = useState(false);
   const customEpsg = pickedOther || !isPreset(epsg);
   const queryClient = useQueryClient();
@@ -237,6 +239,11 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
                   onChange={(e) => setSearch({ clip: e.target.checked ? fullBbox : undefined })} />
                 Clip to an area (bbox, EPSG:4326)
               </label>
+              {view && (
+                <button onClick={() => setSearch({ clip: view })} className="mt-1 text-primary">
+                  Use map view
+                </button>
+              )}
               {clip && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                   {clip.map((v, i) => (

@@ -348,7 +348,6 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
     # Performance-tuned GDAL environment for reading the COGs in place over /vsigs.
     gdal_env = os.environ.copy()
     gdal_env.update({
-        "GDAL_CACHEMAX": "4096",                         # 4 GB block cache
         "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
         "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
         "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
@@ -357,6 +356,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         "GDAL_HTTP_MAX_RETRY": "10",
         "GDAL_HTTP_RETRY_DELAY": "1",
     })
+    gdal_env.setdefault("GDAL_CACHEMAX", "4096")   # MB; the Batch VM sets its own
     sids = _byte_members(tier, sids, gdal_env)
     if not sids:
         print(f"[mosaics] {tier}: no 8-bit COGs left — skipping", file=sys.stderr)
@@ -503,9 +503,9 @@ def build(scales: list[str], maxz: int | None = None,
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Build per-scale raster PMTiles mosaics of geologic maps")
-    ap.add_argument("--scale", choices=(*TIERS, "all"), default="all",
-                    help="Which scale tier to build (default all). 24k is the largest — run it alone "
-                         "with more memory if needed.")
+    ap.add_argument("--scale", choices=(*TIERS, "all"), action="append",
+                    help="Scale tier to build; repeat for several (default all). The statewide 24k tier "
+                         "at z17 runs on Cloud Batch (scripts/submit_mosaics_batch.sh).")
     ap.add_argument("--maxzoom", type=int, default=None,
                     help="Cap the base (native) zoom level; default lets GDAL pick from resolution.")
     ap.add_argument("--editions", choices=("current", "all"), default="current",
@@ -519,7 +519,8 @@ def main() -> int:
     args = ap.parse_args()
     if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
         ap.error("--quads contained no usable quad names")
-    scales = list(TIERS) if args.scale == "all" else [args.scale]
+    picked = args.scale or ["all"]
+    scales = list(TIERS) if "all" in picked else list(dict.fromkeys(picked))
     built = build(scales, maxz=args.maxzoom, edition_mode=args.editions, quads=args.quads)
     # A scoped --quads build under the default --scale all legitimately leaves tiers with no members.
     return 0 if built == len(scales) or (args.quads and built > 0) else 1

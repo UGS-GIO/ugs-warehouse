@@ -644,8 +644,9 @@ steps:
       - --cpu=4
       - --memory=8Gi
 
-  # Per-scale raster PMTiles mosaics of the geologic maps. Statewide 24k at z17 needs a real disk for
-  # MOSAIC_WORK_DIR, which this Cloud Run job lacks; running it on Cloud Batch is tracked in ALL-6048.
+  # Per-scale raster PMTiles mosaics of the geologic maps: the 250k and 500k tiers only. The statewide
+  # 24k tier needs a real disk and runs on Cloud Batch (scripts/submit_mosaics_batch.sh); building it
+  # here too would overwrite that z17 object with a z14 one.
   - id: deploy-mosaics-job
     waitFor: [push-mosaics]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -662,9 +663,7 @@ steps:
       - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
       - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
-      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,all
-      # Zoom is now capped per tier (TIER_MAXZOOM), so the build is bounded; 4h is generous headroom
-      # for the 24k tier (the others are fast). Run a single heavy tier with --scale 24k if needed.
+      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,250k,--scale,500k
       - --task-timeout=14400
       - --max-retries=1
       - --cpu=4

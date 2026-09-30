@@ -65,18 +65,23 @@ type Clip = [number, number, number, number];
 
 const isPreset = (epsg: number) => EPSG_ITEMS.some((o) => o.value === String(epsg));
 
-/** Keeps its own text while typing and commits on blur or Enter. Keyed by the committed value, so
- *  a change from outside (reset, back/forward) remounts it showing the new number. */
+/** Keeps its own text while typing and commits on blur or Enter. A change from outside (reset,
+ *  back/forward) is written into the field unless it has focus: remounting it instead would drop
+ *  focus every time Enter commits. */
 function NumberField({ value, valid = Number.isFinite, onCommit, ...rest }:
   { value: number; valid?: (n: number) => boolean; onCommit: (n: number) => void }
   & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "defaultValue" | "onBlur" | "onKeyDown">) {
+  // A new callback per value, so React calls it again whenever the value changes.
+  const sync = useCallback((el: HTMLInputElement | null) => {
+    if (el && el !== document.activeElement) el.value = String(value);
+  }, [value]);
   const commit = (el: HTMLInputElement) => {
     const n = Number(el.value);
-    if (el.value.trim() && valid(n)) onCommit(n);
-    else el.value = String(value);
+    if (!el.value.trim() || !valid(n)) el.value = String(value);
+    else if (n !== value) onCommit(n);
   };
   return (
-    <input key={value} type="number" defaultValue={value} {...rest}
+    <input ref={sync} type="number" defaultValue={value} {...rest}
       onBlur={(e) => commit(e.currentTarget)}
       onKeyDown={(e) => { if (e.key === "Enter") commit(e.currentTarget); }}
       className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />

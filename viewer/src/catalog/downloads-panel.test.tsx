@@ -393,4 +393,20 @@ describe("DownloadsPanel", () => {
     await userEvent.click(screen.getByText("Projection & area"));
     expect(screen.queryByText("Use map view")).toBeNull();
   });
+
+  it("keeps focus in a field after Enter commits it", async () => {
+    url.search = { clip: [-114, 37, -109, 42] };
+    const { rerender } = show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    const west = screen.getByLabelText<HTMLInputElement>("W");
+    await userEvent.clear(west);
+    await userEvent.type(west, "-111{Enter}");
+    expect(url.search.clip).toEqual([-111, 37, -109, 42]);
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <DownloadsPanel item={item} />
+      </QueryClientProvider>,
+    );
+    expect(document.activeElement).toBe(screen.getByLabelText("W"));
+  });
 });

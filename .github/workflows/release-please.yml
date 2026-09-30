@@ -1,5 +1,6 @@
 # Keeps a standing release PR up to date from conventional commits on main. Merging it tags the
-# version and publishes the GitHub release.
+# version and publishes the GitHub release. Tags only: the release commit touches CHANGELOG.md and
+# version.txt, which the deploy trigger ignores.
 name: release-please
 
 on:
@@ -9,9 +10,14 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
 
 jobs:
   release-please:
     runs-on: ubuntu-latest
     steps:
-      - uses: googleapis/release-please-action@v4
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0

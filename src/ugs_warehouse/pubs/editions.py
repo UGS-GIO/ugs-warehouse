@@ -123,7 +123,7 @@ def footprint_rows() -> list[tuple[str, str, str, str]]:
 
     obj = f"{identity.FOOTPRINTS_PREFIX}/footprints.parquet"  # == footprints.PARQUET_OBJECT
     try:
-        data = gcs.get_bytes(obj)  # obstore; raises if absent
+        data = gcs.get_bytes(obj, bucket=config.SOURCE_BUCKET)  # obstore; raises if absent
     except Exception as e:  # noqa: BLE001 — surface it, don't silently degrade
         raise RuntimeError(
             f"[editions] staged footprints parquet gs://.../{obj} unreadable "

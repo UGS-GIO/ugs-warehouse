@@ -1,4 +1,5 @@
-"""Publication scale → serving scale-tier (24k/250k/500k). Shared by geolmap_mosaics, editions, and sink_stac."""
+"""Publication scale bands (`tier_of`, the editions fallback) and the mosaic tiers, which are the
+geologic map portal's layers (`mosaic_tier_of`). Shared by geolmap_mosaics, editions, sink_stac and ingest."""
 from __future__ import annotations
 
 import re
@@ -45,6 +46,7 @@ def tier_of(raw: str) -> str | None:
 # not its publication scale: the intermediate layer mixes 1:50,000 to 1:125,000 30' x 60' maps,
 # which no scale band separates from the 7.5' quads or the 1 x 2 degree sheets.
 MOSAIC_TIERS = ("24k", "100k", "250k", "500k")
+# Portal layer IDs, as the footprints record them in geomaps_service / servName.
 SERVICE_TIER = {"geomaps_24k": "24k", "geomaps_100k": "100k", "geomaps_1x2": "250k"}
 STATEWIDE_SERVNAME = "500k_Statewide"   # the state map carries no geomaps_service
 MOSAIC_TIER_LABEL = {"24k": "1:24,000", "100k": "intermediate-scale (30' x 60')",

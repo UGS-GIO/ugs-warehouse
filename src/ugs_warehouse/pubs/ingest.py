@@ -173,8 +173,10 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     # predecessor/successor just because this run isn't writing it.
     try:
         fp_rows = editions.footprint_rows()
-        edition_graph = editions.edition_graph(pubs, quad_by_sid=editions.quad_by_series(fp_rows))
         layers = editions.layers_by_series(fp_rows)
+        tier_by_sid = {s: t for s, v in layers.items() if (t := scale.mosaic_tier_of(*v))}
+        edition_graph = editions.edition_graph(pubs, quad_by_sid=editions.quad_by_series(fp_rows),
+                                               tier_by_sid=tier_by_sid)
     except RuntimeError as e:
         print(f"[ingest] WARNING: edition detection skipped — {e}. Items will carry no "
               "version/deprecated/predecessor/successor/latest or mosaic links until the "

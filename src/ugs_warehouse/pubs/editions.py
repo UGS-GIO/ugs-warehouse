@@ -12,16 +12,16 @@ prod, which made edition detection silently produce nothing. A pub's own `p["qua
 present, e.g. in tests or a future feed) is kept only as a fallback for a pub absent from
 footprints. `pub_year`/`pub_scale` are still read straight off each pub dict.
 
-Grouping key = (normalized `quad_name`, scale tier). Editions must share BOTH the quad and the
-scale tier — same quad at a different scale is a different map series, not an edition of this one.
-Scale parsing is reused, not reinvented: `scale.tier_of` (the same 24k/250k/500k tiers
-the mosaics producer bins COGs into) is the single source of truth for "what scale tier is this
-publication". `DM`/`DR` suffixes (`M-206` vs `M-206DM`) are genuinely distinct publications that
+Grouping key = (normalized `quad_name`, tier). Editions must share BOTH the quad and the tier:
+the same quad name in another tier (a 30' x 60' "Tooele Quad" vs the 1 x 2 degree Tooele sheet) is a
+different map series, not an edition of this one. The tier is the map's mosaic tier (its portal
+layer, `scale.mosaic_tier_of`) when the caller passes `tier_by_sid`, so an edition never supersedes a
+map in a different mosaic; a map with no tiered layer falls back to its scale band (`scale.tier_of`). `DM`/`DR` suffixes (`M-206` vs `M-206DM`) are genuinely distinct publications that
 happen to land in the same (quad, scale) group — never collapsed into one series_id.
 
 Conservative by design (never mislabel a published record):
   - a blank `quad_name` -> not a quad map at all (true of most pubs) -> skipped, no warning.
-  - a quad map whose `pub_scale` `tier_of` can't parse -> excluded from every group, warned.
+  - a quad map with no mosaic tier whose `pub_scale` `tier_of` can't parse -> excluded, warned.
   - within a (quad, scale) group, a `pub_year` that's missing or ties with a sibling's makes that
     entry's position ambiguous -> excluded from the graph and warned for human review, while any
     cleanly-ordered siblings in the same group still link normally.
@@ -131,10 +131,14 @@ def footprint_rows() -> list[tuple[str, str, str, str]]:
         tmp.write(data)
         tmp.close()
         with duckdb.connect() as con:
-            rows = con.execute(
-                "SELECT upper(trim(series_id)), coalesce(quad_name, ''), "
-                "coalesce(trim(geomaps_service), ''), coalesce(trim(servName), '') "
-                "FROM read_parquet(?) WHERE coalesce(trim(series_id), '') <> ''", [tmp.name]).fetchall()
+            try:
+                rows = con.execute(
+                    "SELECT upper(trim(series_id)), coalesce(quad_name, ''), "
+                    "coalesce(trim(geomaps_service), ''), coalesce(trim(servName), '') "
+                    "FROM read_parquet(?) WHERE coalesce(trim(series_id), '') <> ''",
+                    [tmp.name]).fetchall()
+            except duckdb.Error as e:  # e.g. a parquet staged before geomaps_service existed
+                raise RuntimeError(f"[editions] footprints parquet gs://.../{obj} unusable: {e}") from e
     finally:
         os.unlink(tmp.name)
     return [(str(s), str(q), str(g), str(n)) for s, q, g, n in rows]
@@ -159,7 +163,8 @@ def layers_by_series(rows: list[tuple[str, str, str, str]] | None = None
     return {s: (frozenset(svc.get(s, ())), frozenset(names.get(s, ()))) for s in svc.keys() | names.keys()}
 
 
-def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None) -> dict[str, dict]:
+def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None,
+                  tier_by_sid: dict[str, str] | None = None) -> dict[str, dict]:
     """{series_id -> edition dict} for every quad map placed unambiguously in a (quad, scale)
     group — `{"version", "deprecated", "predecessor_href", "successor_href", "latest_href"}`, the
     shape `sink_stac.build_item(..., edition=...)` consumes. A pub not covered by any rule below is
@@ -167,7 +172,8 @@ def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None) -
 
     `quad_by_sid` (`{UPPER series_id: quad_name}`) is the footprints-sourced quad map; defaults to
     `quad_by_series()` (a live parquet read) when omitted. Pass `{}` to force the feed-only
-    fallback with no network call — see `tests/test_pubs_editions.py`."""
+    fallback with no network call — see `tests/test_pubs_editions.py`. `tier_by_sid`
+    (`{UPPER series_id: mosaic tier}`) groups each map by its mosaic tier instead of its scale band."""
     if quad_by_sid is None:
         quad_by_sid = quad_by_series()
     groups: dict[tuple[str, str], list[dict]] = defaultdict(list)
@@ -176,7 +182,7 @@ def edition_graph(pubs: list[dict], quad_by_sid: dict[str, str] | None = None) -
         quad = (quad_by_sid.get(sid.upper()) or (p.get("quad_name") or "")).strip()
         if not sid or not quad:
             continue  # no quad_name -> not a quad map (the common case, not an anomaly)
-        tier = tier_of(p.get("pub_scale"))
+        tier = (tier_by_sid or {}).get(sid.upper()) or tier_of(p.get("pub_scale"))
         if tier is None:
             print(f"[editions] WARNING: {sid} (quad={quad!r}) has a missing/unparseable "
                   f"pub_scale ({p.get('pub_scale')!r}) — excluded from edition detection")

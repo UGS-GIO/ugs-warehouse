@@ -1,15 +1,19 @@
 // Every way to save a file, as one grid. Assets read over HTTP instead of saved belong in
 // "Services" — see `endpoints-panel.tsx`.
-import { useMutation } from "@tanstack/react-query";
-import { useCallback, useRef, useState, useSyncExternalStore } from "react";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { type InputHTMLAttributes, useCallback, useRef, useState, useSyncExternalStore } from "react";
 
-import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
+import { currentExports, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
+import { toBbox } from "@/lib/bbox";
+import { usePreviewBounds } from "@/map/preview-map";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
 
-import { exportFindings, type Finding, findingsHeading } from "./export-findings";
+import { exportFindings, type Warning } from "./export-findings";
+import { ExportWarning } from "./export-warning";
 
 const SERVICE_KEYS = new Set(["pmtiles", "style", "xyz", "ducklake", "tiles"]);
 
@@ -28,6 +32,7 @@ const HINTS: Record<ExportFormat, string> = {
   fgb: "streaming · web",
   geojson: "web · always WGS 84",
   csv: "spreadsheet · WKT geometry",
+  parquet: "clipped · always WGS 84",
 };
 
 /** `…/thing.parquet?x=1` → `parquet` */
@@ -58,16 +63,52 @@ const TILE = "flex items-start justify-between gap-2 rounded-md border border-bo
 const SUB = "mt-0.5 block text-xs font-normal text-muted-foreground";
 const BBOX_LABELS = ["W", "S", "E", "N"];
 
-// Carries its own format, so rendering it never reaches back into the mutation's variables.
-type Warning = { fmt: ExportFormat; findings: Finding[] };
+type Clip = [number, number, number, number];
+
+const isPreset = (epsg: number) => EPSG_ITEMS.some((o) => o.value === String(epsg));
+
+/** Keeps its own text while typing and commits on blur or Enter. A change from outside (reset,
+ *  back/forward) is written into the field unless it has focus: remounting it instead would drop
+ *  focus every time Enter commits. */
+function NumberField({ value, valid = Number.isFinite, onCommit, ...rest }:
+  { value: number; valid?: (n: number) => boolean; onCommit: (n: number) => void }
+  & Omit<InputHTMLAttributes<HTMLInputElement>, "value" | "defaultValue" | "onBlur" | "onKeyDown">) {
+  // A new callback per value, so React calls it again whenever the value changes.
+  const sync = useCallback((el: HTMLInputElement | null) => {
+    if (el && el !== document.activeElement) el.value = String(value);
+  }, [value]);
+  const commit = (el: HTMLInputElement) => {
+    const n = Number(el.value);
+    if (!el.value.trim() || !valid(n)) el.value = String(value);
+    else if (n !== value) onCommit(n);
+  };
+  return (
+    <input ref={sync} type="number" defaultValue={value} {...rest}
+      onBlur={(e) => commit(e.currentTarget)}
+      onKeyDown={(e) => { if (e.key === "Enter") commit(e.currentTarget); }}
+      className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+  );
+}
 
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
-  const fullBbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
-  const [clipOn, setClipOn] = useState(false);
-  const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
-  const [epsg, setEpsg] = useState(4326);
-  const [customEpsg, setCustomEpsg] = useState(false);
+  const fullBbox = toBbox(item.bbox);
+  // CRS and clip live in the URL, so a reload or a shared link keeps them.
+  const { crs: epsg = 4326, clip } = useSearch({ from: "__root__" });
+  const navigate = useNavigate();
+  const setSearch = (next: { crs?: number; clip?: Clip }) =>
+    void navigate({
+      to: ".", replace: true,
+      search: (prev) => ({
+        ...prev,
+        ...("crs" in next && { crs: next.crs === 4326 ? undefined : next.crs }),
+        ...("clip" in next && { clip: next.clip }),
+      }),
+    });
+  const view = usePreviewBounds();
+  const [pickedOther, setPickedOther] = useState(false);
+  const customEpsg = pickedOther || !isPreset(epsg);
+  const queryClient = useQueryClient();
 
   // The export outlives this component: the panel is keyed per item, so switching items remounts
   // it while the run continues. Reading the module's own state keeps the indicator and Cancel on
@@ -78,7 +119,6 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
 
   const run = useMutation({
     mutationFn: async ({ fmt, force }: { fmt: ExportFormat; force?: boolean }): Promise<Warning | undefined> => {
-      const clip = clipOn ? bbox : undefined;
       const { beginExport, endRun, exportItem, exportWarnings, startRun } = await import("@/data/download");
       // The ticket is taken BEFORE the pre-flight, which is the slow part — a cancel during it
       // has to suppress the delivery too.
@@ -89,8 +129,12 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       // Every format reads the whole GeoParquet into the tab, so every format is pre-flighted.
       // A failed pre-flight just proceeds to the export.
       if (!force) {
-        const w = await exportWarnings(parquet!.href, fmt, clip)
-          .catch((e) => { console.warn("export pre-flight failed", e); return null; });
+        // Cached per file, format and clip: a second click on the same export skips the read.
+        const w = await queryClient.fetchQuery({
+          queryKey: ["export-preflight", parquet!.href, fmt, clip ?? null],
+          queryFn: () => exportWarnings(parquet!.href, fmt, clip),
+          staleTime: Infinity,
+        }).catch((e) => { console.warn("export pre-flight failed", e); return null; });
         const found = w ? exportFindings(w, fmt) : [];
         if (found.length) { endRun(epoch); return { fmt, findings: found }; }   // no export follows, so release the ticket
       }
@@ -104,18 +148,30 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
     void import("@/data/download").then((m) => m.cancelExport(id));
     if (id === ticket.current) { ticket.current = null; run.reset(); }
   };
-  // Stable identity: an inline arrow is a new ref every commit, so React would re-run it on each
-  // render and steal focus back from the clip and CRS inputs the warning tells the user to use.
-  const focusWarning = useCallback((el: HTMLDivElement | null) => { el?.focus(); }, []);
   // Dismissing puts focus back on the button that opened the warning, not on <body>.
   const dismiss = () => { run.reset(); invoker.current?.focus(); };
   const warn = run.data;
-  const tooBig = warn?.findings.some((f) => f.level === "too-big");
 
   const files = fileAssets(item);
   if (!files.length) return null;
   const data = files.filter(([, a]) => isParquetAsset(a));
   const sidecars = files.filter(([, a]) => !isParquetAsset(a));
+
+  const formatTile = (fmt: ExportFormat, label: string) => (
+    <button key={fmt} aria-disabled={run.isPending} aria-busy={busy === fmt}
+      onClick={(e) => {
+        if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
+        invoker.current = e.currentTarget;
+        run.mutate({ fmt });
+      }}
+      aria-label={`Download ${label}`} className={TILE}>
+      <span className="font-medium">
+        {label}
+        <span className={SUB}>{HINTS[fmt]}</span>
+      </span>
+      <span aria-hidden className="shrink-0 text-primary">{busy === fmt ? "…" : "↓"}</span>
+    </button>
+  );
 
   const assetTile = ([key, a]: [string, Asset]) => (
     <a key={key} href={a.href} target="_blank" rel="noopener" className={TILE}>
@@ -131,22 +187,11 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
     <section className="mt-3 rounded-lg border border-border bg-muted p-3">
       <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Downloads</h3>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {data.map(assetTile)}
-        {parquet && FORMATS.map((f) => (
-          <button key={f.id} aria-disabled={run.isPending} aria-busy={busy === f.id}
-            onClick={(e) => {
-              if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
-              invoker.current = e.currentTarget;
-              run.mutate({ fmt: f.id });
-            }}
-            aria-label={`Download ${f.label}`} className={TILE}>
-            <span className="font-medium">
-              {f.label}
-              <span className={SUB}>{HINTS[f.id]}</span>
-            </span>
-            <span aria-hidden className="shrink-0 text-primary">{busy === f.id ? "…" : "↓"}</span>
-          </button>
-        ))}
+        {/* The archive is the whole file; under a clip, the same tile exports just the clipped rows. */}
+        {data.map((entry) => (clip && entry[1] === parquet
+          ? formatTile("parquet", entry[1].title ?? "GeoParquet")
+          : assetTile(entry)))}
+        {parquet && FORMATS.map((f) => formatTile(f.id, f.label))}
         {sidecars.map(assetTile)}
       </div>
       {/* Always mounted: a live region created with its text is announced unreliably. Announces
@@ -178,37 +223,45 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
               Output CRS
               <UiSelect value={customEpsg ? "other" : String(epsg)} className="px-1.5 py-0.5"
                 onValueChange={(v) => {
-                  if (v === "other") setCustomEpsg(true);
-                  else { setCustomEpsg(false); setEpsg(Number(v)); }
+                  if (v === "other") setPickedOther(true);
+                  else { setPickedOther(false); setSearch({ crs: Number(v) }); }
                 }}
                 items={EPSG_ITEMS} />
             </label>
             {customEpsg && (
               <label className="flex items-center gap-1">
                 EPSG:
-                <input type="number" min={1024} max={999999} value={epsg} autoFocus
-                  onChange={(e) => setEpsg(Number(e.target.value))}
-                  className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+                <NumberField value={epsg} min={1024} max={999999} autoFocus
+                  valid={(n) => Number.isInteger(n) && n >= 1024 && n <= 999999}
+                  onCommit={(crs) => setSearch({ crs })} />
               </label>
             )}
           </div>
           {fullBbox && (
             <div className="mt-2 text-sm">
               <label className="flex items-center gap-1.5 text-muted-foreground">
-                <input type="checkbox" checked={clipOn} onChange={(e) => setClipOn(e.target.checked)} />
+                <input type="checkbox" checked={!!clip}
+                  onChange={(e) => setSearch({ clip: e.target.checked ? fullBbox : undefined })} />
                 Clip to an area (bbox, EPSG:4326)
               </label>
-              {clipOn && (
+              {view && (
+                <button onClick={() => setSearch({ clip: view })} className="mt-1 text-primary">
+                  Use map view
+                </button>
+              )}
+              {clip && (
                 <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {bbox.map((v, i) => (
+                  {clip.map((v, i) => (
                     <label key={i} className="flex items-center gap-1 text-muted-foreground">
                       {BBOX_LABELS[i]}
-                      <input type="number" step="0.01" value={v}
-                        onChange={(e) => setBbox((b) => b.map((x, j) => (j === i ? Number(e.target.value) : x)) as typeof b)}
-                        className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+                      <NumberField value={v} step="0.01" onCommit={(n) => {
+                        const next: Clip = [...clip];
+                        next[i] = n;
+                        setSearch({ clip: next });
+                      }} />
                     </label>
                   ))}
-                  <button onClick={() => setBbox(fullBbox)} className="text-primary">reset</button>
+                  <button onClick={() => setSearch({ clip: fullBbox })} className="text-primary">reset</button>
                 </div>
               )}
             </div>
@@ -217,33 +270,9 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       )}
 
       {warn && (
-        <div aria-labelledby="dl-warn-title" aria-describedby="dl-warn-why" tabIndex={-1} ref={focusWarning}
-          onKeyDown={(e) => { if (e.key === "Escape") dismiss(); }}
-          className="mt-2 rounded-md border border-amber-500/50 bg-amber-500/10 p-2.5 text-sm">
-          <div id="dl-warn-title" className="font-semibold text-amber-700 dark:text-amber-400">
-            {findingsHeading(warn.findings, warn.fmt)}
-          </div>
-          <ul id="dl-warn-why" className="mt-1 list-disc space-y-0.5 pl-4 text-foreground">
-            {warn.findings.map((f) => <li key={f.id}><b>{f.title}</b> {f.detail}</li>)}
-          </ul>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {/* GeoPackage shares the tab and the wasm instance, so it is no way out of a memory
-                ceiling — only out of the limits the single-geometry formats impose. */}
-            {!tooBig && holdsOneGeomType(warn.fmt) && (
-              <button onClick={() => run.mutate({ fmt: "gpkg" })}
-                className="rounded border border-border bg-primary px-2 py-0.5 text-primary-foreground hover:opacity-90">
-                Use GeoPackage instead
-              </button>
-            )}
-            {!warn.findings.some((f) => f.noForce) && (
-              <button onClick={() => run.mutate({ fmt: warn.fmt, force: true })}
-                className="rounded border border-border bg-card px-2 py-0.5 text-foreground hover:border-primary">
-                Download anyway
-              </button>
-            )}
-            <button onClick={dismiss} className="text-muted-foreground hover:underline">Cancel</button>
-          </div>
-        </div>
+        <ExportWarning warn={warn} onDismiss={dismiss}
+          onUseGeoPackage={() => run.mutate({ fmt: "gpkg" })}
+          onForce={() => run.mutate({ fmt: warn.fmt, force: true })} />
       )}
     </section>
   );

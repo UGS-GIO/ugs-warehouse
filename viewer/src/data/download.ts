@@ -171,12 +171,12 @@ export function estimateGeoJSONBytes(
   return Math.round(geometry + rowCount * (60 + perRow));   // 60 = the Feature envelope
 }
 
-/** Peak bytes live at once for `fmt`. CSV streams from DuckDB and touches neither GeoJSON nor
- *  GDAL; the zipped formats (shp, gdb) also hold the archive. */
+/** Peak bytes live at once for `fmt`. CSV and GeoParquet stream from DuckDB and touch neither
+ *  GeoJSON nor GDAL; the zipped formats (shp, gdb) also hold the archive. */
 export function estimateExportPeakBytes(
   fmt: ExportFormat, geojsonBytes: number, outputBytes: number,
 ): number {
-  if (fmt === "csv") return 0;
+  if (fmt === "csv" || fmt === "parquet") return 0;
   if (fmt === "geojson") return geojsonBytes * 2;              // the seq bytes + the wrapped copy
   const zipped = fmt === "shp" || fmt === "gdb";
   return geojsonBytes + outputBytes * (zipped ? 2 : 1);
@@ -608,7 +608,7 @@ export async function exportItem(
   const deliver = (parts: Uint8Array[], filename: string, mime: string) => {
     if (!isCancelled(epoch)) triggerDownload(parts, filename, mime);
   };
-  let csvOut: string | undefined;
+  let fileOut: string | undefined;   // DuckDB-written output (csv, parquet)
   let seqOut: string | undefined;
   let borrowed: string | undefined;
   try {
@@ -645,16 +645,26 @@ export async function exportItem(
       t = clipped;
     }
 
+    if (fmt === "parquet") {
+      fileOut = `o${id}.parquet`;
+      // A GEOMETRY column writes as GeoParquet (WKB plus the `geo` metadata); a BLOB one is
+      // hydrated first so it does too.
+      const sel = geom === ident(geomCol) ? "*" : `* REPLACE (${geom} AS ${ident(geomCol)})`;
+      await conn.query(`COPY (SELECT ${sel} FROM ${t}) TO '${fileOut}' (FORMAT PARQUET);`);
+      deliver([await db.copyFileToBuffer(fileOut)], `${stem}.parquet`, "application/vnd.apache.parquet");
+      return;
+    }
+
     if (fmt === "csv") {
-      csvOut = `o${id}.csv`;
+      fileOut = `o${id}.csv`;
       // WKT geometry in the chosen output CRS (source is always 4326); attributes unchanged.
       // always_xy: geom is stored lon/lat, but EPSG:4326's authority axis order is lat/lon — without
       // this the transform reads longitude as latitude and returns inf.
       const wkt = srs === 4326 ? `ST_AsText(${geom})`
         : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${srs}', always_xy := true))`;
       const drop = cols0.includes(COVERING_COL) ? ` EXCLUDE (${ident(COVERING_COL)})` : "";
-      await conn.query(`COPY (SELECT *${drop} REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
-      deliver([await db.copyFileToBuffer(csvOut)], `${stem}.csv`, "text/csv");
+      await conn.query(`COPY (SELECT *${drop} REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${fileOut}' (HEADER, DELIMITER ',');`);
+      deliver([await db.copyFileToBuffer(fileOut)], `${stem}.csv`, "text/csv");
       return;
     }
 
@@ -682,7 +692,7 @@ export async function exportItem(
     await conn.query(`DROP TABLE IF EXISTS ${raw}; DROP TABLE IF EXISTS ${clipped};`).catch(() => {});
     await conn.close();
     if (borrowed !== undefined) release(borrowed);
-    if (csvOut) await db.dropFile(csvOut).catch(() => {});
+    if (fileOut) await db.dropFile(fileOut).catch(() => {});
     if (seqOut) await db.dropFile(seqOut).catch(() => {});
     endRun(epoch);
   }

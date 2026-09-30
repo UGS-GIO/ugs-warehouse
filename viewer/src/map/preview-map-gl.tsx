@@ -17,6 +17,8 @@ import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers }
 import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
+import { useSearch } from "@tanstack/react-router";
+import { bboxRing } from "@/lib/bbox";
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 
@@ -54,15 +56,24 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection, onBoundsChange }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
   onFeatureSelect?: (props: Record<string, unknown>, fid: number | null) => void;
   onClearSelection?: () => void;
+  onBoundsChange?: (b: [number, number, number, number]) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
+  // The downloads panel's clip, drawn so the user sees the area the export will keep.
+  const { clip } = useSearch({ from: "__root__" });
+  // Four decimals is about 10 m, plenty for a clip, and keeps the URL short.
+  const reportBounds = () => {
+    const b = mapRef.current?.getMap().getBounds();
+    const r = (n: number) => Math.round(n * 1e4) / 1e4;
+    if (b) onBoundsChange?.([r(b.getWest()), r(b.getSouth()), r(b.getEast()), r(b.getNorth())]);
+  };
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
   // <MapGL> subtree (and its WebGL context) is created once and never torn down. We then move that
   // container element between the active slot and a hidden parking holder with plain appendChild —
@@ -235,7 +246,8 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
         <MapGL
           ref={mapRef}
           mapLib={maplibregl}
-          onLoad={() => setMapLoaded(true)}
+          onLoad={() => { setMapLoaded(true); reportBounds(); }}
+          onMoveEnd={reportBounds}
           initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
           mapStyle={LIGHT_BASEMAP}
           interactiveLayerIds={isVector ? layerIds : undefined}
@@ -315,6 +327,14 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
           {spec?.kind === "cog" && cogReady && (
             <Source id="cog" type="raster" url={`cog://${spec.href}`} tileSize={256}>
               <Layer id="cog-raster" type="raster" />
+            </Source>
+          )}
+
+          {clip && (
+            <Source id="export-clip" type="geojson"
+              data={{ type: "Feature", properties: {}, geometry: { type: "Polygon", coordinates: bboxRing(clip) } }}>
+              <Layer id="export-clip-fill" type="fill" paint={{ "fill-color": "#d1491c", "fill-opacity": 0.08 }} />
+              <Layer id="export-clip-line" type="line" paint={{ "line-color": "#d1491c", "line-width": 2, "line-dasharray": [2, 1] }} />
             </Source>
           )}
 

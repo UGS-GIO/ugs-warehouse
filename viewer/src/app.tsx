@@ -157,14 +157,17 @@ function useViewState() {
       search: (prev) => {
         const { view: _v, c: _c, i: _i, l: _l, s: _s, sheet,
           q, collections, category, types, formats, geometry, sort, layout, density, area,
-          ...rest } = prev;  // keep override params (rest); Discover keys re-added only when staying
+          crs, clip, ...rest } = prev;  // keep override params (rest); Discover keys re-added only when staying
         // Preview is only ever reached from Discover, so carry the filter state through it → Back
         // restores the filtered result set the user came from.
         const discover = next.view === "discover" || next.view === "preview"
           ? { q, collections, category, types, formats, geometry, sort, layout, density, area } : {};
+        // Export settings belong to the item they were set on.
+        const exportSettings = next.i && next.i === prev.i ? { crs, clip } : {};
         return {
           ...rest,
           ...discover,
+          ...exportSettings,
           sheet: next.view === "map" ? next.sheet ?? sheet : undefined,   // the map's own; it doesn't follow you out
           c: next.c || undefined,
           i: next.i || undefined,

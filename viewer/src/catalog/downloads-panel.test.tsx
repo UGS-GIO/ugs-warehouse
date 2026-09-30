@@ -31,6 +31,16 @@ const { exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun,
       runs,
     };
   });
+// The panel keeps CRS and clip in the URL. A plain object stands in for the location search.
+const url = vi.hoisted(() => ({ search: {} as Record<string, unknown> }));
+vi.mock("@tanstack/react-router", () => ({
+  useSearch: () => url.search,
+  useNavigate: () => ({ search }: { search: (prev: Record<string, unknown>) => Record<string, unknown> }) => {
+    url.search = search(url.search);
+  },
+}));
+const preview = vi.hoisted(() => ({ bounds: null as [number, number, number, number] | null }));
+vi.mock("@/map/preview-map", () => ({ usePreviewBounds: () => preview.bounds }));
 vi.mock("@/data/download", () => ({
   exportItem, exportWarnings, beginExport, cancelExport, startRun, endRun,
   holdsOneGeomType: (fmt: string) => fmt === "shp" || fmt === "gdb",
@@ -74,6 +84,8 @@ const show = () => render(
 );
 
 beforeEach(() => {
+  url.search = {};
+  preview.bounds = null;
   exportItem.mockClear();
   cancelExport.mockClear();
   startRun.mockClear();
@@ -304,5 +316,109 @@ describe("DownloadsPanel", () => {
     show();
     await userEvent.click(screen.getByLabelText("Download GeoJSON"));
     expect(await screen.findByRole("alert")).toHaveProperty("textContent", "Download failed: gdal exploded");
+  });
+
+  it("exports in the CRS and clip the URL carries", async () => {
+    url.search = { crs: 26912, clip: [-112, 40, -111, 41] };
+    show();
+    await userEvent.click(screen.getByLabelText("Download GeoPackage"));
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "gpkg", [-112, 40, -111, 41], 26912, 7);
+  });
+
+  it("writes the clip to the URL when the box is ticked", async () => {
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    await userEvent.click(screen.getByLabelText(/clip/i));
+    expect(url.search.clip).toEqual([-114, 37, -109, 42]);
+  });
+
+  it("reuses the pre-flight when the same export is asked for again", async () => {
+    exportWarnings.mockResolvedValue(TRUNCATED);
+    show();
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    await userEvent.click(await screen.findByText("Cancel"));
+    await userEvent.click(screen.getByLabelText("Download Shapefile (zip)"));
+    await screen.findByText("Download anyway");
+    expect(exportWarnings).toHaveBeenCalledTimes(1);
+  });
+
+  it("writes a typed clip value to the URL on blur", async () => {
+    url.search = { clip: [-114, 37, -109, 42] };
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    const west = screen.getByLabelText("W");
+    await userEvent.clear(west);
+    await userEvent.type(west, "-111.5");
+    expect(url.search.clip).toEqual([-114, 37, -109, 42]);
+    await userEvent.tab();
+    expect(url.search.clip).toEqual([-111.5, 37, -109, 42]);
+  });
+
+  it("shows a clip that changed in the URL without a remount", async () => {
+    url.search = { clip: [-114, 37, -109, 42] };
+    const { rerender } = show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    url.search = { clip: [-112, 40, -111, 41] };
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <DownloadsPanel item={item} />
+      </QueryClientProvider>,
+    );
+    expect(screen.getByLabelText<HTMLInputElement>("W").value).toBe("-112");
+  });
+
+  it("puts the committed value back when the typed one is not a code", async () => {
+    url.search = { crs: 26912 };
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    await userEvent.click(screen.getByRole("combobox"));
+    await userEvent.click(await screen.findByText("Other (any EPSG)…"));
+    const code = screen.getByLabelText<HTMLInputElement>("EPSG:");
+    await userEvent.clear(code);
+    await userEvent.type(code, "12{Enter}");
+    expect(url.search.crs).toBe(26912);
+    expect(code.value).toBe("26912");
+  });
+
+  it("clips to the preview map's extent on request", async () => {
+    preview.bounds = [-111.9, 40.6, -111.7, 40.8];
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    await userEvent.click(screen.getByText("Use map view"));
+    expect(url.search.clip).toEqual([-111.9, 40.6, -111.7, 40.8]);
+  });
+
+  it("offers no map view when there is no preview map", async () => {
+    show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    expect(screen.queryByText("Use map view")).toBeNull();
+  });
+
+  it("keeps focus in a field after Enter commits it", async () => {
+    url.search = { clip: [-114, 37, -109, 42] };
+    const { rerender } = show();
+    await userEvent.click(screen.getByText("Projection & area"));
+    const west = screen.getByLabelText<HTMLInputElement>("W");
+    await userEvent.clear(west);
+    await userEvent.type(west, "-111{Enter}");
+    expect(url.search.clip).toEqual([-111, 37, -109, 42]);
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <DownloadsPanel item={item} />
+      </QueryClientProvider>,
+    );
+    expect(document.activeElement).toBe(screen.getByLabelText("W"));
+  });
+
+  it("links the whole archive when there is no clip", () => {
+    show();
+    expect(screen.getByText("GeoParquet archive").closest("a")?.getAttribute("href")).toBe(HREF);
+  });
+
+  it("exports only the clipped rows from the archive tile under a clip", async () => {
+    url.search = { clip: [-112, 40, -111, 41] };
+    show();
+    await userEvent.click(screen.getByLabelText("Download GeoParquet archive"));
+    expect(exportItem).toHaveBeenCalledWith(HREF, "x", "parquet", [-112, 40, -111, 41], 4326, 7);
   });
 });

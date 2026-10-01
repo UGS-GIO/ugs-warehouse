@@ -226,9 +226,12 @@ export const isDrawableCog = (a: Asset, d?: StacDoc): boolean => {
 };
 
 // The COG to draw, or undefined when the item has raster data but no render path — drawing nothing
-// beats throwing on a projection this client cannot reproject.
-export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined =>
-  Object.values(d?.assets ?? {}).find((a) => isDrawableCog(a, d));
+// beats throwing on a projection this client cannot reproject. `visual` goes first: an items.json
+// entry carries no proj:code, so the native-CRS COG would also pass as drawable.
+export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined => {
+  const assets = Object.values(d?.assets ?? {});
+  return assets.find((a) => isCog(a) && a.roles?.includes("visual")) ?? assets.find((a) => isDrawableCog(a, d));
+};
 
 // A RASTER PMTiles asset (the per-scale geologic-map mosaics) — rendered as raster tiles via the
 // pmtiles:// protocol. Marked `ugs:render: raster`: a vector layer's PMTiles is an asset with the

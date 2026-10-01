@@ -2,6 +2,7 @@
 // draw one. Mounted once by PreviewMapProvider and NEVER torn down: its DOM is portaled into
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
 import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { sameFeature } from "@/lib/same-feature";
 import { createPortal } from "react-dom";
 import maplibregl from "@/map/maplibre-lib";
@@ -73,7 +74,9 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
   const [container] = useState(() => document.createElement("div"));
   const holderRef = useRef<HTMLDivElement>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
-  const [showDem, setShowDem] = useState(false);
+  // In the URL, so a reload or a shared link keeps it. Changing item drops it (app.tsx go()).
+  const showDem = useSearch({ from: "__root__", select: (s) => s.terrain === true });
+  const navigate = useNavigate();
   const [cogReady, setCogReady] = useState(false);
 
   const isVector = spec?.kind === "vector";
@@ -119,8 +122,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     const map = mapRef.current?.getMap();
     if (!spec || !map || !mapLoaded || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
-    setShowDem(false);  // terrain and tilt reset per item
-    map.setPitch(0);
+    map.setPitch(showDem ? 48 : 0);
     if (spec.kind === "cog") {
       let live = true;
       (async () => {
@@ -136,7 +138,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     }
     const b = boundsOf(spec.item);
     if (b) map.fitBounds(b, { padding: 16, duration: 0 });
-  }, [fitKey, mapLoaded, spec]);
+  }, [fitKey, mapLoaded, spec, showDem]);
 
   // Fly to a picked feature (table row click). Keyed on focus.key so re-picking the same row re-flies.
   const fb = focus?.bbox;
@@ -251,7 +253,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
             <button
               onClick={() => {
                 const next = !showDem;
-                setShowDem(next);
+                navigate({ to: ".", replace: true, search: (prev) => ({ ...prev, terrain: next || undefined }) });
                 mapRef.current?.getMap().easeTo({ pitch: next ? 48 : 0, duration: 500 });
               }}
               className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${

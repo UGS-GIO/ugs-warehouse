@@ -153,6 +153,9 @@ resource "google_cloudbuild_trigger" "pr_ci" {
   }
 
   filename = "cloudbuild-ci.yaml"
+  # A release-please PR changes only these. It is opened by a bot, so without this it waits on
+  # /gcbrun for a build that tests nothing.
+  ignored_files = ["CHANGELOG.md", ".release-please-manifest.json"]
 }
 
 resource "google_cloudbuild_trigger" "docs" {

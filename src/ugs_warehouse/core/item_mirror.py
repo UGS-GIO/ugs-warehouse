@@ -16,6 +16,7 @@ import tempfile
 
 from . import config, gcs
 from .bbox import to_2d_bbox
+from .geoparquet import geometry_types
 
 OBJECT_NAME = "items.parquet"
 ASSET_KEY = "items"
@@ -45,11 +46,9 @@ def _extent(items: list[dict]) -> tuple[float, float, float, float]:
 
 def _geo_metadata(con, ndjson_path: str) -> str:
     """The GeoParquet 1.1 `geo` key with `bbox` declared as the covering. DuckDB writes 1.0 without it."""
-    from ..vector.sink_archive import _GEOMETRY_TYPES
-
     rows = con.execute(f"SELECT DISTINCT ST_GeometryType({GEOM})::VARCHAR, ST_HasZ({GEOM}) "
                        f"FROM read_json_auto('{ndjson_path}')").fetchall()
-    types = sorted({_GEOMETRY_TYPES.get(t, t) + (" Z" if z else "") for t, z in rows if t})
+    types = geometry_types(rows)
     covering = {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}
     return json.dumps({"version": "1.1.0", "primary_column": "geometry", "columns": {"geometry": {
         "encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})

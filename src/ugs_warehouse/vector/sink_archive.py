@@ -16,7 +16,7 @@ import tempfile
 
 import duckdb
 
-from ..core import config, gcs
+from ..core import config, gcs, geoparquet
 from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
@@ -56,18 +56,12 @@ def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
     return max(ROW_GROUP_MIN, min(ROW_GROUP_MAX, int(TARGET_ROW_GROUP_BYTES / per_row)))
 
 
-# ST_GeometryType names → GeoParquet's.
-_GEOMETRY_TYPES = {"POINT": "Point", "LINESTRING": "LineString", "POLYGON": "Polygon",
-                   "MULTIPOINT": "MultiPoint", "MULTILINESTRING": "MultiLineString",
-                   "MULTIPOLYGON": "MultiPolygon", "GEOMETRYCOLLECTION": "GeometryCollection"}
-
-
 def _geo_metadata(con: duckdb.DuckDBPyConnection, view: str) -> str:
     """The GeoParquet 1.1 `geo` key: WKB in `geom`, the types present, and `bbox` as its covering.
     The CRS is left out, which GeoParquet reads as OGC:CRS84: the transform writes lon/lat WGS84."""
     rows = con.execute(f"SELECT DISTINCT ST_GeometryType(geom)::VARCHAR, ST_HasZ(geom) FROM {view} "
                        f"WHERE geom IS NOT NULL").fetchall()
-    types = sorted({_GEOMETRY_TYPES.get(t, t) + (" Z" if z else "") for t, z in rows if t})
+    types = geoparquet.geometry_types(rows)
     covering = {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}
     return json.dumps({"version": "1.1.0", "primary_column": "geom", "columns": {"geom": {
         "encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})

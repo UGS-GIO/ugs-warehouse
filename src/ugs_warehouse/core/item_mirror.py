@@ -35,21 +35,32 @@ def _connect():
     return con
 
 
-def _copy_sql(ndjson_path: str, out_path: str) -> str:
+def _extent(items: list[dict]) -> tuple[float, float, float, float]:
+    """The union of the item bboxes. It contains every centroid, so it bounds the Hilbert key."""
+    # A 3D bbox is [xmin, ymin, zmin, xmax, ymax, zmax], so the max corner starts halfway.
+    corners = [(b[0], b[1], b[len(b) // 2], b[len(b) // 2 + 1]) for b in (it["bbox"] for it in items)]
+    xmin, ymin, xmax, ymax = zip(*corners)
+    return min(xmin), min(ymin), max(max(xmax), min(xmin) + 1e-9), max(max(ymax), min(ymin) + 1e-9)
+
+
+def _copy_sql(ndjson_path: str, out_path: str, extent: tuple[float, float, float, float]) -> str:
     """Item JSON -> GeoParquet.
 
     `geometry` arrives as parsed JSON, so it goes back through `to_json` to reach
     `ST_GeomFromGeoJSON`. `bbox` becomes the struct GeoParquet 1.1 expects. Rows are hilbert-ordered
-    on the centroid, the same ordering the archive sink uses, so row-group statistics prune well.
+    on the centroid over `extent`, the same ordering the archive sink uses, so row-group statistics
+    prune well. Unbounded, ST_Hilbert orders by the raw float bits, which is not spatially local.
     """
     geom = "ST_GeomFromGeoJSON(CAST(to_json(geometry) AS VARCHAR))"
+    xmin, ymin, xmax, ymax = extent
+    box = f"{{'min_x': {xmin!r}, 'min_y': {ymin!r}, 'max_x': {xmax!r}, 'max_y': {ymax!r}}}::BOX_2D"
     return f"""
         COPY (
           SELECT id, collection, type, stac_version, properties, assets, links,
                  {geom} AS geometry,
                  {{'xmin': bbox[1], 'ymin': bbox[2], 'xmax': bbox[3], 'ymax': bbox[4]}} AS bbox
           FROM read_json_auto('{ndjson_path}')
-          ORDER BY ST_Hilbert(ST_Centroid({geom}))
+          ORDER BY ST_Hilbert(ST_Centroid({geom}), {box})
         ) TO '{out_path}'
         (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {ROW_GROUP_SIZE})
     """
@@ -78,7 +89,7 @@ def write(collection_path: str, items: list[dict]) -> gcs.FileMeta | None:
                     fh.write(json.dumps({k: v for k, v in it.items() if not k.startswith("_")}) + "\n")
             con = _connect()
             try:
-                con.execute(_copy_sql(ndjson, parquet))
+                con.execute(_copy_sql(ndjson, parquet, _extent(spatial)))
             finally:
                 con.close()
             return gcs.upload(parquet, object_path(collection_path),

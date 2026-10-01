@@ -73,34 +73,38 @@ its own storage, so that data does not show in the app, and Safari can delete it
 with no visit.
 
 1. Open <https://data.geology.utah.gov/> in Safari.
-2. Tap **Share**.
+2. Tap **Share**, then tap **Add to Home Screen**.
 
-    ![Safari Share button](img/offline/safari-share.png){ width="300" }
+    ![Safari share menu with Add to Home Screen](img/offline/safari-share.png){ width="300" }
 
-3. Tap **Add to Home Screen**, then tap **Add**.
+3. Make sure **Open as Web App** is on, then tap **Add**.
 
-    ![Add to Home Screen](img/offline/safari-add-to-home-screen.png){ width="300" }
+    ![Add to Home Screen with Open as Web App on](img/offline/safari-add-to-home-screen.png){ width="300" }
 
 4. Open **UGS Warehouse** from your Home Screen, then go to [Save data](#save-data).
-
-    ![App icon on the Home Screen](img/offline/home-screen-icon.png){ width="300" }
 
 #### Android (Chrome)
 
 1. Open <https://data.geology.utah.gov/> in Chrome.
-2. Tap the **⋮** menu, then tap **Add to Home screen** and **Install**.
+2. Tap the **⋮** menu, then tap **Install and create shortcut**.
 
-    ![Chrome Add to Home screen](img/offline/chrome-android-install.png){ width="300" }
+    ![Chrome menu with Install and create shortcut](img/offline/chrome-android-menu.png){ width="300" }
 
-3. Open **UGS Warehouse** from your Home screen, then go to [Save data](#save-data).
+3. Tap **Install**. Do not tap **Create shortcut**: a shortcut opens in Chrome, not as an app.
+
+    ![Install or Create shortcut](img/offline/chrome-android-install.png){ width="300" }
+
+4. If your phone asks to add the icon to the Home screen, tap **Add**.
+
+    ![Add to Home screen confirmation](img/offline/chrome-android-add.png){ width="300" }
+
+5. Open **UGS Warehouse** from your Home screen, then go to [Save data](#save-data).
 
 #### Computer (Chrome or Edge)
 
 1. Open <https://data.geology.utah.gov/> in Chrome or Edge.
 2. Click the install icon at the right of the address bar, then click **Install**. If you do not
    see the icon, open the **⋮** menu and click **Cast, save, and share** > **Install page as app**.
-
-    ![Chrome install icon](img/offline/chrome-desktop-install.png){ width="500" }
 
 3. The app opens in its own window. Go to [Save data](#save-data).
 

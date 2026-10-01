@@ -44,6 +44,12 @@ describe("cog asset selection", () => {
     expect(cogAsset(twoCogs)?.href).toBe("https://x/a_3857.cog.tif");
   });
 
+  it("draws the visual derivative from an items.json entry, which has no proj:code", () => {
+    const entry = { assets: { cog: { href: "https://x/a.cog.tif", type: COG, roles: ["data"] },
+      visual: { href: "https://x/a_3857.cog.tif", type: COG, roles: ["visual"] } } };
+    expect(cogRenderAsset(entry)?.href).toBe("https://x/a_3857.cog.tif");
+  });
+
   it("draws a lone COG that is already web mercator, or says nothing to draw", () => {
     const merc = { assets: { cog: { href: "https://x/m.cog.tif", type: COG, roles: ["data"], "proj:code": "EPSG:3857" } } };
     expect(cogRenderAsset(merc)?.href).toBe("https://x/m.cog.tif");

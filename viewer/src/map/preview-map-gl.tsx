@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { sameFeature } from "@/lib/same-feature";
 import { createPortal } from "react-dom";
 import maplibregl from "@/map/maplibre-lib";
+import type { TerrainSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
 import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
@@ -118,7 +119,8 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     const map = mapRef.current?.getMap();
     if (!spec || !map || !mapLoaded || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
-    setShowDem(false);  // terrain resets per item
+    setShowDem(false);  // terrain and tilt reset per item
+    map.setPitch(0);
     if (spec.kind === "cog") {
       let live = true;
       (async () => {
@@ -242,7 +244,8 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
           onClick={onMapClick}
           style={{ width: "100%", height: "100%" }}
           maxPitch={85}
-          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
+          // null, not undefined: react-map-gl skips an undefined terrain, so it never turned off.
+          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : null as unknown as TerrainSpecification}
         >
           <MapControl position="top-right">
             <button

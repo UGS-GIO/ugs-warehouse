@@ -22,6 +22,7 @@ ASSET_KEY = "items"
 # Rows per row group. The spec caps it at 150,000 so a client can skip groups cheaply; our largest
 # collection is far under that, so this is a ceiling rather than a tuning knob.
 ROW_GROUP_SIZE = 150_000
+GEOM = "ST_GeomFromGeoJSON(CAST(to_json(geometry) AS VARCHAR))"
 
 
 def _connect():
@@ -42,7 +43,20 @@ def _extent(items: list[dict]) -> tuple[float, float, float, float]:
     return min(xmin), min(ymin), max(max(xmax), min(xmin) + 1e-9), max(max(ymax), min(ymin) + 1e-9)
 
 
-def _copy_sql(ndjson_path: str, out_path: str, extent: tuple[float, float, float, float]) -> str:
+def _geo_metadata(con, ndjson_path: str) -> str:
+    """The GeoParquet 1.1 `geo` key with `bbox` declared as the covering. DuckDB writes 1.0 without it."""
+    from ..vector.sink_archive import _GEOMETRY_TYPES
+
+    rows = con.execute(f"SELECT DISTINCT ST_GeometryType({GEOM})::VARCHAR, ST_HasZ({GEOM}) "
+                       f"FROM read_json_auto('{ndjson_path}')").fetchall()
+    types = sorted({_GEOMETRY_TYPES.get(t, t) + (" Z" if z else "") for t, z in rows if t})
+    covering = {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}
+    return json.dumps({"version": "1.1.0", "primary_column": "geometry", "columns": {"geometry": {
+        "encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})
+
+
+def _copy_sql(ndjson_path: str, out_path: str, extent: tuple[float, float, float, float],
+              geo: str) -> str:
     """Item JSON -> GeoParquet.
 
     `geometry` arrives as parsed JSON, so it goes back through `to_json` to reach
@@ -50,19 +64,19 @@ def _copy_sql(ndjson_path: str, out_path: str, extent: tuple[float, float, float
     on the centroid over `extent`, the same ordering the archive sink uses, so row-group statistics
     prune well. Unbounded, ST_Hilbert orders by the raw float bits, which is not spatially local.
     """
-    geom = "ST_GeomFromGeoJSON(CAST(to_json(geometry) AS VARCHAR))"
     xmin, ymin, xmax, ymax = extent
     box = f"{{'min_x': {xmin!r}, 'min_y': {ymin!r}, 'max_x': {xmax!r}, 'max_y': {ymax!r}}}::BOX_2D"
     return f"""
         COPY (
-          SELECT id, collection, type, stac_version, properties, assets, links,
-                 {geom} AS geometry,
+          SELECT id, collection, type, stac_version, stac_extensions, properties, assets, links,
+                 ST_AsWKB({GEOM}) AS geometry,
                  {{'xmin': bbox[1], 'ymin': bbox[2], 'xmax': bbox[len(bbox) // 2 + 1],
                    'ymax': bbox[len(bbox) // 2 + 2]}} AS bbox
           FROM read_json_auto('{ndjson_path}')
-          ORDER BY ST_Hilbert(ST_Centroid({geom}), {box})
+          ORDER BY ST_Hilbert(ST_Centroid({GEOM}), {box})
         ) TO '{out_path}'
-        (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {ROW_GROUP_SIZE})
+        (FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {ROW_GROUP_SIZE},
+         GEOPARQUET_VERSION 'NONE', KV_METADATA {{geo: '{geo}'}})
     """
 
 
@@ -86,10 +100,12 @@ def write(collection_path: str, items: list[dict]) -> gcs.FileMeta | None:
             parquet = os.path.join(tmp, OBJECT_NAME)
             with open(ndjson, "w", encoding="utf-8") as fh:
                 for it in spatial:
-                    fh.write(json.dumps({k: v for k, v in it.items() if not k.startswith("_")}) + "\n")
+                    # stac_extensions is optional on an item, but the COPY selects it.
+                    row = {"stac_extensions": [], **{k: v for k, v in it.items() if not k.startswith("_")}}
+                    fh.write(json.dumps(row) + "\n")
             con = _connect()
             try:
-                con.execute(_copy_sql(ndjson, parquet, _extent(spatial)))
+                con.execute(_copy_sql(ndjson, parquet, _extent(spatial), _geo_metadata(con, ndjson)))
             finally:
                 con.close()
             return gcs.upload(parquet, object_path(collection_path),

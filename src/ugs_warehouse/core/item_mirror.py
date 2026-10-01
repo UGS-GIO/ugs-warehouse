@@ -15,6 +15,7 @@ import os
 import tempfile
 
 from . import config, gcs
+from .bbox import to_2d_bbox
 
 OBJECT_NAME = "items.parquet"
 ASSET_KEY = "items"
@@ -37,9 +38,7 @@ def _connect():
 
 def _extent(items: list[dict]) -> tuple[float, float, float, float]:
     """The union of the item bboxes. It contains every centroid, so it bounds the Hilbert key."""
-    # A 3D bbox is [xmin, ymin, zmin, xmax, ymax, zmax], so the max corner starts halfway.
-    corners = [(b[0], b[1], b[len(b) // 2], b[len(b) // 2 + 1]) for b in (it["bbox"] for it in items)]
-    xmin, ymin, xmax, ymax = zip(*corners)
+    xmin, ymin, xmax, ymax = zip(*(to_2d_bbox(it["bbox"]) for it in items))
     return min(xmin), min(ymin), max(max(xmax), min(xmin) + 1e-9), max(max(ymax), min(ymin) + 1e-9)
 
 

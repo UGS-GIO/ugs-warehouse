@@ -150,10 +150,10 @@ export async function save(url: string, { signal, onProgress }: SaveOptions = {}
     throw e;
   }
 
-  // `move` is how OPFS renames. Where it is missing, copy through a second write rather than
-  // leaving the artifact parked under the .part name.
+  // `move` is how OPFS renames. Pass the directory too: Safari has no one-argument form. Where
+  // `move` is missing, copy through a second write rather than leaving the artifact as .part.
   if (canMove(handle)) {
-    await handle.move(name);
+    await handle.move(d, name);
   } else {
     const final = await (await d.getFileHandle(name, { create: true })).createWritable();
     // Write the File itself, not its arrayBuffer: `write` takes a Blob, and buffering a 300 MB
@@ -173,7 +173,7 @@ export async function save(url: string, { signal, onProgress }: SaveOptions = {}
 }
 
 /** OPFS `move`, which renames in place; not in TypeScript's DOM types, and not in every browser. */
-function canMove(h: FileSystemFileHandle): h is FileSystemFileHandle & { move(name: string): Promise<void> } {
+function canMove(h: FileSystemFileHandle): h is FileSystemFileHandle & { move(dir: FileSystemDirectoryHandle, name: string): Promise<void> } {
   return "move" in h && typeof h.move === "function";
 }
 

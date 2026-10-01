@@ -32,3 +32,14 @@ def test_nearby_items_share_row_groups(tmp_path):
         xs, ys = zip(*xy[k:k + 100])
         areas.append((max(xs) - min(xs)) * (max(ys) - min(ys)) / full)
     assert sum(areas) / len(areas) < 0.2
+
+
+def test_a_3d_bbox_keeps_its_max_corner(tmp_path):
+    item = {**_item(0, -111.9, 40.7), "bbox": [-111.9, 40.7, 1200.0, -111.8, 40.8, 1500.0]}
+    src, out = tmp_path / "items.ndjson", tmp_path / "items.parquet"
+    src.write_text(json.dumps(item) + "\n")
+
+    con = item_mirror._connect()
+    con.execute(item_mirror._copy_sql(str(src), str(out), item_mirror._extent([item])))
+    row = con.execute(f"SELECT bbox.xmax, bbox.ymax FROM read_parquet('{out}')").fetchone()
+    assert row == (-111.8, 40.8)

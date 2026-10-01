@@ -58,7 +58,8 @@ def _copy_sql(ndjson_path: str, out_path: str, extent: tuple[float, float, float
         COPY (
           SELECT id, collection, type, stac_version, properties, assets, links,
                  {geom} AS geometry,
-                 {{'xmin': bbox[1], 'ymin': bbox[2], 'xmax': bbox[3], 'ymax': bbox[4]}} AS bbox
+                 {{'xmin': bbox[1], 'ymin': bbox[2], 'xmax': bbox[len(bbox) // 2 + 1],
+                   'ymax': bbox[len(bbox) // 2 + 2]}} AS bbox
           FROM read_json_auto('{ndjson_path}')
           ORDER BY ST_Hilbert(ST_Centroid({geom}), {box})
         ) TO '{out_path}'

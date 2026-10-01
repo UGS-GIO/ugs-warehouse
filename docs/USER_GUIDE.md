@@ -68,6 +68,9 @@ app, then save data in the app.
 
 #### iPhone and iPad (Safari)
 
+**Note:** On iPhone and iPad, install the app from Safari. These steps do not apply to Chrome or
+other browsers on iOS.
+
 You need iOS or iPadOS 26 or later. Do not save data in a Safari tab: the Home Screen app keeps
 its own storage, so that data does not show in the app, and Safari can delete it after 7 days
 with no visit.

@@ -15,6 +15,7 @@ const PROSE = [
   "[&_ul]:my-2.5 [&_ul]:list-disc [&_ul]:pl-6 [&_ol]:my-2.5 [&_ol]:list-decimal [&_ol]:pl-6 [&_li]:my-1",
   "[&_a]:text-primary [&_a]:underline [&_a:hover]:opacity-80",
   "[&_strong]:font-semibold",
+  "[&_img]:my-2 [&_img]:w-[300px] [&_img]:max-w-full [&_img]:rounded-md [&_img]:border [&_img]:border-border",
   "[&_hr]:my-6 [&_hr]:border-border",
   "[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_blockquote]:my-3",
   // inline code + fenced blocks

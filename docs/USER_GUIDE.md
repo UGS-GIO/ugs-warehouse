@@ -61,6 +61,71 @@ Open **<https://data.geology.utah.gov/>**
 Good for: a quick look, a one-off download, sharing a link. For repeatable/large work use one of the
 tools below.
 
+### Use it offline
+
+You can save the basemap and layers on your device and use them with no signal. First install the
+app, then save data in the app.
+
+#### iPhone and iPad (Safari)
+
+You need iOS or iPadOS 26 or later. Do not save data in a Safari tab: the Home Screen app keeps
+its own storage, so that data does not show in the app, and Safari can delete it after 7 days
+with no visit.
+
+1. Open <https://data.geology.utah.gov/> in Safari.
+2. Tap **Share**.
+
+    ![Safari Share button](img/offline/safari-share.png){ width="300" }
+
+3. Tap **Add to Home Screen**, then tap **Add**.
+
+    ![Add to Home Screen](img/offline/safari-add-to-home-screen.png){ width="300" }
+
+4. Open **UGS Warehouse** from your Home Screen, then go to [Save data](#save-data).
+
+    ![App icon on the Home Screen](img/offline/home-screen-icon.png){ width="300" }
+
+#### Android (Chrome)
+
+1. Open <https://data.geology.utah.gov/> in Chrome.
+2. Tap the **⋮** menu, then tap **Add to Home screen** and **Install**.
+
+    ![Chrome Add to Home screen](img/offline/chrome-android-install.png){ width="300" }
+
+3. Open **UGS Warehouse** from your Home screen, then go to [Save data](#save-data).
+
+#### Computer (Chrome or Edge)
+
+1. Open <https://data.geology.utah.gov/> in Chrome or Edge.
+2. Click the install icon at the right of the address bar, then click **Install**. If you do not
+   see the icon, open the **⋮** menu and click **Cast, save, and share** > **Install page as app**.
+
+    ![Chrome install icon](img/offline/chrome-desktop-install.png){ width="500" }
+
+3. The app opens in its own window. Go to [Save data](#save-data).
+
+#### Save data
+
+1. Open the menu and tap **Offline data**.
+
+    ![Menu with Offline data](img/offline/menu.png){ width="300" }
+
+2. Under **Offline basemap**, tap **All of Utah** to save the full basemap.
+
+    ![Offline data page](img/offline/offline-page.png){ width="300" }
+
+3. To save a layer, go to **Map**, open **Layers**, and turn the layer on. Under **On the map**,
+   tap the download button beside the layer.
+
+    ![Download button beside a layer](img/offline/layer-download.png){ width="300" }
+
+To save only part of the state, zoom in on the map and tap **Save this area** under
+**Offline basemap**.
+
+Downloads run one at a time. If you close the app or lose signal, the download continues from
+where it stopped the next time you open the app. The **Offline data** page shows what is saved,
+how much space it uses, and lets you delete it.
+
 ---
 
 ## ArcGIS Pro

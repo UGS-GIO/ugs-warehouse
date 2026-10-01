@@ -117,8 +117,8 @@ async function inflate(data: ArrayBuffer, compression: Compression): Promise<Arr
  * the network first, falling back to the stored copy, so online bounds stay the full archive's.
  */
 export async function areaResponse(url: string, kind: "json" | "tile", signal?: AbortSignal,
-  network?: () => Promise<{ data: unknown }>, liveVersion?: (archive: string) => Promise<string | undefined>,
-): Promise<{ data: unknown } | null> {
+  network?: () => Promise<{ data: object | string }>, liveVersion?: (archive: string) => Promise<string | undefined>,
+): Promise<{ data: object | string } | null> {
   await (loaded ??= loadStoredAreas().catch(() => []));   // once, before the first answer
   const m = kind === "tile" ? /^pmtiles:\/\/(.+)\/(\d+)\/(\d+)\/(\d+)$/.exec(url) : null;
   const archive = kind === "tile" ? m?.[1] : url.slice("pmtiles://".length);

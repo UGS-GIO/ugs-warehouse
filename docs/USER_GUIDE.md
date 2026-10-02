@@ -61,12 +61,14 @@ Open **<https://data.geology.utah.gov/>**
 Good for: a quick look, a one-off download, sharing a link. For repeatable/large work use one of the
 tools below.
 
-### Use it offline
+---
+
+## Use the viewer offline
 
 You can save the basemap and layers on your device and use them with no signal. First install the
 app, then save data in the app.
 
-#### iPhone and iPad (Safari)
+### Install on iPhone and iPad (Safari)
 
 **Note:** On iPhone and iPad, install the app from Safari. These steps do not apply to Chrome or
 other browsers on iOS.
@@ -77,54 +79,41 @@ with no visit.
 
 1. Open <https://data.geology.utah.gov/> in Safari.
 2. Tap **Share**, then tap **Add to Home Screen**.
-
-    ![Safari share menu with Add to Home Screen](img/offline/safari-share.png){ width="300" }
-
 3. Make sure **Open as Web App** is on, then tap **Add**.
+4. Open **UGS Warehouse** from your Home Screen, then go to [Save data](#save-data-for-offline-use).
 
-    ![Add to Home Screen with Open as Web App on](img/offline/safari-add-to-home-screen.png){ width="300" }
+![Step 2: Safari share menu with Add to Home Screen](img/offline/safari-share.png){ width="220" }
+![Step 3: Add to Home Screen with Open as Web App on](img/offline/safari-add-to-home-screen.png){ width="220" }
 
-4. Open **UGS Warehouse** from your Home Screen, then go to [Save data](#save-data).
-
-#### Android (Chrome)
+### Install on Android (Chrome)
 
 1. Open <https://data.geology.utah.gov/> in Chrome.
 2. Tap the **⋮** menu, then tap **Install and create shortcut**.
-
-    ![Chrome menu with Install and create shortcut](img/offline/chrome-android-menu.png){ width="300" }
-
 3. Tap **Install**. Do not tap **Create shortcut**: a shortcut opens in Chrome, not as an app.
-
-    ![Install or Create shortcut](img/offline/chrome-android-install.png){ width="300" }
-
 4. If your phone asks to add the icon to the Home screen, tap **Add**.
+5. Open **UGS Warehouse** from your Home screen, then go to [Save data](#save-data-for-offline-use).
 
-    ![Add to Home screen confirmation](img/offline/chrome-android-add.png){ width="300" }
+![Step 2: Chrome menu with Install and create shortcut](img/offline/chrome-android-menu.png){ width="220" }
+![Step 3: Install or Create shortcut](img/offline/chrome-android-install.png){ width="220" }
+![Step 4: Add to Home screen confirmation](img/offline/chrome-android-add.png){ width="220" }
 
-5. Open **UGS Warehouse** from your Home screen, then go to [Save data](#save-data).
-
-#### Computer (Chrome or Edge)
+### Install on a computer (Chrome or Edge)
 
 1. Open <https://data.geology.utah.gov/> in Chrome or Edge.
 2. Click the install icon at the right of the address bar, then click **Install**. If you do not
    see the icon, open the **⋮** menu and click **Cast, save, and share** > **Install page as app**.
+3. The app opens in its own window. Go to [Save data](#save-data-for-offline-use).
 
-3. The app opens in its own window. Go to [Save data](#save-data).
-
-#### Save data
+### Save data for offline use
 
 1. Open the menu and tap **Offline data**.
-
-    ![Menu with Offline data](img/offline/menu.png){ width="300" }
-
 2. Under **Offline basemap**, tap **All of Utah** to save the full basemap.
-
-    ![Offline data page](img/offline/offline-page.png){ width="300" }
-
 3. To save a layer, go to **Map**, open **Layers**, and turn the layer on. Under **On the map**,
    tap the download button beside the layer.
 
-    ![Download button beside a layer](img/offline/layer-download.png){ width="300" }
+![Step 1: Menu with Offline data](img/offline/menu.png){ width="220" }
+![Step 2: Offline data page](img/offline/offline-page.png){ width="220" }
+![Step 3: Download button beside a layer](img/offline/layer-download.png){ width="220" }
 
 To save only part of the state, zoom in on the map and tap **Save this area** under
 **Offline basemap**.

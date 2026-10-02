@@ -138,9 +138,9 @@ how much space it uses, and lets you delete it.
   `https://maps-assets.geology.utah.gov/geolmap/cogs/M-299DM.cog.tif`
 - Pro range-reads the COG over HTTP — only the pixels in view download.
 
-**Discovery (STAC):** Pro 3.x can add a **STAC connection** to
-`https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json` to browse the catalog and add
-COG items directly.
+**Discovery:** Pro's **STAC connection** needs a searchable STAC API, and this catalog is static
+files, so it does not connect. Find a layer or map in the [web viewer](#web-viewer), then add its
+URL as shown above.
 
 > GeoParquet: Pro's direct Parquet support is limited/version-dependent — prefer the **OGC API**
 > connection for vector, or download via the [web viewer](#web-viewer) / [ogr2ogr](#gdal-and-ogr2ogr) to
@@ -193,7 +193,7 @@ rows = con.execute(f"""
     SELECT *, ST_AsText(geom) AS wkt
     FROM read_parquet('{URL}')
     WHERE bbox_xmin < -111.8 AND bbox_xmax > -112.0
-      AND bbox_ymin <  40.8 AND bbox_ymax <  41.0
+      AND bbox_ymin <  41.0 AND bbox_ymax >  40.8
 """).df()
 ```
 
@@ -237,10 +237,11 @@ df  <- dbGetQuery(con, sprintf(
   "SELECT *, ST_AsText(geom) AS wkt FROM read_parquet('%s') LIMIT 1000", url))
 ```
 
-**Discovery (STAC) with rstac:**
+**Discovery (list every layer id):**
 ```r
-library(rstac)
-stac("https://maps-assets.geology.utah.gov/warehouse/stac") |> collections() |> get_request()
+library(jsonlite)
+idx <- fromJSON("https://maps-assets.geology.utah.gov/warehouse/stac/ugs-serving-topics/items.json")
+idx$items$id
 ```
 
 ---
@@ -261,9 +262,9 @@ LIMIT 10;
 SELECT count(*)
 FROM read_parquet('https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet')
 WHERE bbox_xmin < -111.8 AND bbox_xmax > -112.0
-  AND bbox_ymin <  40.8 AND bbox_ymax <  41.0;
+  AND bbox_ymin <  41.0 AND bbox_ymax >  40.8;
 
--- export a clip to GeoJSON
+-- export to CSV with the geometry as WKT
 COPY (
   SELECT * EXCLUDE (geom), ST_AsText(geom) AS wkt
   FROM read_parquet('https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet')
@@ -315,9 +316,9 @@ GIS tools above.
   `https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json`
 - **List every layer (DuckDB over the catalog index):**
   ```sql
-  SELECT id FROM read_json_auto(
+  SELECT item.id FROM read_json_auto(
     'https://maps-assets.geology.utah.gov/warehouse/stac/ugs-serving-topics/items.json'
-  ) t, UNNEST(t.items) AS u(item)  -- ids are under .items[].id
+  ) t, UNNEST(t.items) AS u(item)
   ```
 - A layer id (e.g. `hazards_qfaults`, `enmin_oilgasfields_ogm`) plugs into every URL pattern above,
   and is also the **OGC API collection id** and the STAC item id.

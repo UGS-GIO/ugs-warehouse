@@ -82,8 +82,8 @@ with no visit.
 3. Make sure **Open as Web App** is on, then tap **Add**.
 4. Open **UGS Warehouse** from your Home Screen, then go to [Save data](#save-data-for-offline-use).
 
-![Step 2: Safari share menu with Add to Home Screen](img/offline/safari-share.png){ width="220" }
-![Step 3: Add to Home Screen with Open as Web App on](img/offline/safari-add-to-home-screen.png){ width="220" }
+![Step 2: Safari share menu with Add to Home Screen](img/offline/safari-share.png){ width="320" }
+![Step 3: Add to Home Screen with Open as Web App on](img/offline/safari-add-to-home-screen.png){ width="320" }
 
 ### Install on Android (Chrome)
 
@@ -93,9 +93,9 @@ with no visit.
 4. If your phone asks to add the icon to the Home screen, tap **Add**.
 5. Open **UGS Warehouse** from your Home screen, then go to [Save data](#save-data-for-offline-use).
 
-![Step 2: Chrome menu with Install and create shortcut](img/offline/chrome-android-menu.png){ width="220" }
-![Step 3: Install or Create shortcut](img/offline/chrome-android-install.png){ width="220" }
-![Step 4: Add to Home screen confirmation](img/offline/chrome-android-add.png){ width="220" }
+![Step 2: Chrome menu with Install and create shortcut](img/offline/chrome-android-menu.png){ width="320" }
+![Step 3: Install or Create shortcut](img/offline/chrome-android-install.png){ width="320" }
+![Step 4: Add to Home screen confirmation](img/offline/chrome-android-add.png){ width="320" }
 
 ### Install on a computer (Chrome or Edge)
 
@@ -111,9 +111,9 @@ with no visit.
 3. To save a layer, go to **Map**, open **Layers**, and turn the layer on. Under **On the map**,
    tap the download button beside the layer.
 
-![Step 1: Menu with Offline data](img/offline/menu.png){ width="220" }
-![Step 2: Offline data page](img/offline/offline-page.png){ width="220" }
-![Step 3: Download button beside a layer](img/offline/layer-download.png){ width="220" }
+![Step 1: Menu with Offline data](img/offline/menu.png){ width="320" }
+![Step 2: Offline data page](img/offline/offline-page.png){ width="320" }
+![Step 3: Download button beside a layer](img/offline/layer-download.png){ width="320" }
 
 To save only part of the state, zoom in on the map and tap **Save this area** under
 **Offline basemap**.

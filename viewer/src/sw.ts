@@ -67,8 +67,9 @@ self.addEventListener("message", (event) => {
   if (event.data === "warm-app") event.waitUntil(warmApp());
 });
 
-// SPA deep links. `/api/` is denied because the review deploy serves comments from this origin.
-registerRoute(new NavigationRoute(createHandlerBoundToURL("index.html"), { denylist: [/^\/api\//] }));
+// SPA deep links. `/api/` is denied because the review deploy serves comments from this origin, and
+// `/assets/` so an image opened in its own tab loads the file, not the app.
+registerRoute(new NavigationRoute(createHandlerBoundToURL("index.html"), { denylist: [/^\/api\//, /^\/assets\//] }));
 
 // StaleWhileRevalidate, not CacheFirst: items.json already ships max-age 60 + SWR 600, and a
 // catalog pinned forever is worse than no catalog. 200 only — an opaque response on this route is

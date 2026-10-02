@@ -760,16 +760,24 @@ def refresh_catalog() -> None:
             leaf[path] = {"id": cid, "title": title or prettify(cid), "count": len(item_ids),
                           "mappable": mappable}
 
-    # 2. Build the hierarchy. A top-level segment with nested children (and no direct items)
-    #    becomes a sub-catalog (e.g. ugs-publications → DS, OFR, … series collections);
-    #    everything else is a flat collection directly under root. Child links carry counts.
+    # 2. Build the hierarchy. A top-level segment with nested children becomes a sub-catalog
+    #    (e.g. ugs-publications → DS, OFR, … series collections); one with only direct items
+    #    is a flat collection directly under root. Child links carry counts.
     tops: dict[str, list[str]] = {}
     for path in groups:
         tops.setdefault(path.split("/")[0], []).append(path)
     root_children = []
     for top, paths in tops.items():
-        if top not in groups:  # sub-catalog (nested, no direct items)
-            kids = [leaf[p] for p in sorted(paths)]
+        nested_paths = [p for p in paths if "/" in p]
+        if nested_paths:  # sub-catalog
+            # Items sitting directly under a nested segment are leftovers from the flat layout.
+            # Linking the flat collection instead would hide every nested child, so the nested
+            # layout wins and the strays are named here for cleanup.
+            if top in groups:
+                print(f"[catalog] {top}: {len(groups[top])} item(s) sit directly under a nested "
+                      f"catalog and are left out of the hierarchy (flat-layout leftovers, delete "
+                      f"them): {', '.join(sorted(groups[top]))}", file=sys.stderr)
+            kids = [leaf[p] for p in sorted(nested_paths)]
             ptitle = prettify(top.replace("ugs-", ""))
             rolled = rollup.get(top)
             if rolled is not None:  # one index spanning every child collection

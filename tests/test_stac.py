@@ -379,6 +379,39 @@ def test_group_title_prefers_an_ingest_supplied_collection_title():
     assert stac._group_title("ugs-publications", items) == "24k Geologic Map Series"  # wins over pub type
 
 
+def test_refresh_catalog_prefers_nested_layout_over_flat_leftovers(monkeypatch, capsys):
+    """A flat-layout item left behind under ugs-serving-topics must not flip the root back to a
+    flat collection: that hid every per-schema topic in the review catalog (#469)."""
+    import json
+
+    from ugs_warehouse.vector import sink_stac as vec_sink
+
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    nested = stac.build_item(
+        item_id="hazards_new_topic", collection="hazards",
+        collection_path=vec_sink.collection_path("hazards"),
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
+        datetime_iso="2026-01-01T00:00:00Z", properties={"ugs:dbt_schema": "hazards"}, assets={})
+    stac.write_item(nested)
+    leftover = stac.build_item(
+        item_id="hazards_old_topic", collection=stac.SERVING_TOPICS_CATALOG,
+        collection_path=stac.SERVING_TOPICS_CATALOG,
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
+        datetime_iso="2026-01-01T00:00:00Z", properties={}, assets={})
+    stac.write_item(leftover)
+
+    stac.refresh_catalog()
+    p = config.STAC_PREFIX
+
+    root = json.loads(store[f"{p}/catalog.json"])
+    assert [lnk["href"] for lnk in root["links"] if lnk["rel"] == "child"] == [
+        "./ugs-serving-topics/catalog.json"]
+    sub = json.loads(store[f"{p}/ugs-serving-topics/catalog.json"])
+    assert [lnk["href"] for lnk in sub["links"] if lnk["rel"] == "child"] == ["./hazards/collection.json"]
+    assert "hazards_old_topic" in capsys.readouterr().err
+
+
 def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
     """Serving topics split into per-schema collections under a `ugs-serving-topics` sub-catalog,
     with a rollup items.json so one-URL consumers (featureserv, tiles, ops) keep working."""

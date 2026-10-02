@@ -407,8 +407,14 @@ def test_refresh_catalog_prefers_nested_layout_over_flat_leftovers(monkeypatch, 
     root = json.loads(store[f"{p}/catalog.json"])
     assert [lnk["href"] for lnk in root["links"] if lnk["rel"] == "child"] == [
         "./ugs-serving-topics/catalog.json"]
+    assert next(lnk for lnk in root["links"] if lnk["rel"] == "child")["ugs:item_count"] == 1
     sub = json.loads(store[f"{p}/ugs-serving-topics/catalog.json"])
     assert [lnk["href"] for lnk in sub["links"] if lnk["rel"] == "child"] == ["./hazards/collection.json"]
+    # The rollup consumers read (featureserv, tiles) holds only the nested topic, and no orphaned
+    # flat collection is written for the leftover.
+    rollup = json.loads(store[f"{p}/ugs-serving-topics/items.json"])
+    assert "hazards_new_topic" in json.dumps(rollup) and "hazards_old_topic" not in json.dumps(rollup)
+    assert f"{p}/ugs-serving-topics/collection.json" not in store
     assert "hazards_old_topic" in capsys.readouterr().err
 
 

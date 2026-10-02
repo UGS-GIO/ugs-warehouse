@@ -706,6 +706,9 @@ def refresh_catalog() -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     groups = _group_items(gcs.list_paths(config.STAC_PREFIX))
+    # A segment with nested collections is a sub-catalog, so items sitting directly under it
+    # (pre-split flat-layout leftovers) get no flat collection of their own; step 2 names them.
+    nested_tops = {path.split("/")[0] for path in groups if "/" in path}
 
     # 1. Write each leaf collection.json + items.json (flat or nested). collection id = the
     #    path's last segment (a series code when nested); title from the items' pub type.
@@ -714,6 +717,8 @@ def refresh_catalog() -> None:
     rollup: dict[str, list[dict]] = {}   # nesting catalog -> its children's items (see ROLLUP_INDEX_CATALOGS)
     with ThreadPoolExecutor(max_workers=64) as executor:
         for path, item_ids in groups.items():
+            if path in nested_tops:
+                continue
             def _fetch_one(iid: str) -> dict | None:
                 try:
                     return json.loads(gcs.get_bytes(item_object_path(path, iid)).decode())
@@ -769,14 +774,14 @@ def refresh_catalog() -> None:
     root_children = []
     for top, paths in tops.items():
         nested_paths = [p for p in paths if "/" in p]
-        if nested_paths:  # sub-catalog
-            # Items sitting directly under a nested segment are leftovers from the flat layout.
-            # Linking the flat collection instead would hide every nested child, so the nested
-            # layout wins and the strays are named here for cleanup.
+        if nested_paths:  # sub-catalog: any nested collection makes the segment one
+            # Linking a flat collection here would hide every nested child, so direct items
+            # under a nested segment stay out of the hierarchy and are named for cleanup.
             if top in groups:
                 print(f"[catalog] {top}: {len(groups[top])} item(s) sit directly under a nested "
-                      f"catalog and are left out of the hierarchy (flat-layout leftovers, delete "
-                      f"them): {', '.join(sorted(groups[top]))}", file=sys.stderr)
+                      f"catalog and are left out of it; remove them with "
+                      f"`python -m scripts.prune_flat_topic_items --apply`: "
+                      f"{', '.join(sorted(groups[top]))}", file=sys.stderr)
             kids = [leaf[p] for p in sorted(nested_paths)]
             ptitle = prettify(top.replace("ugs-", ""))
             rolled = rollup.get(top)

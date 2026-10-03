@@ -5,7 +5,7 @@
 #
 #   thumbs (loop until covers/contents/fulltext sidecars stop growing) -> threed (convert new 3D pubs)
 #     -> vectors (extract new pubs' GIS layers) -> prune (drop items the source no longer lists)
-#     -> pubs-ingest (bind + corpus) -> pubs-fts (all-pub BM25 index) -> pubs-embed (semantic VSS index)
+#     -> pubs-ingest (bind + corpus) -> pubs-fts (all-pub BM25 index)
 #
 # Its runtime SA needs roles/run.developer (execute the sub-jobs) + actAs on their runtime SA.
 set -uo pipefail
@@ -18,7 +18,6 @@ VECTORS_JOB="${VECTORS_JOB:-ugs-pubs-vectors}"
 PRUNE_JOB="${PRUNE_JOB:-ugs-pubs-prune}"
 INGEST_JOB="${INGEST_JOB:-ugs-pubs-ingest}"
 FTS_JOB="${FTS_JOB:-ugs-pubs-fts}"
-EMBED_JOB="${EMBED_JOB:-ugs-pubs-embed}"
 MAX_THUMB_ROUNDS="${MAX_THUMB_ROUNDS:-8}"
 
 run_job() {  # execute a Cloud Run Job and wait for it; a timed-out task is fine (we loop/check)
@@ -59,8 +58,5 @@ run_job "$INGEST_JOB"
 
 # Build the all-pub full-text-search DuckDB index from the fulltext sidecars the thumbs pass wrote.
 run_job "$FTS_JOB"
-
-# Build the semantic-search DuckDB VSS index (chunk + embed every pub).
-run_job "$EMBED_JOB"
 
 echo "[pipeline] ✓ publications refresh complete"

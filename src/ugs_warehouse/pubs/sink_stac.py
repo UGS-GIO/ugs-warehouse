@@ -274,13 +274,13 @@ def build_item(p: dict, attachments: list[dict], *,
                          "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
                          "roles": ["data", "cloud-optimized"], **(cog_fields or {})}
     if has_thumb:
-        assets["thumbnail"] = {"href": config.public_url(f"{identity.COG_PREFIX}/{sid.upper()}.thumb.png"),
-                               "type": "image/png", "title": "Thumbnail", "roles": ["thumbnail"]}
+        assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
+                               "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
     # PDF first-page cover — a preview for ANY pub (incl. non-spatial). The harvested COG thumb (above)
     # is preferred when present (added first → the viewer picks it); this covers everything else.
     if has_cover:
-        assets["preview"] = {"href": config.public_url(f"{identity.PUB_THUMB_PREFIX}/{sid.upper()}.png"),
-                             "type": "image/png", "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
+        assets["preview"] = {"href": config.public_url(identity.pub_cover_object(sid)),
+                             "type": config.WEBP_MIME, "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
     if has_units:
         assets["units"] = {
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),

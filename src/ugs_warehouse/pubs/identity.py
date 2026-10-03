@@ -85,6 +85,22 @@ MINING_DISTRICT_COLLECTION = "ugs-mining-district-files"  # MD series — archiv
 EXTERNAL_COLLECTION = "ugs-external"                     # foreign publishers UGS only hosts
 
 
+# Previews are WebP (#372). The harvest writes a map's catalog thumbnail and the sheet the 3D viewer
+# drapes next to its COG; the cover job writes a cover for every pub. The ingest finds them by these
+# suffixes, so producers and catalog share one spelling.
+COG_THUMB_SUFFIX = ".thumb.webp"
+COG_SHEET_SUFFIX = ".sheet.webp"
+COVER_SUFFIX = ".webp"
+# PNG previews still in GCS: webp_backfill converts them, and the ingest warns about any it finds
+# unconverted, because an item can only point at the WebP.
+PNG_THUMB_SUFFIX = ".thumb.png"
+PNG_COVER_SUFFIX = ".png"
+
+
+def pub_cover_object(series_id: str) -> str:
+    return f"{PUB_THUMB_PREFIX}/{series_id.upper()}{COVER_SUFFIX}"
+
+
 @dataclass(frozen=True)
 class Pub:
     series_id: str  # e.g. "M-299DM" — the STAC item id + artifact basename
@@ -96,6 +112,14 @@ class Pub:
     @property
     def cog_object(self) -> str:
         return f"{COG_PREFIX}/{self.series_id}.cog.tif"
+
+    @property
+    def thumb_object(self) -> str:
+        return f"{COG_PREFIX}/{self.series_id}{COG_THUMB_SUFFIX}"
+
+    @property
+    def sheet_object(self) -> str:
+        return f"{COG_PREFIX}/{self.series_id}{COG_SHEET_SUFFIX}"
 
     @classmethod
     def parse(cls, series_id: str) -> "Pub":

@@ -49,12 +49,12 @@ STAGES = [
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt. "
               "Then render each topic's styled PMTiles → preview thumbnail (content-hash skip; "
               "re-renders only changed styles)."},
-    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest",
-                                                 "graph", "fts", "embed"],
+    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "vectors",
+                                                 "pubs-ingest", "graph", "fts"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
               "STAC (3 collections). One-click Full refresh runs thumbnails → rebuild for you, or "
-              "step through harvest / thumbnail / rebuild individually. Search corpora (full-text + "
-              "semantic) rebuild from the same pub set."},
+              "step through harvest / thumbnail / rebuild individually. The full-text search index "
+              "rebuilds from the same pub set."},
     {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
      "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
               "One mosaic per portal layer. The intermediate and 500k tiers build here; the statewide "
@@ -78,7 +78,7 @@ JOBS: dict[str, Job] = {j.key: j for j in [
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
         "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
-        "Render each pub's PDF first page → cover PNG (every pub incl. Survey Notes; SKIP_EXISTING; "
+        "Render each pub's PDF first page → cover WebP (every pub incl. Survey Notes; SKIP_EXISTING; "
         "5 shards). Then Rebuild pubs STAC to bind the previews.", tasks=5),
     Job("ingest", "ugs-warehouse-ingest", "Vector reingest (--all)",
         "Vector reingest — gengis, feature_id, classification/table, proj:code, FK relationships. "
@@ -97,9 +97,6 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         modes=(("report", "Report"), ("dry-run", "Dry run"))),
     Job("fts", "ugs-pubs-fts", "Build full-text search",
         "Rebuild the all-pub full-text-search DuckDB (BM25 FTS) → CDN. Run after pub text changes."),
-    Job("embed", "ugs-pubs-embed", "Build semantic search",
-        "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
-        "classification changes.", danger=True),
     Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (intermediate + 500k)",
         "Rebuild the intermediate-scale and 1:500,000 raster PMTiles mosaics of the published geologic "
         "maps. Use the per-tier buttons to regenerate just one. The 24k tier is not built here: it "
@@ -109,6 +106,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
         "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "
         "Run a Vector reingest after to bind the new thumbnail assets. 3 shards.", tasks=3),
+    # Out of STAGES while the viewer has no semantic search; here so a manual run shows in Watch.
+    Job("embed", "ugs-pubs-embed", "Build semantic search",
+        "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
+        "classification changes.", danger=True),
     Job("graph", "ugs-pubs-graph", "Build knowledge graph",
         "Rebuild the publications knowledge graph (nodes/edges Parquet) — citation + co-author + "
         "semantic edges. Reads pub metadata + embeddings; safe to re-run."),

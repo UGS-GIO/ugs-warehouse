@@ -123,8 +123,9 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const polyUrl = asset.href;
   const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
   const cog = cogAsset(item);
-  // Drape the geologic map sheet — the COG's PNG overview (browsers can't texture a COG directly).
-  const sheetImg = cog ? cog.href.replace(/\.cog\.tif$/i, ".thumb.png") : undefined;
+  // Drape the geologic map sheet: the 700 px WebP overview the harvest writes next to every COG
+  // (pubs/harvest.py _write_previews), since browsers can't texture a COG directly.
+  const sheetImg = cog ? cog.href.replace(/\.cog\.tif$/i, ".sheet.webp") : undefined;
 
   useEffect(() => {
     let active = true;

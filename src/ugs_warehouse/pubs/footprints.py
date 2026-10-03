@@ -17,7 +17,7 @@ import tempfile
 import requests
 
 from ..core import config, gcs
-from . import identity, source, topic
+from . import geoparquet, identity, source, topic
 
 FOOTPRINTS_URL = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/services/"
                   "Geologic_Map_Footprints_View/FeatureServer/0/query")
@@ -64,7 +64,7 @@ def export(minz: int = 2, maxz: int = 11) -> None:
         parquet = os.path.join(tmp, "footprints.parquet")
         geojsonl = os.path.join(tmp, "footprints.geojsonl")
         pmtiles = os.path.join(tmp, "footprints.pmtiles")
-        gdf.to_parquet(parquet)
+        geoparquet.write(gdf, parquet)
         gdf.to_file(geojsonl, driver="GeoJSONSeq")
         subprocess.run(["tippecanoe", "-o", pmtiles, "-l", "footprints", "-n", "UGS map footprints",
                         "-Z", str(minz), "-z", str(maxz), "--drop-densest-as-needed", "--force",

@@ -31,7 +31,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ..core import config, gcs
-from . import identity
+from . import geoparquet, identity
 
 FOOTPRINTS = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/services/"
               "Geologic_Map_Footprints_View/FeatureServer/0/query")
@@ -860,14 +860,8 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                                  "size_mb": os.path.getsize(cog) // 1024 // 1024,
                                  "compress": prof.get("compress", COG_COMPRESS)})
         if shp:
-            import duckdb
             gpq = os.path.join(work, f"{series_id}.units.parquet")
-            con = duckdb.connect()
-            try:
-                con.execute("INSTALL spatial; LOAD spatial;")
-                con.execute(f"COPY (SELECT * FROM ST_Read('{shp}')) TO '{gpq}' (FORMAT PARQUET)")
-            finally:
-                con.close()
+            geoparquet.write(shp, gpq)
             units_obj = f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet"
             gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
             _report("produced", units_parquet=units_obj)

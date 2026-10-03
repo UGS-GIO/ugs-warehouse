@@ -190,6 +190,18 @@ type MetaDef = { key: string; label: string; fmt?: (v: unknown) => string };
 
 const num = (v: unknown): string => (typeof v === "number" ? v.toLocaleString() : String(v));
 const asList = (v: unknown): string => (Array.isArray(v) ? v.map(String).join(", ") : String(v));
+export const fmtDatetime = (v: unknown): string => (typeof v === "string" ? fmtDate(v.slice(0, 10)) : String(v));
+
+// A publication's datetime is when it was published; a layer's is usually when the warehouse loaded it,
+// and nothing on the item says which. This guesses from `ugs:series_id`, which only the publications
+// producer sets, and is the one place that guess lives. Drop it once every producer writes the load
+// time to STAC `updated` (#479), and label and sort by those fields instead.
+export const datetimeIsPublished = (props: Record<string, unknown>): boolean =>
+  typeof props["ugs:series_id"] === "string" && props["ugs:series_id"] !== "";
+const PUBLISHED: MetaDef = { key: "datetime", label: "Published", fmt: fmtDatetime };
+const INGESTED: MetaDef = { key: "datetime", label: "Ingested", fmt: fmtDatetime };
+export const datetimeLabel = (props: Record<string, unknown>): string =>
+  (datetimeIsPublished(props) ? PUBLISHED : INGESTED).label;
 
 const CURATED_DEFS: MetaDef[] = [
   { key: "ugs:author", label: "Author" },
@@ -201,7 +213,7 @@ const CURATED_DEFS: MetaDef[] = [
   { key: "ugs:issue", label: "Issue" },
   { key: "ugs:county", label: "County" },
   { key: "keywords", label: "Keywords", fmt: asList },
-  { key: "ugs:published", label: "Published" },
+  PUBLISHED,
   { key: "license", label: "License" },
 ];
 const DERIVED_DEFS: MetaDef[] = [
@@ -212,8 +224,11 @@ const DERIVED_DEFS: MetaDef[] = [
   { key: "ugs:primary_key", label: "Primary key", fmt: asList },
   { key: "proj:code", label: "Coordinate system" },
   { key: "ugs:summary_fields", label: "Summary fields", fmt: asList },
-  { key: "datetime", label: "Ingested", fmt: (v) => (typeof v === "string" ? fmtDate(v.slice(0, 10)) : String(v)) },
+  INGESTED,
 ];
+const withoutDatetime = (defs: MetaDef[]): MetaDef[] => defs.filter((d) => d.key !== "datetime");
+const OTHER_CURATED_DEFS = withoutDatetime(CURATED_DEFS);
+const PUB_DERIVED_DEFS = withoutDatetime(DERIVED_DEFS);
 
 const rowsFrom = (props: Record<string, unknown>, defs: MetaDef[]): MetaRow[] =>
   defs.flatMap((d) => {
@@ -222,10 +237,13 @@ const rowsFrom = (props: Record<string, unknown>, defs: MetaDef[]): MetaRow[] =>
     return [{ label: d.label, value: (d.fmt ?? String)(v) }];
   });
 
-export const curatedDerived = (props: Record<string, unknown>): { curated: MetaRow[]; derived: MetaRow[] } => ({
-  curated: rowsFrom(props, CURATED_DEFS),
-  derived: rowsFrom(props, DERIVED_DEFS),
-});
+export const curatedDerived = (props: Record<string, unknown>): { curated: MetaRow[]; derived: MetaRow[] } => {
+  const pub = datetimeIsPublished(props);
+  return {
+    curated: rowsFrom(props, pub ? CURATED_DEFS : OTHER_CURATED_DEFS),
+    derived: rowsFrom(props, pub ? PUB_DERIVED_DEFS : DERIVED_DEFS),
+  };
+};
 
 // Re-export the column-schema type so item-detail's schema table can import one thing from here.
 export type { TableColumn };

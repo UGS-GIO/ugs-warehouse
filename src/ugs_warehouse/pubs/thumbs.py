@@ -107,7 +107,7 @@ def thumb_one(p: dict, force: bool = False) -> str:
                     text = contents.full_text(pdfp)
                     # An empty sidecar records "no text layer", so later runs skip this PDF instead of
                     # downloading it again. The search builds skip empty bodies; --force retries it.
-                    gcs.put_bytes((text or "").encode(), fulltext_obj,
+                    gcs.put_bytes(text.encode(), fulltext_obj,
                                   content_type="text/plain; charset=utf-8", cache_control=gcs.CACHE_MUTABLE)
                     hlog(f"OK full text → {len(text)} chars" if text else "no text layer; recorded empty",
                          step="result", category="ok" if text else "expected")

@@ -10,8 +10,12 @@ PUB = {"series_id": "B-10", "pub_url": "bulletins/b-10.pdf"}
 def test_a_pdf_without_text_is_recorded_and_skipped_next_run(monkeypatch):
     gcs.put_bytes(b"cover", thumbs.cover_object("B-10"), content_type="image/webp")
     downloads: list[str] = []
-    monkeypatch.setattr(thumbs, "download",
-                        lambda url, dst, **_: downloads.append(url) or open(dst, "wb").close())
+
+    def fake_download(url, dst, **_):
+        downloads.append(url)
+        open(dst, "wb").close()
+
+    monkeypatch.setattr(thumbs, "download", fake_download)
     monkeypatch.setattr(contents, "full_text", lambda pdf: "")
 
     assert thumbs.thumb_one(PUB) == "ok"

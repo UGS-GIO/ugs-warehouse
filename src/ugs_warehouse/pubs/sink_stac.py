@@ -238,21 +238,23 @@ def build_item(p: dict, attachments: list[dict], *,
 
     # A publisher's plain TIFF is the upstream original, not our raster data: Portolan's `source`
     # role, which is exempt from the COG requirement. Our own raster is the `cog` asset below.
-    def roles_for(h: str) -> list[str]:
-        return ["source"] if media_type(h) == "image/tiff" else ["data"]
+    def roles_for(mtype: str) -> list[str]:
+        return ["source"] if mtype == "image/tiff" else ["data"]
 
     assets: dict = {}
     main_pdf = href(p.get("pub_url"))
     if main_pdf:
-        assets["publication"] = source_asset(main_pdf, type=media_type(main_pdf),
-                                             title="Publication", roles=roles_for(main_pdf))
+        mtype = media_type(main_pdf)
+        assets["publication"] = source_asset(main_pdf, type=mtype, title="Publication",
+                                             roles=roles_for(mtype))
     for a in attachments:
         h = href(a.get("pub_url"))
         if not h:
             continue
+        mtype = media_type(h)
         key = re.sub(r"[^a-z0-9]+", "_", (a.get("extra_data") or "file").strip().lower()).strip("_") or "file"
-        assets.setdefault(key, source_asset(h, type=media_type(h),
-                                            title=(a.get("extra_data") or "").strip(), roles=roles_for(h)))
+        assets.setdefault(key, source_asset(h, type=mtype,
+                                            title=(a.get("extra_data") or "").strip(), roles=roles_for(mtype)))
     if has_cog:
         # The COG's own CRS (3857) differs from the item-level proj:code (4326), so it rides on the
         # asset as a per-asset override; `cog_fields` (see cog_asset_fields) carries it.

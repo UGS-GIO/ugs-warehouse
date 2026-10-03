@@ -109,7 +109,7 @@ def _extract_and_upload(
 def extracted_series() -> set[str]:
     """Series ids that already have layers on GCS, from one listing of the vectors prefix."""
     pfx = VECTORS_PREFIX.rstrip("/") + "/"
-    return {p[len(pfx):].split("/", 1)[0] for p in gcs.list_paths(pfx)}
+    return {p.removeprefix(pfx).split("/", 1)[0] for p in gcs.list_paths(pfx)}
 
 
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
@@ -128,7 +128,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
 
     # `existing` is one listing for a batch run; a single pub lists its own prefix.
     done = (series_id in existing) if existing is not None \
-        else bool(list(gcs.list_paths(f"{VECTORS_PREFIX}/{series_id}/")))
+        else bool(gcs.list_paths(f"{VECTORS_PREFIX}/{series_id}/"))
     if not force and not dry_run and done:
         print(f"{series_id}: SKIP (vector parquets already exist on GCS)")
         return "skip"

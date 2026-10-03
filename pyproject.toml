@@ -57,6 +57,7 @@ pubs = [
   "requests>=2.31",
   "pymysql>=1.1",        # optional: live pub metadata from MySQL (else vendored CSV snapshot)
   "fastembed>=0.3",      # semantic-search embeddings (bge-small via ONNX, no torch) — pubs/embed.py
+  "geoparquet-io>=1.6",  # GeoParquet writes (pubs/geoparquet.py); pins duckdb >=1.5.5,<1.6
 ]
 # topics-thumbnail job — headless MapLibre render of styled PMTiles → PNG (vector/thumbs.py).
 # Installed in Dockerfile.topics-thumbs, which also runs `playwright install --with-deps chromium`.

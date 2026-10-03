@@ -25,7 +25,7 @@ import tempfile
 import zipfile
 
 from ..core import config, gcs
-from . import harvest, identity, source
+from . import geoparquet, harvest, identity, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME
@@ -69,7 +69,7 @@ def _extract_and_upload(
     which labels are spatial vs plain tables. Returns that manifest:
     {"spatial": [...], "tables": [...]}.
 
-    Spatial layers keep their geometry (GeoParquet via geopandas, as before). Non-spatial GeMS
+    Spatial layers keep their geometry (GeoParquet via gpio, plus a bbox column). Non-spatial GeMS
     companion tables are read WITHOUT geometry via pyogrio and written as plain Parquet. Raw
     schema is preserved verbatim either way — no rename, no type coercion. A layer with 0 rows
     is skipped (as before); a layer whose reader raises is logged and skipped, same as today.
@@ -85,7 +85,7 @@ def _extract_and_upload(
                 gdf = gpd.read_file(path, layer=layer, engine="pyogrio")
                 if len(gdf) == 0:
                     continue
-                gdf.to_parquet(dst)
+                geoparquet.write(gdf, dst)
             else:
                 df = pyogrio.read_dataframe(path, layer=layer, read_geometry=False)
                 if len(df) == 0:

@@ -17,7 +17,10 @@ dependencies = [
   "uvicorn[standard]>=0.32",
   "asyncpg>=0.29",       # review-comments CRUD (serve.py) → review.comments in mapping-db (review_writer)
   "firebase-admin>=6.5",  # verify Firebase/Entra ID tokens from the hazards-review app (non-IAP review path)
+  "google-auth>=2.40",   # iap.py verifies IAP JWTs
+  "cryptography>=42",   # ...which are ES256, and google-auth only verifies EC keys with it
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
+  "rustac>=0.9",         # writes the stac-geoparquet item mirror (core/item_mirror.py); no deps
   # NB: no pyarrow / shapely — the vector ingest streams Postgres→DuckDB→CDN entirely in DuckDB
   # (no Python materialization). They live in the [pubs] extra (geopandas/pyogrio need them).
 ]
@@ -33,8 +36,11 @@ dependencies = [
 # real builders write. It pulls the raster stack (rasterio, pyarrow, pyproj), which the base
 # install deliberately avoids — the cost is ~400MB in CI and nothing in the runtime images. The
 # test skips when it is absent, so a lean local env still runs the rest of the suite.
+# geopandas/shapely: without them, test_pubs_vectors.py importorskips the GeoParquet writer away.
+# geoparquet-io: test_archive_gpio.py runs `gpio check` on the archive writer's output. It pins
+# duckdb below 1.6, so CI tests a 1.5 duckdb until gpio moves.
 dev = ["pytest>=8", "ruff==0.16.0", "pre-commit>=3.7", "pystac[validation]>=1.11", "httpx>=0.27",
-       "rashid>=0.1.8"]
+       "rashid>=0.1.8", "geopandas>=1.0", "shapely>=2.0", "geoparquet-io>=1.6"]
 # pubs/COG producer — heavy raster deps; installed in Dockerfile.harvest (needs system
 # GDAL CLI + poppler too). duckdb is in the base deps.
 pubs = [

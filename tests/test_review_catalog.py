@@ -59,16 +59,15 @@ def test_collect_items_uses_items_index_and_dedupes(monkeypatch):
              "properties": {"title": "Quaternary Faults", "ugs:primary_key": "pk"}}]},
     }
 
-    class _Get:
-        def __init__(self, b): self._b = b
-        def bytes(self): return self._b
-
-    def fake_get(store, path):
+    # Patch the seam _read_json actually uses now — gcs.get_bytes (which handles the gzipped indexes
+    # via its google-cloud fallback + gunzip). Patching raw obs.get would exercise the wrong path and
+    # pass even if the reroute regressed; this fails if _read_json goes back to raw obstore. (#341)
+    def fake_get_bytes(path):
         if path in fs:
-            return _Get(json.dumps(fs[path]).encode())
+            return json.dumps(fs[path]).encode()
         raise FileNotFoundError(path)
 
-    monkeypatch.setattr(rc.obs, "get", fake_get)
+    monkeypatch.setattr(rc.gcs, "get_bytes", fake_get_bytes)
     items = rc._collect_items()
     ids = [it["id"] for it, _ in items]
     assert ids == ["hazards_qfaults"]  # from items.json, and the rel=item link did NOT double-add

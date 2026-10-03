@@ -8,7 +8,15 @@ import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
 import { CheckIcon, CopyIcon, copyCatalogUrl } from "@/catalog/stac-url-chip";
+import { type DataSaverPref, setPref, useDataSaverPref } from "@/lib/data-saver";
+import { LEGAL_LINKS } from "./legal-footer";
 import { getTheme, setTheme, type Theme } from "./theme";
+
+const SAVER: { value: DataSaverPref; label: string }[] = [
+  { value: "auto", label: "Auto (slow connections)" },
+  { value: "on", label: "On" },
+  { value: "off", label: "Off" },
+];
 
 const THEMES: { value: Theme; label: string; icon: string }[] = [
   { value: "light", label: "Light", icon: "☀" },
@@ -18,7 +26,7 @@ const THEMES: { value: Theme; label: string; icon: string }[] = [
 
 export type NavPage = { id: string; label: string; onSelect: () => void };
 
-const ITEM = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm outline-none data-[highlighted]:bg-muted";
+const ITEM = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm pointer-coarse:min-h-11 outline-none data-[highlighted]:bg-muted";
 const HEADING = "px-2 py-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground";
 
 export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
@@ -26,6 +34,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
   overflow?: NavPage[];  // secondary views (Architecture/Guide/Developers/Review) — always in the menu
   current: string; catalogUrl?: string;
 }) {
+  const saver = useDataSaverPref();
   const [theme, setThemeState] = useState<Theme>(getTheme);
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const pick = (value: Theme) => {
@@ -59,7 +68,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
       </Menu.Trigger>
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
-          <Menu.Popup className="min-w-44 rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
+          <Menu.Popup className="max-h-[var(--available-height)] min-w-44 overflow-y-auto rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
             {/* Views only where the tab row is hidden; the theme picker is always here. */}
             {pages.length > 0 && (
               <div className="md:hidden">
@@ -107,6 +116,20 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                 <Menu.Separator className="my-1 h-px bg-border" />
               </div>
             )}
+            {/* Phones hide the footer (legal-footer.tsx); its links live here instead. */}
+            <div className="md:hidden">
+              <div className={HEADING}>About</div>
+              {[{ href: "https://geology.utah.gov", label: "Utah Geological Survey" }, ...LEGAL_LINKS].map((l) => (
+                <Menu.Item key={l.label} className={ITEM} nativeButton={false}
+                  render={<a href={l.href} target="_blank" rel="noreferrer" />}>
+                  {l.label}
+                </Menu.Item>
+              ))}
+              <p className="px-2 py-1 text-xs text-muted-foreground" title={`viewer build ${__BUILD_HASH__}`}>
+                build {__BUILD_DATE__} · {__BUILD_HASH__}
+              </p>
+              <Menu.Separator className="my-1 h-px bg-border" />
+            </div>
             <div className={HEADING}>Theme</div>
             <Menu.RadioGroup value={theme} onValueChange={(value) => pick(value as Theme)}>
               {THEMES.map((t) => (
@@ -115,6 +138,21 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                 <Menu.RadioItem key={t.value} value={t.value} className={ITEM} closeOnClick>
                   <span aria-hidden className="w-4 text-center">{t.icon}</span>
                   <span className="flex-1">{t.label}</span>
+                  <Menu.RadioItemIndicator className="text-primary">✓</Menu.RadioItemIndicator>
+                </Menu.RadioItem>
+              ))}
+            </Menu.RadioGroup>
+            <Menu.Separator className="my-1 h-px bg-border" />
+            {/* Holds back previews (the item map) on a slow or metered connection; see
+                lib/data-saver.ts. Auto follows the browser where it says; iPhones don't. */}
+            <div className={HEADING}>Data saver</div>
+            <Menu.RadioGroup value={saver} onValueChange={(value) => {
+              const o = SAVER.find((x) => x.value === value);
+              if (o) setPref(o.value);
+            }}>
+              {SAVER.map((o) => (
+                <Menu.RadioItem key={o.value} value={o.value} className={ITEM} closeOnClick>
+                  <span className="flex-1">{o.label}</span>
                   <Menu.RadioItemIndicator className="text-primary">✓</Menu.RadioItemIndicator>
                 </Menu.RadioItem>
               ))}

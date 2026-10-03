@@ -40,11 +40,12 @@ def compute(con: duckdb.DuckDBPyConnection, view: str) -> str:
 
 def published_hash(topic: Topic) -> str | None:
     """`ugs:content_hash` on the currently-published STAC item, or None when there is no published
-    item / no stored hash / it's unreadable — all of which mean 'treat as changed, rebuild'."""
+    item / no stored hash / it's unreadable — all of which mean 'treat as changed, rebuild'. Any
+    other error, such as GCS being unreachable, raises."""
     path = stac.item_object_path(sink_stac.collection_path(topic.schema), topic.stem)
     try:
         item = json.loads(gcs.get_bytes(path))
-    except Exception:  # noqa: BLE001 — no/unreadable item → rebuild
+    except (FileNotFoundError, ValueError):  # no item, or not JSON → rebuild
         return None
     return (item.get("properties") or {}).get(CONTENT_HASH_PROP)
 

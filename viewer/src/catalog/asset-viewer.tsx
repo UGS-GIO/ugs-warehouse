@@ -1,13 +1,20 @@
 // Per-asset preview: picks a viewer by asset kind (map, datacube, 3D, PDF, table, image, text).
 import { useQuery } from "@tanstack/react-query";
-import { lazy, Suspense, useMemo, useState } from "react";
+import { qk } from "@/query-keys";
+import { lazy, Suspense, useMemo, useRef, useState } from "react";
 
+import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
+import { FeatureCard } from "@/map/feature-card";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
 import { type Asset, type AssetKind, assetKind, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
   summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
-import { ThreeDViewer } from "@/data/three-d-viewer";
 import { C, toggle } from "@/ui/ui";
+import { useDataSaver } from "@/lib/data-saver";
+
+// deck.gl's mesh layers and the terrain builder: only items with a 3D asset need them, so they load
+// with the first one rather than with every catalog page.
+const ThreeDViewer = lazy(() => import("@/data/three-d-viewer").then((m) => ({ default: m.ThreeDViewer })));
 
 // deck.gl-zarr drags in luma.gl + the reprojection stack; only datacube items pay for it.
 const ZarrMap = lazy(() => import("@/zarr/zarr-map").then((m) => ({ default: m.ZarrMap })));
@@ -51,22 +58,34 @@ function RasterMosaicPreview({ item }: { item: StacDoc }) {
   return <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href } : null} />;
 }
 
+// Directly under the preview map, above the fields/table, so a click's result is in view without
+// scrolling past a long data table.
+function SelectedFeatureCard({ item }: { item: StacDoc }) {
+  const { selectedFeature, clearSelection, openRelated } = usePreviewMap();
+  const ref = useRef<HTMLDivElement>(null);
+  // `selectFeature` builds a new object per click, so clicking the same feature twice re-scrolls.
+  useScrollOnNew(selectedFeature, ref);
+  if (!selectedFeature) return null;
+  return <div ref={ref}><FeatureCard item={item} props={selectedFeature.props} onOpenRelated={openRelated} onClear={clearSelection} /></div>;
+}
+
 // Vector asset preview: the item's PMTiles on the shared persistent map + full dataset explorer,
-// linked — click a table row → map flies to that feature; click a map feature → table pages to it.
-// The map instance lives in PreviewMapProvider (mounted once); this publishes the vector spec and
-// wires the table↔map state (focus/pick) through the provider.
+// linked — click a table row → map flies to that feature; click a map feature → table pages to it,
+// and its detail docks in the card directly below the map. The map instance lives in
+// PreviewMapProvider (mounted once); this publishes the vector spec and wires the table↔map state.
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
   const pm = pmtilesLink(item);
-  const { setFocus, pick } = usePreviewMap();
+  const { setFocus, pick, mapMismatch } = usePreviewMap();
   const spec: PreviewSpec = pm
     ? { kind: "vector", item, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "") }
     : null;
   return (
     <>
       <PreviewMapSlot spec={spec} />
+      <SelectedFeatureCard item={item} />
       <FieldsPanel item={item} />
-      {pq && <DataExplorer key={pq.href} href={pq.href} onPick={setFocus} mapPick={pick} reviewItemId={String(item.id ?? "")}
+      {pq && <DataExplorer key={pq.href} href={pq.href} title={String(item.properties?.title ?? item.id ?? "")} startCollapsed onPick={setFocus} mapPick={pick} mapMismatch={mapMismatch} reviewItemId={String(item.id ?? "")}
         rowKey={primaryKeyOf(item)} summaryFields={summaryFieldsOf(item)} />}
     </>
   );
@@ -81,9 +100,8 @@ const KIND_LABEL: Record<AssetKind, string> = {
 function TextPreview({ href }: { href: string }) {
   // Slice to 20k in the queryFn so only the preview is retained, not the whole (possibly large) file.
   const { data: txt, error } = useQuery({
-    queryKey: ["text-preview", href],
+    queryKey: qk.textPreview(href),
     queryFn: async ({ signal }) => (await (await fetch(href, { signal })).text()).slice(0, 20000),
-    staleTime: 5 * 60_000,
   });
   if (error) return <div className="mt-2 text-xs text-destructive">preview failed: {error instanceof Error ? error.message : String(error)}</div>;
   if (txt === undefined) return <div className="mt-2 text-xs text-muted-foreground">loading…</div>;
@@ -114,7 +132,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
           <ZarrMap asset={asset} item={item} />
         </Suspense>
       );
-    case "threeD": return <ThreeDViewer asset={asset} item={item} />;
+    case "threeD": return <Suspense fallback={<p className="text-sm text-muted-foreground">Loading the 3D viewer…</p>}><ThreeDViewer asset={asset} item={item} /></Suspense>;
     case "parquet": return <DataExplorer key={asset.href} href={asset.href} />;
     case "image":
       return (
@@ -136,6 +154,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
 // 50–70MB, cross-origin) PDF only embeds when asked. Avoids a heavy auto-download + a blank box
 // while a big file streams in. The cover + open-in-tab link always work regardless.
 function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   const [show, setShow] = useState(false);
   const poster = thumbnailAsset(item)?.href;
   if (show) {
@@ -152,7 +171,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
     <div className="mt-2">
       <button onClick={() => setShow(true)} title="Load the full PDF preview"
         className="group relative block w-full overflow-hidden rounded-md border border-border bg-muted">
-        {poster
+        {poster && !saver
           ? <img src={poster} alt={asset.title ?? "PDF cover"} className="max-h-160 w-full object-contain" />
           : <div className="flex h-64 items-center justify-center text-xs text-muted-foreground">PDF</div>}
         <span className="absolute inset-0 flex items-center justify-center bg-black/0 transition group-hover:bg-black/20">

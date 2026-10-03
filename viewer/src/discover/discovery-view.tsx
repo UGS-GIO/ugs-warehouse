@@ -6,22 +6,25 @@
 // All pure logic lives in ./discovery-model; this file is the React shell + the map/detail wiring.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate, useSearch } from "@tanstack/react-router";
+import { qk } from "@/query-keys";
 
 import type { ItemRef } from "@/catalog/browse";
 import {
-  activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf,
-  extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, sortItems,
+  activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
+  extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
 import type { Footprint } from "@/map/map-model";
+import { AddToMapButton } from "@/map/add-to-map-button";
+import { OpenMapPill } from "./open-map-pill";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
 import { useQuery } from "@tanstack/react-query";
 
 import { ArticleHit, useCorpus } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
-import { buildIndex, type Hit, toSearchDoc } from "./search-index";
+import { buildIndex, type Hit, searchCatalog, toSearchDoc } from "./search-index";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -37,6 +40,7 @@ const ItemMap = lazy(() => import("@/map/map").then((m) => ({ default: m.ItemMap
 const LAYOUTS = [{ value: "gallery" as const, label: "Gallery" }, { value: "list" as const, label: "List" }];
 const DENSITIES = [{ value: "comfortable" as const, label: "Comfy" }, { value: "compact" as const, label: "Compact" }];
 const SORT_ITEMS = SORTS.map((s) => ({ value: s.key, label: s.label }));
+const SORT_ITEMS_WITHOUT_MATCH = SORT_ITEMS.filter((s) => s.value !== "relevance");
 const PAGE = 48; // cards per "Show more" step (reference parity)
 // Detail drawer width: drag-resizable and remembered, since how much room the preview deserves
 // depends on the item (a long abstract vs. a thumbnail). CSS caps it on narrow viewports.
@@ -48,7 +52,7 @@ const idOf = (href: string) => href.split("/").slice(-2)[0];
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
@@ -56,6 +60,7 @@ export function DiscoveryView({
   onOpenPub: (collId: string, itemId: string) => void;  // an article cites a pub by series id
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
   selectedItem?: StacDoc;              // its full doc (App resolves it from ?c=/?i=); undefined while loading
+  selectedItemError?: unknown;         // that doc's request error (e.g. offline and never cached)
   selectedCollectionId?: string;
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
@@ -68,7 +73,8 @@ export function DiscoveryView({
   // (not the arrays, which are fresh each parse) so they don't re-run on unrelated renders.
   const sp = useSearch({ from: "__root__" });
   const st = parseDiscovery(sp);
-  const { q, geometry, sort, layout, density, area } = st;
+  const { q, geometry, layout, density, area } = st;
+  const sort = effectiveSort(st);
   const { collections: colls, categories: cats, types, formats } = st;
   const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
   const areaK = area ? area.join(",") : "";
@@ -125,7 +131,7 @@ export function DiscoveryView({
   // Which result kind the chips are showing. "all" stacks them; the rest isolate one.
   const [scope, setScope] = useState<"all" | "items" | "articles" | "pubtext">("all");
   const pubFts = useQuery({
-    queryKey: ["pub-fts", q.trim()],
+    queryKey: qk.pubFts(q.trim()),
     enabled: pubText && q.trim().length >= 2,
     staleTime: Infinity, retry: false,
     queryFn: () => searchPubs(q.trim()),
@@ -156,7 +162,7 @@ export function DiscoveryView({
     // Bare/phrase words narrow via MiniSearch; a field- or exclude-only query has no keyword to
     // hand it, so scan the flat doc list instead.
     const base = baseTerms(query);
-    const hits = base ? (index.search(base) as unknown as Hit[]) : itemDocs;
+    const hits = base ? (searchCatalog(index, base) as unknown as Hit[]) : itemDocs;
     const order = new Map(hits.filter((h) => matchesQuery(query, h as SearchDoc)).map((h, i) => [h.id, i]));
     return withData
       .filter((it) => order.has(docIdOf(it)))
@@ -235,6 +241,9 @@ export function DiscoveryView({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      {/* Added layers accumulate into ?l= but Discovery's map only draws footprints — this is the
+          only feedback that a card's "+ Add to map" did anything, plus the way to the Map view. */}
+      <OpenMapPill />
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
         <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
@@ -254,7 +263,7 @@ export function DiscoveryView({
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <label className="flex items-center gap-1 text-xs text-muted-foreground">
             Sort
-            <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={SORT_ITEMS} className="text-xs" />
+            <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={ranksByWords(query) ? SORT_ITEMS : SORT_ITEMS_WITHOUT_MATCH} className="text-xs" />
           </label>
           <UiSegmented value={density} onValueChange={(v) => patch({ density: v }, true)} items={DENSITIES} className="text-xs" />
           <UiSegmented value={layout} onValueChange={(v) => patch({ layout: v }, true)} items={LAYOUTS} className="text-xs" />
@@ -361,13 +370,15 @@ export function DiscoveryView({
             {layout === "gallery" ? (
             <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr))]">
               {shown.map((it) => (
-                <ResultCard key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)} />
+                <ResultCard key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)}
+                  addSlot={<AddToMapButton layerId={idOf(it.href)} compact />} />
               ))}
             </div>
           ) : (
             <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
               {shown.map((it) => (
-                <ResultRow key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)} />
+                <ResultRow key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)}
+                  addSlot={<AddToMapButton layerId={idOf(it.href)} compact />} />
               ))}
             </ul>
             )}
@@ -477,7 +488,7 @@ export function DiscoveryView({
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} layout="drawer"
+              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} error={selectedItemError} layout="drawer"
                 onBack={onCloseItem} onMap={onViewOnMap} onExplore={onExplore} />
             </div>
           </aside>

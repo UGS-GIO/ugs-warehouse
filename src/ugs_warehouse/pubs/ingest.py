@@ -17,7 +17,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs, stac
-from . import identity, sink_stac, source, threed, topic
+from . import editions, identity, sink_stac, source, threed, topic, vectors
 
 
 def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
@@ -108,6 +108,27 @@ def _unit_ids() -> set[str]:
     return out
 
 
+def _vector_manifests_by_sid() -> dict[str, dict]:
+    """{SID: {"spatial": [labels], "tables": [labels]}} from the per-series manifests
+    pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`) — the AUTHORITATIVE
+    record of which extracted layers are spatial vs non-spatial GeMS companion tables, so
+    build_item doesn't have to guess a layer's kind from its name."""
+    pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
+    out: dict[str, dict] = {}
+    for path in gcs.list_paths(vectors.VECTORS_PREFIX):
+        if not path.endswith("/_manifest.json"):
+            continue
+        rest = path[len(pfx):] if path.startswith(pfx) else path
+        sid = rest.split("/", 1)[0].upper()
+        try:
+            doc = json.loads(gcs.get_bytes(path).decode())
+            out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or []}
+        except Exception as e:  # noqa: BLE001 — a bad manifest just costs that pub its vector assets
+            print(f"[pubs] corrupt vector manifest, skipping: {path} ({e})", file=sys.stderr)
+            continue
+    return out
+
+
 def _cog_footprints(cog_ids: set[str]) -> dict[str, tuple]:
     """series_id -> (geometry, bbox, "cog"): each harvested COG's own extent, reprojected to EPSG:4326.
 
@@ -146,6 +167,21 @@ def _cog_footprints(cog_ids: set[str]) -> dict[str, tuple]:
 def build_catalog(limit: int | None = None, series: str | None = None, skip_refresh: bool = False) -> int:
     print(f"[pubs] metadata source: {source.source_name()}")
     pubs = source.read_pubs()
+    # Computed over the FULL corpus, before --series/--limit narrow `pubs` below: a same-quad
+    # edition link can cross series-type prefixes (an OFR predecessor to a later M map) or fall
+    # outside a smoke-test slice, and a filtered run must never blind edition detection to a real
+    # predecessor/successor just because this run isn't writing it.
+    try:
+        fp_rows = editions.footprint_rows()
+        layers = editions.layers_by_series(fp_rows)
+        tier_by_sid = editions.mosaic_tier_by_series(layers)
+        edition_graph = editions.edition_graph(pubs, quad_by_sid=editions.quad_by_series(fp_rows),
+                                               tier_by_sid=tier_by_sid)
+    except RuntimeError as e:
+        print(f"[ingest] WARNING: edition detection skipped — {e}. Items will carry no "
+              "version/deprecated/predecessor/successor/latest or mosaic links until the "
+              "footprints parquet is built.", file=sys.stderr)
+        edition_graph, tier_by_sid = {}, {}
     if series:
         series_upper = series.strip().upper()
         pubs = [p for p in pubs if sink_stac.series_code(p.get("series_id")) == series_upper]
@@ -166,9 +202,10 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     units = _unit_ids()
     foot = _cog_footprints(cogs)  # footprints derived from OUR COGs' bounds (no external service)
     mirrored = _mirrored_files()  # source files served from our CDN instead of the publisher's host
+    vector_manifests = _vector_manifests_by_sid()  # spatial/table split extracted by pubs/vectors.py
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
           f"{len(units)} unit sets, {len(foot)} footprints, {len(threed_ids)} 3D, "
-          f"{len(mirrored)} mirrored source files")
+          f"{len(mirrored)} mirrored source files, {len(vector_manifests)} vector manifests")
 
     def process_pub(p: dict) -> bool:
         sid = (p.get("series_id") or "").strip()
@@ -176,11 +213,16 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             return False
         up = sid.upper()
         geom, bbox, fp_source = foot.get(up, (None, None, None))
+        manifest = vector_manifests.get(up, {"spatial": [], "tables": []})
         item = sink_stac.build_item(
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
             has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
+            vector_layers=manifest["spatial"],
+            companion_tables=[{"label": t, "columns": None} for t in manifest["tables"]],
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
+            edition=edition_graph.get(sid),
+            mosaic_tier=tier_by_sid.get(up),
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
         stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)

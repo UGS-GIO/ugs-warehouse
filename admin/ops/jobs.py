@@ -32,7 +32,8 @@ class Job:
     tasks: int | None = None  # override task_count (parallel shards) at run time; None = job default
     tiers: tuple[tuple[str, str], ...] | None = None  # per-variant regen (value, label); e.g. mosaic scale tiers
     force_toggle: bool = False  # render a "force rebuild" checkbox (ingest: override the default skip-unchanged)
-    modes: tuple[tuple[str, str], ...] | None = None  # read-only variants (value, label); rendered as secondary buttons
+    modes: tuple[tuple[str, str], ...] | None = None  # variants (value, label); rendered as secondary buttons
+    modes_label: str = "Look first:"  # the text before the mode buttons
 
 
 # Pipeline stages mirror the Architecture page (docs/ARCHITECTURE.md + viewer Architecture.tsx) so
@@ -56,7 +57,9 @@ STAGES = [
               "semantic) rebuild from the same pub set."},
     {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
      "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
-              "Rebuild all tiers at once, or regenerate a single scale tier on its own."},
+              "One mosaic per portal layer. The intermediate and 500k tiers build here; the statewide "
+              "24k tier runs on Cloud Batch (scripts/submit_mosaics_batch.sh --statewide). Add the 250k "
+              "(1 x 2 degree) tier to this console and the job's args once one of those sheets has a COG."},
 ]
 
 
@@ -79,7 +82,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Skips topics whose content + tiling is unchanged; tick Force to rebuild every topic.",
         danger=True, force_toggle=True),
     Job("restyle", "ugs-warehouse-restyle", "Rebind styles",
-        "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest)."),
+        "Re-fetch the ugs-styles manifest + rebind renders onto the STAC items (no reingest). "
+        "Refresh catalog only rebuilds catalog.json and every collection.json from the items: run "
+        "it after a change to how the catalog is written.",
+        modes=(("refresh", "Refresh catalog"),), modes_label="Only:"),
     Job("ducklake-maintain", "ugs-warehouse-ducklake-maintain", "DuckLake maintenance",
         "Expire snapshots older than 7 days, compact small parquet, and GC orphaned files from GCS. "
         "Keeps the append-only DuckLake catalog fast + bounded — small files are billed per scan as "
@@ -91,10 +97,11 @@ JOBS: dict[str, Job] = {j.key: j for j in [
     Job("embed", "ugs-pubs-embed", "Build semantic search",
         "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
         "classification changes.", danger=True),
-    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (all tiers)",
-        "Rebuild the per-scale raster PMTiles mosaics of the published geologic maps. Heavy "
-        "(GDAL warp + tile). Use the per-tier buttons to regenerate just one scale.",
-        danger=True, tiers=(("24k", "1:24,000"), ("250k", "1:250,000"), ("500k", "1:500,000"))),
+    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (intermediate + 500k)",
+        "Rebuild the intermediate-scale and 1:500,000 raster PMTiles mosaics of the published geologic "
+        "maps. Use the per-tier buttons to regenerate just one. The 24k tier is not built here: it "
+        "runs on Cloud Batch, and a Cloud Run build would overwrite its z17 mosaic with a z14 one.",
+        danger=True, tiers=(("100k", "Intermediate"), ("500k", "1:500,000"))),
     Job("topics-thumbs", "ugs-topics-thumbs", "Topic thumbnails",
         "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
         "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "
@@ -102,6 +109,12 @@ JOBS: dict[str, Job] = {j.key: j for j in [
     Job("graph", "ugs-pubs-graph", "Build knowledge graph",
         "Rebuild the publications knowledge graph (nodes/edges Parquet) — citation + co-author + "
         "semantic edges. Reads pub metadata + embeddings; safe to re-run."),
+    # Deliberately absent from STAGES: retirement is per-topic and irreversible, so it gets the
+    # two-step page (ops:retire), not a Run button. Being in JOBS is what puts its executions in the
+    # Watch feed and gives it its own log stream — the audit trail.
+    Job("retire", "ugs-warehouse-retire", "Retire a topic",
+        "Drop a topic's DuckLake table and delete its parquet, PMTiles, thumbnails and STAC item, "
+        "then refresh the catalog. Irreversible.", danger=True),
 ]}
 
 
@@ -179,20 +192,23 @@ def run_ingest(force: bool = False) -> dict:
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 
 
-# Read-only variants of the maintenance job. Unlike the mosaics job (command=python), this one is
-# deployed with command=cloudrun_entrypoint.sh and no args, and the entrypoint execs
-# `python -m $RUN_MODULE "$@"` — so the override is just the CLI flag.
-#   --report   prints per-table file counts + catalog options; touches nothing.
-#   --dry-run  reports what expire/cleanup WOULD remove, and skips compaction entirely.
-MAINTAIN_MODE_ARGS = {"report": ["--report"], "dry-run": ["--dry-run"]}
+# A job's variants: args that replace its configured ones. ducklake-maintain's entrypoint runs
+# `python -m $RUN_MODULE "$@"`, so its modes are read-only CLI flags. restyle runs `python`, so its
+# mode names a module: the catalog rebuild an ingest ends with.
+MODE_ARGS = {
+    "ducklake-maintain": {"report": ["--report"], "dry-run": ["--dry-run"]},
+    "restyle": {"refresh": ["-m", "scripts.refresh_stac"]},
+}
 
 
-def run_maintain(mode: str) -> dict:
-    """Run DuckLake maintenance in a read-only mode. Neither mode rewrites or deletes anything."""
-    job = JOBS.get("ducklake-maintain")
-    args = MAINTAIN_MODE_ARGS.get(mode)
-    if not job or not args:
-        return {"ok": False, "message": f"unknown maintenance mode {mode!r}"}
+def run_mode(key: str, mode: str) -> dict:
+    """Run a job with a variant's args in place of its configured ones."""
+    job = JOBS.get(key)
+    args = MODE_ARGS.get(key, {}).get(mode)
+    if not job:
+        return {"ok": False, "message": f"unknown job {key!r}"}
+    if not args:
+        return {"ok": False, "message": f"unknown mode {mode!r} for {key!r}"}
     if settings.JOBS_DRY_RUN:
         return {"ok": True, "message": f"DRY-RUN: would execute {job.name} {' '.join(args)}",
                 "dry_run": True}
@@ -206,6 +222,53 @@ def run_maintain(mode: str) -> dict:
         op = client.run_job(request=req)
         exec_name = (op.metadata.name if op.metadata else "") or "(started)"
         return {"ok": True, "message": f"started {job.name} {' '.join(args)}", "execution": exec_name}
+    except Exception as e:  # noqa: BLE001 — surface the error to the operator
+        return {"ok": False, "message": f"{type(e).__name__}: {e}"}
+
+
+# The retire job shares the ingest image + entrypoint (`python -m $RUN_MODULE "$@"`), so the topic
+# arrives as CLI args. `--yes` skips the CLI's own typed confirmation, which the console has already
+# taken from the operator — see views.retire_execute, which re-checks it server-side.
+RETIRE_MODULE = "ugs_warehouse.vector.retire"
+
+
+def retire_args(topic: str, *, dry_run: bool, purge_overrides: bool = False) -> list[str]:
+    args = ["--topic", topic, "--dry-run"] if dry_run else ["--topic", topic, "--yes"]
+    if purge_overrides and not dry_run:
+        args.append("--purge-overrides")
+    return args
+
+
+def run_retire(topic: str, *, dry_run: bool, purge_overrides: bool = False,
+               requested_by: str = "") -> dict:
+    """Retire one serving topic, or preview it with --dry-run. {ok, execution|message}.
+
+    The operator's IAP email rides along as an env var so it lands in the run's OWN logs. There is
+    nowhere durable to write an audit row — the console's SQLite is ephemeral (settings.py) — so the
+    execution and its log stream are the record.
+    """
+    job = JOBS["retire"]
+    try:
+        from ugs_warehouse.vector.topics import Topic
+        Topic.parse(topic)  # rejects a non-identifier or a non-`_current` table before dispatch
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+
+    args = retire_args(topic, dry_run=dry_run, purge_overrides=purge_overrides)
+    what = f"{job.name} {' '.join(args)}"
+    if settings.JOBS_DRY_RUN:
+        return {"ok": True, "message": f"DRY-RUN: would execute {what}", "dry_run": True}
+    try:
+        from google.cloud import run_v2
+        client = run_v2.JobsClient()
+        env = [run_v2.EnvVar(name="RETIRE_REQUESTED_BY", value=requested_by)] if requested_by else []
+        override = run_v2.RunJobRequest.Overrides.ContainerOverride(args=args, env=env)
+        req = run_v2.RunJobRequest(
+            name=_job_path(job),
+            overrides=run_v2.RunJobRequest.Overrides(container_overrides=[override], task_count=1))
+        op = client.run_job(request=req)
+        exec_name = (op.metadata.name if op.metadata else "") or ""
+        return {"ok": True, "message": f"started {what}", "execution": exec_name.split("/")[-1]}
     except Exception as e:  # noqa: BLE001 — surface the error to the operator
         return {"ok": False, "message": f"{type(e).__name__}: {e}"}
 
@@ -268,8 +331,11 @@ def recent(key: str, limit: int = 5) -> list[dict]:
         return []
 
 
-def logs(key: str, limit: int = 80) -> dict:
+def logs(key: str, limit: int = 80, execution: str = "") -> dict:
     """Recent Cloud Logging lines for a job (near-live; newest fetched, returned chronological).
+
+    `execution` narrows to one run. A job whose output IS the answer — a retire dry-run preview —
+    must not render the previous operator's run while its own is still starting.
 
     Needs `roles/logging.viewer` on the runtime SA. Returns {ok, lines, message?} so the view can
     show *why* it's empty instead of a silent blank — the whole point is process visibility.
@@ -283,6 +349,8 @@ def logs(key: str, limit: int = 80) -> dict:
     try:
         client = _logging_client()
         flt = f'resource.type="cloud_run_job" resource.labels.job_name="{job.name}"'
+        if execution:
+            flt += f' labels."run.googleapis.com/execution_name"="{execution}"'
         lines = []
         for e in client.list_entries(filter_=flt, order_by="timestamp desc",
                                      page_size=limit, max_results=limit):

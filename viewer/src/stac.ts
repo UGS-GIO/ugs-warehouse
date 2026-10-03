@@ -2,6 +2,7 @@
 // -> items) on the CDN. No fetch useEffects; components call these hooks. JSON items stay
 // the source of truth (the warehouse writes them via core/stac).
 import { useQueries, useQuery } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 
 // Import guard: the pure item view-model (item-view.ts) reuses this module's asset helpers and is
 // unit-tested in the node env, where there is no `location`. Read it through this shim so the module
@@ -30,6 +31,32 @@ const DEV = Boolean((import.meta as { env?: Record<string, unknown> }).env?.DEV)
 export const IS_REVIEW = CATALOG_URL.includes("/review/") ||
   (DEV && new URLSearchParams(LOC.search).get("review") === "1");
 
+// Unique collection key = the path from the catalog root to the collection folder, so a folder name
+// that repeats across sub-catalogs (e.g. `B` under both ugs-external and ugs-publications) stays
+// distinct: `ugs-external/B` vs `ugs-publications/B`. Derivable from any href — a collection.json,
+// a catalog.json (sub-catalog), or an item's .json — without needing the loaded tree.
+export const collKeyOf = (href?: string): string | undefined => {
+  if (!href) return undefined;
+  const clean = href.split(/[?#]/)[0];                  // drop any ?query / #hash before the $-anchored strips
+  const base = CATALOG_URL.replace(/[^/]*$/, "");       // …/stac/
+  const s = (clean.startsWith(base) ? clean.slice(base.length) : clean)
+    .replace(/\/?(collection|catalog)\.json$/, "")      // a collection/sub-catalog url → its folder path
+    .replace(/\/[^/]+\/[^/]+\.json$/, "");              // an item url → drop /<id>/<id>.json
+  return s || undefined;
+};
+export const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
+
+// In-app catalog route (?c=<collection key>&i=<item id>) for a STAC item .json href, reusing
+// collKeyOf so the `c` key matches how the catalog tree keys its collections. A foreign href (not
+// under our catalog root) has no in-app route, so it is returned unchanged as a direct link.
+export const catalogItemHref = (stacHref: string): string => {
+  const base = CATALOG_URL.replace(/[^/]*$/, "");
+  let abs: string;
+  try { abs = new URL(stacHref, base).href; } catch { return stacHref; }  // resolve a relative catalog link
+  const c = abs.startsWith(base) ? collKeyOf(abs) : undefined;            // foreign / off-catalog → passthrough
+  return c ? `?c=${encodeURIComponent(c)}&i=${encodeURIComponent(idOf(abs))}` : stacHref;
+};
+
 export type Link = {
   rel: string;
   href: string;
@@ -48,6 +75,7 @@ export type ForeignKey = {
 };
 export type Asset = {
   href: string; title?: string; type?: string; roles?: string[];
+  description?: string;   // one-line usage hint (display / query / download) stamped by core/stac (#280)
   "proj:code"?: string;   // per-asset CRS; overrides the item's (a reprojected COG carries its own)
   "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];
 };
@@ -93,6 +121,27 @@ export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
   Object.values(d?.assets ?? {})
     .filter((a) => !a.roles?.includes("related"))
     .flatMap((a) => a["ugs:foreign_keys"] ?? []);
+
+// Click-join descriptors for a clicked feature of THIS layer: each related (aspatial child) asset
+// carrying an FK back to this layer, flattened to the single-column equality we can run — the
+// related row's childField = the clicked feature's parentField value. Composite (multi-column) keys
+// are skipped: a partial join would return wrong rows, so surface nothing rather than bad data.
+export type RelatedJoin = { key: string; title: string; href: string; childField: string; parentField: string };
+export const relatedJoins = (d: StacDoc | undefined): RelatedJoin[] =>
+  relatedAssets(d).flatMap(({ key, asset }) =>
+    (asset["ugs:foreign_keys"] ?? [])
+      .filter((fk) => fk.fields.length === 1 && fk.reference.fields.length === 1)
+      .map((fk) => ({ key, title: asset.title ?? key, href: asset.href,
+                      childField: fk.fields[0], parentField: fk.reference.fields[0] })));
+
+// Per-asset usage hint (STAC `description`) — the warehouse's "display vs query vs download"
+// guidance, stamped in core/stac so one item says which asset/endpoint to use (#280). Returns only
+// the assets that carry a hint, paired with their key; a listing can render these. Rendering and
+// asset selection elsewhere are unchanged — this only surfaces the metadata.
+export const assetUsages = (d: StacDoc | undefined): { key: string; asset: Asset; usage: string }[] =>
+  Object.entries(d?.assets ?? {})
+    .filter(([, a]) => Boolean(a.description))
+    .map(([key, asset]) => ({ key, asset, usage: asset.description as string }));
 
 // Survey Notes "In this issue": [{title, page}] parsed from the issue PDF's table of contents
 // (warehouse, ugs:contents) — page is null for "back cover". Undefined when the item carries none.
@@ -177,17 +226,19 @@ export const isDrawableCog = (a: Asset, d?: StacDoc): boolean => {
 };
 
 // The COG to draw, or undefined when the item has raster data but no render path — drawing nothing
-// beats throwing on a projection this client cannot reproject.
-export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined =>
-  Object.values(d?.assets ?? {}).find((a) => isDrawableCog(a, d));
+// beats throwing on a projection this client cannot reproject. `visual` goes first: an items.json
+// entry carries no proj:code, so the native-CRS COG would also pass as drawable.
+export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined => {
+  const assets = Object.values(d?.assets ?? {});
+  return assets.find((a) => isCog(a) && a.roles?.includes("visual")) ?? assets.find((a) => isDrawableCog(a, d));
+};
 
 // A RASTER PMTiles asset (the per-scale geologic-map mosaics) — rendered as raster tiles via the
-// pmtiles:// protocol. Distinguished from VECTOR PMTiles, which are declared as a web-map LINK
-// (see pmtilesLink), not an asset: a `visual` pmtiles ASSET is a raster mosaic.
+// pmtiles:// protocol. Marked `ugs:render: raster`: a vector layer's PMTiles is an asset with the
+// `visual` role too (besides its web-map link), so the role says nothing about the tile type.
 export const rasterTilesAsset = (d: StacDoc | undefined): Asset | undefined =>
   Object.values(d?.assets ?? {}).find(
-    (a) => a.type?.includes("pmtiles")
-      && (a.roles?.includes("visual") || (a as { "ugs:render"?: string })["ugs:render"] === "raster"),
+    (a) => a.type?.includes("pmtiles") && (a as { "ugs:render"?: string })["ugs:render"] === "raster",
   );
 
 // STAC Table extension: the GeoParquet `data` asset's column schema (name + type). Undefined
@@ -273,10 +324,9 @@ async function fetchJson(url: string): Promise<StacDoc> {
 /** Fetch + cache any STAC doc by URL. `enabled` gates on a selected url. */
 export function useStac(url?: string) {
   return useQuery({
-    queryKey: ["stac", url],
+    queryKey: qk.stac(url),
     queryFn: () => fetchJson(url as string),
     enabled: Boolean(url),
-    staleTime: 5 * 60_000,
   });
 }
 
@@ -285,9 +335,8 @@ export function useStac(url?: string) {
 export function useDocs(urls: string[]) {
   const results = useQueries({
     queries: urls.map((u) => ({
-      queryKey: ["stac", u],
+      queryKey: qk.stac(u),
       queryFn: () => fetchJson(u),
-      staleTime: 5 * 60_000,
     })),
   });
   return {
@@ -306,10 +355,9 @@ async function fetchStyleLayers(url: string, signal?: AbortSignal): Promise<Reco
 }
 export function useStyleLayers(styleUrl?: string): Record<string, unknown>[] | null {
   const { data } = useQuery({
-    queryKey: ["gl-style-layers", styleUrl],
+    queryKey: qk.styleLayers(styleUrl),
     queryFn: ({ signal }) => fetchStyleLayers(styleUrl as string, signal),
     enabled: Boolean(styleUrl),
-    staleTime: 5 * 60_000,
   });
   return styleUrl ? (data ?? null) : null;
 }
@@ -345,7 +393,7 @@ async function fetchStylesManifest(url: string, signal?: AbortSignal): Promise<M
 export function useLiveLegend(styleUrl: string | undefined, itemId: string | undefined, renderId: string | undefined) {
   const url = styleUrl ? manifestUrlOf(styleUrl) : undefined;
   const { data } = useQuery({
-    queryKey: ["styles-manifest", url],
+    queryKey: qk.stylesManifest(url),
     queryFn: ({ signal }) => fetchStylesManifest(url as string, signal),
     enabled: Boolean(url),
     staleTime: 60_000,
@@ -360,9 +408,8 @@ export function useStyleLayersFor(layers: { id: string; styleUrl?: string }[]): 
   const withStyle = layers.filter((l) => l.styleUrl);
   const results = useQueries({
     queries: withStyle.map((l) => ({
-      queryKey: ["gl-style-layers", l.styleUrl],
+      queryKey: qk.styleLayers(l.styleUrl),
       queryFn: ({ signal }: { signal?: AbortSignal }) => fetchStyleLayers(l.styleUrl as string, signal),
-      staleTime: 5 * 60_000,
     })),
   });
   const out: Record<string, Record<string, unknown>[]> = {};
@@ -385,7 +432,7 @@ export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [numb
   const urls = [...new Set(hrefs.filter((h): h is string => Boolean(h)))];
   const results = useQueries({
     queries: urls.map((href) => ({
-      queryKey: ["cog-bbox", href],
+      queryKey: qk.cogBbox(href),
       queryFn: () => fetchCogBox(href),
       staleTime: Infinity,
       retry: 1,
@@ -423,9 +470,8 @@ export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL):
 export function useIndexes(collections: { id: string; href: string }[]) {
   const results = useQueries({
     queries: collections.map((c) => ({
-      queryKey: ["index", c.href],
+      queryKey: qk.index(c.href),
       queryFn: () => fetchJson(indexUrlFor(c.href)) as Promise<unknown>,
-      staleTime: 5 * 60_000,
       retry: false,
       enabled: hasItemsIndex(c.href),
     })),

@@ -1,5 +1,6 @@
 // 3D fence-diagram viewer: GeoParquet/GeoJSON cross-sections draped over a 3DEP terrain mesh.
 import { COORDINATE_SYSTEM, OrbitView } from "@deck.gl/core";
+import { qk } from "@/query-keys";
 import { PathStyleExtension } from "@deck.gl/extensions";
 import { BitmapLayer, PathLayer, SolidPolygonLayer } from "@deck.gl/layers";
 import { SimpleMeshLayer } from "@deck.gl/mesh-layers";
@@ -11,6 +12,7 @@ import { lruSet } from "@/lib/lru";
 import { type Asset, classificationColors, cogAsset, type StacDoc } from "@/stac";
 import { buildMeshFrom3DEP, type TerrainMesh } from "@/map/terrain";
 import { UiSlider } from "@/ui/slider";
+import { to2d } from "@/lib/bbox";
 
 const GEOLOGIC_COLORS: Record<string, string> = {
   "red pine shale": "#556B2F",
@@ -101,12 +103,11 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   // cartography. Interim: a baked per-pub sidecar (the 3D pipeline will fold this into the GeoParquet).
   // Authored geologic colors for this pub (interim baked sidecar). Absent → getUnitColor fallback.
   const { data: authored = {} } = useQuery<Record<string, string>>({
-    queryKey: ["3d-colors", item.id],
+    queryKey: qk.threeDColors(item.id),
     queryFn: async ({ signal }) => {
       const r = await fetch(`${import.meta.env.BASE_URL}3d-colors/${item.id}.json`, { signal });
       return r.ok ? r.json() : {};
     },
-    staleTime: 5 * 60_000,
   });
   // Per-unit fill carried in the GeoParquet `fill` column (cloud-native path) — authored, highest
   // precedence. Empty on the GeoJSON path.
@@ -264,7 +265,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       setTerrainPending(false);
       return () => { active = false; };
     }
-    const mapBbox = (item.bbox?.slice(0, 4) as [number, number, number, number] | undefined) ?? extent.bbox;
+    const mapBbox = to2d(item.bbox) ?? extent.bbox;
     // Live USGS 3DEP (CORS-open, public domain, 1 m lidar over Utah) — no hosting, any pub's bbox.
     // Progressive: a coarse grid lands in ~1–2 s so the surface shows immediately, then a fine grid
     // samples in the background and swaps in (smooth — no facets, the draped sheet stops looking
@@ -364,7 +365,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
   // Frame the full map sheet (so the fence reads as a transect within it), centred on the map — not
   // the fence — since the fence sits off-centre in the quad.
-  const mb = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
+  const mb = to2d(item.bbox);
   const mapCtr: [number, number] = mb && extent
     ? [((mb[0] + mb[2]) / 2 - extent.center[0]) * extent.scale[0], ((mb[1] + mb[3]) / 2 - extent.center[1]) * extent.scale[1]]
     : [0, 0];

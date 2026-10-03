@@ -6,6 +6,7 @@
 import type { ReactNode } from "react";
 
 import heroImg from "@/assets/fantasy-canyon.jpg";
+import { useDataSaver } from "@/lib/data-saver";
 
 export function PageHero({ eyebrow, title, lead, children }: {
   eyebrow?: string;       // section, NOT the agency — the state band above already names it
@@ -13,9 +14,10 @@ export function PageHero({ eyebrow, title, lead, children }: {
   lead?: string;
   children?: ReactNode;   // chips, counts, a filter row — sits under the lead
 }) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   return (
     <header className="relative border-b border-border">
-      <img src={heroImg} alt="" aria-hidden className="absolute inset-0 h-full w-full object-cover" />
+      {!saver && <img src={heroImg} alt="" aria-hidden className="absolute inset-0 h-full w-full object-cover" />}
       <div aria-hidden className="absolute inset-0 bg-gradient-to-t from-black/85 via-black/65 to-black/40" />
       <div className="relative w-full px-4 py-16 text-white sm:px-6 lg:px-10">
         {eyebrow && (

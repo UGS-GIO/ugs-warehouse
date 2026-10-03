@@ -1,9 +1,11 @@
 // Item detail: two layouts share one component. `page` = the full-width catalog/browse detail (a
 // 2/3 · 1/3 grid); `drawer` = the single-column stack that fits the 560px Discover result drawer. Both
 // reuse the same capability panels (Preview, Downloads, Endpoints, Related, Review, schema, STAC JSON).
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 
 import type { ItemRef } from "./browse";
+import { useScrollOnNew } from "@/lib/use-scroll-on-new";
+import { AddToMapButton } from "@/map/add-to-map-button";
 import { CommentsPanel } from "@/review/comments-panel";
 import { DataExplorer } from "@/data/data-explorer";
 import { PhotoGallery } from "./photo-gallery";
@@ -18,14 +20,11 @@ import { PropertyTable } from "./property-table";
 import { SchemaTable } from "./schema-table";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
-import { type Asset, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
-  relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+import { type Asset, catalogItemHref, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
+  relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
-
-const relatedViewerHref = (stacHref: string): string => {
-  const m = stacHref.match(/\/([^/]+)\/([^/]+)\/[^/]+\.json(?:\?.*)?$/);
-  return m ? `?c=${encodeURIComponent(m[1])}&i=${encodeURIComponent(m[2])}` : stacHref;
-};
+import { Unavailable } from "@/offline/offline-notice";
 
 function RelatedPanel({ item }: { item: StacDoc }) {
   const links = relatedLinks(item);
@@ -35,6 +34,16 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   // additionally offer a thumbnail Gallery. Both use a Set so multiple stay open.
   const [openTables, setOpenTables] = useState<Set<string>>(new Set());
   const [openGalleries, setOpenGalleries] = useState<Set<string>>(new Set());
+  const { featureRelated, clearRelated } = usePreviewMap();
+  const sectionRef = useRef<HTMLDivElement>(null);
+  // A map-feature click (via the preview-map context) auto-opens its related table — DERIVED, not an
+  // effect that mutates `openTables`: deriving keeps the open set and the context from disagreeing,
+  // and stops a remount (page↔drawer layout switch) from reopening a table on its own.
+  const isOpen = (key: string) => openTables.has(key) || featureRelated?.relatedKey === key;
+  // `block: "start"` here, not "nearest": the section expands as this renders, so put its heading at
+  // the top rather than scrolling the minimum distance to a box that is still growing.
+  useScrollOnNew(featureRelated && `${featureRelated.relatedKey}:${featureRelated.value}`,
+                 sectionRef, { behavior: "smooth", block: "start" });
   const toggleIn = (set: React.Dispatch<React.SetStateAction<Set<string>>>) => (key: string) =>
     set((prev) => {
       const next = new Set(prev);
@@ -46,14 +55,14 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
   if (!links.length && !tables.length && !fks.length) return null;
   return (
-    <section className="mt-4 rounded-md border border-border p-3">
+    <section ref={sectionRef} className="mt-4 rounded-md border border-border p-3">
       <h3 className="text-sm font-semibold">Related</h3>
       {links.length > 0 && (
         <div className="mt-1.5">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">Related layers</div>
           <ul className="mt-1 space-y-0.5">
             {links.map((l, i) => (
-              <li key={i}><a href={relatedViewerHref(l.href)} className="text-primary hover:underline">{l.title ?? "related"} ›</a></li>
+              <li key={i}><a href={catalogItemHref(l.href)} className="text-primary hover:underline">{l.title ?? "related"} ›</a></li>
             ))}
           </ul>
         </div>
@@ -84,7 +93,7 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                   <span className="font-medium">{asset.title ?? key}</span>
                   <button className="text-primary hover:underline"
                     onClick={() => toggleTable(key)}>
-                    {openTables.has(key) ? "Hide" : "View"}
+                    {isOpen(key) ? "Hide" : "View"}
                   </button>
                   {isPhotos(key, asset) && (
                     <button className="text-primary hover:underline" onClick={() => toggleGallery(key)}>
@@ -98,7 +107,16 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                 </div>
                 {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
                     range-read (never downloads the whole file). No geometry → a plain data table. */}
-                {openTables.has(key) && <DataExplorer key={asset.href} href={asset.href} />}
+                {isOpen(key) && (() => {
+                  const childField = relatedJoins(item).find((j) => j.key === key)?.childField;
+                  const preset = featureRelated?.relatedKey === key && childField
+                    ? { col: childField, kind: "exact" as const, value: featureRelated.value }
+                    : undefined;
+                  // Clearing the preset widens the table in place, so record it open BEFORE clearing
+                  // the context — a table opened only by the click would otherwise close with it.
+                  const onClearPreset = () => { setOpenTables((prev) => new Set(prev).add(key)); clearRelated(); };
+                  return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={onClearPreset} />;
+                })()}
                 {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
               </li>
             ))}
@@ -226,12 +244,18 @@ function ReviewBadge({ itemId }: { itemId: string }) {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
 }
 
-export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layout = "drawer" }: {
+export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
+  error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
   onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
   layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
-  if (!item) return <em className={C.muted}>Loading…</em>;
+  if (!item) {
+    return error
+      ? <Unavailable what="this item" error={error}
+          fallback="Could not load this item." />
+      : <em className={C.muted}>Loading…</em>;
+  }
   const p = item.properties ?? {};
   const hasGeom = Boolean(item.geometry || item.bbox);
   const via = viaLink(item);
@@ -245,6 +269,10 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
           View on map ›
         </button>
       )}
+      {/* "View on map" isolates this item; "+ Add to map" accumulates it into the active set without
+          leaving. No layerId: this panel always shows the OPEN item, so the button targets it.
+          Self-gates: renders only when that item is a real map layer. */}
+      <AddToMapButton />
       {onExplore && (
         <button onClick={onExplore} className="inline-block rounded border border-border px-2.5 py-1 text-xs text-foreground hover:border-primary">
           Explore ⤢
@@ -292,7 +320,6 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
             {IS_REVIEW && item.id && <ReviewBadge itemId={String(item.id)} />}
           </div>
           <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{String(p.title ?? item.id ?? "")}</h1>
-          <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
           {byline.length > 0 && <p className="mt-1.5 text-sm text-muted-foreground">{byline.join(" · ")}</p>}
           {typeof p.description === "string" && <p className="mt-3 max-w-3xl text-muted-foreground">{p.description}</p>}
         </header>
@@ -317,7 +344,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
                 </div>
               ) : <p className="text-sm text-muted-foreground">No metadata published.</p>}
             </Section>
-            <DownloadsPanel item={item} />
+            <DownloadsPanel key={String(item.id)} item={item} />
             <EndpointsPanel item={item} />
             <Section title="Developer"><StacJson item={item} title={`${item.id} — STAC JSON`} /></Section>
             <details className="rounded-lg border border-border">
@@ -335,10 +362,8 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
     <>
       <div className="mb-4 border-b border-border pb-3">
         {crumb}
-        {/* Title leads. The machine id is the subtitle — it was set in blue mono ABOVE the human
-            name, so the thing nobody reads outranked the thing everybody does. */}
+        {/* Title leads; the id already shows in the crumb above, so it isn't repeated under it. */}
         <h1 className={T.pageTitle}>{String(p.title ?? item.id ?? "")}</h1>
-        <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
       </div>
       <Preview item={item} />
       {/* Below the map/table, not above it: the description is context for what you are looking at,
@@ -348,7 +373,7 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
       )}
       <div className="mt-1.5">{actions}</div>
       <IssueContents item={item} />
-      <DownloadsPanel item={item} />
+      <DownloadsPanel key={String(item.id)} item={item} />
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />
       {IS_REVIEW && <CatalogReview item={item} />}

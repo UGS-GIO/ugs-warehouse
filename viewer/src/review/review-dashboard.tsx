@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { useState } from "react";
 import { type Comment, deleteComment, ITEM_STATUSES, listAllComments, setStatus, whoami } from "./comments";
 import { NotificationsInbox } from "./notifications-inbox";
@@ -18,16 +19,16 @@ export function ReviewDashboard({ onOpen }: { onOpen: (itemId: string) => void }
   const qc = useQueryClient();
   const [filter, setFilter] = useState<"open" | "all" | "resolved">("open");
   const [report, setReport] = useState(false);
-  const invalidate = () => qc.invalidateQueries({ queryKey: ["comments-all"] });
+  const invalidate = () => qc.invalidateQueries({ queryKey: qk.comments.all });
 
   // Fetch everything (roots + replies) and thread client-side so the status filter never orphans a
   // reply from its root. Filtering by status applies to the thread ROOT.
   const { data: all = [], isLoading, error } = useQuery({
-    queryKey: ["comments-all"],
+    queryKey: qk.comments.all,
     queryFn: () => listAllComments(),
     retry: false,
   });
-  const me = useQuery({ queryKey: ["whoami"], queryFn: whoami, retry: false, staleTime: Infinity });
+  const me = useQuery({ queryKey: qk.whoami, queryFn: whoami, retry: false, staleTime: Infinity });
   const toggle = useMutation({ mutationFn: (c: Comment) => setStatus(c.id, c.status === "resolved" ? "open" : "resolved"), onSuccess: invalidate });
   const remove = useMutation({ mutationFn: (id: number) => deleteComment(id), onSuccess: invalidate });
 

@@ -19,6 +19,7 @@ substitutions:
   _JOB: ugs-warehouse-ingest              # Cloud Run job (batch --all reingest). Distinct resource from the Pub/Sub topic of the same name below.
   _REVIEW_JOB: ugs-warehouse-ingest-review # Cloud Run job: same ingest over `_review` serving tables → writes the gated catalog under review/ (pre-release; promote _review→_current to publish)
   _MAINTAIN_JOB: ugs-warehouse-ducklake-maintain # Cloud Run job: DuckLake housekeeping (expire snapshots + compact small files + GC orphaned parquet). Run daily.
+  _RETIRE_JOB: ugs-warehouse-retire        # Cloud Run job: retire ONE serving topic (drop its DuckLake table + delete its artifacts). Operator-driven, never scheduled.
   _PUBS_JOB: ugs-pubs-ingest              # Cloud Run job: rebuild the ugs-publications STAC collection from pub metadata (no COG re-harvest)
   _PUBTHUMB_JOB: ugs-pubs-thumbs          # Cloud Run job: render PDF first-page cover thumbnails for every pub (poppler)
   _PIPELINE_JOB: ugs-pubs-pipeline        # Cloud Run job: orchestrator — loops thumbs then runs pubs-ingest (one-click "full refresh")
@@ -35,11 +36,15 @@ substitutions:
   # featureserv buffers whole responses, so this and Paging.LimitMax in
   # featureserv/duckdb_featureserv.toml are one decision. Passed to the image build as well as the
   # deploy so check_limits.py can refuse an unmeasured pairing rather than let it OOM in prod.
-  _FEATURES_MEMORY: 2Gi
+  # 8Gi (was 2Gi): a pre-merge parallel-load test (ALL-5869) showed 4Gi OOM-kills the container
+  # under concurrent full-layer pulls (silent truncation + 503s); 8Gi with cpu=2 and DuckDB
+  # memory_limit=3GB (the featureserv patch) serves them cleanly. (8Gi, LimitMax 10000) is covered
+  # by the measured (2Gi, 100000) pair via monotonicity. Feeds the image build AND the deploy.
+  _FEATURES_MEMORY: 8Gi
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
-  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # runtime SA — run.developer (trigger/status) + logging.viewer (live + per-pub logs) + storage.objectViewer on the COG bucket (registry harvest status)
+  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # runtime SA — job-level run.developer + run.viewer (provision.sh) + logging.viewer (live + per-pub logs) + storage.objectViewer on the COG bucket (registry harvest status)
   _ADMIN_HOSTS: .run.app                                                           # ALLOWED_HOSTS; add the LB/custom domain once IAP is fronted
   _ADMIN_SECRET: warehouse-admin-secret-key                                        # Secret Manager secret — stable Django SECRET_KEY across workers/instances
   # Pub/Sub topic/subscription names live in scripts/provision.sh now (not build inputs).
@@ -101,6 +106,21 @@ steps:
         DOCKER_BUILDKIT=1 docker build -f Dockerfile.harvest \
           --build-arg BUILDKIT_INLINE_CACHE=1 \
           --build-arg TIPPECANOE_IMAGE="$$TIP" \
+          --cache-from "$$IMG:latest" \
+          -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
+
+  # Mosaic bake image: pinned GDAL 3.11+ for `gdal raster tile` (the harvest image's GDAL is older).
+  - id: build-mosaics
+    waitFor: ['-']
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics
+        docker pull "$$IMG:latest" || true
+        DOCKER_BUILDKIT=1 docker build -f Dockerfile.mosaics \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
           --cache-from "$$IMG:latest" \
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
@@ -204,6 +224,11 @@ steps:
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest']
 
+  - id: push-mosaics
+    waitFor: [build-mosaics]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics']
+
   - id: push-pipeline
     waitFor: [build-pipeline]
     name: gcr.io/cloud-builders/docker
@@ -224,13 +249,21 @@ steps:
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=DB_PASS=${_SECRET}:latest
       # custom delimiter (^@^) so gs:// values with no commas stay safe
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=1.5GB
+      # DUCKDB_MAX_MEMORY caps DuckDB's buffer manager, not the process: RSS lands well above it —
+      # the producer hydrates the whole `_current` table into ONE in-memory DuckDB (no temp_directory,
+      # and /tmp is RAM on Cloud Run anyway), so peak RSS tracks the layer's geometry, not this cap.
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}@DUCKDB_MAX_MEMORY=6GB
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600
       - --max-retries=1
-      - --cpu=2
-      - --memory=2Gi
+      # 16Gi/4CPU (was 2Gi/2CPU): heavy wetland _current tables signal-9'd the container at the Postgres
+      # read. wetlands_wetlandsoutline (426k rows / 2876 MB in PG incl TOAST) OOM'd 2Gi outright; riverine
+      # (1815 MB) and nonriverine (1069 MB) do too. Sized to clear the outline layer with headroom — the
+      # same standing remedy as gdal-microservice (16Gi) for this wetland data. It's a batch job, so the
+      # bigger box is only billed per run. Right-size down if/when the producer can spill to real disk.
+      - --cpu=4
+      - --memory=16Gi
 
   # REVIEW ingest — identical to the job above but reads `_review` serving tables and writes the
   # whole catalog under review/ (STAC + GeoParquet + PMTiles + a separate DuckLake root). Feeds the
@@ -260,13 +293,14 @@ steps:
       # CDN-only; styles aren't secret, so the review app fetching them from the public CDN is fine.
       # Review needs its OWN DuckLake metadata schema: a catalog binds one DATA_PATH, so sharing the
       # public catalog while writing to the review bucket fails to attach.
-      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@WAREHOUSE_BUCKET=${_REVIEW_BUCKET}@WAREHOUSE_PUBLIC_BASE_URL=${_REVIEW_SERVING_URL}@STYLES_CDN_BASE=https://maps-assets.geology.utah.gov/styles@DUCKLAKE_DATA_PATH=gs://${_REVIEW_BUCKET}/review/ducklake/@DUCKLAKE_METADATA_SCHEMA=ducklake_catalog_review@DUCKDB_MAX_MEMORY=1.5GB@WAREHOUSE_TABLE_SUFFIX=_review@WAREHOUSE_STAC_PREFIX=review/stac@WAREHOUSE_ARCHIVE_PREFIX=review/geoparquet@WAREHOUSE_PMTILES_PREFIX=review/pmtiles@WAREHOUSE_THUMBS_PREFIX=review/thumbs
+      - --set-env-vars=^@^SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@WAREHOUSE_BUCKET=${_REVIEW_BUCKET}@WAREHOUSE_PUBLIC_BASE_URL=${_REVIEW_SERVING_URL}@STYLES_CDN_BASE=https://maps-assets.geology.utah.gov/styles@DUCKLAKE_DATA_PATH=gs://${_REVIEW_BUCKET}/review/ducklake/@DUCKLAKE_METADATA_SCHEMA=ducklake_catalog_review@DUCKDB_MAX_MEMORY=6GB@WAREHOUSE_TABLE_SUFFIX=_review@WAREHOUSE_STAC_PREFIX=review/stac@WAREHOUSE_ARCHIVE_PREFIX=review/geoparquet@WAREHOUSE_PMTILES_PREFIX=review/pmtiles@WAREHOUSE_THUMBS_PREFIX=review/thumbs
       - --command=scripts/cloudrun_entrypoint.sh
       - --args=--all
       - --task-timeout=3600
       - --max-retries=1
-      - --cpu=2
-      - --memory=2Gi
+      # 16Gi/4CPU + DuckDB 6GB: the same heavy wetland tables OOM 2Gi over _review too. Mirror the public job.
+      - --cpu=4
+      - --memory=16Gi
 
   # Review serving app (ugs-warehouse#16) — the IAP-gated Cloud Run service that streams the private
   # review bucket. tofu owns its config + IAP + ingress and IGNORES the image, so cloudbuild just ships
@@ -373,6 +407,38 @@ steps:
       # 2Gi was sized for the old no-op merge; real compaction rewrites whole tables.
       - --cpu=4
       - --memory=8Gi
+
+  # Retire one serving topic. Same image + DSN setup as the ingest job (RUN_MODULE swaps the CLI),
+  # and it needs the same identity: DuckLake catalog + delete on every artifact prefix in the bucket.
+  #
+  # Its own job rather than an arg override on the maintenance job, even though the entrypoint would
+  # allow that: the ops console filters logs and lists executions BY JOB NAME, so sharing one would
+  # file every retirement under "DuckLake maintenance" and lose the only audit trail there is
+  # (the console has no durable store — see admin/config/settings.py).
+  #
+  # Never scheduled, and no args here: every execution comes from the console (or a hand-run
+  # `gcloud run jobs execute`) with --topic supplied as a container override.
+  - id: deploy-retire-job
+    waitFor: [push-warehouse]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_RETIRE_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=DB_PASS=${_SECRET}:latest
+      - --set-env-vars=^@^RUN_MODULE=ugs_warehouse.vector.retire@SOURCE_BACKEND=postgres@CLOUDSQL_INSTANCE=${_SQL_INSTANCE}@DB_NAME=seamlessgeolmap@DB_USER=schema_owner@DUCKLAKE_DATA_PATH=${_DATA_PATH}
+      - --command=scripts/cloudrun_entrypoint.sh
+      # One topic: a listing, a table drop and a few hundred deletes. Nothing like a compaction.
+      - --task-timeout=1800
+      - --max-retries=0
+      - --cpu=1
+      - --memory=2Gi
 
   - id: deploy-harvest-job
     waitFor: [push-harvest]
@@ -578,13 +644,12 @@ steps:
       - --cpu=4
       - --memory=8Gi
 
-  # Per-scale raster PMTiles mosaics of the published geologic maps (old ArcGIS MD_* equivalent).
-  # Harvest image (GDAL CLI + the go-pmtiles binary). Reads the COGs in place over /vsigs (no full
-  # download), but the rendered MBTiles lands in RAM-backed /tmp — so the 24k tier is the heavy one.
-  # Defaults to --scale all; for the big 24k tier, execute with --args override + more memory, e.g.
-  #   gcloud run jobs execute ugs-geolmap-mosaics --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,24k
+  # Raster PMTiles mosaics of the geologic maps, one per portal layer: intermediate (100k) and 500k
+  # here. The 24k tier needs a real disk and runs on Cloud Batch (scripts/submit_mosaics_batch.sh);
+  # building it here too would overwrite that z17 object with a z14 one. Add --scale 250k (the 1 x 2
+  # degree sheets) here and in the admin console once one of those maps has a COG; none does yet.
   - id: deploy-mosaics-job
-    waitFor: [push-harvest]
+    waitFor: [push-mosaics]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -592,16 +657,15 @@ steps:
       - jobs
       - deploy
       - ${_MOSAICS_JOB}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
       - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
-      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,all
-      # Zoom is now capped per tier (TIER_MAXZOOM), so the build is bounded; 4h is generous headroom
-      # for the 24k tier (the others are fast). Run a single heavy tier with --scale 24k if needed.
+      # --scale=<tier> form: gcloud rejects a repeated bare "--scale" item in --args.
+      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale=100k,--scale=500k
       - --task-timeout=14400
       - --max-retries=1
       - --cpu=4
@@ -731,33 +795,57 @@ steps:
       - --service-account=${_RUNTIME_SA}
       - --allow-unauthenticated
       - --port=9000
-      - --cpu=1
+      # cpu=2 is required for --memory 8Gi (Cloud Run caps 1 vCPU at 4Gi) and gives the concurrent
+      # heavy queries real parallelism. Was cpu=1/2Gi.
+      - --cpu=2
       # Set via _FEATURES_MEMORY so the image build sees the same number and check_limits.py can
-      # gate the (memory, LimitMax) pairing. 512Mi OOM-killed the container mid-response for a client
-      # paging a large collection; 1Gi survives paging but not a single full pull; 2Gi covers both
-      # (84,756 features / 122MB). Scale-to-zero means it is only billed while serving. ALL-5410.
+      # gate the (memory, LimitMax) pairing. History: 512Mi OOM-killed mid-response when paging;
+      # 1Gi survives paging but not a single full pull; 2Gi covered both (ALL-5410). A pre-merge
+      # parallel-load test (ALL-5869) then showed even 4Gi OOM-kills the container under concurrent
+      # full-layer pulls (133MB each) -- the Go whole-response buffering, not DuckDB, is the wall,
+      # and an OOM mid-stream silently truncates a 200. 8Gi + cpu=2 + DuckDB memory_limit=3GB serves
+      # the concurrent full pulls cleanly. Scale-to-zero: billed only while serving.
       - --memory=${_FEATURES_MEMORY}
       - --timeout=120
+      # Cap per-instance request concurrency. duckdb_featureserv shares one in-process DuckDB across
+      # every in-flight request AND buffers each whole response in Go heap, so heavy Features queries
+      # collectively exhausted the instance under Cloud Run's default 80 -- 500/503, taking in-flight
+      # requests down with it (ALL-5869). A pre-merge load test validated 4 at cpu=2/8Gi: a realistic
+      # ~12-parallel AGOL bbox render is 12/12 clean, and 12 concurrent worst-case full-layer pulls
+      # (133MB each) also serve without OOM or truncation. Scale-to-zero, so more-but-smaller
+      # instances still only bill while serving; the tradeoff is more cold starts (~20s catalog scan
+      # each). check_limits.py does NOT model concurrency -- re-test before changing this triple.
+      - --concurrency=4
+      # Bound blast radius: --allow-unauthenticated + 8Gi/instance makes an unbounded fan-out a real
+      # cost exposure. 50 sits far above this endpoint's real concurrency (50x4 = 200 in-flight) while
+      # halving the instance-count worst case vs Cloud Run's default 100. Hitting it returns a clean
+      # 429, not an OOM. Tune down for a tighter bound.
+      - --max-instances=50
 
   # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).
   # Memory is small: it holds PMTiles directories, never tile data. Behind the CDN this only
   # ever sees cache misses, so concurrency matters more than instance count.
+  # Route by the `prod` tag, which moves to this deploy's revision, so it goes live even when traffic
+  # was pinned to an older revision (a rollback or manual reroute pins it; a plain deploy gets 0%).
   - id: deploy-tiles
     waitFor: [push-tiles]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - ${_TILES_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
-      - --region=${_REGION}
-      - --service-account=${_RUNTIME_SA}
-      - --allow-unauthenticated
-      - --port=8080
-      - --cpu=1
-      - --memory=512Mi
-      - --timeout=60
+      - -c
+      - |
+        set -euo pipefail
+        gcloud run deploy ${_TILES_SERVICE} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG} \
+          --region=${_REGION} \
+          --service-account=${_RUNTIME_SA} \
+          --allow-unauthenticated \
+          --port=8080 \
+          --cpu=1 \
+          --memory=512Mi \
+          --timeout=60 \
+          --tag=prod
+        gcloud run services update-traffic ${_TILES_SERVICE} --region=${_REGION} --to-tags=prod=100
 
   # No resolve-features-url / resolve-tiles-url here any more: they existed only to bake
   # VITE_FEATURES_BASE / VITE_TILES_BASE into the viewer build, and nothing in this config builds
@@ -775,6 +863,7 @@ images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-topics-thumbs
 

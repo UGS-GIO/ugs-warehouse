@@ -16,6 +16,7 @@ may use it. AGENTS.md tells a program how to read it without downloading everyth
 from __future__ import annotations
 
 from . import config
+from .bbox import to_2d_bbox
 
 README_NAME = "README.md"
 AGENTS_NAME = "AGENTS.md"
@@ -61,9 +62,9 @@ def _formats(items: list[dict]) -> list[tuple[str, str]]:
 
 def _extent_line(extent: dict | None) -> str:
     bbox = ((extent or {}).get("spatial") or {}).get("bbox") or []
-    if not bbox or len(bbox[0]) < 4:
+    if not bbox or len(bbox[0]) not in (4, 6):
         return ""
-    w, s, e, n = bbox[0][:4]
+    w, s, e, n = to_2d_bbox(bbox[0])
     return f"- Extent (WGS84): {w:.3f}, {s:.3f} to {e:.3f}, {n:.3f}\n"
 
 
@@ -89,14 +90,32 @@ def readme(*, title: str, description: str, kind: str, children: int,
 
 
 def agents(*, title: str, kind: str, path: str, children: int,
-           items: list[dict] | None = None) -> str:
-    """What a program needs to use this node without fetching everything first."""
+           items: list[dict] | None = None, service: bool = False) -> str:
+    """What a program needs to use this node without fetching everything first.
+
+    `service` is True for the nodes duckdb_featureserv serves live (flat collections and the
+    serving-topic schemas, per `core.stac.has_feature_service`). Those DO have a query endpoint —
+    OGC API Features — so the note names it and steers bulk/whole-layer work to the GeoParquet asset
+    instead, rather than the old blanket claim that no query endpoint exists (#280).
+    """
     base = config.public_url(f"{config.STAC_PREFIX}/{path}").rstrip("/") if path else \
         config.public_url(config.STAC_PREFIX)
     doc = "catalog.json" if kind == "catalog" else "collection.json"
+    if service:
+        api_note = ("The catalog itself is static JSON, read by following links; a live OGC API "
+                    "Features service also answers queries (see Querying).")
+    elif kind == "catalog":
+        # A catalog spans collections that may or may not be served, so it must not deny a query
+        # endpoint globally — a serving-topic collection under the root has one, and the root is the
+        # natural entry point (#280 one level up). Point at the per-collection note instead.
+        api_note = ("The catalog is static JSON, read by following links. Where a dataset offers a "
+                    "live query service (OGC API Features), its own collection says so.")
+    else:
+        # A static leaf collection (e.g. a publication series) — its data really has no query API.
+        api_note = ("Every object is static JSON; this collection has no query endpoint — read its "
+                    "assets directly.")
     out = [f"# {title} — notes for agents\n\n",
-           f"STAC {kind} at `{base}/{doc}`, served from the maps-assets CDN. Every object is static "
-           f"JSON; there is no STAC API and no query endpoint behind it.\n\n",
+           f"STAC {kind} at `{base}/{doc}`, served from the maps-assets CDN. {api_note}\n\n",
            "## Getting the contents\n\n"]
     if kind == "catalog":
         out.append(f"Follow the `rel:child` links in `{doc}`. Each carries a title and a "
@@ -110,6 +129,17 @@ def agents(*, title: str, kind: str, path: str, children: int,
     if formats:
         out.append("\n## Assets you will find\n\n")
         out.extend(f"- **{name}** — {how}\n" for name, how in formats)
+    if service:
+        # The endpoint that motivated #280: a consumer that loads the whole OGC API Features
+        # collection to draw it OOMs the service. Name the query endpoint AND say what each thing is
+        # for — filtered queries on the API, whole-layer/bulk on the GeoParquet asset.
+        out.append("\n## Querying\n\n"
+                   "These items are also served live via OGC API Features — each item carries a "
+                   "`rel:service` link to its own `/collections/<item id>` endpoint. Use it for "
+                   "attribute queries and server-side spatial filters that return a few features. "
+                   "For a whole layer, or bulk or spatial analysis, read the GeoParquet `data` asset "
+                   "directly (it is range-readable) instead of paging the API — that is the cheaper "
+                   "path and avoids overloading the service.\n")
     out.append("\n## Conventions\n\n"
                "- Geometry and `bbox` are WGS84 (EPSG:4326). An asset in another projection carries "
                "its own `proj:code`, which overrides the item's.\n"

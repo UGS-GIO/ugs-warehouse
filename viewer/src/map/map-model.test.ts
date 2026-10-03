@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { boundsOf, clampSize, DETENTS, hasFootprint, layerParam, mapKindOf, nearestDetent, nextPick,
-  NO_LAYERS, parseLayerParam, validBbox } from "./map-model";
+import { type ActiveLayer, boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam,
+  mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
+  validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
 
 describe("validBbox", () => {
@@ -113,6 +114,57 @@ describe("nearestDetent", () => {
   });
 });
 
+describe("releaseDetent", () => {
+  it("snaps to the nearest detent on a slow release", () => {
+    expect(releaseDetent(0.5, 0.2)).toBe(1);
+  });
+
+  it("goes one detent further on a flick, even a short one", () => {
+    expect(releaseDetent(0.1, 2)).toBe(1);
+    expect(releaseDetent(0.6, 2)).toBe(2);
+    expect(releaseDetent(0.5, -2)).toBe(0);
+    expect(releaseDetent(0.9, -2)).toBe(1);
+    expect(releaseDetent(DETENTS[1], -2)).toBe(0);
+    expect(releaseDetent(DETENTS[1], 2)).toBe(2);
+  });
+
+  it("stays at the end when a flick has nowhere further to go", () => {
+    expect(releaseDetent(DETENTS[2], 2)).toBe(2);
+    expect(releaseDetent(DETENTS[0], -2)).toBe(0);
+  });
+});
+
+describe("contentTakesDrag", () => {
+  it("drags down only from the top of the content", () => {
+    expect(contentTakesDrag(0, 5, true, 2)).toBe(true);
+    expect(contentTakesDrag(0, 5, false, 2)).toBe(false);
+  });
+
+  it("drags up only while the sheet can grow", () => {
+    expect(contentTakesDrag(0, -5, false, 1)).toBe(true);
+    expect(contentTakesDrag(0, -5, true, 2)).toBe(false);
+  });
+
+  it("leaves a sideways swipe alone", () => {
+    expect(contentTakesDrag(6, 5, true, 1)).toBe(false);
+  });
+});
+
+describe("the `sheet` param", () => {
+  it("round-trips every tab and detent", () => {
+    for (const tab of ["layers", "info"] as const) {
+      for (const detent of [0, 1, 2]) expect(parseSheet(sheetParam({ tab, detent }))).toEqual({ tab, detent });
+    }
+  });
+
+  it("leaves the default out of the URL, and reads junk as the default", () => {
+    expect(sheetParam({ tab: "layers", detent: 0 })).toBeUndefined();
+    expect(sheetParam({ tab: "info", detent: 2 })).toBe("info-full");
+    expect(parseSheet("info-sideways")).toEqual({ tab: "info", detent: 0 });
+    expect(parseSheet(undefined)).toEqual({ tab: "layers", detent: 0 });
+  });
+});
+
 describe("clampSize", () => {
   it("clamps into range", () => {
     expect(clampSize(10, 100, 500, 200)).toBe(100);
@@ -145,5 +197,88 @@ describe("the `l` layer param", () => {
 
   it("ignores empty segments from a hand-edited url", () => {
     expect(parseLayerParam("a,,b,")).toEqual(["a", "b"]);
+  });
+});
+
+describe("reorderLayers", () => {
+  it("moves a layer down the draw order", () => {
+    expect(reorderLayers(["a", "b", "c"], 0, 2)).toEqual(["b", "c", "a"]);
+  });
+
+  it("moves a layer up the draw order", () => {
+    expect(reorderLayers(["a", "b", "c"], 2, 0)).toEqual(["c", "a", "b"]);
+  });
+
+  it("is a no-op when the layer doesn't move", () => {
+    expect(reorderLayers(["a", "b", "c"], 1, 1)).toEqual(["a", "b", "c"]);
+  });
+
+  it("does not mutate the input array", () => {
+    const ids = ["a", "b", "c"];
+    reorderLayers(ids, 0, 2);
+    expect(ids).toEqual(["a", "b", "c"]);
+  });
+
+  it("returns the order unchanged for an out-of-range index (a bad drag can't corrupt ?l=)", () => {
+    expect(reorderLayers(["a", "b", "c"], -1, 1)).toEqual(["a", "b", "c"]);
+    expect(reorderLayers(["a", "b", "c"], 1, 9)).toEqual(["a", "b", "c"]);
+  });
+});
+
+describe("colorForId", () => {
+  it("gives a layer the same color every time, regardless of active-set order (drag can't recolor it)", () => {
+    expect(colorForId("hazards_qfaults")).toBe(colorForId("hazards_qfaults"));
+  });
+
+  it("only ever returns a palette color", () => {
+    for (const id of ["a", "hazards_qfaults", "geolmap_500k", "wells_spatial"]) {
+      expect(LAYER_COLORS).toContain(colorForId(id));
+    }
+  });
+
+  it("spreads distinct ids across the palette rather than collapsing to one color", () => {
+    const ids = ["a", "b", "c", "d", "hazards_qfaults", "geolmap_500k", "wells_spatial", "landslides"];
+    expect(new Set(ids.map(colorForId)).size).toBeGreaterThan(1);
+  });
+});
+
+describe("orderedSublayerIds", () => {
+  const L = (id: string, extra: Partial<ActiveLayer> = {}): ActiveLayer => ({ id, title: id, ...extra });
+  const styled = (counts: Record<string, number>) => (id: string) => counts[id];
+
+  it("gives an unstyled vector layer its fill/line/circle fallback ids", () => {
+    expect(orderedSublayerIds([L("qfaults")], { styledCount: () => undefined, cogReady: false }))
+      .toEqual(["pm-qfaults-fill", "pm-qfaults-line", "pm-qfaults-circle"]);
+  });
+
+  it("gives a styled vector layer one id per resolved style layer, in order", () => {
+    expect(orderedSublayerIds([L("qfaults")], { styledCount: styled({ qfaults: 3 }), cogReady: false }))
+      .toEqual(["pm-qfaults-0", "pm-qfaults-1", "pm-qfaults-2"]);
+  });
+
+  it("renders no ids for a resolved-but-empty style (map.tsx draws nothing there — not the fallback)", () => {
+    expect(orderedSublayerIds([L("qfaults")], { styledCount: styled({ qfaults: 0 }), cogReady: false }))
+      .toEqual([]);
+  });
+
+  it("maps a raster PMTiles mosaic and a ready COG to their single raster id", () => {
+    expect(orderedSublayerIds([L("geo", { rasterPmHref: "x" })], { styledCount: () => undefined, cogReady: false }))
+      .toEqual(["rpm-geo-raster"]);
+    expect(orderedSublayerIds([L("dem", { cogHref: "x" })], { styledCount: () => undefined, cogReady: true }))
+      .toEqual(["cog-dem-raster"]);
+  });
+
+  it("omits a COG until its protocol is ready, and a zarr datacube always (the deck overlay draws it)", () => {
+    expect(orderedSublayerIds([L("dem", { cogHref: "x" })], { styledCount: () => undefined, cogReady: false }))
+      .toEqual([]);
+    expect(orderedSublayerIds([L("cube", { zarr: { href: "x", variable: "v", pinDims: [] } })],
+      { styledCount: () => undefined, cogReady: true })).toEqual([]);
+  });
+
+  it("flattens across layers in the given order, and slugs ids that aren't source-id-safe", () => {
+    expect(orderedSublayerIds([L("a.b:c", { rasterPmHref: "x" }), L("qfaults")],
+      { styledCount: () => undefined, cogReady: false }))
+      .toEqual(["rpm-a_b_c-raster", "pm-qfaults-fill", "pm-qfaults-line", "pm-qfaults-circle"]);
+    expect(slugOf("a.b:c")).toBe("a_b_c");
   });
 });

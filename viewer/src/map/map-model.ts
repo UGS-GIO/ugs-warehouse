@@ -4,6 +4,7 @@
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
 import type { StacDoc } from "@/stac";
+import { to2d } from "@/lib/bbox";
 
 // Which map surface an item needs. A single consolidated map renders the right sources per kind, so
 // switching between items of different kinds swaps sources instead of remounting a whole component
@@ -33,8 +34,7 @@ export function hasFootprint(item: StacDoc | undefined): boolean {
 // down; here a bad bbox just means "no auto-fit" (the map keeps its default view).
 export function validBbox(bb: number[] | undefined): [number, number, number, number] | undefined {
   if (!Array.isArray(bb)) return undefined;
-  const h = bb.length >= 6 ? [bb[0], bb[1], bb[3], bb[4]]
-    : bb.length >= 4 ? [bb[0], bb[1], bb[2], bb[3]] : undefined;
+  const h = to2d(bb);
   if (!h) return undefined;
   const [w, s, e, n] = h;
   const okLon = (v: number) => Number.isFinite(v) && v >= -180 && v <= 180;
@@ -50,9 +50,10 @@ export function boundsOf(item: StacDoc | undefined): [[number, number], [number,
 
 // Map feature-click → table selection. The nonce bumps on every click so re-clicking the SAME
 // feature id still re-fires the downstream table effect (a bare id wouldn't change, so it wouldn't).
-export type MapPick = { id: number; nonce: number };
-export function nextPick(prev: MapPick | null, id: number): MapPick {
-  return { id, nonce: (prev?.nonce ?? 0) + 1 };
+// `props` are the tile feature's attributes, checked against the row the id finds (lib/same-feature).
+export type MapPick = { id: number; nonce: number; props?: Record<string, unknown> };
+export function nextPick(prev: MapPick | null, id: number, props?: Record<string, unknown>): MapPick {
+  return { id, nonce: (prev?.nonce ?? 0) + 1, props };
 }
 
 // Mobile sheet snap points, as a fraction of the map area: peek / half / full.
@@ -70,6 +71,38 @@ export function nearestDetent(frac: number): number {
   return best;
 }
 
+// The phone sheet in the URL (`sheet`): its tab, then how far up it is. `layers` is Layers at half,
+// `info-full` is Info at full, `info-peek` is Info lowered. Absent, or anything unknown, is a
+// Layers peek, so the default map URL stays bare.
+export type SheetTab = "layers" | "info";
+export type SheetState = { tab: SheetTab; detent: number };
+const SHEET_AT = ["peek", "", "full"];
+export function parseSheet(v: string | undefined): SheetState {
+  const [tab, at = ""] = (v ?? "").split("-");
+  const detent = SHEET_AT.indexOf(at);
+  return { tab: tab === "info" ? "info" : "layers", detent: !!v && detent >= 0 ? detent : 0 };
+}
+export function sheetParam({ tab, detent }: SheetState): string | undefined {
+  if (tab === "layers" && detent === 0) return undefined;
+  return [tab, SHEET_AT[detent]].filter(Boolean).join("-");
+}
+
+// Where a released drag settles. A flick (speed in sheet-heights per second, + is up) goes one
+// detent past where the sheet is, in the flick's direction, however short the drag was.
+export const FLICK_SPEED = 0.8;
+export function releaseDetent(frac: number, speed: number): number {
+  if (speed > FLICK_SPEED) return Math.min(DETENTS.filter((d) => d <= frac + 1e-9).length, DETENTS.length - 1);
+  if (speed < -FLICK_SPEED) return Math.max(DETENTS.filter((d) => d < frac - 1e-9).length - 1, 0);
+  return nearestDetent(frac);
+}
+
+// Whether a swipe on the sheet's content moves the sheet instead of scrolling it, from its first
+// move (dy + is down): down only from the top, up only while the sheet can still grow.
+export function contentTakesDrag(dx: number, dy: number, atTop: boolean, detent: number): boolean {
+  if (Math.abs(dy) <= Math.abs(dx)) return false;
+  return dy > 0 ? atTop : detent < DETENTS.length - 1;
+}
+
 // Resizable pane size, clamped. Non-finite (a stored value from an older build, or NaN off a
 // pointer event) falls back to the default rather than collapsing the pane to zero.
 export function clampSize(n: number, min: number, max: number, fallback: number): number {
@@ -77,10 +110,14 @@ export function clampSize(n: number, min: number, max: number, fallback: number)
   return Math.max(min, Math.min(max, n));
 }
 
-// Table row-click → map fly target. `key` identifies the SELECTION (row offset / feature id) so the
-// map re-flies on every distinct pick — even two features at the same lat/lon (identical bbox). The
-// bbox→geometry upgrade within one pick reuses the same key, so it doesn't double-fly.
-export type FocusSel = { bbox?: [number, number, number, number]; geometry?: GeoJSON.Geometry | null; key?: string | number };
+// Table row-click / map-feature-click → map highlight + fly target. `key` identifies the SELECTION
+// so the map re-flies on every distinct pick, even two features at the same lat/lon (identical
+// bbox). `featureId` is the feature to outline via setFeatureState on the PMTiles tile (the exact
+// geometry is already on the map, so nothing is read from the parquet). `bbox` drives the fly.
+export type FocusSel = {
+  bbox?: [number, number, number, number]; featureId?: number; key?: string | number;
+  props?: Record<string, unknown>;   // the row's attributes, checked against the tile feature
+};
 
 // A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
 // layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
@@ -88,6 +125,7 @@ export type FocusSel = { bbox?: [number, number, number, number]; geometry?: Geo
 export type ActiveLayer = {
   id: string; title: string; bbox?: number[];
   pmHref?: string; pmLayer?: string; styleUrl?: string;
+  tableHref?: string;   // the layer's GeoParquet, for saving its table offline
   cogHref?: string;
   rasterPmHref?: string;
   // Zarr datacube — one object, because the store is useless without the variable and the dims to
@@ -95,13 +133,38 @@ export type ActiveLayer = {
   zarr?: { href: string; variable: string; pinDims: string[] };
 };
 
+// Geometry gates for the unstyled fallback render — without them its circle layer puts a dot on
+// every polygon and line VERTEX. Multi- names are for GeoJSON sources; tiles use the singular.
+type GeomFilter = ["match", ["geometry-type"], string[], true, false];
+export const GEOM_FILTER: Record<"fill" | "line" | "point", GeomFilter> = {
+  fill: ["match", ["geometry-type"], ["Polygon", "MultiPolygon"], true, false],
+  line: ["match", ["geometry-type"], ["LineString", "MultiLineString", "Polygon", "MultiPolygon"], true, false],
+  point: ["match", ["geometry-type"], ["Point", "MultiPoint"], true, false],
+};
+
 // A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
 // to open it on click. Aspatial items (no bbox) are filtered out by the caller.
 export type Footprint = { href: string; id: string; title: string; bbox: number[] };
 
-// Distinct colors cycled per active layer.
-export const LAYER_COLORS = ["#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2", "#be185d", "#65a30d"];
-export const colorFor = (i: number) => LAYER_COLORS[i % LAYER_COLORS.length];
+// Distinct, saturated, mid-dark colors that read on the light, dark, and satellite basemaps. Cycled
+// per active layer by colorForId. Kept larger than a handful of layers to hold down repeats.
+export const LAYER_COLORS = [
+  "#d1491c", "#2b6cdf", "#1a7f4b", "#9333ea", "#d97706", "#0891b2",
+  "#be185d", "#65a30d", "#ca8a04", "#4338ca", "#a21caf", "#0f766e",
+];
+
+// A layer's swatch color, keyed to its id — NOT its position in the active set — so toggling a layer
+// or dragging it up/down the draw order never recolors it or its neighbours (that stability is the
+// point; an index-based color would reshuffle on every reorder). A deterministic string hash picks a
+// palette slot. Colors are stable but NOT guaranteed unique: two ids can land on the same slot, more
+// often the more layers are on at once, so the legend labels each layer to disambiguate. A fully
+// collision-free scheme would trade off either the curated palette (generated hues) or that per-id
+// stability (assigning distinct colors across the active set, which recolors on add/remove).
+export const colorForId = (id: string): string => {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) h = (h * 31 + id.charCodeAt(i)) | 0;
+  return LAYER_COLORS[Math.abs(h) % LAYER_COLORS.length];
+};
 
 // The `l` search param. Three states, and collapsing two of them is why the last layer could not
 // be turned off: absent = no choice yet (the open item draws), `none` = every layer off, else a
@@ -113,3 +176,43 @@ export const parseLayerParam = (l?: string): string[] | undefined =>
 
 export const layerParam = (ids?: string[]): string | undefined =>
   ids ? (ids.length ? ids.join(",") : NO_LAYERS) : undefined;
+
+// Move the active layer at `from` to `to` (drag-reorder the draw order), the rest shifting to fill.
+// Returns a NEW array and never mutates the input; an out-of-range index leaves the order untouched,
+// so a stray drag event can't corrupt the ?l= set.
+export const reorderLayers = (ids: string[], from: number, to: number): string[] => {
+  if (from < 0 || to < 0 || from >= ids.length || to >= ids.length) return ids.slice();
+  const next = ids.slice();
+  const [moved] = next.splice(from, 1);
+  next.splice(to, 0, moved);
+  return next;
+};
+
+// Map/source/layer ids are keyed by a STABLE slug of the layer id, never the array index: index-based
+// ids shift when a layer toggles off and maplibre throws "source id changed" on the rename. Shared by
+// the map render and the reorder reconcile so their ids can't drift.
+export const slugOf = (id: string): string => id.replace(/[^a-zA-Z0-9_]/g, "_");
+
+// The GL layer ids each active layer draws, in bottom→top draw order, matching what map.tsx renders:
+// a raster PMTiles mosaic → one `rpm-<slug>-raster`; a COG → one `cog-<slug>-raster` (only once its
+// protocol is ready); a vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
+// the unstyled fallback `pm-<slug>-fill/line/circle`; a zarr datacube → none (a deck.gl overlay draws
+// it, outside maplibre's layer stack). Flattened across `layers` in order, so the reorder reconcile
+// can walk the list and moveLayer each. Pure so it's unit-tested against the render.
+export function orderedSublayerIds(
+  layers: ActiveLayer[],
+  opts: { styledCount: (id: string) => number | undefined; cogReady: boolean },
+): string[] {
+  return layers.flatMap((l) => {
+    const s = slugOf(l.id);
+    if (l.zarr) return [];
+    if (l.rasterPmHref) return [`rpm-${s}-raster`];
+    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`] : [];
+    const n = opts.styledCount(l.id);
+    // map.tsx renders `styleLayers ? styleLayers.map(...) : fallback` — a resolved-but-empty style
+    // ([]) is truthy there and draws nothing, so mirror it with `n != null` (0 → no ids), not `n > 0`.
+    return n != null
+      ? Array.from({ length: n }, (_, li) => `pm-${s}-${li}`)
+      : [`pm-${s}-fill`, `pm-${s}-line`, `pm-${s}-circle`];
+  });
+}

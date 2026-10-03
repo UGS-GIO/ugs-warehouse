@@ -18,7 +18,10 @@ dist/
 out/
 tmp/
 *.pmtiles
+!viewer/src/**/__fixtures__/*.pmtiles
 *.parquet
+# test fixtures are small and committed
+!viewer/src/**/__fixtures__/*.parquet
 
 # generated discovery dump (not source)
 discovered_topics.txt
@@ -62,3 +65,9 @@ infra/.terraform.lock.hcl
 
 # Firebase Hosting deploy cache
 .firebase/
+
+# Claude Code worktrees
+.claude/worktrees/
+
+# Personal working notes (session handoffs) stay local.
+docs/HANDOFF.md

@@ -50,8 +50,10 @@ the Dockerfile — `git apply` fails the build if upstream drifts, which is the 
 
 The id column is resolved by convention — first match of `feature_id`, `fid`, `ogc_fid`, `objectid`,
 `gid`, `id`. DuckDB views have no primary key, so there is nothing authoritative to read; every
-warehouse topic carries `feature_id` (minted in `vector/transform.py`, stable across ingests and
-already the MVT feature id in PMTiles), so the OGC `id` and the PMTiles `id` are the same value.
+warehouse topic carries `feature_id` (minted in `vector/transform.py`, repeatable for unchanged data
+and already the MVT feature id in PMTiles), so the OGC `id` and the PMTiles `id` are the same value.
+It is a row number, not a durable key: any change to a topic's rows, or to the sort, renumbers
+its features, so a client must not store it across ingests.
 
 **Known cost:** the first `/collections` on a cold container resolves an extent per collection
 against remote parquet — ~18s, then cached for the life of the process (~0.03s). Collections are
@@ -182,6 +184,40 @@ in `check_limits.py`. The failure message spells out the commands.
 Streaming the response instead of buffering would make memory roughly constant and retire this whole
 coupling. That is an upstream change.
 
+### Concurrent load and DuckDB memory (ALL-5869)
+
+The table above is single-client. There is a second, separate pressure: **many clients at once.** A
+GIS client (AGOL / ArcGIS Pro / QGIS) renders one view as ~12 parallel `bbox` requests, and on heavy
+polygon layers each response is 50–133MB (a full-extent pull is ~133MB). featureserv shares **one in-process DuckDB instance** across
+every in-flight request, so under Cloud Run's default concurrency of 80 those queries collectively
+exhausted DuckDB's own memory (`Out of Memory Error … 1.5 GiB/1.5 GiB used`) — a 500/503 storm on a
+layer that serves fine one request at a time. The fix is three coupled knobs, validated by a pre-merge
+load test on a `--no-traffic` tagged revision:
+
+- **`--concurrency=4`** (`cloudbuild.yaml`) — caps how many heavy requests share an instance. Biggest
+  lever, and it bounds *both* pressures: the shared DuckDB **and** the Go-side response buffering,
+  which is the half that actually scales with concurrency (featureserv holds ~2.5 heap copies of each
+  50–84MB response at the marshal peak). Tradeoff: more cold starts on this scale-to-zero service,
+  each re-deriving the collection list (~20s), since a burst fans out across more instances.
+- **`--cpu=2 --memory=8Gi`** — 4Gi was NOT enough: the load test showed 4 concurrent *full-layer* pulls
+  (133MB each) OOM-kill a 4Gi container, and an OOM mid-stream silently truncates a 200. The wall is
+  the Go buffering (4 × 133MB × ~2.5 copies), which the DuckDB limit can't govern; 8Gi holds it. cpu=2
+  is required for 8Gi (Cloud Run caps 1 vCPU at 4Gi).
+- **DuckDB pragmas** on every pooled connection (`patches/0002-duckdb-memory-limits.patch`, applied in
+  `catalog_db.go` `dbConnect`): `memory_limit='3GB'` caps DuckDB *below* the container (leaving the
+  rest of the 8Gi for that Go buffering) so a runaway query errors cleanly rather than OOM-killing the
+  whole process; `threads=1` stops one query's parallel operators from spiking;
+  `preserve_insertion_order=false` lets large scans stream rather than
+  buffer a row order no GeoJSON client relies on. Set via the driver's `connInitFn` — a bare
+  `db.Exec("SET …")` would land on one arbitrary connection in the pool.
+
+`memory_limit`, `--memory`, and `--concurrency` are now three coupled numbers, and **only** the
+`--memory`×`LimitMax` pairing is machine-checked (`check_limits.py`) — and that check is
+**sequential-load only**. Keep `memory_limit` below `--memory` with headroom for Go buffering at the
+concurrency cap, and measure a new (memory, concurrency, limit) triple under a real parallel burst
+before trusting it. Gating the DuckDB limit against the container the way `LimitMax` is gated is a
+tracked follow-up.
+
 ## Notes / upgrade path
 
 - **The db is a mirror of the catalog, not a live query against it.** Boot regen shrinks the staleness
@@ -198,11 +234,8 @@ coupling. That is an upstream change.
 - `MODE=table` (env) materializes layers into the db instead of views — a full snapshot (bigger image,
   and it duplicates the data), fallback if a future featureserv drops view support. Incremental
   rebinding is skipped in this mode: an unchanged URL doesn't mean the materialized rows are current.
-- **Paging is a floor, not a fix.** `LimitMax = 100000` clears every topic we serve today
-  (`enmin_plss_sections` is the largest at 84,756), but featureserv emits no `numberMatched` and no
-  `rel="next"` link — neither exists anywhere in its source — so truncation stays *undetectable*. A
-  layer that grows past the cap fails the same silent way. The real fix is an upstream patch that
-  sets `NumberMatched` and emits next links (ALL-5402).
+- **Paging.** `LimitMax = 10000`; larger layers page with the `numberMatched` and `rel="next"` that
+  `patches/0001-ogc-conformance.patch` adds.
 - Still upstream, still unfixed: `geometrytype` is always the literal `GEOMETRY` and `srid` the
   literal `4326` (harmless for us — every topic is 4326 and homogeneous, verified across all 27);
   `orderby=` and `crs=` are accepted and silently ignored; `precision=` and `groupby=` 500;

@@ -137,6 +137,18 @@ done
 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" --project="${PROJECT}" \
   --member="serviceAccount:${RUNTIME_SA}" --role=roles/iam.serviceAccountUser --quiet >/dev/null
 
+# Admin console: run and cancel only its own jobs (admin/ops/jobs.py), read-only everywhere else.
+ADMIN_SA="${ADMIN_SA:-warehouse-admin-run@${PROJECT}.iam.gserviceaccount.com}"
+echo "→ admin console: run.developer on its jobs only, run.viewer on the project"
+for JOB in ugs-pubs-pipeline geolmap-harvest ugs-pubs-ingest ugs-pubs-thumbs ugs-warehouse-ingest \
+    ugs-warehouse-restyle ugs-warehouse-ducklake-maintain ugs-pubs-fts ugs-pubs-embed \
+    ugs-geolmap-mosaics ugs-topics-thumbs ugs-pubs-graph ugs-warehouse-retire; do
+  gcloud run jobs add-iam-policy-binding "${JOB}" --region="${REGION}" --project="${PROJECT}" \
+    --member="serviceAccount:${ADMIN_SA}" --role=roles/run.developer --quiet >/dev/null
+done
+gcloud projects add-iam-policy-binding "${PROJECT}" --member="serviceAccount:${ADMIN_SA}" \
+  --role=roles/run.viewer --condition=None --quiet >/dev/null
+
 # Daily DuckLake maintenance — Cloud Scheduler triggers the maintenance Cloud Run job so the
 # append-only catalog stays bounded/fast without anyone remembering the ops-console button. The
 # scheduler calls the Cloud Run Admin API :run endpoint with an OAuth token minted for RUNTIME_SA
@@ -220,7 +232,7 @@ ALERT_NAME="Warehouse job execution failed"
 ALERT_API="https://monitoring.googleapis.com/v3/projects/${PROJECT}/alertPolicies"
 ALERT_TOKEN=$(gcloud auth print-access-token)
 # Quotes are pre-escaped: this is interpolated INTO a JSON string below.
-WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\")'
+WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\", \"ugs-warehouse-retire\")'
 
 echo "→ alert policy: ${ALERT_NAME}"
 if curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200" \

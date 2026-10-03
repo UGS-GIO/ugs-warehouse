@@ -234,7 +234,8 @@ def build_item(p: dict, attachments: list[dict], *,
     undated = {} if dt else {
         "start_datetime": EARLIEST_RECORD,
         "end_datetime": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT00:00:00Z"),
-        "ugs:date_unknown": True}
+        "ugs:date_unknown": True,
+    }
 
     # A mirrored file is served from OUR CDN, with the publisher's URL kept as an `alternate` —
     # same bytes, two locations. Provenance survives, and a client that wants the publisher's copy

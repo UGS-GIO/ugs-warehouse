@@ -92,6 +92,11 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
         {"series_id": "MD-50", "series": "MD", "pub_year": "1954", "pub_publisher": "",
          "pub_name": "Mining district file 50"}, [], override={}))
 
+    # An undated mining district file: no pub_year, so a null datetime with the source's interval.
+    stac.write_item(pubs_sink.build_item(
+        {"series_id": "MD-134-6", "series": "MD", "pub_year": "", "pub_publisher": "",
+         "pub_name": "List of Beaver County Properties"}, [], override={}))
+
     # A mining district file whose only file is the publisher's plain TIFF scan.
     stac.write_item(pubs_sink.build_item(
         {"series_id": "MD-1002", "series": "MD", "pub_year": "1956", "pub_publisher": "",

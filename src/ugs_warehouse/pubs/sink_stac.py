@@ -10,6 +10,7 @@ Ported from ugs-geolmap-cog-poc/catalog/build_pubs_stac.py — adapted to `core.
 """
 from __future__ import annotations
 
+import datetime
 import math
 import os
 import re
@@ -29,6 +30,9 @@ UGS_NAMES = {"UGS", "UGMS", "UTAH GEOLOGICAL SURVEY", "UTAH GEOLOGICAL AND MINER
 # A client picks a viewer, a downloader or nothing at all from the media type, so an unmapped
 # extension falling back to `application/octet-stream` costs the reader the file. `.tif` here is
 # the publisher's plain scan; a COG we produced carries COG_MIME, set on the asset directly.
+# The earliest pub_year in the publications source: the start of an undated item's interval.
+EARLIEST_RECORD = "1886-01-01T00:00:00Z"
+
 MEDIA = {".pdf": "application/pdf", ".zip": "application/zip",
          ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
          ".xls": "application/vnd.ms-excel",
@@ -224,6 +228,13 @@ def build_item(p: dict, attachments: list[dict], *,
     item_id = item_id_for(sid)
     yr = (p.get("pub_year") or "").strip()
     dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
+    # STAC has no "unknown" date: a null datetime needs an interval. For an undated publication the
+    # only true one runs from the source's earliest dated record to now, flagged so no reader takes
+    # it for a publication date.
+    undated = {} if dt else {
+        "start_datetime": EARLIEST_RECORD,
+        "end_datetime": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT00:00:00Z"),
+        "ugs:date_unknown": True}
 
     # A mirrored file is served from OUR CDN, with the publisher's URL kept as an `alternate` —
     # same bytes, two locations. Provenance survives, and a client that wants the publisher's copy
@@ -390,6 +401,7 @@ def build_item(p: dict, attachments: list[dict], *,
         geometry=geom, bbox=bbox, datetime_iso=dt,
         properties={
             "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop
+            **undated,
             "title": title,
             # STAC gives `description` a minimum length, so a pub with no citation omits the field
             # rather than publishing "". Same for the UGS-prefixed strings below: an empty value

@@ -320,19 +320,19 @@ INSTALL spatial; LOAD spatial;
 
 -- First 10 rows, without geometry
 SELECT * EXCLUDE (geom)
-FROM read_parquet( + P + )
+FROM read_parquet('https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet')
 LIMIT 10;
 
 -- Count the features that overlap a bounding box
 SELECT count(*)
-FROM read_parquet( + P + )
+FROM read_parquet('https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet')
 WHERE bbox_xmin < -111.8 AND bbox_xmax > -112.0
   AND bbox_ymin <  41.0 AND bbox_ymax >  40.8;
 
 -- Export to CSV with the geometry as WKT
 COPY (
   SELECT * EXCLUDE (geom), ST_AsText(geom) AS wkt
-  FROM read_parquet( + P + )
+  FROM read_parquet('https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet')
 ) TO 'faults.csv' (HEADER);
 ```
 
@@ -363,16 +363,19 @@ gdalinfo /vsicurl/https://maps-assets.geology.utah.gov/geolmap/cogs/M-299DM.cog.
 Tableau, Power BI and Excel work well with layer attributes. Their support for geometry is
 limited, so use a GIS tool for maps.
 
+The GeoParquet files and the CSV export from the [web viewer](#web-viewer) both have
+`bbox_xmin` and `bbox_ymin` columns. For a point layer, these columns are the longitude and
+latitude of each point. The CSV also has the geometry as WKT text.
+
 ### Power BI
 
-Click **Get Data** > **Parquet** (or **Web**) and enter a GeoParquet URL. You can also export a
-CSV from the [web viewer](#web-viewer). Use the latitude and longitude or `bbox_*` columns in a map
-visual.
+Click **Get Data** > **Parquet** (or **Web**) and enter a GeoParquet URL, or load a CSV export. In
+a map visual, use `bbox_xmin` as longitude and `bbox_ymin` as latitude.
 
 ### Tableau
 
-Export a CSV from the [web viewer](#web-viewer) and plot points by latitude and longitude. For line
-and polygon layers, convert to GeoPackage with [ogr2ogr](#gdal-and-ogr2ogr) and use Tableau's
+Load a CSV export and plot points with `bbox_xmin` as longitude and `bbox_ymin` as latitude. For
+line and polygon layers, convert to GeoPackage with [ogr2ogr](#gdal-and-ogr2ogr) and use Tableau's
 spatial file connector.
 
 You can use DuckDB to filter rows, select columns or drop the geometry before you load the data.
@@ -396,5 +399,6 @@ Each layer's STAC item lists its fields (`table:columns` on the data asset), its
 colors (`classification:classes`), its CRS and extent, and links to each format. You can use the
 catalog in scripts instead of hard-coded URLs.
 
+---
 
 If a layer does not load, or you have a question, contact the Utah Geological Survey.

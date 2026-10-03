@@ -158,7 +158,7 @@ export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
     ?? assets.find((a) => a.type?.startsWith("image/"));
 };
 
-// OGC API Features endpoint base (the duckdb_featureserv service). Set at build time via
+// OGC API Features endpoint base (the featureserv/ pygeoapi service). Set at build time via
 // VITE_FEATURES_BASE, or per-session via ?features=<url>. Empty → the link is hidden (no dead
 // link). A serving-topic's STAC item id == its featureserv collection id.
 export const FEATURES_BASE = (

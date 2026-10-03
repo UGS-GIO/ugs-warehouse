@@ -93,7 +93,7 @@ def agents(*, title: str, kind: str, path: str, children: int,
            items: list[dict] | None = None, service: bool = False) -> str:
     """What a program needs to use this node without fetching everything first.
 
-    `service` is True for the nodes duckdb_featureserv serves live (flat collections and the
+    `service` is True for the nodes the Features service serves live (flat collections and the
     serving-topic schemas, per `core.stac.has_feature_service`). Those DO have a query endpoint —
     OGC API Features — so the note names it and steers bulk/whole-layer work to the GeoParquet asset
     instead, rather than the old blanket claim that no query endpoint exists (#280).

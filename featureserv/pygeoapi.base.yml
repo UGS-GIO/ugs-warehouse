@@ -1,0 +1,35 @@
+# Everything but `resources`, which start.py fills from the catalog refresh's layer list.
+server:
+  bind: {host: 0.0.0.0, port: 9000}
+  url: ${SERVER_URL}
+  mimetype: application/json; charset=UTF-8
+  encoding: utf-8
+  gzip: true
+  languages: [en-US]
+  cors: true
+  pretty_print: false
+  # A bare /items gets 1000 features; clients page past 10000 with the `next` link.
+  limits: {default_items: 1000, max_items: 10000}
+  map:
+    url: https://tile.openstreetmap.org/{z}/{x}/{y}.png
+    attribution: '&copy; <a href="https://openstreetmap.org/copyright">OpenStreetMap contributors</a>'
+logging:
+  level: ERROR
+metadata:
+  identification:
+    title: Utah Geological Survey OGC API Features
+    description: OGC API Features over the UGS geospatial warehouse GeoParquet. For standards clients (ArcGIS Pro, QGIS). UGS web maps use PMTiles.
+    keywords: [geology, Utah]
+    keywords_type: theme
+    terms_of_service: https://creativecommons.org/licenses/by/4.0/
+    url: https://geology.utah.gov
+  license:
+    name: CC-BY-4.0
+    url: https://creativecommons.org/licenses/by/4.0/
+  provider:
+    name: Utah Geological Survey
+    url: https://geology.utah.gov
+  contact:
+    name: Utah Geological Survey
+    url: https://geology.utah.gov
+    role: pointOfContact

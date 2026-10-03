@@ -1,0 +1,8 @@
+# Pinned exactly: ugs_parquet.py subclasses pygeoapi's Parquet provider, and test_ugs_parquet.py
+# runs in the image build so an upgrade that breaks it fails there.
+pygeoapi==0.24.0
+gunicorn==26.2.0
+geopandas==1.2.0
+pyarrow==25.0.1
+s3fs==2026.9.0
+pytest==8.4.2

@@ -78,6 +78,9 @@ THUMBS_PREFIX = os.environ.get("WAREHOUSE_THUMBS_PREFIX", "warehouse/thumbs")
 # source=manual. Ingest prefers these over source metadata + they survive reingest — for backfilling
 # fields the source doesn't carry reliably. Edited from the ops console.
 OVERRIDES_PREFIX = os.environ.get("WAREHOUSE_OVERRIDES_PREFIX", "warehouse/overrides")
+# The layer list the OGC API Features service (featureserv/) reads at startup, written by the
+# catalog refresh.
+FEATURES_PREFIX = os.environ.get("WAREHOUSE_FEATURES_PREFIX", "warehouse/featureserv")
 
 # Canonical media types for the cloud-native artifacts — one source of truth across all producers
 # (was redefined in ~8 sink/harvest modules).
@@ -86,11 +89,10 @@ PARQUET_MIME = "application/vnd.apache.parquet"
 PMTILES_MIME = "application/vnd.pmtiles"
 WEBP_MIME = "image/webp"
 
-# OGC API Features endpoint (e.g., pg_featureserv base URL)
-# The deployed duckdb-featureserv. This is the Cloud Run hostname, not a vanity domain: the
-# placeholder `api.geology.utah.gov` that used to sit here is NXDOMAIN, so every catalog document
-# advertised a link that resolved nowhere. Deploy-specific by nature — override PGF_BASE_URL once
-# a stable domain fronts the service, and republish the catalog.
+# The deployed OGC API Features service (featureserv/). This is the Cloud Run hostname, not a
+# vanity domain: the placeholder `api.geology.utah.gov` that used to sit here is NXDOMAIN, so every
+# catalog document advertised a link that resolved nowhere. Deploy-specific by nature — override
+# PGF_BASE_URL once a stable domain fronts the service, and republish the catalog.
 PGF_BASE_URL = os.environ.get(
     "PGF_BASE_URL",
     "https://ugs-warehouse-features-xedvkyurga-uc.a.run.app",

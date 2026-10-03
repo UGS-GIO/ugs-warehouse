@@ -106,6 +106,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Render each vector serving-topic's styled PMTiles → preview PNG (headless MapLibre; a neutral "
         "sand style when unstyled). Content-hash skip — re-renders only topics whose style changed. "
         "Run a Vector reingest after to bind the new thumbnail assets. 3 shards.", tasks=3),
+    # Out of STAGES while the viewer has no semantic search; here so a manual run shows in Watch.
+    Job("embed", "ugs-pubs-embed", "Build semantic search",
+        "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
+        "classification changes.", danger=True),
     Job("graph", "ugs-pubs-graph", "Build knowledge graph",
         "Rebuild the publications knowledge graph (nodes/edges Parquet) — citation + co-author + "
         "semantic edges. Reads pub metadata + embeddings; safe to re-run."),

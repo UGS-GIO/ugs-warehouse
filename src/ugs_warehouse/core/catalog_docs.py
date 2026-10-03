@@ -120,6 +120,9 @@ def agents(*, title: str, kind: str, path: str, children: int,
     if kind == "catalog":
         out.append(f"Follow the `rel:child` links in `{doc}`. Each carries a title and a "
                    "`ugs:item_count`, so a listing needs one fetch rather than one per child.\n")
+        if not path:
+            out.append("\nTo get every item at once, read `items.json` beside this file: one index "
+                       "of the whole catalog, each entry with a `self` link to its full item.\n")
     else:
         out.append(f"Follow the `rel:item` links in `{doc}`; each carries the item's title, so a "
                    "listing does not need to fetch every item.\n")

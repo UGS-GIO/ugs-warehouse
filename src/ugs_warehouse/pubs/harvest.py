@@ -305,6 +305,20 @@ def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
     return gt, gis
 
 
+def zip_urls(series_id: str) -> tuple[str | None, str | None]:
+    """(geotiff_zip_url, gis_zip_url): the manifest, then the attachments table, then data.php."""
+    gt_url, gis_url = manifest_urls(series_id)
+    if gt_url or gis_url:
+        return gt_url, gis_url
+    gt_url, gis_url = _get_attached_zips(series_id)
+    if gt_url or gis_url:
+        return gt_url, gis_url
+    try:
+        return data_php_urls(series_id)
+    except Exception:  # noqa: BLE001 — the site lookup is a last resort; no URL means skip
+        return None, None
+
+
 def data_php_urls(series_id):
     gt = gis = None
     for k, v in (_get(DATAPHP, {"pub": series_id}).get("downloads") or {}).items():
@@ -696,14 +710,7 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
         hlog("REFUSE overwrite of published COG; publish a revision as a new edition (series_id)",
              step="resolve", level="ERROR", category="attention")
         return "fail:write-once"
-    gt_url, gis_url = manifest_urls(series_id)
-    if not gt_url and not gis_url:
-        gt_url, gis_url = _get_attached_zips(series_id)
-        if not gt_url and not gis_url:
-            try:
-                gt_url, gis_url = data_php_urls(series_id)
-            except Exception:
-                gt_url, gis_url = None, None
+    gt_url, gis_url = zip_urls(series_id)
 
     if dry_run:
         hlog(f"dry-run URLs: gt={gt_url}, gis={gis_url}", step="resolve")
@@ -910,7 +917,7 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="Harvest UGS geologic-map publications -> COG")
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("series_id", nargs="*", help="Series ID(s) to harvest")
+    g.add_argument("series_id", nargs="*", default=[], help="Series ID(s) to harvest")
     g.add_argument("--all", action="store_true", help="Harvest all series IDs from the metadata database/CSV")
     ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to harvest")
     ap.add_argument("--dry-run", action="store_true", help="Dry run (check and locate metadata URLs only)")

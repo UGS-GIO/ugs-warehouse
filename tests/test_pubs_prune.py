@@ -1,12 +1,12 @@
-"""Hermetic tests for scripts/prune_pub_items.py."""
+"""Hermetic tests for ugs_warehouse.pubs.prune."""
 from __future__ import annotations
 
 import sys
 from unittest.mock import patch
 
-from scripts import prune_pub_items as P
-from scripts.prune_pub_items import expected_pub_items, orphan_pub_paths
 from ugs_warehouse.core import config
+from ugs_warehouse.pubs import prune as P
+from ugs_warehouse.pubs.prune import expected_pub_items, orphan_pub_paths
 
 
 def test_expected_pub_items():
@@ -72,16 +72,29 @@ def test_dry_run_deletes_nothing_and_apply_deletes_each_orphan(monkeypatch):
     ]
     deleted: list[str] = []
     monkeypatch.setattr(P.gcs, "delete", deleted.append)
-    monkeypatch.setattr(P, "expected_pub_items", lambda: {("ugs-publications", "M", "M-100")})
+    expected = {("ugs-publications", "M", f"M-{n}") for n in range(100)}
+    monkeypatch.setattr(P, "expected_pub_items", lambda: expected)
     monkeypatch.setattr(P, "orphan_pub_paths", lambda expected=None: list(orphans))
 
-    monkeypatch.setattr(sys, "argv", ["prune_pub_items"])
+    monkeypatch.setattr(sys, "argv", ["prune"])
     assert P.main() == 0
     assert deleted == []
 
-    monkeypatch.setattr(sys, "argv", ["prune_pub_items", "--apply"])
+    monkeypatch.setattr(sys, "argv", ["prune", "--apply"])
     assert P.main() == 0
     assert deleted == orphans
+
+
+def test_apply_refuses_when_the_source_looks_empty(monkeypatch):
+    """An empty or partial source makes every published item look orphaned. Refuse, delete nothing."""
+    orphans = [f"warehouse/stac/ugs-publications/M/M-{n}/M-{n}.json" for n in range(50)]
+    deleted: list[str] = []
+    monkeypatch.setattr(P.gcs, "delete", deleted.append)
+    monkeypatch.setattr(P, "expected_pub_items", lambda: {("ugs-publications", "M", "M-0")})
+    monkeypatch.setattr(P, "orphan_pub_paths", lambda expected=None: list(orphans))
+    monkeypatch.setattr(sys, "argv", ["prune", "--apply"])
+    assert P.main() == 1
+    assert deleted == []
 
 
 def test_a_case_twin_goes_and_the_correct_spelling_stays():

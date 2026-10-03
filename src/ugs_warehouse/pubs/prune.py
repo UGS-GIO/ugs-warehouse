@@ -4,19 +4,22 @@ Compare published item objects under publication collections against the IDs pro
 by current source data. Orphans are deleted so refresh_catalog does not retain stale
 items.
 
-Dry-run by default. Run AFTER ugs-pubs-ingest has published the corrected items,
-then re-run `python -m scripts.refresh_stac`.
+Dry-run by default. The pubs pipeline runs it with --apply before the pubs ingest, whose catalog
+refresh then drops the deleted items. It refuses to delete more than MAX_ORPHAN_SHARE of the
+published items, so an empty or partial source cannot wipe the catalog.
 
-    python -m scripts.prune_pub_items            # list what would go
-    python -m scripts.prune_pub_items --apply    # delete
+    python -m ugs_warehouse.pubs.prune            # list what would go
+    python -m ugs_warehouse.pubs.prune --apply    # delete
 """
 from __future__ import annotations
 
 import argparse
 import sys
 
-from ugs_warehouse.core import config, gcs
-from ugs_warehouse.pubs import identity, sink_stac, source
+from ..core import config, gcs
+from . import identity, sink_stac, source
+
+MAX_ORPHAN_SHARE = 0.05
 
 PUB_GROUPS = (
     identity.PUBLICATIONS_COLLECTION,
@@ -80,6 +83,10 @@ def main() -> int:
 
     orphan_dirs = {p.rsplit("/", 1)[0] for p in orphans}
     print(f"[prune-pubs] {len(orphans)} orphan object(s) across {len(orphan_dirs)} item(s)")
+    if args.apply and len(orphan_dirs) > MAX_ORPHAN_SHARE * max(len(expected), 1):
+        print(f"[prune-pubs] REFUSE: {len(orphan_dirs)} items is more than {MAX_ORPHAN_SHARE:.0%} "
+              f"of {len(expected)}; check the source before deleting", file=sys.stderr)
+        return 1
     for path in orphans:
         print(f"  {'delete' if args.apply else 'would delete'} {path}")
         if args.apply:
@@ -88,7 +95,7 @@ def main() -> int:
     if not args.apply:
         print("[prune-pubs] dry-run — re-run with --apply")
     else:
-        print("[prune-pubs] done — now re-run `python -m scripts.refresh_stac`")
+        print("[prune-pubs] done; the next catalog refresh drops the deleted items")
     return 0
 
 

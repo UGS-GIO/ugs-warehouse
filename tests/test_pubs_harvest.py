@@ -642,3 +642,23 @@ def test_cog_zoom_strategy_reaches_lzw_fallback(monkeypatch, tmp_path):
     assert _harvest_attempt(pub, ["http://x/m-zl.zip"]) == "ok"
     assert len(calls) == 2                              # the fallback fired
     assert calls[1]["zoom_level_strategy"] == "upper"  # the lzw retry carries the strategy too
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_harvest_attempt_fails_on_a_plate_without_crs(monkeypatch, tmp_path):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+
+    plate = tmp_path / "plate.tif"
+    with rasterio.open(plate, "w", driver="GTiff", width=4, height=4, count=1, dtype="uint8",
+                       transform=from_origin(583552, 4265220, 5, 5)) as ds:  # UTM coords, no CRS
+        ds.write(np.zeros((1, 4, 4), "uint8"))
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 0))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates", lambda zips, work: (str(plate), None))
+    monkeypatch.setattr(harvest, "run", lambda cmd: pytest.fail("warped a plate with no CRS"))
+
+    assert _harvest_attempt(identity.Pub(series_id="M-205DM"), ["http://x/m.zip"]) == "fail:nocrs"

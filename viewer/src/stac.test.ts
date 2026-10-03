@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, catalogItemHref, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins } from "./stac";
+import { assetUsages, catalogItemHref, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -198,5 +198,18 @@ describe("rasterTilesAsset", () => {
   it("leaves a vector layer's visual PMTiles alone", () => {
     const d: StacDoc = { assets: { pmtiles: pm({}) } };
     expect(rasterTilesAsset(d)).toBeUndefined();
+  });
+});
+
+
+describe("rootIndexItems", () => {
+  it("resolves each self link from the root and skips an entry without one", () => {
+    const refs = rootIndexItems({ items: [
+      { id: "M-1", links: [{ rel: "self", href: "./ugs-publications/M/M-1/M-1.json" }] },
+      { id: "broken", links: [] },
+    ] } as never);
+    expect(refs).toHaveLength(1);
+    expect(refs[0].href).toBe(new URL("./ugs-publications/M/M-1/M-1.json", ROOT_INDEX_URL).href);
+    expect(refs[0].collId).toBe("ugs-publications/M");
   });
 });

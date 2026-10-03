@@ -27,26 +27,25 @@ def object_path(collection_path: str) -> str:
 def write(collection_path: str, items: list[dict]) -> gcs.FileMeta | None:
     """Publish `items.parquet` beside a collection.json. Returns what the upload reported, or None.
 
-    Best-effort by design: the mirror is derived data, and a refresh that cannot build it must
-    still publish the collection. An item without geometry is skipped rather than written as a null
-    row, since a mirror row that cannot be queried spatially is worse than an absent one.
+    Items that rustac cannot write skip the mirror, so the refresh still publishes the collection.
+    A failed upload raises like any other catalog write. An item without geometry is left out,
+    since a mirror row that cannot be queried spatially is worse than an absent one.
     """
+    import rustac
+
     spatial = [it for it in items if it.get("geometry") and it.get("bbox")]
     if not spatial:
         return None
-    try:
-        import rustac
-
-        with tempfile.TemporaryDirectory() as tmp:
-            parquet = os.path.join(tmp, OBJECT_NAME)
+    with tempfile.TemporaryDirectory() as tmp:
+        parquet = os.path.join(tmp, OBJECT_NAME)
+        try:
             rustac.write_sync(parquet, [{k: v for k, v in it.items() if not k.startswith("_")}
                                         for it in spatial], format="geoparquet")
-            return gcs.upload(parquet, object_path(collection_path),
-                              content_type=config.PARQUET_MIME,
-                              cache_control=gcs.CACHE_MUTABLE)
-    except Exception as e:  # noqa: BLE001 — derived data; never sink the refresh that publishes the collection
-        print(f"[item-mirror] {collection_path}: SKIP ({e})")
-        return None
+        except rustac.RustacError as e:
+            print(f"[item-mirror] {collection_path}: SKIP ({e})")
+            return None
+        return gcs.upload(parquet, object_path(collection_path),
+                          content_type=config.PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
 
 
 def asset(collection_path: str, meta: gcs.FileMeta | None) -> dict:

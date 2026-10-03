@@ -7,6 +7,23 @@ from google.auth import jwt
 from google.auth.crypt import es256
 
 
+@pytest.fixture(autouse=True)
+def _in_memory_gcs(monkeypatch):
+    """Back every bucket with an obstore MemoryStore, so code that reaches GCS without a stub runs
+    against an empty in-memory bucket instead of the network. A test that stubs a gcs call still
+    overrides this."""
+    from obstore.store import MemoryStore
+
+    from ugs_warehouse.core import gcs
+
+    def _no_client(*_a, **_k):
+        raise RuntimeError("tests must not reach GCS; the google-cloud-storage fallback is not stubbed")
+
+    monkeypatch.setattr(gcs, "_cached_stores", {})
+    monkeypatch.setattr(gcs, "GCSStore", lambda bucket=None, **_k: MemoryStore())
+    monkeypatch.setattr(gcs, "_gcs_client", _no_client)
+
+
 class FakeIap:
     """Mints ES256 tokens shaped like IAP's and serves the matching public key, so the verifiers run
     their real signature/audience/issuer checks against a key the test controls."""

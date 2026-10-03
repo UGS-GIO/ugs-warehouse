@@ -167,6 +167,12 @@ describe("curatedDerived", () => {
       derived: [],
     });
   });
+  it("does not count an empty series ID as a publication", () => {
+    expect(curatedDerived({ "ugs:series_id": "", datetime: "2026-09-12T18:03:00Z" })).toEqual({
+      curated: [],
+      derived: [{ label: "Ingested", value: "2026-09-12" }],
+    });
+  });
 });
 
 describe("seriesLabel", () => {

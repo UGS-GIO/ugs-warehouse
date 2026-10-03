@@ -194,7 +194,8 @@ export const fmtDatetime = (v: unknown): string => (typeof v === "string" ? fmtD
 
 // A publication's datetime is when it was published; anything else's is when the warehouse loaded
 // it. `ugs:series_id` is set only by the publications producer (browse.tsx keys pubs on it too).
-export const datetimeIsPublished = (props: Record<string, unknown>): boolean => props["ugs:series_id"] != null;
+export const datetimeIsPublished = (props: Record<string, unknown>): boolean =>
+  typeof props["ugs:series_id"] === "string" && props["ugs:series_id"] !== "";
 const PUBLISHED: MetaDef = { key: "datetime", label: "Published", fmt: fmtDatetime };
 const INGESTED: MetaDef = { key: "datetime", label: "Ingested", fmt: fmtDatetime };
 export const datetimeLabel = (props: Record<string, unknown>): string =>

@@ -75,7 +75,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"ugs_warehouse.pubs" = ["data/*.csv"]   # vendored pub metadata snapshot
+"ugs_warehouse.pubs" = ["data/*.geojson"]   # vendored SGID county boundaries (counties.py)
 "ugs_warehouse.vector" = ["render_assets/*"]   # vendored maplibre-gl + pmtiles browser libs (topics thumbnails)
 
 [tool.pytest.ini_options]

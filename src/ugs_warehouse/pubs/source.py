@@ -1,23 +1,16 @@
-"""Pub metadata source — live MySQL when configured, vendored CSV snapshot otherwise.
+"""Pub metadata source — the live publications database, MySQL or Postgres.
 
-`pubsdb` / `pubsattacheddata` are MySQL tables; in prod the catalog reads them live. The
-CSVs packaged under `pubs/data/` are a self-contained snapshot fallback so the pipeline
-works with no DB access. Ported from ugs-geolmap-cog-poc/catalog/pubs_source.py.
+`PUBS_DB_URL` is required: a MySQL URL (mysql://user:pass@host:3306/dbname), or a Postgres DSN
+read through DuckDB's postgres extension. Prod points it at the publications feed on Cloud SQL
+(cloudbuild.yaml). There is no file fallback: a stale snapshot published silently is worse than a
+run that stops.
 
-Precedence:
-  1. MySQL          if PUBS_DB_URL is set   (mysql://user:pass@host:3306/dbname — env/secret only)
-  2. PUBS_REPO CSVs if PUBS_REPO is set     (the ugs-publications export dir)
-  3. vendored CSVs  packaged in `pubs/data/` (default, self-contained)
-
-PUBS_DB_URL must come from env/secret — never commit credentials. Point it at a Cloud SQL
-socket / proxy in prod (or wire the cloud-sql-python-connector later).
+PUBS_DB_URL must come from env/secret — never commit credentials.
 """
 from __future__ import annotations
 
-import csv
 import os
 
-DATA = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 PUBS_DB_URL = os.environ.get("PUBS_DB_URL")
 PUBS_TABLE = os.environ.get("PUBS_TABLE", "pubsdb")
 ATT_TABLE = os.environ.get("PUBS_ATT_TABLE", "pubsattacheddata")
@@ -108,35 +101,29 @@ def _from_mysql(table: str) -> list[dict]:
         con.close()
 
 
-def _from_csv(base: str) -> list[dict]:
-    repo = os.environ.get("PUBS_REPO")
-    candidates = []
-    if repo:
-        candidates += [os.path.join(repo, f"{base}7May26.csv"), os.path.join(repo, f"{base}.csv")]
-    candidates.append(os.path.join(DATA, f"{base}.csv"))  # vendored, packaged
-    path = next((p for p in candidates if os.path.exists(p)), None)
-    if not path:
-        raise FileNotFoundError(f"no source for {base}: tried {candidates}")
-    with open(path, encoding="utf-8", errors="replace") as f:
-        return list(csv.DictReader(f))
+def _require_db() -> None:
+    if not PUBS_DB_URL:
+        raise RuntimeError("PUBS_DB_URL is not set: point it at the publications database")
 
 
 def read_pubs() -> list[dict]:
     if _is_postgres():
         table = os.environ.get("PUBS_TABLE", "pubs.ugspubsdraft2")
         return _from_postgres(table)
-    return _from_mysql(PUBS_TABLE) if PUBS_DB_URL else _from_csv("pubsdb")
+    _require_db()
+    return _from_mysql(PUBS_TABLE)
 
 
 def read_attachments() -> list[dict]:
     if _is_postgres():
         table = os.environ.get("PUBS_ATT_TABLE", "pubs.attached_data")
         return _from_postgres(table)
-    return _from_mysql(ATT_TABLE) if PUBS_DB_URL else _from_csv("pubsattacheddata")
+    _require_db()
+    return _from_mysql(ATT_TABLE)
 
 
 def source_name() -> str:
     if _is_postgres():
         table = os.environ.get("PUBS_TABLE", "pubs.ugspubsdraft2")
         return f"PostgreSQL:{table}"
-    return f"MySQL:{PUBS_TABLE}" if PUBS_DB_URL else "CSV (PUBS_REPO or vendored pubs/data/)"
+    return f"MySQL:{PUBS_TABLE}" if PUBS_DB_URL else "none (PUBS_DB_URL is not set)"

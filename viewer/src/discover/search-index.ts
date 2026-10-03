@@ -34,33 +34,54 @@ const idTerms = (ids: string[]): string =>
 const idKey = (s: string): string => s.trim().toUpperCase().replace(/\s+/g, "-");
 // Looser still, without hyphens ("OFR771"). Different ids can share it (MD-86-7 and MD-867).
 const looseKey = (s: string): string => idKey(s).replace(/-/g, "");
+// A key without the format letters after its number: OFR-771DM is cited as OFR-771, M-290DR as M-290.
+const bareKey = (key: string): string => key.replace(/(\d)[A-Z]+$/, "$1");
 
-// Records which doc a key names; a key two docs share names neither (null).
-const claim = (keys: Map<string, string | null>, key: string, docId: string): void => {
+// Which doc a key names, and the id it came from; null when two different ids share the key.
+type Claim = { docId: string; id: string } | null;
+// Ids that differ only by case are one publication listed twice, so the first listing keeps the key.
+const claim = (keys: Map<string, Claim>, key: string, docId: string, id: string): void => {
   const cur = keys.get(key);
-  keys.set(key, cur === undefined || cur === docId ? docId : null);
+  if (cur === undefined) keys.set(key, { docId, id });
+  else if (cur && cur.docId !== docId && idKey(cur.id) !== idKey(id)) keys.set(key, null);
 };
 
 // A query that is a whole id returns that item first, as the header search's exact match does. The
 // item is looked up, not searched for: ranking can't promise it (M-290 loses to a title full of
 // m-words), and an id like CR-91-14DF needn't tokenize into a match at all.
 class CatalogIndex extends MiniSearch<Hit> {
-  private readonly byKey = new Map<string, string | null>();
-  private readonly byLooseKey = new Map<string, string | null>();
+  private readonly byKey = new Map<string, Claim>();
+  private readonly byLooseKey = new Map<string, Claim>();
+  private readonly byBareKey = new Map<string, Claim>();
+  private readonly byLooseBareKey = new Map<string, Claim>();
 
   addIds(docId: string, ids: string[]): void {
     for (const id of ids) {
-      claim(this.byKey, idKey(id), docId);
-      claim(this.byLooseKey, looseKey(id), docId);
+      const key = idKey(id);
+      const loose = looseKey(id);
+      const bare = bareKey(key);
+      const looseBare = bareKey(loose);
+      claim(this.byKey, key, docId, id);
+      claim(this.byLooseKey, loose, docId, id);
+      if (bare !== key) claim(this.byBareKey, bare, docId, id);
+      if (looseBare !== loose) claim(this.byLooseBareKey, looseBare, docId, id);
     }
   }
 
-  // The doc a whole-id query names, if exactly one does. An ambiguous exact key stops there rather
-  // than falling back to the looser one.
+  // The doc a whole-id query names, if exactly one does: by the id as typed, then without hyphens,
+  // then without format letters. The first form some doc has decides, so an ambiguous one stops
+  // there rather than falling back to a looser form.
   private named(query: string): string | undefined {
-    const exact = this.byKey.get(idKey(query));
-    if (exact !== undefined) return exact ?? undefined;
-    return this.byLooseKey.get(looseKey(query)) ?? undefined;
+    const key = idKey(query);
+    const loose = looseKey(query);
+    const forms: [Map<string, Claim>, string][] = [
+      [this.byKey, key], [this.byLooseKey, loose], [this.byBareKey, key], [this.byLooseBareKey, loose],
+    ];
+    for (const [keys, k] of forms) {
+      const found = keys.get(k);
+      if (found !== undefined) return found?.docId;
+    }
+    return undefined;
   }
 
   override search(query: Query, options?: SearchOptions): SearchResult[] {
@@ -111,7 +132,12 @@ export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
   const ms = new CatalogIndex({
     fields: ["title", "text", "keywords", "idText"],
     storeFields: ["kind", "title", "text", "keywords", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic"],
-    searchOptions: { boost: { title: 4 }, prefix: true, fuzzy: 0.2, combineWith: "AND" },
+    // Typos count only in words of four letters or more: one slip in a short code or a number
+    // ("ofr" to "of", "771" to "791") lands on something else entirely.
+    searchOptions: {
+      boost: { title: 4 }, prefix: true, combineWith: "AND",
+      fuzzy: (term: string) => (term.length < 4 || /\d/.test(term) ? false : 0.2),
+    },
   });
   ms.addAll(docs);
   for (const c of catalog) ms.addIds(c.id, c.ids ?? []);

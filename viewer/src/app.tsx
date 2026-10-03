@@ -336,9 +336,7 @@ function useViewState() {
   // Offline data needs it too, to name what is saved; it is the same cached set.
   const mapColls = view === "map" || view === "discover" || view === "landing" || view === "offline"
     ? leafColls : [];
-  // One root items.json covers this catalog's collections; only federated ones are fetched one by
-  // one. Nothing else is fetched while it loads, and if it is missing every collection falls back
-  // to its own items.json.
+  // The root index covers this catalog; only federated collections load their own index.
   const root = useRootIndex(mapColls.length > 0);
   const idxColls = root.isLoading ? [] : mapColls.filter((c) => !(root.data && hasItemsIndex(c.href)));
   const mapIdx = useIndexes(idxColls.map((c) => ({ id: c.id, href: c.href })));

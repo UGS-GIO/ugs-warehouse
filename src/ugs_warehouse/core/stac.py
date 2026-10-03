@@ -566,7 +566,6 @@ def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None)
         entry["assets"] = assets
     # Item docs live at `<collection>/<id>/<id>.json`. A leaf index sits inside that
     # collection dir, the rollup one level above it — so only the rollup carries the segment.
-    # The root index sits above everything, so it passes the item's whole collection path.
     sub = prefix if prefix is not None else f"{item['collection']}/" if rollup and item.get("collection") else ""
     self_link = {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
                  "type": "application/geo+json"}
@@ -793,8 +792,7 @@ def refresh_catalog() -> None:
                                   "title": leaf[top]["title"], "count": leaf[top]["count"],
                                   "mappable": leaf[top]["mappable"]})
     _write_json(_root_doc(root_children), f"{config.STAC_PREFIX}/catalog.json")
-    # One index of every item, so a client that wants the whole catalog makes one request instead
-    # of one per collection. Same entry shape as a collection's items.json; `self` is root-relative.
+    # Every item in one index, so a client that wants the whole catalog makes one request.
     _write_json({"type": "ugs-items-index", "collection": None, "count": len(everything),
                  "items": sorted(everything, key=lambda e: e["links"][0]["href"])},
                 f"{config.STAC_PREFIX}/items.json")

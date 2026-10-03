@@ -32,7 +32,7 @@ class _FakeCon:
 @pytest.fixture
 def fake_duckdb(monkeypatch):
     con = _FakeCon()
-    monkeypatch.setattr(source, "PUBS_DB_URL", "postgresql://u:p@h/db", raising=False)
+    monkeypatch.setenv("PUBS_DB_URL", "postgresql://u:p@h/db")
     monkeypatch.setitem(sys.modules, "duckdb", types.SimpleNamespace(connect=lambda: con))
     return con
 
@@ -67,3 +67,9 @@ def test_duckdb_close_actually_tears_the_connection_down():
     con.close()
     with pytest.raises(duckdb.ConnectionException):
         con.execute("SELECT 1")
+
+
+def test_a_run_without_the_database_stops(monkeypatch):
+    monkeypatch.delenv("PUBS_DB_URL", raising=False)
+    with pytest.raises(RuntimeError, match="PUBS_DB_URL"):
+        source.read_pubs()

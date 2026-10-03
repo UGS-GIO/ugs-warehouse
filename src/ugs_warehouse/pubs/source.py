@@ -11,15 +11,18 @@ from __future__ import annotations
 
 import os
 
-PUBS_DB_URL = os.environ.get("PUBS_DB_URL")
-PUBS_TABLE = os.environ.get("PUBS_TABLE", "pubsdb")
-ATT_TABLE = os.environ.get("PUBS_ATT_TABLE", "pubsattacheddata")
+
+def _db_url() -> str:
+    """PUBS_DB_URL, read at call time; a run without it stops."""
+    url = os.environ.get("PUBS_DB_URL")
+    if not url:
+        raise RuntimeError("PUBS_DB_URL is not set: point it at the publications database")
+    return url
 
 
 def _is_postgres() -> bool:
-    if not PUBS_DB_URL:
-        return False
-    return PUBS_DB_URL.startswith(("postgres://", "postgresql://")) or "host=" in PUBS_DB_URL
+    url = _db_url()
+    return url.startswith(("postgres://", "postgresql://")) or "host=" in url
 
 
 def inject_pg_password(dsn: str) -> str:
@@ -55,7 +58,7 @@ def _from_postgres(table: str) -> list[dict]:
     con = duckdb.connect()
     try:
         con.execute("INSTALL postgres; LOAD postgres;")
-        dsn = inject_pg_password(PUBS_DB_URL)
+        dsn = inject_pg_password(_db_url())
         con.execute(f"ATTACH '{dsn}' AS pg_pubs (TYPE POSTGRES, READ_ONLY)")
 
         if "." in table:
@@ -87,7 +90,7 @@ def _from_mysql(table: str) -> list[dict]:
     from urllib.parse import urlparse
 
     import pymysql
-    u = urlparse(PUBS_DB_URL)
+    u = urlparse(_db_url())
     con = pymysql.connect(host=u.hostname, port=u.port or 3306, user=u.username,
                           password=u.password, database=u.path.lstrip("/"),
                           charset="utf8mb4", cursorclass=pymysql.cursors.DictCursor)
@@ -101,29 +104,21 @@ def _from_mysql(table: str) -> list[dict]:
         con.close()
 
 
-def _require_db() -> None:
-    if not PUBS_DB_URL:
-        raise RuntimeError("PUBS_DB_URL is not set: point it at the publications database")
-
-
 def read_pubs() -> list[dict]:
     if _is_postgres():
-        table = os.environ.get("PUBS_TABLE", "pubs.ugspubsdraft2")
-        return _from_postgres(table)
-    _require_db()
-    return _from_mysql(PUBS_TABLE)
+        return _from_postgres(os.environ.get("PUBS_TABLE", "pubs.ugspubsdraft2"))
+    return _from_mysql(os.environ.get("PUBS_TABLE", "pubsdb"))
 
 
 def read_attachments() -> list[dict]:
     if _is_postgres():
-        table = os.environ.get("PUBS_ATT_TABLE", "pubs.attached_data")
-        return _from_postgres(table)
-    _require_db()
-    return _from_mysql(ATT_TABLE)
+        return _from_postgres(os.environ.get("PUBS_ATT_TABLE", "pubs.attached_data"))
+    return _from_mysql(os.environ.get("PUBS_ATT_TABLE", "pubsattacheddata"))
 
 
 def source_name() -> str:
+    if not os.environ.get("PUBS_DB_URL"):
+        return "none (PUBS_DB_URL is not set)"
     if _is_postgres():
-        table = os.environ.get("PUBS_TABLE", "pubs.ugspubsdraft2")
-        return f"PostgreSQL:{table}"
-    return f"MySQL:{PUBS_TABLE}" if PUBS_DB_URL else "none (PUBS_DB_URL is not set)"
+        return f"PostgreSQL:{os.environ.get('PUBS_TABLE', 'pubs.ugspubsdraft2')}"
+    return f"MySQL:{os.environ.get('PUBS_TABLE', 'pubsdb')}"

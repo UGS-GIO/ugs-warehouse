@@ -24,9 +24,36 @@ def _drop_private(item: dict) -> dict:
     return {k: v for k, v in item.items() if k != "_collection_path"}
 
 
-def test_pub_item_with_cog_validates():
-    """A map pub: footprint geometry (4326) + a COG asset carrying asset-level proj:code (3857).
-    Exercises the projection ext v2.0.0 and the mixed-CRS asset override."""
+def _rgba_cog(path) -> None:
+    """A tiny RGBA uint8 COG in EPSG:3857, the shape harvest.py produces."""
+    import numpy as np
+    import rasterio
+    from rasterio.enums import ColorInterp
+    from rasterio.transform import from_origin
+
+    with rasterio.open(path, "w", driver="COG", height=32, width=32, count=4, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(-12.5e6, 5.0e6, 30, 30)) as ds:
+        ds.write(np.zeros((4, 32, 32), "uint8"))
+        ds.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha]
+
+
+def test_pub_item_with_cog_validates(tmp_path):
+    """A map pub: footprint geometry (4326) + a COG asset whose fields rio-stac reads from a real
+    COG header (asset-level proj:code 3857, STAC 1.1 `bands`). Exercises the projection ext v2.0.0
+    and the mixed-CRS asset override."""
+    rasterio = pytest.importorskip("rasterio")
+    pytest.importorskip("rio_stac")
+    from ugs_warehouse.pubs.sink_stac import cog_asset_fields
+
+    _rgba_cog(tmp_path / "c.tif")
+    with rasterio.open(tmp_path / "c.tif") as ds:
+        fields = cog_asset_fields(ds)
+    assert fields["proj:code"] == "EPSG:3857"
+    assert fields["proj:shape"] == [32, 32]
+    assert fields["data_type"] == "uint8"
+    assert "nodata" not in fields
+    assert [b["description"] for b in fields["bands"]] == ["red", "green", "blue", "alpha"]
+
     item = stac.build_item(
         item_id="OFR-100", collection="OFR", collection_path="ugs-publications/OFR",
         geometry=stac.bbox_polygon([-114, 37, -109, 42]), bbox=[-114, 37, -109, 42],
@@ -35,16 +62,13 @@ def test_pub_item_with_cog_validates():
         assets={
             "cog": {"href": "https://x/OFR-100.cog.tif",
                     "type": "image/tiff; application=geotiff; profile=cloud-optimized",
-                    "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857",
-                    "data_type": "uint8",
-                    "bands": [{"name": "red"}, {"name": "green"},
-                              {"name": "blue"}, {"name": "alpha"}]},
+                    "roles": ["data", "cloud-optimized"], **fields},
         },
         stac_extensions=[stac.PROJ_EXT], proj_epsg=4326,
     )
     d = _drop_private(item)
     assert d["stac_version"] == "1.1.0"
-    assert len(d["assets"]["cog"]["bands"]) == 4  # STAC 1.1 common bands, not raster:bands
+    assert not any(k.startswith(("raster:", "eo:")) for k in d["assets"]["cog"])
     _validate(d)
 
 

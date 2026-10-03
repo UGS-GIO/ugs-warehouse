@@ -81,7 +81,7 @@ def geoms() -> dict[str, tuple]:
     dissolved geometry per pub. Raises FileNotFoundError if the parquet hasn't been exported.
 
     DEPRECATED for the pub STAC footprint path: the ingest now derives item footprints from OUR OWN
-    COGs (pubs/ingest.py `_cog_footprints`) instead of this external ArcGIS FeatureServer export. Kept
+    COGs (pubs/ingest.py `_cog_headers`) instead of this external ArcGIS FeatureServer export. Kept
     only for the `footprints.pmtiles` coverage layer that `export()` still builds; do NOT reintroduce
     it as the item-footprint source (that Esri dependency was the reason all pubs had null geometry)."""
     import geopandas as gpd

@@ -129,8 +129,11 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
     return out
 
 
-def _cog_footprints(cog_ids: set[str]) -> dict[str, tuple]:
-    """series_id -> (geometry, bbox, "cog"): each harvested COG's own extent, reprojected to EPSG:4326.
+def _cog_headers(cog_ids: set[str]) -> dict[str, tuple[tuple | None, dict]]:
+    """series_id -> (footprint, COG asset fields) from each harvested COG's header.
+
+    The footprint is `(geometry, bbox, "cog")`, the COG's own extent reprojected to EPSG:4326, or None
+    if it does not reproject. The asset fields are `sink_stac.cog_asset_fields`.
 
     The warehouse derives footprints from ITS OWN output — the COG we produced — with NO external
     service. Footprint coverage therefore tracks COG coverage: a pub gets a footprint once we've
@@ -148,15 +151,15 @@ def _cog_footprints(cog_ids: set[str]) -> dict[str, tuple]:
             with rio_open(f"/vsicurl/{url}") as ds:
                 # densify so the reprojected 3857→4326 rectangle hugs the curved edges accurately.
                 w, s, e, n = transform_bounds(ds.crs, "EPSG:4326", *ds.bounds, densify_pts=21)
-            if not all(map(math.isfinite, (w, s, e, n))):
-                return None
-            geom = {"type": "Polygon",
-                    "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
-            return sid, (geom, [w, s, e, n], "cog")
+                fields = sink_stac.cog_asset_fields(ds)
         except Exception:  # noqa: BLE001 — unreadable COG → no footprint (better than a wrong one)
             return None
+        if not all(map(math.isfinite, (w, s, e, n))):
+            return sid, (None, fields)
+        geom = {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
+        return sid, ((geom, [w, s, e, n], "cog"), fields)
 
-    out: dict[str, tuple] = {}
+    out: dict[str, tuple[tuple | None, dict]] = {}
     with ThreadPoolExecutor(max_workers=32) as ex:
         for r in ex.map(one, sorted(cog_ids)):
             if r:
@@ -200,11 +203,12 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     overrides_map = _overrides_by_sid()  # hand-authored description/title overrides
     toc = _contents_by_sid()  # Survey Notes "In this issue" sidecars
     units = _unit_ids()
-    foot = _cog_footprints(cogs)  # footprints derived from OUR COGs' bounds (no external service)
+    heads = _cog_headers(cogs)  # footprints + COG asset fields from OUR COGs (no external service)
     mirrored = _mirrored_files()  # source files served from our CDN instead of the publisher's host
     vector_manifests = _vector_manifests_by_sid()  # spatial/table split extracted by pubs/vectors.py
+    n_foot = sum(1 for f, _ in heads.values() if f)
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
-          f"{len(units)} unit sets, {len(foot)} footprints, {len(threed_ids)} 3D, "
+          f"{len(units)} unit sets, {n_foot} footprints, {len(threed_ids)} 3D, "
           f"{len(mirrored)} mirrored source files, {len(vector_manifests)} vector manifests")
 
     def process_pub(p: dict) -> bool:
@@ -212,11 +216,12 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         if not sid:
             return False
         up = sid.upper()
-        geom, bbox, fp_source = foot.get(up, (None, None, None))
+        footprint, cog_fields = heads.get(up, (None, None))
+        geom, bbox, fp_source = footprint or (None, None, None)
         manifest = vector_manifests.get(up, {"spatial": [], "tables": []})
         item = sink_stac.build_item(
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
-            has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
+            has_cog=up in cogs, cog_fields=cog_fields, has_units=up in units, has_thumb=up in thumbs,
             has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
             vector_layers=manifest["spatial"],
             companion_tables=[{"label": t, "columns": None} for t in manifest["tables"]],

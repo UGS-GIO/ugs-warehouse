@@ -93,6 +93,14 @@ Publications are a second producer into the same STAC catalog: scanned geologic 
 footprints, routed into three collections (`ugs-publications`, `ugs-mining-district-files`,
 `ugs-external`).
 
+Metadata comes from the publications app's live feed (`publications.pubs_feed_v1`); `PUBS_DB_URL`
+is required. The ops console's **Full refresh** runs the jobs in order: cover thumbnails, 3D,
+map layers from each new pub's GIS zip, a prune of items the feed no longer lists, the pubs
+ingest, and the full-text search index. New map plates need **Harvest COGs** first. GeoParquet is
+written with geoparquet-io, and COG band metadata is read with rio-stac. A publisher's plain TIFF
+scan is a `source` asset, and a pub with no year gets a `start_datetime`/`end_datetime` interval
+flagged `ugs:date_unknown`.
+
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so
 the legacy URL's path *is* the object path. A mirrored file's asset serves from our CDN and keeps
@@ -142,4 +150,6 @@ The vector pipeline is end-to-end in production. The honest gaps:
   instance with ingest with no dead-letter policy, so one bad message is an outage (#81).
 - 🟧 **STAC `datetime`** is ingest time, not data-validity time — waiting on an upstream validity timestamp.
 - 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).
+- 🟧 **Legacy pubs** — 1,163 catalog items, mostly legacy mining district scans, have no record in
+  the publications app. The prune keeps them until they are imported or retired (#491).
 - 🟧 **FGDC metadata** variant + raster extension (ISO 19139 done for vector + pubs).

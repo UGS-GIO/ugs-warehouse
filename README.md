@@ -12,16 +12,18 @@ bucket, served read-only through the maps-assets CDN and a static STAC viewer.
 One STAC catalog spans both, laid out with collections (`ugs-serving-topics`, `ugs-publications`,
 `ugs-rasters`). `ugs-serving-topics` and `ugs-publications` nest one level — per dbt mart schema
 (`ugs-serving-topics/hazards`) and per publication series (`ugs-publications/DS`) — and serving
-topics also publish a rollup `ugs-serving-topics/items.json` spanning every schema. An optional
+topics also publish a rollup `ugs-serving-topics/items.json` spanning every schema. The root
+`items.json` indexes every item in the catalog in one file, and each collection carries an
+`items.parquet` (stac-geoparquet) mirror of its items. An optional
 Django **ops console** (`admin/`) drives + observes the Cloud Run jobs.
 
 ## Architecture
 
 ```
 vector producer                         pubs producer
-  Pub/Sub {schema, topic}                 CSV/MySQL manifest + footprints
+  Pub/Sub {schema, topic}                 publications feed (Postgres) + GIS zips
    ↓ push → service/main.py                ↓ Cloud Run Job (sharded)
-  source → transform (4326·h3·hilbert)    harvest zip→COG · footprints · units · thumbs
+  source → transform (4326·h3·hilbert)    harvest zip→COG · map layers · covers · search
    ↓                                       ↓
   └──────────────┬─────────── core/stac.py (one item builder, one catalog) ───────────┘
                  ↓

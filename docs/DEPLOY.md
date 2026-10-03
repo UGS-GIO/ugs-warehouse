@@ -208,20 +208,12 @@ under either subtree, so no server change.
 
 ## 5a. Pub search assets → CDN
 
-Client-side pub search (full-text + semantic) reads two kinds of static asset, both served
-same-origin as the viewer (so **no CORS** — only HTTP **range** support matters, see below):
+Discover's publication-text search reads `pubs/search/pubs-fts.duckdb`, built and uploaded by
+the `ugs-pubs-fts` job in the full refresh. Nothing extra to deploy. It is served same-origin as the
+viewer, so there is **no CORS**; only HTTP **range** support matters (below).
 
-- **Search databases** `pubs/search/pubs-fts.duckdb` + `pubs/search/pubs-vss.duckdb` —
-  built and uploaded by the pipeline (the `ugs-pubs-fts` / `ugs-pubs-embed` Cloud Run jobs).
-  Nothing extra to deploy; they appear when the pipeline runs.
-- **Query-embedding model** `pubs/models/Xenova/bge-small-en-v1.5/…` — the bge ONNX weights the
-  browser loads to embed a semantic query. Self-hosted (not HuggingFace) so the read path has no
-  third-party dependency. Vendor it once:
-
-  ```bash
-  ./scripts/vendor_search_assets.sh           # download bge model + rsync → gs://…/pubs/models/
-  # needs storage.objectAdmin on the public bucket (same grant as §5); immutable, ~34MB, one-time
-  ```
+The viewer has no semantic search, so the full refresh no longer runs `ugs-pubs-embed`. The job,
+`pubs/embed.py` and `scripts/vendor_search_assets.sh` (the bge query model) stay for when it returns.
 
 **Range support (the one real prerequisite).** duckdb-wasm queries the `.duckdb` files by
 **range-reading** them (206 Partial Content — it fetches only the index pages a query touches,
@@ -234,8 +226,8 @@ curl -sI -H 'Range: bytes=0-99' \
   https://maps-assets.geology.utah.gov/pubs/search/pubs-fts.duckdb | grep -i '206\|content-range'
 ```
 
-The viewer's engine (duckdb-wasm) and model host are self-hosted by default; `?ftsdb=`, `?vssdb=`,
-`?models=`, and `?extrepo=` override them for local spikes (see `viewer/src/data/duckdb.ts`).
+The viewer's engine (duckdb-wasm) is self-hosted by default; `?ftsdb=` and `?extrepo=` override it
+for local spikes (see `viewer/src/data/duckdb.ts`).
 
 ## 6. Cross-boundary grants — preflight (#223)
 

@@ -396,6 +396,10 @@ You can use DuckDB to filter rows, select columns or drop the geometry before yo
   ```
 - The layer id, for example `hazards_qfaults` or `enmin_oilgasfields_ogm`, goes in each URL
   pattern above. It is also the OGC API collection id and the STAC item id.
+- The catalog root's `items.json` lists every item, layers and publications, in one file:
+  `https://maps-assets.geology.utah.gov/warehouse/stac/items.json`
+- Each collection also has `items.parquet`, its items as stac-geoparquet, which DuckDB and
+  GeoPandas can filter by bbox or date without reading the whole file.
 
 Each layer's STAC item lists its fields (`table:columns` on the data asset), its categories and
 colors (`classification:classes`), its CRS and extent, and links to each format. You can use the

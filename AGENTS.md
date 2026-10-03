@@ -52,6 +52,8 @@ uvicorn service.main:app --host 0.0.0.0 --port 8080
 | `WAREHOUSE_{ARCHIVE,PMTILES,STAC}_PREFIX` | `core/config.py` | per-artifact object prefixes |
 | `WAREHOUSE_PUBLIC_BASE_URL` | `core/config.py` | https base for asset hrefs (defaults to `https://maps-assets.geology.utah.gov`) |
 | `TIPPECANOE_BIN` / `TIPPECANOE_OPTS` | `vector/sink_pmtiles.py` | binary path + extra flags |
+| `PUBS_DB_URL` | `pubs/source.py` | publications database, MySQL URL or Postgres DSN (required; no file fallback) |
+| `PUBS_TABLE` / `PUBS_ATT_TABLE` | `pubs/source.py` | feed tables; prod uses `publications.pubs_feed_v1` / `pubs_attachments_feed_v1` |
 
 GCS auth is ADC: `gcloud auth application-default login` locally, the service account / Workload Identity on Cloud Run.
 

@@ -91,9 +91,12 @@ map.addSource("topic", {
 
   const endpoints: { label: string; value: string }[] = [
     { label: "STAC catalog", value: catalogUrl },
+    { label: "Every item, one file", value: catalogUrl.replace(/catalog\.json$/, "items.json") },
+    { label: "Collection items (stac-geoparquet)", value: `${cdn}/warehouse/stac/<collection>/items.parquet` },
     { label: "GeoParquet", value: `${cdn}/warehouse/geoparquet/<topic>/<topic>.parquet` },
     { label: "PMTiles", value: `${cdn}/warehouse/pmtiles/<topic>/<topic>.pmtiles` },
-    { label: "COG (rasters)", value: `${cdn}/warehouse/cog/<id>/<id>.tif` },
+    { label: "COG (rasters)", value: `${cdn}/cog/<collection>/<id>.cog.tif` },
+    { label: "COG (publication maps)", value: `${cdn}/geolmap/cogs/<series_id>.cog.tif` },
     { label: "OGC API Features", value: `each item's link with rel="service"` },
   ];
 
@@ -102,6 +105,8 @@ map.addSource("topic", {
     { name: "Table", field: "table:columns", url: "https://stac-extensions.github.io/table/v1.2.0/schema.json" },
     { name: "Web Map Links", field: "pmtiles", url: "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json" },
     { name: "Classification", field: "classification:classes", url: "https://stac-extensions.github.io/classification/v2.0.0/schema.json" },
+    { name: "File", field: "file:size, file:checksum", url: "https://stac-extensions.github.io/file/v2.1.0/schema.json" },
+    { name: "Version", field: "version, deprecated", url: "https://stac-extensions.github.io/version/v1.2.0/schema.json" },
     { name: "UGS custom", field: "ugs:* (dbt_schema, row_count, foreign_keys, series, renders, …)" },
   ];
 

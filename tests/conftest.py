@@ -8,17 +8,20 @@ from google.auth.crypt import es256
 
 
 @pytest.fixture(autouse=True)
-def _no_real_gcs(monkeypatch):
-    """Fail fast on a real GCS call. Without this, a call a test forgot to stub waits out the
-    metadata-server retries (about 15 s) before the caller's error handling sees it."""
+def _in_memory_gcs(monkeypatch):
+    """Back every bucket with an obstore MemoryStore, so code that reaches GCS without a stub runs
+    against an empty in-memory bucket instead of the network. A test that stubs a gcs call still
+    overrides this."""
+    from obstore.store import MemoryStore
+
     from ugs_warehouse.core import gcs
 
-    def _blocked(*_a, **_k):
-        raise RuntimeError("tests must not reach GCS; stub the gcs call")
+    def _no_client(*_a, **_k):
+        raise RuntimeError("tests must not reach GCS; the google-cloud-storage fallback is not stubbed")
 
-    for name in ("put", "get", "head", "list", "delete"):
-        monkeypatch.setattr(gcs.obs, name, _blocked)
-    monkeypatch.setattr(gcs, "_gcs_client", _blocked)  # the fallback reader for gzipped objects
+    monkeypatch.setattr(gcs, "_cached_stores", {})
+    monkeypatch.setattr(gcs, "GCSStore", lambda bucket=None, **_k: MemoryStore())
+    monkeypatch.setattr(gcs, "_gcs_client", _no_client)
 
 
 class FakeIap:

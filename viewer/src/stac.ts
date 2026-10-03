@@ -447,15 +447,33 @@ export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [numb
 // Each entry is a mini StacDoc (id, bbox, a props subset, asset + web-map-link summaries)
 // — enough to render the list table, facets, and map overlays without N item.json fetches.
 // The full item.json stays the source of truth and loads on open (useStac).
-export type ItemsIndex = { type?: string; collection?: string; count?: number; items: StacDoc[] };
+export type ItemsIndex = { type?: string; collection?: string | null; count?: number; items: StacDoc[] };
+
+/** The catalog's root items.json: every item of this catalog in one request. */
+export const ROOT_INDEX_URL = CATALOG_URL.replace(/catalog\.json(\?.*)?$/, "items.json");
+
+export function useRootIndex(enabled: boolean) {
+  return useQuery({
+    queryKey: qk.index(ROOT_INDEX_URL),
+    queryFn: () => fetchJson(ROOT_INDEX_URL) as Promise<ItemsIndex>,
+    enabled,
+    retry: false,
+  });
+}
+
+/** A root index entry's `self` is root-relative, so it gives both the item href and its collection. */
+export const rootIndexItems = (idx: ItemsIndex) => idx.items.map((d) => {
+  const href = new URL(d.links?.find((l) => l.rel === "self")?.href ?? "", ROOT_INDEX_URL).href;
+  return { collId: collKeyOf(href) ?? "", href, data: d };
+});
 
 // items.json sits next to collection.json (…/<collection>/items.json). A nesting sub-catalog may
 // publish one too (ugs-serving-topics), rolling up every child collection into one fetch.
 const indexUrlFor = (collectionHref: string) =>
   collectionHref.replace(/(collection|catalog)\.json(\?.*)?$/, "items.json");
 
-/** `items.json` is our own convention, not STAC. A federated catalog (USWB) is somebody else's
- *  bucket and has no reason to publish one, so asking is three guaranteed 404s per view. */
+/** Whether a collection is in this catalog (same origin), so the root and collection items.json
+ *  cover it. A federated catalog's collections are fetched as their own STAC ItemCollection. */
 export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL): boolean => {
   try {
     return new URL(collectionHref, LOC.href).origin === new URL(catalogUrl, LOC.href).origin;
@@ -471,18 +489,22 @@ export function useIndexes(collections: { id: string; href: string }[]) {
   const results = useQueries({
     queries: collections.map((c) => ({
       queryKey: qk.index(c.href),
-      queryFn: () => fetchJson(indexUrlFor(c.href)) as Promise<unknown>,
+      // Ours is a `ugs-items-index`; a federated catalog may publish a STAC ItemCollection
+      // (`features`) at the same place. Either way the caller gets `items`.
+      queryFn: async () => {
+        const doc = await fetchJson(indexUrlFor(c.href)) as ItemsIndex & { features?: StacDoc[] };
+        return doc.features ? { ...doc, items: doc.features } : doc;
+      },
       retry: false,
-      enabled: hasItemsIndex(c.href),
     })),
   });
-  // A foreign catalog reports `missing` without a request — same fallback, no failed fetch.
+  // A collection with no items.json (an error) falls back to its collection.json item links.
   return collections.map((c, i) => ({
     id: c.id,
     href: c.href,
     index: results[i].data as ItemsIndex | undefined,
-    isLoading: hasItemsIndex(c.href) && results[i].isLoading,
-    missing: !hasItemsIndex(c.href) || Boolean(results[i].error),
+    isLoading: results[i].isLoading,
+    missing: Boolean(results[i].error),
   }));
 }
 

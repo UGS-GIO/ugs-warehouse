@@ -432,6 +432,13 @@ def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
     scoped = json.loads(store[f"{p}/ugs-serving-topics/hazards/items.json"])
     assert [it["id"] for it in scoped["items"]] == ["hazards_qfaults"]
 
+    # The root index lists every item once, and each `self` resolves from the catalog root.
+    root_idx = json.loads(store[f"{p}/items.json"])
+    assert root_idx["count"] == 2
+    for e in root_idx["items"]:
+        href = e["links"][0]["href"]
+        assert posixpath.normpath(posixpath.join(p, href)) in store, href
+
 
 def test_build_catalog_series_filter():
     from unittest.mock import patch

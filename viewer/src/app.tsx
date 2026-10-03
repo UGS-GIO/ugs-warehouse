@@ -16,7 +16,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
@@ -336,16 +336,22 @@ function useViewState() {
   // Offline data needs it too, to name what is saved; it is the same cached set.
   const mapColls = view === "map" || view === "discover" || view === "landing" || view === "offline"
     ? leafColls : [];
-  const mapIdx = useIndexes(mapColls.map((c) => ({ id: c.id, href: c.href })));
+  // One root items.json covers this catalog's collections; only federated ones are fetched one by
+  // one. Nothing else is fetched while it loads, and if it is missing every collection falls back
+  // to its own items.json.
+  const root = useRootIndex(mapColls.length > 0);
+  const idxColls = root.isLoading ? [] : mapColls.filter((c) => !(root.data && hasItemsIndex(c.href)));
+  const mapIdx = useIndexes(idxColls.map((c) => ({ id: c.id, href: c.href })));
   // Same collection.json → item-links fallback the browse list uses. Without it a federated
   // catalog contributes no layers at all: it publishes no items.json, so the index is empty and
   // its datacubes never reach the layer list. Bounded — only index-less collections take this path.
-  const mapFbColls = mapColls.filter((_, i) => mapIdx[i]?.missing);
+  const mapFbColls = idxColls.filter((_, i) => mapIdx[i]?.missing);
   const mapFbCollDocs = useDocs(mapFbColls.map((c) => c.href));
   const mapFbRefs = mapFbColls.flatMap((c, i) =>
     itemLinks(mapFbCollDocs.docs[i]?.data, c.href).map((l) => ({ collId: c.id, href: l.href })));
   const mapFbDocs = useDocs(mapFbRefs.map((r) => r.href));
   const mapItems: ItemRef[] = [
+    ...(root.data ? rootIndexItems(root.data) : []),
     ...mapIdx.flatMap((r) => (r.index?.items ?? []).map((d) => ({
       collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d,
     }))),
@@ -353,10 +359,11 @@ function useViewState() {
   ];
   // How much of the map's data has loaded. The fallback count is what federated layers depend on:
   // they arrive only that way, and always after the indexes.
-  const mapLoadKey = mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
+  const mapLoadKey = `root:${root.data?.count ?? 0}|` + mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
     + `|fb:${mapFbDocs.docs.filter((d) => d?.data).length}`;
   // Still-streaming signal for the Landing tiles/recent strip, so counts aren't shown mid-crawl.
-  const mapItemsLoading = mapColls.length > 0 && (mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
+  const mapItemsLoading = mapColls.length > 0
+    && (root.isLoading || mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
   const layerRows: LayerRow[] = useMemo(() => mapItems

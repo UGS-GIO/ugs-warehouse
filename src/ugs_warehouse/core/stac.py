@@ -540,7 +540,7 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
 
 
-def _index_entry(item: dict, *, rollup: bool = False) -> dict:
+def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None) -> dict:
     """A compact, list-renderable subset of a STAC item (mini-doc): id, bbox, a few
     properties, asset summaries, a `rel:self` pointer to the full item, and any web-map
     links (pmtiles/cog) for map overlays.
@@ -566,7 +566,8 @@ def _index_entry(item: dict, *, rollup: bool = False) -> dict:
         entry["assets"] = assets
     # Item docs live at `<collection>/<id>/<id>.json`. A leaf index sits inside that
     # collection dir, the rollup one level above it — so only the rollup carries the segment.
-    sub = f"{item['collection']}/" if rollup and item.get("collection") else ""
+    # The root index sits above everything, so it passes the item's whole collection path.
+    sub = prefix if prefix is not None else f"{item['collection']}/" if rollup and item.get("collection") else ""
     self_link = {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
                  "type": "application/geo+json"}
     wlinks = [{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
@@ -713,6 +714,7 @@ def refresh_catalog() -> None:
     #    Record per-path {id, title, count} so the hierarchy links can carry counts.
     leaf: dict[str, dict] = {}
     rollup: dict[str, list[dict]] = {}   # nesting catalog -> its children's items (see ROLLUP_INDEX_CATALOGS)
+    everything: list[dict] = []          # every item's index entry, for the root items.json
     with ThreadPoolExecutor(max_workers=64) as executor:
         for path, item_ids in groups.items():
             def _fetch_one(iid: str) -> dict | None:
@@ -752,6 +754,7 @@ def refresh_catalog() -> None:
                                         assets=_collection_assets(path, items, mirror)),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
             _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
+            everything.extend(_index_entry(it, prefix=f"{path}/") for it in items)
             _write_markdown(path, title=title or prettify(cid),
                             description=desc or f"UGS warehouse — {title or cid}.",
                             kind="collection", children=len(item_ids),
@@ -790,6 +793,11 @@ def refresh_catalog() -> None:
                                   "title": leaf[top]["title"], "count": leaf[top]["count"],
                                   "mappable": leaf[top]["mappable"]})
     _write_json(_root_doc(root_children), f"{config.STAC_PREFIX}/catalog.json")
+    # One index of every item, so a client that wants the whole catalog makes one request instead
+    # of one per collection. Same entry shape as a collection's items.json; `self` is root-relative.
+    _write_json({"type": "ugs-items-index", "collection": None, "count": len(everything),
+                 "items": sorted(everything, key=lambda e: e["links"][0]["href"])},
+                f"{config.STAC_PREFIX}/items.json")
     _write_markdown("", title=config.CATALOG_TITLE, description=ROOT_DESCRIPTION,
                     kind="catalog", children=len(root_children))
 

@@ -84,6 +84,7 @@ OVERRIDES_PREFIX = os.environ.get("WAREHOUSE_OVERRIDES_PREFIX", "warehouse/overr
 COG_MIME = "image/tiff; application=geotiff; profile=cloud-optimized"
 PARQUET_MIME = "application/vnd.apache.parquet"
 PMTILES_MIME = "application/vnd.pmtiles"
+WEBP_MIME = "image/webp"
 
 # OGC API Features endpoint (e.g., pg_featureserv base URL)
 # The deployed duckdb-featureserv. This is the Cloud Run hostname, not a vanity domain: the

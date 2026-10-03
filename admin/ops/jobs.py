@@ -78,7 +78,7 @@ JOBS: dict[str, Job] = {j.key: j for j in [
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
         "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
-        "Render each pub's PDF first page → cover PNG (every pub incl. Survey Notes; SKIP_EXISTING; "
+        "Render each pub's PDF first page → cover WebP (every pub incl. Survey Notes; SKIP_EXISTING; "
         "5 shards). Then Rebuild pubs STAC to bind the previews.", tasks=5),
     Job("ingest", "ugs-warehouse-ingest", "Vector reingest (--all)",
         "Vector reingest — gengis, feature_id, classification/table, proj:code, FK relationships. "

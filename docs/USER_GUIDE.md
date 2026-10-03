@@ -129,10 +129,12 @@ with no visit.
 ### Install on a computer (Chrome or Edge)
 
 1. Open <https://data.geology.utah.gov/> in Chrome or Edge.
-2. Click the install icon at the right of the address bar, then click **Install**. In Chrome, if
-   you do not see the icon, open the **⋮** menu and click **Cast, save, and share** >
-   **Install page as app**.
+2. Click **Install** at the right of the address bar, then click **Install** in the window that
+   opens. In Chrome, if you do not see **Install**, open the **⋮** menu and click
+   **Cast, save, and share** > **Install page as app**.
 3. The app opens in its own window. Go to [Save data](#save-data-for-offline-use).
+
+![Step 2: Install in the Chrome address bar](img/offline/chrome-desktop-install.png){ width="640" }
 
 ### Save data for offline use
 

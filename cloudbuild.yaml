@@ -566,7 +566,7 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
-      - --set-env-vars=REGION=${_REGION},WAREHOUSE_BUCKET=${_PUBLIC_BUCKET},THUMBS_JOB=${_PUBTHUMB_JOB},THREED_JOB=${_THREED_JOB},VECTORS_JOB=${_VECTORS_JOB},PRUNE_JOB=${_PRUNE_JOB},INGEST_JOB=${_PUBS_JOB},FTS_JOB=${_FTS_JOB},EMBED_JOB=${_EMBED_JOB}
+      - --set-env-vars=REGION=${_REGION},WAREHOUSE_BUCKET=${_PUBLIC_BUCKET},THUMBS_JOB=${_PUBTHUMB_JOB},THREED_JOB=${_THREED_JOB},VECTORS_JOB=${_VECTORS_JOB},PRUNE_JOB=${_PRUNE_JOB},INGEST_JOB=${_PUBS_JOB},FTS_JOB=${_FTS_JOB}
       - --task-timeout=86400
       - --max-retries=0
       - --cpu=1

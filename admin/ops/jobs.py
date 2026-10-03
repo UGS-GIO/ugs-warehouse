@@ -49,12 +49,12 @@ STAGES = [
      "blurb": "Rebind ugs-styles renders onto STAC items by id — seconds, no reingest, no tiles rebuilt. "
               "Then render each topic's styled PMTiles → preview thumbnail (content-hash skip; "
               "re-renders only changed styles)."},
-    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "pubs-ingest",
-                                                 "graph", "fts", "embed"],
+    {"n": "⑤", "title": "Publications", "jobs": ["pubs-pipeline", "harvest", "thumbs", "vectors",
+                                                 "pubs-ingest", "graph", "fts"],
      "blurb": "Scanned geologic maps → COGs (GDAL); cover thumbnails (PDF page 1) for every pub → "
               "STAC (3 collections). One-click Full refresh runs thumbnails → rebuild for you, or "
-              "step through harvest / thumbnail / rebuild individually. Search corpora (full-text + "
-              "semantic) rebuild from the same pub set."},
+              "step through harvest / thumbnail / rebuild individually. The full-text search index "
+              "rebuilds from the same pub set."},
     {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
      "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
               "One mosaic per portal layer. The intermediate and 500k tiers build here; the statewide "
@@ -97,9 +97,6 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         modes=(("report", "Report"), ("dry-run", "Dry run"))),
     Job("fts", "ugs-pubs-fts", "Build full-text search",
         "Rebuild the all-pub full-text-search DuckDB (BM25 FTS) → CDN. Run after pub text changes."),
-    Job("embed", "ugs-pubs-embed", "Build semantic search",
-        "Chunk + embed every pub (bge-small) → DuckDB VSS (HNSW) → CDN. Heavy. Run after pub set or "
-        "classification changes.", danger=True),
     Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (intermediate + 500k)",
         "Rebuild the intermediate-scale and 1:500,000 raster PMTiles mosaics of the published geologic "
         "maps. Use the per-tier buttons to regenerate just one. The 24k tier is not built here: it "

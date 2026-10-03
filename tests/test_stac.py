@@ -968,8 +968,8 @@ def test_a_publication_series_borrows_its_newest_cover(monkeypatch):
     stac.refresh_catalog()
 
     coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-publications/M/collection.json"])
-    assert coll["assets"] == {"thumbnail": {"href": "https://x/M-200.webp", "type": "image/webp",
-                                            "roles": ["thumbnail"], "title": "Preview: Map M-200"}}
+    assert coll["assets"]["thumbnail"] == {"href": "https://x/M-200.webp", "type": "image/webp",
+                                           "roles": ["thumbnail"], "title": "Preview: Map M-200"}
 
 
 def test_a_serving_topic_collection_borrows_no_thumbnail(monkeypatch):
@@ -987,7 +987,8 @@ def test_a_serving_topic_collection_borrows_no_thumbnail(monkeypatch):
     stac.refresh_catalog()
 
     coll = json.loads(store[f"{config.STAC_PREFIX}/ugs-serving-topics/hazards/collection.json"])
-    assert "assets" not in coll
+    assert "thumbnail" not in coll["assets"]
+    assert coll["assets"]["items"]["roles"] == ["collection-mirror"]
 
 
 def test_a_raster_collection_with_no_scene_thumbnails_omits_the_key(monkeypatch):
@@ -1050,13 +1051,14 @@ def test_raster_collection_publishes_an_item_mirror(monkeypatch):
         con = duckdb.connect()
         con.execute("LOAD spatial;")
         rows = con.execute(
-            f"SELECT id, bbox.xmin, properties.datetime, ST_GeometryType(geometry) FROM '{local}' ORDER BY id"
+            f"SELECT id, bbox.xmin, datetime, ST_GeometryType(geometry) FROM '{local}' ORDER BY id"
         ).fetchall()
         con.close()
 
     assert [r[0] for r in rows] == ["scene_a", "scene_b"]
     assert rows[0][1] == -114.0                    # bbox struct, not the raw array
     assert rows[0][3] == "POLYGON"                 # geometry hydrated, queryable
+    assert rows[0][2] is not None                  # properties are top-level columns
 
 
 def test_a_mirror_is_not_written_for_items_without_geometry(monkeypatch):

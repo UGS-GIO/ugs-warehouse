@@ -301,7 +301,7 @@ def _build_search_corpus() -> None:
         for arts in ex.map(load, paths):
             corpus.extend(arts)
     gcs.put_bytes(json.dumps(corpus).encode(), f"{prefix}/corpus.json",
-                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE, compress=True)
     print(f"[pubs] search corpus: {len(corpus)} articles from {len(paths)} issues "
           f"-> {config.public_url(prefix + '/corpus.json')}")
 

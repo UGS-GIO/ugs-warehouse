@@ -119,8 +119,11 @@ function userActionItem(email: string): ActionItem {
 
 // Thin top progress bar — visible while any TanStack Query fetch is in flight OR a view switch is
 // pending (useTransition). A global "working" signal so a slow load never reads as a frozen app.
+const SEARCH_BOX_QUERIES = new Set(["place-suggest", "header-search-index"]);
+
 function FetchBar({ pending }: { pending?: boolean }) {
-  const busy = useIsFetching() > 0 || pending;
+  // The search box has its own spinner.
+  const busy = useIsFetching({ predicate: (q) => !SEARCH_BOX_QUERIES.has(String(q.queryKey[0])) }) > 0 || pending;
   return (
     <div className="pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden">
       {busy && <div className="fetch-bar h-full w-full bg-primary" />}

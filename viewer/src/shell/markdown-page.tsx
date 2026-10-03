@@ -17,6 +17,8 @@ const PROSE = [
   "[&_strong]:font-semibold",
   // A paragraph of screenshots is a grid: side by side where they fit, one per row on a phone.
   "[&_p:has(>a>img)]:grid [&_p:has(>a>img)]:grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] [&_p:has(>a>img)]:gap-3",
+  // A lone screenshot, such as a wide desktop one, takes the full row.
+  "[&_p>a:only-child]:col-span-full",
   "[&_img]:w-full [&_img]:rounded-md [&_img]:border [&_img]:border-border",
   "[&_hr]:my-6 [&_hr]:border-border",
   "[&_blockquote]:border-l-2 [&_blockquote]:border-border [&_blockquote]:pl-3 [&_blockquote]:text-muted-foreground [&_blockquote]:my-3",

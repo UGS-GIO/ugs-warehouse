@@ -1,6 +1,6 @@
 import { Combobox } from "@base-ui/react/combobox";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import type { ItemRef } from "@/catalog/browse";
 import { setPin } from "@/map/camera";
 import { type Bounds, locate, suggest, type Suggestion } from "@/map/place-locator";
@@ -46,6 +46,8 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
 }) {
   const [q, setQ] = useState("");
   const text = q.trim();
+  // Enter with no suggestion highlighted runs the full search, as a plain search box would.
+  const highlighted = useRef<Row | undefined>(undefined);
   const recent = useRecent();
 
   const catalog = useQuery({
@@ -105,6 +107,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
       // otherwise reset it, since the box never holds a selected value.
       onInputValueChange={(v, d) => { if (d.reason === "input-change" || d.reason === "item-press") setQ(v); }}
       onValueChange={(row) => { if (row) pick(row); }}
+      onItemHighlighted={(row) => { highlighted.current = row; }}
       itemToStringLabel={(row) => row.label}
     >
       <div className={`flex items-center gap-2 rounded-full border border-input bg-background px-3 py-1 shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 ${className}`}>
@@ -113,6 +116,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         </svg>
         <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Search places, layers and publications" title="Press / to search"
           aria-label="Search places, layers and publications"
+          onKeyDown={(e) => { if (e.key === "Enter" && !highlighted.current && text) onSearchAll(text); }}
           className="min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none" />
         {busy && <span role="status" aria-label="Searching"
           className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-primary" />}

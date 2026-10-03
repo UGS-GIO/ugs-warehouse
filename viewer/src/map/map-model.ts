@@ -4,6 +4,7 @@
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
 import type { StacDoc } from "@/stac";
+import { to2d } from "@/lib/bbox";
 
 // Which map surface an item needs. A single consolidated map renders the right sources per kind, so
 // switching between items of different kinds swaps sources instead of remounting a whole component
@@ -33,8 +34,7 @@ export function hasFootprint(item: StacDoc | undefined): boolean {
 // down; here a bad bbox just means "no auto-fit" (the map keeps its default view).
 export function validBbox(bb: number[] | undefined): [number, number, number, number] | undefined {
   if (!Array.isArray(bb)) return undefined;
-  const h = bb.length >= 6 ? [bb[0], bb[1], bb[3], bb[4]]
-    : bb.length >= 4 ? [bb[0], bb[1], bb[2], bb[3]] : undefined;
+  const h = to2d(bb);
   if (!h) return undefined;
   const [w, s, e, n] = h;
   const okLon = (v: number) => Number.isFinite(v) && v >= -180 && v <= 180;

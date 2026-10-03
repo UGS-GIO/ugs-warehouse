@@ -16,6 +16,7 @@ may use it. AGENTS.md tells a program how to read it without downloading everyth
 from __future__ import annotations
 
 from . import config
+from .bbox import to_2d_bbox
 
 README_NAME = "README.md"
 AGENTS_NAME = "AGENTS.md"
@@ -61,9 +62,9 @@ def _formats(items: list[dict]) -> list[tuple[str, str]]:
 
 def _extent_line(extent: dict | None) -> str:
     bbox = ((extent or {}).get("spatial") or {}).get("bbox") or []
-    if not bbox or len(bbox[0]) < 4:
+    if not bbox or len(bbox[0]) not in (4, 6):
         return ""
-    w, s, e, n = bbox[0][:4]
+    w, s, e, n = to_2d_bbox(bbox[0])
     return f"- Extent (WGS84): {w:.3f}, {s:.3f} to {e:.3f}, {n:.3f}\n"
 
 

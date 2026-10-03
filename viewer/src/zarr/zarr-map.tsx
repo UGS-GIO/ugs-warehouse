@@ -14,6 +14,7 @@ import { DIRECT, protomapsStyle } from "@/map/basemap-style";
 import { ensurePmtilesProtocol } from "@/map/pmtiles-protocol";
 import { DeckOverlay } from "./zarr-overlay";
 import { useZarrLayers } from "./use-zarr-layers";
+import { to2d } from "@/lib/bbox";
 
 ensurePmtilesProtocol();
 
@@ -41,7 +42,7 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
     return <Note tone="error">Could not open the datacube: {state.error.message}</Note>;
   }
 
-  const [w, s, e, n] = (item.bbox?.slice(0, 4) ?? UTAH) as [number, number, number, number];
+  const [w, s, e, n] = to2d(item.bbox) ?? UTAH;
   const others = variables.length - 1;
   return (
     <div className="mt-2">

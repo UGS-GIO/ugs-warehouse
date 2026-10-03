@@ -22,6 +22,7 @@ import re
 import sys
 
 from . import catalog_docs, config, gcs, iso, item_mirror, styles
+from .bbox import to_2d_bbox
 
 PGF_BASE_URL = config.PGF_BASE_URL
 
@@ -81,8 +82,8 @@ def has_feature_service(collection_path: str) -> bool:
 # ---------------------------------------------------------------- helpers
 
 def bbox_polygon(bbox: list[float]) -> dict:
-    """A GeoJSON Polygon ring from a [minx, miny, maxx, maxy] bbox."""
-    minx, miny, maxx, maxy = bbox
+    """A GeoJSON Polygon ring from a 2D or 3D STAC bbox."""
+    minx, miny, maxx, maxy = to_2d_bbox(bbox)
     return {
         "type": "Polygon",
         "coordinates": [[[minx, miny], [maxx, miny], [maxx, maxy],
@@ -373,7 +374,7 @@ UTAH_BBOX = [-114.1, 36.9, -108.9, 42.1]  # fallback when items carry no bbox
 def _extent(items: list[dict]) -> dict:
     """Real spatial + temporal extent from the collection's items (union bbox, min/max
     datetime). Falls back to the Utah bbox if no item bboxes are present."""
-    bxs = [it["bbox"] for it in items if it.get("bbox") and len(it["bbox"]) >= 4]
+    bxs = [to_2d_bbox(it["bbox"]) for it in items if it.get("bbox") and len(it["bbox"]) in (4, 6)]
     dts = sorted(it["properties"]["datetime"] for it in items
                  if it.get("properties", {}).get("datetime"))
     bbox = ([min(b[0] for b in bxs), min(b[1] for b in bxs),

@@ -10,6 +10,7 @@ import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
 
 import { exportFindings, type Finding, findingsHeading } from "./export-findings";
+import { to2d } from "@/lib/bbox";
 
 const SERVICE_KEYS = new Set(["pmtiles", "style", "xyz", "ducklake", "tiles"]);
 
@@ -63,7 +64,7 @@ type Warning = { fmt: ExportFormat; findings: Finding[] };
 
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
-  const fullBbox = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
+  const fullBbox = to2d(item.bbox);
   const [clipOn, setClipOn] = useState(false);
   const [bbox, setBbox] = useState<[number, number, number, number]>(fullBbox ?? [0, 0, 0, 0]);
   const [epsg, setEpsg] = useState(4326);

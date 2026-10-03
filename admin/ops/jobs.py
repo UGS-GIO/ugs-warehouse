@@ -72,6 +72,9 @@ JOBS: dict[str, Job] = {j.key: j for j in [
     Job("harvest", "geolmap-harvest", "Harvest COGs",
         "Convert publication map plates → COGs (SKIP_EXISTING; safe to re-run). Heavy. "
         "Runs as 5 parallel shards (each task strides 1/5 of the worklist).", danger=True, tasks=5),
+    Job("vectors", "ugs-pubs-vectors", "Extract map layers",
+        "Extract every layer and companion table from the GIS zip of each pub that has one, as "
+        "GeoParquet. Skips pubs already extracted; then Rebuild pubs STAC to bind them."),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
         "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",

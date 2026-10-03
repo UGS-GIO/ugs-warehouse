@@ -10,6 +10,7 @@ Ported from ugs-geolmap-cog-poc/catalog/build_pubs_stac.py — adapted to `core.
 """
 from __future__ import annotations
 
+import math
 import os
 import re
 import sys
@@ -162,10 +163,38 @@ _RESERVED_ASSET_KEYS = frozenset({
 })
 
 
+def cog_asset_fields(ds) -> dict:
+    """STAC 1.1 asset fields for an open COG, read from its header with rio-stac (no pixel reads).
+
+    rio-stac emits projection v1.1 `proj:epsg` and `eo:bands`; both map to their STAC 1.1 forms
+    here (`proj:code` and common `bands`). Its `raster:bands` reads pixel statistics, so data type
+    and nodata come from the header directly.
+    """
+    from rio_stac.stac import get_eobands_info, get_projection_info
+
+    proj = get_projection_info(ds)
+    epsg = proj.pop("epsg")
+    proj.pop("geometry")
+    fields = {f"proj:{k}": v for k, v in proj.items()}
+    if epsg:
+        fields["proj:code"] = f"EPSG:{epsg}"
+    bands = get_eobands_info(ds)
+    if len(set(ds.dtypes)) == 1:
+        fields["data_type"] = ds.dtypes[0]
+    else:
+        for band, dtype in zip(bands, ds.dtypes):
+            band["data_type"] = dtype
+    if ds.nodata is not None:
+        fields["nodata"] = ds.nodata if math.isfinite(ds.nodata) else str(ds.nodata)
+    fields["bands"] = bands
+    return fields
+
+
 def build_item(p: dict, attachments: list[dict], *,
                geom: dict | None = None, bbox: list[float] | None = None,
                fp_source: str | None = None,
-               has_cog: bool = False, has_units: bool = False,
+               has_cog: bool = False, cog_fields: dict | None = None,
+               has_units: bool = False,
                has_thumb: bool = False, has_cover: bool = False,
                has_3d: bool = False, classes_3d: list[dict] | None = None,
                vector_layers: list[str] | None = None,
@@ -220,19 +249,11 @@ def build_item(p: dict, attachments: list[dict], *,
         assets.setdefault(key, source_asset(h, type=media_type(h),
                                             title=(a.get("extra_data") or "").strip(), roles=["data"]))
     if has_cog:
-        # The COG is warped to EPSG:3857 (harvest.py: gdalwarp -t_srs + rio-cogeo web_optimized),
-        # which differs from the item-level proj:code (4326, the footprint/units CRS). The projection
-        # ext allows per-asset overrides, so stamp the COG's real CRS on the asset itself — otherwise
-        # a client reads the item-level 4326 and mis-places the raster.
-        # harvest produces an RGBA uint8 COG (gdalwarp -dstalpha → rio-cogeo). Bands are the
-        # STAC 1.1 common `bands` construct (NOT deprecated raster:bands); data_type is deduped to
-        # the asset per 1.1 best practice. Alpha carries transparency, so no separate nodata.
+        # The COG's own CRS (3857) differs from the item-level proj:code (4326), so it rides on the
+        # asset as a per-asset override; `cog_fields` (see cog_asset_fields) carries it.
         assets["cog"] = {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
                          "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
-                         "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857",
-                         "data_type": "uint8",
-                         "bands": [{"name": "red"}, {"name": "green"},
-                                   {"name": "blue"}, {"name": "alpha"}]}
+                         "roles": ["data", "cloud-optimized"], **(cog_fields or {})}
     if has_thumb:
         assets["thumbnail"] = {"href": config.public_url(f"{identity.COG_PREFIX}/{sid.upper()}.thumb.png"),
                                "type": "image/png", "title": "Thumbnail", "roles": ["thumbnail"]}
@@ -338,7 +359,7 @@ def build_item(p: dict, attachments: list[dict], *,
     # advertised by its `cog` ASSET (media type `…;profile=cloud-optimized`), which STAC Browser and
     # our viewer both render natively, and which `_is_mappable`/`cogAsset` detect. No link needed.
     extensions: list[str] = []
-    if has_cog:
+    if any(k.startswith("proj:") for k in assets.get("cog", {})):
         extensions.append(stac.PROJ_EXT)  # asset-level proj:code on the COG (EPSG:3857)
     if any("alternate" in a for a in assets.values()):
         extensions.append(stac.ALTERNATE_ASSETS_EXT)  # mirrored file + publisher copy

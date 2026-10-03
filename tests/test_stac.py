@@ -447,7 +447,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
@@ -488,7 +488,7 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows",
                side_effect=RuntimeError("footprints missing")), \
@@ -596,7 +596,7 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
          patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \

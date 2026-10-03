@@ -11,7 +11,7 @@ import { qk } from "@/query-keys";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
+  categoryTiles, extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
@@ -237,6 +237,10 @@ export function DiscoveryView({
 
   const chips = activeChips(st, { collection: collectionLabel, category: categoryLabel });
   const activeFilters = chips.length;
+  // Nothing typed or filtered: the front door. The category index sits above the newest-first
+  // results, so "/" is this view and there is one search box with one behavior.
+  const idle = !q.trim() && activeFilters === 0 && !itemSelected;
+  const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], geometry: "all", area: null });
 
   return (
@@ -333,6 +337,20 @@ export function DiscoveryView({
 
         {/* CENTER — result cards (the star): gallery grid or list, paginated. */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-3 py-3">
+          {idle && tiles.length > 0 && (
+            <section aria-label="Categories" className="mb-4 rounded-md border border-border bg-background px-4 py-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</h2>
+              <div className="mt-1 grid grid-cols-1 gap-x-8 sm:grid-cols-2 xl:grid-cols-3">
+                {tiles.map((t) => (
+                  <button key={t.key} type="button" onClick={() => patch({ categories: [t.key] })}
+                    className="flex items-baseline justify-between gap-4 border-b border-border py-2 text-left hover:text-primary">
+                    <span className="text-sm">{t.label}</span>
+                    <span className="font-mono text-sm text-muted-foreground">{t.count.toLocaleString()}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           {/* Removable active-filter chips — a legible summary of what's narrowing the set, above the
               cards (the rail is md+ only, so on a phone this is the ONLY way to see/clear a filter). */}
           {chips.length > 0 && (

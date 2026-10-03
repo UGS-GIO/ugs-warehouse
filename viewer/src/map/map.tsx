@@ -20,7 +20,7 @@ import satelliteThumb from "@/assets/basemaps/satellite.webp";
 import streetsThumb from "@/assets/basemaps/streets.webp";
 import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
-import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+import { COG_GATE, type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { to2d } from "@/lib/bbox";
 
@@ -301,10 +301,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // more so because an UNSTYLED layer falls back to paint with no gate and does draw. Name them
   // instead. Only layers whose style has resolved carry a gate, so nothing flashes during load.
   const gateById: Record<string, Gate | null> = {};
-  for (const l of layers) gateById[l.id] = gateOf(styleCache[l.id]);
+  for (const l of layers) gateById[l.id] = l.cogHref ? COG_GATE : gateOf(styleCache[l.id]);
   const gatedOut = useGatedOut(mapRef, layers.map((l) => ({ id: l.id, gate: gateById[l.id] })), mapLoaded);
-  const hiddenGroup = (dir: "in" | "out") =>
-    groupGate(layers.filter((l) => gatedOut[l.id] === dir).map((l) => ({ title: l.title, gate: gateById[l.id] })), dir);
+  const hiddenGroup = (dir: "in" | "out") => {
+    const out = layers.filter((l) => gatedOut[l.id] === dir);
+    const g = groupGate(out.map((l) => ({ title: l.title, gate: gateById[l.id] })), dir);
+    return g && out.length > 3 ? { ...g, subject: `${out.length} layers` } : g;
+  };
   // Zoom-in wins the slot when both directions are gated — it's the case that actually occurs, since
   // SLD MaxScaleDenominators become minzooms.
   const inGroup = hiddenGroup("in");
@@ -478,7 +481,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         // Raster COG layer — render the georeferenced GeoTIFF via cog:// (once the protocol is
         // registered). Distinct `cog-*` ids keep it out of the vector feature-click regex.
         if (l.cogHref) {
-          if (!cogReady) return null;
+          // Unmounted, not hidden: an invisible Source still decodes.
+          if (!cogReady || gatedOut[l.id]) return null;
           return (
             <Source key={l.id} id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
               <Layer id={`cog-${s}-raster`} type="raster" paint={{ "raster-opacity": 0.9 }} />

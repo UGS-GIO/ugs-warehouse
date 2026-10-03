@@ -137,11 +137,12 @@ export const SORTS: { key: SortKey; label: string }[] = [
 // layers still order among themselves by when they were loaded.
 export function sortItems(items: ItemRef[], key: SortKey): ItemRef[] {
   if (key === "relevance") return items;
-  const out = [...items];
-  if (key === "title") return out.sort((a, b) => discoveryTitle(a).localeCompare(discoveryTitle(b)));
+  if (key === "title") return [...items].sort((a, b) => discoveryTitle(a).localeCompare(discoveryTitle(b)));
   const dir = key === "newest" ? -1 : 1;
-  return out.sort((a, b) =>
-    byDate(publishedOf(a), publishedOf(b), dir) || byDate(loadedOf(a), loadedOf(b), dir));
+  return items
+    .map((it) => ({ it, published: publishedOf(it), loaded: loadedOf(it) }))
+    .sort((a, b) => byDate(a.published, b.published, dir) || byDate(a.loaded, b.loaded, dir))
+    .map(({ it }) => it);
 }
 
 // "Best match" needs words to rank by; field-only queries (series:GQ) and an empty box have none.

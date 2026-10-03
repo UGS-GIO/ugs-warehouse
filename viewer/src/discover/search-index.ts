@@ -78,8 +78,8 @@ class CatalogIndex extends MiniSearch<Hit> {
 }
 
 // One catalog item (a compact index record or a full item) → the flat CatalogDoc the index consumes.
-// The SAME projection App builds for the Search view (title / keywords / series·topic·pub_type meta),
-// so both views index items identically and a hit's `id` (`{collId}/{itemId}`) round-trips to the item.
+// Discover and the header search both build their docs here, so they index items identically, and a
+// hit's `id` (`{collId}/{itemId}`) round-trips to the item.
 export function toSearchDoc(collId: string, d: StacDoc): CatalogDoc {
   const p = (d.properties ?? {}) as Record<string, unknown>;
   const itemId = String(d.id);

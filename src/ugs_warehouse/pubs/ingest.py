@@ -142,13 +142,16 @@ def _cog_headers(cog_ids: set[str]) -> dict[str, tuple[tuple | None, dict]]:
 
     Reads only the COG header via GDAL /vsicurl (a small range read), parallelised — no full download.
     """
+    from rasterio import Env
     from rasterio import open as rio_open
     from rasterio.warp import transform_bounds
 
     def one(sid: str):
         url = config.public_url(identity.Pub(sid).cog_object)
         try:
-            with rio_open(f"/vsicurl/{url}") as ds:
+            # Without this GDAL lists the CDN "directory" before each open, which is most of the time.
+            # The setting is per thread, so it goes here, not around the pool.
+            with Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR"), rio_open(f"/vsicurl/{url}") as ds:
                 # densify so the reprojected 3857→4326 rectangle hugs the curved edges accurately.
                 w, s, e, n = transform_bounds(ds.crs, "EPSG:4326", *ds.bounds, densify_pts=21)
                 fields = sink_stac.cog_asset_fields(ds)

@@ -1,10 +1,12 @@
 // Pure, unit-tested core for the Discover view: facet extraction + result filtering + sorting over
 // the loaded catalog items. Framework/DOM-free — type-only imports of the item + STAC shapes, plus
-// the already-pure validBbox from map-model — so it runs in the (node) test env. The view component
-// wires these to MiniSearch (the shared search-index) and the live map; neither belongs in this layer.
+// the already-pure validBbox from map-model and the query parser — so it runs in the (node) test env.
+// The view component wires these to MiniSearch (the shared search-index) and the live map; neither
+// belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
-import { categorize, collectionLabel, docIdOf, formatsOf, hasGeometry, propsOf,
+import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, hasGeometry, propsOf,
   title, typeOf } from "@/catalog/item-view";
+import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { validBbox } from "@/map/map-model";
 
 // The field getters now live in item-view.ts (one source of truth, shared with browse.tsx). Re-export
@@ -104,8 +106,21 @@ export function filterByViewport(items: ItemRef[], viewport: number[] | undefine
   return items.filter((it) => bboxIntersects(it.data?.bbox, viewport));
 }
 
-// ISO datetime (or empty) for date sorts — lexicographic on ISO strings == chronological.
-const datetimeOf = (it: ItemRef): string => String(propsOf(it).datetime ?? "");
+// ISO dates for date sorts — lexicographic on ISO strings == chronological. A publication's datetime
+// is when it was published; a layer's is when the warehouse last loaded it, which says nothing about
+// how new the data is. So date sorts rank by publication date, and load dates only order the rest.
+const publishedOf = (it: ItemRef): string =>
+  (datetimeIsPublished(propsOf(it)) ? String(propsOf(it).datetime ?? "") : "");
+const loadedOf = (it: ItemRef): string =>
+  (datetimeIsPublished(propsOf(it)) ? "" : String(propsOf(it).datetime ?? ""));
+
+// Two ISO dates in `dir` order, an empty one last whichever the direction.
+const byDate = (a: string, b: string, dir: number): number => {
+  if (a === b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  return dir * a.localeCompare(b);
+};
 
 export type SortKey = "relevance" | "title" | "newest" | "oldest";
 export const SORTS: { key: SortKey; label: string }[] = [
@@ -117,22 +132,25 @@ export const SORTS: { key: SortKey; label: string }[] = [
 
 // Order results for display. "relevance" preserves the caller's order (the MiniSearch score order,
 // or the facet-count order when there's no query) — so it's the identity. The others return a NEW
-// array (never mutate the input). Items missing a datetime sort last under both date orders, so an
-// undated pub never jumps to the top of "Newest".
+// array (never mutate the input). Items without a publication date sort after those with one under
+// both date orders, so an undated pub or a freshly reloaded layer never jumps to the top of "Newest";
+// layers still order among themselves by when they were loaded.
 export function sortItems(items: ItemRef[], key: SortKey): ItemRef[] {
   if (key === "relevance") return items;
   const out = [...items];
   if (key === "title") return out.sort((a, b) => discoveryTitle(a).localeCompare(discoveryTitle(b)));
   const dir = key === "newest" ? -1 : 1;
-  return out.sort((a, b) => {
-    const da = datetimeOf(a);
-    const db = datetimeOf(b);
-    if (da === db) return 0;
-    if (!da) return 1; // undated → last, regardless of direction
-    if (!db) return -1;
-    return dir * da.localeCompare(db);
-  });
+  return out.sort((a, b) =>
+    byDate(publishedOf(a), publishedOf(b), dir) || byDate(loadedOf(a), loadedOf(b), dir));
 }
+
+// "Best match" needs words to rank by; field-only queries (series:GQ) and an empty box have none.
+export const ranksByWords = (query: Query): boolean => Boolean(baseTerms(query));
+
+// Without words, "Best match" is just catalog load order, which leads with the oldest external
+// publishers, so that view lists newest first instead. A sort the user picked is kept.
+export const effectiveSort = (s: DiscoveryState): SortKey =>
+  (s.sort === "relevance" && !ranksByWords(parseQuery(s.q)) ? "newest" : s.sort);
 
 // ---- URL <-> Discover state (the boundary) ------------------------------------------------------
 // The Discover view's whole filter/sort/layout state lives in the URL so a landing tile or a shared

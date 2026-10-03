@@ -10,8 +10,8 @@ import { qk } from "@/query-keys";
 
 import type { ItemRef } from "@/catalog/browse";
 import {
-  activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf,
-  extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, sortItems,
+  activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
+  extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
@@ -40,6 +40,7 @@ const ItemMap = lazy(() => import("@/map/map").then((m) => ({ default: m.ItemMap
 const LAYOUTS = [{ value: "gallery" as const, label: "Gallery" }, { value: "list" as const, label: "List" }];
 const DENSITIES = [{ value: "comfortable" as const, label: "Comfy" }, { value: "compact" as const, label: "Compact" }];
 const SORT_ITEMS = SORTS.map((s) => ({ value: s.key, label: s.label }));
+const SORT_ITEMS_WITHOUT_MATCH = SORT_ITEMS.filter((s) => s.value !== "relevance");
 const PAGE = 48; // cards per "Show more" step (reference parity)
 // Detail drawer width: drag-resizable and remembered, since how much room the preview deserves
 // depends on the item (a long abstract vs. a thumbnail). CSS caps it on narrow viewports.
@@ -72,7 +73,8 @@ export function DiscoveryView({
   // (not the arrays, which are fresh each parse) so they don't re-run on unrelated renders.
   const sp = useSearch({ from: "__root__" });
   const st = parseDiscovery(sp);
-  const { q, geometry, sort, layout, density, area } = st;
+  const { q, geometry, layout, density, area } = st;
+  const sort = effectiveSort(st);
   const { collections: colls, categories: cats, types, formats } = st;
   const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
   const areaK = area ? area.join(",") : "";
@@ -261,7 +263,7 @@ export function DiscoveryView({
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <label className="flex items-center gap-1 text-xs text-muted-foreground">
             Sort
-            <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={SORT_ITEMS} className="text-xs" />
+            <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={ranksByWords(query) ? SORT_ITEMS : SORT_ITEMS_WITHOUT_MATCH} className="text-xs" />
           </label>
           <UiSegmented value={density} onValueChange={(v) => patch({ density: v }, true)} items={DENSITIES} className="text-xs" />
           <UiSegmented value={layout} onValueChange={(v) => patch({ layout: v }, true)} items={LAYOUTS} className="text-xs" />

@@ -41,6 +41,8 @@ class GeoParquetProvider(ParquetProvider):
         geo = json.loads((self.ds.schema.metadata or {}).get(b"geo", b"{}"))
         column = geo.get("primary_column") or "geometry"
         self._covering = ((geo.get("columns") or {}).get(column) or {}).get("covering", {}).get("bbox")
+        if column not in self.ds.schema.names:
+            raise ProviderQueryError(f"{self.source} has no geometry column {column!r}")
         self.ds = _RenamedGeometry(self.ds, column)
         self._fields = {}
         self.get_fields()
@@ -50,6 +52,8 @@ class GeoParquetProvider(ParquetProvider):
         if bbox:
             if not self._covering:
                 raise ProviderQueryError("Dataset has no GeoParquet bbox covering to filter on")
+            if len(bbox) == 6:  # minx, miny, minz, maxx, maxy, maxz
+                bbox = [*bbox[:2], *bbox[3:5]]
             minx, miny, maxx, maxy = (float(b) for b in bbox)
             c = {k: pc.field(*path) for k, path in self._covering.items()}
             self.ds.extra = ((c["xmax"] >= minx) & (c["xmin"] <= maxx)

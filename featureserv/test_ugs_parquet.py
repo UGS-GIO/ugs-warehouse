@@ -41,6 +41,7 @@ def test_bbox_keeps_features_that_cross_its_edge(provider_def):
     assert p.query(bbox=BOX, resulttype="hits")["numberMatched"] == 2
     # The bbox does not carry over to the next query on the same provider.
     assert p.query(resulttype="hits")["numberMatched"] == 3
+    assert names(p.query(bbox=[0, 0, -5, 10, 10, 5])) == ["crosses the edge", "inside"]
 
 
 def test_paging_skip_geometry_and_select_properties(provider_def):
@@ -49,3 +50,18 @@ def test_paging_skip_geometry_and_select_properties(provider_def):
     assert all(f["geometry"] is None for f in p.query(skip_geometry=True)["features"])
     feature = p.query(select_properties=["name"], limit=1)["features"][0]
     assert feature["geometry"] is not None and "name" in feature["properties"]
+
+
+def test_metadata_naming_a_missing_geometry_column_fails_clearly(tmp_path):
+    import json
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    path = tmp_path / "broken.parquet"
+    geo = {"version": "1.1.0", "primary_column": "geom", "columns": {"geom": {"encoding": "WKB"}}}
+    pq.write_table(pa.table({"feature_id": [1]}).replace_schema_metadata({"geo": json.dumps(geo)}),
+                   path)
+    with pytest.raises(Exception, match="no geometry column"):
+        GeoParquetProvider({"name": "x", "type": "feature", "id_field": "feature_id",
+                            "data": {"source": str(path)}})

@@ -97,8 +97,8 @@ The COG is advertised as an asset, not a web-map-links `cog` link; that extensio
 rel.
 
 On refresh, each `ugs-rasters/<layer>` collection also gets a `thumbnail` asset (from its newest
-item with one) and an `items` asset: `items.parquet`, a stac-geoparquet mirror of its items
-(`core/item_mirror.py`).
+item with one). Every collection, raster or not, gets an `items` asset: `items.parquet`, a
+stac-geoparquet mirror of its items that rustac writes (`core/item_mirror.py`).
 
 ## Environment
 

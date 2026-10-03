@@ -459,10 +459,10 @@ def _collection_assets(path: str, items: list[dict], mirror: object | None = Non
     The item is the most recent one that has a thumbnail, ties broken by id, so the preview tracks
     what was published last instead of whichever item happened to sort first.
     """
-    is_raster = path.split("/", 1)[0] == RASTER_CATALOG
-    if not is_raster and path.split("/", 1)[0] not in PUB_SERIES_CATALOGS:
-        return {}
-    mirror_asset = item_mirror.asset(path, mirror) if is_raster else {}
+    mirror_asset = item_mirror.asset(path, mirror)
+    top = path.split("/", 1)[0]
+    if top != RASTER_CATALOG and top not in PUB_SERIES_CATALOGS:
+        return mirror_asset
     with_thumbs = [it for it in items if (it.get("assets") or {}).get("thumbnail", {}).get("href")]
     if not with_thumbs:
         return mirror_asset
@@ -743,9 +743,8 @@ def refresh_catalog() -> None:
             item_titles = {it["id"]: it["properties"]["title"] for it in items
                            if it.get("id") and it.get("properties", {}).get("title")}
             # The mirror is derived from these same items, so it is rebuilt whenever the
-            # collection is — the two cannot drift. Raster collections only, for now (#259).
-            mirror = (item_mirror.write(path, items)
-                      if path.startswith(f"{RASTER_CATALOG}/") else None)
+            # collection is — the two cannot drift.
+            mirror = item_mirror.write(path, items)
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
                                         mappable=mappable, description=desc,
                                         item_titles=item_titles,

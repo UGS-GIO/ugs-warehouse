@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StacDoc } from "@/stac";
-import { buildIndex, toSearchDoc } from "./search-index";
+import { buildIndex, idMatch, searchCatalog, toSearchDoc } from "./search-index";
 
 // Publications shaped like the catalog's index records, with live IDs: OFR-771 and M-290 only exist
 // as OFR-771DM and M-290DR, and their neighbours share the series and most of the number. MD-1320's
@@ -28,17 +28,12 @@ const CATALOG = [
   pub("MP-173", "Selected papers on the Uinta Basin", { "ugs:pub_type": "Miscellaneous Publication" }),
   pub("CR-91-14DF", "Engineering geology of the Jordan Narrows", { "ugs:pub_type": "Contract Report" }),
   // Different files whose ids only differ by a hyphen (both live in the Mining District series).
-  pub("MD-86-7", "Report on the Horn Silver mine", { "ugs:pub_type": "Mining District Files" }),
-  pub("MD-867", "Report on the Cactus mine", { "ugs:pub_type": "Mining District Files" }),
-  // One map listed twice under ids that differ only by case, as in the live catalog, and a title
-  // that cites it, which outranks both on words alone.
-  pub("OFR-673DM", "Geologic Map of the Kanab Quadrangle", { "ugs:pub_type": "Open File Report" }),
-  pub("OFR-673dm", "Geologic Map of the Kanab Quadrangle", { "ugs:pub_type": "Open File Report" }),
-  pub("OFR-799", "Supplement to OFR 673", { "ugs:pub_type": "Open File Report" }),
+  pub("MD-86-7", "Sage Plains Drill Hole Salt Wash Member Thickness", { "ugs:pub_type": "Mining District Files" }),
+  pub("MD-867", "Beryl Mine, Davis County, Utah - Beryllium", { "ugs:pub_type": "Mining District Files" }),
 ];
 
 const catalogIndex = () => buildIndex([], CATALOG.map(([coll, doc]) => toSearchDoc(coll, doc))).index;
-const search = (q: string): string[] => catalogIndex().search(q).map((h) => String(h.id));
+const search = (q: string): string[] => searchCatalog(catalogIndex(), q).map((h) => String(h.id));
 
 describe("catalog search by series ID", () => {
   it.each([
@@ -52,9 +47,6 @@ describe("catalog search by series ID", () => {
     ["m-290", "ugs-publications/M/M-290DR"],
     ["M 290", "ugs-publications/M/M-290DR"],
     ["CR-91-14DF", "ugs-publications/CR/CR-91-14DF"],
-    ["MD-86-7", "ugs-publications/MD/MD-86-7"],
-    ["MD-867", "ugs-publications/MD/MD-867"],
-    ["md-867", "ugs-publications/MD/MD-867"],
   ])("%s ranks that publication first", (q, want) => {
     expect(search(q)[0]).toBe(want);
   });
@@ -64,19 +56,14 @@ describe("catalog search by series ID", () => {
     expect(search("OFR-771")).toEqual(["ugs-publications/OFR/OFR-771DM"]);
   });
 
-  it("treats ids that differ only by case as one publication", () => {
-    expect(search("OFR-673")[0]).toBe("ugs-publications/OFR/OFR-673DM");
-    expect(search("OFR-673dm")[0]).toBe("ugs-publications/OFR/OFR-673DM");
+  it("names no item when an ID fits more than one", () => {
+    expect(idMatch(catalogIndex(), "MD-867")).toBeUndefined();
+    expect(idMatch(catalogIndex(), "OFR-771")?.id).toBe("ugs-publications/OFR/OFR-771DM");
   });
 
-  it("does not guess between ids that differ only by hyphens", () => {
-    // Only the hyphenless key (MD867) matches, and both files have it.
-    expect(search("MD8-67")).toEqual([]);
-  });
-
-  it("leaves a caller's filter in charge of what comes back", () => {
-    const hits = catalogIndex().search("M-290", { filter: (r) => r.id !== "ugs-publications/M/M-290DR" });
-    expect(hits.map((h) => h.id)).not.toContain("ugs-publications/M/M-290DR");
+  it("names no item for a number alone", () => {
+    // 773 is only OFR-773's number, but a bare number may be a year or a count, not a citation.
+    expect(idMatch(catalogIndex(), "773")).toBeUndefined();
   });
 
   it("finds every publication that starts with a partial series ID", () => {

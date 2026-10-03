@@ -24,7 +24,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArticleHit, useCorpus } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
-import { buildIndex, type Hit, toSearchDoc } from "./search-index";
+import { buildIndex, type Hit, searchCatalog, toSearchDoc } from "./search-index";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -162,7 +162,7 @@ export function DiscoveryView({
     // Bare/phrase words narrow via MiniSearch; a field- or exclude-only query has no keyword to
     // hand it, so scan the flat doc list instead.
     const base = baseTerms(query);
-    const hits = base ? (index.search(base) as unknown as Hit[]) : itemDocs;
+    const hits = base ? (searchCatalog(index, base) as unknown as Hit[]) : itemDocs;
     const order = new Map(hits.filter((h) => matchesQuery(query, h as SearchDoc)).map((h, i) => [h.id, i]));
     return withData
       .filter((it) => order.has(docIdOf(it)))

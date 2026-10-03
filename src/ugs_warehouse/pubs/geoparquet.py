@@ -6,11 +6,13 @@ ROW_GROUP_MB = 32  # matches the viewer's range reads; gpio's default is ~300 MB
 
 def write(src, path) -> None:
     """Write a GeoDataFrame, or a vector file gpio can convert, as GeoParquet 1.1 with a bbox
-    covering column, Hilbert-sorted, in ~32 MB row groups."""
+    covering column, Hilbert-sorted, in ~32 MB row groups. A file's geometry column is `geom`."""
     import geoparquet_io as gpio
 
     if isinstance(src, str):
-        table = gpio.convert(src, repair_geometry=False)  # keep source geometry as published
+        conv = gpio.convert(src, repair_geometry=False)  # keep source geometry as published
+        names = ["geom" if c == conv.geometry_column else c for c in conv.column_names]
+        table = gpio.Table(conv.table.rename_columns(names), geometry_column="geom", crs=conv.crs)
     else:
         import pyarrow as pa
 

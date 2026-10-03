@@ -52,5 +52,7 @@ def test_write_converts_a_shapefile_path(tmp_path):
 
     meta = _geo(out)
     assert meta["version"] == "1.1.0"
-    assert meta["columns"][meta["primary_column"]]["covering"] == COVERING
+    assert meta["primary_column"] == "geom"
+    assert meta["columns"]["geom"]["covering"] == COVERING
+    assert "geom" in pq.read_schema(out).names
     assert gpd.read_parquet(out).crs.to_epsg() == 26912

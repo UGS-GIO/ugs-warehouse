@@ -35,16 +35,19 @@ function bindSlash(el: HTMLInputElement | null) {
 
 const itemRow = (hit: ItemHit): Row => ({ type: "item", key: hit.href, label: hit.label, sub: hit.sub, hit });
 
-export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAll, className = "" }: {
+export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAll, defaultQuery, onClear,
+  className = "" }: {
   items: ItemRef[];
   loadKey: string;
   isLayer: (r: ItemRef) => boolean;
   onPlace: (b: Bounds, label: string) => void;
   onItem: (hit: { href: string; bbox?: Bounds }) => void;
   onSearchAll: (q: string) => void;
+  defaultQuery?: string;   // the search already applied (Discover's ?q=)
+  onClear?: () => void;    // the clear button also drops the applied search
   className?: string;
 }) {
-  const [q, setQ] = useState("");
+  const [q, setQ] = useState(defaultQuery ?? "");
   const text = q.trim();
   // Enter with no suggestion highlighted runs the full search, as a plain search box would.
   const highlighted = useRef<Row | undefined>(undefined);
@@ -83,7 +86,8 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
             sub: p.kind === "place" ? "Place" : p.kind === "layer" ? "Layer" : "Publication", pick: p })) },
         { value: "Try", items: TRY.map((t): Row => ({ type: "try", key: `try:${t}`, label: t, sub: "" })) },
       ].filter((g) => g.items.length);
-  const busy = places.isFetching || catalog.isFetching || place.isPending;
+  // Only while searching; the index also builds on page load.
+  const busy = (text.length >= 2 && (places.isFetching || catalog.isFetching)) || place.isPending;
 
   const pickItem = (hit: ItemHit) => {
     addRecent({ kind: hit.kind, label: hit.label, href: hit.href, bbox: hit.bbox });
@@ -123,7 +127,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
         {place.isError && <span className="text-xs text-destructive">place not found</span>}
         {q && (
           <button type="button" aria-label="Clear the search"
-            onClick={() => { setQ(""); setPin(null); document.getElementById(INPUT_ID)?.focus(); }}
+            onClick={() => { setQ(""); setPin(null); onClear?.(); document.getElementById(INPUT_ID)?.focus(); }}
             className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
             <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
           </button>

@@ -40,7 +40,8 @@ class GeoParquetProvider(ParquetProvider):
         super().__init__(provider_def)
         geo = json.loads((self.ds.schema.metadata or {}).get(b"geo", b"{}"))
         column = geo.get("primary_column") or "geometry"
-        self._covering = ((geo.get("columns") or {}).get(column) or {}).get("covering", {}).get("bbox")
+        meta = (geo.get("columns") or {}).get(column) or {}
+        self._covering = (meta.get("covering") or {}).get("bbox")
         if column not in self.ds.schema.names:
             raise ProviderQueryError(f"{self.source} has no geometry column {column!r}")
         self.ds = _RenamedGeometry(self.ds, column)

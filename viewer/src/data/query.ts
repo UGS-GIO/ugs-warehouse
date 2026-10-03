@@ -112,7 +112,7 @@ function fieldValue(d: SearchDoc, f: FieldName): string {
  *  engine already ANDed them (with prefix/fuzzy); re-checking as substrings would drop good matches.
  *  This enforces the precise parts: phrases, exclusions, and field constraints. */
 export function matchesQuery(q: Query, d: SearchDoc): boolean {
-  const hay = [d.title, d.text, d.keywords, d.topic].filter(Boolean).join(" ").toLowerCase();
+  const hay = [d.title, d.text, d.keywords, d.topic, d.itemId].filter(Boolean).join(" ").toLowerCase();
   for (const p of q.phrases) if (!hay.includes(p.toLowerCase())) return false;
   for (const t of q.not) if (hay.includes(t.toLowerCase())) return false;
   for (const p of q.notPhrases) if (hay.includes(p.toLowerCase())) return false;

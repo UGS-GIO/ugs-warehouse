@@ -28,27 +28,26 @@ function toHit(r: ItemRef & { data: StacDoc }, layer: boolean): ItemHit {
 /**
  * The layer and publication half of the header search, over the items the catalog has loaded.
  * MiniSearch loads on first use, so it stays out of the main bundle. A series ID (`OFR-598`) is an
- * exact match and comes back on its own, ahead of the ranked hits.
+ * exact match, found by the same lookup Discover uses, and comes back on its own, ahead of the
+ * ranked hits.
  */
 export async function buildCatalogSearch(
   items: ItemRef[], isLayer: (r: ItemRef) => boolean,
 ): Promise<CatalogSearch> {
-  const { buildIndex, toSearchDoc } = await import("@/discover/search-index");
+  const { buildIndex, idMatch, toSearchDoc } = await import("@/discover/search-index");
   const hits = new Map<string, ItemHit>();
-  const byId = new Map<string, ItemHit>();
   const docs = items.flatMap((r) => {
     if (!r.data) return [];
     const doc = toSearchDoc(r.collId, r.data);
-    const hit = toHit({ ...r, data: r.data }, isLayer(r));
-    hits.set(doc.id, hit);
-    byId.set(hit.id.toUpperCase(), hit);
+    hits.set(doc.id, toHit({ ...r, data: r.data }, isLayer(r)));
     return [doc];
   });
   const { index } = buildIndex([], docs);
   return (q) => {
     const text = q.trim();
     if (text.length < 2) return NONE;
-    const exact = byId.get(text.toUpperCase());
+    const named = idMatch(index, text);
+    const exact = named ? hits.get(String(named.id)) : undefined;
     const found = index.search(text).flatMap((h) => {
       const hit = hits.get(String(h.id));
       return hit && hit !== exact ? [hit] : [];

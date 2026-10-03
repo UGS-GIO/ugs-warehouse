@@ -28,6 +28,12 @@ describe("buildCatalogSearch", () => {
     expect(res.publications.map((h) => h.id)).not.toContain("OFR-598");
   });
 
+  it("returns a series ID written with spaces or without hyphens as the exact match", async () => {
+    const search = await buildCatalogSearch(ITEMS, isLayer);
+    expect(search("OFR 598").exact?.id).toBe("OFR-598");
+    expect(search("ofr598").exact?.id).toBe("OFR-598");
+  });
+
   it("returns nothing for one character", async () => {
     const res = (await buildCatalogSearch(ITEMS, isLayer))("f");
     expect(res).toEqual({ layers: [], publications: [] });

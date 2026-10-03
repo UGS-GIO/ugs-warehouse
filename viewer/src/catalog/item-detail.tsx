@@ -320,7 +320,6 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
             {IS_REVIEW && item.id && <ReviewBadge itemId={String(item.id)} />}
           </div>
           <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{String(p.title ?? item.id ?? "")}</h1>
-          <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
           {byline.length > 0 && <p className="mt-1.5 text-sm text-muted-foreground">{byline.join(" · ")}</p>}
           {typeof p.description === "string" && <p className="mt-3 max-w-3xl text-muted-foreground">{p.description}</p>}
         </header>
@@ -363,10 +362,8 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
     <>
       <div className="mb-4 border-b border-border pb-3">
         {crumb}
-        {/* Title leads. The machine id is the subtitle — it was set in blue mono ABOVE the human
-            name, so the thing nobody reads outranked the thing everybody does. */}
+        {/* Title leads; the id already shows in the crumb above, so it isn't repeated under it. */}
         <h1 className={T.pageTitle}>{String(p.title ?? item.id ?? "")}</h1>
-        <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
       </div>
       <Preview item={item} />
       {/* Below the map/table, not above it: the description is context for what you are looking at,

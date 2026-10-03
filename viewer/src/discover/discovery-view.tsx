@@ -11,7 +11,7 @@ import { qk } from "@/query-keys";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
+  categoryTiles, extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
@@ -53,6 +53,7 @@ const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
   items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  renderSearch,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
@@ -65,6 +66,8 @@ export function DiscoveryView({
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
   onExplore?: () => void;              // opens the selected item full-screen in the Preview view
+  // Suggestions while typing; results change on Enter.
+  renderSearch?: (q: string, submit: (q: string) => void) => React.ReactNode;
 }) {
   const navigate = useNavigate();
   // The whole filter/sort/layout state lives in the URL (namespaced Discover keys), so a landing tile,
@@ -237,6 +240,10 @@ export function DiscoveryView({
 
   const chips = activeChips(st, { collection: collectionLabel, category: categoryLabel });
   const activeFilters = chips.length;
+  // Nothing typed or filtered: the front door. The category index sits above the newest-first
+  // results, so "/" is this view and there is one search box with one behavior.
+  const idle = !q.trim() && activeFilters === 0 && !itemSelected;
+  const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], geometry: "all", area: null });
 
   return (
@@ -246,9 +253,13 @@ export function DiscoveryView({
       <OpenMapPill />
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
-        <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
-          placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
-          className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
+        {renderSearch ? (
+          <div className="min-w-[12rem] flex-1 sm:max-w-md">{renderSearch(q, (text) => patch({ q: text }))}</div>
+        ) : (
+          <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
+            placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
+            className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
+        )}
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
         </span>
@@ -333,6 +344,20 @@ export function DiscoveryView({
 
         {/* CENTER — result cards (the star): gallery grid or list, paginated. */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-3 py-3">
+          {idle && tiles.length > 0 && (
+            <section aria-label="Categories" className="mb-4 rounded-md border border-border bg-background px-4 py-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</h2>
+              <div className="mt-1 grid grid-cols-1 gap-x-8 sm:grid-cols-2 xl:grid-cols-3">
+                {tiles.map((t) => (
+                  <button key={t.key} type="button" onClick={() => patch({ categories: [t.key] })}
+                    className="flex items-baseline justify-between gap-4 border-b border-border py-2 text-left hover:text-primary">
+                    <span className="text-sm">{t.label}</span>
+                    <span className="font-mono text-sm text-muted-foreground">{t.count.toLocaleString()}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           {/* Removable active-filter chips — a legible summary of what's narrowing the set, above the
               cards (the rail is md+ only, so on a phone this is the ONLY way to see/clear a filter). */}
           {chips.length > 0 && (

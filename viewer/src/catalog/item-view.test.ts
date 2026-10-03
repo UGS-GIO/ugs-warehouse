@@ -155,6 +155,18 @@ describe("curatedDerived", () => {
   it("is empty for empty props", () => {
     expect(curatedDerived({})).toEqual({ curated: [], derived: [] });
   });
+  it("labels a publication's date Published, not Ingested", () => {
+    expect(curatedDerived({
+      "ugs:series_id": "OFR-771", "ugs:pub_type": "Open File Report", datetime: "2025-01-01T00:00:00Z",
+    })).toEqual({
+      curated: [
+        { label: "Publication type", value: "Open File Report" },
+        { label: "Series ID", value: "OFR-771" },
+        { label: "Published", value: "2025" },
+      ],
+      derived: [],
+    });
+  });
 });
 
 describe("seriesLabel", () => {

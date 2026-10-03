@@ -8,4 +8,6 @@ public/stac/
 .playwright-mcp/
 *.png
 !src/assets/*.png
+!public/basemap-*.png
+!public/icons/*.png
 *.tsbuildinfo

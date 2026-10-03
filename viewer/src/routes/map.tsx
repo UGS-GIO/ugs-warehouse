@@ -1,6 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useState } from "react";
 
-import { idOf, useViewCtx } from "@/app";
+import { idOf, MapSearchFor, useViewCtx } from "@/app";
+import { useIsDesktop } from "@/ui/use-breakpoint";
 import { FeatureDetail, ItemMap, type OpenRelated, type RelatedTablesInfo, type SelectedFeature } from "@/map/map";
 import { MapDetail } from "@/map/map-detail";
 import { LayerList } from "@/map/layer-list";
@@ -10,6 +12,11 @@ import { MapShell } from "@/map/map-shell";
 import { colorForId } from "@/map/map-model";
 import { relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
+import { BasemapDownload } from "@/offline/basemap-download";
+import { isSupported } from "@/offline/opfs";
+import { WhatsHerePicker } from "@/offline/whats-here-picker";
+import type { Target } from "@/offline/whats-here";
+import { useZarrProblems } from "@/zarr/use-zarr-layers";
 
 // The Info dock shows one of three things, strictly nested: a related table is only reachable from a
 // selected feature. No floating feature popup anywhere — stakeholder requirement.
@@ -21,9 +28,18 @@ const DOCK_ITEM: Dock = { kind: "item" };
 
 function MapView() {
   const c = useViewCtx();
+  const isDesktop = useIsDesktop();
   // Scoped to the open item (usePerItem): opening a footprint changes the item and the dock reads
   // back as `item` in the same render — no reset effect, so no frame where a stale feature shows.
   const [dock, setDock] = usePerItem<Dock>(c.itemUrl ?? "", DOCK_ITEM);
+  // The map's view, for "This area" in the offline basemap section of the layers panel.
+  const [view, setView] = useState<[number, number, number, number] | null>(null);
+  // The "What's here" picker. `canSave`: the explicit "Save this area…" always saves; a long press
+  // or right-click saves on phones only, and on desktop is for showing what is there.
+  const [pick, setPick] = useState<{ target: Target; canSave: boolean } | null>(null);
+  // A datacube that can't open says so in its row instead of sitting "on" and blank.
+  const zarrProblems = useZarrProblems(c.activeLayers.flatMap((l) => (l.zarr
+    ? [{ id: l.id, href: l.zarr.href, variable: l.zarr.variable }] : [])));
 
   // A clicked layer's related tables, named from the compact index (its asset summaries carry the
   // related entries). The FK join columns are stripped from the index by design, so RelatedTable
@@ -34,10 +50,19 @@ function MapView() {
     return rec && tables.length ? { itemHref: rec.href, tables } : undefined;
   };
 
-  return <MapShell
+  // The picker sits beside the shell, not inside a panel: on phones the panels only render while
+  // the sheet is open, so a long press with the sheet down had nowhere to mount it. It portals to
+  // the page body either way.
+  const picker = pick && <WhatsHerePicker key={JSON.stringify(pick.target)} target={pick.target}
+    canSave={pick.canSave} onClose={() => setPick(null)} />;
+
+  return <>{picker}<MapShell
     revealInfo={c.revealInfo}
     map={<ItemMap item={c.item.data} layers={c.activeLayers} footprints={c.footprints} onPickFootprint={c.openItem}
+      onBoundsChange={setView}
+      onPickAt={(lon, lat, zoom) => setPick({ target: { kind: "point", lon, lat, zoom }, canSave: !isDesktop && isSupported() })}
       relatedFor={relatedFor}
+      search={<MapSearchFor state={c} className={isDesktop ? "w-80" : "w-[calc(100vw-20px)]"} />} showPin
       onSelectFeature={(f) => { setDock(f ? { kind: "feature", feature: f } : DOCK_ITEM); if (f) c.revealInfo.current?.(); }} />}
     info={dock.kind === "related"
       ? <RelatedTable key={`${dock.related.itemHref}::${dock.related.relatedKey}`}
@@ -50,6 +75,8 @@ function MapView() {
       : <MapDetail item={c.item.data} loading={c.item.isLoading} />}
     layers={<>
       {c.catalog.isLoading && <p className="text-muted-foreground">Loading catalog…</p>}
+      <BasemapDownload bbox={view}
+        onSaveArea={view ? () => setPick({ target: { kind: "area", bbox: view }, canSave: true }) : undefined} />
       <LayerList
         rows={c.layerRows}
         activeIds={c.idsForMap}
@@ -58,11 +85,18 @@ function MapView() {
         onToggle={c.toggleLayer}
         onToggleMany={c.toggleLayers}
         onReorder={c.setLayerOrder}
+        problemOf={(id) => zarrProblems[id]}
         onOpen={c.openItem}
+        // PMTiles, the raster mosaics and COGs are all single files read by range, and the
+        // service worker answers all three out of OPFS, so all three can be stored whole.
+        offlineHrefOf={(id) => {
+          const l = c.activeLayers.find((a) => a.id === id);
+          return l?.pmHref ?? l?.rasterPmHref ?? l?.cogHref;
+        }}
         // Vector overlays only: a COG/raster tile layer is a picture, not a classification.
         legend={<MapLegend layers={c.activeLayers.flatMap((l) => (l.cogHref || l.rasterPmHref ? []
           : [{ id: l.id, title: l.title, color: colorForId(l.id), styleLayers: c.styleCache[l.id] }]))} />} />
-    </>} />;
+    </>} /></>;
 }
 
 export const Route = createFileRoute("/map")({ component: MapView });

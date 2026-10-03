@@ -116,17 +116,24 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         ("archive",  _archive),
         ("pmtiles",  _pmtiles),
     ]
-    for name, fn in [
-        *data_sinks,
-        ("stac",     lambda: sink_stac.write(topic, con, view, metadata=meta, related=related_info,
-                                             content_hash=fp, file_meta=written)),
-    ]:
+    data_failed = False
+
+    def _stac() -> None:
+        # The hash vouches for the published artifacts, so it only moves when they were all
+        # rewritten. Stamping it after a failed data sink would make the next --skip-unchanged run
+        # skip the rebuild, and hand the tiles service a new version for the old archive.
+        content_hash = fingerprint.published_hash(topic) if data_failed else fp
+        sink_stac.write(topic, con, view, metadata=meta, related=related_info,
+                        content_hash=content_hash, file_meta=written)
+
+    for name, fn in [*data_sinks, ("stac", _stac)]:
         try:
             fn()
         except Exception as e:  # per-sink isolation: log + continue, never silent fail
             print(f"[{topic.fqn}] sink {name} FAILED: {e}", file=sys.stderr)
             traceback.print_exc()
             rc = 1
+            data_failed = data_failed or name != "stac"
 
     if not skip_refresh:
         try:
@@ -190,7 +197,7 @@ def main() -> int:
         "--dry-run",
         action="store_true",
         help="exercise source + transform only; skip all sinks "
-             "(no GCS / Iceberg writes — safe smoke against real _current)",
+             "(no GCS / DuckLake writes; safe smoke against real _current)",
     )
     ap.add_argument(
         "--parallel",

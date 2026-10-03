@@ -22,6 +22,7 @@ from django.apps import apps  # noqa: E402
 if not apps.ready:
     django.setup()
 
+from core import iap_auth  # noqa: E402
 from django.test import Client, override_settings  # noqa: E402
 from ops import jobs  # noqa: E402
 
@@ -30,8 +31,48 @@ OPERATOR = "geologist@utah.gov"
 
 
 @pytest.fixture()
-def client():
-    return Client(HTTP_X_GOOG_AUTHENTICATED_USER_EMAIL=f"accounts.google.com:{OPERATOR}")
+def client(monkeypatch, fake_iap):
+    fake_iap.install(monkeypatch, iap_auth)
+    return Client(HTTP_X_GOOG_IAP_JWT_ASSERTION=fake_iap.token(OPERATOR))
+
+
+@override_settings(DEBUG=False)
+def test_a_forged_iap_email_header_gets_no_admin(monkeypatch, fake_iap, dispatched):
+    fake_iap.install(monkeypatch, iap_auth)
+    forged = Client(HTTP_X_GOOG_AUTHENTICATED_USER_EMAIL=f"accounts.google.com:{OPERATOR}")
+    res = forged.post("/retire/execute", {"topic": TOPIC, "confirm": TOPIC})
+    assert res.status_code == 403
+    assert dispatched == []
+
+
+@override_settings(DEBUG=False)
+def test_an_invalid_iap_token_gets_no_admin(monkeypatch, fake_iap, other_iap, rejected_token_kwargs,
+                                            dispatched):
+    # The admin console keeps its own copy of the verifier; it must refuse what the shared one does.
+    fake_iap.install(monkeypatch, iap_auth)
+    for token in (fake_iap.token(OPERATOR, **rejected_token_kwargs), other_iap.token(OPERATOR)):
+        res = Client(HTTP_X_GOOG_IAP_JWT_ASSERTION=token).post(
+            "/retire/execute", {"topic": TOPIC, "confirm": TOPIC})
+        assert res.status_code == 403
+    assert dispatched == []
+
+
+def test_admin_audience_is_derived_from_the_metadata_server(monkeypatch):
+    class _Resp:
+        text = "projects/534590904912/regions/us-central1\n"
+
+        def raise_for_status(self):
+            pass
+
+    monkeypatch.setenv("K_SERVICE", "ugs-warehouse-admin")
+    monkeypatch.setattr(iap_auth.requests, "get", lambda url, headers=None, timeout=None: _Resp())
+    iap_auth._audience.cache_clear()
+    try:
+        with override_settings(IAP_AUDIENCE=""):
+            aud = iap_auth._audience()
+    finally:
+        iap_auth._audience.cache_clear()
+    assert aud == "/projects/534590904912/locations/us-central1/services/ugs-warehouse-admin"
 
 
 @pytest.fixture()

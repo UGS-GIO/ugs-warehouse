@@ -9,17 +9,18 @@
  * Adapted from the same shell in ugs-soil-water-model's viewer; the tabs differ because our third
  * surface is an item's metadata, not a chart.
  */
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ReactNode, RefObject } from "react";
 import { useRef, useState } from "react";
 
 import { LegalFooter } from "@/shell/legal-footer";
 import { CATALOG_URL } from "@/stac";
-import { clampSize, DETENTS, nearestDetent } from "./map-model";
+import { DETENTS, parseSheet, sheetParam, type SheetState, type SheetTab } from "./map-model";
+import { useSheetDrag } from "./use-sheet-drag";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
 
-type Tab = "layers" | "info";
 type RevealRef = RefObject<(() => void) | null>;
 
 const SIDEBAR_KEY = "ugsw.mapSidebarW";
@@ -62,75 +63,86 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
 }
 
 const icon = "h-5 w-5";
+// What drags the sheet: a long press there must not select, highlight, or open a callout menu.
+const GRAB = "touch-none select-none [-webkit-touch-callout:none] [-webkit-tap-highlight-color:transparent]";
+const SHEET_LABEL = ["Expand panel", "Expand panel to full height", "Collapse panel"];
+const noMenu = (e: React.MouseEvent) => e.preventDefault();
 // No "Map" tab: the map is never hidden, it's what the sheet sits on. Tapping the open tab drops
 // the sheet back to a peek, which is the move a Map button was standing in for.
-const TABS: { id: Tab; label: string; path: ReactNode }[] = [
+const TABS: { id: SheetTab; label: string; path: ReactNode }[] = [
   { id: "layers", label: "Layers", path: <><path d="m12 2 9 5-9 5-9-5 9-5Z" /><path d="m3 12 9 5 9-5" /><path d="m3 17 9 5 9-5" /></> },
   { id: "info", label: "Info", path: <><circle cx="12" cy="12" r="9" /><path d="M12 16v-5M12 8h.01" /></> },
 ];
 
 /** Mobile: full map + a draggable sheet anchored above a persistent tab bar, which picks what the
- * sheet holds. Detent 0 (a peek) is the map view; `tab` is only what's shown when it's raised. */
+ * sheet holds. Detent 0 (a peek) is the map view; `tab` is only what's shown when it's raised.
+ * Both live in the URL: a reload or a shared link keeps the sheet, and Back undoes a tap. */
 function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
-  const [tab, setTab] = useState<Tab>("layers");
-  const [detent, setDetent] = useState(0);
-  const [dragH, setDragH] = useState<number | null>(null);
+  const { tab, detent } = parseSheet(useSearch({ from: "__root__", select: (s) => s.sheet }));
+  const navigate = useNavigate();
+  // Taps push a history entry; drags and reveals replace, so Back doesn't replay every drag.
+  const setSheet = (next: SheetState, push = false) =>
+    navigate({ to: ".", replace: !push, search: (prev) => ({ ...prev, sheet: sheetParam(next) }) });
+  const setDetent = (d: number) => setSheet({ tab, detent: d });
   const areaRef = useRef<HTMLDivElement>(null);
+  const { sheetRef, onPointerDown, contentRef, wasDrag } = useSheetDrag(areaRef, detent, setDetent);
   const collapsed = detent === 0;
 
-  revealInfo.current = () => {
-    setTab("info");
-    setDetent((d) => Math.max(d, 1));
+  revealInfo.current = () => setSheet({ tab: "info", detent: Math.max(detent, 1) });
+
+  const selectTab = (e: React.MouseEvent, t: SheetTab) => {
+    if (wasDrag(e)) return;
+    // Tap the open tab to get the map back.
+    setSheet(t === tab && !collapsed ? { tab, detent: 0 } : { tab: t, detent: Math.max(detent, 1) }, true);
   };
 
-  const selectTab = (t: Tab) => {
-    if (t === tab && !collapsed) return setDetent(0);   // tap the open tab to get the map back
-    setTab(t);
-    setDetent((d) => Math.max(d, 1));
+  // Tap the grabber: peek → half → full → peek.
+  const stepSheet = (e: React.MouseEvent) => {
+    if (!wasDrag(e)) setSheet({ tab, detent: (detent + 1) % DETENTS.length }, true);
   };
-
-  const startDrag = (e: React.PointerEvent) => {
-    const startY = e.clientY;
-    const height = areaRef.current?.clientHeight ?? window.innerHeight;
-    const startH = height * DETENTS[detent];
-    const clamp = (h: number) => clampSize(h, height * 0.06, height * 0.94, startH);
-    const move = (ev: PointerEvent) => setDragH(clamp(startH + (startY - ev.clientY)));
-    const up = (ev: PointerEvent) => {
-      setDetent(nearestDetent(clamp(startH + (startY - ev.clientY)) / height));
-      setDragH(null);
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+  const arrowSheet = (e: React.KeyboardEvent) => {
+    const step = e.key === "ArrowUp" ? 1 : e.key === "ArrowDown" ? -1 : 0;
+    if (!step) return;
+    e.preventDefault();
+    setDetent(Math.min(Math.max(detent + step, 0), DETENTS.length - 1));
   };
 
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div ref={areaRef} className="relative min-h-0 flex-1">
-        <div className="absolute inset-0">{map}</div>
-        <div
-          style={dragH != null ? { height: `${dragH}px` } : { height: `${DETENTS[detent] * 100}%` }}
-          className={"absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl "
-            + (dragH == null ? "transition-[height] duration-300 ease-out" : "")}
-        >
-          <div onPointerDown={startDrag} className="flex shrink-0 cursor-grab touch-none items-center justify-center py-2.5">
+        <div style={{ "--peek": `${DETENTS[0] * 100}%` }}
+          className="phone-map absolute inset-0">{map}</div>
+        <div ref={sheetRef} style={{ height: `${DETENTS[detent] * 100}%` }}
+          className="absolute inset-x-0 bottom-0 z-20 flex flex-col rounded-t-2xl border-t border-border bg-background shadow-2xl transition-[height] duration-300 ease-out">
+          {/* A button too, so each detent is a tap or an arrow key away, not only a drag (WCAG 2.5.7). */}
+          <button type="button" onPointerDown={onPointerDown} onContextMenu={noMenu} onClick={stepSheet} onKeyDown={arrowSheet}
+            aria-label={SHEET_LABEL[detent]}
+            className={`flex shrink-0 cursor-grab items-center justify-center py-3 ${GRAB}`}>
             <span className="h-1.5 w-10 rounded-full bg-border" />
-          </div>
+          </button>
           {!collapsed && (
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="px-3 pb-3">{tab === "layers" ? layers : info}</div>
+            <div ref={contentRef} className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+              <div className="px-3 pb-3">
+                {/* The detail's way back: an installed app has no browser Back button. */}
+                {tab === "info" && (
+                  <button type="button" onClick={() => setSheet({ tab: "layers", detent }, true)}
+                    className="-ml-1 mb-1 inline-flex items-center gap-1 rounded px-1 text-sm text-primary hover:underline">
+                    <span aria-hidden>‹</span> Layers
+                  </button>
+                )}
+                {tab === "layers" ? layers : info}
+              </div>
               <LegalFooter catalogUrl={CATALOG_URL} />
             </div>
           )}
         </div>
       </div>
-      <nav aria-label="Map views" className="z-30 flex shrink-0 border-t border-border" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <nav aria-label="Map views" onPointerDown={onPointerDown} onContextMenu={noMenu} className={`z-30 flex shrink-0 border-t border-border ${GRAB}`} style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         {TABS.map((t) => (
           <button
             key={t.id}
             type="button"
-            onClick={() => selectTab(t.id)}
+            onClick={(e) => selectTab(e, t.id)}
             aria-expanded={tab === t.id && !collapsed}
             className={"flex flex-1 flex-col items-center gap-0.5 py-2 text-sm font-medium "
               + (tab === t.id && !collapsed ? "text-primary" : "text-muted-foreground hover:text-foreground")}

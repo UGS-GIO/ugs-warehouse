@@ -1,4 +1,5 @@
-"""Publication scale → serving scale-tier (24k/250k/500k). Shared by geolmap_mosaics, editions, and sink_stac."""
+"""Publication scale bands (`tier_of`, the editions fallback) and the mosaic tiers, which are the
+geologic map portal's layers (`mosaic_tier_of`). Shared by geolmap_mosaics, editions, sink_stac and ingest."""
 from __future__ import annotations
 
 import re
@@ -39,3 +40,29 @@ def tier_of(raw: str) -> str | None:
     if d <= 350_000:
         return "250k"
     return "500k"
+
+
+# Mosaic tiers are the geologic map portal's layers, read from a map's footprint `geomaps_service`,
+# not its publication scale: the intermediate layer mixes 1:50,000 to 1:125,000 30' x 60' maps,
+# which no scale band separates from the 7.5' quads or the 1 x 2 degree sheets.
+MOSAIC_TIERS = ("24k", "100k", "250k", "500k")
+# Portal layer IDs, as the footprints record them in geomaps_service / servName.
+SERVICE_TIER = {"geomaps_24k": "24k", "geomaps_100k": "100k", "geomaps_1x2": "250k"}
+STATEWIDE_SERVNAME = "500k_Statewide"   # the state map carries no geomaps_service
+MOSAIC_TIER_LABEL = {"24k": "1:24,000", "100k": "intermediate-scale (30' x 60')",
+                     "250k": "1:250,000 (1 x 2 degree)", "500k": "1:500,000"}
+
+
+def mosaic_tiers(services: frozenset[str], serv_names: frozenset[str]) -> set[str]:
+    """Every mosaic tier a map's portal layer(s) (see `editions.layers_by_series`) point at."""
+    tiers = {SERVICE_TIER[s] for s in services if s in SERVICE_TIER}
+    if STATEWIDE_SERVNAME in serv_names:
+        tiers.add("500k")
+    return tiers
+
+
+def mosaic_tier_of(services: frozenset[str], serv_names: frozenset[str]) -> str | None:
+    """The map's mosaic tier, or None when it has no tiered layer (irregular maps, no footprint) or
+    its footprints point at two tiers."""
+    tiers = mosaic_tiers(services, serv_names)
+    return next(iter(tiers)) if len(tiers) == 1 else None

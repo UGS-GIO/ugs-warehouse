@@ -28,6 +28,8 @@ substitutions:
   _MOSAICS_JOB: ugs-geolmap-mosaics       # Cloud Run job: per-scale raster PMTiles mosaics of the published geologic maps (GDAL + pmtiles)
   _GRAPH_JOB: ugs-pubs-graph              # Cloud Run job: build the pubs knowledge graph (nodes/edges Parquet) — citation + co-author + semantic edges
   _THREED_JOB: ugs-pubs-threed            # Cloud Run job: convert 3D GeMS pubs (gdb+.mapx) → GeoParquet-3D + glTF + classes sidecar; --all auto-discovers, pubs-ingest binds the assets
+  _VECTORS_JOB: ugs-pubs-vectors          # Cloud Run job: extract every layer + companion table from new pubs' GIS zips → GeoParquet; skip-existing, pubs-ingest binds them
+  _PRUNE_JOB: ugs-pubs-prune              # Cloud Run job: delete pub STAC items the source no longer lists (case twins, renamed ids); refuses a large share
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
   _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip, chain after ingest + restyle
   _API_SERVICE: ugs-warehouse-api
@@ -38,13 +40,13 @@ substitutions:
   # deploy so check_limits.py can refuse an unmeasured pairing rather than let it OOM in prod.
   # 8Gi (was 2Gi): a pre-merge parallel-load test (ALL-5869) showed 4Gi OOM-kills the container
   # under concurrent full-layer pulls (silent truncation + 503s); 8Gi with cpu=2 and DuckDB
-  # memory_limit=3GB (the featureserv patch) serves them cleanly. (8Gi, LimitMax 100000) is covered
+  # memory_limit=3GB (the featureserv patch) serves them cleanly. (8Gi, LimitMax 10000) is covered
   # by the measured (2Gi, 100000) pair via monotonicity. Feeds the image build AND the deploy.
   _FEATURES_MEMORY: 8Gi
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
-  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # runtime SA — run.developer (trigger/status) + logging.viewer (live + per-pub logs) + storage.objectViewer on the COG bucket (registry harvest status)
+  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com  # runtime SA — job-level run.developer + run.viewer (provision.sh) + logging.viewer (live + per-pub logs) + storage.objectViewer on the COG bucket (registry harvest status)
   _ADMIN_HOSTS: .run.app                                                           # ALLOWED_HOSTS; add the LB/custom domain once IAP is fronted
   _ADMIN_SECRET: warehouse-admin-secret-key                                        # Secret Manager secret — stable Django SECRET_KEY across workers/instances
   # Pub/Sub topic/subscription names live in scripts/provision.sh now (not build inputs).
@@ -106,6 +108,21 @@ steps:
         DOCKER_BUILDKIT=1 docker build -f Dockerfile.harvest \
           --build-arg BUILDKIT_INLINE_CACHE=1 \
           --build-arg TIPPECANOE_IMAGE="$$TIP" \
+          --cache-from "$$IMG:latest" \
+          -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
+
+  # Mosaic bake image: pinned GDAL 3.11+ for `gdal raster tile` (the harvest image's GDAL is older).
+  - id: build-mosaics
+    waitFor: ['-']
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics
+        docker pull "$$IMG:latest" || true
+        DOCKER_BUILDKIT=1 docker build -f Dockerfile.mosaics \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
           --cache-from "$$IMG:latest" \
           -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
@@ -208,6 +225,11 @@ steps:
     waitFor: [build-harvest]
     name: gcr.io/cloud-builders/docker
     args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest']
+
+  - id: push-mosaics
+    waitFor: [build-mosaics]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics']
 
   - id: push-pipeline
     waitFor: [build-pipeline]
@@ -544,7 +566,7 @@ steps:
       - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
-      - --set-env-vars=REGION=${_REGION},WAREHOUSE_BUCKET=${_PUBLIC_BUCKET},THUMBS_JOB=${_PUBTHUMB_JOB},THREED_JOB=${_THREED_JOB},INGEST_JOB=${_PUBS_JOB},FTS_JOB=${_FTS_JOB},EMBED_JOB=${_EMBED_JOB}
+      - --set-env-vars=REGION=${_REGION},WAREHOUSE_BUCKET=${_PUBLIC_BUCKET},THUMBS_JOB=${_PUBTHUMB_JOB},THREED_JOB=${_THREED_JOB},VECTORS_JOB=${_VECTORS_JOB},PRUNE_JOB=${_PRUNE_JOB},INGEST_JOB=${_PUBS_JOB},FTS_JOB=${_FTS_JOB},EMBED_JOB=${_EMBED_JOB}
       - --task-timeout=86400
       - --max-retries=0
       - --cpu=1
@@ -624,13 +646,12 @@ steps:
       - --cpu=4
       - --memory=8Gi
 
-  # Per-scale raster PMTiles mosaics of the published geologic maps (old ArcGIS MD_* equivalent).
-  # Harvest image (GDAL CLI + the go-pmtiles binary). Reads the COGs in place over /vsigs (no full
-  # download), but the rendered MBTiles lands in RAM-backed /tmp — so the 24k tier is the heavy one.
-  # Defaults to --scale all; for the big 24k tier, execute with --args override + more memory, e.g.
-  #   gcloud run jobs execute ugs-geolmap-mosaics --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,24k
+  # Raster PMTiles mosaics of the geologic maps, one per portal layer: intermediate (100k) and 500k
+  # here. The 24k tier needs a real disk and runs on Cloud Batch (scripts/submit_mosaics_batch.sh);
+  # building it here too would overwrite that z17 object with a z14 one. Add --scale 250k (the 1 x 2
+  # degree sheets) here and in the admin console once one of those maps has a COG; none does yet.
   - id: deploy-mosaics-job
-    waitFor: [push-harvest]
+    waitFor: [push-mosaics]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
     entrypoint: gcloud
     args:
@@ -638,16 +659,15 @@ steps:
       - jobs
       - deploy
       - ${_MOSAICS_JOB}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics:${_TAG}
       - --region=${_REGION}
       - --service-account=${_RUNTIME_SA}
       - --set-cloudsql-instances=${_SQL_INSTANCE}
       - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
       - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
       - --command=python
-      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale,all
-      # Zoom is now capped per tier (TIER_MAXZOOM), so the build is bounded; 4h is generous headroom
-      # for the 24k tier (the others are fast). Run a single heavy tier with --scale 24k if needed.
+      # --scale=<tier> form: gcloud rejects a repeated bare "--scale" item in --args.
+      - --args=-m,ugs_warehouse.pubs.geolmap_mosaics,--scale=100k,--scale=500k
       - --task-timeout=14400
       - --max-retries=1
       - --cpu=4
@@ -679,6 +699,55 @@ steps:
       - --max-retries=1
       - --cpu=2
       - --memory=8Gi
+
+  # Map layers: every feature class + companion table from new pubs' GIS zips → GeoParquet. Only
+  # pubs whose attachments list a GIS zip, skip-existing from one listing, so a run with nothing new
+  # downloads nothing. Harvest image ([pubs] extra: geopandas/pyogrio + gpio).
+  - id: deploy-vectors-job
+    waitFor: [push-harvest]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_VECTORS_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.vectors,--all
+      - --task-timeout=3600
+      - --max-retries=1
+      - --cpu=2
+      - --memory=8Gi
+
+  # Prune pub STAC items the source no longer lists, before the ingest's catalog refresh. Refuses
+  # when the orphans exceed 5% of the source, so an empty feed cannot wipe the catalog.
+  - id: deploy-prune-job
+    waitFor: [push-harvest]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - jobs
+      - deploy
+      - ${_PRUNE_JOB}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^PUBS_DB_URL=host=/cloudsql/${_SQL_INSTANCE} dbname=ucrc user=${_API_DB_USER}|PUBS_TABLE=publications.pubs_feed_v1|PUBS_ATT_TABLE=publications.pubs_attachments_feed_v1
+      - --command=python
+      - --args=-m,ugs_warehouse.pubs.prune,--apply
+      - --task-timeout=1800
+      - --max-retries=0
+      - --cpu=1
+      - --memory=2Gi
 
   # Publications knowledge graph: nodes/edges Parquet (authored/coauthor/in_series/has_topic +
   # cites mined from full text + semantic 'similar' from embeddings). Harvest image (pandas/pyarrow/
@@ -807,22 +876,27 @@ steps:
   # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).
   # Memory is small: it holds PMTiles directories, never tile data. Behind the CDN this only
   # ever sees cache misses, so concurrency matters more than instance count.
+  # Route by the `prod` tag, which moves to this deploy's revision, so it goes live even when traffic
+  # was pinned to an older revision (a rollback or manual reroute pins it; a plain deploy gets 0%).
   - id: deploy-tiles
     waitFor: [push-tiles]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
-    entrypoint: gcloud
+    entrypoint: bash
     args:
-      - run
-      - deploy
-      - ${_TILES_SERVICE}
-      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
-      - --region=${_REGION}
-      - --service-account=${_RUNTIME_SA}
-      - --allow-unauthenticated
-      - --port=8080
-      - --cpu=1
-      - --memory=512Mi
-      - --timeout=60
+      - -c
+      - |
+        set -euo pipefail
+        gcloud run deploy ${_TILES_SERVICE} \
+          --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG} \
+          --region=${_REGION} \
+          --service-account=${_RUNTIME_SA} \
+          --allow-unauthenticated \
+          --port=8080 \
+          --cpu=1 \
+          --memory=512Mi \
+          --timeout=60 \
+          --tag=prod
+        gcloud run services update-traffic ${_TILES_SERVICE} --region=${_REGION} --to-tags=prod=100
 
   # No resolve-features-url / resolve-tiles-url here any more: they existed only to bake
   # VITE_FEATURES_BASE / VITE_TILES_BASE into the viewer build, and nothing in this config builds
@@ -840,6 +914,7 @@ images:
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-harvest
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-mosaics
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline
   - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-topics-thumbs
 

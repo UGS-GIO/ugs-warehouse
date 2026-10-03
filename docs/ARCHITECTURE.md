@@ -104,11 +104,9 @@ python -m ugs_warehouse.pubs.mirror             # then re-run pubs.ingest to rep
 ```
 
 !!! note "Honest gaps"
-    **Metadata source.** Pluggable via `PUBS_DB_URL` — live MySQL, live Postgres (through the
-    DuckDB postgres extension), or the vendored CSV snapshot. Prod leaves `PUBS_DB_URL` **unset**, so
-    it reads the **vendored CSV snapshot** checked into the repo. That snapshot is point-in-time and
-    goes stale as upstream changes. Wiring a live source (MySQL or a Postgres mirror) is the open
-    item (#121).
+    **Metadata source.** `PUBS_DB_URL` is required: live MySQL, or live Postgres through the
+    DuckDB postgres extension. Prod reads the publications feed on Cloud SQL. There is no file
+    fallback, so a run without the database stops instead of publishing a stale snapshot.
 
     **File hosting.** The mirror is selective by design (#120): map pubs only, ~81 GB of a ~200 GB
     full mirror. Everything else still depends on the legacy host, which sends no CORS header — so
@@ -143,6 +141,5 @@ The vector pipeline is end-to-end in production. The honest gaps:
   is trusted text that's never verified against the promoted COG (#83), and promote shares an
   instance with ingest with no dead-letter policy, so one bad message is an outage (#81).
 - 🟧 **STAC `datetime`** is ingest time, not data-validity time — waiting on an upstream validity timestamp.
-- 🟧 **Live publications source** (MySQL or Postgres mirror) instead of the vendored CSV snapshot (#121).
 - 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).
 - 🟧 **FGDC metadata** variant + raster extension (ISO 19139 done for vector + pubs).

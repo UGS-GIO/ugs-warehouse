@@ -13,7 +13,8 @@
 //     write these correctly (incl. Esri .gdb — OpenFileGDB write, GDAL ≥ 3.6). gdal3.js
 //     is ~40 MB (wasm+data), so it's dynamically imported only when one is requested.
 
-import { BBOX_COLS, GEOM_NAMES, ID_COL, sanitize } from "./columns";
+import { BBOX_COLS, COVERING_COL, GEOM_NAMES, ID_COL, sanitize } from "./columns";
+import { overlaps } from "@/lib/bbox";
 import { newDuckDb } from "./duckdb";
 import {
   beginExport, consumeIfCancelled, endRun, isCancelled, startRun,
@@ -196,9 +197,8 @@ export type RowGroup = { bytes: number; xmin: number; xmax: number; ymin: number
  *  a file written as one big group is read whole however small the area. */
 export function estimateReadBytes(groups: RowGroup[], clip?: [number, number, number, number]): number {
   if (!clip) return groups.reduce((n, g) => n + g.bytes, 0);
-  const [w, s, e, n] = clip;
   return groups
-    .filter((g) => g.xmin <= e && g.xmax >= w && g.ymin <= n && g.ymax >= s)
+    .filter((g) => overlaps([g.xmin, g.ymin, g.xmax, g.ymax], clip))
     .reduce((acc, g) => acc + g.bytes, 0);
 }
 
@@ -298,6 +298,9 @@ export interface PageOpts {
   desc?: boolean;
   search?: string;        // free-text, matched case-insensitively across every column
   filters?: ColFilter[];  // per-column constraints, ANDed together (and with `search`)
+  // Only rows whose bbox overlaps one of these areas. Offline, a table saved by area has only those
+  // rows' row groups on the device, and this is what keeps DuckDB from reading any other.
+  clip?: [number, number, number, number][];
 }
 export interface Page {
   columns: string[];
@@ -328,6 +331,63 @@ function buildWhere(columns: string[], opts: PageOpts): string {
     if (cl) clauses.push(`(${cl})`);
   }
   return clauses.length ? ` WHERE ${clauses.join(" AND ")}` : "";
+}
+
+/** Rows whose bbox overlaps `area`, by the per-row bbox columns. Their row-group stats let DuckDB
+ *  skip every row group outside it without reading it. */
+export function clipClause([w, s, e, n]: [number, number, number, number]): string {
+  return `(bbox_xmin <= ${e} AND bbox_xmax >= ${w} AND bbox_ymin <= ${n} AND bbox_ymax >= ${s})`;
+}
+
+/**
+ * What a page query reads FROM: the file, or with a clip, a CTE holding only the clipped rows.
+ *
+ * Offline, only the row groups inside the saved areas are on the device, so the clip must stop
+ * DuckDB reading any other. Two shapes that look equivalent do not (measured against a range log):
+ * - Inline, the optimizer folds the clip in with a search and a sort and reads every row group's
+ *   columns. Materializing the clipped rows first keeps the pruning.
+ * - One OR across several areas is pruned by their combined envelope, which takes in the groups
+ *   between them. One branch per area, each skipping rows an earlier one already took, prunes each
+ *   branch to its own area.
+ */
+export function scanOf(src: string, clip?: [number, number, number, number][]): { cte: string; from: string } {
+  const file = `read_parquet('${src}')`;
+  if (!clip?.length) return { cte: "", from: file };
+  const branches = clip.map((a, i) => `SELECT * FROM ${file} WHERE ${clipClause(a)}`
+    + clip.slice(0, i).map((b) => ` AND NOT ${clipClause(b)}`).join(""));
+  return { cte: `WITH clipped AS MATERIALIZED (${branches.join(" UNION ALL ")}) `, from: "clipped" };
+}
+
+const num = (v: unknown) => (v == null ? NaN : Number(v));
+
+/** Each row group's extent and byte span in the file, from the footer alone. */
+export type GroupSpan = { xmin: number; ymin: number; xmax: number; ymax: number; start: number; end: number };
+
+export async function rowGroupSpans(parquetUrl: string): Promise<GroupSpan[]> {
+  const db = await getDB();
+  const conn = await db.connect();
+  let borrowed: string | undefined;
+  try {
+    const src = borrowed = await registerUrl(parquetUrl);
+    // A column chunk starts at its dictionary page when it has one, else at its first data page.
+    const start = "CASE WHEN dictionary_page_offset > 0 AND dictionary_page_offset < data_page_offset"
+      + " THEN dictionary_page_offset ELSE data_page_offset END";
+    return (await conn.query(
+      `SELECT min(${start})::BIGINT AS s, max(${start} + total_compressed_size)::BIGINT AS e,
+              min(CASE WHEN path_in_schema = 'bbox_xmin' THEN CAST(stats_min AS DOUBLE) END) AS xmin,
+              max(CASE WHEN path_in_schema = 'bbox_xmax' THEN CAST(stats_max AS DOUBLE) END) AS xmax,
+              min(CASE WHEN path_in_schema = 'bbox_ymin' THEN CAST(stats_min AS DOUBLE) END) AS ymin,
+              max(CASE WHEN path_in_schema = 'bbox_ymax' THEN CAST(stats_max AS DOUBLE) END) AS ymax
+       FROM parquet_metadata('${src}') GROUP BY row_group_id ORDER BY row_group_id;`,
+    )).toArray().map((r) => ({
+      start: Number(r.s), end: Number(r.e),
+      // NaN, not Number(null) = 0, when the file has no bbox columns: 0 would read as an extent.
+      xmin: num(r.xmin), xmax: num(r.xmax), ymin: num(r.ymin), ymax: num(r.ymax),
+    }));
+  } finally {
+    if (borrowed !== undefined) release(borrowed);
+    await conn.close();
+  }
 }
 // Inner ORDER BY expression (no leading " ORDER BY "): the user's sort (if any) then feature_id
 // as a stable tiebreaker, so two rows with an equal sort key always page in the same order, and
@@ -386,7 +446,7 @@ function typesOf(descRows: { column_name?: unknown; column_type?: unknown }[]): 
   const allCols = descRows.map((r) => String(r.column_name));
   const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
   const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-  const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
+  const hidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), COVERING_COL, ID_COL]);
   const types: Record<string, ColType> = {};
   for (const r of descRows) {
     const name = String(r.column_name);
@@ -410,21 +470,22 @@ export async function queryParquet(parquetUrl: string, opts: PageOpts): Promise<
     const geomCols = GEOM_NAMES.filter((c) => allCols.includes(c));
     // Row object drops geometry + bbox (noise) but KEEPS feature_id so the table can highlight a
     // map-picked row. Displayed columns additionally drop feature_id (synthetic, not user data).
-    const rowHidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : [])]);
+    const rowHidden = new Set([...geomCols, ...(hasBbox ? BBOX_COLS : []), COVERING_COL]);
     const colHidden = new Set([...rowHidden, ID_COL]);
     const columns = allCols.filter((c) => !colHidden.has(c));
     const types = typesOf(descRows);
 
     // WHERE = global free-text (OR across all columns) AND each per-column filter.
     const where = buildWhere(columns, opts);
-    const totalRes = await conn.query(`SELECT count(*) AS n FROM ${from}${where};`);
+    const scan = scanOf(src, opts.clip);
+    const totalRes = await conn.query(`${scan.cte}SELECT count(*) AS n FROM ${scan.from}${where};`);
     const total = Number(totalRes.toArray()[0]?.n ?? 0);
 
     const order = buildOrder(columns, opts, hasId);
     // Select displayed cols + bbox cols explicitly (excluding geometry) so bbox survives for zoom.
     const sel = geomCols.length ? `* EXCLUDE (${geomCols.map(ident).join(", ")})` : "*";
     const res = await conn.query(
-      `SELECT ${sel} FROM ${from}${where}${order} LIMIT ${opts.limit} OFFSET ${opts.offset};`,
+      `${scan.cte}SELECT ${sel} FROM ${scan.from}${where}${order} LIMIT ${opts.limit} OFFSET ${opts.offset};`,
     );
     const raw = res.toArray().map((r) => r.toJSON() as Record<string, unknown>);
     const rows = raw.map((o) => {
@@ -462,7 +523,7 @@ export async function ordinalByFeatureId(
     const allCols = desc.toArray().map((r) => String(r.column_name));
     if (!allCols.includes(ID_COL)) return null;
     const hasBbox = BBOX_COLS.every((c) => allCols.includes(c));
-    const colHidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : []), ID_COL]);
+    const colHidden = new Set([...GEOM_NAMES, ...(hasBbox ? BBOX_COLS : []), COVERING_COL, ID_COL]);
     const columns = allCols.filter((c) => !colHidden.has(c));
     const full: PageOpts = { ...opts, limit: 1, offset: 0 };
     const where = buildWhere(columns, full);
@@ -472,10 +533,11 @@ export async function ordinalByFeatureId(
     // even after the parquet is spatially re-sorted, when feature_id no longer equals row order.
     const ord = orderExpr(columns, full, true);
     const over = ord ? `ORDER BY ${ord}` : "";
+    const scan = scanOf(src, opts.clip);
     const res = await conn.query(
-      `SELECT pos FROM (
+      `${scan.cte}SELECT pos FROM (
          SELECT ${ident(ID_COL)} AS fid, row_number() OVER (${over}) - 1 AS pos
-         FROM ${from}${where}
+         FROM ${scan.from}${where}
        ) WHERE fid = ${Number(featureId)};`,
     );
     const pos = res.toArray()[0]?.pos;
@@ -590,14 +652,15 @@ export async function exportItem(
       // this the transform reads longitude as latitude and returns inf.
       const wkt = srs === 4326 ? `ST_AsText(${geom})`
         : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${srs}', always_xy := true))`;
-      await conn.query(`COPY (SELECT * REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
+      const drop = cols0.includes(COVERING_COL) ? ` EXCLUDE (${ident(COVERING_COL)})` : "";
+      await conn.query(`COPY (SELECT *${drop} REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
       deliver([await db.copyFileToBuffer(csvOut)], `${stem}.csv`, "text/csv");
       return;
     }
 
     // One Feature per line, written straight to a DuckDB file — the features never exist as a
     // JS value or string, so peak memory is one buffer instead of Arrow rows + string + MEMFS copy.
-    const cols = descRows.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c));
+    const cols = descRows.map((r) => String(r.column_name)).filter((c) => !GEOM_NAMES.includes(c) && c !== COVERING_COL);
     seqOut = `o${id}.geojsonl`;
     await conn.query(`COPY (${featureSeqSql(cols, geom, t)}) TO '${seqOut}' (FORMAT JSON, ARRAY false);`);
     const seqBytes = await db.copyFileToBuffer(seqOut);
@@ -646,7 +709,6 @@ export interface ShapefileWarnings {
   estReadBytes: number;                // bytes the export fetches, after row-group pruning
   rowGroups: number;                   // how finely the file is grouped — what pruning can work with
   minClipBytes: number;                // the least any clip could read: the largest single group
-  any: boolean;                        // true if anything worth warning about
 }
 
 /** Geometry types off the GeoParquet `geo` key — present on anything our transform wrote, and
@@ -814,9 +876,6 @@ export async function exportWarnings(
       mixedGeometry, rowCount, estShpBytes, estDbfBytes, over2gb: shp && over2gb,
       estPeakBytes, overBrowserLimit, widthsEstimated,
       estReadBytes, rowGroups: groups.length, minClipBytes,
-      any: longNames.length > 0 || collisions.length > 0 || tooManyFields
-        || mixedGeometry.length > 0 || (shp && over2gb) || overBrowserLimit
-        || estReadBytes > SLOW_READ_BYTES || widthsEstimated,
     };
   } finally {
     if (borrowed !== undefined) release(borrowed);

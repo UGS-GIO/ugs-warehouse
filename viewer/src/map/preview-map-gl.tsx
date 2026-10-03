@@ -2,12 +2,16 @@
 // draw one. Mounted once by PreviewMapProvider and NEVER torn down: its DOM is portaled into
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
 import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { sameFeature } from "@/lib/same-feature";
 import { createPortal } from "react-dom";
-import maplibregl from "maplibre-gl";
+import maplibregl from "@/map/maplibre-lib";
+import type { TerrainSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
 import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
+import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
 import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
@@ -18,7 +22,7 @@ import { UiSelect } from "@/ui/select";
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 
-const POSITRON = "https://tiles.openfreemap.org/styles/positron";
+const LIGHT_BASEMAP = protomapsStyle("white", DIRECT);
 
 // Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders, not
 // faux cartography. fill/line/circle all added so any geometry type shows.
@@ -52,9 +56,10 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
-  focus: FocusSel | null; onFeatureClick: (id: number) => void;
+  focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
+  onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
   onFeatureSelect?: (props: Record<string, unknown>, fid: number | null) => void;
   onClearSelection?: () => void;
@@ -69,7 +74,9 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   const [container] = useState(() => document.createElement("div"));
   const holderRef = useRef<HTMLDivElement>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
-  const [showDem, setShowDem] = useState(false);
+  // In the URL, so a reload or a shared link keeps it. Changing item drops it (app.tsx go()).
+  const showDem = useSearch({ from: "__root__", select: (s) => s.terrain === true });
+  const navigate = useNavigate();
   const [cogReady, setCogReady] = useState(false);
 
   const isVector = spec?.kind === "vector";
@@ -115,7 +122,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     const map = mapRef.current?.getMap();
     if (!spec || !map || !mapLoaded || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
-    setShowDem(false);  // terrain resets per item
+    map.setPitch(showDem ? 48 : 0);
     if (spec.kind === "cog") {
       let live = true;
       (async () => {
@@ -131,7 +138,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     }
     const b = boundsOf(spec.item);
     if (b) map.fitBounds(b, { padding: 16, duration: 0 });
-  }, [fitKey, mapLoaded, spec]);
+  }, [fitKey, mapLoaded, spec, showDem]);
 
   // Fly to a picked feature (table row click). Keyed on focus.key so re-picking the same row re-flies.
   const fb = focus?.bbox;
@@ -190,7 +197,21 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   // it; on itemId (source swap) so a stale id can't light a same-id feature in the next dataset; on
   // mapLoaded so a focus set before the map is ready applies once it is. Map clicks call
   // highlightFeature directly (below) without touching focus, so they don't retrigger this.
-  useEffect(() => { highlightFeature(focus?.featureId ?? null); },
+  // Once the tiles are in, the lit feature must be the row's record: a map and table from
+  // different ingests number rows differently (lib/same-feature). A mismatch is left unlit.
+  useEffect(() => {
+    const fid = focus?.featureId ?? null;
+    highlightFeature(fid);
+    const map = mapRef.current?.getMap();
+    const props = focus?.props;
+    if (!map || fid == null || !props || !sourceLayer) return;
+    const check = () => {
+      const [f] = map.querySourceFeatures("pm-prev", { sourceLayer, filter: ["==", ["id"], fid] });
+      if (f && !sameFeature(f.properties ?? {}, props)) { highlightFeature(null); onMismatch?.(); }
+    };
+    map.once("idle", check);
+    return () => { map.off("idle", check); };
+  },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [itemId, focusKey, mapLoaded]);
 
@@ -202,7 +223,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     const fid = f.id != null ? Number(f.id) : null;
     highlightFeature(fid);  // exact outline via the tile's feature-state, no parquet read
     onFeatureSelect?.(props, fid);
-    if (fid != null) onFeatureClick(fid);
+    if (fid != null) onFeatureClick(fid, props);
   };
 
   const cluster = (
@@ -220,18 +241,19 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
           mapLib={maplibregl}
           onLoad={() => setMapLoaded(true)}
           initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
-          mapStyle={POSITRON}
+          mapStyle={LIGHT_BASEMAP}
           interactiveLayerIds={isVector ? layerIds : undefined}
           onClick={onMapClick}
           style={{ width: "100%", height: "100%" }}
           maxPitch={85}
-          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
+          // null, not undefined: react-map-gl skips an undefined terrain, so it never turned off.
+          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : null as unknown as TerrainSpecification}
         >
           <MapControl position="top-right">
             <button
               onClick={() => {
                 const next = !showDem;
-                setShowDem(next);
+                navigate({ to: ".", replace: true, search: (prev) => ({ ...prev, terrain: next || undefined }) });
                 mapRef.current?.getMap().easeTo({ pitch: next ? 48 : 0, duration: 500 });
               }}
               className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${

@@ -52,7 +52,7 @@ and the dormant/keyless fallback id. `ugs_key` is the **durable identity** — t
 the STAC comment key (`ugs:primary_key`), and the target viewer/OGC feature id.
 
 **Where each is set.** `feature_id` is minted `1..N` in Hilbert order, tie-broken by `hash(row)` so
-it is cross-ingest-deterministic (`transform.py:74-75`). It is promoted to the MVT tile id via
+it is cross-ingest-deterministic (`transform.py:124-126`). It is promoted to the MVT tile id via
 tippecanoe `--use-attribute-for-id=feature_id` (`sink_pmtiles.py`), and on armed topics `ugs_key`
 rides the tiles as a plain property — never the tile id, so the viewer's `ugs_key`-keyed row
 comments can still read it. The durable-identity surfaces are the DuckLake merge key and the

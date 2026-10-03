@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, catalogItemHref, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, relatedJoins } from "./stac";
+import { assetUsages, catalogItemHref, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -42,6 +42,12 @@ describe("cog asset selection", () => {
   it("draws the visual derivative, not whichever COG comes first", () => {
     expect(cogRenderAsset(twoCogs)?.href).toBe("https://x/a_3857.cog.tif");
     expect(cogAsset(twoCogs)?.href).toBe("https://x/a_3857.cog.tif");
+  });
+
+  it("draws the visual derivative from an items.json entry, which has no proj:code", () => {
+    const entry = { assets: { cog: { href: "https://x/a.cog.tif", type: COG, roles: ["data"] },
+      visual: { href: "https://x/a_3857.cog.tif", type: COG, roles: ["visual"] } } };
+    expect(cogRenderAsset(entry)?.href).toBe("https://x/a_3857.cog.tif");
   });
 
   it("draws a lone COG that is already web mercator, or says nothing to draw", () => {
@@ -180,5 +186,17 @@ describe("catalogItemHref", () => {
   it("leaves a foreign (non-catalog) href as a direct link", () => {
     const foreign = "https://ubm-assets.geology.utah.gov/stac/ubm-x/item/item.json";
     expect(catalogItemHref(foreign)).toBe(foreign);
+  });
+});
+
+describe("rasterTilesAsset", () => {
+  const pm = (extra: Record<string, unknown>) => ({ href: "https://x/a.pmtiles", type: "application/vnd.pmtiles", roles: ["visual"], ...extra });
+  it("finds the raster mosaic by its ugs:render mark", () => {
+    const d: StacDoc = { assets: { tiles: pm({ "ugs:render": "raster" }) } };
+    expect(rasterTilesAsset(d)?.href).toBe("https://x/a.pmtiles");
+  });
+  it("leaves a vector layer's visual PMTiles alone", () => {
+    const d: StacDoc = { assets: { pmtiles: pm({}) } };
+    expect(rasterTilesAsset(d)).toBeUndefined();
   });
 });

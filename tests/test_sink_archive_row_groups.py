@@ -25,6 +25,9 @@ class _FakeCon:
     def fetchone(self):
         return (self._per_row,)
 
+    def fetchall(self):
+        return [("MULTIPOLYGON", False)]
+
 
 def test_copy_bounds_the_row_group_size() -> None:
     con = _FakeCon()
@@ -87,3 +90,26 @@ def test_row_group_size_falls_back_when_the_view_is_empty():
     con.execute("INSTALL spatial; LOAD spatial;")
     con.execute("CREATE VIEW empty AS SELECT 1 AS id, ST_Point(0, 0) AS geom WHERE false")
     assert sink_archive._row_group_size(con, "empty") == sink_archive.ROW_GROUP_MAX
+
+
+def test_copy_writes_geoparquet_1_1_with_a_bbox_covering(tmp_path) -> None:
+    """1.1, not DuckDB's 1.0 or 2.0: 2.0 does not open in GDAL before 3.12 (every QGIS today)."""
+    import json
+
+    import duckdb
+
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial")
+    con.execute("CREATE TABLE v AS SELECT i AS feature_id, ST_Point(-112 + i / 100, 40) AS geom FROM range(3) r(i)")
+    out = str(tmp_path / "o.parquet")
+    sink_archive._copy_geoparquet(con, "v", out)
+
+    geo = json.loads(con.execute(
+        f"SELECT decode(value) FROM parquet_kv_metadata('{out}') WHERE decode(key) = 'geo'").fetchone()[0])
+    assert geo["version"] == "1.1.0"
+    assert geo["columns"]["geom"]["geometry_types"] == ["Point"]
+    assert geo["columns"]["geom"]["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
+    stats = con.execute(f"SELECT stats_min FROM parquet_metadata('{out}') "
+                        f"WHERE path_in_schema = 'bbox, xmin'").fetchone()
+    assert float(stats[0]) == -112.0
+    assert con.execute(f"SELECT typeof(geom) FROM read_parquet('{out}') LIMIT 1").fetchone()[0].startswith("GEOMETRY")

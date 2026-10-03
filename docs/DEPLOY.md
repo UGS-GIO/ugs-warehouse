@@ -53,10 +53,8 @@ gcloud iam service-accounts create warehouse-admin-run \
   --display-name="Warehouse Admin Console Runtime" --project=$DEPLOY_PROJECT
 
 # Admin Console SA roles:
-#   trigger and monitor Cloud Run jobs
-gcloud projects add-iam-policy-binding $DEPLOY_PROJECT \
-  --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
-  --role=roles/run.developer
+#   trigger and monitor its Cloud Run jobs: job-level run.developer + project run.viewer,
+#   granted by scripts/provision.sh
 #   act as the runtime SA to launch the jobs
 gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
   --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
@@ -203,7 +201,7 @@ the comment and diff surfaces. `cloudbuild-review-viewer.yaml` builds the review
 `VITE_CATALOG_URL` pointing at the review catalog is what `stac.ts` derives `IS_REVIEW` from.
 
 Any bundle mounted under a prefix must be told which one, via Vite's `--base` (it is also the
-router basepath, `src/mount.ts`): `/review/viewer/` for the review app, `/viewer/pr-<n>/` for a
+router basepath, `src/lib/mount.ts`): `/review/viewer/` for the review app, `/viewer/pr-<n>/` for a
 review preview. A Firebase channel serves at a host root, so it needs no `--base`.
 `src/ugs_warehouse/serve.py` already serves the right bundle's `index.html` for an unknown path
 under either subtree, so no server change.

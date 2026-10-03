@@ -15,4 +15,5 @@ jobs:
       pull-requests: write
       issues: write
     uses: UGS-GIO/ugs-gha-pr-review/.github/workflows/review.yml@v1
-    secrets: inherit
+    # No `secrets: inherit`: the review runs on vars + OIDC, and a job fed PR text must not hold
+    # the repo's deploy keys.

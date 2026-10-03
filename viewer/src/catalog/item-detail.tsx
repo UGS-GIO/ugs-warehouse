@@ -24,6 +24,7 @@ import { type Asset, catalogItemHref, citeLink, contentsOf, IS_REVIEW, ownForeig
   relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
+import { Unavailable } from "@/offline/offline-notice";
 
 function RelatedPanel({ item }: { item: StacDoc }) {
   const links = relatedLinks(item);
@@ -243,12 +244,18 @@ function ReviewBadge({ itemId }: { itemId: string }) {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
 }
 
-export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layout = "drawer" }: {
+export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
+  error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
   onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
   layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
-  if (!item) return <em className={C.muted}>Loading…</em>;
+  if (!item) {
+    return error
+      ? <Unavailable what="this item" error={error}
+          fallback="Could not load this item." />
+      : <em className={C.muted}>Loading…</em>;
+  }
   const p = item.properties ?? {};
   const hasGeom = Boolean(item.geometry || item.bbox);
   const via = viaLink(item);
@@ -313,7 +320,6 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
             {IS_REVIEW && item.id && <ReviewBadge itemId={String(item.id)} />}
           </div>
           <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{String(p.title ?? item.id ?? "")}</h1>
-          <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
           {byline.length > 0 && <p className="mt-1.5 text-sm text-muted-foreground">{byline.join(" · ")}</p>}
           {typeof p.description === "string" && <p className="mt-3 max-w-3xl text-muted-foreground">{p.description}</p>}
         </header>
@@ -356,10 +362,8 @@ export function ItemDetail({ collectionId, item, onBack, onMap, onExplore, layou
     <>
       <div className="mb-4 border-b border-border pb-3">
         {crumb}
-        {/* Title leads. The machine id is the subtitle — it was set in blue mono ABOVE the human
-            name, so the thing nobody reads outranked the thing everybody does. */}
+        {/* Title leads; the id already shows in the crumb above, so it isn't repeated under it. */}
         <h1 className={T.pageTitle}>{String(p.title ?? item.id ?? "")}</h1>
-        <div className="mt-0.5 font-mono text-xs text-muted-foreground">{item.id}</div>
       </div>
       <Preview item={item} />
       {/* Below the map/table, not above it: the description is context for what you are looking at,

@@ -235,7 +235,10 @@ def apply(path: str, layers: list[tuple[str, str]], prior: dict[str, str] | None
             src = pq.replace("'", "''")
             # One unreadable layer must cost us that collection, not the whole catalog.
             try:
-                con.execute(f'CREATE OR REPLACE {kw} "{cid}" AS SELECT * FROM read_parquet(\'{src}\')')
+                # Not the GeoParquet 1.1 `bbox` covering struct: a struct is no feature attribute,
+                # and COLUMNS() also binds on files written before it existed.
+                con.execute(f'CREATE OR REPLACE {kw} "{cid}" AS '
+                            f'SELECT COLUMNS(c -> c <> \'bbox\') FROM read_parquet(\'{src}\')')
             except Exception as e:
                 warn(f"  ! skip {cid}: {e}")
                 continue

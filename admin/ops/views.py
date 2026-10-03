@@ -61,14 +61,12 @@ def rebuild_mosaic(request, tier):
 
 @admin_required
 @require_POST
-def run_maintain(request, mode):
-    """Run DuckLake maintenance read-only (--report / --dry-run). Reports into the same
-    #result-ducklake-maintain slot as the Run button."""
-    result = jobs.run_maintain(mode)
+def run_mode(request, key, mode):
+    """Run a job's variant (jobs.MODE_ARGS). Reports into the same result slot as its Run button."""
+    result = jobs.run_mode(key, mode)
     return render(request, "ops/_job_result.html", {
-        "key": "ducklake-maintain", "job": jobs.JOBS.get("ducklake-maintain"), "result": result,
-        "recent": jobs.recent("ducklake-maintain"),
-        "console_url": jobs.console_logs_url("ducklake-maintain"),
+        "key": key, "job": jobs.JOBS.get(key), "result": result,
+        "recent": jobs.recent(key), "console_url": jobs.console_logs_url(key),
     })
 
 

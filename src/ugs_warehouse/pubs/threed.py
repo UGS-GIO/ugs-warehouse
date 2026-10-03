@@ -220,6 +220,8 @@ def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict
     Pure/local: writes files under out_dir, no GCS. Z is preserved (WKB-Z in the GeoParquet)."""
     import geopandas as gpd
 
+    from . import geoparquet
+
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     colors = mapx_colors(mapx_path)
@@ -232,7 +234,7 @@ def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict
     polys["fill"] = polys["MapUnit"].map(lambda u: colors.get(str(u)))
     poly_cols = [c for c in ("MapUnit", "label", "fill", "geometry") if c in polys.columns]
     poly_path = out / f"{series_id}_3d_polygons.parquet"
-    polys[poly_cols].to_parquet(poly_path, index=False)
+    geoparquet.write(polys[poly_cols], poly_path)
 
     # glTF mesh (download/interop) — triangulated panels, authored per-vertex colour, local metres.
     b = polys.total_bounds
@@ -245,7 +247,7 @@ def convert(gdb_path: str, mapx_path: str, series_id: str, out_dir: str) -> dict
     lines["dashed"] = lines.get("Symbol").astype("string").map(lambda s: "approxim" in str(s or "").lower())
     line_cols = [c for c in ("kind", "dashed", "Type", "Symbol", "geometry") if c in lines.columns]
     line_path = out / f"{series_id}_3d_lines.parquet"
-    lines[line_cols].to_parquet(line_path, index=False)
+    geoparquet.write(lines[line_cols], line_path)
 
     # classification:classes (STAC standard): one per MapUnit, ordered by HierarchyKey, value=MapUnit
     # so the viewer joins a feature's MapUnit → colour. Same shape core/styles.classification_classes

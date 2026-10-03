@@ -107,8 +107,9 @@ export function filterByViewport(items: ItemRef[], viewport: number[] | undefine
 }
 
 // ISO dates for date sorts — lexicographic on ISO strings == chronological. A publication's datetime
-// is when it was published; a layer's is when the warehouse last loaded it, which says nothing about
-// how new the data is. So date sorts rank by publication date, and load dates only order the rest.
+// is when it was published; a layer's is usually when the warehouse last loaded it, which says nothing
+// about how new the data is. So date sorts rank by publication date, and the rest only order among
+// themselves (datetimeIsPublished, until #479).
 const publishedOf = (it: ItemRef): string =>
   (datetimeIsPublished(propsOf(it)) ? String(propsOf(it).datetime ?? "") : "");
 const loadedOf = (it: ItemRef): string =>

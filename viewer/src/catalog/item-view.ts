@@ -192,8 +192,10 @@ const num = (v: unknown): string => (typeof v === "number" ? v.toLocaleString() 
 const asList = (v: unknown): string => (Array.isArray(v) ? v.map(String).join(", ") : String(v));
 export const fmtDatetime = (v: unknown): string => (typeof v === "string" ? fmtDate(v.slice(0, 10)) : String(v));
 
-// A publication's datetime is when it was published; anything else's is when the warehouse loaded
-// it. `ugs:series_id` is set only by the publications producer (browse.tsx keys pubs on it too).
+// A publication's datetime is when it was published; a layer's is usually when the warehouse loaded it,
+// and nothing on the item says which. This guesses from `ugs:series_id`, which only the publications
+// producer sets, and is the one place that guess lives. Drop it once every producer writes the load
+// time to STAC `updated` (#479), and label and sort by those fields instead.
 export const datetimeIsPublished = (props: Record<string, unknown>): boolean =>
   typeof props["ugs:series_id"] === "string" && props["ugs:series_id"] !== "";
 const PUBLISHED: MetaDef = { key: "datetime", label: "Published", fmt: fmtDatetime };

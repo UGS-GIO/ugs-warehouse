@@ -22,6 +22,7 @@ import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSubla
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
+import { to2d } from "@/lib/bbox";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
 const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
@@ -220,8 +221,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
   // A layer's effective bbox: its STAC bbox, else (for a COG) its fetched GeoTIFF extent.
   const effBox = (l: ActiveLayer): [number, number, number, number] | undefined => {
-    const b = l.bbox?.slice(0, 4);
-    if (b && b.length >= 4) return b as [number, number, number, number];
+    const b = to2d(l.bbox);
+    if (b) return b;
     return l.cogHref ? cogBoxes[l.cogHref] : undefined;
   };
   const initialCam = useRef(readCam());
@@ -233,7 +234,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const activeBoxes = layers.map(effBox).filter((b): b is [number, number, number, number] => Array.isArray(b));
   // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
   const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
-  const fitBox = unionBbox(activeBoxes) ?? (item?.bbox?.slice(0, 4) as [number, number, number, number] | undefined);
+  const fitBox = unionBbox(activeBoxes) ?? to2d(item?.bbox);
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;

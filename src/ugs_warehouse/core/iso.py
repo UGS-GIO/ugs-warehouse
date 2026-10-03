@@ -14,6 +14,8 @@ from __future__ import annotations
 
 from xml.sax.saxutils import escape
 
+from .bbox import to_2d_bbox
+
 ORG = "Utah Geological Survey"
 
 NS = (
@@ -66,8 +68,8 @@ def stac_to_iso19139(item: dict) -> str:
     bbox = item.get("bbox") or []
 
     geo = ""
-    if len(bbox) >= 4:
-        w, s, e, n = bbox[0], bbox[1], bbox[2], bbox[3]
+    if len(bbox) in (4, 6):
+        w, s, e, n = to_2d_bbox(bbox)
         geo = (
             "<gmd:geographicElement><gmd:EX_GeographicBoundingBox>"
             f"<gmd:westBoundLongitude><gco:Decimal>{w}</gco:Decimal></gmd:westBoundLongitude>"

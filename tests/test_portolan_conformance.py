@@ -37,6 +37,7 @@ GUARDED = {
     "PTL-TMP-002",  # RFC 3339 datetimes, start before end
     "PTL-AST-001",  # every asset has a media type and a role
     "PTL-AST-002",  # absolute asset hrefs use https (#249)
+    "PTL-AST-006",  # a publisher's plain TIFF is a `source` asset, exempt from the COG requirement
     "PTL-FIL-001",  # README.md + AGENTS.md beside every catalog and collection
     "PTL-FIL-002",  # AGENTS.md linked rel:"agents"
     "PTL-FIL-003",  # README.md linked rel:"describedby"
@@ -90,6 +91,11 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
     stac.write_item(pubs_sink.build_item(
         {"series_id": "MD-50", "series": "MD", "pub_year": "1954", "pub_publisher": "",
          "pub_name": "Mining district file 50"}, [], override={}))
+
+    # A mining district file whose only file is the publisher's plain TIFF scan.
+    stac.write_item(pubs_sink.build_item(
+        {"series_id": "MD-1002", "series": "MD", "pub_year": "1956", "pub_publisher": "",
+         "pub_name": "Geophysical Sonic Log", "pub_url": "uranium_data/MD01002.tif"}, [], override={}))
 
     # An edition pair: a current map and its deprecated predecessor, both with a COG (exercises the
     # version/deprecated properties, predecessor/successor/latest links, and the currency-gated

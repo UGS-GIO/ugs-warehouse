@@ -7,6 +7,20 @@ from google.auth import jwt
 from google.auth.crypt import es256
 
 
+@pytest.fixture(autouse=True)
+def _no_real_gcs(monkeypatch):
+    """Fail fast on a real GCS call. Without this, a call a test forgot to stub waits out the
+    metadata-server retries (about 15 s) before the caller's error handling sees it."""
+    from ugs_warehouse.core import gcs
+
+    def _blocked(*_a, **_k):
+        raise RuntimeError("tests must not reach GCS; stub the gcs call")
+
+    for name in ("put", "get", "head", "list", "delete"):
+        monkeypatch.setattr(gcs.obs, name, _blocked)
+    monkeypatch.setattr(gcs, "_gcs_client", _blocked)  # the fallback reader for gzipped objects
+
+
 class FakeIap:
     """Mints ES256 tokens shaped like IAP's and serves the matching public key, so the verifiers run
     their real signature/audience/issuer checks against a key the test controls."""

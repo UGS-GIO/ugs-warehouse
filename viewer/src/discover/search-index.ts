@@ -18,8 +18,9 @@ export type CatalogDoc = {
 
 export type Hit = {
   id: string; kind: "article" | "item"; title: string; text?: string; keywords?: string;
-  // The item's ids, one per line: `ids` indexes each whole, `idParts` by the part after the series code.
-  ids?: string; idParts?: string;
+  // The item's ids, one per line: `ids` indexes each whole, `idBare` without the format letters after
+  // the number, and `idParts` by the part after the series code.
+  ids?: string; idBare?: string; idParts?: string;
   sid?: string; pdf?: string; page?: number | null; volume?: number | null; issue?: string;
   collId?: string; itemId?: string; topic?: string; score: number;
 };
@@ -27,11 +28,13 @@ export type Hit = {
 // An id with case, spaces and hyphens dropped, so OFR-771, ofr771 and OFR 771 read the same.
 const compactId = (s: string): string => s.toLowerCase().replace(/[\s-]/g, "");
 
-// The terms `ids` indexes for one id: its compact form ("ofr771dm") and that form without the format
-// letters after the number ("ofr771"), since OFR-771DM is cited as OFR-771.
-const wholeIdTerms = (id: string): string[] => {
+// The term `idBare` indexes for one id: its compact form without the format letters after the number
+// ("ofr771" for OFR-771DM). DM or DR is added once a publication goes digital, so both forms are valid
+// ids for it. Empty when the id has no such letters, since `ids` already holds that form.
+const bareId = (id: string): string => {
   const compact = compactId(id);
-  return [...new Set([compact, compact.replace(/(\d)[a-z]+$/, "$1")])];
+  const bare = compact.replace(/(\d)[a-z]+$/, "$1");
+  return bare === compact ? "" : bare;
 };
 
 // The term `idParts` indexes: what follows the series code ("771dm"), so a partial id like OFR-77
@@ -39,9 +42,10 @@ const wholeIdTerms = (id: string): string[] => {
 // item. Never the series code alone: "mp" or "md" would fuzzy-match ordinary words like "map" and "mid".
 const idPart = (id: string): string => (id.includes("-") ? compactId(id.slice(id.indexOf("-") + 1)) : "");
 
-// MiniSearch's own tokenizer and term processing, which every field but `ids` keeps.
+// MiniSearch's own tokenizer and term processing, which every field but the id fields keeps.
 const defaultTokenize: (text: string) => string[] = MiniSearch.getDefault("tokenize");
 const defaultProcessTerm: (term: string) => string | null | undefined = MiniSearch.getDefault("processTerm");
+const ID_FIELDS = new Set(["ids", "idBare", "idParts"]);
 
 // One catalog item (a compact index record or a full item) → the flat CatalogDoc the index consumes.
 // Discover and the header search both build their docs here, so they index items identically, and a
@@ -73,25 +77,26 @@ export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
       const ids = (c.ids ?? []).join("\n");
       return {
         id: c.id, kind: "item" as const, title: c.title, text: c.meta ?? "", keywords: c.keywords ?? "",
-        ids, idParts: ids, collId: c.collId, itemId: c.itemId, page: null, score: 0,
+        ids, idBare: ids, idParts: ids, collId: c.collId, itemId: c.itemId, page: null, score: 0,
       };
     }),
   ];
   const ms = new MiniSearch<Hit>({
-    fields: ["title", "text", "keywords", "ids", "idParts"],
+    fields: ["title", "text", "keywords", "ids", "idBare", "idParts"],
     storeFields: ["kind", "title", "text", "keywords", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic"],
-    // The two id fields read whole ids, one per line; every other field keeps MiniSearch's defaults.
+    // The id fields read whole ids, one per line; every other field keeps MiniSearch's defaults.
     tokenize: (text, field) =>
-      (field === "ids" || field === "idParts" ? text.split("\n").filter(Boolean) : defaultTokenize(text)),
+      (ID_FIELDS.has(field ?? "") ? text.split("\n").filter(Boolean) : defaultTokenize(text)),
     processTerm: (term, field) => {
-      if (field === "ids") return wholeIdTerms(term);
+      if (field === "ids") return compactId(term);
+      if (field === "idBare") return bareId(term);
       if (field === "idParts") return idPart(term);
       return defaultProcessTerm(term);
     },
     // Typos count only in words of four letters or more: one slip in a short code or a number
     // ("ofr" to "of", "771" to "791") lands on something else entirely.
     searchOptions: {
-      boost: { title: 4, ids: 2 }, prefix: true, combineWith: "AND",
+      boost: { title: 4, ids: 2, idBare: 2 }, prefix: true, combineWith: "AND",
       fuzzy: (term: string) => (term.length < 4 || /\d/.test(term) ? false : 0.2),
     },
   });
@@ -99,13 +104,18 @@ export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
   return { index: ms, docs };
 }
 
-// The one item a whole-id query names: an exact search of the `ids` field, with no prefix or typo
-// matching. More than one hit is ambiguous (MD-86-7 and MD-867 read the same), so none is named.
+// The one item a whole-id query names: an exact search, with no prefix or typo matching, of the whole
+// ids and then of the ids without their format letters. So M-205 names M-205 even though M-205DM
+// exists, and OFR-771 names OFR-771DM. More than one hit is ambiguous (MD-86-7 and MD-867 read the
+// same), so none is named.
 export function idMatch(index: MiniSearch<Hit>, q: string): SearchResult | undefined {
-  const hits = index.search(q, {
-    fields: ["ids"], prefix: false, fuzzy: false, tokenize: (s) => [s], processTerm: compactId,
-  });
-  return hits.length === 1 ? hits[0] : undefined;
+  for (const field of ["ids", "idBare"]) {
+    const hits = index.search(q, {
+      fields: [field], prefix: false, fuzzy: false, tokenize: (s) => [s], processTerm: compactId,
+    });
+    if (hits.length) return hits.length === 1 ? hits[0] : undefined;
+  }
+  return undefined;
 }
 
 // Ranked search with the item a whole-id query names first. Ranking alone can't promise it: M-290

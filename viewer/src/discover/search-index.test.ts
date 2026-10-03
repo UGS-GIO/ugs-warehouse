@@ -25,6 +25,13 @@ const CATALOG = [
   pub("M-290DR", "Geologic Map of the Tickville Spring Quadrangle, Salt Lake and Utah Counties, Utah",
     { "ugs:pub_type": "Map" }),
   pub("M-291DR", "Geologic Map of the Jordan Narrows Quadrangle", { "ugs:pub_type": "Map" }),
+  // One map in both forms: DM is added to the ID once a publication goes digital.
+  pub("M-205", "Geologic Map of the Gunlock Quadrangle", { "ugs:pub_type": "Map" }),
+  pub("M-205DM", "Geologic Map of the Gunlock Quadrangle (GIS)", { "ugs:pub_type": "Map" }),
+  // A map listed twice under case-only spellings (as in the live catalog), plus a lettered plate.
+  pub("M-48", "Geologic Map of the Ogden Quadrangle", { "ugs:pub_type": "Map" }),
+  pub("m-48", "Geologic Map of the Ogden Quadrangle", { "ugs:pub_type": "Map" }),
+  pub("M-48A", "Geologic Map of the Ogden Quadrangle, Plate A", { "ugs:pub_type": "Map" }),
   pub("MP-173", "Selected papers on the Uinta Basin", { "ugs:pub_type": "Miscellaneous Publication" }),
   pub("CR-91-14DF", "Engineering geology of the Jordan Narrows", { "ugs:pub_type": "Contract Report" }),
   // Different files whose ids only differ by a hyphen (both live in the Mining District series).
@@ -59,6 +66,17 @@ describe("catalog search by series ID", () => {
   it("names no item when an ID fits more than one", () => {
     expect(idMatch(catalogIndex(), "MD-867")).toBeUndefined();
     expect(idMatch(catalogIndex(), "OFR-771")?.id).toBe("ugs-publications/OFR/OFR-771DM");
+  });
+
+  it("names the exact form first when a publication exists with and without DM", () => {
+    expect(idMatch(catalogIndex(), "M-205")?.id).toBe("ugs-publications/M/M-205");
+    expect(idMatch(catalogIndex(), "M-205DM")?.id).toBe("ugs-publications/M/M-205DM");
+    expect(search("M-205")).toContain("ugs-publications/M/M-205DM");
+  });
+
+  it("stops at an ambiguous whole ID instead of trying the form without letters", () => {
+    // M-48 and m-48 both match whole; M-48A would match without its letter, but is a different plate.
+    expect(idMatch(catalogIndex(), "M-48")).toBeUndefined();
   });
 
   it("names no item for a number alone", () => {

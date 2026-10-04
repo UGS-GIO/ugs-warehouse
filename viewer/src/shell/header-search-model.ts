@@ -32,17 +32,15 @@ function toHit(r: ItemRef & { data: StacDoc }, layer: boolean): ItemHit {
  * ranked hits.
  */
 export async function buildCatalogSearch(
-  items: ItemRef[], isLayer: (r: ItemRef) => boolean,
+  items: ItemRef[], isLayer: (r: ItemRef) => boolean, key: string,
 ): Promise<CatalogSearch> {
-  const { buildIndex, idMatch, toSearchDoc } = await import("@/discover/search-index");
+  const { catalogIndex, idMatch } = await import("@/discover/search-index");
   const hits = new Map<string, ItemHit>();
-  const docs = items.flatMap((r) => {
-    if (!r.data) return [];
-    const doc = toSearchDoc(r.collId, r.data);
-    hits.set(doc.id, toHit({ ...r, data: r.data }, isLayer(r)));
-    return [doc];
-  });
-  const { index } = buildIndex([], docs);
+  // Keyed like the index's documents (toSearchDoc), so a hit's id finds its row.
+  for (const r of items) {
+    if (r.data) hits.set(`${r.collId}/${String(r.data.id)}`, toHit({ ...r, data: r.data }, isLayer(r)));
+  }
+  const { index } = catalogIndex(key, items);
   return (q) => {
     const text = q.trim();
     if (text.length < 2) return NONE;

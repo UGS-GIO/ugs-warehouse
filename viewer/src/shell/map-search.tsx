@@ -55,7 +55,7 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
 
   const catalog = useQuery({
     queryKey: ["header-search-index", loadKey],
-    queryFn: () => buildCatalogSearch(items, isLayer),
+    queryFn: () => buildCatalogSearch(items, isLayer, loadKey),
     enabled: items.length > 0,
     placeholderData: keepPreviousData,
     staleTime: Infinity,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { StacDoc } from "@/stac";
-import { buildIndex, idMatch, searchCatalog, toSearchDoc } from "./search-index";
+import { buildIndex, catalogIndex as sharedIndex, idMatch, searchCatalog, toSearchDoc } from "./search-index";
 
 // Publications shaped like the catalog's index records, with live IDs: OFR-771 and M-290 only exist
 // as OFR-771DM and M-290DR, and their neighbours share the series and most of the number. MD-1320's
@@ -93,5 +93,18 @@ describe("catalog search by series ID", () => {
 
   it("does not let an ordinary word match a bare series code", () => {
     expect(search("map")).not.toContain("ugs-publications/MP/MP-173");
+  });
+});
+
+describe("the shared catalog index", () => {
+  it("adds newly streamed items to the same index instead of rebuilding it", () => {
+    const ref = ([coll, doc]: (typeof CATALOG)[number]) => ({ collId: coll, href: `${coll}/${doc.id}/${doc.id}.json`, data: doc });
+    const first = sharedIndex("a", CATALOG.slice(0, 2).map(ref));
+    const grown = sharedIndex("b", CATALOG.map(ref));
+    expect(grown.index).toBe(first.index);
+    expect(grown.docs).toHaveLength(CATALOG.length);
+    expect(searchCatalog(grown.index, String(CATALOG.at(-1)![1].id)).length).toBeGreaterThan(0);
+    // An item going away rebuilds.
+    expect(sharedIndex("c", CATALOG.slice(1).map(ref)).index).not.toBe(first.index);
   });
 });

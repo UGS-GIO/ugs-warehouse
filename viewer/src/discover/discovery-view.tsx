@@ -24,7 +24,7 @@ import { useQuery } from "@tanstack/react-query";
 import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
-import { buildIndex, type Hit, searchCatalog, toSearchDoc } from "./search-index";
+import { catalogIndex, type Hit, searchCatalog } from "./search-index";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -108,7 +108,7 @@ export function DiscoveryView({
   // thousands of docs. Matches App's own mapLoadKey memo pattern.
   const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const { index, docs: itemDocs } = useMemo(
-    () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))),
+    () => catalogIndex(itemsKey, withData),
     [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
   // Survey Notes articles, in a SECOND index, built in a worker. Not merged into the item index: an

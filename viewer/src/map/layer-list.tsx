@@ -187,9 +187,7 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
         <div>
           <div className="flex items-center px-1.5 pb-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
             On the map · {active.length}
-            {/* Clear the FULL active set (activeIds), not just `active` — the resolved subset. An id
-                in ?l= whose collection index hasn't loaded yet isn't in `active`, so clearing that
-                would leave it behind; a shared or deep-linked set could never be fully cleared. */}
+            {/* activeIds, not `active`: an id whose collection hasn't loaded is in the set but has no row. */}
             <button type="button" className={`${BULK_CLASS} ml-auto`} title="Turn every layer off"
               onClick={() => onToggleMany(activeIds, false)}>
               Clear

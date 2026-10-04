@@ -11,6 +11,7 @@ const c = useViewCtx();
 return <DiscoveryView
   items={c.mapItems}
   itemsKey={c.mapLoadKey}
+  loading={c.mapItemsLoading}
   onOpenItem={c.openItem}
   onOpenPub={(collId, itemId) => c.go({ view: "catalog", c: collId, i: itemId })}
   itemSelected={Boolean(c.itemUrl)}

@@ -170,7 +170,7 @@ export const effectiveSort = (s: DiscoveryState): SortKey =>
   (s.sort === "relevance" && !ranksByWords(parseQuery(s.q)) ? "newest" : s.sort);
 
 // ---- URL <-> Discover state (the boundary) ------------------------------------------------------
-// The Discover view's whole filter/sort/layout state lives in the URL so a landing tile or a shared
+// The Discover view's whole filter/sort/layout state lives in the URL so a category tile or a shared
 // link reproduces the view. These two pure functions are the validated boundary: parse the raw search
 // (all strings, possibly bad) into a typed state, and serialize a state back to a search patch that
 // drops defaults (so a pristine view stays a clean `/discover`). Namespaced keys — q / collections

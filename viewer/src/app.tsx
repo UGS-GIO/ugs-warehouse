@@ -29,15 +29,15 @@ export { idOf } from "./stac";
 
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review" | "offline";
+export type View = "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review" | "offline";
 // `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
 // route tree — a computed `/${view}` string would not, which is what the old cast papered over.
 const VIEW_PATH = {
-  landing: "/", catalog: "/catalog", map: "/map", discover: "/discover", arch: "/arch",
+  catalog: "/catalog", map: "/map", discover: "/discover", arch: "/arch",
   guide: "/guide", developers: "/developers", preview: "/preview",
   review: "/review", offline: "/offline",
 } satisfies Record<View, string>;
-const isView = (v: string): v is View => v !== "landing" && v in VIEW_PATH;
+const isView = (v: string): v is View => v in VIEW_PATH;
 export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[]; sheet?: string };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
@@ -136,13 +136,11 @@ function useViewState() {
   // (catalog, m, ftsdb, …) ride in the same search untouched (see router.tsx validateSearch).
   const sp = useSearch({ from: "__root__" });
   const navigate = useNavigate();
-  // Param-less URL → the Landing front door, EXCEPT a legacy deep link that carries a catalog item
-  // (?c=&i= with no view=) still opens the catalog detail it always did — so old links keep working.
-  // The view is the PATH, not a ?view= param — see routes.tsx for why.
-  // A bare "/" with a selection still means the catalog, so old ?c=/?i= links keep working.
+  // The view is the PATH, not a ?view= param — see routes.tsx for why. "/" redirects to Discover
+  // (routes/index.tsx); a bare "/" with a selection still means the catalog, so old ?c=/?i= links work.
   const pathname = useRouterState({ select: (st) => st.location.pathname });
   const seg = pathname.replace(/^\/+|\/+$/g, "").split("/")[0];
-  const view: View = isView(seg) ? seg : sp.i || sp.c ? "catalog" : "landing";
+  const view: View = isView(seg) ? seg : sp.i || sp.c ? "catalog" : "discover";
   const collectionUrl = sp.c;
   const itemUrl = sp.i;
   const layerIds = parseLayerParam(sp.l);
@@ -226,7 +224,7 @@ function useViewState() {
   const catalog = useStac(CATALOG_URL);
 
   // ---- catalog tree (one level of nesting: root → sub-catalog → series collections) ----
-  // Counts + titles ride on the child links (warehouse emits ugs:item_count), so the landing
+  // Counts + titles ride on the child links (warehouse emits ugs:item_count), so the catalog page
   // and the series chooser render from a single fetch each — no per-collection fan-out. A
   // child whose href ends in catalog.json is a nesting sub-catalog (ugs-publications); the
   // rest are leaf collections. (A pre-nesting flat catalog has only leaf collections — this
@@ -334,10 +332,9 @@ function useViewState() {
   ];
   const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
 
-  // The Map, Discover AND Landing views load every leaf collection's index (all items → the map +
-  // facets + the landing tiles/recent strip). Landing reuses this exact cached set — no extra fetch.
-  // Offline data needs it too, to name what is saved; it is the same cached set.
-  const mapColls = view === "map" || view === "discover" || view === "landing" || view === "offline"
+  // The Map and Discover views load every leaf collection's index (all items → the map, the facets
+  // and the category index). Offline data needs it too, to name what is saved; it is the same set.
+  const mapColls = view === "map" || view === "discover" || view === "offline"
     ? leafColls : [];
   // The root index covers this catalog; only federated collections load their own index.
   const root = useRootIndex(mapColls.length > 0);
@@ -362,7 +359,7 @@ function useViewState() {
   // they arrive only that way, and always after the indexes.
   const mapLoadKey = `root:${root.data?.count ?? 0}|` + mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
     + `|fb:${mapFbDocs.docs.filter((d) => d?.data).length}`;
-  // Still-streaming signal for the Landing tiles/recent strip, so counts aren't shown mid-crawl.
+  // Still streaming, so Discover's category index doesn't show counts that are still climbing.
   const mapItemsLoading = mapColls.length > 0
     && (root.isLoading || mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
@@ -415,14 +412,10 @@ function useViewState() {
   // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
   // collection key from the item href so it resolves + the URL stays tidy.
   const openCover = (href: string) => go({ view, c: collKeyOf(href), i: idOf(href) });
-  // Landing → Discover: open an item's drawer, or start Discover on a query / a category tile (each
-  // clears any stale Discover keys so the handoff is a clean, shareable /discover?…).
-  const openInDiscover = (href: string) => go({ view: "discover", c: collKeyOf(href), i: idOf(href) });
   // The full item page. Below lg this replaces the Discover drawer.
   const openItemPage = (href: string) => go({ view: "catalog", c: collKeyOf(href), i: idOf(href) });
-  // Landing hands off to Discover: the search box, the category rows, "Browse all". `to` is
-  // REQUIRED — a view is a path now, so navigating with search alone stayed on "/" and appended a
-  // ?view= nobody reads, which is what made the landing buttons look dead.
+  // The header search hands a query to Discover, clearing stale Discover keys. `to` is REQUIRED: a
+  // view is a path, so navigating with search alone would stay put.
   const openDiscoverSearch = (opts: { q?: string; category?: string }) =>
     navigate({
       to: VIEW_PATH.discover,
@@ -516,14 +509,14 @@ function useViewState() {
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
   // The Map, Discover and Preview views LOCK the viewport (a full-height split/shell whose inner panes
-  // scroll) — unlike the document views (landing/catalog/search/developers/…), which scroll the page
+  // scroll) — unlike the document views (catalog/guide/developers/…), which scroll the page
   // under a sticky header.
   const lockedView = mapView || view === "discover" || view === "preview";
   // Same cached queries the map itself reads (TanStack dedupes by key) — the legend needs the bound
   // style layers, and the drawer renders outside the map component.
   const styleCache = useStyleLayersFor(activeLayers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
   // "Is this item a resolvable map layer?" — the gate the Add-to-map button self-checks. `layerRows`
-  // only covers the map/discover/landing set (mapColls), so on the item page (catalog view, where
+  // only covers the map/discover set (mapColls), so on the item page (catalog view, where
   // mapColls is empty) it's empty. Also treat the OPEN item as a layer when its own loaded doc draws
   // as one — otherwise the item-detail Add-to-map button is permanently hidden there.
   const isLayerId = (id: string) =>
@@ -532,7 +525,7 @@ function useViewState() {
     go, view, setView, catalog, lockedView, pending, mapView,
     catalogDocs, mapItems, mapLoadKey, mapItemsLoading,
     searchIsLayer, pickPlace, pickSearchItem,
-    openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
+    openItem, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, collectionId, collectionUrl, layerIds, seriesSel,
     rootChildren, cardsWithCovers, allItems, itemsLoading, leafColl, crumbs,
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
@@ -583,7 +576,7 @@ export function AppLayout() {
           </span>
           <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </Link>
-        {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
+        {/* Beside the name, not in a hero — the URL applies to every view. */}
         <StacUrlChip url={CATALOG_URL} />
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger

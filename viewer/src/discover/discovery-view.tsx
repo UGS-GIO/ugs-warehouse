@@ -52,11 +52,12 @@ const idOf = (href: string) => href.split("/").slice(-2)[0];
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, itemsKey, loading = false, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
   renderSearch,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
+  loading?: boolean; // the catalog is still streaming in, so category counts are not final yet
   onOpenItem: (href: string) => void;   // the map footprint picker; cards navigate via <Link>
   onOpenPub: (collId: string, itemId: string) => void;  // an article cites a pub by series id
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
@@ -70,7 +71,7 @@ export function DiscoveryView({
   renderSearch?: (q: string, submit: (q: string) => void) => React.ReactNode;
 }) {
   const navigate = useNavigate();
-  // The whole filter/sort/layout state lives in the URL (namespaced Discover keys), so a landing tile,
+  // The whole filter/sort/layout state lives in the URL (namespaced Discover keys), so a category tile,
   // a shared link, or the Back button reproduces the view. App still owns view/c/i/l/s; we patch only
   // our own keys. parse is cheap → recomputed each render; the memos below key on the SERIALIZED values
   // (not the arrays, which are fresh each parse) so they don't re-run on unrelated renders.
@@ -248,6 +249,8 @@ export function DiscoveryView({
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      {/* The page's only h1. The header already shows the name, so it is for screen readers. */}
+      <h1 className="sr-only">Discover UGS data and publications</h1>
       {/* Added layers accumulate into ?l= but Discovery's map only draws footprints — this is the
           only feedback that a card's "+ Add to map" did anything, plus the way to the Map view. */}
       <OpenMapPill />
@@ -344,7 +347,8 @@ export function DiscoveryView({
 
         {/* CENTER — result cards (the star): gallery grid or list, paginated. */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-3 py-3">
-          {idle && tiles.length > 0 && (
+          {/* Hidden until the whole catalog is in, so its counts don't climb as each index arrives. */}
+          {idle && !loading && tiles.length > 0 && (
             <section aria-label="Categories" className="mb-4 rounded-md border border-border bg-background px-4 py-3">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</h2>
               <div className="mt-1 grid grid-cols-1 gap-x-8 sm:grid-cols-2 xl:grid-cols-3">
@@ -623,5 +627,5 @@ function GeometrySection({ facets, value, onChange }: {
   );
 }
 
-// The result card + list row now live in result-card.tsx (shared with the Landing "Recently updated"
-// strip). This file keeps only the Discover shell + the facet-rail sections above.
+// The result card + list row live in result-card.tsx. This file keeps the Discover shell + the
+// facet-rail sections above.

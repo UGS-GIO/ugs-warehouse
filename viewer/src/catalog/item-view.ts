@@ -110,7 +110,7 @@ export const kindLabel = (it: ItemRef): string => KIND_LABELS[itemKind(it)];
 
 // ---- one "home" category (first match) — ported from ugs-data-catalog/src/lib/categorize.ts over
 // the warehouse STAC shape: serving topics by `ugs:dbt_schema`, the top collections by collId root,
-// publications by root/pub_type/series. Each category names the discovery facet a landing tile lands on.
+// publications by root/pub_type/series. Each category names the discovery facet its tile opens.
 export type CategoryResult = { key: string; label: string };
 type Category = CategoryResult & {
   match: (it: ItemRef) => boolean;

@@ -347,6 +347,7 @@ export function DiscoveryView({
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
         {/* The Map page's search bar, without its suggestion list: here the results are the list. */}
         <LiveSearchBar value={text} className="min-w-[12rem] flex-1 sm:max-w-md"
+          placeholder="Search titles, series IDs, authors and places"
           onChange={(v) => { setText(v); sendQ(v); }} onEnter={submit}
           onClear={() => { setText(""); sendQ("", true); }} />
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">

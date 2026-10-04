@@ -66,10 +66,11 @@ function Meta({ it, meta }: { it: ItemRef; meta: string[] }) {
     return sid ? <div className="truncate font-mono text-[11px] text-muted-foreground" title={sid}>{sid}</div> : null;
   }
   const [id, ...rest] = meta;
+  // One block of inline text, so a narrow card ends in "…" rather than clipping mid-word.
   return (
-    <div className="flex min-w-0 items-baseline gap-x-2 truncate text-[11px] text-muted-foreground" title={meta.join(" · ")}>
+    <div className="truncate text-[11px] text-muted-foreground" title={meta.join(" · ")}>
       <span className="font-mono font-semibold text-foreground">{id}</span>
-      {rest.map((m) => <span key={m} className="shrink-0">{m}</span>)}
+      {rest.length ? ` · ${rest.join(" · ")}` : ""}
     </div>
   );
 }

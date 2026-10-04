@@ -14,7 +14,7 @@ type Row =
   | { type: "try"; key: string; label: string; sub: string };
 type Group = { value: string; items: Row[] };
 
-const INPUT_ID = "map-search";
+const INPUT_ID = "site-search";   // the one search bar: the Map page's or Discover's, never both
 const TRY = ["Moab", "faults", "landslides", "OFR-598"];
 
 // "/" focuses the search from anywhere, unless the key is being typed into a field. The input's ref
@@ -24,6 +24,9 @@ function onSlash(e: KeyboardEvent) {
   if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable='true']")) return;
   const input = document.getElementById(INPUT_ID);
   if (!input) return;
+  // Not from under an open dialog (Discover's item drawer): typing would filter the page behind it.
+  const modal = document.querySelector("[aria-modal='true']");
+  if (modal && !modal.contains(input)) return;
   e.preventDefault();
   input.focus();
 }
@@ -62,20 +65,19 @@ function BarFrame({ className, busy, error, showClear, onClear, children }: {
 const INPUT_CLASS = "min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none [&::-webkit-search-cancel-button]:hidden";
 
 /** The same bar without the suggestion list: Discover filters its results as the text changes. */
-export function LiveSearchBar({ value, onChange, onEnter, onClear, className = "" }: {
+export function LiveSearchBar({ value, onChange, onEnter, onClear, placeholder = PLACEHOLDER, className = "" }: {
   value: string;
   onChange: (text: string) => void;
   onEnter: () => void;
   onClear: () => void;
+  placeholder?: string;
   className?: string;
 }) {
-  const input = useRef<HTMLInputElement | null>(null);
   return (
     <BarFrame className={className} showClear={value !== ""}
-      onClear={() => { onClear(); input.current?.focus(); }}>
-      <input id={INPUT_ID} type="search" value={value} placeholder={PLACEHOLDER} aria-label={PLACEHOLDER}
-        title="Press / to search"
-        ref={(el) => { input.current = el; return bindSlash(el); }}
+      onClear={() => { onClear(); document.getElementById(INPUT_ID)?.focus(); }}>
+      <input id={INPUT_ID} type="search" value={value} placeholder={placeholder} aria-label={placeholder}
+        title="Press / to search" ref={bindSlash}
         onChange={(e) => onChange(e.target.value)}
         onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) onEnter(); }}
         className={INPUT_CLASS} />

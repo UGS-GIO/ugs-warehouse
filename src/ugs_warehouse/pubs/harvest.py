@@ -480,7 +480,7 @@ def _plate_kind(path) -> str:
         return "byte"
     if (not bands[0]["type"].startswith(("UInt", "Int"))
             or any(b.get("colorInterpretation") == "Palette" for b in bands)
-            or any("computedMin" not in b for b in bands)):   # all nodata: nothing to judge
+            or any("computedMin" not in b for b in bands[:3])):   # all nodata: nothing to judge
         return "grid"
     lo = min(b["computedMin"] for b in bands[:3])
     hi = max(b["computedMax"] for b in bands[:3])

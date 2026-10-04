@@ -229,9 +229,8 @@ export function DiscoveryView({
 
   const chips = activeChips(st, { collection: collectionLabel, category: categoryLabel });
   const activeFilters = chips.length;
-  // Nothing typed or filtered: the front door. The category index sits above the newest-first
-  // results, so "/" is this view and there is one search box with one behavior.
-  const idle = !q.trim() && activeFilters === 0 && !itemSelected;
+  // Nothing searched or filtered yet: the category list shows above the newest results.
+  const noSearch = !q.trim() && activeFilters === 0 && !itemSelected;
   const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], geometry: "all", area: null });
 
@@ -336,7 +335,7 @@ export function DiscoveryView({
         {/* CENTER — result cards (the star): gallery grid or list, paginated. */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-3 py-3">
           {/* Hidden until the whole catalog is in, so its counts don't climb as each index arrives. */}
-          {idle && !loading && tiles.length > 0 && (
+          {noSearch && !loading && tiles.length > 0 && (
             <section aria-label="Categories" className="mb-4 rounded-md border border-border bg-background px-4 py-3">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</h2>
               <div className="mt-1 grid grid-cols-1 gap-x-8 sm:grid-cols-2 xl:grid-cols-3">

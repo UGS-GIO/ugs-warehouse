@@ -37,7 +37,7 @@ const bump = (m: Map<string, FacetCount>, key: string, label: string) => {
 // toggle, so the rail reads like a table of contents rather than jumping around).
 export type Tile = { key: string; label: string; count: number };
 
-// The front-door category index: each item's one home category, in taxonomy order, with counts,
+// The category list Discover shows before a search: each item's one home category, in taxonomy order, with counts,
 // keeping only the categories that have items.
 export function categoryTiles(items: ItemRef[]): Tile[] {
   const counts = new Map<string, number>();

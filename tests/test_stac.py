@@ -560,7 +560,7 @@ def test_vector_manifests_by_sid_carries_each_tables_recorded_columns():
     from ugs_warehouse.pubs import vectors
     from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
 
-    cols = [{"name": "MapUnit", "type": "large_string"}]
+    cols = [{"name": "MapUnit", "type": "string"}]
     manifest = {"spatial": [], "tables": ["geo__DescriptionOfMapUnits"],
                 "layers": [{"label": "geo__DescriptionOfMapUnits", "spatial": False, "rows": 3,
                             "columns": cols}]}

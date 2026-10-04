@@ -124,10 +124,14 @@ def _spatial_meta(gdf, geo: dict | None, label: str, warnings: list[dict]) -> di
     from pyproj import Transformer
 
     primary = (geo or {}).get("columns", {}).get((geo or {}).get("primary_column"), {})
-    epsg = gdf.crs.to_epsg(min_confidence=90)
     meta = {"geometry_types": primary.get("geometry_types", []),
-            "proj_code": f"EPSG:{epsg}" if epsg else None, "proj_wkt2": gdf.crs.to_wkt(),
-            "bbox": None}
+            "proj_code": None, "proj_wkt2": None, "bbox": None}
+    try:
+        epsg = gdf.crs.to_epsg(min_confidence=90)
+        meta["proj_code"] = f"EPSG:{epsg}" if epsg else None
+        meta["proj_wkt2"] = gdf.crs.to_wkt()
+    except Exception as e:
+        warnings.append({"label": label, "warning": f"CRS not described: {_error(e)}"})
     bounds = [float(v) for v in gdf.total_bounds]
     if not all(math.isfinite(v) for v in bounds):
         warnings.append({"label": label, "warning": "every geometry is null or empty; bbox not computed"})
@@ -139,7 +143,11 @@ def _spatial_meta(gdf, geo: dict | None, label: str, warnings: list[dict]) -> di
         warnings.append({"label": label, "warning": f"bbox not computed: {_error(e)}"})
         return meta
     meta["bbox"] = [_floor6(west), _floor6(south), _ceil6(east), _ceil6(north)]
-    area = gdf.crs.area_of_use
+    try:
+        area = gdf.crs.area_of_use
+    except Exception as e:
+        warnings.append({"label": label, "warning": f"CRS area of use unavailable: {_error(e)}"})
+        return meta
     if area and (east < area.west or west > area.east or north < area.south or south > area.north):
         warnings.append({"label": label, "warning": f"bbox {meta['bbox']} is outside the CRS's "
                                                     f"area of use ({area.name}); the .prj may be wrong"})
@@ -208,16 +216,27 @@ def _extract_and_upload(
     return manifest
 
 
+def _clean_manifest(path: str) -> bool:
+    """True when the manifest at `path` reads as an object with no errors. An unreadable manifest
+    is reported and counts as not done, so the next extraction rewrites it."""
+    try:
+        doc = json.loads(gcs.get_bytes(path).decode())
+    except Exception as e:
+        print(f"  unreadable manifest {path}, re-extracting: {_error(e)}", file=sys.stderr)
+        return False
+    if not isinstance(doc, dict):
+        print(f"  manifest {path} is not an object, re-extracting", file=sys.stderr)
+        return False
+    return not doc.get("errors")
+
+
 def extracted_series() -> set[str]:
-    """Series ids whose layers are already on GCS and extracted cleanly, from one listing of the
-    vectors prefix. A series whose manifest lists errors is left out, so every run retries it
-    and reports it again instead of the failure going quiet after the first run."""
+    """Series ids extracted cleanly: a readable `_manifest.json` that lists no errors, from one
+    listing of the vectors prefix. A series with errors, or with layers but no manifest, is left
+    out, so every run retries it and reports it again instead of the failure going quiet."""
     pfx = VECTORS_PREFIX.rstrip("/") + "/"
-    paths = gcs.list_paths(pfx)
-    present = {p.removeprefix(pfx).split("/", 1)[0] for p in paths}
-    errored = {p.removeprefix(pfx).split("/", 1)[0] for p in paths
-               if p.endswith("/_manifest.json") and json.loads(gcs.get_bytes(p).decode()).get("errors")}
-    return present - errored
+    return {p.removeprefix(pfx).split("/", 1)[0] for p in gcs.list_paths(pfx)
+            if p.endswith("/_manifest.json") and _clean_manifest(p)}
 
 
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
@@ -234,11 +253,16 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         print(f"{series_id}: SKIP (unpublished placeholder)")
         return "skip"
 
-    # `existing` is one listing for a batch run; a single pub checks the same way on its own.
-    done = series_id in (existing if existing is not None else extracted_series())
-    if not force and not dry_run and done:
-        print(f"{series_id}: SKIP (vector parquets already exist on GCS)")
-        return "skip"
+    if not force and not dry_run:
+        # `existing` is one listing for a batch run; a single pub reads only its own manifest.
+        if existing is not None:
+            done = series_id in existing
+        else:
+            mpath = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
+            done = mpath in gcs.list_paths(f"{VECTORS_PREFIX}/{series_id}/") and _clean_manifest(mpath)
+        if done:
+            print(f"{series_id}: SKIP (already extracted cleanly)")
+            return "skip"
 
     _, gis_url = harvest.zip_urls(series_id)
 

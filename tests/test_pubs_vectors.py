@@ -291,6 +291,31 @@ def test_extracted_series_leaves_out_a_series_whose_manifest_lists_errors(monkey
     assert vectors.extracted_series() == {"M-1DM", "M-3DM"}
 
 
+def test_extracted_series_retries_a_corrupt_manifest_or_a_series_with_no_manifest(monkeypatch, capsys):
+    """One unreadable manifest is reported and re-extracted, not fatal to the batch; layers with
+    no manifest (its write failed) are not counted as done."""
+    pfx = vectors.VECTORS_PREFIX
+    bodies = {f"{pfx}/M-1DM/_manifest.json": b'{"spatial": ["a"]}',
+              f"{pfx}/M-2DM/_manifest.json": b"not json",
+              f"{pfx}/M-4DM/_manifest.json": b"null"}
+    monkeypatch.setattr(vectors.gcs, "list_paths",
+                        lambda prefix: [*bodies, f"{pfx}/M-3DM/a.parquet"])
+    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: bodies[p])
+
+    assert vectors.extracted_series() == {"M-1DM"}
+    err = capsys.readouterr().err
+    assert f"{pfx}/M-2DM/_manifest.json" in err and f"{pfx}/M-4DM/_manifest.json" in err
+
+
+def test_a_forced_run_never_reads_the_existing_manifests(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    _stub_bundle(monkeypatch, tmp_path, ([], []))
+    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: 1 / 0)
+    monkeypatch.setattr(vectors, "extracted_series", lambda: 1 / 0)
+
+    assert vectors.extract_one("M-110", force=True) == "skip"  # empty bundle, no manifest reads
+
+
 def _stub_bundle(monkeypatch, tmp_path, srcs_and_errors):
     """extract_one with the download and unzip stubbed out and _sources returning a fixed answer."""
     from ugs_warehouse.pubs import harvest

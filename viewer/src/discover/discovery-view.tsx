@@ -488,9 +488,10 @@ export function DiscoveryView({
 
         {/* CENTER — result cards (the star): gallery grid or list, paginated. */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-3 py-3">
-          {/* Hidden until the whole catalog is in, so its counts don't climb as each index arrives. */}
+          {/* Phones only: from md up the rail beside it already lists the categories, with counts.
+              Hidden until the whole catalog is in, so its counts don't climb as each index arrives. */}
           {noSearch && !loading && tiles.length > 0 && (
-            <section aria-label="Categories" className="mb-4 rounded-md border border-border bg-background px-4 py-3">
+            <section aria-label="Categories" className="mb-4 rounded-md border border-border bg-background px-4 py-3 md:hidden">
               <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</h2>
               <div className="mt-1 grid grid-cols-1 gap-x-8 sm:grid-cols-2 xl:grid-cols-3">
                 {tiles.map((t) => (

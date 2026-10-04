@@ -392,8 +392,10 @@ def run_all(force: bool = False, limit: int | None = None) -> int:
         srcs = srcs[:limit]
     print(f"[3d] {len(srcs)} 3D-eligible pubs (shard {i + 1}/{n})")
     rc = 0
+    # One listing up front instead of a HEAD request per pub.
+    existing = set() if force else set(gcs.list_paths(f"{THREED_PREFIX}/"))
     for sid, gdb_uri, mapx_uri in srcs:
-        if not force and gcs.exists(threed_object(sid, POLY_NAME)):
+        if threed_object(sid, POLY_NAME) in existing:
             print(f"[3d] {sid}: skip (exists)")
             continue
         try:

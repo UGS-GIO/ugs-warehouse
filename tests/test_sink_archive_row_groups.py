@@ -113,3 +113,26 @@ def test_copy_writes_geoparquet_1_1_with_a_bbox_covering(tmp_path) -> None:
                         f"WHERE path_in_schema = 'bbox, xmin'").fetchone()
     assert float(stats[0]) == -112.0
     assert con.execute(f"SELECT typeof(geom) FROM read_parquet('{out}') LIMIT 1").fetchone()[0].startswith("GEOMETRY")
+
+
+def test_is_current_accepts_only_the_format_write_makes(tmp_path) -> None:
+    """Skip-unchanged rebuilds an archive from an older writer: GeoParquet 1.0 has no covering."""
+    import duckdb
+
+    from ugs_warehouse.core import config, gcs
+    from ugs_warehouse.vector.topics import Topic
+
+    topic = Topic(layer="hazards_rockfall_current", schema="hazards")
+    assert not sink_archive.is_current(topic)  # nothing published yet
+
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial")
+    con.execute("CREATE TABLE v AS SELECT i AS feature_id, ST_Point(i, 40) AS geom FROM range(3) r(i)")
+    old, new = str(tmp_path / "old.parquet"), str(tmp_path / "new.parquet")
+    con.execute(f"COPY v TO '{old}' (FORMAT parquet)")  # DuckDB's own GeoParquet 1.0
+    sink_archive._copy_geoparquet(con, "v", new)
+
+    for path, current in ((old, False), (new, True)):
+        with open(path, "rb") as f:
+            gcs.put_bytes(f.read(), config.archive_path(topic.stem), content_type="application/x")
+        assert sink_archive.is_current(topic) is current, path

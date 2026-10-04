@@ -20,6 +20,7 @@ from ..core import config, gcs
 from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
+GEOPARQUET_VERSION = "1.1.0"
 
 # A row group is the smallest unit a range-reading client can fetch, so it floors both the viewer's
 # first page and what a clipped export has to download. DuckDB's default (122,880) put
@@ -69,8 +70,8 @@ def _geo_metadata(con: duckdb.DuckDBPyConnection, view: str) -> str:
                        f"WHERE geom IS NOT NULL").fetchall()
     types = sorted({_GEOMETRY_TYPES.get(t, t) + (" Z" if z else "") for t, z in rows if t})
     covering = {k: ["bbox", k] for k in ("xmin", "ymin", "xmax", "ymax")}
-    return json.dumps({"version": "1.1.0", "primary_column": "geom", "columns": {"geom": {
-        "encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})
+    return json.dumps({"version": GEOPARQUET_VERSION, "primary_column": "geom", "columns": {
+        "geom": {"encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})
 
 
 def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
@@ -108,6 +109,29 @@ def _upload(topic: Topic, local: str) -> gcs.FileMeta:
     gcs.upload(local, dated, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
     print(f"[{topic.fqn}] archive: {config.public_url(latest)} (+ dated {stamp})")
     return meta  # same bytes both times; the item cites the latest pointer
+
+
+def is_current(topic: Topic) -> bool:
+    """The published archive is in the format `write` makes today: GeoParquet 1.1 with a bbox
+    covering. Skip-unchanged checks this, so an archive from an older writer is rebuilt even when its
+    data has not changed. Reads only the Parquet footer."""
+    path = config.archive_path(topic.stem)
+    try:
+        footer = gcs.get_tail(path, 64 * 1024)  # holds the whole footer of any archive we write
+        size = int.from_bytes(footer[-8:-4], "little") + 8
+        if size > len(footer):
+            footer = gcs.get_tail(path, size)
+    except FileNotFoundError:
+        return False
+    footer = footer[-size:]
+    with tempfile.NamedTemporaryFile(suffix=".parquet") as f:
+        f.write(b"PAR1" + footer)  # DuckDB reads the metadata from the end of the file
+        f.flush()
+        row = duckdb.sql(f"SELECT decode(value) FROM parquet_kv_metadata('{f.name}') "
+                         f"WHERE decode(key) = 'geo'").fetchone()
+    geo = json.loads(row[0]) if row else {}
+    column = (geo.get("columns") or {}).get(geo.get("primary_column")) or {}
+    return geo.get("version") == GEOPARQUET_VERSION and "bbox" in (column.get("covering") or {})
 
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:

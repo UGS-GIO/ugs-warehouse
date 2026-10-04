@@ -30,7 +30,7 @@ def test_geometry_comes_from_the_primary_column(provider_def):
     p = GeoParquetProvider(provider_def)
     features = p.query()["features"]
     assert all(f["geometry"]["type"] == "Polygon" for f in features)
-    assert not any({"geom", "geometry"} & f["properties"].keys() for f in features)
+    assert not any({"geom", "geometry", "bbox"} & f["properties"].keys() for f in features)
     assert "geom" not in p.get_fields()
     assert p.get(2)["geometry"]["type"] == "Polygon"
 

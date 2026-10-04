@@ -2,8 +2,8 @@
 
 Reads FEATURES_COLLECTIONS (a gs:// or local path), writes the pygeoapi config and OpenAPI
 document, then execs gunicorn. Before the first refresh has written that file, it builds the list
-from the serving-topics index (FEATURES_INDEX). A layer whose file does not open is left out and logged,
-so one bad file never stops the service. For a local run, GCS_MIRROR=/data reads
+from the serving-topics index (FEATURES_INDEX). A layer whose file does not open is left out and
+logged, so one bad file never stops the service. For a local run, GCS_MIRROR=/data reads
 gs://<bucket>/<object> from /data/<bucket>/<object> instead.
 """
 from __future__ import annotations
@@ -88,6 +88,9 @@ def main() -> None:
     layers = _layers()
     with ThreadPoolExecutor(16) as ex:
         layers = [layer for layer, ok in zip(layers, ex.map(_opens, layers)) if ok]
+    if not layers:
+        # Exit so Cloud Run keeps the previous revision instead of serving an empty list.
+        sys.exit("[featureserv] no layer opened; not starting")
     config["resources"] = resources(layers)
     with open(CONFIG, "w") as f:
         yaml.safe_dump(config, f)

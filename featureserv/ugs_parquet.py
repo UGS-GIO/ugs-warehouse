@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 
+import pyarrow
 import pyarrow.compute as pc
 import pyarrow.dataset
 from pygeoapi.provider.base import ProviderQueryError
@@ -19,12 +20,14 @@ from pygeoapi.provider.parquet import ParquetProvider
 
 
 class _RenamedGeometry:
-    """The dataset with its primary geometry column read as `geometry`, and an extra filter."""
+    """The dataset with its primary geometry column read as `geometry`, `hidden` columns left out of
+    the features (a filter can still use them), and an extra filter."""
 
-    def __init__(self, ds: pyarrow.dataset.Dataset, column: str):
+    def __init__(self, ds: pyarrow.dataset.Dataset, column: str, hidden: set[str]):
         self.source, self._column, self.extra = ds, column, None
         i = ds.schema.get_field_index(column)
-        self.schema = ds.schema.set(i, ds.schema.field(i).with_name("geometry"))
+        schema = ds.schema.set(i, ds.schema.field(i).with_name("geometry"))
+        self.schema = pyarrow.schema([f for f in schema if f.name not in hidden], schema.metadata)
 
     def filtered(self, filter_):
         return self.extra if filter_ is None else filter_ & self.extra if self.extra is not None \
@@ -48,7 +51,9 @@ class GeoParquetProvider(ParquetProvider):
             self._covering = flat  # GeoParquet 1.0 archives carry the bbox as flat columns
         if column not in self.ds.schema.names:
             raise ProviderQueryError(f"{self.source} has no geometry column {column!r}")
-        self.ds = _RenamedGeometry(self.ds, column)
+        # The 1.1 covering column is a struct of the bbox, not an attribute of the feature.
+        hidden = {path[0] for path in (self._covering or {}).values() if len(path) == 2}
+        self.ds = _RenamedGeometry(self.ds, column, hidden)
         self._fields = {}
         self.get_fields()
 

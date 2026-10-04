@@ -48,7 +48,7 @@ export function Developers({ catalogUrl, groups }: { catalogUrl: string; groups:
 
   const endpoints: { label: string; value: string }[] = [
     { label: "STAC catalog", value: catalogUrl },
-    { label: "Every item, one file", value: catalogUrl.replace(/catalog\.json$/, "items.json") },
+    { label: "All items", value: catalogUrl.replace(/catalog\.json$/, "items.json") },
     { label: "Collection items (stac-geoparquet)", value: `${cdn}/warehouse/stac/<collection>/items.parquet` },
     { label: "GeoParquet", value: `${cdn}/warehouse/geoparquet/<topic>/<topic>.parquet` },
     { label: "PMTiles", value: `${cdn}/warehouse/pmtiles/<topic>/<topic>.pmtiles` },
@@ -64,7 +64,7 @@ export function Developers({ catalogUrl, groups }: { catalogUrl: string; groups:
     { name: "Classification", field: "classification:classes", url: "https://stac-extensions.github.io/classification/v2.0.0/schema.json" },
     { name: "File", field: "file:size, file:checksum", url: "https://stac-extensions.github.io/file/v2.1.0/schema.json" },
     { name: "Version", field: "version, deprecated", url: "https://stac-extensions.github.io/version/v1.2.0/schema.json" },
-    { name: "UGS custom", field: "ugs:* (dbt_schema, row_count, foreign_keys, series, renders, …)" },
+    { name: "UGS fields", field: "ugs:* (dbt_schema, row_count, foreign_keys, series, renders and others)" },
   ];
 
   return (
@@ -72,8 +72,9 @@ export function Developers({ catalogUrl, groups }: { catalogUrl: string; groups:
       <header className="space-y-2">
         <h2 className="text-2xl font-semibold tracking-tight text-foreground">For developers</h2>
         <p className="max-w-2xl text-muted-foreground">
-          The whole UGS warehouse is a static, CORS-open <strong className="font-semibold text-foreground">STAC</strong> catalog
-          on the CDN — GeoParquet, PMTiles, COG, and an OGC API Features service, all reachable without a key or a backend.
+          The catalog is static <strong className="font-semibold text-foreground">STAC</strong> on the CDN. You need no key, and
+          a browser can read it directly. The data is GeoParquet, PMTiles and COG. Vector layers also have an OGC API
+          Features service.
         </p>
       </header>
 

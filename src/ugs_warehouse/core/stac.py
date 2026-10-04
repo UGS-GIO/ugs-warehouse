@@ -636,8 +636,8 @@ SERIES_DESC = {
 # Serving-topic groups carry NO authored title or description. The group is the dbt mart schema,
 # so its only honest label is the schema name itself (prettified, the same dumb transform items
 # get). A curated name for `emp` or `gengis` would be invention — when upstream publishes one
-# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Pub series differ — SERIES_DESC is
-# verbatim UGS copy from geology.utah.gov/map-pub, inherited rather than written.
+# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Pub series
+# differ — SERIES_DESC is verbatim UGS copy from geology.utah.gov/map-pub, inherited, not written.
 
 # Nesting catalogs that ALSO publish a rollup items.json spanning every child collection. Keeps
 # one-URL consumers (the tiles service, the ops console) working across a split

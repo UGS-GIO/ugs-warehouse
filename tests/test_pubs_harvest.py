@@ -858,6 +858,7 @@ def test_an_unreadable_plate_fails_only_that_pub(monkeypatch, tmp_path):
     assert harvest.exit_code({"ok": 0, "expected": 0, "attention": 1}) == 0
 
 
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
 def test_plate_kind_and_saturation_treat_a_bandless_dataset_as_not_a_map(monkeypatch):
     from unittest.mock import MagicMock
 

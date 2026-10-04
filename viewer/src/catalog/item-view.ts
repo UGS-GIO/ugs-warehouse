@@ -48,6 +48,36 @@ export const scale = (it: ItemRef): string => String(propsOf(it)["ugs:scale"] ??
 export const author = (it: ItemRef): string => String(propsOf(it)["ugs:author"] ?? "");
 export const county = (it: ItemRef): string => String(propsOf(it)["ugs:county"] ?? "");
 
+// A free-text scale as its 1:N denominator, or null. Mirrors pubs/scale.py `denominator`, which writes
+// `ugs:scale_denominator`; this reads the raw text when an item has no number.
+export const parseScale = (raw: string): number | null => {
+  const s = raw.trim().toLowerCase().replace(/,/g, "");
+  if (!s) return null;
+  let m = /1\s*:\s*(\d[\d ]*\d|\d)/.exec(s);
+  if (m) return parseInt(m[1].replace(/ /g, ""), 10) || null;
+  m = /1\s*in(?:ch)?\s*=\s*([\d.]+)\s*feet/.exec(s);
+  if (m) return Math.trunc(parseFloat(m[1]) * 12) || null;
+  m = /1\s*in(?:ch)?\s*=\s*([\d.]+)\s*mile/.exec(s);
+  if (m) return Math.trunc(parseFloat(m[1]) * 63360) || null;
+  return null;
+};
+export const scaleDenominator = (it: ItemRef): number | null => {
+  const d = propsOf(it)["ugs:scale_denominator"];
+  return typeof d === "number" && d > 0 ? d : parseScale(scale(it));
+};
+
+// "Trimble et al." from "Larry M. Trimble; Hellmut H. Doelling". Handles "Sanchez, J.D." and
+// "Thomas C. Chidsey, Jr".
+export const firstAuthor = (it: ItemRef): string => {
+  const people = author(it).split(";").map((s) => s.trim()).filter(Boolean);
+  if (!people.length) return "";
+  const suffix = /^(jr|sr|ii|iii)\.?$/i;
+  const [head, tail = ""] = people[0].split(",").map((s) => s.trim());
+  const words = head.split(/\s+/).filter((w) => !suffix.test(w));
+  const name = tail && !suffix.test(tail) ? head : words.at(-1) ?? head;
+  return name.replace(/[.,]+$/, "") + (people.length > 1 ? " et al." : "");
+};
+
 // ISO date (YYYY-MM-DD), or "" when absent/non-string. Lexicographic on ISO == chronological.
 export const dateOf = (it: ItemRef): string =>
   (typeof propsOf(it).datetime === "string" ? (propsOf(it).datetime as string).slice(0, 10) : "");
@@ -90,7 +120,7 @@ export const recordCountLabel = (it: ItemRef): string | undefined => {
 // ---- coarse content kind (a badge/label) — mirrors ugs-data-catalog datasetKind over StacDoc ----
 export type ItemKind = "vector" | "raster" | "publication" | "other";
 const PUBLICATION_ROOTS = new Set(["ugs-publications", "ugs-external"]);
-const isPublication = (it: ItemRef): boolean =>
+export const isPublication = (it: ItemRef): boolean =>
   PUBLICATION_ROOTS.has(collectionRoot(it.collId))
   || propsOf(it)["ugs:pub_type"] != null
   || propsOf(it)["ugs:series"] != null;

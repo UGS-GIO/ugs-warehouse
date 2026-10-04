@@ -143,6 +143,8 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   coverageDefault?: boolean;
 }) {
   const mapRef = useRef<MapRef>(null);
+  // Register for outside camera moves on mount: load waits for every tile, long after the map can move.
+  useEffect(() => setMapTarget(mapRef), []);
   const pin = usePin();
   const shownPin = showPin ? pin : null;
   const [mapLoaded, setMapLoaded] = useState(false);
@@ -179,6 +181,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const highlight = validBbox(highlightBbox);
   // Report the viewport bbox on load + after every move: for Discover's "Search this area", and
   // for the map view's "Save basemap" panel, which downloads the quads in view.
+  const boundsSent = useRef(false);
   const reportBounds = () => {
     const m = mapRef.current?.getMap();
     if (!m || !onBoundsChange) return;
@@ -351,10 +354,11 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       onMouseMove={onHover}
       onLoad={() => {
         setMapLoaded(true); reportBounds();
-        setMapTarget(mapRef);
         const focus = takeFocus();
         if (focus && mapRef.current) fitTo(mapRef.current, focus);
       }}
+      // Bounds from the first frame, so "Search this area" works before every tile has loaded.
+      onRender={() => { if (!boundsSent.current) { boundsSent.current = true; reportBounds(); } }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
       onRotate={trackNorth}
       onPitch={trackNorth}

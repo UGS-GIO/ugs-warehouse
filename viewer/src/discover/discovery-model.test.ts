@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ItemRef } from "@/catalog/browse";
 import {
-  activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
-  effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery,
-  sortItems, typeOf,
+  activeChips, activeGroups, applyFacets, bboxIntersects, CLEAR_ALL, DEFAULT_DISCOVERY, type DiscoveryState,
+  discoveryPatch, effectiveSort, extractFacets, filterByViewport, filterResults, GEOM_HAS, GEOM_NONE, hasGeometry,
+  byOverlap, drawable, nearestStep, overlapScore, placeArea, unionOf, parseDiscovery, reliefs, withSelected, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
 } from "./discovery-model";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
@@ -189,7 +189,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(s).toEqual({
       q: "faults", collections: ["a", "b"], categories: ["hazards"], types: ["Report"],
       formats: ["PDF", "COG"], geometry: "has", sort: "newest", layout: "list",
-      density: "compact", area: [-114, 37, -109, 42],
+      density: "compact", area: [-114, 37, -109, 42], place: "", years: null, scales: null,
     });
     expect(parseDiscovery({ area: "999,999,0,0" }).area).toBeNull();
   });
@@ -198,7 +198,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(discoveryPatch(DEFAULT_DISCOVERY)).toEqual({
       q: undefined, collections: undefined, category: undefined, types: undefined,
       formats: undefined, geometry: undefined, sort: undefined, layout: undefined,
-      density: undefined, area: undefined,
+      density: undefined, area: undefined, place: undefined, years: undefined, scale: undefined,
     });
     const patched = discoveryPatch({ ...DEFAULT_DISCOVERY, q: "x", categories: ["hazards"], area: [-114, 37, -109, 42], sort: "newest" });
     expect(patched.q).toBe("x");
@@ -251,5 +251,143 @@ describe("effectiveSort", () => {
   it("keeps a sort the user picked", () => {
     expect(at("", "title")).toBe("title");
     expect(at("salt lake", "oldest")).toBe("oldest");
+  });
+});
+
+// Publications carry `ugs:series_id`, which is what makes their datetime a publication date.
+const pub = (id: string, props: Record<string, unknown>, bbox?: number[]) =>
+  item("ugs-publications/M", id, { "ugs:series_id": id, "ugs:pub_type": "Map", title: id, ...props }, bbox);
+const pubs: ItemRef[] = [
+  pub("M-1", { datetime: "1955-01-01T00:00:00Z", "ugs:scale": "1:24,000" }, [-110, 38, -109.9, 38.1]),
+  pub("M-2", { datetime: "1993-01-01T00:00:00Z", "ugs:scale": "1:100,000" }, [-110.5, 38, -109, 39]),
+  pub("M-3", { datetime: "2002-01-01T00:00:00Z", "ugs:scale_denominator": 24000 }),
+  pub("M-4", { "ugs:scale": "1:250,000" }),                       // undated
+  item("ugs-serving-topics/hazards", "hazards_qfaults", { "ugs:topic": "hazards", datetime: "2026-01-01T00:00:00Z" }),
+];
+
+describe("year + scale ranges", () => {
+  it("round-trip through the URL, open ends included", () => {
+    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, years: [1990, null], scales: [24000, 100000] };
+    const patched = discoveryPatch(s);
+    expect(patched.years).toBe("1990,");
+    expect(patched.scale).toBe("24000,100000");
+    expect(parseDiscovery(patched as Record<string, unknown>)).toEqual(s);
+    expect(parseDiscovery({ years: "2010,1990" }).years).toEqual([1990, 2010]);
+    expect(parseDiscovery({ years: "," }).years).toBeNull();
+    expect(parseDiscovery({ years: "abc,1990" }).years).toBeNull();
+    expect(parseDiscovery({ scale: "0," }).scales).toBeNull();
+    expect(parseDiscovery({ scale: "-5,10" }).scales).toBeNull();
+    expect(parseDiscovery({ years: "1990.5," }).years).toBeNull();
+  });
+
+  it("keep only items with a value in range; a layer has no publication year", () => {
+    const ids = (s: Partial<DiscoveryState>) => filterResults(pubs, { ...DEFAULT_DISCOVERY, ...s }).map((it) => it.data?.id);
+    expect(ids({ years: [1990, 2010] })).toEqual(["M-2", "M-3"]);
+    expect(ids({ years: [null, 1960] })).toEqual(["M-1"]);
+    expect(ids({ scales: [24000, 24000] })).toEqual(["M-1", "M-3"]);
+    expect(ids({ scales: [50000, null] })).toEqual(["M-2", "M-4"]);
+    // The filter steps like the slider: 1:20,000 sits at the 1:24,000 step, 1:63,360 at 1:62,500.
+    const off = [pub("M-5", { "ugs:scale": "1:20,000" }), pub("M-6", { "ugs:scale": "1 inch = 1 mile" })];
+    const pick = (r: [number, number]) => filterResults(off, { ...DEFAULT_DISCOVERY, scales: r }).map((it) => it.data?.id);
+    expect(pick([24000, 24000])).toEqual(["M-5"]);
+    expect(pick([62500, 62500])).toEqual(["M-6"]);
+  });
+
+  it("bin years and scales for the histograms", () => {
+    expect(yearSpan(pubs)).toEqual([1955, 2002]);
+    const bins = yearBins(pubs, [1950, 2004], 5);
+    expect(bins[0]).toEqual({ lo: 1950, hi: 1954, n: 0 });
+    expect(bins[1]).toEqual({ lo: 1955, hi: 1959, n: 1 });
+    expect(bins.at(-1)).toEqual({ lo: 2000, hi: 2004, n: 1 });
+    const sb = scaleBins(pubs);
+    expect(sb[SCALE_STEPS.indexOf(24000)].n).toBe(2);
+    expect(sb[SCALE_STEPS.indexOf(250000)].n).toBe(1);
+    expect(nearestStep(30000)).toBe(SCALE_STEPS.indexOf(31680));
+    expect(nearestStep(42240)).toBe(SCALE_STEPS.indexOf(50000));
+  });
+
+  it("chip labels name open ends plainly", () => {
+    const labels = activeChips({ ...DEFAULT_DISCOVERY, years: [1990, null], scales: [null, 100000] },
+      { collection: (k) => k, category: (k) => k }).map((c) => c.label);
+    expect(labels).toEqual(["1990 or later", "1:100,000 or more detailed"]);
+  });
+});
+
+describe("reliefs (what each filter hides)", () => {
+  it("counts what dropping each active filter brings back, most first", () => {
+    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, years: [1990, 2010], scales: [24000, 24000] };
+    const shown = filterResults(pubs, s).length;              // M-3
+    expect(shown).toBe(1);
+    expect(activeGroups(s)).toEqual(["years", "scales"]);
+    expect(reliefs(pubs, s, shown).map((r) => [r.group, r.gain])).toEqual([["years", 1], ["scales", 1]]);
+  });
+  it("CLEAR_ALL drops every filter", () => {
+    const s = { ...DEFAULT_DISCOVERY, categories: ["hazards"], area: [-1, 0, 1, 2] as DiscoveryState["area"],
+      place: "Moab", years: [1990, null] as DiscoveryState["years"], q: "faults" };
+    const cleared = { ...s, ...CLEAR_ALL };
+    expect(activeGroups(cleared)).toEqual([]);
+    expect(cleared.q).toBe("faults");
+  });
+});
+
+describe("withSelected", () => {
+  it("keeps a selected value the search left empty, at 0, first", () => {
+    const f = [{ key: "hazards", label: "Hazards", n: 3 }];
+    expect(withSelected(f, ["energy-minerals", "hazards"], (k) => k.toUpperCase())).toEqual([
+      { key: "energy-minerals", label: "ENERGY-MINERALS", n: 0 }, { key: "hazards", label: "Hazards", n: 3 },
+    ]);
+    expect(withSelected(f, ["hazards"], String)).toBe(f);
+  });
+});
+
+describe("searching an area", () => {
+  const moab: [number, number, number, number] = [-109.58, 38.54, -109.52, 38.60];
+  it("grows a town to about a 30' x 60' sheet around it", () => {
+    const [w, s, e, n] = placeArea(moab);
+    expect(e - w).toBeCloseTo(1);
+    expect(n - s).toBeCloseTo(0.5);
+    expect((w + e) / 2).toBeCloseTo(-109.55);
+    expect(placeArea([-112, 37, -110, 39])).toEqual([-112, 37, -110, 39]);   // already big enough
+  });
+  it("ranks local maps first and statewide ones last", () => {
+    const area = placeArea(moab);
+    const quad = overlapScore([-109.627, 38.499, -109.498, 38.625], area);
+    const sheet = overlapScore([-110.259, 38.479, -108.94, 39.011], area);
+    const region = overlapScore([-111.5, 37.5, -108.9, 40.5], area);   // a layer over eastern Utah
+    const state = overlapScore([-114.05, 37.0, -109.04, 42.0], area);
+    expect(quad).toBeGreaterThan(sheet);     // all inside the area beats mostly inside
+    expect(sheet).toBeGreaterThan(region);
+    expect(region).toBeGreaterThan(state);
+    expect(overlapScore([-111.9, 40.7, -111.8, 40.8], area)).toBe(0);
+    expect(overlapScore([-109.55, 38.57, -109.55, 38.57], area)).toBeGreaterThan(0.5);
+    const order = byOverlap([pub("S", {}, [-114.05, 37.0, -109.04, 42.0]), pub("Q", {}, [-109.627, 38.499, -109.498, 38.625])], area);
+    expect(order.map((it) => it.data?.id)).toEqual(["Q", "S"]);
+  });
+  it("keeps 'Best match' as the default order while an area is set", () => {
+    expect(effectiveSort({ ...DEFAULT_DISCOVERY, area: moab })).toBe("relevance");
+    expect(effectiveSort(DEFAULT_DISCOVERY)).toBe("newest");
+  });
+});
+
+describe("area edge cases and the map", () => {
+  it("grows a point (an address) to the minimum area, centred on it", () => {
+    expect(placeArea([-109.55, 38.57, -109.55, 38.57])).toEqual([-110.05, 38.32, -109.05, 38.82]);
+  });
+  it("rejects a zero-size or inverted area from the URL, and grows an old place link", () => {
+    expect(parseDiscovery({ area: "-110,38,-110,39" }).area).toBeNull();
+    expect(parseDiscovery({ area: "-109,38,-110,39" }).area).toBeNull();
+    const s = parseDiscovery({ area: "-109.58,38.54,-109.52,38.60", place: "Moab" });
+    expect(s.area![2] - s.area![0]).toBeCloseTo(1);
+    expect(parseDiscovery(discoveryPatch(s) as Record<string, unknown>)).toEqual(s);
+  });
+  it("keeps statewide items in an area's results, but doesn't draw them", () => {
+    const area: [number, number, number, number] = [-110.05, 38.32, -109.05, 38.82];
+    const at = [pub("Q", {}, [-109.627, 38.499, -109.498, 38.625]), pub("S", {}, [-114.05, 37.0, -109.04, 42.0])];
+    expect(filterResults(at, { ...DEFAULT_DISCOVERY, area, place: "Moab" }).map((it) => it.data?.id)).toEqual(["Q", "S"]);
+    const fps = at.map((it) => ({ id: it.data!.id, bbox: it.data!.bbox! }));
+    expect(drawable(fps, area).map((f) => f.id)).toEqual(["Q"]);
+    expect(drawable(fps, null).map((f) => f.id)).toEqual(["Q"]);
+    expect(unionOf(fps)).toEqual([-114.05, 37.0, -109.04, 42.0]);
+    expect(unionOf([])).toBeNull();
   });
 });

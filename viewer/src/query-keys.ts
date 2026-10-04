@@ -48,6 +48,7 @@ export const qk = {
   // Search
   articleSearch: (url: string, q: string) => ["article-search", url, q] as const,
   pubFts: (q: string) => ["pub-fts", q] as const,
+  placeSuggest: (text: string) => ["place-suggest", text] as const,
 
   // Review deploy
   comments,

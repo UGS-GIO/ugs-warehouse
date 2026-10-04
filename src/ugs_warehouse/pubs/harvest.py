@@ -458,71 +458,49 @@ def ensure_rgb(tif):
     return tif
 
 
+def _gdalinfo(path, *flags) -> dict:
+    """gdalinfo -json, which (unlike the rasterio wheel) reads WEBP-compressed COGs. stderr is captured
+    because the attempt's handler logs a failure's `e.stderr`."""
+    out = subprocess.run(["gdalinfo", "-json", "-nomd", "-noct", *flags, str(path)],
+                         check=True, capture_output=True, text=True).stdout
+    return json.loads(out)
+
+
 @functools.lru_cache(maxsize=32)
 def _plate_kind(path) -> str:
-    """How a plate raster reaches 8 bits, judged from a decimated nearest-neighbour read (nodata masked):
-    "byte" (already 8-bit), "color" (3+ bands whose color values fit 0-255 in a wider type, e.g. a UInt16
-    plate; the warp casts it), "lineart" (a 1-band 0/1 line scan, 0 = paper and 1 = ink), or "grid"
-    (anything else: a data grid such as a DEM or salinity surface, real 16-bit imagery, or a non-8-bit
-    palette). "color" trusts the sample: a real 16-bit plate whose sample stays under 256 would be
-    clipped by the cast, a risk accepted because such a plate's values are then almost surely 8-bit.
+    """How a plate raster reaches 8 bits, judged from GDAL's exact per-band min/max (nodata excluded):
+    "byte" (already 8-bit), "color" (3+ integer bands whose values fit 0-255, e.g. a UInt16 plate; the
+    warp casts it), "lineart" (a 1-band 0/1 line scan, 0 = paper and 1 = ink), or "grid" (anything else:
+    a data grid such as a DEM or salinity surface, real 16-bit imagery, or a non-8-bit palette).
     Cached: plate selection and the attempt probe the same path."""
-    import numpy as np
-    import rasterio
-    from rasterio.enums import ColorInterp, Resampling
-    with rasterio.open(path) as ds:
-        if ds.count == 0:                 # a container (e.g. subdatasets) with no raster bands
-            return "grid"
-        if all(str(t) == "uint8" for t in ds.dtypes):
-            return "byte"
-        if (not np.issubdtype(np.dtype(ds.dtypes[0]), np.integer)
-                or ColorInterp.palette in ds.colorinterp):
-            return "grid"
-        count = ds.count
-        a = ds.read(out_shape=(count, min(ds.height, 512), min(ds.width, 512)),
-                    resampling=Resampling.nearest, masked=True)
-    if count >= 3:
-        color = a[:3].compressed()
-        return "color" if color.size and color.min() >= 0 and color.max() <= 255 else "grid"
-    vals = a[0].compressed()
-    return "lineart" if count == 1 and vals.size and set(np.unique(vals).tolist()) <= {0, 1} else "grid"
+    bands = _gdalinfo(path, "-mm").get("bands") or []
+    if not bands:                         # a container (e.g. subdatasets) with no raster bands
+        return "grid"
+    if all(b["type"] == "Byte" for b in bands):
+        return "byte"
+    if (not bands[0]["type"].startswith(("UInt", "Int"))
+            or any(b.get("colorInterpretation") == "Palette" for b in bands)
+            or any("computedMin" not in b for b in bands)):   # all nodata: nothing to judge
+        return "grid"
+    lo = min(b["computedMin"] for b in bands[:3])
+    hi = max(b["computedMax"] for b in bands[:3])
+    if len(bands) >= 3:
+        return "color" if lo >= 0 and hi <= 255 else "grid"
+    return "lineart" if len(bands) == 1 and lo >= 0 and hi <= 1 else "grid"
 
 
 def _lineart_to_byte(path, work) -> str:
     """Render a 0/1 line scan as 8-bit gray + alpha: 0 -> white paper, 1 -> black ink, nodata ->
-    transparent (the same mapping as the 2-entry color table these plates ship with elsewhere). Raises
-    on any other value, since the decimated `_plate_kind` read can miss a rare one."""
-    import numpy as np
-    import rasterio
-    from rasterio.enums import ColorInterp
+    transparent (the same mapping as the 2-entry color table these plates ship with elsewhere)."""
     out = os.path.join(work, "plate.lineart.tif")
-    with rasterio.open(path) as src:
-        gcps, gcp_crs = src.gcps
-        georef = {"crs": gcp_crs} if gcps else {"crs": src.crs, "transform": src.transform}
-        prof = {"driver": "GTiff", "width": src.width, "height": src.height, "count": 2,
-                "dtype": "uint8", "tiled": True, "blockxsize": 512, "blockysize": 512,
-                "compress": "deflate", "bigtiff": "IF_SAFER", **georef}
-        with rasterio.open(out, "w", **prof) as dst:
-            if gcps:                      # a GCP-georeferenced scan keeps its GCPs for the warp
-                dst.gcps = (gcps, gcp_crs)
-            dst.colorinterp = (ColorInterp.gray, ColorInterp.alpha)
-            for _, win in dst.block_windows(1):
-                v = src.read(1, window=win, masked=True)
-                nodata = np.ma.getmaskarray(v)
-                raw = v.data
-                if ((raw != 0) & (raw != 1) & ~nodata).any():
-                    raise RuntimeError(f"{os.path.basename(str(path))}: line scan holds values other than 0/1")
-                dst.write(np.where(raw == 1, 0, 255).astype("uint8"), 1, window=win)
-                dst.write(np.where(nodata, 0, 255).astype("uint8"), 2, window=win)
+    run(["gdal_translate", "-ot", "Byte", "-scale_1", "0", "1", "255", "0", "-b", "1", "-b", "mask",
+         "-colorinterp", "gray,alpha", "-a_nodata", "none", "-co", "TILED=YES",
+         "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER", str(path), out])
     return out
 
 
 def _band_types(path) -> list[str]:
-    """Band data types via the GDAL CLI, which (unlike the rasterio wheel) reads WEBP-compressed COGs.
-    stderr is captured because the attempt's handler logs a failure's `e.stderr`."""
-    out = subprocess.run(["gdalinfo", "-json", "-nomd", "-noct", path],
-                         check=True, capture_output=True, text=True).stdout
-    return [b["type"] for b in json.loads(out).get("bands") or []]
+    return [b["type"] for b in _gdalinfo(path).get("bands") or []]
 
 
 def _source_saturation(path) -> float:

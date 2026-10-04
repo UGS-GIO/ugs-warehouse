@@ -712,17 +712,17 @@ def test_lineart_to_byte_renders_paper_white_ink_black_nodata_clear(tmp_path):
     with rasterio.open(out) as ds:
         assert ds.dtypes == ("uint8", "uint8")
         assert ds.crs.to_epsg() == 26712
-        assert ds.read(1).tolist() == [[255, 0, 255]] and ds.read(2).tolist() == [[255, 255, 0]]
+        # The nodata pixel's gray is never drawn: its alpha is 0.
+        assert ds.read(1).tolist()[0][:2] == [255, 0] and ds.read(2).tolist() == [[255, 255, 0]]
 
 
 @pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
-def test_lineart_to_byte_raises_on_a_value_the_sample_missed(tmp_path):
+def test_plate_kind_reads_exact_min_max_so_a_rare_value_is_not_line_art(tmp_path):
     import numpy as np
 
     from ugs_warehouse.pubs import harvest
     _write_nodata_tif(str(tmp_path / "line.tif"), np.array([[[0, 1, 2]]], dtype="int16"), "int16", 255)
-    with pytest.raises(RuntimeError, match="other than 0/1"):
-        harvest._lineart_to_byte(str(tmp_path / "line.tif"), str(tmp_path))
+    assert harvest._plate_kind(str(tmp_path / "line.tif")) == "grid"
 
 
 @pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
@@ -862,8 +862,9 @@ def test_plate_kind_and_saturation_treat_a_bandless_dataset_as_not_a_map(monkeyp
     from unittest.mock import MagicMock
 
     from ugs_warehouse.pubs import harvest
+    monkeypatch.setattr(harvest, "_gdalinfo", lambda p, *f: {"bands": []})
+    assert harvest._plate_kind("empty.tif") == "grid"
     ds = MagicMock(count=0, dtypes=(), colorinterp=())
     cm = MagicMock(__enter__=MagicMock(return_value=ds), __exit__=MagicMock(return_value=False))
     monkeypatch.setattr("rasterio.open", lambda p: cm)
-    assert harvest._plate_kind("empty.tif") == "grid"
     assert harvest._source_saturation("empty.tif") == -1.0

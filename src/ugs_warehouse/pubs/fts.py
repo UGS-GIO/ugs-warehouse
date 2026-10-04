@@ -36,7 +36,7 @@ def _fields(p: dict) -> tuple[str, str, str, str]:
 
 
 def _sid(path: str) -> str:
-    return path.rsplit("/", 1)[-1][:-len(".txt")].upper()
+    return path.rsplit("/", 1)[-1].removesuffix(".txt").upper()
 
 
 def fingerprint(etags: dict[str, str], meta: dict[str, dict]) -> str:

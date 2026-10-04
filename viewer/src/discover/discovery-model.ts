@@ -4,7 +4,7 @@
 // The view component wires these to MiniSearch (the shared search-index) and the live map; neither
 // belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
-import { CATEGORIES, categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, hasGeometry, propsOf,
+import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, hasGeometry, propsOf,
   scaleDenominator, title, typeOf, year } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { validBbox } from "@/map/map-model";
@@ -35,21 +35,6 @@ const bump = (m: Map<string, FacetCount>, key: string, label: string) => {
 
 // Counts for each facet group over the full loaded set (stable — counts don't shift as filters
 // toggle, so the rail reads like a table of contents rather than jumping around).
-export type Tile = { key: string; label: string; count: number };
-
-// The category list Discover shows before a search: each item's one home category, in taxonomy order, with counts,
-// keeping only the categories that have items.
-export function categoryTiles(items: ItemRef[]): Tile[] {
-  const counts = new Map<string, number>();
-  for (const it of items) {
-    const { key } = categorize(it);
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return CATEGORIES
-    .map((c) => ({ key: c.key, label: c.label, count: counts.get(c.key) ?? 0 }))
-    .filter((t) => t.count > 0);
-}
-
 export function extractFacets(items: ItemRef[]): Facets {
   const colls = new Map<string, FacetCount>();
   const cats = new Map<string, FacetCount>();

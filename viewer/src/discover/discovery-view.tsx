@@ -11,7 +11,7 @@ import { qk } from "@/query-keys";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, CLEAR_ALL, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  extractFacets, type FacetCount, GEOM_HAS, withSelected, type FacetSelection, filterResults, nearestStep, parseDiscovery,
+  byOverlap, drawable, extractFacets, type FacetCount, GEOM_HAS, placeArea, unionOf, withSelected, type FacetSelection, filterResults, nearestStep, parseDiscovery,
   publishedYear, ranksByWords, reliefs, SCALE_STEPS, scaleBins, scalesLabel, sortItems, type SortKey, SORTS, yearBins,
   yearsLabel, yearSpan,
 } from "./discovery-model";
@@ -28,7 +28,7 @@ import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { catalogIndex, type Hit, idMatch, searchCatalog } from "./search-index";
-import { type Bounds, locate, suggest } from "@/map/place-locator";
+import { locate, suggest } from "@/map/place-locator";
 import { flyTo } from "@/map/camera";
 import { LiveSearchBar } from "@/shell/map-search";
 import type { StacDoc } from "@/stac";
@@ -91,7 +91,7 @@ export function DiscoveryView({
   const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
   const areaK = area ? area.join(",") : "";
   const yearsK = st.years ? st.years.join(",") : "", scalesK = st.scales ? st.scales.join(",") : "";
-  const filterK = [collsK, catsK, typesK, formatsK, geometry, areaK, st.place, st.broad, yearsK, scalesK].join("~");
+  const filterK = [collsK, catsK, typesK, formatsK, geometry, areaK, yearsK, scalesK].join("~");
 
   // Merge a partial state change into the URL. push (default) for discrete filter changes so Back
   // undoes them one at a time; replace for typing + view prefs (layout/density) so they don't pile up.
@@ -213,12 +213,14 @@ export function DiscoveryView({
   // stay stable as you toggle facets — the rail reads as a table of contents, not a jumping wall.
   const facets = useMemo(() => extractFacets(queried), [queried]);
 
-  const results = useMemo(() => sortItems(filterResults(queried, st), sort),
-    [queried, filterK, sort]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Near a place, the bigger footprints that only touch it (statewide maps) wait behind a toggle.
-  const broadN = useMemo(() => (st.place && !st.broad
-    ? filterResults(queried, { ...st, broad: true }).length - results.length : 0),
-    [queried, results, filterK]); // eslint-disable-line react-hooks/exhaustive-deps
+  const results = useMemo(() => {
+    const kept = filterResults(queried, st);
+    // An area and nothing typed: "Best match" is how well each footprint fits the area.
+    return sort === "relevance" && area && !ranksByWords(query)
+      ? byOverlap(sortItems(kept, "newest"), area)   // stable sort: ties stay newest first
+      : sortItems(kept, sort);
+  },
+    [queried, filterK, sort, q]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const searching = q.trim().length >= MIN_Q || !isEmptyQuery(query);
   const hidden = useMemo(() => (searching && queried.length > results.length
@@ -258,15 +260,14 @@ export function DiscoveryView({
     if (!placeHit || picking) return;
     setPicking(true);
     try {
-      const b: Bounds = await locate(placeHit);
-      // A point (an address) has no extent; give it a small one so it can meet a footprint.
-      const box: Bounds = b[0] === b[2] && b[1] === b[3] ? [b[0] - 0.02, b[1] - 0.02, b[2] + 0.02, b[3] + 0.02] : b;
+      const box = placeArea(await locate(placeHit));
       setPlaceError(null);
       clearTimeout(typeTimer.current);
       sentQ.current = "";
       setText("");
       patch({ area: box, place: placeHit.text, q: "" });
-      if (isWide && showMap) flyTo(box);   // only a mounted map; a queued fit would fire on /map later
+      // Only a mounted map; a fit queued with none would fire on /map later.
+      if (isWide && showMap) flyTo(box);
     } catch (e) {
       setPlaceError(`Couldn't find ${placeHit.text}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -283,6 +284,18 @@ export function DiscoveryView({
   const footprints = useMemo<Footprint[]>(() => results
     .map((it) => ({ href: it.href, id: idOf(it.href), title: discoveryTitle(it), bbox: it.data?.bbox }))
     .filter((f): f is Footprint => Array.isArray(f.bbox) && f.bbox.length >= 4), [results]);
+  const drawn = useMemo(() => drawable(footprints, area), [footprints, areaK]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A settled text search moves the map to what it found, once per query.
+  const fittedQ = useRef("");
+  useEffect(() => {
+    const t = q.trim();
+    if (!isWide || !showMap || area || t.length < MIN_Q || t === fittedQ.current) return;
+    const u = unionOf(drawn);
+    if (!u) return;
+    fittedQ.current = t;
+    flyTo(u);
+  }, [q, drawn]); // eslint-disable-line react-hooks/exhaustive-deps
   const hoverBbox = hoverHref ? bboxByHref.get(hoverHref) : undefined;
 
   // Hover sync. Track WHERE the hover came from: only a MAP-originated hover scrolls the card list —
@@ -403,11 +416,12 @@ export function DiscoveryView({
         </Dialog.Trigger>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
+          {footprints.length > drawn.length && ` · ${(footprints.length - drawn.length).toLocaleString()} too large to draw`}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <label className="flex items-center gap-1 text-xs text-muted-foreground">
             Sort
-            <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={ranksByWords(query) ? SORT_ITEMS : SORT_ITEMS_WITHOUT_MATCH} className="text-xs" />
+            <UiSelect value={sort} onValueChange={(v) => patch({ sort: v as SortKey })} items={ranksByWords(query) || area ? SORT_ITEMS : SORT_ITEMS_WITHOUT_MATCH} className="text-xs" />
           </label>
           <UiSegmented value={density} onValueChange={(v) => patch({ density: v }, true)} items={DENSITIES} className="text-xs" />
           <UiSegmented value={layout} onValueChange={(v) => patch({ layout: v }, true)} items={LAYOUTS} className="text-xs" />
@@ -438,12 +452,6 @@ export function DiscoveryView({
           <button type="button" onClick={resetAll} className="px-1 text-xs text-muted-foreground hover:text-foreground hover:underline">
             Clear all
           </button>
-          {(broadN > 0 || st.broad) && (
-            <button type="button" onClick={() => patch({ broad: !st.broad })}
-              className="ml-auto px-1 text-xs text-primary hover:underline">
-              {st.broad ? "Hide statewide and regional" : `+${broadN.toLocaleString()} statewide and regional, show`}
-            </button>
-          )}
         </div>
       )}
 
@@ -452,6 +460,16 @@ export function DiscoveryView({
           bare checkbox beside the item count — which read as that count's label. */}
       {q.trim().length >= MIN_Q && (
         <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5 text-xs">
+          {placeHit && (
+            <button type="button" onClick={pickPlace} disabled={picking}
+              title={`Show what's mapped in and around ${placeHit.text}`}
+              className="mr-1 inline-flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2.5 py-0.5 font-medium text-primary hover:bg-primary/20 disabled:opacity-50">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" />
+              </svg>
+              {picking ? `Finding ${placeHit.text}…` : `Near ${placeHit.text}`}
+            </button>
+          )}
           <span className="text-muted-foreground">Showing</span>
           <ScopeChip on={scope === "all"} onClick={() => setScope("all")}>Everything</ScopeChip>
           <ScopeChip on={scope === "items"} onClick={() => setScope("items")}>
@@ -485,16 +503,6 @@ export function DiscoveryView({
               : pubFts.isLoading ? "Publication text · searching…"
                 : pubText ? "Publication text · loading engine…" : "Search publication text (~35MB)"}
           </ScopeChip>
-          {placeHit && (
-            <ScopeChip on={false} onClick={pickPlace} title={`Show everything whose footprint covers ${placeHit.text}`}>
-              <span className="inline-flex items-center gap-1">
-                <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" />
-                </svg>
-                {picking ? `Finding ${placeHit.text}…` : `Near ${placeHit.text}`}
-              </span>
-            </ScopeChip>
-          )}
           {(placeError || (placeQ.isError && typed.length >= 3)) && (
             <span role="alert" className="text-destructive">
               {placeError ?? `Place lookup failed: ${placeQ.error instanceof Error ? placeQ.error.message : String(placeQ.error)}`}
@@ -638,7 +646,7 @@ export function DiscoveryView({
         {isWide && showMap && (
           <div className="relative min-h-0 w-2/5 shrink-0 border-l border-border">
             <Suspense fallback={<div className="grid h-full place-items-center bg-muted text-sm text-muted-foreground">Loading map…</div>}>
-              <ItemMap layers={[]} footprints={footprints} onPickFootprint={onOpenItem}
+              <ItemMap layers={[]} footprints={drawn} onPickFootprint={onOpenItem}
                 highlightBbox={hoverBbox} onHoverFootprint={onMapHover} onBoundsChange={setBounds}
                 coverageDefault />
             </Suspense>

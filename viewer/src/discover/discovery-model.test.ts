@@ -3,7 +3,7 @@ import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, activeGroups, applyFacets, bboxIntersects, CLEAR_ALL, DEFAULT_DISCOVERY, type DiscoveryState,
   discoveryPatch, effectiveSort, extractFacets, filterByViewport, filterResults, GEOM_HAS, GEOM_NONE, hasGeometry,
-  isNear, nearestStep, parseDiscovery, reliefs, withSelected, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
+  byOverlap, drawable, nearestStep, overlapScore, placeArea, unionOf, parseDiscovery, reliefs, withSelected, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
 } from "./discovery-model";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
@@ -189,7 +189,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(s).toEqual({
       q: "faults", collections: ["a", "b"], categories: ["hazards"], types: ["Report"],
       formats: ["PDF", "COG"], geometry: "has", sort: "newest", layout: "list",
-      density: "compact", area: [-114, 37, -109, 42], place: "", broad: false, years: null, scales: null,
+      density: "compact", area: [-114, 37, -109, 42], place: "", years: null, scales: null,
     });
     expect(parseDiscovery({ area: "999,999,0,0" }).area).toBeNull();
   });
@@ -198,7 +198,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(discoveryPatch(DEFAULT_DISCOVERY)).toEqual({
       q: undefined, collections: undefined, category: undefined, types: undefined,
       formats: undefined, geometry: undefined, sort: undefined, layout: undefined,
-      density: undefined, area: undefined, place: undefined, broad: undefined, years: undefined, scale: undefined,
+      density: undefined, area: undefined, place: undefined, years: undefined, scale: undefined,
     });
     const patched = discoveryPatch({ ...DEFAULT_DISCOVERY, q: "x", categories: ["hazards"], area: [-114, 37, -109, 42], sort: "newest" });
     expect(patched.q).toBe("x");
@@ -340,21 +340,54 @@ describe("withSelected", () => {
   });
 });
 
-describe("near a place", () => {
+describe("searching an area", () => {
   const moab: [number, number, number, number] = [-109.58, 38.54, -109.52, 38.60];
-  it("keeps footprints mostly within 10 miles, drops statewide ones that only touch it", () => {
-    expect(isNear([-109.627, 38.499, -109.498, 38.625], moab)).toBe(true);    // Moab 7.5' quad
-    expect(isNear([-110.215, 38.479, -108.984, 39.028], moab)).toBe(false);   // 30' x 60' sheet
-    expect(isNear([-114.05, 37.0, -109.04, 42.0], moab)).toBe(false);         // statewide
-    expect(isNear([-109.55, 38.57, -109.55, 38.57], moab)).toBe(true);        // a point in town
-    expect(isNear([-111.9, 40.7, -111.8, 40.8], moab)).toBe(false);           // Salt Lake
+  it("grows a town to about a 30' x 60' sheet around it", () => {
+    const [w, s, e, n] = placeArea(moab);
+    expect(e - w).toBeCloseTo(1);
+    expect(n - s).toBeCloseTo(0.5);
+    expect((w + e) / 2).toBeCloseTo(-109.55);
+    expect(placeArea([-112, 37, -110, 39])).toEqual([-112, 37, -110, 39]);   // already big enough
   });
-  it("broad keeps everything that touches the place, and round-trips with it", () => {
-    const pubsAt = [pub("Q", {}, [-109.627, 38.499, -109.498, 38.625]), pub("S", {}, [-114.05, 37.0, -109.04, 42.0])];
-    const ids = (broad: boolean) => filterResults(pubsAt, { ...DEFAULT_DISCOVERY, area: moab, place: "Moab", broad }).map((it) => it.data?.id);
-    expect(ids(false)).toEqual(["Q"]);
-    expect(ids(true)).toEqual(["Q", "S"]);
-    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, area: moab, place: "Moab", broad: true };
+  it("ranks local maps first and statewide ones last", () => {
+    const area = placeArea(moab);
+    const quad = overlapScore([-109.627, 38.499, -109.498, 38.625], area);
+    const sheet = overlapScore([-110.259, 38.479, -108.94, 39.011], area);
+    const region = overlapScore([-111.5, 37.5, -108.9, 40.5], area);   // a layer over eastern Utah
+    const state = overlapScore([-114.05, 37.0, -109.04, 42.0], area);
+    expect(quad).toBeGreaterThan(sheet);     // all inside the area beats mostly inside
+    expect(sheet).toBeGreaterThan(region);
+    expect(region).toBeGreaterThan(state);
+    expect(overlapScore([-111.9, 40.7, -111.8, 40.8], area)).toBe(0);
+    expect(overlapScore([-109.55, 38.57, -109.55, 38.57], area)).toBeGreaterThan(0.5);
+    const order = byOverlap([pub("S", {}, [-114.05, 37.0, -109.04, 42.0]), pub("Q", {}, [-109.627, 38.499, -109.498, 38.625])], area);
+    expect(order.map((it) => it.data?.id)).toEqual(["Q", "S"]);
+  });
+  it("keeps 'Best match' as the default order while an area is set", () => {
+    expect(effectiveSort({ ...DEFAULT_DISCOVERY, area: moab })).toBe("relevance");
+    expect(effectiveSort(DEFAULT_DISCOVERY)).toBe("newest");
+  });
+});
+
+describe("area edge cases and the map", () => {
+  it("grows a point (an address) to the minimum area, centred on it", () => {
+    expect(placeArea([-109.55, 38.57, -109.55, 38.57])).toEqual([-110.05, 38.32, -109.05, 38.82]);
+  });
+  it("rejects a zero-size or inverted area from the URL, and grows an old place link", () => {
+    expect(parseDiscovery({ area: "-110,38,-110,39" }).area).toBeNull();
+    expect(parseDiscovery({ area: "-109,38,-110,39" }).area).toBeNull();
+    const s = parseDiscovery({ area: "-109.58,38.54,-109.52,38.60", place: "Moab" });
+    expect(s.area![2] - s.area![0]).toBeCloseTo(1);
     expect(parseDiscovery(discoveryPatch(s) as Record<string, unknown>)).toEqual(s);
+  });
+  it("keeps statewide items in an area's results, but doesn't draw them", () => {
+    const area: [number, number, number, number] = [-110.05, 38.32, -109.05, 38.82];
+    const at = [pub("Q", {}, [-109.627, 38.499, -109.498, 38.625]), pub("S", {}, [-114.05, 37.0, -109.04, 42.0])];
+    expect(filterResults(at, { ...DEFAULT_DISCOVERY, area, place: "Moab" }).map((it) => it.data?.id)).toEqual(["Q", "S"]);
+    const fps = at.map((it) => ({ id: it.data!.id, bbox: it.data!.bbox! }));
+    expect(drawable(fps, area).map((f) => f.id)).toEqual(["Q"]);
+    expect(drawable(fps, null).map((f) => f.id)).toEqual(["Q"]);
+    expect(unionOf(fps)).toEqual([-114.05, 37.0, -109.04, 42.0]);
+    expect(unionOf([])).toBeNull();
   });
 });

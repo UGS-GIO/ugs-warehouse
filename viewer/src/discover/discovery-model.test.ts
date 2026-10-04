@@ -3,7 +3,7 @@ import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, activeGroups, applyFacets, bboxIntersects, CLEAR_ALL, DEFAULT_DISCOVERY, type DiscoveryState,
   discoveryPatch, effectiveSort, extractFacets, filterByViewport, filterResults, GEOM_HAS, GEOM_NONE, hasGeometry,
-  nearestStep, parseDiscovery, reliefs, withSelected, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
+  isNear, nearestStep, parseDiscovery, reliefs, withSelected, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
 } from "./discovery-model";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
@@ -189,7 +189,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(s).toEqual({
       q: "faults", collections: ["a", "b"], categories: ["hazards"], types: ["Report"],
       formats: ["PDF", "COG"], geometry: "has", sort: "newest", layout: "list",
-      density: "compact", area: [-114, 37, -109, 42], place: "", years: null, scales: null,
+      density: "compact", area: [-114, 37, -109, 42], place: "", broad: false, years: null, scales: null,
     });
     expect(parseDiscovery({ area: "999,999,0,0" }).area).toBeNull();
   });
@@ -198,7 +198,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(discoveryPatch(DEFAULT_DISCOVERY)).toEqual({
       q: undefined, collections: undefined, category: undefined, types: undefined,
       formats: undefined, geometry: undefined, sort: undefined, layout: undefined,
-      density: undefined, area: undefined, place: undefined, years: undefined, scale: undefined,
+      density: undefined, area: undefined, place: undefined, broad: undefined, years: undefined, scale: undefined,
     });
     const patched = discoveryPatch({ ...DEFAULT_DISCOVERY, q: "x", categories: ["hazards"], area: [-114, 37, -109, 42], sort: "newest" });
     expect(patched.q).toBe("x");
@@ -337,5 +337,24 @@ describe("withSelected", () => {
       { key: "energy-minerals", label: "ENERGY-MINERALS", n: 0 }, { key: "hazards", label: "Hazards", n: 3 },
     ]);
     expect(withSelected(f, ["hazards"], String)).toBe(f);
+  });
+});
+
+describe("near a place", () => {
+  const moab: [number, number, number, number] = [-109.58, 38.54, -109.52, 38.60];
+  it("keeps footprints mostly within 10 miles, drops statewide ones that only touch it", () => {
+    expect(isNear([-109.627, 38.499, -109.498, 38.625], moab)).toBe(true);    // Moab 7.5' quad
+    expect(isNear([-110.215, 38.479, -108.984, 39.028], moab)).toBe(false);   // 30' x 60' sheet
+    expect(isNear([-114.05, 37.0, -109.04, 42.0], moab)).toBe(false);         // statewide
+    expect(isNear([-109.55, 38.57, -109.55, 38.57], moab)).toBe(true);        // a point in town
+    expect(isNear([-111.9, 40.7, -111.8, 40.8], moab)).toBe(false);           // Salt Lake
+  });
+  it("broad keeps everything that touches the place, and round-trips with it", () => {
+    const pubsAt = [pub("Q", {}, [-109.627, 38.499, -109.498, 38.625]), pub("S", {}, [-114.05, 37.0, -109.04, 42.0])];
+    const ids = (broad: boolean) => filterResults(pubsAt, { ...DEFAULT_DISCOVERY, area: moab, place: "Moab", broad }).map((it) => it.data?.id);
+    expect(ids(false)).toEqual(["Q"]);
+    expect(ids(true)).toEqual(["Q", "S"]);
+    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, area: moab, place: "Moab", broad: true };
+    expect(parseDiscovery(discoveryPatch(s) as Record<string, unknown>)).toEqual(s);
   });
 });

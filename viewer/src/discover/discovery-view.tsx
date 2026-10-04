@@ -48,7 +48,8 @@ const DENSITIES = [{ value: "comfortable" as const, label: "Comfy" }, { value: "
 const SORT_ITEMS = SORTS.map((s) => ({ value: s.key, label: s.label }));
 const SORT_ITEMS_WITHOUT_MATCH = SORT_ITEMS.filter((s) => s.value !== "relevance");
 const PAGE = 48; // cards per "Show more" step (reference parity)
-const TYPE_DEBOUNCE_MS = 180;
+const TYPE_DEBOUNCE_MS = 300;
+const MIN_Q = 3;   // shorter prefixes ("pr", "pro") match hundreds of items and flash the whole state
 const SCALE_MAX = SCALE_STEPS.length - 1;
 const FILTERS_DIALOG = Dialog.createHandle();   // ties the phone Filters button to its panel
 const fmtDenom = (d: number) => d.toLocaleString("en-US");
@@ -90,7 +91,7 @@ export function DiscoveryView({
   const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
   const areaK = area ? area.join(",") : "";
   const yearsK = st.years ? st.years.join(",") : "", scalesK = st.scales ? st.scales.join(",") : "";
-  const filterK = [collsK, catsK, typesK, formatsK, geometry, areaK, yearsK, scalesK].join("~");
+  const filterK = [collsK, catsK, typesK, formatsK, geometry, areaK, st.place, st.broad, yearsK, scalesK].join("~");
 
   // Merge a partial state change into the URL. push (default) for discrete filter changes so Back
   // undoes them one at a time; replace for typing + view prefs (layout/density) so they don't pile up.
@@ -133,7 +134,7 @@ export function DiscoveryView({
   const [ftsQ, setFtsQ] = useState("");
   const submit = () => {
     sendQ(text, true);
-    if (text.trim().length >= 2) { setDeep(true); setFtsQ(text.trim()); }
+    if (text.trim().length >= MIN_Q) { setDeep(true); setFtsQ(text.trim()); }
   };
 
   // Ephemeral UI state (never shareable): the map toggle, the hover highlight, the live viewport, and
@@ -155,7 +156,7 @@ export function DiscoveryView({
   // Survey Notes articles, in a SECOND index, built in a worker. Not merged into the item index: an
   // article has no collection, geometry or date, so it cannot ride the ItemRef pipeline the
   // facets/map/sort use.
-  const articles = useArticleSearch(deep ? q : "");
+  const articles = useArticleSearch(deep && q.trim().length >= MIN_Q ? q : "");
   const articleHits = articles.data ?? [];
   // "DS-9" -> its collection, from the loaded items; the series prefix is the fallback for a pub
   // that has not streamed in yet.
@@ -174,7 +175,7 @@ export function DiscoveryView({
   const [scopePick, setScope] = useState<"all" | "items" | "articles" | "pubtext">("all");
   const pubFts = useQuery({
     queryKey: qk.pubFts(ftsQ),
-    enabled: pubText && ftsQ.length >= 2,
+    enabled: pubText && ftsQ.length >= MIN_Q,
     staleTime: Infinity, retry: false,
     queryFn: () => searchPubs(ftsQ),
   });
@@ -185,7 +186,7 @@ export function DiscoveryView({
 
   // The scope chips only show for a search, so without one (or once the chosen kind has nothing)
   // the view falls back to everything rather than an empty page with no way back.
-  const scope = q.trim().length < 2 || (scopePick === "articles" && articleHits.length === 0) ? "all" : scopePick;
+  const scope = q.trim().length < MIN_Q || (scopePick === "articles" && articleHits.length === 0) ? "all" : scopePick;
 
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
@@ -196,7 +197,7 @@ export function DiscoveryView({
 
   // Text narrows first (score-ordered via the shared index); facets/area/sort are pure and cheap.
   const queried = useMemo(() => {
-    if (q.trim().length < 2 && isEmptyQuery(query)) return withData;
+    if (q.trim().length < MIN_Q && isEmptyQuery(query)) return withData;
     // Bare/phrase words narrow via MiniSearch; a field- or exclude-only query has no keyword to
     // hand it, so scan the flat doc list instead.
     const base = baseTerms(query);
@@ -214,8 +215,12 @@ export function DiscoveryView({
 
   const results = useMemo(() => sortItems(filterResults(queried, st), sort),
     [queried, filterK, sort]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Near a place, the bigger footprints that only touch it (statewide maps) wait behind a toggle.
+  const broadN = useMemo(() => (st.place && !st.broad
+    ? filterResults(queried, { ...st, broad: true }).length - results.length : 0),
+    [queried, results, filterK]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const searching = q.trim().length >= 2 || !isEmptyQuery(query);
+  const searching = q.trim().length >= MIN_Q || !isEmptyQuery(query);
   const hidden = useMemo(() => (searching && queried.length > results.length
     ? { n: queried.length - results.length, reliefs: reliefs(queried, st, results.length) }
     : null), [queried, results, searching]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -433,13 +438,19 @@ export function DiscoveryView({
           <button type="button" onClick={resetAll} className="px-1 text-xs text-muted-foreground hover:text-foreground hover:underline">
             Clear all
           </button>
+          {(broadN > 0 || st.broad) && (
+            <button type="button" onClick={() => patch({ broad: !st.broad })}
+              className="ml-auto px-1 text-xs text-primary hover:underline">
+              {st.broad ? "Hide statewide and regional" : `+${broadN.toLocaleString()} statewide and regional, show`}
+            </button>
+          )}
         </div>
       )}
 
       {/* Result kinds, named with their counts. Without this the article and publication groups sat
           below a screenful of cards with nothing saying they existed, and the opt-in engine was a
           bare checkbox beside the item count — which read as that count's label. */}
-      {q.trim().length >= 2 && (
+      {q.trim().length >= MIN_Q && (
         <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5 text-xs">
           <span className="text-muted-foreground">Showing</span>
           <ScopeChip on={scope === "all"} onClick={() => setScope("all")}>Everything</ScopeChip>
@@ -544,7 +555,7 @@ export function DiscoveryView({
             </div>
           ) : (
             <>
-            {scope === "all" && q.trim().length >= 2 && (articleHits.length > 0 || pubText) && (
+            {scope === "all" && q.trim().length >= MIN_Q && (articleHits.length > 0 || pubText) && (
               <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                 Layers &amp; publications · {results.length}
               </h2>
@@ -594,7 +605,7 @@ export function DiscoveryView({
             </section>
           )}
 
-          {pubText && q.trim().length >= 2 && scope !== "items" && scope !== "articles" && (
+          {pubText && q.trim().length >= MIN_Q && scope !== "items" && scope !== "articles" && (
             <section className="mt-6">
               <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                 Publication full text{pubFts.data ? ` · ${pubFts.data.length}` : ""}

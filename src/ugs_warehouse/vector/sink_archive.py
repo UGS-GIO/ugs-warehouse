@@ -117,9 +117,13 @@ def is_current(topic: Topic) -> bool:
     data has not changed. Reads only the Parquet footer."""
     path = config.archive_path(topic.stem)
     try:
-        footer = gcs.get_tail(path, int.from_bytes(gcs.get_tail(path, 8)[:4], "little") + 8)
+        footer = gcs.get_tail(path, 64 * 1024)  # holds the whole footer of any archive we write
+        size = int.from_bytes(footer[-8:-4], "little") + 8
+        if size > len(footer):
+            footer = gcs.get_tail(path, size)
     except FileNotFoundError:
         return False
+    footer = footer[-size:]
     with tempfile.NamedTemporaryFile(suffix=".parquet") as f:
         f.write(b"PAR1" + footer)  # DuckDB reads the metadata from the end of the file
         f.flush()

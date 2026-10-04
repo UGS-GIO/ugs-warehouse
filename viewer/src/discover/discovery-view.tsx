@@ -479,6 +479,21 @@ export function DiscoveryView({
               : pubFts.isLoading ? "Publication text · searching…"
                 : pubText ? "Publication text · loading engine…" : "Search publication text (~35MB)"}
           </ScopeChip>
+          {placeHit && (
+            <ScopeChip on={false} onClick={pickPlace} title={`Show everything whose footprint covers ${placeHit.text}`}>
+              <span className="inline-flex items-center gap-1">
+                <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" />
+                </svg>
+                {picking ? `Finding ${placeHit.text}…` : `Near ${placeHit.text}`}
+              </span>
+            </ScopeChip>
+          )}
+          {(placeError || (placeQ.isError && typed.length >= 3)) && (
+            <span role="alert" className="text-destructive">
+              {placeError ?? `Place lookup failed: ${placeQ.error instanceof Error ? placeQ.error.message : String(placeQ.error)}`}
+            </span>
+          )}
         </div>
       )}
 
@@ -500,24 +515,6 @@ export function DiscoveryView({
 
         {/* CENTER — result cards (the star): gallery grid or list, paginated. */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-3 py-3">
-          {placeHit && !area && (
-            <button type="button" onClick={pickPlace} disabled={picking} aria-busy={picking}
-              className="mb-3 flex w-full items-center gap-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-left hover:border-primary">
-              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-primary">
-                <path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" />
-              </svg>
-              <span className="min-w-0">
-                <span className="block truncate text-sm font-semibold text-foreground">{placeHit.text}</span>
-                <span className="block text-xs text-muted-foreground">{picking ? `Finding ${placeHit.text}…` : "Place · show everything that covers it"}</span>
-              </span>
-            </button>
-          )}
-          {placeError && <p role="alert" className="mb-3 text-xs text-destructive">{placeError}</p>}
-          {placeQ.isError && typed.length >= 3 && (
-            <p className="mb-3 text-xs text-destructive">
-              Place lookup failed: {placeQ.error instanceof Error ? placeQ.error.message : String(placeQ.error)}
-            </p>
-          )}
           {hidden && (
             <div className="mb-3 space-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm dark:border-amber-700 dark:bg-amber-950/40">
               <p className="text-foreground">

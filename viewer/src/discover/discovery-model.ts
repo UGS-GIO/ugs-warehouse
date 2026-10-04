@@ -286,7 +286,7 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
     sort: oneOf(sp.sort, SORT_KEYS, "relevance"),
     layout: oneOf(sp.layout, LAYOUTS_K, "gallery"),
     density: oneOf(sp.density, DENSITIES_K, "comfortable"),
-    // A place's area is always at least placeArea's size, links made before that included.
+    // A place's area is at least placeArea's size, whatever the link carries.
     area: parseArea(sp.area) && str(sp.place) ? placeArea(parseArea(sp.area)!) : parseArea(sp.area),
     place: parseArea(sp.area) ? str(sp.place) : "",
     years: parseRange(sp.years),

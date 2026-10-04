@@ -49,7 +49,7 @@ export const author = (it: ItemRef): string => String(propsOf(it)["ugs:author"] 
 export const county = (it: ItemRef): string => String(propsOf(it)["ugs:county"] ?? "");
 
 // A free-text scale as its 1:N denominator, or null. Mirrors pubs/scale.py `denominator`, which writes
-// `ugs:scale_denominator`; this reads the raw text for items published before that field existed.
+// `ugs:scale_denominator`; this reads the raw text when an item has no number.
 export const parseScale = (raw: string): number | null => {
   const s = raw.trim().toLowerCase().replace(/,/g, "");
   if (!s) return null;

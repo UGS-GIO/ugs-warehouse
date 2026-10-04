@@ -77,6 +77,14 @@ export function extractFacets(items: ItemRef[]): Facets {
   };
 }
 
+/** A facet's rows plus any selected value the current search left with no matches, at 0, so a
+ *  filter that's on can always be seen and turned off where it was turned on. */
+export function withSelected(facets: FacetCount[], selected: string[], label: (key: string) => string): FacetCount[] {
+  const have = new Set(facets.map((f) => f.key));
+  const missing = selected.filter((k) => !have.has(k)).map((k) => ({ key: k, label: label(k), n: 0 }));
+  return missing.length ? [...missing, ...facets] : facets;
+}
+
 export type FacetSelection = {
   collections: string[];
   types: string[];

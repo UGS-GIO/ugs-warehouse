@@ -8,7 +8,7 @@ import { UiRangeSlider } from "@/ui/slider";
 export type RangeBin = { from: number; to: number; n: number; tip: string };
 
 export function RangeFacet({ label, summary, min, max, value, bins, onCommit, toText, fromText, prefix = "",
-  ends, labels, note }: {
+  ends, labels, note, defaultOpen = true }: {
   label: string;
   summary: string;                         // "Any", or the range in words
   min: number;
@@ -22,8 +22,9 @@ export function RangeFacet({ label, summary, min, max, value, bins, onCommit, to
   ends?: [string, string];                 // words under the slider's two ends
   labels: [string, string];                // the thumbs' and boxes' accessible names
   note?: string;                           // e.g. "15 undated items hidden"
+  defaultOpen?: boolean;
 }) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(defaultOpen || summary !== "Any");
   const [live, setLive] = useState(value);
   const [text, setText] = useState<[string | null, string | null]>([null, null]);
   const [lo, hi] = value;

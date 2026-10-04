@@ -1,9 +1,10 @@
 """pygeoapi's Parquet provider, fixed for GeoParquet 1.1 files like ours.
 
-The upstream provider (0.24) has two gaps:
+The upstream provider (0.24) has three gaps:
 - it reads geometry only from a column named `geometry`; ours is `geom` (the `primary_column`)
 - its bbox filter keeps features inside the box, where OGC API Features wants every feature that
   intersects it, so features crossing the edge of a client's view go missing
+- a page reports `numberMatched` as the rows read so far plus one, not the total
 It also filters a GeoParquet 1.0 archive, which has no bbox covering, on its flat bbox_* columns.
 
 pygeoapi builds a provider per request, so per-request state on the instance is safe.
@@ -57,7 +58,7 @@ class GeoParquetProvider(ParquetProvider):
         self._fields = {}
         self.get_fields()
 
-    def query(self, *args, bbox=[], **kwargs):  # noqa: B006 (the base signature)
+    def query(self, *args, bbox=[], resulttype="results", **kwargs):  # noqa: B006
         self.ds.extra = None
         if bbox:
             if not self._covering:
@@ -68,7 +69,12 @@ class GeoParquetProvider(ParquetProvider):
             c = {k: pc.field(*path) for k, path in self._covering.items()}
             self.ds.extra = ((c["xmax"] >= minx) & (c["xmin"] <= maxx)
                              & (c["ymax"] >= miny) & (c["ymin"] <= maxy))
-        return super().query(*args, bbox=[], **kwargs)
+        result = super().query(*args, bbox=[], resulttype=resulttype, **kwargs)
+        if resulttype == "results" and "numberMatched" in result:
+            # The total, from a count with the same filters; the `next` link still follows from it.
+            hits = super().query(*args, bbox=[], resulttype="hits", **kwargs)
+            result["numberMatched"] = hits["numberMatched"]
+        return result
 
     def _response_feature_hits(self, filter):
         # Counting needs a real Dataset; the column rename never matters to a count.

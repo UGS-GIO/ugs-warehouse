@@ -183,11 +183,10 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
         className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm outline-none focus:border-primary"
       />
 
-      {active.length > 0 && (
+      {activeIds.length > 0 && (
         <div>
           <div className="flex items-center px-1.5 pb-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            On the map · {active.length}
-            {/* activeIds, not `active`: an id whose collection hasn't loaded is in the set but has no row. */}
+            On the map · {activeIds.length}
             <button type="button" className={`${BULK_CLASS} ml-auto`} title="Turn every layer off"
               onClick={() => onToggleMany(activeIds, false)}>
               Clear

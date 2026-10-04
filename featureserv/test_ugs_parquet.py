@@ -47,6 +47,9 @@ def test_bbox_keeps_features_that_cross_its_edge(provider_def):
 def test_paging_skip_geometry_and_select_properties(provider_def):
     p = GeoParquetProvider(provider_def)
     assert len(p.query(bbox=BOX, limit=1, offset=1)["features"]) == 1
+    # A page reports the total, not the rows read so far.
+    assert p.query(limit=1)["numberMatched"] == 3
+    assert p.query(bbox=BOX, limit=1)["numberMatched"] == 2
     assert all(f["geometry"] is None for f in p.query(skip_geometry=True)["features"])
     feature = p.query(select_properties=["name"], limit=1)["features"][0]
     assert feature["geometry"] is not None and "name" in feature["properties"]

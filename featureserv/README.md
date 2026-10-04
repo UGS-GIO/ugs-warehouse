@@ -20,18 +20,19 @@ not touch it.
 
 ## The plugin
 
-`ugs_parquet.py` subclasses pygeoapi's Parquet provider to fix two gaps in 0.24:
+`ugs_parquet.py` subclasses pygeoapi's Parquet provider to fix three gaps in 0.24:
 
 | Gap | Effect without the plugin |
 |---|---|
 | Geometry is read only from a column named `geometry` | our column is `geom` (the GeoParquet `primary_column`), so every feature has a null geometry |
 | `bbox` keeps features inside the box | OGC API Features wants every feature that intersects it, so features crossing the edge of a client's view go missing |
+| A page reports `numberMatched` as the rows read plus one | a client that shows a feature count shows 11 for a layer of 374 |
 
 It also filters the GeoParquet 1.0 archives (the `hazards_*` layers), which have no bbox covering,
 on their flat `bbox_*` columns.
 
 pygeoapi is pinned exactly in `requirements.txt`. `test_ugs_parquet.py` runs in the image build,
-so an upgrade that breaks the plugin fails the build. Delete the plugin when upstream fixes both.
+so an upgrade that breaks the plugin fails the build. Delete the plugin when upstream fixes all three.
 
 The id is `feature_id`, minted in `vector/transform.py` and also the feature id in PMTiles, so a
 feature clicked in the viewer and the same feature fetched over OGC agree. It is a row number, not

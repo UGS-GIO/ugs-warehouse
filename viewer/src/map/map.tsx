@@ -481,11 +481,10 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         // Raster COG layer — render the georeferenced GeoTIFF via cog:// (once the protocol is
         // registered). Distinct `cog-*` ids keep it out of the vector feature-click regex.
         if (l.cogHref) {
-          // Unmounted, not hidden: an invisible Source still decodes.
-          if (!cogReady || gatedOut[l.id]) return null;
+          if (!cogReady) return null;
           return (
             <Source key={l.id} id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
-              <Layer id={`cog-${s}-raster`} type="raster" paint={{ "raster-opacity": 0.9 }} />
+              <Layer id={`cog-${s}-raster`} type="raster" minzoom={COG_GATE.min} paint={{ "raster-opacity": 0.9 }} />
             </Source>
           );
         }

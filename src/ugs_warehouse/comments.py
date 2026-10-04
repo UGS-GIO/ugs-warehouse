@@ -185,8 +185,8 @@ def _verify_firebase_email(token: str) -> str | None:
     """Verify a Firebase ID token (from the ugs-map-viewer /hazards-review app) and return the reviewer's
     email. Firebase re-issues its own signed JWT after the Entra OIDC exchange, so one verifier covers
     whichever upstream IdP the user came through. Returns None on any failure (never raises) — so a bad
-    token just falls through to a 401, not a 500. google-auth checks the signature, expiry and audience;
-    the issuer and subject checks are the rest of what Firebase requires."""
+    token just falls through to a 401, not a 500. google-auth checks the signature, expiry and
+    audience. This checks the issuer and subject."""
     try:
         claims = id_token.verify_firebase_token(token, iap.cached_request, audience=FIREBASE_PROJECT_ID)
         if claims.get("iss") != _FIREBASE_ISSUER or not claims.get("sub"):

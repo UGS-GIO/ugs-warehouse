@@ -27,8 +27,8 @@ _ISSUER = "https://cloud.google.com/iap"
 _METADATA = "http://metadata.google.internal/computeMetadata/v1/"
 _CLOCK_SKEW_S = 30  # Google's guide allows 30 s between IAP's clock and ours
 
-# Google's signing keys (IAP here, Firebase in comments.py) are kept as long as their Cache-Control
-# allows, then refetched. 5 s, not google-auth's 120 s default, so a slow fetch can't hold a worker.
+# Caches Google's signing keys for IAP and Firebase (comments.py) as long as their Cache-Control
+# allows. Times out after 5 s.
 cached_request = functools.partial(
     google.auth.transport.requests.Request(session=cachecontrol.CacheControl(requests.Session())), timeout=5)
 

@@ -39,7 +39,6 @@ def test_verify_firebase_email_returns_none_on_bad_token():
 
 
 def test_verify_firebase_email_checks_issuer_and_subject(monkeypatch):
-    # google-auth checks signature, expiry and audience; the issuer and subject are ours to check.
     good = {"iss": comments._FIREBASE_ISSUER, "sub": "uid-1", "email": "r@utah.gov"}
     for claims, want in [(good, "r@utah.gov"),
                          ({**good, "iss": "https://securetoken.google.com/other-project"}, None),

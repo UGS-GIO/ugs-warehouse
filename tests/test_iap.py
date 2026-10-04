@@ -77,7 +77,7 @@ def test_whoami_shows_only_a_verified_identity(monkeypatch, fake_iap):
 
 
 def test_keys_go_through_an_http_cache():
-    # gstatic's Cache-Control decides how long keys are kept; without the cache every request refetches.
+    # Without the cache, every request would refetch the keys.
     from cachecontrol.adapter import CacheControlAdapter
     assert isinstance(iap.cached_request.func.session.get_adapter(iap._CERTS_URL), CacheControlAdapter)
-    assert iap.cached_request.keywords == {"timeout": 5}   # not google-auth's 120 s default
+    assert iap.cached_request.keywords == {"timeout": 5}

@@ -40,3 +40,5 @@ const subscribe = (notify: () => void) => {
 };
 export const useIsDark = (): boolean =>
   useSyncExternalStore(subscribe, () => document.documentElement.classList.contains("dark"));
+/** The CHOSEN theme (light, dark or system), for the settings page. */
+export const useThemePref = (): Theme => useSyncExternalStore(subscribe, getTheme, () => "system");

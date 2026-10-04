@@ -1,28 +1,14 @@
 /**
- * App menu (hamburger). Holds the theme picker, plus the views at widths where the tab row can't
- * fit. Base UI Menu, same as the soil-water app: opening moves focus into the menu, arrow keys and
+ * App menu (hamburger). Holds the secondary views (Settings among them), plus the primary views at
+ * widths where the tab row can't fit. Base UI Menu, same as the soil-water app: opening moves focus into the menu, arrow keys and
  * typeahead navigate it, Escape closes and returns focus to the trigger — none of which the
- * hand-rolled popover this replaced could do. Theme is a radio group writing straight to theme.ts.
+ * hand-rolled popover this replaced could do.
  */
 import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
 import { CheckIcon, CopyIcon, copyCatalogUrl } from "@/catalog/stac-url-chip";
-import { type DataSaverPref, setPref, useDataSaverPref } from "@/lib/data-saver";
 import { LEGAL_LINKS } from "./legal-footer";
-import { getTheme, setTheme, type Theme } from "./theme";
-
-const SAVER: { value: DataSaverPref; label: string }[] = [
-  { value: "auto", label: "Auto (slow connections)" },
-  { value: "on", label: "On" },
-  { value: "off", label: "Off" },
-];
-
-const THEMES: { value: Theme; label: string; icon: string }[] = [
-  { value: "light", label: "Light", icon: "☀" },
-  { value: "dark", label: "Dark", icon: "☾" },
-  { value: "system", label: "System", icon: "◐" },
-];
 
 export type NavPage = { id: string; label: string; onSelect: () => void };
 
@@ -31,16 +17,10 @@ const HEADING = "px-2 py-1 text-sm font-semibold uppercase tracking-wider text-m
 
 export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
   pages: NavPage[];      // the primary tabs — shown here only below md, where the tab row is hidden
-  overflow?: NavPage[];  // secondary views (Architecture/Guide/Developers/Review) — always in the menu
+  overflow?: NavPage[];  // secondary views (Architecture/Guide/Offline data/Settings/Review) — always in the menu
   current: string; catalogUrl?: string;
 }) {
-  const saver = useDataSaverPref();
-  const [theme, setThemeState] = useState<Theme>(getTheme);
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
-  const pick = (value: Theme) => {
-    setTheme(value);
-    setThemeState(value);
-  };
 
   const copy = async () => {
     setCopied(catalogUrl && (await copyCatalogUrl(catalogUrl)) ? "copied" : "failed");
@@ -50,7 +30,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
     // Closing resets the copy state — the menu's own lifetime is the feedback's, so no timer.
     <Menu.Root onOpenChange={(open) => !open && setCopied("idle")}>
       {/* One menu, two faces: a hamburger below md (it carries the views too), and a labeled
-          "More" on desktop. A bare theme icon here hid Architecture/Guide/Developers behind
+          "More" on desktop. A bare theme icon here hid Architecture and the Guide behind
           something that read as a light-switch — the word is what makes them findable. */}
       <Menu.Trigger
         aria-label={pages.length ? "Menu" : "More"}
@@ -69,7 +49,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
       <Menu.Portal>
         <Menu.Positioner side="bottom" align="end" sideOffset={6} className="z-50">
           <Menu.Popup className="max-h-[var(--available-height)] min-w-44 overflow-y-auto rounded-md border border-border bg-card p-1 text-foreground shadow-lg outline-none">
-            {/* Views only where the tab row is hidden; the theme picker is always here. */}
+            {/* Views only where the tab row is hidden. */}
             {pages.length > 0 && (
               <div className="md:hidden">
                 <div className={HEADING}>Views</div>
@@ -128,35 +108,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
               <p className="px-2 py-1 text-xs text-muted-foreground" title={`viewer build ${__BUILD_HASH__}`}>
                 build {__BUILD_DATE__} · {__BUILD_HASH__}
               </p>
-              <Menu.Separator className="my-1 h-px bg-border" />
             </div>
-            <div className={HEADING}>Theme</div>
-            <Menu.RadioGroup value={theme} onValueChange={(value) => pick(value as Theme)}>
-              {THEMES.map((t) => (
-                // RadioItem keeps the menu open by default (for multi-pick groups); picking a
-                // theme is one choice, and the result is visible behind the menu.
-                <Menu.RadioItem key={t.value} value={t.value} className={ITEM} closeOnClick>
-                  <span aria-hidden className="w-4 text-center">{t.icon}</span>
-                  <span className="flex-1">{t.label}</span>
-                  <Menu.RadioItemIndicator className="text-primary">✓</Menu.RadioItemIndicator>
-                </Menu.RadioItem>
-              ))}
-            </Menu.RadioGroup>
-            <Menu.Separator className="my-1 h-px bg-border" />
-            {/* Holds back previews (the item map) on a slow or metered connection; see
-                lib/data-saver.ts. Auto follows the browser where it says; iPhones don't. */}
-            <div className={HEADING}>Data saver</div>
-            <Menu.RadioGroup value={saver} onValueChange={(value) => {
-              const o = SAVER.find((x) => x.value === value);
-              if (o) setPref(o.value);
-            }}>
-              {SAVER.map((o) => (
-                <Menu.RadioItem key={o.value} value={o.value} className={ITEM} closeOnClick>
-                  <span className="flex-1">{o.label}</span>
-                  <Menu.RadioItemIndicator className="text-primary">✓</Menu.RadioItemIndicator>
-                </Menu.RadioItem>
-              ))}
-            </Menu.RadioGroup>
           </Menu.Popup>
         </Menu.Positioner>
       </Menu.Portal>

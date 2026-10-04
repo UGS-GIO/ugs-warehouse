@@ -111,7 +111,7 @@ def test_sink_stac_stamps_this_runs_writes_and_carries_the_rest(monkeypatch):
     })
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
-    for name in ("attach_renders", "attach_classification", "attach_iso"):
+    for name in ("attach_renders", "attach_classification"):
         monkeypatch.setattr(sink_stac.stac, name, lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
 

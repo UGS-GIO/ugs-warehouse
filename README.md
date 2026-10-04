@@ -58,7 +58,6 @@ src/ugs_warehouse/
 │   ├── gcs.py       obstore upload/list + Cache-Control + CDN URLs
 │   ├── stac.py      item builder, collections hierarchy, derive-from-truth catalog refresh
 │   ├── styles.py    ugs-styles bridge → ugs:renders block + style asset
-│   └── iso.py        STAC → ISO 19139 sidecars
 ├── vector/      producer A: Postgres _current → DuckLake/GeoParquet/PMTiles/STAC
 │   ├── source.py transform.py ducklake.py sink_archive.py sink_pmtiles.py sink_stac.py
 │   ├── related.py   FK relationships → related links + ugs:foreign_keys + aspatial child tables

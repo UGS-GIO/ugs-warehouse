@@ -105,7 +105,7 @@ def captured_item(monkeypatch):
     monkeypatch.setattr(sink_stac.gcs, "exists", lambda _p: False)
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: seen.update(k) or {"assets": k["assets"]})
-    for fn in ("attach_renders", "attach_classification", "attach_iso"):
+    for fn in ("attach_renders", "attach_classification"):
         monkeypatch.setattr(sink_stac.stac, fn, lambda _i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda _i: "stac/path.json")
     return seen

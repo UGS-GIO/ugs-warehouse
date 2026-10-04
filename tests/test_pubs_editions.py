@@ -147,7 +147,6 @@ def test_build_catalog_wires_edition_into_build_item():
              ("M-1", "", "geomaps_24k", ""), ("M-2", "", "geomaps_24k", "7_5_Quads")]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):

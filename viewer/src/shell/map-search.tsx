@@ -1,6 +1,6 @@
 import { Combobox } from "@base-ui/react/combobox";
 import { keepPreviousData, useMutation, useQuery } from "@tanstack/react-query";
-import { useRef, useState } from "react";
+import { type ReactNode, useRef, useState } from "react";
 import type { ItemRef } from "@/catalog/browse";
 import { setPin } from "@/map/camera";
 import { type Bounds, locate, suggest, type Suggestion } from "@/map/place-locator";
@@ -31,6 +31,56 @@ function bindSlash(el: HTMLInputElement | null) {
   if (!el) return;
   window.addEventListener("keydown", onSlash);
   return () => window.removeEventListener("keydown", onSlash);
+}
+
+const PLACEHOLDER = "Search places, layers and publications";
+
+// The bar's frame: the same pill on the Map page (with suggestions) and on Discover (which filters
+// its own results as you type instead). The caller supplies the input.
+function BarFrame({ className, busy, error, showClear, onClear, children }: {
+  className: string; busy?: boolean; error?: string; showClear: boolean; onClear: () => void; children: ReactNode;
+}) {
+  return (
+    <div className={`flex items-center gap-2 rounded-full border border-input bg-background px-3 py-1 shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 ${className}`}>
+      <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
+        <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
+      </svg>
+      {children}
+      {busy && <span role="status" aria-label="Searching"
+        className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-primary" />}
+      {error && <span className="text-xs text-destructive">{error}</span>}
+      {showClear && (
+        <button type="button" aria-label="Clear the search" onClick={onClear}
+          className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
+          <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+        </button>
+      )}
+    </div>
+  );
+}
+
+const INPUT_CLASS = "min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none [&::-webkit-search-cancel-button]:hidden";
+
+/** The same bar without the suggestion list: Discover filters its results as the text changes. */
+export function LiveSearchBar({ value, onChange, onEnter, onClear, className = "" }: {
+  value: string;
+  onChange: (text: string) => void;
+  onEnter: () => void;
+  onClear: () => void;
+  className?: string;
+}) {
+  const input = useRef<HTMLInputElement | null>(null);
+  return (
+    <BarFrame className={className} showClear={value !== ""}
+      onClear={() => { onClear(); input.current?.focus(); }}>
+      <input id={INPUT_ID} type="search" value={value} placeholder={PLACEHOLDER} aria-label={PLACEHOLDER}
+        title="Press / to search"
+        ref={(el) => { input.current = el; return bindSlash(el); }}
+        onChange={(e) => onChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) onEnter(); }}
+        className={INPUT_CLASS} />
+    </BarFrame>
+  );
 }
 
 const itemRow = (hit: ItemHit): Row => ({ type: "item", key: hit.href, label: hit.label, sub: hit.sub, hit });
@@ -111,25 +161,13 @@ export function MapSearch({ items, loadKey, isLayer, onPlace, onItem, onSearchAl
       onItemHighlighted={(row) => { highlighted.current = row; }}
       itemToStringLabel={(row) => row.label}
     >
-      <div className={`flex items-center gap-2 rounded-full border border-input bg-background px-3 py-1 shadow focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 ${className}`}>
-        <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
-          <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
-        </svg>
-        <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder="Search places, layers and publications" title="Press / to search"
-          aria-label="Search places, layers and publications"
+      <BarFrame className={className} busy={busy} error={place.isError ? "place not found" : undefined} showClear={q !== ""}
+        onClear={() => { setQ(""); setPin(null); document.getElementById(INPUT_ID)?.focus(); }}>
+        <Combobox.Input id={INPUT_ID} ref={bindSlash} placeholder={PLACEHOLDER} title="Press / to search"
+          aria-label={PLACEHOLDER}
           onKeyDown={(e) => { if (e.key === "Enter" && !highlighted.current && text) onSearchAll(text); }}
-          className="min-w-0 flex-1 bg-transparent py-0.5 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none" />
-        {busy && <span role="status" aria-label="Searching"
-          className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-muted-foreground/40 border-t-primary" />}
-        {place.isError && <span className="text-xs text-destructive">place not found</span>}
-        {q && (
-          <button type="button" aria-label="Clear the search"
-            onClick={() => { setQ(""); setPin(null); document.getElementById(INPUT_ID)?.focus(); }}
-            className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
-            <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-          </button>
-        )}
-      </div>
+          className={INPUT_CLASS} />
+      </BarFrame>
       <Combobox.Portal>
         <Combobox.Positioner sideOffset={6} align="start" className="z-50">
           <Combobox.Popup className="max-h-[70vh] w-[var(--anchor-width)] min-w-72 overflow-y-auto rounded-md border border-border bg-card py-1 text-sm text-foreground shadow-lg">

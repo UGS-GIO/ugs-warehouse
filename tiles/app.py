@@ -11,7 +11,7 @@ range reads against the CDN. This app sits in front of it for the two things it 
     binds it to this service's tile URL and injects the `source-layer`.
 
 Nothing is stored here. The topic list and the style binding are read from the STAC catalog on
-demand (derive-from-truth, same rule as featureserv's gen_db) and cached for CACHE_TTL seconds.
+demand (derive-from-truth) and cached for CACHE_TTL seconds.
 
 Env: TILES_UPSTREAM, STAC_COLLECTION_URL, PUBLIC_URL, CACHE_TTL, HTTP_TIMEOUT.
 """

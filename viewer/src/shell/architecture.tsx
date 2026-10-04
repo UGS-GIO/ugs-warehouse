@@ -120,11 +120,11 @@ const LAYERS: Layer[] = [
     points: [
       "Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.",
       "Datacube items (STAC datacube extension) render as zarr layers on the viewer map, sliced per dimension.",
-      "OGC API Features for ArcGIS Pro / QGIS: `duckdb_featureserv` over the GeoParquet on the CDN, scale-to-zero.",
+      "OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.",
       "`ugs-warehouse-tiles`: XYZ tiles, ready-to-use MapLibre styles, and an Esri VectorTileServer facade so AGOL and Pro can add a layer at all.",
       "External catalogs (USWB) are federated in as children of the root, so one catalog URL covers them too.",
     ],
-    note: "A second OGC path exists — `pg_featureserv` (api/) straight over Postgres — but its config has drifted. It needs reconciling with, or retiring in favour of, the duckdb_featureserv tier.",
+    note: "A second OGC path exists — `pg_featureserv` (api/) straight over Postgres — but its config has drifted. It needs reconciling with, or retiring in favour of, the pygeoapi tier.",
   },
   {
     n: "⑦", title: "Review path", status: "done",

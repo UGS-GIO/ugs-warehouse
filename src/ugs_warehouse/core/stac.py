@@ -21,7 +21,7 @@ import json
 import re
 import sys
 
-from . import catalog_docs, config, gcs, iso, item_mirror, styles
+from . import catalog_docs, config, feature_service, gcs, iso, item_mirror, styles
 from .bbox import to_2d_bbox
 
 PGF_BASE_URL = config.PGF_BASE_URL
@@ -73,9 +73,10 @@ USAGE_METADATA = "ISO 19139 metadata (ISO 19115 content model)"
 
 def has_feature_service(collection_path: str) -> bool:
     """True when the collection at `collection_path` is served live by OGC API Features
-    (duckdb_featureserv) — the flat collections and the serving-topic schemas. Single source for the
-    collection's `rel:service` link (`_collection_doc`) and the AGENTS.md query-endpoint note
-    (`catalog_docs.agents`), so the link and the prose that describes it can't disagree."""
+    (featureserv/) — the flat collections and the serving-topic schemas. Single source for the
+    collection's `rel:service` link (`_collection_doc`), the AGENTS.md query-endpoint note
+    (`catalog_docs.agents`) and the service's layer list (`feature_service`), so they can't
+    disagree."""
     return "/" not in collection_path or collection_path.startswith(f"{SERVING_TOPICS_CATALOG}/")
 
 
@@ -668,7 +669,7 @@ SERIES_DESC = {
 # verbatim UGS copy from geology.utah.gov/map-pub, inherited rather than written.
 
 # Nesting catalogs that ALSO publish a rollup items.json spanning every child collection. Keeps
-# one-URL consumers (featureserv gen_db, the tiles service, the ops console) working across a split
+# one-URL consumers (the tiles service, the ops console) working across a split
 # without walking N sub-collections. Deliberately NOT pubs: thousands of items in one document.
 ROLLUP_INDEX_CATALOGS = {SERVING_TOPICS_CATALOG}
 
@@ -714,6 +715,7 @@ def refresh_catalog() -> None:
     leaf: dict[str, dict] = {}
     rollup: dict[str, list[dict]] = {}   # nesting catalog -> its children's items (see ROLLUP_INDEX_CATALOGS)
     everything: list[dict] = []          # every item's index entry, for the root items.json
+    served: list[dict] = []              # the items the OGC API Features service serves
     with ThreadPoolExecutor(max_workers=64) as executor:
         for path, item_ids in groups.items():
             def _fetch_one(iid: str) -> dict | None:
@@ -730,6 +732,8 @@ def refresh_catalog() -> None:
                     return None
 
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
+            if has_feature_service(path):
+                served.extend(items)
             nested = "/" in path
             top, cid = path.split("/")[0], path.split("/")[-1]
             # Title/description are inherited, never authored here: see _group_title. A group with
@@ -798,6 +802,7 @@ def refresh_catalog() -> None:
                 f"{config.STAC_PREFIX}/items.json")
     _write_markdown("", title=config.CATALOG_TITLE, description=ROOT_DESCRIPTION,
                     kind="catalog", children=len(root_children))
+    feature_service.write(served)
 
     n = sum(len(v) for v in groups.values())
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "

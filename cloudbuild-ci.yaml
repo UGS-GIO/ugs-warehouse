@@ -25,6 +25,18 @@ steps:
         ruff check .
         python -m pytest -q
 
+  # ---- featureserv: the pygeoapi plugin against the pinned pygeoapi (the image build runs it too) ----
+  - id: featureserv
+    name: python:3.12
+    waitFor: ["-"]
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        set -e
+        pip install -q -r featureserv/requirements.txt
+        cd featureserv && python -m pytest -q -p no:cacheprovider test_ugs_parquet.py
+
   # ---- docs: every relative Markdown link resolves. Offline, so external URLs never flake the PR;
   # links inside docs/ are also checked by `mkdocs build --strict` in cloudbuild-docs.yaml. ----
   - id: docs-links

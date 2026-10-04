@@ -30,7 +30,7 @@ flowchart LR
   subgraph S["Serving"]
     direction TB
     VW["STAC viewer<br/>browse · map · zarr datacubes · export"]
-    FS["OGC Features · tiles<br/>duckdb_featureserv · XYZ · Esri VTS"]
+    FS["OGC Features · tiles<br/>pygeoapi · XYZ · Esri VTS"]
   end
 
   CDN --> VW
@@ -127,7 +127,7 @@ which preserves object paths.
 
 - Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.
 - STAC viewer: catalog browse + map + COG preview + zarr datacube layers + client-side export.
-- OGC API Features for ArcGIS Pro / QGIS: `duckdb_featureserv` over the GeoParquet, scale-to-zero.
+- OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.
 - `ugs-warehouse-tiles`: XYZ tiles, ready-made MapLibre styles, and an Esri VectorTileServer facade
   so AGOL and Pro can add a layer at all.
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.

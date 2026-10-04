@@ -33,16 +33,8 @@ substitutions:
   _RESTYLE_JOB: ugs-warehouse-restyle     # Cloud Run job: rebind ugs-styles renders into STAC items (no reingest) — ugs-styles publish CI triggers it
   _TOPICTHUMB_JOB: ugs-topics-thumbs      # Cloud Run job: render styled-PMTiles preview PNGs for ugs-serving-topics (headless MapLibre); content-hash skip, chain after ingest + restyle
   _API_SERVICE: ugs-warehouse-api
-  _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (duckdb_featureserv over GeoParquet, scale-to-zero)
+  _FEATURES_SERVICE: ugs-warehouse-features   # OGC API Features for Arc Pro (pygeoapi over GeoParquet, scale-to-zero)
   _TILES_SERVICE: ugs-warehouse-tiles         # XYZ vector tiles + ready-to-use MapLibre styles (go-pmtiles over the CDN PMTiles, scale-to-zero)
-  # featureserv buffers whole responses, so this and Paging.LimitMax in
-  # featureserv/duckdb_featureserv.toml are one decision. Passed to the image build as well as the
-  # deploy so check_limits.py can refuse an unmeasured pairing rather than let it OOM in prod.
-  # 8Gi (was 2Gi): a pre-merge parallel-load test (ALL-5869) showed 4Gi OOM-kills the container
-  # under concurrent full-layer pulls (silent truncation + 503s); 8Gi with cpu=2 and DuckDB
-  # memory_limit=3GB (the featureserv patch) serves them cleanly. (8Gi, LimitMax 10000) is covered
-  # by the measured (2Gi, 100000) pair via monotonicity. Feeds the image build AND the deploy.
-  _FEATURES_MEMORY: 8Gi
   _SERVICE: ugs-warehouse-service
   # Ops console (Django + HTMX, behind IAP) — triggers the jobs above + shows catalog coverage.
   _ADMIN_SERVICE: ugs-warehouse-admin
@@ -136,8 +128,8 @@ steps:
         IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-pubs-pipeline
         docker build -f Dockerfile.pipeline -t "$$IMG:${_TAG}" -t "$$IMG:latest" .
 
-  # OGC API Features for Arc Pro — duckdb_featureserv over GeoParquet (DuckDB views on the CDN
-  # parquet). Builds a tiny DuckDB file from the STAC catalog at image-build time (needs network).
+  # OGC API Features for Arc Pro: pygeoapi over the GeoParquet. The build reads nothing from the
+  # catalog; the layer list is read at startup (featureserv/README.md).
   - id: build-features
     name: gcr.io/cloud-builders/docker
     args:
@@ -146,8 +138,6 @@ steps:
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:${_TAG}
       - -t
       - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:latest
-      - --build-arg
-      - MEMORY_LIMIT=${_FEATURES_MEMORY}
       - featureserv/
 
   # XYZ vector tiles for clients that cannot read PMTiles directly. No data copy: go-pmtiles
@@ -832,7 +822,7 @@ steps:
       - --set-env-vars=^|^DATABASE_URL=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}|PGFS_DATABASE_DBCONNECTION=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}
       - --allow-unauthenticated
 
-  # OGC API Features (Arc Pro) — scale-to-zero, no Cloud SQL / secrets (reads public CDN parquet).
+  # OGC API Features (Arc Pro): scale-to-zero. Reads the GeoParquet from the bucket as the runtime SA.
   - id: deploy-features
     waitFor: [push-features]
     name: gcr.io/google.com/cloudsdktool/cloud-sdk
@@ -846,31 +836,13 @@ steps:
       - --service-account=${_RUNTIME_SA}
       - --allow-unauthenticated
       - --port=9000
-      # cpu=2 is required for --memory 8Gi (Cloud Run caps 1 vCPU at 4Gi) and gives the concurrent
-      # heavy queries real parallelism. Was cpu=1/2Gi.
-      - --cpu=2
-      # Set via _FEATURES_MEMORY so the image build sees the same number and check_limits.py can
-      # gate the (memory, LimitMax) pairing. History: 512Mi OOM-killed mid-response when paging;
-      # 1Gi survives paging but not a single full pull; 2Gi covered both (ALL-5410). A pre-merge
-      # parallel-load test (ALL-5869) then showed even 4Gi OOM-kills the container under concurrent
-      # full-layer pulls (133MB each) -- the Go whole-response buffering, not DuckDB, is the wall,
-      # and an OOM mid-stream silently truncates a 200. 8Gi + cpu=2 + DuckDB memory_limit=3GB serves
-      # the concurrent full pulls cleanly. Scale-to-zero: billed only while serving.
-      - --memory=${_FEATURES_MEMORY}
+      # A load test peaked at 1.4GB with 12 parallel 10,000-feature pages on one instance;
+      # --concurrency=4 matches the 4 gunicorn threads, so an instance sees at most 4.
+      - --cpu=1
+      - --memory=2Gi
       - --timeout=120
-      # Cap per-instance request concurrency. duckdb_featureserv shares one in-process DuckDB across
-      # every in-flight request AND buffers each whole response in Go heap, so heavy Features queries
-      # collectively exhausted the instance under Cloud Run's default 80 -- 500/503, taking in-flight
-      # requests down with it (ALL-5869). A pre-merge load test validated 4 at cpu=2/8Gi: a realistic
-      # ~12-parallel AGOL bbox render is 12/12 clean, and 12 concurrent worst-case full-layer pulls
-      # (133MB each) also serve without OOM or truncation. Scale-to-zero, so more-but-smaller
-      # instances still only bill while serving; the tradeoff is more cold starts (~20s catalog scan
-      # each). check_limits.py does NOT model concurrency -- re-test before changing this triple.
       - --concurrency=4
-      # Bound blast radius: --allow-unauthenticated + 8Gi/instance makes an unbounded fan-out a real
-      # cost exposure. 50 sits far above this endpoint's real concurrency (50x4 = 200 in-flight) while
-      # halving the instance-count worst case vs Cloud Run's default 100. Hitting it returns a clean
-      # 429, not an OOM. Tune down for a tighter bound.
+      # Bounds the cost of an unbounded fan-out on a public endpoint; past it Cloud Run returns 429.
       - --max-instances=50
 
   # XYZ vector tiles + MapLibre styles — scale-to-zero, no secrets (reads the public CDN).

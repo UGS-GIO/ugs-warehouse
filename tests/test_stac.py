@@ -1122,3 +1122,40 @@ def test_the_readme_carries_what_the_rule_asks_for(monkeypatch):
     # Derived from the assets the items actually carry, so the advice cannot describe a format
     # this collection does not publish.
     assert "PMTiles" in md and "GeoParquet" not in md
+
+
+def test_refresh_catalog_writes_the_feature_service_layer_list(monkeypatch):
+    """The Features service reads one layer list from the refresh: each served item's GeoParquet as a
+    gs:// path. A pub item outside the served collections is left out."""
+    from ugs_warehouse.core import feature_service
+    from ugs_warehouse.vector import sink_stac as vec_sink
+
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    parquet = {"data": {"href": config.public_url(config.archive_path("hazards_qfaults")),
+                        "type": config.PARQUET_MIME, "roles": ["data"]}}
+    stac.write_item(stac.build_item(
+        item_id="hazards_qfaults", collection="hazards", collection_path=vec_sink.collection_path("hazards"),
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3], datetime_iso="2026-01-01T00:00:00Z",
+        properties={"title": "Quaternary faults", "keywords": ["faults"]}, assets=parquet))
+    stac.write_item(stac.build_item(
+        item_id="M-1", collection="M", collection_path="ugs-publications/M",
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3], datetime_iso="2026-01-01T00:00:00Z",
+        properties={}, assets=parquet))
+
+    stac.refresh_catalog()
+
+    layers = json.loads(store[feature_service.OBJECT])["collections"]
+    assert layers == [{
+        "id": "hazards_qfaults", "title": "Quaternary faults", "description": "Quaternary faults",
+        "keywords": ["faults"], "bbox": [0, 1, 2, 3],
+        "source": f"gs://{config.BUCKET}/{config.archive_path('hazards_qfaults')}",
+        "id_field": "feature_id"}]
+
+
+def test_feature_service_skips_an_item_without_our_geoparquet():
+    from ugs_warehouse.core import feature_service
+
+    elsewhere = {"data": {"href": "https://example.com/x.parquet", "type": config.PARQUET_MIME}}
+    assert feature_service.collection({"id": "a", "assets": elsewhere}) is None
+    assert feature_service.collection({"id": "b", "assets": {}}) is None

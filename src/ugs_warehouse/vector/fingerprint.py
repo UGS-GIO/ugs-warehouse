@@ -2,7 +2,8 @@
 
 A stable, order-independent hash of a topic's transformed view folded with the tiling inputs,
 stored on the published STAC item as `ugs:content_hash`. On a later ingest, if the freshly-computed
-fingerprint matches the published item AND the PMTiles output still exists, the topic's DATA sinks
+fingerprint matches the published item, the PMTiles output still exists AND the GeoParquet archive
+is in the current format (`sink_archive.is_current`), the topic's DATA sinks
 (tippecanoe / GeoParquet / DuckLake) are skipped — the rebuild would be byte-identical, so the
 expensive tile run is wasted work.
 
@@ -20,7 +21,7 @@ import json
 import duckdb
 
 from ..core import config, gcs, stac
-from . import introspect, sink_pmtiles, sink_stac
+from . import introspect, sink_archive, sink_pmtiles, sink_stac
 from .topics import Topic
 
 CONTENT_HASH_PROP = "ugs:content_hash"
@@ -57,5 +58,7 @@ def pmtiles_present(topic: Topic) -> bool:
 
 
 def is_unchanged(topic: Topic, fingerprint: str) -> bool:
-    """Unchanged ⇔ the fingerprint matches the published item AND the PMTiles output still exists."""
-    return fingerprint == published_hash(topic) and pmtiles_present(topic)
+    """Unchanged ⇔ the fingerprint matches the published item, the PMTiles output still exists, and
+    the GeoParquet archive is in the current format."""
+    return (fingerprint == published_hash(topic) and pmtiles_present(topic)
+            and sink_archive.is_current(topic))

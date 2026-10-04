@@ -300,10 +300,10 @@ export function DiscoveryView({
   }, [q, drawn]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Clearing a place undoes picking it: back to the search it came from (the map refits to that),
-  // or, with none, the whole catalog and all of Utah.
+  // or, with none, the whole catalog and all of Utah. A search typed since then is kept.
   const placeFromQ = useRef("");
   const clearPlace = () => {
-    const back = placeFromQ.current;
+    const back = text.trim() ? text : placeFromQ.current;
     placeFromQ.current = "";
     fittedQ.current = "";
     clearTimeout(typeTimer.current);

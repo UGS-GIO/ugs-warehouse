@@ -234,6 +234,12 @@ def exists(object_path: str) -> bool:
         return _gcs_client().bucket(config.BUCKET).blob(object_path).exists()
 
 
+def get_tail(object_path: str, length: int) -> bytes:
+    """The last `length` bytes of an object, such as a Parquet footer, without the rest of it."""
+    size = obs.head(_store(), object_path)["size"]
+    return bytes(obs.get_range(_store(), object_path, start=max(0, size - length), end=size))
+
+
 class WriteOnceViolation(Exception):
     """Attempt to overwrite an existing write-once (authoritative published) object."""
 

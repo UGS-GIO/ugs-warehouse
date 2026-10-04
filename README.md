@@ -7,21 +7,23 @@ bucket, served read-only through the maps-assets CDN and a static STAC viewer.
 - **vector** — Postgres `{schema}.{topic}_current` serving tables → DuckLake table, GeoParquet
   archive, PMTiles, STAC item.
 - **pubs** — UGS publications → COG (geologic plates), footprints + unit polygons, cover
-  thumbnails, STAC item. See `docs/INTEGRATION_GEOLMAP.md`.
+  thumbnails, STAC item. See `docs/ARCHITECTURE.md`.
 
 One STAC catalog spans both, laid out with collections (`ugs-serving-topics`, `ugs-publications`,
 `ugs-rasters`). `ugs-serving-topics` and `ugs-publications` nest one level — per dbt mart schema
 (`ugs-serving-topics/hazards`) and per publication series (`ugs-publications/DS`) — and serving
-topics also publish a rollup `ugs-serving-topics/items.json` spanning every schema. An optional
+topics also publish a rollup `ugs-serving-topics/items.json` spanning every schema. The root
+`items.json` indexes every item in the catalog in one file, and each collection carries an
+`items.parquet` (stac-geoparquet) mirror of its items. An optional
 Django **ops console** (`admin/`) drives + observes the Cloud Run jobs.
 
 ## Architecture
 
 ```
 vector producer                         pubs producer
-  Pub/Sub {schema, topic}                 CSV/MySQL manifest + footprints
+  Pub/Sub {schema, topic}                 publications feed (Postgres) + GIS zips
    ↓ push → service/main.py                ↓ Cloud Run Job (sharded)
-  source → transform (4326·h3·hilbert)    harvest zip→COG · footprints · units · thumbs
+  source → transform (4326·h3·hilbert)    harvest zip→COG · map layers · covers · search
    ↓                                       ↓
   └──────────────┬─────────── core/stac.py (one item builder, one catalog) ───────────┘
                  ↓
@@ -69,7 +71,7 @@ src/ugs_warehouse/
 
 service/         Cloud Run service: Pub/Sub push → vector ingest
 admin/           Django + HTMX ops console (IAP): run/observe the Cloud Run jobs
-featureserv/     duckdb_featureserv config — OGC API Features over the GeoParquet
+featureserv/     pygeoapi: OGC API Features over the GeoParquet
 viewer/          React + MapLibre STAC viewer (static, on Firebase Hosting; catalog off the CDN)
 scripts/         CLI: bootstrap catalog, manual ingest, provision pub/sub
 docs/            MkDocs site (ARCHITECTURE, SERVING, STYLING, USER_GUIDE, …)
@@ -96,5 +98,5 @@ python -m ugs_warehouse.vector.ingest --topic hazards.hazards_qfaults_current --
 python -m ugs_warehouse.vector.ingest --all
 ```
 
-The pubs producer + ops console have their own entrypoints — see `docs/INTEGRATION_GEOLMAP.md`
-and `admin/`. CI + dedicated service accounts come at deploy time (`docs/DEPLOY.md`).
+The pubs producer runs as `python -m ugs_warehouse.pubs.ingest` (each `pubs/` stage takes `--help`);
+the ops console lives in `admin/`. CI + dedicated service accounts come at deploy time (`docs/DEPLOY.md`).

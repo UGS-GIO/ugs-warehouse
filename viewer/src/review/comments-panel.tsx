@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { useRef, useState } from "react";
 import { type Comment, type CommentTarget, createComment, deleteComment, listComments, listReviewers, replyToComment, setStatus, whoami } from "./comments";
 
@@ -18,10 +19,10 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
   const qc = useQueryClient();
   // Multi-select (comment on N rows at once) has no single thread to show — compose only.
   const composeOnly = (target?.rowVals?.length ?? 0) > 1;
-  const key = ["comments", itemId, target?.kind ?? "item", target?.rowVal ?? null, target?.column ?? null];
+  const key = qk.comments.thread(itemId, target);
   const invalidate = () => {
     qc.invalidateQueries({ queryKey: key });
-    qc.invalidateQueries({ queryKey: ["comments-all"] });  // keep the Review dashboard fresh
+    qc.invalidateQueries({ queryKey: qk.comments.all });  // keep the Review dashboard fresh
   };
 
   const { data: comments = [], isLoading, error } = useQuery({
@@ -30,12 +31,12 @@ export function CommentsPanel({ itemId, target, label = "Review comments" }: {
     retry: false,
     enabled: !composeOnly,
   });
-  const me = useQuery({ queryKey: ["whoami"], queryFn: whoami, retry: false, staleTime: Infinity });
+  const me = useQuery({ queryKey: qk.whoami, queryFn: whoami, retry: false, staleTime: Infinity });
   const myEmail = me.data?.email;
 
   const [body, setBody] = useState("");
   // @-mention autocomplete: roster = review group members (fetched once, filtered client-side).
-  const reviewers = useQuery({ queryKey: ["reviewers"], queryFn: listReviewers, retry: false, staleTime: 5 * 60_000 });
+  const reviewers = useQuery({ queryKey: qk.reviewers, queryFn: listReviewers, retry: false });
   const taRef = useRef<HTMLTextAreaElement>(null);
   const [mentions, setMentions] = useState<string[]>([]);  // current dropdown matches (empty = hidden)
   const [mentionIdx, setMentionIdx] = useState(0);         // keyboard-highlighted row in the dropdown

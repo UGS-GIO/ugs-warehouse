@@ -8,7 +8,7 @@
 # Auth is WIF (no long-lived key): github-actions-sa's federation already allows this repo. This
 # job itself only submits the build — the actual deletes run under `ugs-warehouse-preview-build`
 # (--service-account below), the same least-trusted identity the viewer/tiles preview triggers use,
-# so a compromised Actions run still can't reach past the previews bucket + the tiles service tag.
+# so a compromised Actions run still can't reach past the previews bucket + the tiles preview service's tags.
 name: PR preview cleanup
 
 on:

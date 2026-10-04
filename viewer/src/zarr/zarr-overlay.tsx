@@ -2,7 +2,7 @@
  * Datacube layers on a maplibre map. Lives inside the MapGL tree (useControl needs the map context)
  * and is lazy-loaded, so a map with no datacube never pulls in deck.gl-zarr.
  */
-import { MapboxOverlay, type MapboxOverlayProps } from "@deck.gl/mapbox";
+import { MapLibreOverlay, type MapLibreOverlayProps } from "@deck.gl/maplibre";
 import type { Device } from "@luma.gl/core";
 import { useState } from "react";
 import { useControl } from "react-map-gl/maplibre";
@@ -10,8 +10,8 @@ import { useControl } from "react-map-gl/maplibre";
 import { useZarrLayers, type ZarrSpec } from "./use-zarr-layers";
 
 /** deck.gl layers as a maplibre control. `interleaved` keeps basemap labels above the raster. */
-export function DeckOverlay(props: MapboxOverlayProps) {
-  const overlay = useControl<MapboxOverlay>(() => new MapboxOverlay({ ...props, interleaved: true }));
+export function DeckOverlay(props: MapLibreOverlayProps) {
+  const overlay = useControl<MapLibreOverlay>(() => new MapLibreOverlay({ ...props, interleaved: true }));
   overlay.setProps(props);
   return null;
 }

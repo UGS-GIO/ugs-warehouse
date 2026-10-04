@@ -1,4 +1,5 @@
 /// <reference types="vite/client" />
+/// <reference types="vite-plugin-pwa/client" />
 
 // Bare CSS subpath export (no `.css` extension) — TS6 can't resolve it without a hint.
 declare module "@utahdts/utah-design-system-header/css";

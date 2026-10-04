@@ -1,4 +1,4 @@
-import maplibregl from "maplibre-gl";
+import * as maplibregl from "maplibre-gl";
 
 // cog:// protocol registered once, lazily — pulls geotiff.js only when a COG is first viewed.
 // Shared by the item-detail COG map (CogMap) and the multi-layer overlay map (ItemMap), so both

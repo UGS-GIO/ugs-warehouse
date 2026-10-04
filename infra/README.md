@@ -49,7 +49,7 @@ done
 
 # Let the operator impersonate it (narrow: just token minting, not the admin roles):
 gcloud iam service-accounts add-iam-policy-binding $SA --project=$PROJECT \
-  --member="user:clunn@utah.gov" --role=roles/iam.serviceAccountTokenCreator
+  --member="user:<you>@utah.gov" --role=roles/iam.serviceAccountTokenCreator
 ```
 
 State-bucket note: `impersonate_service_account` in the provider covers provider calls only; the gcs

@@ -1,15 +1,28 @@
 import { Toggle } from "@base-ui/react/toggle";
-import maplibregl from "maplibre-gl";
+import { qk } from "@/query-keys";
+import maplibregl from "@/map/maplibre-lib";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
-import { GeolocateControl, Layer, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
+import { useQuery } from "@tanstack/react-query";
+import { lazy, type ReactNode, Suspense, useEffect, useRef, useState } from "react";
+import { GeolocateControl, Layer, NavigationControl, type LayerProps, type MapLayerMouseEvent, Map as MapGL, type MapRef, Marker, Popup, Source, type ViewStateChangeEvent } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
+import { BLANK_STYLE } from "@/offline/basemap";
+import { type Flavor, GLYPHS, protomapsStyle } from "./basemap-style";
+import { basemapProtocol } from "@/offline/basemap-protocol";
+import * as offlineStore from "@/offline/store";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
-import { UiSegmented } from "@/ui/segmented";
-import { type ActiveLayer, colorFor, type Footprint, GEOM_FILTER, validBbox } from "./map-model";
-import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+import { usePerItem } from "@/lib/use-per-item";
+import { BasemapMenu } from "./basemap-menu";
+import lightThumb from "@/assets/basemaps/light.webp";
+import satelliteThumb from "@/assets/basemaps/satellite.webp";
+import streetsThumb from "@/assets/basemaps/streets.webp";
+import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, pickFeature, slugOf, validBbox } from "./map-model";
+import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
+import { COG_GATE, type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
+import { useIsDesktop } from "@/ui/use-breakpoint";
+import { to2d } from "@/lib/bbox";
 
 // deck.gl-zarr + luma.gl only load when a datacube is actually toggled on.
 const ZarrOverlay = lazy(() => import("@/zarr/zarr-overlay").then((m) => ({ default: m.ZarrOverlay })));
@@ -31,21 +44,55 @@ function writeCam({ longitude, latitude, zoom }: Cam): void {
   history.replaceState(null, "", `${location.pathname}?${p}`);
 }
 
-const ofm = (s: string) => `https://tiles.openfreemap.org/styles/${s}`;
-// Ours, so it names glyphs itself (the OpenFreeMap basemaps bring their own) — else no labels (#116).
+// Names glyphs itself, so data-layer labels still draw over imagery — else no labels (#116).
 const SATELLITE: maplibregl.StyleSpecification = {
   version: 8,
-  glyphs: "https://maps-assets.geology.utah.gov/styles/fonts/{fontstack}/{range}.pbf",
+  glyphs: GLYPHS,
   sources: { sat: { type: "raster", tiles: ["https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"], tileSize: 256, attribution: "Imagery © Esri" } },
   layers: [{ id: "sat", type: "raster", source: "sat" }],
 };
 const BASEMAPS = {
-  Streets: ofm("liberty"), Light: ofm("positron"), Satellite: SATELLITE,
-} satisfies Record<string, string | maplibregl.StyleSpecification>;
+  Streets: "light", Light: "white", Satellite: SATELLITE,
+} satisfies Record<string, Flavor | maplibregl.StyleSpecification>;
 type BasemapId = keyof typeof BASEMAPS;
-const BASEMAP_ITEMS = (Object.keys(BASEMAPS) as BasemapId[]).map((value) => ({ value, label: value }));
 
-type PopupInfo = { lng: number; lat: number; title: string; props: Record<string, unknown>; href?: string };
+const BASEMAP_IDS = Object.keys(BASEMAPS) as BasemapId[];
+const BASEMAP_THUMBS: Record<BasemapId, string> = { Streets: streetsThumb, Light: lightThumb, Satellite: satelliteThumb };
+
+let basemapProtocolReady = false;
+
+// Streets and Light read through basemap:// (offline/basemap-protocol.ts), so a saved archive draws
+// from disk. The protocol has to know what is on disk before the map asks for its first tile, so
+// the style waits for the store's first read.
+function useBasemapStyle(id: BasemapId) {
+  return useQuery({
+    queryKey: qk.basemapStyle(id),
+    queryFn: async (): Promise<maplibregl.StyleSpecification> => {
+      const spec = BASEMAPS[id];
+      if (typeof spec !== "string") return spec;
+      if (!basemapProtocolReady) {
+        basemapProtocolReady = true;
+        maplibregl.addProtocol("basemap", basemapProtocol);
+      }
+      await offlineStore.whenReady();
+      return protomapsStyle(spec);
+    },
+    staleTime: Infinity,
+  });
+}
+
+// The footprint "Open item →" popup is the only popup left on the map — a data-feature click docks
+// its detail instead (see SelectedFeature/onSelectFeature below), so this never carries feature props.
+type PopupInfo = { lng: number; lat: number; title: string; href?: string };
+
+// The related tables a clicked layer offers — names + the full-item href to resolve joins on open.
+// Named from the compact index (cheap); the join columns are read from the full item only on open.
+export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string }[] };
+// What "open a related table" hands back up to the map route (which renders it in the Info panel).
+export type OpenRelated = { itemHref: string; relatedKey: string; title: string; props: Record<string, unknown> };
+// A clicked data feature's detail, lifted to the route so it can be docked (no floating feature
+// popup anywhere — the stakeholder-mandated pattern this replaces).
+export type SelectedFeature = { title: string; props: Record<string, unknown>; related?: RelatedTablesInfo };
 
 // Union of bboxes → [w,s,e,n], or null.
 function unionBbox(bs: number[][]): [number, number, number, number] | null {
@@ -72,9 +119,19 @@ function coverageFC(fps: Footprint[]): GeoJSON.FeatureCollection {
 }
 
 export function ItemMap({ item, layers, footprints = [], onPickFootprint,
-  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false }: {
+  highlightBbox, onHoverFootprint, onBoundsChange, coverageDefault = false, relatedFor, onSelectFeature, search,
+  showPin = false, onPickAt }: {
   item?: StacDoc; layers: ActiveLayer[];
+  search?: ReactNode;   // drawn in the top-left corner (the desktop map search)
+  showPin?: boolean;    // the map view shows the search's place pin; Discover's map does not
+  // "What's here" at a point: a long press on phones, a right-click on desktop. Optional.
+  onPickAt?: (lon: number, lat: number, zoom: number) => void;
   footprints?: Footprint[]; onPickFootprint?: (href: string) => void;
+  // Related-table affordances: `relatedFor` maps a clicked layer id → its related tables (named
+  // from the index by the caller). `onSelectFeature` lifts a clicked data feature up to the route,
+  // which docks its detail — there is no floating feature popup. Both optional.
+  relatedFor?: (layerId: string) => RelatedTablesInfo | undefined;
+  onSelectFeature?: (f: SelectedFeature | null) => void;
   // Discovery sync (all optional — the map works standalone without them): a footprint to emphasize
   // (a hovered discovery card), a callback when a coverage footprint is hovered on the map (→ the
   // card list highlights it), and the viewport bounds after load/move (→ "Search this area").
@@ -86,14 +143,42 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   coverageDefault?: boolean;
 }) {
   const mapRef = useRef<MapRef>(null);
+  const pin = usePin();
+  const shownPin = showPin ? pin : null;
   const [mapLoaded, setMapLoaded] = useState(false);
   const [cursor, setCursor] = useState<"" | "pointer">("");
   const [popup, setPopup] = useState<PopupInfo | null>(null);
+  // The selected feature's geometry, highlighted so switching the dock doesn't lose your place.
+  // Straight off the click event, so tile-clipped for very large polygons — fine for a highlight.
+  // Scoped to the shown item.
+  const [hlGeom, setHlGeom] = usePerItem<GeoJSON.Geometry | null>(item?.id ?? "", null);
   const [basemap, setBasemap] = useState<BasemapId>("Streets");
+  const basemapStyle = useBasemapStyle(basemap);
+  const isDesktop = useIsDesktop();
+  // What's-here gestures, without an effect: refs hold the press in progress.
+  //  - Touch: a timer. iOS Safari never fires contextmenu on a long press, so a timer is the one
+  //    method that works on every phone. Holding arms it (with a short buzz where the phone can);
+  //    LIFTING opens it. Opening while the finger is still down let the lift land on the picker's
+  //    new backdrop as a tap outside, which closed it again at once. Panning cancels.
+  //  - Mouse: open on right-button UP without movement. Opening on contextmenu would fire at the
+  //    start of every right-drag rotation on macOS and Linux, where it arrives on mousedown.
+  const press = useRef<{
+    timer?: ReturnType<typeof setTimeout>; x: number; y: number; lng?: number; lat?: number; armed?: boolean;
+  } | null>(null);
+  const cancelPress = () => { clearTimeout(press.current?.timer); press.current = null; };
+  const moved = (x: number, y: number) => !!press.current && Math.hypot(x - press.current.x, y - press.current.y) > 8;
+  // Off north-up (rotated or tilted), which is when the phone compass is worth its space. Set only
+  // when it flips, so a twist gesture's stream of rotate events does not re-render the map each frame.
+  const [offNorth, setOffNorth] = useState(false);
+  const trackNorth = ({ viewState: v }: ViewStateChangeEvent) => {
+    const off = Math.abs(v.bearing) > 0.5 || v.pitch > 0.5;
+    if (off !== offNorth) setOffNorth(off);
+  };
   // The discovery highlight rectangle: the hovered card's footprint, normalized (validBbox handles a
   // 6-length 3D bbox and rejects bad values) so a malformed bbox just draws nothing.
   const highlight = validBbox(highlightBbox);
-  // Report the viewport bbox on load + after every move, for the panel's "Search this area".
+  // Report the viewport bbox on load + after every move: for Discover's "Search this area", and
+  // for the map view's "Save basemap" panel, which downloads the quads in view.
   const reportBounds = () => {
     const m = mapRef.current?.getMap();
     if (!m || !onBoundsChange) return;
@@ -121,25 +206,23 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const coverage = showCoverage && footprints.length ? coverageFC(footprints) : null;
   // COG (raster) layers need the cog:// protocol registered before their Source mounts. Register
   // lazily the first time any toggled-on layer is a COG; render those Sources only once ready.
-  const [cogReady, setCogReady] = useState(false);
   const hasCog = layers.some((l) => l.cogHref);
+  // One-time async import, cached — hence no ready flag and no late-resolve guard.
+  const { isSuccess: cogReady } = useQuery({
+    queryKey: qk.cogProtocol,
+    queryFn: async () => { await ensureCogProtocol(); return true as const; },
+    enabled: hasCog, staleTime: Infinity, gcTime: Infinity,
+  });
   // Datacubes render through deck.gl, not a maplibre Source, so they're collected here and drawn by
   // one overlay rather than in the per-layer Source switch below.
   const zarrSpecs = layers.flatMap((l) => (l.zarr ? [{ id: l.id, ...l.zarr }] : []));
-  useEffect(() => {
-    if (!hasCog || cogReady) return;
-    let live = true;
-    ensureCogProtocol().then(() => { if (live) setCogReady(true); });
-    return () => { live = false; };
-  }, [hasCog, cogReady]);
-
   // COG extents for camera fit (many pub/raster items have no STAC bbox), one cached query per href.
   const cogBoxes = useCogBoxes(layers.map((l) => l.cogHref));
 
   // A layer's effective bbox: its STAC bbox, else (for a COG) its fetched GeoTIFF extent.
   const effBox = (l: ActiveLayer): [number, number, number, number] | undefined => {
-    const b = l.bbox?.slice(0, 4);
-    if (b && b.length >= 4) return b as [number, number, number, number];
+    const b = to2d(l.bbox);
+    if (b) return b;
     return l.cogHref ? cogBoxes[l.cogHref] : undefined;
   };
   const initialCam = useRef(readCam());
@@ -151,11 +234,14 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const activeBoxes = layers.map(effBox).filter((b): b is [number, number, number, number] => Array.isArray(b));
   // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
   const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
-  const fitBox = unionBbox(activeBoxes) ?? (item?.bbox?.slice(0, 4) as [number, number, number, number] | undefined);
+  const fitBox = unionBbox(activeBoxes) ?? to2d(item?.bbox);
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
     setPopup(null);
+    // A search pick that also added a layer: zoom to the pick, not to every layer on the map.
+    const focus = takeFocus();
+    if (focus) { honorCam.current = false; fitTo(mapRef.current, focus); return; }
     if (honorCam.current) { honorCam.current = false; return; }
     const [w, s, e, n] = fitBox;
     mapRef.current.fitBounds([[w, s], [e, n]], { padding: 40, maxZoom: 12, duration: 600 });
@@ -164,10 +250,38 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // Bound GL style `layers` per overlay (id→layers for those that resolved), via TanStack Query.
   const styleCache = useStyleLayersFor(layers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
 
-  // Source/layer ids are keyed by a STABLE slug of the layer id — NOT the array index. Index-based
-  // ids change when a layer is unchecked (the array shifts), and react-map-gl throws "source id
-  // changed" (you can't rename a mounted maplibre source) → the page crashes. Slugs stay constant.
-  const slugOf = (id: string) => id.replace(/[^a-zA-Z0-9_]/g, "_");
+  // Restack the canvas to match the tray order. react-map-gl only calls moveLayer when a <Layer>'s
+  // beforeId prop changes, and we pass none — so a drag-reorder rewrites ?l= and re-renders the
+  // layers in the new order but never restacks the drawn features. Reconcile imperatively:
+  // moveLayer(id) with no `before` sends a layer to the top, so walking the desired stack bottom→top
+  // lands each above the last and the final order matches the tray. We deliberately avoid a computed
+  // beforeId — maplibre's moveLayer splices the layer OUT of the draw order before checking the
+  // before-target exists, so a beforeId pointing at a not-yet-loaded layer during an async window can
+  // drop a layer with no retry. Tray top row = front (drawn on top), so reverse to get bottom→top.
+  const orderKey = layers.map((l) => l.id).join(",");
+  const styledKey = layers.map((l) => styleCache[l.id]?.length ?? 0).join(",");
+  useEffect(() => {
+    const map = mapRef.current?.getMap();
+    if (!map) return;
+    const reconcile = () => {
+      if (!map.isStyleLoaded()) return;
+      const desired = orderedSublayerIds([...layers].reverse(), {
+        styledCount: (id) => styleCache[id]?.length,
+        cogReady,
+      }).filter((id) => map.getLayer(id));
+      // `idle` fires on every pan/zoom — skip the moveLayer churn when the stack is already correct.
+      const current = map.getStyle().layers.map((l) => l.id).filter((id) => desired.includes(id));
+      if (current.length === desired.length && current.every((id, i) => id === desired[i])) return;
+      for (const id of desired) map.moveLayer(id);
+    };
+    reconcile();
+    map.on("idle", reconcile);
+    return () => { map.off("idle", reconcile); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orderKey, styledKey, cogReady, mapLoaded]);
+
+  // Source/layer ids use slugOf(id) (imported) — a stable slug, never the array index, so unchecking
+  // a layer can't rename a mounted source (maplibre throws "source id changed" and takes the map down).
   const layerByMapId: Record<string, ActiveLayer> = {};
   const interactiveIds = layers.flatMap((l) => {
     const s = slugOf(l.id);
@@ -187,10 +301,13 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   // more so because an UNSTYLED layer falls back to paint with no gate and does draw. Name them
   // instead. Only layers whose style has resolved carry a gate, so nothing flashes during load.
   const gateById: Record<string, Gate | null> = {};
-  for (const l of layers) gateById[l.id] = gateOf(styleCache[l.id]);
+  for (const l of layers) gateById[l.id] = l.cogHref ? COG_GATE : gateOf(styleCache[l.id]);
   const gatedOut = useGatedOut(mapRef, layers.map((l) => ({ id: l.id, gate: gateById[l.id] })), mapLoaded);
-  const hiddenGroup = (dir: "in" | "out") =>
-    groupGate(layers.filter((l) => gatedOut[l.id] === dir).map((l) => ({ title: l.title, gate: gateById[l.id] })), dir);
+  const hiddenGroup = (dir: "in" | "out") => {
+    const out = layers.filter((l) => gatedOut[l.id] === dir);
+    const g = groupGate(out.map((l) => ({ title: l.title, gate: gateById[l.id] })), dir);
+    return g && out.length > 3 ? { ...g, subject: `${out.length} layers` } : g;
+  };
   // Zoom-in wins the slot when both directions are gated — it's the case that actually occurs, since
   // SLD MaxScaleDenominators become minzooms.
   const inGroup = hiddenGroup("in");
@@ -201,16 +318,26 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const easeZoomTo = (z: number) => mapRef.current?.getMap().easeTo({ zoom: z, duration: 600 });
 
   const onClick = (e: MapLayerMouseEvent) => {
-    const f = e.features?.[0];
-    if (!f) return setPopup(null);
+    const f = pickFeature(e, allInteractiveIds);
+    if (!f) { setPopup(null); onSelectFeature?.(null); setHlGeom(null); return; }
     if (f.layer.id === "coverage-fill") {
       // A footprint: popup its title + a link to open the item (don't yank the user off the map).
+      // Clear any docked FeatureDetail too — a footprint popup and a docked feature must never
+      // coexist (that's the floating-popup-beside-the-dock drift this redesign removes).
       setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: String(f.properties?.title ?? ""),
-                 props: {}, href: f.properties?.href ? String(f.properties.href) : undefined });
+                 href: f.properties?.href ? String(f.properties.href) : undefined });
+      onSelectFeature?.(null);
+      setHlGeom(null);   // a footprint isn't a data feature — nothing to highlight
       return;
     }
     const l = layerByMapId[f.layer.id];
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, title: l?.title ?? "", props: f.properties ?? {} });
+    // Resolve the related tables ONCE here, not on every dock render (ItemMap re-renders on hover/move).
+    // Lifted to the route, which docks the detail — no floating feature popup. Close any open
+    // footprint popup too, for the same reason as above.
+    onSelectFeature?.({ title: l?.title ?? "", props: f.properties ?? {},
+                         related: l?.id ? relatedFor?.(l.id) : undefined });
+    setPopup(null);
+    setHlGeom((f.geometry as GeoJSON.Geometry) ?? null);
   };
 
   return (
@@ -218,25 +345,68 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
       ref={mapRef}
       mapLib={maplibregl}
       initialViewState={initialCam.current ?? { longitude: -111.7, latitude: 39.3, zoom: 5.3 }}
-      mapStyle={BASEMAPS[basemap]}
+      mapStyle={basemapStyle.data ?? BLANK_STYLE}
       style={{ width: "100%", height: "100%" }}
       interactiveLayerIds={allInteractiveIds}
       cursor={cursor}
       onMouseEnter={() => setCursor("pointer")}
       onMouseLeave={() => { setCursor(""); emitHover(null); }}
       onMouseMove={onHover}
-      onLoad={() => { setMapLoaded(true); reportBounds(); }}
+      onLoad={() => {
+        setMapLoaded(true); reportBounds();
+        setMapTarget(mapRef);
+        const focus = takeFocus();
+        if (focus && mapRef.current) fitTo(mapRef.current, focus);
+      }}
       onMoveEnd={(e: ViewStateChangeEvent) => { writeCam(e.viewState); reportBounds(); }}
+      onRotate={trackNorth}
+      onPitch={trackNorth}
       onClick={onClick}
+      onTouchStart={(e) => {
+        if (!onPickAt || e.originalEvent.touches.length !== 1) return cancelPress();
+        const p = { x: e.point.x, y: e.point.y, lng: e.lngLat.lng, lat: e.lngLat.lat, armed: false };
+        press.current = { ...p, timer: setTimeout(() => {
+          if (press.current) press.current.armed = true;
+          navigator.vibrate?.(15);
+        }, 550) };
+      }}
+      onTouchMove={(e) => { if (moved(e.point.x, e.point.y)) cancelPress(); }}
+      onTouchEnd={(e) => {
+        const p = press.current;
+        cancelPress();
+        if (!p?.armed || p.lng === undefined || p.lat === undefined) return;
+        // Swallow the click the browser synthesises after a touch: it would land on the picker
+        // that just opened under the finger and toggle whichever row is there.
+        e.originalEvent.preventDefault();
+        onPickAt?.(p.lng, p.lat, mapRef.current?.getZoom() ?? 12);
+      }}
+      onMouseDown={(e) => { if (e.originalEvent.button === 2) press.current = { x: e.point.x, y: e.point.y }; }}
+      onMouseUp={(e) => {
+        if (e.originalEvent.button !== 2 || !press.current) return;
+        const still = !moved(e.point.x, e.point.y);
+        press.current = null;
+        if (still) onPickAt?.(e.lngLat.lng, e.lngLat.lat, mapRef.current?.getZoom() ?? 12);
+      }}
     >
-      <MapControl position="top-left">
-        <Geocoder onPick={(b) => mapRef.current?.fitBounds([[b[0], b[1]], [b[2], b[3]]], { padding: 40, maxZoom: 14, duration: 800 })} />
-      </MapControl>
+      {search && <MapControl position="top-left">{search}</MapControl>}
+      {shownPin && (
+        <Marker longitude={shownPin.lng} latitude={shownPin.lat} anchor="bottom">
+          <div className="flex flex-col items-center">
+            <span className="mb-0.5 flex items-center gap-1 whitespace-nowrap rounded-full border border-border bg-card px-2 py-0.5 text-xs font-medium text-foreground shadow">
+              {shownPin.label}
+              <button type="button" aria-label="Remove the pin" onClick={() => setPin(null)}
+                className="text-muted-foreground hover:text-foreground">×</button>
+            </span>
+            <svg aria-hidden="true" width="26" height="34" viewBox="0 0 24 32" className="text-primary drop-shadow">
+              <path fill="currentColor" stroke="white" strokeWidth="1.5" d="M12 1C6 1 1.5 5.5 1.5 11.3 1.5 19 12 31 12 31s10.5-12 10.5-19.7C22.5 5.5 18 1 12 1z" />
+              <circle cx="12" cy="11.5" r="4" fill="white" />
+            </svg>
+          </div>
+        </Marker>
+      )}
 
       {/* Added before the geolocate control, so it sits above it in the same corner. */}
       <MapControl position="top-right" className="flex gap-1 text-xs">
-        <UiSegmented value={basemap} onValueChange={setBasemap} items={BASEMAP_ITEMS}
-          className="bg-card/95 shadow" />
         {footprints.length > 0 && (
           <Toggle pressed={showCoverage} onPressedChange={setShowCoverage}
             title="Show every item's footprint (what's mapped where)"
@@ -246,8 +416,17 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         )}
       </MapControl>
 
-      <GeolocateControl position="top-right" trackUserLocation
+      {/* Phones follow the Google/Apple Maps layout. Locate goes bottom-right, in thumb reach: it is
+          the control used most in the field, and top-right is the hardest spot to reach one-handed.
+          (MapLibre stacks bottom controls upward, so it sits just above the attribution.) The compass
+          stays top-right and appears only off north-up, where it earns its space; a tap resets
+          bearing and pitch. No +/-: phones pinch to zoom. */}
+      <MapControl position="top-right">
+        <BasemapMenu value={basemap} onValueChange={setBasemap} items={BASEMAP_IDS} thumbs={BASEMAP_THUMBS} />
+      </MapControl>
+      <GeolocateControl position={isDesktop ? "top-right" : "bottom-right"} trackUserLocation
         positionOptions={{ enableHighAccuracy: true }} />
+      {!isDesktop && offNorth && <NavigationControl position="top-right" showZoom={false} visualizePitch />}
 
       {/* Scale-gated overlays: name the layers this zoom hides, and offer the one move that reveals
           them all. */}
@@ -287,7 +466,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         <Suspense fallback={null}><ZarrOverlay specs={zarrSpecs} /></Suspense>
       )}
 
-      {layers.map((l, i) => {
+      {layers.map((l) => {
         const s = slugOf(l.id);
         if (l.zarr) return null;   // drawn by the deck overlay above
         // Raster PMTiles mosaic — the per-scale geologic-map tiles, served via the already-registered
@@ -305,11 +484,11 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
           if (!cogReady) return null;
           return (
             <Source key={l.id} id={`cog-${s}`} type="raster" url={`cog://${l.cogHref}`} tileSize={256}>
-              <Layer id={`cog-${s}-raster`} type="raster" paint={{ "raster-opacity": 0.9 }} />
+              <Layer id={`cog-${s}-raster`} type="raster" minzoom={COG_GATE.min} paint={{ "raster-opacity": 0.9 }} />
             </Source>
           );
         }
-        const c = colorFor(i);  // color rotates by position — fine to stay index-based
+        const c = colorForId(l.id);  // keyed to id → matches the legend/tray swatch and survives reorder
         const styleLayers = styleCache[l.id];
         const pmHref = l.pmHref!;
         const pmLayer = l.pmLayer!;
@@ -341,16 +520,26 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         );
       })}
 
+      {/* Selected-feature highlight — marks which feature is docked, and survives switching the dock
+          (e.g. to open a related table) so you don't lose your place. Non-interactive. */}
+      {hlGeom && (
+        <Source id="feat-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
+          <Layer id="feat-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
+          <Layer id="feat-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
+          <Layer id="feat-hl-pt" type="circle" filter={["in", ["geometry-type"], ["literal", ["Point", "MultiPoint"]]]} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
+        </Source>
+      )}
+
+      {/* Footprint discovery affordance only — a data-feature click docks its detail (onSelectFeature
+          above) instead of popping up. */}
       {popup && (
         <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
           {popup.title && <div className="mb-1 text-xs font-semibold text-gray-900">{popup.title}</div>}
-          {popup.href ? (
+          {popup.href && (
             <button onClick={() => { onPickFootprint?.(popup.href!); setPopup(null); }}
               className="text-xs font-medium text-primary underline underline-offset-2 hover:opacity-80">
               Open item →
             </button>
-          ) : (
-            <FeatureProps props={popup.props} />
           )}
         </Popup>
       )}
@@ -358,55 +547,62 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   );
 }
 
-// Keyless place search via Nominatim (OSM). US-biased; flies the map to the first hit.
-function Geocoder({ onPick }: { onPick: (b: [number, number, number, number]) => void }) {
-  const [q, setQ] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState<string>();
-
-  const search = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!q.trim()) return;
-    setBusy(true);
-    setErr(undefined);
-    try {
-      const u = `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=us&q=${encodeURIComponent(q)}`;
-      const hits = await (await fetch(u)).json();
-      if (!hits.length) { setErr("not found"); return; }
-      const bb = hits[0].boundingbox.map(Number); // [south, north, west, east]
-      onPick([bb[2], bb[0], bb[3], bb[1]]); // → [w, s, e, n]
-    } catch {
-      setErr("search failed");
-    } finally {
-      setBusy(false);
-    }
-  };
-
+function FeatureProps({ props }: { props: Record<string, unknown> }) {
+  const rows = Object.entries(props).filter(([, v]) => v !== null && v !== "").slice(0, 18);
+  if (!rows.length) return <em className="text-muted-foreground">No attributes.</em>;
+  // Flow the pairs into columns so a wide (desktop) dock fills its horizontal space instead of a
+  // narrow table hugging the left edge; collapses to one column in the narrow mobile sheet.
   return (
-    <form onSubmit={search} className="flex items-center gap-1 rounded-md border border-border bg-card/95 p-1 text-xs shadow">
-      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search place…"
-        className="w-24 sm:w-40 rounded bg-transparent px-1.5 py-0.5 text-foreground placeholder:text-muted-foreground focus:outline-none" />
-      <button type="submit" disabled={busy} className="rounded bg-primary px-2 py-0.5 text-primary-foreground disabled:opacity-50">
-        {busy ? "…" : "Go"}
-      </button>
-      {err && <span className="px-1 text-destructive">{err}</span>}
-    </form>
+    <dl className="columns-1 gap-x-8 text-xs sm:columns-2 lg:columns-3">
+      {rows.map(([k, v]) => (
+        <div key={k} className="flex break-inside-avoid items-baseline gap-2 py-0.5">
+          <dt className="shrink-0 whitespace-nowrap font-medium text-muted-foreground">{k}</dt>
+          <dd className="min-w-0 flex-1 truncate text-foreground" title={String(v)}>{String(v)}</dd>
+        </div>
+      ))}
+    </dl>
   );
 }
 
-function FeatureProps({ props }: { props: Record<string, unknown> }) {
-  const rows = Object.entries(props).filter(([, v]) => v !== null && v !== "").slice(0, 14);
-  if (!rows.length) return <em className="text-muted-foreground">No attributes.</em>;
+// Related-table affordances under the feature props. Names come straight from the index (no fetch on
+// click); the join columns, COUNT, and rows load only when one is opened, in the Info panel.
+function RelatedLinks({ info, props, onOpen }: {
+  info?: RelatedTablesInfo; props: Record<string, unknown>; onOpen: (r: OpenRelated) => void;
+}) {
+  if (!info?.tables.length) return null;
   return (
-    <table className="border-collapse text-xs">
-      <tbody>
-        {rows.map(([k, v]) => (
-          <tr key={k}>
-            <td className="pr-2 align-top font-medium text-gray-600">{k}</td>
-            <td className="align-top text-gray-900">{String(v)}</td>
-          </tr>
+    <div className="mt-3 border-t border-border pt-2.5">
+      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
+      <div className="flex flex-wrap gap-1.5">
+        {info.tables.map((t) => (
+          <button key={t.key} type="button"
+            onClick={() => onOpen({ itemHref: info.itemHref, relatedKey: t.key, title: t.title, props })}
+            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary">
+            {t.title} <span aria-hidden className="text-primary">→</span>
+          </button>
         ))}
-      </tbody>
-    </table>
+      </div>
+    </div>
+  );
+}
+
+// A clicked data feature's props + related-table launchers, rendered in the Info dock (whose slot
+// scrolls, so no fixed height here). The footprint "Open item →" popup is a separate affordance.
+export function FeatureDetail({ feature, onOpenRelated, onClose }: {
+  feature: SelectedFeature; onOpenRelated: (r: OpenRelated) => void; onClose: () => void;
+}) {
+  return (
+    <div>
+      <div className="mb-2.5 flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</div>
+          <h3 className="truncate text-sm font-semibold text-foreground" title={feature.title}>{feature.title || "Feature"}</h3>
+        </div>
+        <button type="button" onClick={onClose} aria-label="Close feature detail" title="Close feature detail"
+          className="-mr-1 shrink-0 rounded p-1 text-muted-foreground hover:text-foreground"><span aria-hidden>✕</span></button>
+      </div>
+      <FeatureProps props={feature.props} />
+      <RelatedLinks info={feature.related} props={feature.props} onOpen={onOpenRelated} />
+    </div>
   );
 }

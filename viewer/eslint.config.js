@@ -31,4 +31,25 @@ export default tseslint.config(
       "@typescript-eslint/no-unused-vars": ["warn", { argsIgnorePattern: "^_", varsIgnorePattern: "^_" }],
     },
   },
+  {
+    // Routes are the URL layer: search params + queries, not effects. Scoped reset-on-key state goes
+    // through usePerItem, fetched state through TanStack Query, shareable state through router search
+    // params. Reset-on-change effects belong to none of those, so effects are banned here outright.
+    files: ["src/routes/**/*.{ts,tsx}"],
+    rules: {
+      "no-restricted-syntax": ["error", {
+        selector: "CallExpression[callee.name='useEffect']",
+        message: "No useEffect in routes/: use usePerItem for scoped reset state, TanStack Query for fetched state, and router search params for shareable state.",
+      }],
+    },
+  },
+  {
+    // Offline storage reads files the app wrote in earlier versions, or that got damaged. Type them
+    // by checking (offline/guards.ts), never by asserting: no `as`, no `!`. `as const` stays allowed.
+    files: ["src/offline/**/*.{ts,tsx}", "src/sw.ts", "src/map/pmtiles-protocol.ts", "src/map/map-shell.tsx"],
+    rules: {
+      "@typescript-eslint/consistent-type-assertions": ["error", { assertionStyle: "never" }],
+      "@typescript-eslint/no-non-null-assertion": "error",
+    },
+  },
 );

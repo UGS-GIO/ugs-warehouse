@@ -4,6 +4,7 @@ import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { tanstackRouter } from "@tanstack/router-plugin/vite";
 import { defineConfig } from "vite";
+import { VitePWA } from "vite-plugin-pwa";
 
 // Build stamp — git short hash + the HEAD commit's date, so the date and hash
 // always describe the same commit. Falls back gracefully if git is unavailable
@@ -26,7 +27,47 @@ const BUILD_DATE = sh("git log -1 --format=%cd --date=short", new Date().toISOSt
 export default defineConfig({
   // tanstackRouter must precede react(): it generates routeTree.gen.ts from src/routes/ and the
   // react plugin has to see the generated output.
-  plugins: [tanstackRouter({ target: "react", autoCodeSplitting: true }), react(), tailwindcss()],
+  plugins: [
+    tanstackRouter({ target: "react", autoCodeSplitting: true }),
+    react(),
+    tailwindcss(),
+    // Service worker + manifest. Scope, start_url and the precache manifest all derive from `base`,
+    // so the review and preview builds get a SW scoped to their own prefix with no extra config.
+    //
+    // injectManifest, not generateSW: the worker is written out in src/sw.ts because offline layers
+    // need a fetch handler that answers HTTP Range from local storage, which no Workbox strategy
+    // expresses. The routes are the same either way; only the authoring moves.
+    VitePWA({
+      disable: process.env.VITE_OFFLINE === "0",
+      strategies: "injectManifest",
+      srcDir: "src",
+      filename: "sw.ts",
+      // The worker calls skipWaiting/clientsClaim itself; this only drives the client registration.
+      registerType: "autoUpdate",
+      includeAssets: ["favicon.svg", "robots.txt", "icons/*.png"],
+      manifest: {
+        name: "UGS Warehouse",
+        short_name: "UGS Warehouse",
+        description: "Utah Geological Survey data catalog and map viewer.",
+        theme_color: "#2765e4",
+        background_color: "#ffffff",
+        display: "standalone",
+        icons: [
+          { src: "icons/icon-192.png", sizes: "192x192", type: "image/png" },
+          { src: "icons/icon-512.png", sizes: "512x512", type: "image/png" },
+          { src: "icons/icon-maskable-512.png", sizes: "512x512", type: "image/png", purpose: "maskable" },
+        ],
+      },
+      injectManifest: {
+        globPatterns: ["**/*.{js,css,html,svg,woff2,png}", "basemap-*.json"],   // png: the phone header logo, colormaps, icons (~100 KB)
+        // The duckdb-wasm loader and its `eh` worker (~1 MB) are precached so a table saved for
+        // offline can open; the 36 MB .wasm is cached only when someone saves one (offline/engine.ts).
+        // The `mvp` worker serves browsers without Wasm exceptions, which offline tables skip.
+        // public/stac and public/pmtiles are the gitignored local dev fixtures.
+        globIgnores: ["**/duckdb-browser-mvp*", "stac/**", "pmtiles/**"],
+      },
+    }),
+  ],
   base: "/",
   // "@" is src/ — a cross-folder import says where it comes from without counting ../ hops.
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },

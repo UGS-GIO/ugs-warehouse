@@ -8,7 +8,10 @@ single IAP session cookie covers every fetch (viewer shell + catalog + range rea
 Read-only by construction: the only GCS verbs used are head + ranged get. The service account
 (infra/iam.tf) holds `objectViewer` on the review bucket and nothing else.
 
-HTTP Range is honored (206 + Content-Range) so PMTiles/COG range reads work directly.
+HTTP Range is honored (206 + Content-Range) so PMTiles/COG range reads work directly. HEAD is answered
+from object metadata with the same headers GCS sends (size, ETag, Last-Modified), because the viewer's
+readers that work against the public CDN (hyparquet's file-size probe, the offline version checks) send
+HEAD first and treat a 405 as a failed read.
 
 Routing: real objects stream from the bucket. The viewer is a client-side-routed SPA, so a not-found
 path with NO file extension (an app route like `/map`) falls back to the viewer's index.html; a
@@ -21,14 +24,15 @@ from __future__ import annotations
 
 import os
 import re
+from email.utils import format_datetime
 
 import obstore as obs
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import StreamingResponse
 from obstore.store import GCSStore
 
-from ugs_warehouse import comments, review_catalog
-from ugs_warehouse.core import config
+from ugs_warehouse import comments, iap, review_catalog
+from ugs_warehouse.core import config, gcs
 
 app = FastAPI(title="ugs-warehouse-review-serving")
 
@@ -89,14 +93,11 @@ VIEWER_INDEX = f"{VIEWER_PREFIX}/index.html"
 # review bucket, served behind the same IAP. Each SPA needs its own index for client-side-route fallback,
 # so an unknown route under /review/app/ serves the app shell, not the internal viewer's.
 APP_PREFIX = os.environ.get("REVIEW_APP_PREFIX", "review/app").strip("/")
-# A per-PR preview is its own SPA and must fall back to ITS OWN index.html — one that served a
-# different build's shell would silently render something other than the URL promises. On the
-# previews service every path is a preview (`<app>/pr-<n>/…`); on the review service the review
-# app's own previews still live under <APP_PREFIX>/pr-<n>/.
+# On the previews service every path is a preview (`<app>/pr-<n>/…`), and each falls back to ITS
+# OWN index.html. The review service does not serve previews.
 _PREVIEW_SUBTREE = r"[A-Za-z0-9._-]+/pr-[A-Za-z0-9._-]+"
-_PR_PREVIEW_RE = re.compile(
-    rf"^({_PREVIEW_SUBTREE})(?:/|$)" if STATIC_ONLY
-    else rf"^({re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+)(?:/|$)")
+_PR_PREVIEW_RE = re.compile(rf"^({_PREVIEW_SUBTREE})(?:/|$)")
+_APP_PREVIEW_RE = re.compile(rf"^{re.escape(APP_PREFIX)}/pr-[A-Za-z0-9._-]+(?:/|$)")
 # (prefix, index) longest-prefix-first so a nested prefix wins over a shorter one.
 _SPA_INDEXES = sorted(
     [(APP_PREFIX, f"{APP_PREFIX}/index.html"), (VIEWER_PREFIX, VIEWER_INDEX)],
@@ -107,13 +108,12 @@ _SPA_PREFIXES = {APP_PREFIX, VIEWER_PREFIX}
 
 
 def _spa_index_for(path: str) -> str:
-    """The SPA index.html for a client-side route path — the app shell whose prefix owns it. A per-PR
-    preview subtree (<APP_PREFIX>/pr-<n>/…) serves its own shell; otherwise the live app or the internal
-    viewer (the default for root/unprefixed paths)."""
-    m = _PR_PREVIEW_RE.match(path)
-    if m:
-        return f"{m.group(1)}/index.html"
+    """The SPA index.html for a client-side route path: on the previews service the preview's own
+    shell, otherwise the live app or the internal viewer (the default for root/unprefixed paths)."""
     if STATIC_ONLY:
+        m = _PR_PREVIEW_RE.match(path)
+        if m:
+            return f"{m.group(1)}/index.html"
         # Nothing else exists on this service. Returning a live shell here is what we are avoiding.
         raise HTTPException(status_code=404, detail="not found")
     for prefix, index in _SPA_INDEXES:
@@ -147,6 +147,11 @@ _MIME = {
 
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 
+# Review objects are rewritten in place (republished data, a redeployed viewer shell), and a
+# Last-Modified with no Cache-Control lets browsers cache heuristically, so every response says to
+# revalidate. `private` keeps IAP-gated bytes out of shared caches.
+_CACHE_CONTROL = "private, no-cache"
+
 
 def _content_type(path: str) -> str:
     _, dot, ext = path.rpartition(".")
@@ -165,26 +170,48 @@ def healthz() -> dict[str, str]:
 
 @app.get("/whoami")
 def whoami(request: Request) -> dict[str, str]:
-    """The IAP-authenticated user, for the viewer's logged-in badge. IAP injects
-    `X-Goog-Authenticated-User-Email` as `accounts.google.com:user@domain` on every request that
-    passes it. 404 when absent (e.g. hit outside IAP) so the badge simply hides. Display-only — not
-    used for authorization (IAP already gated the request)."""
-    raw = request.headers.get("x-goog-authenticated-user-email", "")
-    email = raw.split(":", 1)[-1] if raw else ""
+    """The IAP-authenticated user, for the viewer's logged-in badge. 404 when there is no verified IAP
+    identity (e.g. hit outside IAP) so the badge simply hides. Display-only: not used for
+    authorization (IAP already gated the request)."""
+    email = iap.verified_email(request.headers)
     if not email:
         raise HTTPException(status_code=404, detail="no IAP identity")
     return {"email": email, "user": email.split("@")[0]}
 
 
 def _serve_object(object_path: str, request: Request) -> Response:
-    """Stream a single bucket object (with Range support). Raises 404 if it doesn't exist."""
+    """Serve a single bucket object. Small JSON docs (STAC items + the gzipped catalog/collection/items
+    indexes) are buffered + decompressed via get_bytes; everything else streams with Range support.
+    Raises 404 if it doesn't exist."""
+    if object_path.endswith(".json"):
+        # obstore can't stream a gzipped object (GCS strips Content-Length under decompressive
+        # transcoding, and obs.head fails the same way), and these JSON docs are small and never
+        # Range-requested — so buffer + decompress via get_bytes (its google-cloud fallback reads the
+        # gzipped indexes) and serve plain with an honest Content-Length. (#341)
+        try:
+            body = gcs.get_bytes(object_path)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="not found") from None
+        if request.method == "HEAD":
+            return Response(media_type=_content_type(object_path),
+                            headers={"Cache-Control": _CACHE_CONTROL, "Content-Length": str(len(body))})
+        return Response(content=body, media_type=_content_type(object_path),
+                        headers={"Cache-Control": _CACHE_CONTROL})
     try:
         meta = obs.head(_store, object_path)  # ObjectMeta is a TypedDict
     except FileNotFoundError:
         raise HTTPException(status_code=404, detail="not found") from None
     size = meta["size"]
     ctype = _content_type(object_path)
-    headers = {"Accept-Ranges": "bytes", "Content-Type": ctype}
+    headers = {"Accept-Ranges": "bytes", "Content-Type": ctype, "Cache-Control": _CACHE_CONTROL,
+               "Last-Modified": format_datetime(meta["last_modified"], usegmt=True)}
+    if meta.get("e_tag"):
+        headers["ETag"] = meta["e_tag"]
+
+    # Range applies only to GET (RFC 9110 §14.2), so HEAD always describes the whole object.
+    if request.method == "HEAD":
+        headers["Content-Length"] = str(size)
+        return Response(status_code=200, headers=headers)
 
     range_header = request.headers.get("range")
     if range_header:
@@ -207,7 +234,7 @@ def _serve_object(object_path: str, request: Request) -> Response:
     return StreamingResponse(resp.stream(), status_code=200, headers=headers, media_type=ctype)
 
 
-@app.get("/{object_path:path}")
+@app.api_route("/{object_path:path}", methods=["GET", "HEAD"])
 def serve(object_path: str, request: Request) -> Response:
     # The non-IAP twin (public, Firebase-token-auth) must NOT stream the private review bucket — it
     # exists only for the /api/* review routes. Everything else 404s there.
@@ -215,6 +242,8 @@ def serve(object_path: str, request: Request) -> Response:
         raise HTTPException(status_code=404, detail="not found")
 
     object_path = object_path.lstrip("/")
+    if not STATIC_ONLY and _APP_PREVIEW_RE.match(object_path):
+        raise HTTPException(status_code=404, detail="not found")
 
     # Root / directory-style paths → the matching SPA shell (internal viewer or the hazards-review app).
     if not object_path or object_path.endswith("/") or object_path in _SPA_PREFIXES:

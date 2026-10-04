@@ -14,6 +14,11 @@
 # preview-cleanup is deliberately absent: it is not a trigger, it is a GitHub Action submitting a
 # build over WIF, because Cloud Build has no "PR closed" event.
 #
+# The PR CI trigger runs as its own SA, which only writes logs. One-time
+# (BP=ut-dnr-ugs-backend-tools, SA=ugs-warehouse-ci@$BP.iam.gserviceaccount.com):
+#   gcloud iam service-accounts create ugs-warehouse-ci --project=$BP --display-name="Runs PR CI"
+#   gcloud projects add-iam-policy-binding $BP --member=serviceAccount:$SA --role=roles/logging.logWriter --condition=None
+#
 # These live in the BUILD project, not var.project_id, so the deploy SA needs, cross-project:
 #   - roles/cloudbuild.builds.editor on build_project (like the Firebase grant)
 #   - roles/iam.serviceAccountUser on trigger_service_account AND preview_trigger_service_account —
@@ -45,6 +50,12 @@ variable "preview_trigger_service_account" {
   type        = string
   default     = ""
   description = "SA the PR-preview triggers run as — the least-trusted identity, scoped to the previews bucket (infra/iam.tf §previews). A preview builds unmerged branch code, so it deliberately differs from trigger_service_account. Empty → the preview triggers are not managed here."
+}
+
+variable "ci_trigger_service_account" {
+  type        = string
+  default     = ""
+  description = "SA the PR CI trigger runs as, as projects/…/serviceAccounts/… . Logs only. Empty → trigger_service_account."
 }
 
 # Paths that actually need an image rebuild. Everything NOT listed here — viewer/**, docs/** — must
@@ -129,7 +140,7 @@ resource "google_cloudbuild_trigger" "pr_ci" {
   project         = var.build_project
   location        = var.region
   name            = "ugs-warehouse-pr-ci"
-  service_account = var.trigger_service_account
+  service_account = coalesce(var.ci_trigger_service_account, var.trigger_service_account)
 
   repository_event_config {
     repository = var.build_repository
@@ -204,4 +215,32 @@ resource "google_cloudbuild_trigger" "tiles_preview" {
 
   filename       = "cloudbuild-service-preview.yaml"
   included_files = ["tiles/**"]
+}
+
+# Monthly basemap build; its topic, schedule and SA grants are in basemap-refresh.tf.
+resource "google_cloudbuild_trigger" "basemap" {
+  count = local.manage_basemap
+
+  project         = var.build_project
+  location        = var.region
+  name            = "ugs-warehouse-basemap"
+  description     = "Basemap: Protomaps daily build → Utah extract → utah.pmtiles, overview and quads on the CDN. Monthly via Pub/Sub, or by hand."
+  service_account = var.basemap_trigger_service_account
+
+  pubsub_config {
+    topic = google_pubsub_topic.basemap[0].id
+  }
+
+  source_to_build {
+    repository = var.build_repository
+    ref        = "refs/heads/main"
+    repo_type  = "GITHUB"
+  }
+
+  git_file_source {
+    path       = "cloudbuild-basemap.yaml"
+    repository = var.build_repository
+    revision   = "refs/heads/main"
+    repo_type  = "GITHUB"
+  }
 }

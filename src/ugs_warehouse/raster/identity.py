@@ -1,7 +1,7 @@
 """Identity for the raster producer — the COG/STAC analog of pubs `series_id`.
 
 Per the ugs-ingest #169 contract (append-only editions): every layer is a versioned
-collection `ugs-raster-<layer>` of dated Items — one row/edition in `raw.raster_catalog`,
+collection `ugs-rasters/<layer>` of dated Items — one row/edition in `raw.raster_catalog`,
 `is_current` marking the live one, nothing overwriting. `item_id` and `collection` are
 emitted by ingest (`{piece}_{pubid}_{pubdate}`); the warehouse owns only the COG path
 convention (`cog/<layer>/<item_id>.*`, matching the other artifact sinks + #41).

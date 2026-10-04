@@ -1,0 +1,43 @@
+# Raster-mosaic bake (pubs/geolmap_mosaics.py). Needs `gdal raster tile` (GDAL 3.11+); pinned (tag and
+# multi-arch digest) because the unified `gdal` CLI is provisional, so re-check its flags before bumping.
+FROM ghcr.io/osgeo/gdal:ubuntu-full-3.11.3@sha256:984938ae4ffda015d5e806a8048eb29fc4eeddaf97ada04e627f7f27b51feddb
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# The base's Arrow apt repo has a rotating key that breaks apt-get update; nothing here uses it.
+RUN rm -f /etc/apt/sources.list.d/*arrow* \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl python3-venv libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# go-pmtiles publishes no checksums, so these are the release tarballs' SHA-256s, pinned with the version.
+ARG PMTILES_VERSION=1.22.3
+ARG PMTILES_SHA256_AMD64=c2ddf8ab9afa2981876dc7e49df0290ed37183570329d3571d1df5f58f66856f
+ARG PMTILES_SHA256_ARM64=662c78b71ce20ae4ecf0da308d1478e85b1d964aa2c406e505c1715abcd31b0b
+RUN set -e; arch="$(dpkg --print-architecture)"; case "$arch" in \
+      amd64) a=x86_64; sum="$PMTILES_SHA256_AMD64";; \
+      arm64) a=arm64; sum="$PMTILES_SHA256_ARM64";; \
+      *) echo "no pinned go-pmtiles checksum for $arch" >&2; exit 1;; esac; \
+    curl -fsSL -o /tmp/pmtiles.tar.gz \
+      "https://github.com/protomaps/go-pmtiles/releases/download/v${PMTILES_VERSION}/go-pmtiles_${PMTILES_VERSION}_Linux_${a}.tar.gz"; \
+    echo "$sum  /tmp/pmtiles.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/pmtiles.tar.gz -C /usr/local/bin pmtiles; rm /tmp/pmtiles.tar.gz; \
+    chmod +x /usr/local/bin/pmtiles; pmtiles version
+
+# A venv keeps pip away from the base image's GDAL Python bindings.
+ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
+RUN python3 -m venv "$VIRTUAL_ENV"
+
+WORKDIR /app
+# Full .[pubs] extra for parity with the harvest image; a slimmer mosaics-only extra is an ALL-5993 follow-up.
+COPY pyproject.toml ./
+RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
+    && pip install --upgrade pip && pip install .[pubs] \
+    && rm -rf src
+
+COPY src ./src
+RUN pip install --no-deps --force-reinstall .
+
+CMD ["python", "-m", "ugs_warehouse.pubs.geolmap_mosaics", "--scale", "all"]

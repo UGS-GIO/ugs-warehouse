@@ -10,9 +10,10 @@ Cloud Build, no GHA workflows).
 [`cloudbuild-ci.yaml`](https://github.com/UGS-GIO/ugs-warehouse/blob/main/cloudbuild-ci.yaml) — PR validation, test-only (no push/deploy):
 
 - **backend** (`python:3.11`): `pip install -e ".[dev]"` → `ruff check .` → `pytest -q`
-- **viewer** (`node:20`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run`
+- **docs-links** (`lycheeverse/lychee`): every relative Markdown link in the repo resolves (offline)
+- **viewer** (`node:22`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run` → `npm run build`
 
-Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build → the PR check goes red.
+All steps run in parallel (`waitFor: ["-"]`); any failing fails the build → the PR check goes red.
 
 ## One-time setup
 
@@ -46,7 +47,7 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build �
    already grants `run.admin` + `serviceAccountUser` there, but only to whatever
    `var.build_service_account` in `infra/terraform.tfvars` names, and that's the default Compute SA
    (a prior, already-documented finding from 2026-07-10: `gcloud builds submit` with no
-   `--service-account`, which is what GHA's `deploy.yml`/`viewer.yml` do, runs the build's *steps* as
+   `--service-account`, which is what the since-removed GHA `deploy.yml`/`viewer.yml` did, runs the build's *steps* as
    the project's default Compute SA regardless of which identity authenticated the API call). Matching
    the trigger's SA to that existing grant was the fix — no Terraform/IAM change needed.
 
@@ -110,9 +111,11 @@ tofu apply
 Every trigger below was found by `gcloud builds triggers describe` and is now managed by
 `infra/cloudbuild-triggers.tf`. The two preview triggers run as `ugs-warehouse-preview-build@`
 rather than the Compute SA — a preview builds unmerged branch code and must stay the
-least-trusted identity, hence the separate `preview_trigger_service_account` variable.
+least-trusted identity, hence the separate `preview_trigger_service_account` variable. The basemap
+trigger runs as `ugs-basemap-build@`, which can write only under `basemap/` in the public bucket
+(`basemap_trigger_service_account`; grants in `infra/basemap-refresh.tf`).
 
-All five Cloud Build triggers live in `ut-dnr-ugs-backend-tools` (the build project), on the
+All Cloud Build triggers live in `ut-dnr-ugs-backend-tools` (the build project), on the
 2nd-gen GitHub connection `ugs-warehouse-github` (repository resource `ugs-warehouse`) — itself
 console/CLI-created (§ One-time setup above), not Terraform-managed either.
 
@@ -124,6 +127,7 @@ console/CLI-created (§ One-time setup above), not Terraform-managed either.
 | `ugs-warehouse-viewer-preview` | `cloudbuild-viewer-preview.yaml` | PR to `main` | `viewer/**` | `ugs-warehouse-preview-build@` |
 | `ugs-warehouse-tiles-preview` | `cloudbuild-service-preview.yaml` | PR to `main` | `tiles/**` | `ugs-warehouse-preview-build@` |
 | `ugs-warehouse-review-viewer` | `cloudbuild-review-viewer.yaml` | push to `main` | `viewer/**` | default Compute SA |
+| `ugs-warehouse-basemap` | `cloudbuild-basemap.yaml` | Pub/Sub `ugs-warehouse-basemap` (monthly Cloud Scheduler, or by hand) | n/a | `ugs-basemap-build@` |
 
 `default Compute SA` = `534590904912-compute@developer.gserviceaccount.com` — see the "why not
 `warehouse-deployer@`" note above (§ One-time setup, point 2); that finding still holds.

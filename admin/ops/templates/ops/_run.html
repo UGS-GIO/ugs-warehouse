@@ -40,12 +40,12 @@
             </label>
             {% endif %}
             {% if job.modes %}
-            {# Read-only variants — no confirm, they rewrite and delete nothing. #}
+            {# Variants — no confirm: read-only (maintenance) or cheap and repeatable (catalog refresh). #}
             <div class="mt-2 flex items-center gap-1.5 flex-wrap">
-              <span class="text-xs text-slate-400">Look first:</span>
+              <span class="text-xs text-slate-400">{{ job.modes_label }}</span>
               {% for value, label in job.modes %}
               <button class="rounded border border-slate-300 text-slate-700 text-xs px-2 py-1 hover:bg-slate-50 disabled:opacity-50"
-                hx-post="{% url 'ops:run_maintain' value %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
+                hx-post="{% url 'ops:run_mode' job.key value %}" hx-target="#result-{{ job.key }}" hx-swap="innerHTML"
                 hx-disabled-elt="this">{{ label }}</button>
               {% endfor %}
             </div>

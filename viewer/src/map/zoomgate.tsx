@@ -18,6 +18,10 @@ export type GateDir = "in" | "out";   // which way the user has to zoom to see t
 // MapLibre's ceiling — the effective maxzoom when a layer declares none.
 export const MAX_ZOOM = 24;
 
+// Scanned plates decode client-side, and zoomed out each one decodes an overview across the whole
+// viewport: 12 of them cost 1092MB of heap at z5, 61MB at z10. Unreadable that far out anyway.
+export const COG_GATE: Gate = { min: 8, max: MAX_ZOOM };
+
 const DRAW_TYPES = new Set(["fill", "line", "circle", "fill-extrusion", "heatmap"]);
 
 const drawsGeometry = (l: Record<string, unknown>): boolean => {

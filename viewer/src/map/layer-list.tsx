@@ -7,6 +7,15 @@
 import type { ReactNode } from "react";
 import { useState } from "react";
 
+import { closestCenter, DndContext, type DragEndEvent, KeyboardSensor, PointerSensor,
+  useSensor, useSensors } from "@dnd-kit/core";
+import { SortableContext, sortableKeyboardCoordinates, useSortable,
+  verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
+
+import { OfflineButton } from "@/offline/offline-button";
+import { reorderLayers } from "./map-model";
+
 // `layer` = a serving topic rather than a publication plate; those sort first and lead the list.
 export type LayerRow = { id: string; href: string; title: string; group: string; layer: boolean };
 
@@ -34,7 +43,7 @@ function Fold({ id, label, action, indent, forceOpen, closed, setClosed, childre
           return next;
         });
       }}>
-      <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
+      <summary className="sticky top-0 z-10 flex cursor-pointer list-none items-center bg-background px-1.5 py-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground pointer-coarse:min-h-11">
         <span className="inline-block w-3 shrink-0 transition-transform [details[open]>summary_&]:rotate-90">▸</span>
         <span className="min-w-0 truncate">{label}</span>
         {action && <span className="ml-auto pl-2">{action}</span>}
@@ -44,9 +53,54 @@ function Fold({ id, label, action, indent, forceOpen, closed, setClosed, childre
   );
 }
 
-const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal hover:bg-hover";
+// A pinned active-layer row that can be dragged to change draw order. Defined at module scope (not
+// inside LayerList) so its useSortable state survives re-renders — an inline component would be a new
+// type each render and remount mid-drag. Kept in lockstep with the plain `Row` below.
+function ActiveRow({ r, colorOf, onToggle, onOpen, openId, onMove, offlineHrefOf, problem }: {
+  r: LayerRow; colorOf: (id: string) => string | undefined;
+  onToggle: (id: string) => void; onOpen: (href: string) => void; openId?: string;
+  onMove: { up?: () => void; down?: () => void };
+  offlineHrefOf?: (id: string) => string | undefined;
+  problem?: string;   // why this layer draws nothing, shown under its name
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: r.id });
+  const style = { transform: CSS.Transform.toString(transform), transition };
+  return (
+    <div ref={setNodeRef} style={style}
+      // On a touch screen its controls take a second line, so 44 px targets leave the name room.
+      className={`group flex items-center gap-1.5 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:flex-wrap pointer-coarse:py-0 ${isDragging ? "opacity-60" : ""} ${r.id === openId ? "bg-muted" : ""}`}>
+      <button type="button" {...attributes} {...listeners} aria-label={`Reorder ${r.title}`} title="Drag to reorder"
+        className="flex shrink-0 cursor-grab touch-none items-center justify-center px-0.5 text-muted-foreground/60 hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-8 pointer-coarse:text-lg"><span aria-hidden>⠿</span></button>
+      <button type="button" onClick={() => onToggle(r.id)} aria-pressed={true}
+        className="flex min-w-0 flex-1 items-center gap-2 text-left pointer-coarse:min-h-11 pointer-coarse:basis-[calc(100%-3.5rem)]">
+        <span className="h-3 w-3 shrink-0 rounded-sm border" style={{ background: colorOf(r.id), borderColor: colorOf(r.id) }} />
+        <span className="min-w-0">
+          <span className="block truncate" title={r.title}>{r.title}</span>
+          {problem && <span className="block text-xs text-destructive">{problem}</span>}
+        </span>
+      </button>
+      {/* Taps for what the grip does by drag: a drag must never be the only way (WCAG 2.5.7). */}
+      <button type="button" onClick={onMove.up} disabled={!onMove.up} aria-label={`Move ${r.title} up`} title="Move up"
+        className={`${MOVE_CLASS} pointer-coarse:ml-auto`}><span aria-hidden>▲</span></button>
+      <button type="button" onClick={onMove.down} disabled={!onMove.down} aria-label={`Move ${r.title} down`} title="Move down"
+        className={MOVE_CLASS}><span aria-hidden>▼</span></button>
+      {offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
+      <button type="button" onClick={() => onOpen(r.href)} aria-label={`Details for ${r.title}`} title="Details"
+        className={INFO_CLASS}><span aria-hidden>ⓘ</span></button>
+    </div>
+  );
+}
 
-export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend }: {
+// Hover-revealed, except where there is no hover (a phone): there it is always shown. On a touch
+// screen every control here is a 44 px target; a mouse keeps the dense rows.
+const INFO_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 "
+  + "hover:text-foreground focus:opacity-100 group-hover:opacity-100 pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-lg pointer-coarse:opacity-100";
+const MOVE_CLASS = "flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] text-muted-foreground hover:text-foreground disabled:opacity-25 "
+  + "pointer-coarse:h-11 pointer-coarse:w-11 pointer-coarse:text-sm";
+const BULK_CLASS = "cursor-pointer rounded border border-border px-1.5 py-0.5 text-[11px] font-medium normal-case tracking-normal hover:bg-hover "
+  + "pointer-coarse:min-h-11 pointer-coarse:px-3 pointer-coarse:text-sm";
+
+export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, onOpen, openId, legend, onReorder, offlineHrefOf, problemOf }: {
   rows: LayerRow[];
   activeIds: string[];
   colorOf: (id: string) => string | undefined;
@@ -56,6 +110,12 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
   onOpen: (href: string) => void;
   openId?: string;
   legend?: ReactNode;   // what the active layers mean — belongs with them, not after the whole list
+  onReorder?: (ids: string[]) => void;   // commit a new draw order after dragging an active layer
+  // The downloadable file behind an active layer (its PMTiles archive), or undefined when it has
+  // none. Omit the prop entirely to leave the offline control out.
+  offlineHrefOf?: (id: string) => string | undefined;
+  // Why an active layer draws nothing (e.g. a datacube with no published data), shown in its row.
+  problemOf?: (id: string) => string | undefined;
 }) {
   const [filter, setFilter] = useState("");
   // Published maps start closed: they outnumber the serving topics several times over, and someone
@@ -72,18 +132,44 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
     .map((s) => ({ ...s, items: rest.filter((r) => r.layer === s.layer) }))
     .filter((s) => s.items.length);
 
+  // Drag-reorder the active layers (draw order). A small activation distance leaves a plain click on
+  // a row's toggle/info buttons alone; keyboard sensor makes the handle operable without a pointer.
+  const sensors = useSensors(
+    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
+  );
+  const sortable = Boolean(onReorder) && active.length > 1;
+  const onDragEnd = (e: DragEndEvent) => {
+    const { active: dragged, over } = e;
+    if (!over || dragged.id === over.id) return;
+    // Reorder against the full activeIds, NOT the resolved `active` subset: an id whose layer row
+    // hasn't loaded yet (e.g. a shared ?l= with a still-fetching collection) must stay in the URL,
+    // not be silently dropped when the user drags. Both dragged/over ids are rendered active rows.
+    moveTo(String(dragged.id), String(over.id));
+  };
+  const moveTo = (id: string, overId: string) =>
+    onReorder?.(reorderLayers(activeIds, activeIds.indexOf(id), activeIds.indexOf(overId)));
+  const moves = (i: number) => ({
+    up: i > 0 ? () => moveTo(active[i].id, active[i - 1].id) : undefined,
+    down: i < active.length - 1 ? () => moveTo(active[i].id, active[i + 1].id) : undefined,
+  });
+
   const Row = ({ r, on }: { r: LayerRow; on: boolean }) => (
-    <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-hover ${r.id === openId ? "bg-muted" : ""}`}>
+    <div className={`group flex items-center gap-2 rounded px-1.5 py-1 hover:bg-hover pointer-coarse:py-0 ${r.id === openId ? "bg-muted" : ""}`}>
       <button type="button" onClick={() => onToggle(r.id)} aria-pressed={on}
-        className="flex min-w-0 flex-1 items-center gap-2 text-left">
+        className="flex min-w-0 flex-1 items-center gap-2 text-left pointer-coarse:min-h-11">
         <span className="h-3 w-3 shrink-0 rounded-sm border border-muted-foreground/50"
           style={on ? { background: colorOf(r.id), borderColor: colorOf(r.id) } : undefined} />
-        <span className="truncate" title={r.title}>{r.title}</span>
+        <span className="min-w-0">
+          <span className="block truncate" title={r.title}>{r.title}</span>
+          {on && problemOf?.(r.id) && <span className="block text-xs text-destructive">{problemOf(r.id)}</span>}
+        </span>
       </button>
-      <button type="button" onClick={() => onOpen(r.href)} title="Details"
-        className="shrink-0 rounded px-1 text-muted-foreground opacity-0 hover:text-foreground focus:opacity-100 group-hover:opacity-100">
-        ⓘ
-      </button>
+      {/* Active rows only: downloading a layer you are not looking at is not a thing anyone asks for,
+          and a single active layer renders through here rather than through the sortable ActiveRow. */}
+      {on && offlineHrefOf && <OfflineButton href={offlineHrefOf(r.id)} title={r.title} />}
+      <button type="button" onClick={() => onOpen(r.href)} aria-label={`Details for ${r.title}`} title="Details"
+        className={INFO_CLASS}><span aria-hidden>ⓘ</span></button>
     </div>
   );
 
@@ -97,16 +183,27 @@ export function LayerList({ rows, activeIds, colorOf, onToggle, onToggleMany, on
         className="w-full rounded-md border border-border bg-card px-2 py-1.5 text-sm outline-none focus:border-primary"
       />
 
-      {active.length > 0 && (
+      {activeIds.length > 0 && (
         <div>
           <div className="flex items-center px-1.5 pb-0.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            On the map · {active.length}
+            On the map · {activeIds.length}
             <button type="button" className={`${BULK_CLASS} ml-auto`} title="Turn every layer off"
-              onClick={() => onToggleMany(active.map((r) => r.id), false)}>
+              onClick={() => onToggleMany(activeIds, false)}>
               Clear
             </button>
           </div>
-          {active.map((r) => <Row key={r.id} r={r} on />)}
+          {sortable ? (
+            <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+              <SortableContext items={active.map((r) => r.id)} strategy={verticalListSortingStrategy}>
+                {active.map((r, i) => (
+                  <ActiveRow key={r.id} r={r} colorOf={colorOf} onToggle={onToggle} onOpen={onOpen} openId={openId}
+                    onMove={moves(i)} offlineHrefOf={offlineHrefOf} problem={problemOf?.(r.id)} />
+                ))}
+              </SortableContext>
+            </DndContext>
+          ) : (
+            active.map((r) => <Row key={r.id} r={r} on />)
+          )}
           {legend}
         </div>
       )}

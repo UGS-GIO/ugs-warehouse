@@ -106,13 +106,13 @@ const LAYERS: Layer[] = [
   },
   {
     n: "⑤", title: "Publications", status: "partial",
-    lead: "The publication catalog is harvested rather than pushed: plates become COGs, GeMS packages become 3D glTF, and the text becomes search indexes.",
+    lead: "The publication catalog is harvested from the publications app's live feed: plates become COGs, GIS zips become map layers, GeMS packages become 3D glTF, and the text becomes a search index.",
     points: [
       "Harvest builds COGs (and per-scale seamless mosaics) from the published plates.",
-      "Pubs ingest writes the STAC items; separate jobs build cover thumbnails, the citation graph, FTS and embedding indexes.",
-      "Those indexes are what the Search tab queries — DuckDB files read straight off the CDN.",
+      "Full refresh runs cover thumbnails, 3D, map-layer extraction, a prune of items the feed no longer lists, the pubs ingest and the full-text index.",
+      "Discover's publication-text search queries that index, a DuckDB file read straight off the CDN.",
     ],
-    note: "Prod still reads a vendored CSV snapshot of the publications database, so upstream edits don't reach the catalog until someone re-exports it (#121).",
+    note: "1,163 legacy items, mostly mining district scans, have no record in the publications app yet (#491).",
   },
   {
     n: "⑥", title: "Storage, CDN + serving", status: "done",
@@ -120,11 +120,11 @@ const LAYERS: Layer[] = [
     points: [
       "Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.",
       "Datacube items (STAC datacube extension) render as zarr layers on the viewer map, sliced per dimension.",
-      "OGC API Features for ArcGIS Pro / QGIS: `duckdb_featureserv` over the GeoParquet on the CDN, scale-to-zero.",
+      "OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.",
       "`ugs-warehouse-tiles`: XYZ tiles, ready-to-use MapLibre styles, and an Esri VectorTileServer facade so AGOL and Pro can add a layer at all.",
       "External catalogs (USWB) are federated in as children of the root, so one catalog URL covers them too.",
     ],
-    note: "A second OGC path exists — `pg_featureserv` (api/) straight over Postgres — but its config has drifted. It needs reconciling with, or retiring in favour of, the duckdb_featureserv tier.",
+    note: "A second OGC path exists — `pg_featureserv` (api/) straight over Postgres — but its config has drifted. It needs reconciling with, or retiring in favour of, the pygeoapi tier.",
   },
   {
     n: "⑦", title: "Review path", status: "done",
@@ -142,7 +142,6 @@ const ROADMAP: { status: Status; text: string }[] = [
   { status: "planned", text: "Grouping model — dataset/collection/group spine so a project or a seamless mosaic is a first-class object (ugs-ingest #342)." },
   { status: "partial", text: "STAC `datetime` is ingest time, not data-validity time — waiting on an upstream validity timestamp." },
   { status: "partial", text: "Metadata export: ISO 19139 sidecar done for vector + pubs; FGDC variant and raster extension still open." },
-  { status: "partial", text: "Live publications source (MySQL or Postgres mirror) instead of the vendored CSV snapshot (#121)." },
   { status: "planned", text: "Publish allowlist — explicit per-layer control over what the warehouse exposes, and a private tier for embargoed layers." },
 ];
 

@@ -29,6 +29,7 @@ import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { catalogIndex, type Hit, idMatch, searchCatalog } from "./search-index";
 import { type Bounds, locate, suggest } from "@/map/place-locator";
+import { flyTo } from "@/map/camera";
 import { LiveSearchBar } from "@/shell/map-search";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
@@ -260,6 +261,7 @@ export function DiscoveryView({
       sentQ.current = "";
       setText("");
       patch({ area: box, place: placeHit.text, q: "" });
+      if (isWide && showMap) flyTo(box);   // only a mounted map; a queued fit would fire on /map later
     } catch (e) {
       setPlaceError(`Couldn't find ${placeHit.text}: ${e instanceof Error ? e.message : String(e)}`);
     } finally {

@@ -28,6 +28,7 @@ import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { buildIndex, type Hit, idMatch, searchCatalog, toSearchDoc } from "./search-index";
 import { type Bounds, locate, suggest } from "@/map/place-locator";
+import { LiveSearchBar } from "@/shell/map-search";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -108,7 +109,6 @@ export function DiscoveryView({
   const [text, setText] = useState(q);
   const sentQ = useRef(q);
   const typeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
     if (q === sentQ.current) return;
     clearTimeout(typeTimer.current);   // or the pending keystrokes would overwrite where Back landed
@@ -354,22 +354,10 @@ export function DiscoveryView({
       </p>
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
-        <div className="flex min-w-[12rem] flex-1 items-center gap-1 rounded-md border border-input bg-card px-2 focus-within:border-primary sm:max-w-md">
-          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
-            <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
-          </svg>
-          <input ref={inputRef} type="search" value={text}
-            onChange={(e) => { setText(e.target.value); sendQ(e.target.value); }}
-            onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) submit(); }}
-            placeholder="Search titles, series IDs, authors, places…" aria-label="Search the catalog"
-            className="min-w-0 flex-1 bg-transparent py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden" />
-          {text && (
-            <button type="button" aria-label="Clear the search" onClick={() => { setText(""); sendQ("", true); inputRef.current?.focus(); }}
-              className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
-              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
-            </button>
-          )}
-        </div>
+        {/* The Map page's search bar, without its suggestion list: here the results are the list. */}
+        <LiveSearchBar value={text} className="min-w-[12rem] flex-1 sm:max-w-md"
+          onChange={(v) => { setText(v); sendQ(v); }} onEnter={submit}
+          onClear={() => { setText(""); sendQ("", true); }} />
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
         </span>

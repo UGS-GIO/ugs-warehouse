@@ -8,7 +8,7 @@ SCALE_LABEL = {"24k": "1:24,000", "250k": "1:250,000", "500k": "1:500,000"}
 DEFAULT_TIER = "24k"          # COG present but scale unparseable/blank -> finest tier (+ logged)
 
 
-def _denominator(raw: str) -> int | None:
+def denominator(raw: str) -> int | None:
     """Free-text publication scale -> 1:N denominator, or None if unparseable.
 
     Handles '1:24,000', '1:24 000', '1 inch = 200 feet' (x12), '1 inch = 1 mile' (x63360)."""
@@ -21,18 +21,19 @@ def _denominator(raw: str) -> int | None:
             return int(m.group(1).replace(" ", ""))
         except ValueError:
             return None
-    m = re.search(r"1\s*in(?:ch)?\s*=\s*([\d.]+)\s*feet", s)
-    if m:
-        return int(float(m.group(1)) * 12)
-    m = re.search(r"1\s*in(?:ch)?\s*=\s*([\d.]+)\s*mile", s)
-    if m:
-        return int(float(m.group(1)) * 63360)
+    for pattern, per_inch in ((r"1\s*in(?:ch)?\s*=\s*([\d.]+)\s*feet", 12),
+                              (r"1\s*in(?:ch)?\s*=\s*([\d.]+)\s*mile", 63360)):
+        if m := re.search(pattern, s):
+            try:
+                return int(float(m.group(1)) * per_inch)
+            except ValueError:   # "1 inch = . feet": digits-and-dots that are no number
+                return None
     return None
 
 
 def tier_of(raw: str) -> str | None:
     """Scale-tier key for a publication scale, or None when unparseable (caller applies fallback)."""
-    d = _denominator(raw)
+    d = denominator(raw)
     if d is None or d <= 0:
         return None
     if d <= 62_500:

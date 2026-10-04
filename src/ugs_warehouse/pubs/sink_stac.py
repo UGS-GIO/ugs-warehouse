@@ -19,7 +19,7 @@ import urllib.parse
 
 from ..core import config, stac
 from . import counties, identity, topic
-from .scale import MOSAIC_TIER_LABEL
+from .scale import MOSAIC_TIER_LABEL, denominator
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
 from .vectors import VECTORS_PREFIX
 
@@ -192,6 +192,14 @@ def cog_asset_fields(ds) -> dict:
         fields["nodata"] = ds.nodata if math.isfinite(ds.nodata) else str(ds.nodata)
     fields["bands"] = bands
     return fields
+
+
+def _scale_number(sid: str, raw: str) -> int | None:
+    """`raw` as a 1:N denominator; a scale that is there but unreadable is logged, not dropped quietly."""
+    d = denominator(raw)
+    if raw and d is None:
+        print(f"[pubs] {sid}: scale {raw!r} is not a readable 1:N scale", file=sys.stderr)
+    return d
 
 
 def build_item(p: dict, attachments: list[dict], *,
@@ -411,6 +419,8 @@ def build_item(p: dict, attachments: list[dict], *,
             "ugs:pub_type": pub_type_of(p),
             **({"ugs:series": s} if (s := (p.get("series") or "").strip()) else {}),
             **({"ugs:scale": sc} if (sc := (p.get("pub_scale") or "").strip()) else {}),
+            # The scale as a number, so a client can filter by range without parsing the text.
+            **({"ugs:scale_denominator": d} if (d := _scale_number(sid, sc)) else {}),
             **({"ugs:author": au} if (au := (p.get("pub_author") or "").strip()) else {}),
             # Edition version/deprecated (Versioning Indicators ext, auto-declared by
             # core.stac.build_item from these two properties — see `edition` above).

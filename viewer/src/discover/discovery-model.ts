@@ -5,7 +5,7 @@
 // belongs in this layer.
 import type { ItemRef } from "@/catalog/browse";
 import { CATEGORIES, categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, hasGeometry, propsOf,
-  title, typeOf } from "@/catalog/item-view";
+  scaleDenominator, title, typeOf, year } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { validBbox } from "@/map/map-model";
 
@@ -179,6 +179,9 @@ export type Layout = "gallery" | "list";
 export type Density = "comfortable" | "compact";
 export type Area = [number, number, number, number];
 
+// An inclusive [min, max]; a null end is open ("Any").
+export type Range = [number | null, number | null];
+
 export type DiscoveryState = {
   q: string;
   collections: string[];
@@ -190,11 +193,15 @@ export type DiscoveryState = {
   layout: Layout;
   density: Density;
   area: Area | null;
+  place: string;          // the place an area came from ("Moab"), for its chip; "" for a drawn area
+  years: Range | null;    // publication year
+  scales: Range | null;   // scale denominators: [24000, 100000] is 1:24,000 to 1:100,000
 };
 
 export const DEFAULT_DISCOVERY: DiscoveryState = {
   q: "", collections: [], categories: [], types: [], formats: [],
   geometry: "all", sort: "relevance", layout: "gallery", density: "comfortable", area: null,
+  place: "", years: null, scales: null,
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -215,6 +222,19 @@ const parseArea = (v: unknown): Area | null => {
   return validBbox(parts) ? (parts as Area) : null;
 };
 
+// "1990,2010" / "1990," / ",2010" → a Range of positive whole numbers (years, scale denominators);
+// anything else, or both ends open, → null.
+const parseRange = (v: unknown): Range | null => {
+  const parts = str(v).split(",");
+  if (parts.length !== 2) return null;
+  const [lo, hi] = parts.map((p) => (p.trim() === "" ? null : Number(p)));
+  if ([lo, hi].some((n) => n !== null && !(Number.isInteger(n) && n > 0))) return null;
+  if (lo === null && hi === null) return null;
+  return lo !== null && hi !== null && lo > hi ? [hi, lo] : [lo, hi];
+};
+const rangeParam = (r: Range | null): string | undefined =>
+  (r ? `${r[0] ?? ""},${r[1] ?? ""}` : undefined);
+
 /** Raw search params → a validated DiscoveryState (bad/absent values fall back to the default). */
 export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
   return {
@@ -228,6 +248,9 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
     layout: oneOf(sp.layout, LAYOUTS_K, "gallery"),
     density: oneOf(sp.density, DENSITIES_K, "comfortable"),
     area: parseArea(sp.area),
+    place: parseArea(sp.area) ? str(sp.place) : "",
+    years: parseRange(sp.years),
+    scales: parseRange(sp.scale),
   };
 }
 
@@ -250,6 +273,9 @@ export function discoveryPatch(s: DiscoveryState): Record<string, string | undef
     layout: s.layout === "gallery" ? undefined : s.layout,
     density: s.density === "comfortable" ? undefined : s.density,
     area: s.area ? s.area.join(",") : undefined,
+    place: s.area && s.place ? s.place : undefined,
+    years: rangeParam(s.years),
+    scale: rangeParam(s.scales),
   };
 }
 
@@ -270,6 +296,129 @@ export function activeChips(s: DiscoveryState, labelFor: {
     chips.push({ id: `fmt:${key}`, label: key, patch: { formats: s.formats.filter((k) => k !== key) } });
   if (s.geometry === GEOM_HAS) chips.push({ id: "geom", label: "On the map", patch: { geometry: "all" } });
   if (s.geometry === GEOM_NONE) chips.push({ id: "geom", label: "No footprint", patch: { geometry: "all" } });
-  if (s.area) chips.push({ id: "area", label: "Map area", patch: { area: null } });
+  if (s.area) chips.push({ id: "area", label: s.place ? `Near ${s.place}` : "Map area", patch: { area: null, place: "" } });
+  if (s.years) chips.push({ id: "years", label: yearsLabel(s.years), patch: { years: null } });
+  if (s.scales) chips.push({ id: "scales", label: scalesLabel(s.scales), patch: { scales: null } });
   return chips;
 }
+
+const fmtScale = (d: number) => `1:${d.toLocaleString("en-US")}`;
+export const yearsLabel = ([lo, hi]: Range): string => {
+  if (lo !== null && hi !== null) return lo === hi ? `${lo}` : `${lo} to ${hi}`;
+  if (lo !== null) return `${lo} or later`;
+  return hi !== null ? `${hi} or earlier` : "Any";
+};
+export const scalesLabel = ([lo, hi]: Range): string => {
+  if (lo !== null && hi !== null) return lo === hi ? fmtScale(lo) : `${fmtScale(lo)} to ${fmtScale(hi)}`;
+  if (lo !== null) return `${fmtScale(lo)} or less detailed`;
+  return hi !== null ? `${fmtScale(hi)} or more detailed` : "Any";
+};
+
+// ---- Year + scale ranges ------------------------------------------------------------------------
+// A publication's year; a layer's datetime is when it was loaded, so it has none (datetimeIsPublished).
+export const publishedYear = (it: ItemRef): number | null =>
+  (datetimeIsPublished(propsOf(it)) ? year(it) : null);
+
+const within = (v: number | null, [lo, hi]: Range): boolean =>
+  v !== null && (lo === null || v >= lo) && (hi === null || v <= hi);
+
+// The scales the slider steps through, detailed to broad: the ones UGS maps are published at.
+export const SCALE_STEPS = [
+  1000, 2400, 6000, 12000, 24000, 31680, 50000, 62500, 100000, 125000, 250000, 500000, 1000000, 2500000,
+];
+/** The step nearest a denominator, on a log scale (1:30,000 is nearer 1:24,000 than 1:50,000). */
+export const nearestStep = (d: number): number => {
+  let best = 0;
+  SCALE_STEPS.forEach((s, i) => {
+    if (Math.abs(Math.log(d / s)) < Math.abs(Math.log(d / SCALE_STEPS[best]))) best = i;
+  });
+  return best;
+};
+
+export type Bin = { lo: number; hi: number; n: number };
+/** Counts per `size`-year bin across [min, max], for the year filter's histogram. */
+export function yearBins(items: ItemRef[], [min, max]: [number, number], size = 5): Bin[] {
+  const bins: Bin[] = [];
+  for (let lo = min; lo <= max; lo += size) bins.push({ lo, hi: Math.min(lo + size - 1, max), n: 0 });
+  for (const it of items) {
+    const y = publishedYear(it);
+    if (y !== null && y >= min && y <= max) bins[Math.floor((y - min) / size)].n++;
+  }
+  return bins;
+}
+/** Whether a denominator falls in a scale range, compared step by step: the slider and histogram put
+ *  a 1:20,000 map at the 1:24,000 step, so a 1:24,000 to 1:24,000 range has to include it too. */
+export const inScaleRange = (d: number | null, [lo, hi]: Range): boolean => {
+  if (d === null) return false;
+  const i = nearestStep(d);
+  return (lo === null || i >= nearestStep(lo)) && (hi === null || i <= nearestStep(hi));
+};
+/** Counts per SCALE_STEPS entry (each item at its nearest step), for the scale filter's histogram. */
+export function scaleBins(items: ItemRef[]): Bin[] {
+  const bins = SCALE_STEPS.map((s) => ({ lo: s, hi: s, n: 0 }));
+  for (const it of items) {
+    const d = scaleDenominator(it);
+    if (d !== null) bins[nearestStep(d)].n++;
+  }
+  return bins;
+}
+/** The span of publication years present, or null when none has one. */
+export function yearSpan(items: ItemRef[]): [number, number] | null {
+  let min = Infinity, max = -Infinity;
+  for (const it of items) {
+    const y = publishedYear(it);
+    if (y !== null) { min = Math.min(min, y); max = Math.max(max, y); }
+  }
+  return min <= max ? [min, max] : null;
+}
+
+// ---- Every filter, and what each one hides --------------------------------------------------------
+export type FilterGroup =
+  "collections" | "categories" | "types" | "formats" | "geometry" | "area" | "years" | "scales";
+
+const CLEAR: Record<FilterGroup, Partial<DiscoveryState>> = {
+  collections: { collections: [] }, categories: { categories: [] }, types: { types: [] },
+  formats: { formats: [] }, geometry: { geometry: "all" }, area: { area: null, place: "" },
+  years: { years: null }, scales: { scales: null },
+};
+const ANY: Record<FilterGroup, string> = {
+  collections: "Any collection", categories: "Any category", types: "Any type", formats: "Any format",
+  geometry: "With or without a footprint", area: "Anywhere", years: "Any year", scales: "Any scale",
+};
+
+export const activeGroups = (s: DiscoveryState): FilterGroup[] => {
+  const on: Record<FilterGroup, boolean> = {
+    collections: s.collections.length > 0, categories: s.categories.length > 0, types: s.types.length > 0,
+    formats: s.formats.length > 0, geometry: s.geometry !== "all", area: s.area !== null,
+    years: s.years !== null, scales: s.scales !== null,
+  };
+  return (Object.keys(on) as FilterGroup[]).filter((g) => on[g]);
+};
+
+/** The items passing every Discover filter, or every one but `skip`. */
+export function filterResults(items: ItemRef[], s: DiscoveryState, skip?: FilterGroup): ItemRef[] {
+  let out = applyFacets(items, {
+    collections: skip === "collections" ? [] : s.collections,
+    categories: skip === "categories" ? [] : s.categories,
+    types: skip === "types" ? [] : s.types,
+    formats: skip === "formats" ? [] : s.formats,
+    geometry: skip === "geometry" ? "all" : s.geometry,
+  });
+  if (s.area && skip !== "area") out = filterByViewport(out, s.area);
+  const { years, scales } = s;
+  if (years && skip !== "years") out = out.filter((it) => within(publishedYear(it), years));
+  if (scales && skip !== "scales") out = out.filter((it) => inScaleRange(scaleDenominator(it), scales));
+  return out;
+}
+
+/** For each active filter, how many more of `matched` would show without it, and the patch that
+ *  drops it. Only the ones that would bring something back, most first. */
+export type Relief = { group: FilterGroup; label: string; gain: number; patch: Partial<DiscoveryState> };
+export function reliefs(matched: ItemRef[], s: DiscoveryState, shown: number): Relief[] {
+  return activeGroups(s)
+    .map((g) => ({ group: g, label: ANY[g], gain: filterResults(matched, s, g).length - shown, patch: CLEAR[g] }))
+    .filter((r) => r.gain > 0)
+    .sort((a, b) => b.gain - a.gain);
+}
+/** Every filter cleared, the query and view settings kept. */
+export const CLEAR_ALL: Partial<DiscoveryState> = Object.assign({}, ...Object.values(CLEAR));

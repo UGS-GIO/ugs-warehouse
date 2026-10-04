@@ -547,8 +547,30 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=get_bytes):
         out = _vector_manifests_by_sid()
 
-    assert out["M-100"] == manifest  # keyed by uppercased series_id, matching the other discovery maps
+    # keyed by uppercased series_id, matching the other discovery maps
+    assert out["M-100"] == {**manifest, "columns": {}}
     assert "DS-2" not in out
+
+
+def test_vector_manifests_by_sid_carries_each_tables_recorded_columns():
+    """A manifest's per-layer `columns` (written by pubs/vectors.py) reach build_item, so a
+    companion table's asset gets `table:columns` instead of none."""
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+
+    cols = [{"name": "MapUnit", "type": "large_string"}]
+    manifest = {"spatial": [], "tables": ["geo__DescriptionOfMapUnits"],
+                "layers": [{"label": "geo__DescriptionOfMapUnits", "spatial": False, "rows": 3,
+                            "columns": cols}]}
+    path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
+
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
+        out = _vector_manifests_by_sid()
+
+    assert out["M-100"]["columns"] == {"geo__DescriptionOfMapUnits": cols}
 
 
 def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
@@ -577,7 +599,7 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
         out = _vector_manifests_by_sid()  # must return, not raise
 
-    assert out["M-100"] == good  # unaffected by the sibling's bad manifest
+    assert out["M-100"] == {**good, "columns": {}}  # unaffected by the sibling's bad manifest
     assert "DS-9" not in out  # skipped, not crashed on
     assert bad_path in capsys.readouterr().err  # but named on stderr, not silently dropped
 
@@ -590,8 +612,10 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
 
     from ugs_warehouse.pubs.ingest import build_catalog
 
+    dmu_cols = [{"name": "MapUnit", "type": "string"}]
     manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults"],
-                          "tables": ["geo__DescriptionOfMapUnits"]}}
+                          "tables": ["geo__DescriptionOfMapUnits"],
+                          "columns": {"geo__DescriptionOfMapUnits": dmu_cols}}}
 
     with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
          patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
@@ -623,7 +647,7 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
          by_sid = {c.args[0]["series_id"]: c.kwargs for c in mock_build.call_args_list}
          assert by_sid["DS-8"]["vector_layers"] == ["geo__ContactsAndFaults"]
          assert by_sid["DS-8"]["companion_tables"] == [
-             {"label": "geo__DescriptionOfMapUnits", "columns": None}]
+             {"label": "geo__DescriptionOfMapUnits", "columns": dmu_cols}]
          # a series absent from the manifest map still gets empty lists, never None/KeyError.
          assert by_sid["OFR-12"]["vector_layers"] == []
          assert by_sid["OFR-12"]["companion_tables"] == []

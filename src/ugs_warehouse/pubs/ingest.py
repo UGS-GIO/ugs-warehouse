@@ -128,10 +128,11 @@ def _unit_ids() -> set[str]:
 
 
 def _vector_manifests_by_sid() -> dict[str, dict]:
-    """{SID: {"spatial": [labels], "tables": [labels]}} from the per-series manifests
-    pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`) — the AUTHORITATIVE
-    record of which extracted layers are spatial vs non-spatial GeMS companion tables, so
-    build_item doesn't have to guess a layer's kind from its name."""
+    """{SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]}}} from
+    the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
+    — the AUTHORITATIVE record of which extracted layers are spatial vs non-spatial GeMS companion
+    tables, so build_item doesn't have to guess a layer's kind from its name. `columns` holds each
+    layer's recorded schema; manifests written before it was recorded have none."""
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
     out: dict[str, dict] = {}
     for path in gcs.list_paths(vectors.VECTORS_PREFIX):
@@ -141,7 +142,9 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
         sid = rest.split("/", 1)[0].upper()
         try:
             doc = json.loads(gcs.get_bytes(path).decode())
-            out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or []}
+            out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or [],
+                        "columns": {lay["label"]: lay["columns"] for lay in doc.get("layers") or []
+                                    if lay.get("label") and lay.get("columns")}}
         except Exception as e:  # noqa: BLE001 — a bad manifest just costs that pub its vector assets
             print(f"[pubs] corrupt vector manifest, skipping: {path} ({e})", file=sys.stderr)
             continue
@@ -245,7 +248,8 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             has_cog=up in cogs, cog_fields=cog_fields, has_units=up in units, has_thumb=up in thumbs,
             has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
             vector_layers=manifest["spatial"],
-            companion_tables=[{"label": t, "columns": None} for t in manifest["tables"]],
+            companion_tables=[{"label": t, "columns": manifest.get("columns", {}).get(t)}
+                              for t in manifest["tables"]],
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
             edition=edition_graph.get(sid),
             mosaic_tier=tier_by_sid.get(up),

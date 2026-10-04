@@ -49,6 +49,7 @@ const SORT_ITEMS = SORTS.map((s) => ({ value: s.key, label: s.label }));
 const SORT_ITEMS_WITHOUT_MATCH = SORT_ITEMS.filter((s) => s.value !== "relevance");
 const PAGE = 48; // cards per "Show more" step (reference parity)
 const TYPE_DEBOUNCE_MS = 300;
+const UTAH: [number, number, number, number] = [-114.05, 37.0, -109.04, 42.0];
 const MIN_Q = 3;   // shorter prefixes ("pr", "pro") match hundreds of items and flash the whole state
 const SCALE_MAX = SCALE_STEPS.length - 1;
 const FILTERS_DIALOG = Dialog.createHandle();   // ties the phone Filters button to its panel
@@ -270,6 +271,7 @@ export function DiscoveryView({
     setPicking(true);
     try {
       const box = placeArea(await locate(placeHit));
+      placeFromQ.current = text.trim();
       setPlaceError(null);
       clearTimeout(typeTimer.current);
       sentQ.current = "";
@@ -305,6 +307,20 @@ export function DiscoveryView({
     fittedQ.current = t;
     flyTo(u);
   }, [q, drawn]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Clearing a place undoes picking it: back to the search it came from (the map refits to that),
+  // or, with none, the whole catalog and all of Utah.
+  const placeFromQ = useRef("");
+  const clearPlace = () => {
+    const back = placeFromQ.current;
+    placeFromQ.current = "";
+    fittedQ.current = "";
+    clearTimeout(typeTimer.current);
+    sentQ.current = back;
+    setText(back);
+    patch({ area: null, place: "", q: back });
+    if (!back && isWide && showMap) flyTo(UTAH);
+  };
   const hoverBbox = hoverHref ? bboxByHref.get(hoverHref) : undefined;
 
   // Hover sync. Track WHERE the hover came from: only a MAP-originated hover scrolls the card list —
@@ -450,7 +466,7 @@ export function DiscoveryView({
         <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5">
           <span className="text-xs text-muted-foreground">Filtering by</span>
           {chips.map((c) => (
-            <button key={c.id} type="button" onClick={() => patch(c.patch)}
+            <button key={c.id} type="button" onClick={() => (c.id === "area" && st.place ? clearPlace() : patch(c.patch))}
               className="inline-flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20">
               {c.label} <span aria-hidden>✕</span>
               <span className="sr-only">remove filter</span>
@@ -662,7 +678,7 @@ export function DiscoveryView({
                 this on a 2/5-width pane put it on top of the basemap toggle. */}
             <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex justify-center">
               {area ? (
-                <button type="button" onClick={() => patch({ area: null, place: "" })}
+                <button type="button" onClick={() => (st.place ? clearPlace() : patch({ area: null, place: "" }))}
                   className="pointer-events-auto rounded-full border border-primary bg-primary px-3 py-1 text-xs font-medium text-primary-foreground shadow">
                   ✕ Clear map area
                 </button>

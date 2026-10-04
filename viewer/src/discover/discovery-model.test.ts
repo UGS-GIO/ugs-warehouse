@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { ItemRef } from "@/catalog/browse";
 import {
-  activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
-  effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery,
-  sortItems, typeOf,
+  activeChips, activeGroups, applyFacets, bboxIntersects, CLEAR_ALL, DEFAULT_DISCOVERY, type DiscoveryState,
+  discoveryPatch, effectiveSort, extractFacets, filterByViewport, filterResults, GEOM_HAS, GEOM_NONE, hasGeometry,
+  nearestStep, parseDiscovery, reliefs, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
 } from "./discovery-model";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
@@ -189,7 +189,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(s).toEqual({
       q: "faults", collections: ["a", "b"], categories: ["hazards"], types: ["Report"],
       formats: ["PDF", "COG"], geometry: "has", sort: "newest", layout: "list",
-      density: "compact", area: [-114, 37, -109, 42],
+      density: "compact", area: [-114, 37, -109, 42], place: "", years: null, scales: null,
     });
     expect(parseDiscovery({ area: "999,999,0,0" }).area).toBeNull();
   });
@@ -198,7 +198,7 @@ describe("parseDiscovery / discoveryPatch (the URL boundary)", () => {
     expect(discoveryPatch(DEFAULT_DISCOVERY)).toEqual({
       q: undefined, collections: undefined, category: undefined, types: undefined,
       formats: undefined, geometry: undefined, sort: undefined, layout: undefined,
-      density: undefined, area: undefined,
+      density: undefined, area: undefined, place: undefined, years: undefined, scale: undefined,
     });
     const patched = discoveryPatch({ ...DEFAULT_DISCOVERY, q: "x", categories: ["hazards"], area: [-114, 37, -109, 42], sort: "newest" });
     expect(patched.q).toBe("x");
@@ -251,5 +251,81 @@ describe("effectiveSort", () => {
   it("keeps a sort the user picked", () => {
     expect(at("", "title")).toBe("title");
     expect(at("salt lake", "oldest")).toBe("oldest");
+  });
+});
+
+// Publications carry `ugs:series_id`, which is what makes their datetime a publication date.
+const pub = (id: string, props: Record<string, unknown>, bbox?: number[]) =>
+  item("ugs-publications/M", id, { "ugs:series_id": id, "ugs:pub_type": "Map", title: id, ...props }, bbox);
+const pubs: ItemRef[] = [
+  pub("M-1", { datetime: "1955-01-01T00:00:00Z", "ugs:scale": "1:24,000" }, [-110, 38, -109.9, 38.1]),
+  pub("M-2", { datetime: "1993-01-01T00:00:00Z", "ugs:scale": "1:100,000" }, [-110.5, 38, -109, 39]),
+  pub("M-3", { datetime: "2002-01-01T00:00:00Z", "ugs:scale_denominator": 24000 }),
+  pub("M-4", { "ugs:scale": "1:250,000" }),                       // undated
+  item("ugs-serving-topics/hazards", "hazards_qfaults", { "ugs:topic": "hazards", datetime: "2026-01-01T00:00:00Z" }),
+];
+
+describe("year + scale ranges", () => {
+  it("round-trip through the URL, open ends included", () => {
+    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, years: [1990, null], scales: [24000, 100000] };
+    const patched = discoveryPatch(s);
+    expect(patched.years).toBe("1990,");
+    expect(patched.scale).toBe("24000,100000");
+    expect(parseDiscovery(patched as Record<string, unknown>)).toEqual(s);
+    expect(parseDiscovery({ years: "2010,1990" }).years).toEqual([1990, 2010]);
+    expect(parseDiscovery({ years: "," }).years).toBeNull();
+    expect(parseDiscovery({ years: "abc,1990" }).years).toBeNull();
+    expect(parseDiscovery({ scale: "0," }).scales).toBeNull();
+    expect(parseDiscovery({ scale: "-5,10" }).scales).toBeNull();
+    expect(parseDiscovery({ years: "1990.5," }).years).toBeNull();
+  });
+
+  it("keep only items with a value in range; a layer has no publication year", () => {
+    const ids = (s: Partial<DiscoveryState>) => filterResults(pubs, { ...DEFAULT_DISCOVERY, ...s }).map((it) => it.data?.id);
+    expect(ids({ years: [1990, 2010] })).toEqual(["M-2", "M-3"]);
+    expect(ids({ years: [null, 1960] })).toEqual(["M-1"]);
+    expect(ids({ scales: [24000, 24000] })).toEqual(["M-1", "M-3"]);
+    expect(ids({ scales: [50000, null] })).toEqual(["M-2", "M-4"]);
+    // The filter steps like the slider: 1:20,000 sits at the 1:24,000 step, 1:63,360 at 1:62,500.
+    const off = [pub("M-5", { "ugs:scale": "1:20,000" }), pub("M-6", { "ugs:scale": "1 inch = 1 mile" })];
+    const pick = (r: [number, number]) => filterResults(off, { ...DEFAULT_DISCOVERY, scales: r }).map((it) => it.data?.id);
+    expect(pick([24000, 24000])).toEqual(["M-5"]);
+    expect(pick([62500, 62500])).toEqual(["M-6"]);
+  });
+
+  it("bin years and scales for the histograms", () => {
+    expect(yearSpan(pubs)).toEqual([1955, 2002]);
+    const bins = yearBins(pubs, [1950, 2004], 5);
+    expect(bins[0]).toEqual({ lo: 1950, hi: 1954, n: 0 });
+    expect(bins[1]).toEqual({ lo: 1955, hi: 1959, n: 1 });
+    expect(bins.at(-1)).toEqual({ lo: 2000, hi: 2004, n: 1 });
+    const sb = scaleBins(pubs);
+    expect(sb[SCALE_STEPS.indexOf(24000)].n).toBe(2);
+    expect(sb[SCALE_STEPS.indexOf(250000)].n).toBe(1);
+    expect(nearestStep(30000)).toBe(SCALE_STEPS.indexOf(31680));
+    expect(nearestStep(42240)).toBe(SCALE_STEPS.indexOf(50000));
+  });
+
+  it("chip labels name open ends plainly", () => {
+    const labels = activeChips({ ...DEFAULT_DISCOVERY, years: [1990, null], scales: [null, 100000] },
+      { collection: (k) => k, category: (k) => k }).map((c) => c.label);
+    expect(labels).toEqual(["1990 or later", "1:100,000 or more detailed"]);
+  });
+});
+
+describe("reliefs (what each filter hides)", () => {
+  it("counts what dropping each active filter brings back, most first", () => {
+    const s: DiscoveryState = { ...DEFAULT_DISCOVERY, years: [1990, 2010], scales: [24000, 24000] };
+    const shown = filterResults(pubs, s).length;              // M-3
+    expect(shown).toBe(1);
+    expect(activeGroups(s)).toEqual(["years", "scales"]);
+    expect(reliefs(pubs, s, shown).map((r) => [r.group, r.gain])).toEqual([["years", 1], ["scales", 1]]);
+  });
+  it("CLEAR_ALL drops every filter", () => {
+    const s = { ...DEFAULT_DISCOVERY, categories: ["hazards"], area: [-1, 0, 1, 2] as DiscoveryState["area"],
+      place: "Moab", years: [1990, null] as DiscoveryState["years"], q: "faults" };
+    const cleared = { ...s, ...CLEAR_ALL };
+    expect(activeGroups(cleared)).toEqual([]);
+    expect(cleared.q).toBe("faults");
   });
 });

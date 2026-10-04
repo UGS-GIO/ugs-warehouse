@@ -10,21 +10,24 @@ import { qk } from "@/query-keys";
 
 import type { ItemRef } from "@/catalog/browse";
 import {
-  activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  categoryTiles, extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
-  type SortKey, SORTS,
+  activeChips, CLEAR_ALL, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
+  categoryTiles, extractFacets, type FacetCount, type FacetSelection, filterResults, nearestStep, parseDiscovery,
+  publishedYear, ranksByWords, reliefs, SCALE_STEPS, scaleBins, scalesLabel, sortItems, type SortKey, SORTS, yearBins,
+  yearsLabel, yearSpan,
 } from "./discovery-model";
-import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
+import { RangeFacet } from "./range-facet";
+import { categoryLabel, collectionLabel, itemIdOf, scaleDenominator } from "@/catalog/item-view";
 import type { Footprint } from "@/map/map-model";
 import { AddToMapButton } from "@/map/add-to-map-button";
 import { OpenMapPill } from "./open-map-pill";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
 
 import { ArticleHit, useCorpus } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
-import { buildIndex, type Hit, searchCatalog, toSearchDoc } from "./search-index";
+import { buildIndex, type Hit, idMatch, searchCatalog, toSearchDoc } from "./search-index";
+import { type Bounds, locate, suggest } from "@/map/place-locator";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -42,6 +45,11 @@ const DENSITIES = [{ value: "comfortable" as const, label: "Comfy" }, { value: "
 const SORT_ITEMS = SORTS.map((s) => ({ value: s.key, label: s.label }));
 const SORT_ITEMS_WITHOUT_MATCH = SORT_ITEMS.filter((s) => s.value !== "relevance");
 const PAGE = 48; // cards per "Show more" step (reference parity)
+// Results follow the box as you type; the URL (and so the results) catches up this long after the
+// last keystroke, so a fast typist doesn't search every prefix.
+const TYPE_DEBOUNCE_MS = 180;
+const SCALE_MAX = SCALE_STEPS.length - 1;
+const fmtDenom = (d: number) => d.toLocaleString("en-US");
 // Detail drawer width: drag-resizable and remembered, since how much room the preview deserves
 // depends on the item (a long abstract vs. a thumbnail). CSS caps it on narrow viewports.
 const DRAWER_KEY = "ugsw.discoverDrawerW";
@@ -53,7 +61,6 @@ const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
   items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
-  renderSearch,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
@@ -66,8 +73,6 @@ export function DiscoveryView({
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
   onExplore?: () => void;              // opens the selected item full-screen in the Preview view
-  // Suggestions while typing; results change on Enter.
-  renderSearch?: (q: string, submit: (q: string) => void) => React.ReactNode;
 }) {
   const navigate = useNavigate();
   // The whole filter/sort/layout state lives in the URL (namespaced Discover keys), so a landing tile,
@@ -81,17 +86,50 @@ export function DiscoveryView({
   const { collections: colls, categories: cats, types, formats } = st;
   const collsK = colls.join("|"), catsK = cats.join("|"), typesK = types.join("|"), formatsK = formats.join("|");
   const areaK = area ? area.join(",") : "";
+  const yearsK = st.years ? st.years.join(",") : "", scalesK = st.scales ? st.scales.join(",") : "";
+  const filterK = [collsK, catsK, typesK, formatsK, geometry, areaK, yearsK, scalesK].join("~");
 
   // Merge a partial state change into the URL. push (default) for discrete filter changes so Back
   // undoes them one at a time; replace for typing + view prefs (layout/density) so they don't pile up.
+  // It merges onto the URL as it is when the navigation runs, not this render's `st`, so a delayed
+  // patch (the typing debounce, a place lookup) can't undo a filter set in the meantime.
   const patch = (p: Partial<DiscoveryState>, replace = false) => {
-    const next = discoveryPatch({ ...st, ...p });
     // `to: "."` is the current route — a same-route search patch, and it is what types the reducer.
-    navigate({ to: ".", replace, search: (prev) => ({ ...prev, ...next }) });
+    navigate({ to: ".", replace,
+      search: (prev) => ({ ...prev, ...discoveryPatch({ ...parseDiscovery(prev), ...p }) }) });
   };
   const toggleList = (key: "collections" | "categories" | "types" | "formats", value: string) => {
     const cur = st[key];
     patch({ [key]: cur.includes(value) ? cur.filter((k) => k !== value) : [...cur, value] });
+  };
+
+  // The box holds what's typed; ?q= follows it after a short pause, and the results follow ?q=. A q
+  // that changes from outside (Back, a chip, a link) resets the box.
+  const [text, setText] = useState(q);
+  const sentQ = useRef(q);
+  const typeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    if (q === sentQ.current) return;
+    clearTimeout(typeTimer.current);   // or the pending keystrokes would overwrite where Back landed
+    sentQ.current = q;
+    setText(q);
+  }, [q]);
+  useEffect(() => () => clearTimeout(typeTimer.current), []);
+  const sendQ = (v: string, now = false) => {
+    clearTimeout(typeTimer.current);
+    const go = () => { sentQ.current = v; patch({ q: v }, true); };
+    if (now) go(); else typeTimer.current = setTimeout(go, TYPE_DEBOUNCE_MS);
+  };
+  // The Survey Notes text is 8.5 MB, and indexing it blocks the page for about a second, so it loads
+  // only once someone asks for it: Enter, or the articles chip.
+  const [deep, setDeep] = useState(false);
+  // Publication full text is a remote query per search, so it runs on Enter (or its chip), not on
+  // every pause in typing.
+  const [ftsQ, setFtsQ] = useState("");
+  const submit = () => {
+    sendQ(text, true);
+    if (text.trim().length >= 2) { setDeep(true); setFtsQ(text.trim()); }
   };
 
   // Ephemeral UI state (never shareable): the map toggle, the hover highlight, the live viewport, and
@@ -112,8 +150,8 @@ export function DiscoveryView({
   );
   // Survey Notes articles, in a SECOND index. Not merged into the item index: an article has no
   // collection, geometry or date, so it cannot ride the ItemRef pipeline the facets/map/sort use.
-  // Lazy — nothing fetches the corpus until someone actually types.
-  const corpus = useCorpus(q.trim().length >= 2);
+  // Lazy: nothing fetches the corpus until someone presses Enter or asks for articles.
+  const corpus = useCorpus(deep && q.trim().length >= 2);
   const articleIndex = useMemo(
     () => (corpus.data?.length ? buildIndex(corpus.data, []).index : null),
     [corpus.data],
@@ -132,12 +170,12 @@ export function DiscoveryView({
   // first use, so it stays off until someone ticks it rather than firing on every keystroke.
   const [pubText, setPubText] = useState(false);
   // Which result kind the chips are showing. "all" stacks them; the rest isolate one.
-  const [scope, setScope] = useState<"all" | "items" | "articles" | "pubtext">("all");
+  const [scopePick, setScope] = useState<"all" | "items" | "articles" | "pubtext">("all");
   const pubFts = useQuery({
-    queryKey: qk.pubFts(q.trim()),
-    enabled: pubText && q.trim().length >= 2,
+    queryKey: qk.pubFts(ftsQ),
+    enabled: pubText && ftsQ.length >= 2,
     staleTime: Infinity, retry: false,
-    queryFn: () => searchPubs(q.trim()),
+    queryFn: () => searchPubs(ftsQ),
   });
 
   // "exact phrase", -exclude and series:GQ — the same parser the publication BM25 path uses, so one
@@ -151,6 +189,10 @@ export function DiscoveryView({
     return (articleIndex.search(base) as unknown as Hit[])
       .filter((h) => matchesQuery(query, h as SearchDoc)).slice(0, 20);
   }, [articleIndex, q, query]);
+
+  // The scope chips only show for a search, so without one (or once the chosen kind has nothing)
+  // the view falls back to everything rather than an empty page with no way back.
+  const scope = q.trim().length < 2 || (scopePick === "articles" && articleHits.length === 0) ? "all" : scopePick;
 
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
@@ -177,16 +219,69 @@ export function DiscoveryView({
   // stay stable as you toggle facets — the rail reads as a table of contents, not a jumping wall.
   const facets = useMemo(() => extractFacets(queried), [queried]);
 
-  const results = useMemo(() => {
-    let base = applyFacets(queried, { collections: colls, categories: cats, types, formats, geometry });
-    if (area) base = filterByViewport(base, area);
-    return sortItems(base, sort);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [queried, collsK, catsK, typesK, formatsK, geometry, areaK, sort]);
+  const results = useMemo(() => sortItems(filterResults(queried, st), sort),
+    [queried, filterK, sort]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Search hits the filters hide, and which filter hides how many. Only for a search: without one,
+  // "outside your filters" is just everything else in the catalog.
+  const searching = q.trim().length >= 2 || !isEmptyQuery(query);
+  const hidden = useMemo(() => (searching && queried.length > results.length
+    ? { n: queried.length - results.length, reliefs: reliefs(queried, st, results.length) }
+    : null), [queried, results, searching]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The item a typed series id names (M-181), pinned first by searchCatalog; its card says why.
+  const namedId = useMemo(() => (q.trim() ? idMatch(index, q.trim())?.id : undefined), [index, q]);
+
+  // Year + scale: their spans come from the whole catalog (stable), their histograms from what the
+  // other filters leave (so they describe what you'd get).
+  const span = useMemo(() => yearSpan(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const yearPool = useMemo(() => filterResults(queried, st, "years"), [queried, filterK]); // eslint-disable-line react-hooks/exhaustive-deps
+  const scalePool = useMemo(() => filterResults(queried, st, "scales"), [queried, filterK]); // eslint-disable-line react-hooks/exhaustive-deps
+  const yearHist = useMemo(() => (span ? yearBins(yearPool, span, 5).map((b) => ({
+    from: b.lo, to: b.hi, n: b.n, tip: `${b.lo} to ${b.hi}: ${b.n.toLocaleString()}` })) : []), [yearPool, span]);
+  const scaleHist = useMemo(() => scaleBins(scalePool).map((b, i) => ({
+    from: i, to: i, n: b.n, tip: `1:${fmtDenom(b.lo)}: ${b.n.toLocaleString()}` })), [scalePool]);
+  const undated = useMemo(() => (st.years ? yearPool.filter((it) => publishedYear(it) === null).length : 0),
+    [yearPool, yearsK]); // eslint-disable-line react-hooks/exhaustive-deps
+  const unscaled = useMemo(() => (st.scales ? scalePool.filter((it) => scaleDenominator(it) === null).length : 0),
+    [scalePool, scalesK]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // A place typed into the box: offer it as a pill above the results. Picking it narrows to that area
+  // and stays here (the header search's place pick flies the Map view instead).
+  const typed = text.trim();
+  const placeQ = useQuery({
+    queryKey: qk.placeSuggest(typed),
+    queryFn: ({ signal }) => suggest(typed, signal),
+    enabled: typed.length >= 3 && !area,
+    staleTime: Infinity, retry: false,
+    placeholderData: keepPreviousData,   // keep the pill steady while the next keystroke's lookup runs
+  });
+  const placeHit = placeQ.data?.find((s) => s.text.toLowerCase().startsWith(typed.toLowerCase()));
+  const [placeError, setPlaceError] = useState<string | null>(null);
+  useEffect(() => setPlaceError(null), [typed]);
+  const [picking, setPicking] = useState(false);
+  const pickPlace = async () => {
+    if (!placeHit || picking) return;
+    setPicking(true);
+    try {
+      const b: Bounds = await locate(placeHit);
+      // A point (an address) has no extent; give it a small one so it can meet a footprint.
+      const box: Bounds = b[0] === b[2] && b[1] === b[3] ? [b[0] - 0.02, b[1] - 0.02, b[2] + 0.02, b[3] + 0.02] : b;
+      setPlaceError(null);
+      clearTimeout(typeTimer.current);
+      sentQ.current = "";
+      setText("");
+      patch({ area: box, place: placeHit.text, q: "" });
+    } catch (e) {
+      setPlaceError(`Couldn't find ${placeHit.text}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setPicking(false);
+    }
+  };
 
   // Reset paging whenever the working set changes (new query/filter/sort) — reference parity. The
   // listed keys are all serialized primitives (none referenced in the body), so no disable is needed.
-  useEffect(() => setVisible(PAGE), [q, collsK, catsK, typesK, formatsK, geometry, areaK, sort, itemsKey]);
+  useEffect(() => setVisible(PAGE), [q, filterK, sort, itemsKey]);
   const shown = results.slice(0, visible);
 
   // Every result's footprint → the map's coverage overlay (synced to the card set as filters narrow).
@@ -244,33 +339,40 @@ export function DiscoveryView({
   // results, so "/" is this view and there is one search box with one behavior.
   const idle = !q.trim() && activeFilters === 0 && !itemSelected;
   const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
-  const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], geometry: "all", area: null });
+  const resetAll = () => patch(CLEAR_ALL);
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
       {/* Added layers accumulate into ?l= but Discovery's map only draws footprints — this is the
           only feedback that a card's "+ Add to map" did anything, plus the way to the Map view. */}
       <OpenMapPill />
+      {/* One always-mounted live region, so a screen reader hears the count settle after typing
+          (a region that mounts with its text is often never announced). */}
+      <p role="status" className="sr-only">
+        {withData.length ? `${results.length.toLocaleString()} ${results.length === 1 ? "result" : "results"}` : ""}
+        {hidden ? `, ${hidden.n.toLocaleString()} more hidden by filters` : ""}
+      </p>
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
-        {renderSearch ? (
-          <div className="min-w-[12rem] flex-1 sm:max-w-md">{renderSearch(q, (text) => patch({ q: text }))}</div>
-        ) : (
-          <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
-            placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
-            className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
-        )}
+        <div className="flex min-w-[12rem] flex-1 items-center gap-1 rounded-md border border-input bg-card px-2 focus-within:border-primary sm:max-w-md">
+          <svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" className="shrink-0 text-muted-foreground">
+            <circle cx="11" cy="11" r="7" /><path d="M20 20l-4-4" />
+          </svg>
+          <input ref={inputRef} type="search" value={text}
+            onChange={(e) => { setText(e.target.value); sendQ(e.target.value); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) submit(); }}
+            placeholder="Search titles, series IDs, authors, places…" aria-label="Search the catalog"
+            className="min-w-0 flex-1 bg-transparent py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground [&::-webkit-search-cancel-button]:hidden" />
+          {text && (
+            <button type="button" aria-label="Clear the search" onClick={() => { setText(""); sendQ("", true); inputRef.current?.focus(); }}
+              className="flex size-6 shrink-0 items-center justify-center rounded-full text-muted-foreground hover:bg-muted hover:text-foreground">
+              <svg aria-hidden="true" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M6 6l12 12M18 6L6 18" /></svg>
+            </button>
+          )}
+        </div>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
         </span>
-        {/* Clearable even when the map is hidden — the map's own "clear area" pill can be off-screen. */}
-        {area && (
-          <button type="button" onClick={() => patch({ area: null })}
-            title="Results are limited to the map area — click to clear"
-            className="shrink-0 rounded-full border border-primary bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20">
-            Map area ✕
-          </button>
-        )}
         <div className="ml-auto flex flex-wrap items-center gap-1.5">
           <label className="flex items-center gap-1 text-xs text-muted-foreground">
             Sort
@@ -290,6 +392,24 @@ export function DiscoveryView({
         </div>
       </div>
 
+      {/* What's narrowing the results, right under the box that searches them, so a filter set earlier
+          can't be forgotten. On a phone (no rail) this is the only place to see or clear one. */}
+      {chips.length > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 border-b border-border bg-background px-3 py-1.5">
+          <span className="text-xs text-muted-foreground">Filtering by</span>
+          {chips.map((c) => (
+            <button key={c.id} type="button" onClick={() => patch(c.patch)}
+              className="inline-flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20">
+              {c.label} <span aria-hidden>✕</span>
+              <span className="sr-only">remove filter</span>
+            </button>
+          ))}
+          <button type="button" onClick={resetAll} className="px-1 text-xs text-muted-foreground hover:text-foreground hover:underline">
+            Clear all
+          </button>
+        </div>
+      )}
+
       {/* Result kinds, named with their counts. Without this the article and publication groups sat
           below a screenful of cards with nothing saying they existed, and the opt-in engine was a
           bare checkbox beside the item count — which read as that count's label. */}
@@ -300,15 +420,28 @@ export function DiscoveryView({
           <ScopeChip on={scope === "items"} onClick={() => setScope("items")}>
             Layers &amp; publications · {results.length}
           </ScopeChip>
-          {articleHits.length > 0 && (
+          {articleHits.length > 0 ? (
             <ScopeChip on={scope === "articles"} onClick={() => setScope("articles")}>
               Survey Notes articles · {articleHits.length}
             </ScopeChip>
+          ) : !deep ? (
+            <ScopeChip on={false} onClick={() => setDeep(true)}
+              title="Searches the text of every Survey Notes article (an 8.5 MB download, then cached). Enter does this too.">
+              Search Survey Notes articles
+            </ScopeChip>
+          ) : corpus.isError ? (
+            <span role="alert" className="text-destructive">
+              Survey Notes articles couldn't load: {corpus.error instanceof Error ? corpus.error.message : String(corpus.error)}
+            </span>
+          ) : corpus.isLoading ? (
+            <span className="text-muted-foreground">Survey Notes articles · loading…</span>
+          ) : (
+            <span className="text-muted-foreground">Survey Notes articles · 0</span>
           )}
           {/* Selecting it is what starts the search, and it is a ~35MB DuckDB-WASM download on first
               use. The size goes ON the chip: a user deciding whether to click deserves the cost, not
               a tooltip. It is cached afterwards, hence "first use" rather than per search. */}
-          <ScopeChip on={scope === "pubtext"} onClick={() => { setScope("pubtext"); setPubText(true); }}
+          <ScopeChip on={scope === "pubtext"} onClick={() => { setScope("pubtext"); setPubText(true); setFtsQ(q.trim()); }}
             title="Searches inside every publication's full text (~7000 docs). First use downloads a
                    ~35MB query engine, then it is cached; the index itself is read in ranges, not downloaded.">
             {pubFts.data ? `Publication text · ${pubFts.data.length}`
@@ -336,6 +469,26 @@ export function DiscoveryView({
             onToggle={(k) => toggleList("types", k)} />
           <FacetSection label="Format" facets={facets.formats} selected={new Set(formats)}
             onToggle={(k) => toggleList("formats", k)} />
+          {span && span[0] < span[1] && (
+            <RangeFacet label="Year published" summary={st.years ? yearsLabel(st.years) : "Any"}
+              min={span[0]} max={span[1]} value={[st.years?.[0] ?? span[0], st.years?.[1] ?? span[1]]}
+              bins={yearHist}
+              onCommit={(lo, hi, replace) => patch({ years: lo <= span[0] && hi >= span[1] ? null
+                : [lo <= span[0] ? null : lo, hi >= span[1] ? null : hi] }, replace)}
+              toText={String} fromText={(s) => (/^\d{4}$/.test(s.trim()) ? Number(s.trim()) : null)}
+              labels={["Earliest year", "Latest year"]}
+              note={undated ? `${undated.toLocaleString()} without a publication year hidden` : undefined} />
+          )}
+          <RangeFacet label="Map scale" summary={st.scales ? scalesLabel(st.scales) : "Any"}
+            min={0} max={SCALE_MAX}
+            value={[st.scales?.[0] != null ? nearestStep(st.scales[0]) : 0, st.scales?.[1] != null ? nearestStep(st.scales[1]) : SCALE_MAX]}
+            bins={scaleHist}
+            onCommit={(lo, hi, replace) => patch({ scales: lo === 0 && hi === SCALE_MAX ? null
+              : [lo === 0 ? null : SCALE_STEPS[lo], hi === SCALE_MAX ? null : SCALE_STEPS[hi]] }, replace)}
+            toText={(i) => fmtDenom(SCALE_STEPS[i])}
+            fromText={(s) => { const n = Number(s.replace(/^\s*1\s*:/, "").replace(/[,\s]/g, "")); return n >= 1 ? nearestStep(n) : null; }}
+            prefix="1:" ends={["More detailed", "Less detailed"]} labels={["Most detailed scale", "Least detailed scale"]}
+            note={unscaled ? `${unscaled.toLocaleString()} without a scale hidden` : undefined} />
           <GeometrySection facets={facets.geometry} value={geometry} onChange={(v) => patch({ geometry: v })} />
           <div className="px-3 py-4 text-[11px] leading-snug text-muted-foreground">
             Filters narrow the cards and the map together. Hover a card to find it on the map.
@@ -358,27 +511,51 @@ export function DiscoveryView({
               </div>
             </section>
           )}
-          {/* Removable active-filter chips — a legible summary of what's narrowing the set, above the
-              cards (the rail is md+ only, so on a phone this is the ONLY way to see/clear a filter). */}
-          {chips.length > 0 && (
-            <div className="mb-2 flex flex-wrap items-center gap-1.5">
-              {chips.map((c) => (
-                <button key={c.id} type="button" onClick={() => patch(c.patch)}
-                  className="inline-flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/20">
-                  {c.label} <span aria-hidden>✕</span>
-                  <span className="sr-only">remove filter</span>
+          {placeHit && !area && (
+            <button type="button" onClick={pickPlace} disabled={picking} aria-busy={picking}
+              className="mb-3 flex w-full items-center gap-3 rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-left hover:border-primary">
+              <svg aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-primary">
+                <path d="M12 21s-7-6.2-7-11.5A7 7 0 0 1 19 9.5C19 14.8 12 21 12 21z" /><circle cx="12" cy="9.5" r="2.5" />
+              </svg>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-foreground">{placeHit.text}</span>
+                <span className="block text-xs text-muted-foreground">{picking ? `Finding ${placeHit.text}…` : "Place · show everything that covers it"}</span>
+              </span>
+            </button>
+          )}
+          {placeError && <p role="alert" className="mb-3 text-xs text-destructive">{placeError}</p>}
+          {placeQ.isError && (
+            <p className="mb-3 text-xs text-destructive">
+              Place lookup failed: {placeQ.error instanceof Error ? placeQ.error.message : String(placeQ.error)}
+            </p>
+          )}
+          {/* Search hits the filters hide: say how many and offer the way back, instead of a dead end. */}
+          {hidden && (
+            <div className="mb-3 space-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm dark:border-amber-700 dark:bg-amber-950/40">
+              <p className="text-foreground">
+                {results.length === 0
+                  ? <><b>No results for “{q.trim()}” with your filters.</b> {hidden.n.toLocaleString()} match without them.</>
+                  : <><b>{hidden.n.toLocaleString()} more {hidden.n === 1 ? "result" : "results"} for “{q.trim()}”</b> {hidden.n === 1 ? "is" : "are"} outside your filters.</>}
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                <button type="button" onClick={resetAll}
+                  className="rounded-full border border-primary bg-primary px-3 py-0.5 text-xs font-medium text-primary-foreground hover:bg-primary/90">
+                  Search everything
                 </button>
-              ))}
-              <button type="button" onClick={resetAll} className="px-1 text-xs text-muted-foreground hover:text-foreground hover:underline">
-                Clear all
-              </button>
+                {hidden.reliefs.map((r) => (
+                  <button key={r.group} type="button" onClick={() => patch(r.patch)}
+                    className="rounded-full border border-border bg-card px-3 py-0.5 text-xs text-foreground hover:border-primary">
+                    {r.label} (+{r.gain.toLocaleString()})
+                  </button>
+                ))}
+              </div>
             </div>
           )}
           {/* An isolating chip hides the item results entirely — not just their heading. */}
           {scope === "articles" || scope === "pubtext" ? null
             : withData.length === 0 ? (
             <p className="px-1 py-16 text-center text-sm text-muted-foreground">Loading the catalog…</p>
-          ) : shown.length === 0 ? (
+          ) : shown.length === 0 && hidden ? null : shown.length === 0 ? (
             <div className="mx-auto mt-10 max-w-sm rounded-lg border border-dashed border-border p-8 text-center">
               <p className="text-sm font-medium text-foreground">Nothing matches these filters.</p>
               {activeFilters > 0 && (
@@ -396,6 +573,7 @@ export function DiscoveryView({
             <div className="grid gap-3 [grid-template-columns:repeat(auto-fill,minmax(min(240px,100%),1fr))]">
               {shown.map((it) => (
                 <ResultCard key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)}
+                  idMatch={namedId === docIdOf(it)}
                   addSlot={<AddToMapButton layerId={idOf(it.href)} compact />} />
               ))}
             </div>
@@ -403,6 +581,7 @@ export function DiscoveryView({
             <ul className="divide-y divide-border overflow-hidden rounded-lg border border-border bg-card">
               {shown.map((it) => (
                 <ResultRow key={it.href} it={it} density={density} on={hoverHref === it.href} link={cardLink(it)}
+                  idMatch={namedId === docIdOf(it)}
                   addSlot={<AddToMapButton layerId={idOf(it.href)} compact />} />
               ))}
             </ul>
@@ -440,6 +619,9 @@ export function DiscoveryView({
               <h2 className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
                 Publication full text{pubFts.data ? ` · ${pubFts.data.length}` : ""}
               </h2>
+              {ftsQ !== q.trim() && (
+                <p className="mt-1 text-xs text-muted-foreground">For “{ftsQ}”. Press Enter to search the text for “{q.trim()}”.</p>
+              )}
               {pubFts.isLoading && <p className="mt-1 text-xs text-muted-foreground">Loading the query engine + searching…</p>}
               {pubFts.isError && <p className="mt-1 text-xs text-muted-foreground">Full-text index not available yet (built by the FTS job on reingest).</p>}
               <ol className="mt-1 divide-y divide-border">
@@ -474,12 +656,12 @@ export function DiscoveryView({
                 this on a 2/5-width pane put it on top of the basemap toggle. */}
             <div className="pointer-events-none absolute inset-x-0 top-12 z-10 flex justify-center">
               {area ? (
-                <button type="button" onClick={() => patch({ area: null })}
+                <button type="button" onClick={() => patch({ area: null, place: "" })}
                   className="pointer-events-auto rounded-full border border-primary bg-primary px-3 py-1 text-xs font-medium text-primary-foreground shadow">
                   ✕ Clear map area
                 </button>
               ) : (
-                <button type="button" onClick={() => bounds && patch({ area: bounds })} disabled={!bounds}
+                <button type="button" onClick={() => bounds && patch({ area: bounds, place: "" })} disabled={!bounds}
                   title="Limit results to what's in the current map view"
                   className="pointer-events-auto rounded-full border border-border bg-card/95 px-3 py-1 text-xs font-medium text-foreground shadow hover:bg-hover disabled:opacity-50">
                   Search this area

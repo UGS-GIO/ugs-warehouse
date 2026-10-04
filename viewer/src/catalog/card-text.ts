@@ -1,5 +1,3 @@
-// What a Discover result card says, kept apart from the card component so it is testable without
-// React. See result-card.tsx for why a publication card leads with part of its title.
 import type { ItemRef } from "./browse";
 import { collectionLabel, dateOf, firstAuthor, fmtDate, isPublication, itemIdOf, scaleDenominator, title,
   typeOf } from "./item-view";
@@ -13,8 +11,6 @@ export type CardText = {
   interim: boolean;
 };
 
-/** What a card says. Publications are split (titleParts); layers keep their title and the
- *  collection · type · date line they had. */
 export function cardText(it: ItemRef): CardText {
   const t = title(it);
   if (!isPublication(it)) {

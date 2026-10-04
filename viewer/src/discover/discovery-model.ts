@@ -215,8 +215,7 @@ const parseArea = (v: unknown): Area | null => {
   return validBbox(parts) ? (parts as Area) : null;
 };
 
-// "1990,2010" / "1990," / ",2010" → a Range of positive whole numbers (years, scale denominators);
-// anything else, or both ends open, → null.
+// "1990,2010" / "1990," / ",2010"; only positive whole numbers.
 const parseRange = (v: unknown): Range | null => {
   const parts = str(v).split(",");
   if (parts.length !== 2) return null;
@@ -307,7 +306,6 @@ export const scalesLabel = ([lo, hi]: Range): string => {
   return hi !== null ? `${fmtScale(hi)} or more detailed` : "Any";
 };
 
-// ---- Year + scale ranges ------------------------------------------------------------------------
 // A publication's year; a layer's datetime is when it was loaded, so it has none (datetimeIsPublished).
 export const publishedYear = (it: ItemRef): number | null =>
   (datetimeIsPublished(propsOf(it)) ? year(it) : null);
@@ -315,7 +313,6 @@ export const publishedYear = (it: ItemRef): number | null =>
 const within = (v: number | null, [lo, hi]: Range): boolean =>
   v !== null && (lo === null || v >= lo) && (hi === null || v <= hi);
 
-// The scales the slider steps through, detailed to broad: the ones UGS maps are published at.
 export const SCALE_STEPS = [
   1000, 2400, 6000, 12000, 24000, 31680, 50000, 62500, 100000, 125000, 250000, 500000, 1000000, 2500000,
 ];
@@ -329,7 +326,6 @@ export const nearestStep = (d: number): number => {
 };
 
 export type Bin = { lo: number; hi: number; n: number };
-/** Counts per `size`-year bin across [min, max], for the year filter's histogram. */
 export function yearBins(items: ItemRef[], [min, max]: [number, number], size = 5): Bin[] {
   const bins: Bin[] = [];
   for (let lo = min; lo <= max; lo += size) bins.push({ lo, hi: Math.min(lo + size - 1, max), n: 0 });
@@ -346,7 +342,6 @@ export const inScaleRange = (d: number | null, [lo, hi]: Range): boolean => {
   const i = nearestStep(d);
   return (lo === null || i >= nearestStep(lo)) && (hi === null || i <= nearestStep(hi));
 };
-/** Counts per SCALE_STEPS entry (each item at its nearest step), for the scale filter's histogram. */
 export function scaleBins(items: ItemRef[]): Bin[] {
   const bins = SCALE_STEPS.map((s) => ({ lo: s, hi: s, n: 0 }));
   for (const it of items) {
@@ -355,7 +350,6 @@ export function scaleBins(items: ItemRef[]): Bin[] {
   }
   return bins;
 }
-/** The span of publication years present, or null when none has one. */
 export function yearSpan(items: ItemRef[]): [number, number] | null {
   let min = Infinity, max = -Infinity;
   for (const it of items) {
@@ -365,7 +359,6 @@ export function yearSpan(items: ItemRef[]): [number, number] | null {
   return min <= max ? [min, max] : null;
 }
 
-// ---- Every filter, and what each one hides --------------------------------------------------------
 export type FilterGroup =
   "collections" | "categories" | "types" | "formats" | "geometry" | "area" | "years" | "scales";
 
@@ -388,7 +381,6 @@ export const activeGroups = (s: DiscoveryState): FilterGroup[] => {
   return (Object.keys(on) as FilterGroup[]).filter((g) => on[g]);
 };
 
-/** The items passing every Discover filter, or every one but `skip`. */
 export function filterResults(items: ItemRef[], s: DiscoveryState, skip?: FilterGroup): ItemRef[] {
   let out = applyFacets(items, {
     collections: skip === "collections" ? [] : s.collections,
@@ -413,5 +405,4 @@ export function reliefs(matched: ItemRef[], s: DiscoveryState, shown: number): R
     .filter((r) => r.gain > 0)
     .sort((a, b) => b.gain - a.gain);
 }
-/** Every filter cleared, the query and view settings kept. */
 export const CLEAR_ALL: Partial<DiscoveryState> = Object.assign({}, ...Object.values(CLEAR));

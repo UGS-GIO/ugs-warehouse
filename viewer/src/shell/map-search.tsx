@@ -38,8 +38,7 @@ function bindSlash(el: HTMLInputElement | null) {
 
 const PLACEHOLDER = "Search places, layers and publications";
 
-// The bar's frame: the same pill on the Map page (with suggestions) and on Discover (which filters
-// its own results as you type instead). The caller supplies the input.
+// The bar's frame, shared by the Map page (with suggestions) and Discover (without).
 function BarFrame({ className, busy, error, showClear, onClear, children }: {
   className: string; busy?: boolean; error?: string; showClear: boolean; onClear: () => void; children: ReactNode;
 }) {

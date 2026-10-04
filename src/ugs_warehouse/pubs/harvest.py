@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextvars
 import csv
+import functools
 import json
 import os
 import re
@@ -472,6 +473,51 @@ def ensure_rgb(tif):
     return tif
 
 
+def _gdalinfo(path, *flags) -> dict:
+    """gdalinfo -json, which (unlike the rasterio wheel) reads WEBP-compressed COGs. stderr is captured
+    because the attempt's handler logs a failure's `e.stderr`."""
+    out = subprocess.run(["gdalinfo", "-json", "-nomd", "-noct", *flags, str(path)],
+                         check=True, capture_output=True, text=True).stdout
+    return json.loads(out)
+
+
+@functools.lru_cache(maxsize=32)
+def _plate_kind(path) -> str:
+    """How a plate raster reaches 8 bits, judged from GDAL's exact per-band min/max (nodata excluded):
+    "byte" (already 8-bit), "color" (3+ integer bands whose values fit 0-255, e.g. a UInt16 plate; the
+    warp casts it), "lineart" (a 1-band 0/1 line scan, 0 = paper and 1 = ink), or "grid" (anything else:
+    a data grid such as a DEM or salinity surface, real 16-bit imagery, or a non-8-bit palette).
+    Cached: plate selection and the attempt probe the same path."""
+    bands = _gdalinfo(path, "-mm").get("bands") or []
+    if not bands:                         # a container (e.g. subdatasets) with no raster bands
+        return "grid"
+    if all(b["type"] == "Byte" for b in bands):
+        return "byte"
+    if (not bands[0]["type"].startswith(("UInt", "Int"))
+            or any(b.get("colorInterpretation") == "Palette" for b in bands)
+            or any("computedMin" not in b for b in bands[:3])):   # all nodata: nothing to judge
+        return "grid"
+    lo = min(b["computedMin"] for b in bands[:3])
+    hi = max(b["computedMax"] for b in bands[:3])
+    if len(bands) >= 3:
+        return "color" if lo >= 0 and hi <= 255 else "grid"
+    return "lineart" if len(bands) == 1 and lo >= 0 and hi <= 1 else "grid"
+
+
+def _lineart_to_byte(path, work) -> str:
+    """Render a 0/1 line scan as 8-bit gray + alpha: 0 -> white paper, 1 -> black ink, nodata ->
+    transparent (the same mapping as the 2-entry color table these plates ship with elsewhere)."""
+    out = os.path.join(work, "plate.lineart.tif")
+    run(["gdal_translate", "-ot", "Byte", "-scale_1", "0", "1", "255", "0", "-b", "1", "-b", "mask",
+         "-colorinterp", "gray,alpha", "-a_nodata", "none", "-co", "TILED=YES",
+         "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER", str(path), out])
+    return out
+
+
+def _band_types(path) -> list[str]:
+    return [b["type"] for b in _gdalinfo(path).get("bands") or []]
+
+
 def _source_saturation(path) -> float:
     """Color-vs-grayscale probe: the mean per-pixel R/G/B spread of a raster over its OPAQUE pixels,
     read cheaply from a decimated 96x96 thumbnail. A palette raster is scored from its colortable's own
@@ -494,8 +540,11 @@ def _source_saturation(path) -> float:
                     spreads = [max(c[:3]) - min(c[:3]) for c in cmap.values()]
                     return float(sum(spreads) / len(spreads)) if spreads else 0.0
                 return 255.0
+            if ds.count == 0:
+                return -1.0                       # no raster bands: not a map candidate
             if ds.count < 3 and str(ds.dtypes[0]) != "uint8":
-                return -1.0                       # 1-2 band non-Byte = DEM / data grid — intentional skip
+                # 1-2 band non-Byte: a 0/1 line scan is a (grayscale) map; anything else is a data grid.
+                return 0.0 if _plate_kind(path) == "lineart" else -1.0
             nb = min(ds.count, 4)
             has_alpha = (nb >= 4 and ds.colorinterp[3] == ColorInterp.alpha
                          and str(ds.dtypes[3]) == "uint8")   # band 4 = real alpha, not RGBN's NIR
@@ -608,6 +657,10 @@ def prepare_plates(zip_paths, work):
         hlog(f"advisory: no color source among {len(tif_candidates)} GeoTIFF candidate(s) "
              f"(best spread {best_sat:.1f} < floor {COLOR_SAT_FLOOR:.0f}) — using name-pick GeoTIFF; a "
              f"color plate that failed to read (spread -1) would show here", step="plate", level="WARNING")
+    if gtif and _plate_kind(f"/vsizip/{target_zip}/{inner_gtif}") == "grid":
+        hlog(f"name-picked {inner_gtif} is a data grid, not a map plate — not using it",
+             step="plate", level="WARNING")
+        gtif = None
     if not gtif:
         _report_derive_skipped(shp)
         return None, shp_path
@@ -788,6 +841,19 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                  level="ERROR", category="attention", err=True)
             return "fail:noplate"
 
+        # Every COG is 8-bit: WEBP needs it, the mosaic VRT keeps only sources matching the first one's
+        # type, and browsers draw 16-bit plates almost black.
+        kind = _plate_kind(plate)
+        if kind == "grid":
+            hlog("FAIL plate is not 8-bit map imagery (a data grid, or real 16-bit color)", step="plate",
+                 level="ERROR", category="attention", err=True)
+            return "fail:not_8bit"
+        if kind == "lineart":
+            plate = _lineart_to_byte(plate, work)
+        # -dstalpha carries the transparency; no nodata tag, or white paper could turn clear. INIT_DEST
+        # is explicit because, with no nodata, GDAL 3.11 exits 1 on its default and leaves a partial file.
+        cast_args = ["-ot", "Byte", "-dstnodata", "None", "-wo", "INIT_DEST=0"] if kind == "color" else []
+
         clipped = os.path.join(work, "clipped.tif")
         # No footprint in the index → empty cutline → gdalwarp "cannot compute bounds of cutline".
         # Fall back to an uncropped warp (full sheet) instead of failing the pub.
@@ -798,7 +864,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             cutline_args = []
             hlog("no map footprint in the index — warping uncropped (full sheet)",
                  step="cog", level="WARNING")
-        run(["gdalwarp", *cutline_args,
+        run(["gdalwarp", *cutline_args, *cast_args,
              "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
              "-co", "BIGTIFF=YES", "-co", "COMPRESS=DEFLATE", plate, clipped])
         cog = os.path.join(work, f"{series_id}.cog.tif")
@@ -821,7 +887,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                           zoom_level_strategy=COG_ZOOM_STRATEGY,
                           overview_resampling="bilinear", quiet=True)
 
-        # webp is 8-bit-only and raises on 16-bit/float plates; lossless lzw keeps web_optimized
+        # webp can still fail to encode a plate; lossless lzw keeps web_optimized
         # so the result is still tiled + overviewed for range reads.
         try:
             cog_translate(rgb_clipped, cog, prof, web_optimized=True,
@@ -861,6 +927,11 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         if not ok:
             hlog("FAIL cog invalid", step="validate", level="ERROR", category="attention", err=True)
             return "fail:cog"
+        cog_types = _band_types(cog)
+        if not cog_types or any(t != "Byte" for t in cog_types):
+            hlog(f"FAIL COG bands are {cog_types}, not 8-bit", step="validate",
+                 level="ERROR", category="attention", err=True)
+            return "fail:not_8bit"
         # "It ran ≠ it's right": a COLOR source that came out grayscale means the pipeline silently
         # dropped the color — never publish it. (No-op for a webp COG the rasterio wheel can't read:
         # _source_saturation returns -1, which fails the `0 <= cog_sat` check.)

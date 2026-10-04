@@ -51,8 +51,7 @@ For a scanned geologic map, the COG URL is under **Assets** on the map's page.
 ### Metadata and fields
 
 Each layer page in the viewer shows the layer's description and other metadata. **Fields**
-lists each field and its data type. Under **Assets**, each layer has an ISO 19139 metadata file
-(XML) that you can load into ArcGIS Pro or a metadata catalog.
+lists each field and its data type.
 
 ### Citation
 

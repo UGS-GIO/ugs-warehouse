@@ -4,25 +4,19 @@ from unittest.mock import patch
 
 import pytest
 
-from ugs_warehouse.core import config, iso, stac
+from ugs_warehouse.core import config, stac
 from ugs_warehouse.pubs import identity
 from ugs_warehouse.pubs import sink_stac as pubs_sink
 from ugs_warehouse.pubs.sink_stac import collection_group
 
 
-def test_pub_items_author_an_iso_topic_category():
-    """Pubs share core/iso.py with the vector path, which omits topicCategory when uncurated (#53).
-
-    Pubs have no schema_registry row, so without an authored value every publication's ISO record
-    would silently lose a mandatory element. A UGS publication is our own product — asserting the
-    category is a statement about our own work, not a guess about someone else's data.
-    """
+def test_pub_items_author_a_topic_category():
+    """A UGS publication is our own product, so asserting its category is not a guess."""
     with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
          patch("ugs_warehouse.core.stac.manual_override", return_value={}):
         item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS"}, [])
 
     assert item["properties"]["ugs:topic_category"] == "geoscientificInformation"
-    assert "<gmd:topicCategory>" in iso.stac_to_iso19139(item)
 
 
 def test_collection_group_routes_md_external_and_ugs():
@@ -458,7 +452,6 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as mock_refresh:
@@ -500,7 +493,6 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
                side_effect=RuntimeError("footprints missing")), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
@@ -607,7 +599,6 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
@@ -666,10 +657,8 @@ def test_collection_doc_titles_its_item_links():
     assert items["./landslides/landslides.json"]["title"] == "landslides"
 
 
-def test_pub_keywords_are_a_list_and_reach_the_iso_record():
-    """`keywords` is a list in STAC. The source hands over one `;`-separated blob, and publishing
-    that string made core/iso.py iterate it per character: every pub's ISO record carried a
-    <gmd:keyword> for each letter (the same fault #64 fixed on the vector path)."""
+def test_pub_keywords_are_a_list():
+    """`keywords` is a list in STAC. The source hands over one `;`-separated blob."""
     raw = "Geology; Summit County; Maps\nGeology; Tooele, Utah; Maps"
     with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
          patch("ugs_warehouse.core.stac.manual_override", return_value={}):
@@ -678,9 +667,6 @@ def test_pub_keywords_are_a_list_and_reach_the_iso_record():
 
     # Deduped, and a comma inside a heading stays inside it.
     assert item["properties"]["keywords"] == ["Geology", "Summit County", "Maps", "Tooele, Utah"]
-    record = iso.stac_to_iso19139(item)
-    assert "<gmd:keyword><gco:CharacterString>Summit County</gco:CharacterString></gmd:keyword>" in record
-    assert "<gco:CharacterString>G</gco:CharacterString>" not in record
 
 
 def test_pub_item_omits_the_fields_the_source_left_empty():

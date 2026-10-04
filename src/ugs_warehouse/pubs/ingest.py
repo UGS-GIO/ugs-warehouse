@@ -251,7 +251,6 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             mosaic_tier=tier_by_sid.get(up),
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
-        stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
         stac.write_item(item)
         return True
 

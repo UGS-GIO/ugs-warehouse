@@ -21,7 +21,7 @@ import json
 import re
 import sys
 
-from . import catalog_docs, config, feature_service, gcs, iso, item_mirror, styles
+from . import catalog_docs, config, feature_service, gcs, item_mirror, styles
 from .bbox import to_2d_bbox
 
 PGF_BASE_URL = config.PGF_BASE_URL
@@ -68,7 +68,6 @@ USAGE_PMTILES = "Vector tiles — web-map display"
 USAGE_DUCKLAKE = "DuckLake table — versioned SQL analysis (review catalog only)"
 USAGE_THUMBNAIL = "Styled preview image"
 USAGE_STYLE = "MapLibre GL style — how to draw this layer"
-USAGE_METADATA = "ISO 19139 metadata (ISO 19115 content model)"
 
 
 def has_feature_service(collection_path: str) -> bool:
@@ -260,33 +259,6 @@ def prior_file_fields(collection_path: str, item_id: str) -> dict[str, dict]:
         if fields:
             out[key] = fields
     return out
-
-
-def attach_iso(item: dict) -> str:
-    """Write an ISO 19139 sidecar next to the item + add a `metadata` asset (mutates item).
-
-    For gov clearinghouses (data.gov / state portals) that harvest ISO, not STAC. Call
-    before `write_item` so the written item references the sidecar; generated from the item
-    as-is so the metadata asset is not yet present (no self-reference).
-    """
-    # An uncurated topic emits an ISO record with no <gmd:topicCategory> — mandatory for datasets,
-    # so the record is knowingly invalid rather than confidently wrong (#53). Say which ones, or the
-    # gap is invisible until a harvester rejects it.
-    if not item.get("properties", {}).get("ugs:topic_category"):
-        print(f"[{item['id']}] ISO: no iso_topic_category curated — omitting <gmd:topicCategory> "
-              "(record will not validate; curate raw.schema_registry to fix)", file=sys.stderr)
-    path = f"{config.STAC_PREFIX}/{_layout_path(item)}/{item['id']}/{item['id']}.iso.xml"
-    gcs.put_bytes(iso.stac_to_iso19139(item).encode(), path,
-                  content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
-    item.setdefault("assets", {})["metadata"] = {
-        "href": config.public_url(path), "type": "application/xml",
-        # `iso-19115` is the STAC + Portolan standard role for an ISO metadata file; our sidecar is
-        # ISO 19139, the XML encoding of the 19115 content model, so it earns that role alongside the
-        # generic `metadata`.
-        "roles": ["metadata", "iso-19115"], "title": "ISO 19139 metadata",
-        "description": USAGE_METADATA,
-    }
-    return path
 
 
 def attach_renders(item: dict) -> None:
@@ -664,9 +636,8 @@ SERIES_DESC = {
 # Serving-topic groups carry NO authored title or description. The group is the dbt mart schema,
 # so its only honest label is the schema name itself (prettified, the same dumb transform items
 # get). A curated name for `emp` or `gengis` would be invention — when upstream publishes one
-# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Same rule as
-# the ISO topicCategory: absent means absent, never defaulted. Pub series differ — SERIES_DESC is
-# verbatim UGS copy from geology.utah.gov/map-pub, inherited rather than written.
+# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Pub series
+# differ — SERIES_DESC is verbatim UGS copy from geology.utah.gov/map-pub, inherited, not written.
 
 # Nesting catalogs that ALSO publish a rollup items.json spanning every child collection. Keeps
 # one-URL consumers (the tiles service, the ops console) working across a split

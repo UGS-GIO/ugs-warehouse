@@ -152,4 +152,3 @@ The vector pipeline is end-to-end in production. The honest gaps:
 - 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).
 - 🟧 **Legacy pubs** — 1,163 catalog items, mostly legacy mining district scans, have no record in
   the publications app. The prune keeps them until they are imported or retired (#491).
-- 🟧 **FGDC metadata** variant + raster extension (ISO 19139 done for vector + pubs).

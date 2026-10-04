@@ -248,6 +248,5 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
     )
     stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
     stac.attach_classification(item)  # classification:classes from the style's categories (graceful)
-    stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
     path = stac.write_item(item)
     print(f"[{topic.fqn}] stac: {config.public_url(path)}")

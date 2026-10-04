@@ -141,7 +141,6 @@ const ROADMAP: { status: Status; text: string }[] = [
   { status: "partial", text: "Raster path — consume/promote is deployed and provisioned (#61), but promoted items still don't render on the map (the visual asset is the native-CRS COG, #84), `native_crs` is trusted text rather than verified (#83), and promote shares an instance with ingest and has no DLQ (#81)." },
   { status: "planned", text: "Grouping model — dataset/collection/group spine so a project or a seamless mosaic is a first-class object (ugs-ingest #342)." },
   { status: "partial", text: "STAC `datetime` is ingest time, not data-validity time — waiting on an upstream validity timestamp." },
-  { status: "partial", text: "Metadata export: ISO 19139 sidecar done for vector + pubs; FGDC variant and raster extension still open." },
   { status: "planned", text: "Publish allowlist — explicit per-layer control over what the warehouse exposes, and a private tier for embargoed layers." },
 ];
 

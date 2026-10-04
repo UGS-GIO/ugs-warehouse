@@ -98,12 +98,15 @@ def _extract_and_upload(
         except Exception as e:
             print(f"  layer {label} failed: {e}", file=sys.stderr)
 
-    if manifest["spatial"] or manifest["tables"]:
-        gcs.put_bytes(json.dumps(manifest).encode(),
-                       f"{VECTORS_PREFIX}/{series_id}/_manifest.json",
-                       content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-
+    _write_manifest(series_id, manifest)
     return manifest
+
+
+def _write_manifest(series_id: str, manifest: dict[str, list[str]]) -> None:
+    """Also written empty, for a zip with nothing to extract: it marks the pub done, so later runs
+    skip it instead of downloading the zip again. `--force` retries it."""
+    gcs.put_bytes(json.dumps(manifest).encode(), f"{VECTORS_PREFIX}/{series_id}/_manifest.json",
+                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
 
 
 def extracted_series() -> set[str]:
@@ -152,6 +155,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
 
         srcs = _sources(work)
         if not srcs:
+            _write_manifest(series_id, {"spatial": [], "tables": []})
             print(f"{series_id}: SKIP (no shapefiles, GDB layers, or tables found)")
             return "skip"
 

@@ -119,7 +119,9 @@ def test_extract_and_upload_skips_empty_layers_of_either_type(monkeypatch, tmp_p
     manifest = vectors._extract_and_upload(str(tmp_path), "M-101", srcs)
 
     assert manifest == {"spatial": [], "tables": []}
-    assert store == {}  # nothing uploaded — including no manifest — for an all-empty extraction
+    # No layer uploaded, but an empty manifest marks the pub done so the next run skips the zip.
+    assert store == {f"{vectors.VECTORS_PREFIX}/M-101/_manifest.json":
+                     json.dumps({"spatial": [], "tables": []}).encode()}
 
 
 def test_extract_and_upload_continues_past_a_failed_layer(monkeypatch, tmp_path):

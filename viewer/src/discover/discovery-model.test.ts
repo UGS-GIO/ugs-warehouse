@@ -3,7 +3,7 @@ import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, activeGroups, applyFacets, bboxIntersects, CLEAR_ALL, DEFAULT_DISCOVERY, type DiscoveryState,
   discoveryPatch, effectiveSort, extractFacets, filterByViewport, filterResults, GEOM_HAS, GEOM_NONE, hasGeometry,
-  nearestStep, parseDiscovery, reliefs, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
+  nearestStep, parseDiscovery, reliefs, withSelected, SCALE_STEPS, scaleBins, sortItems, typeOf, yearBins, yearSpan,
 } from "./discovery-model";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
@@ -327,5 +327,15 @@ describe("reliefs (what each filter hides)", () => {
     const cleared = { ...s, ...CLEAR_ALL };
     expect(activeGroups(cleared)).toEqual([]);
     expect(cleared.q).toBe("faults");
+  });
+});
+
+describe("withSelected", () => {
+  it("keeps a selected value the search left empty, at 0, first", () => {
+    const f = [{ key: "hazards", label: "Hazards", n: 3 }];
+    expect(withSelected(f, ["energy-minerals", "hazards"], (k) => k.toUpperCase())).toEqual([
+      { key: "energy-minerals", label: "ENERGY-MINERALS", n: 0 }, { key: "hazards", label: "Hazards", n: 3 },
+    ]);
+    expect(withSelected(f, ["hazards"], String)).toBe(f);
   });
 });

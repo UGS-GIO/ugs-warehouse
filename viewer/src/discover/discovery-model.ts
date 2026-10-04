@@ -106,6 +106,28 @@ export function bboxIntersects(a: number[] | undefined, b: number[] | undefined)
   return va[0] <= vb[2] && va[2] >= vb[0] && va[1] <= vb[3] && va[3] >= vb[1];
 }
 
+// "Near" a place: its box grown by NEAR_MILES, and at least NEAR_SHARE of an item's footprint inside
+// that. A statewide map touches every town, so meeting the place isn't enough.
+export const NEAR_MILES = 10;
+export const NEAR_SHARE = 0.5;
+const MILES_PER_DEG_LAT = 69;
+export function bufferMiles([w, s, e, n]: Area, miles: number): Area {
+  const dLat = miles / MILES_PER_DEG_LAT;
+  const dLon = miles / (MILES_PER_DEG_LAT * Math.cos(((s + n) / 2) * Math.PI / 180));
+  return [w - dLon, s - dLat, e + dLon, n + dLat];
+}
+/** Whether most of a footprint lies within NEAR_MILES of a place. Plain box arithmetic: fast, and
+ *  in degrees, which is fine for a ratio over one small region. */
+export function isNear(bbox: number[] | undefined, place: Area): boolean {
+  const b = validBbox(bbox);
+  if (!b) return false;
+  const [w, s, e, n] = bufferMiles(place, NEAR_MILES);
+  const ow = Math.min(b[2], e) - Math.max(b[0], w), oh = Math.min(b[3], n) - Math.max(b[1], s);
+  if (ow < 0 || oh < 0) return false;
+  const area = (b[2] - b[0]) * (b[3] - b[1]);
+  return area === 0 || (ow * oh) / area >= NEAR_SHARE;   // a point or line inside the buffer is near
+}
+
 // "Search this area": keep items whose footprint meets the current map viewport. Aspatial items (no
 // valid bbox) can't be in an area, so they drop out while the filter is active. A missing/invalid
 // viewport is a no-op (everything passes).
@@ -187,6 +209,7 @@ export type DiscoveryState = {
   density: Density;
   area: Area | null;
   place: string;          // the place an area came from ("Moab"), for its chip; "" for a drawn area
+  broad: boolean;         // with a place: also keep footprints far bigger than it (statewide maps)
   years: Range | null;    // publication year
   scales: Range | null;   // scale denominators: [24000, 100000] is 1:24,000 to 1:100,000
 };
@@ -194,7 +217,7 @@ export type DiscoveryState = {
 export const DEFAULT_DISCOVERY: DiscoveryState = {
   q: "", collections: [], categories: [], types: [], formats: [],
   geometry: "all", sort: "relevance", layout: "gallery", density: "comfortable", area: null,
-  place: "", years: null, scales: null,
+  place: "", broad: false, years: null, scales: null,
 };
 
 const str = (v: unknown): string => (typeof v === "string" ? v : "");
@@ -241,6 +264,7 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
     density: oneOf(sp.density, DENSITIES_K, "comfortable"),
     area: parseArea(sp.area),
     place: parseArea(sp.area) ? str(sp.place) : "",
+    broad: parseArea(sp.area) !== null && str(sp.place) !== "" && sp.broad === "1",
     years: parseRange(sp.years),
     scales: parseRange(sp.scale),
   };
@@ -266,6 +290,7 @@ export function discoveryPatch(s: DiscoveryState): Record<string, string | undef
     density: s.density === "comfortable" ? undefined : s.density,
     area: s.area ? s.area.join(",") : undefined,
     place: s.area && s.place ? s.place : undefined,
+    broad: s.area && s.place && s.broad ? "1" : undefined,
     years: rangeParam(s.years),
     scale: rangeParam(s.scales),
   };
@@ -288,7 +313,7 @@ export function activeChips(s: DiscoveryState, labelFor: {
     chips.push({ id: `fmt:${key}`, label: key, patch: { formats: s.formats.filter((k) => k !== key) } });
   if (s.geometry === GEOM_HAS) chips.push({ id: "geom", label: "On the map", patch: { geometry: "all" } });
   if (s.geometry === GEOM_NONE) chips.push({ id: "geom", label: "No footprint", patch: { geometry: "all" } });
-  if (s.area) chips.push({ id: "area", label: s.place ? `Near ${s.place}` : "Map area", patch: { area: null, place: "" } });
+  if (s.area) chips.push({ id: "area", label: s.place ? `Near ${s.place}` : "Map area", patch: { area: null, place: "", broad: false } });
   if (s.years) chips.push({ id: "years", label: yearsLabel(s.years), patch: { years: null } });
   if (s.scales) chips.push({ id: "scales", label: scalesLabel(s.scales), patch: { scales: null } });
   return chips;
@@ -364,7 +389,7 @@ export type FilterGroup =
 
 const CLEAR: Record<FilterGroup, Partial<DiscoveryState>> = {
   collections: { collections: [] }, categories: { categories: [] }, types: { types: [] },
-  formats: { formats: [] }, geometry: { geometry: "all" }, area: { area: null, place: "" },
+  formats: { formats: [] }, geometry: { geometry: "all" }, area: { area: null, place: "", broad: false },
   years: { years: null }, scales: { scales: null },
 };
 const ANY: Record<FilterGroup, string> = {
@@ -389,7 +414,10 @@ export function filterResults(items: ItemRef[], s: DiscoveryState, skip?: Filter
     formats: skip === "formats" ? [] : s.formats,
     geometry: skip === "geometry" ? "all" : s.geometry,
   });
-  if (s.area && skip !== "area") out = filterByViewport(out, s.area);
+  if (s.area && skip !== "area") {
+    const area = s.area;
+    out = s.place && !s.broad ? out.filter((it) => isNear(it.data?.bbox, area)) : filterByViewport(out, area);
+  }
   const { years, scales } = s;
   if (years && skip !== "years") out = out.filter((it) => within(publishedYear(it), years));
   if (scales && skip !== "scales") out = out.filter((it) => inScaleRange(scaleDenominator(it), scales));

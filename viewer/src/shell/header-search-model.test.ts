@@ -15,27 +15,27 @@ const isLayer = (r: ItemRef) => r.collId === "hazards";
 
 describe("buildCatalogSearch", () => {
   it("splits hits into layers and publications", async () => {
-    const res = (await buildCatalogSearch(ITEMS, isLayer))("fault");
+    const res = (await buildCatalogSearch(ITEMS, isLayer, "test"))("fault");
     expect(res.layers.map((h) => h.id)).toEqual(["hazards_qfaults"]);
     expect(res.publications.map((h) => h.id)).toEqual(["DS-7"]);
     expect(res.publications[0].sub).toBe("DS-7 · Data Series · 2026");
   });
 
   it("returns a series ID as the exact match, in any case", async () => {
-    const res = (await buildCatalogSearch(ITEMS, isLayer))("ofr-598");
+    const res = (await buildCatalogSearch(ITEMS, isLayer, "test"))("ofr-598");
     expect(res.exact?.id).toBe("OFR-598");
     expect(res.exact?.bbox).toEqual([-114.08, 41.48, -112.97, 42.02]);
     expect(res.publications.map((h) => h.id)).not.toContain("OFR-598");
   });
 
   it("returns a series ID written with spaces or without hyphens as the exact match", async () => {
-    const search = await buildCatalogSearch(ITEMS, isLayer);
+    const search = await buildCatalogSearch(ITEMS, isLayer, "test");
     expect(search("OFR 598").exact?.id).toBe("OFR-598");
     expect(search("ofr598").exact?.id).toBe("OFR-598");
   });
 
   it("returns nothing for one character", async () => {
-    const res = (await buildCatalogSearch(ITEMS, isLayer))("f");
+    const res = (await buildCatalogSearch(ITEMS, isLayer, "test"))("f");
     expect(res).toEqual({ layers: [], publications: [] });
   });
 });

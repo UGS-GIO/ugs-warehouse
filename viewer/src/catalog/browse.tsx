@@ -619,8 +619,7 @@ export function CollectionsGrid({
 
   return (
     <>
-      {/* The catalog landing gets the same title band as the content pages — it IS the front door,
-          and the search that opens the whole catalog belongs in it rather than above a bare list. */}
+      {/* The catalog root gets the same title band as the content pages. */}
       {atRoot && (
         <PageHero title="Data Catalog"
           lead="Geologic maps, hazard layers and publications." />

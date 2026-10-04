@@ -11,7 +11,7 @@ import { qk } from "@/query-keys";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
+  categoryTiles, extractFacets, type FacetCount, type FacetSelection, filterByViewport, parseDiscovery, ranksByWords, sortItems,
   type SortKey, SORTS,
 } from "./discovery-model";
 import { categoryLabel, collectionLabel, itemIdOf } from "@/catalog/item-view";
@@ -21,10 +21,10 @@ import { OpenMapPill } from "./open-map-pill";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
 import { useQuery } from "@tanstack/react-query";
 
-import { ArticleHit, useCorpus } from "./article-search";
+import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
-import { buildIndex, type Hit, searchCatalog, toSearchDoc } from "./search-index";
+import { catalogIndex, type Hit, searchCatalog } from "./search-index";
 import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -52,10 +52,12 @@ const idOf = (href: string) => href.split("/").slice(-2)[0];
 const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
-  items, itemsKey, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  items, itemsKey, loading = false, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  renderSearch,
 }: {
   items: ItemRef[];
   itemsKey: string; // stable identity for the (deliberately unmemoized) items array — App's mapLoadKey
+  loading?: boolean; // the catalog is still streaming in, so category counts are not final yet
   onOpenItem: (href: string) => void;   // the map footprint picker; cards navigate via <Link>
   onOpenPub: (collId: string, itemId: string) => void;  // an article cites a pub by series id
   itemSelected: boolean;               // an item is selected (?i=) → show the detail drawer
@@ -65,9 +67,11 @@ export function DiscoveryView({
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
   onExplore?: () => void;              // opens the selected item full-screen in the Preview view
+  // Suggestions while typing; results change on Enter.
+  renderSearch?: (q: string, submit: (q: string) => void) => React.ReactNode;
 }) {
   const navigate = useNavigate();
-  // The whole filter/sort/layout state lives in the URL (namespaced Discover keys), so a landing tile,
+  // The whole filter/sort/layout state lives in the URL (namespaced Discover keys), so a category tile,
   // a shared link, or the Back button reproduces the view. App still owns view/c/i/l/s; we patch only
   // our own keys. parse is cheap → recomputed each render; the memos below key on the SERIALIZED values
   // (not the arrays, which are fresh each parse) so they don't re-run on unrelated renders.
@@ -104,17 +108,13 @@ export function DiscoveryView({
   // thousands of docs. Matches App's own mapLoadKey memo pattern.
   const withData = useMemo(() => items.filter((it) => it.data), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const { index, docs: itemDocs } = useMemo(
-    () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))),
+    () => catalogIndex(itemsKey, withData),
     [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  // Survey Notes articles, in a SECOND index. Not merged into the item index: an article has no
-  // collection, geometry or date, so it cannot ride the ItemRef pipeline the facets/map/sort use.
-  // Lazy — nothing fetches the corpus until someone actually types.
-  const corpus = useCorpus(q.trim().length >= 2);
-  const articleIndex = useMemo(
-    () => (corpus.data?.length ? buildIndex(corpus.data, []).index : null),
-    [corpus.data],
-  );
+  // Survey Notes articles, in a SECOND index, built in a worker. Not merged into the item index: an
+  // article has no collection, geometry or date, so it cannot ride the ItemRef pipeline the
+  // facets/map/sort use. Lazy — nothing fetches the corpus until someone searches.
+  const articleHits = useArticleSearch(q).data ?? [];
   // "DS-9" -> its collection, from the loaded items; the series prefix is the fallback for a pub
   // that has not streamed in yet.
   const collOfPub = useMemo(() => {
@@ -140,14 +140,6 @@ export function DiscoveryView({
   // "exact phrase", -exclude and series:GQ — the same parser the publication BM25 path uses, so one
   // box speaks one language across all three corpora.
   const query = useMemo(() => parseQuery(q), [q]);
-
-  const articleHits = useMemo(() => {
-    if (!articleIndex || (q.trim().length < 2 && isEmptyQuery(query))) return [];
-    const base = baseTerms(query);
-    if (!base) return [];   // a field-only query addresses catalog metadata, not article prose
-    return (articleIndex.search(base) as unknown as Hit[])
-      .filter((h) => matchesQuery(query, h as SearchDoc)).slice(0, 20);
-  }, [articleIndex, q, query]);
 
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
@@ -237,18 +229,27 @@ export function DiscoveryView({
 
   const chips = activeChips(st, { collection: collectionLabel, category: categoryLabel });
   const activeFilters = chips.length;
+  // Nothing searched or filtered yet: the category list shows above the newest results.
+  const noSearch = !q.trim() && activeFilters === 0 && !itemSelected;
+  const tiles = useMemo(() => categoryTiles(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const resetAll = () => patch({ collections: [], categories: [], types: [], formats: [], geometry: "all", area: null });
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
+      {/* The page's only h1. The header already shows the name, so it is for screen readers. */}
+      <h1 className="sr-only">Discover UGS data and publications</h1>
       {/* Added layers accumulate into ?l= but Discovery's map only draws footprints — this is the
           only feedback that a card's "+ Add to map" did anything, plus the way to the Map view. */}
       <OpenMapPill />
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
-        <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
-          placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
-          className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
+        {renderSearch ? (
+          <div className="min-w-[12rem] flex-1 sm:max-w-md">{renderSearch(q, (text) => patch({ q: text }))}</div>
+        ) : (
+          <input value={q} onChange={(e) => patch({ q: e.target.value }, true)}
+            placeholder="Search layers, publications and article text…" aria-label="Search the catalog"
+            className="min-w-[12rem] flex-1 rounded-md border border-input bg-card px-3 py-1.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary sm:max-w-md" />
+        )}
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
         </span>
@@ -333,6 +334,21 @@ export function DiscoveryView({
 
         {/* CENTER — result cards (the star): gallery grid or list, paginated. */}
         <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto bg-muted/30 px-3 py-3">
+          {/* Hidden until the whole catalog is in, so its counts don't climb as each index arrives. */}
+          {noSearch && !loading && tiles.length > 0 && (
+            <section aria-label="Categories" className="mb-4 rounded-md border border-border bg-background px-4 py-3">
+              <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Categories</h2>
+              <div className="mt-1 grid grid-cols-1 gap-x-8 sm:grid-cols-2 xl:grid-cols-3">
+                {tiles.map((t) => (
+                  <button key={t.key} type="button" onClick={() => patch({ categories: [t.key] })}
+                    className="flex items-baseline justify-between gap-4 border-b border-border py-2 text-left hover:text-primary">
+                    <span className="text-sm">{t.label}</span>
+                    <span className="font-mono text-sm text-muted-foreground">{t.count.toLocaleString()}</span>
+                  </button>
+                ))}
+              </div>
+            </section>
+          )}
           {/* Removable active-filter chips — a legible summary of what's narrowing the set, above the
               cards (the rail is md+ only, so on a phone this is the ONLY way to see/clear a filter). */}
           {chips.length > 0 && (
@@ -598,5 +614,5 @@ function GeometrySection({ facets, value, onChange }: {
   );
 }
 
-// The result card + list row now live in result-card.tsx (shared with the Landing "Recently updated"
-// strip). This file keeps only the Discover shell + the facet-rail sections above.
+// The result card + list row live in result-card.tsx. This file keeps the Discover shell + the
+// facet-rail sections above.

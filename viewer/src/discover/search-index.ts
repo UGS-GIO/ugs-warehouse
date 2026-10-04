@@ -3,6 +3,7 @@
 // No React; MiniSearch is the only runtime import, so this stays out of the main bundle — both
 // consumers (the lazy Search view and the lazy Discover view) pull it into their own chunks.
 import MiniSearch, { type SearchResult } from "minisearch";
+import type { ItemRef } from "@/catalog/browse";
 import type { StacDoc } from "@/stac";
 
 export type Article = {
@@ -64,11 +65,9 @@ export function toSearchDoc(collId: string, d: StacDoc): CatalogDoc {
   };
 }
 
-// Build the combined index + a flat doc list (the latter powers field-only queries like `series:GQ`,
-// which have no keyword to hand MiniSearch). Plain function, memoized by the caller. Pass `[]` articles
-// to index catalog items only (the Discover view's case).
-export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
-  const docs: Hit[] = [
+// Articles and catalog docs as the flat documents the index stores.
+function toHits(articles: Article[], catalog: CatalogDoc[]): Hit[] {
+  return [
     ...articles.map((a) => ({
       id: a.id, kind: "article" as const, title: a.title, text: a.text, keywords: "",
       sid: a.sid, pdf: a.pdf, page: a.page, volume: a.volume, issue: a.issue, topic: a.topic, score: 0,
@@ -81,6 +80,13 @@ export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
       };
     }),
   ];
+}
+
+// Build the combined index + a flat doc list (the latter powers field-only queries like `series:GQ`,
+// which have no keyword to hand MiniSearch). Plain function, memoized by the caller. Pass `[]` articles
+// to index catalog items only (the Discover view's case).
+export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
+  const docs = toHits(articles, catalog);
   const ms = new MiniSearch<Hit>({
     fields: ["title", "text", "keywords", "ids", "idBare", "idParts"],
     storeFields: ["kind", "title", "text", "keywords", "sid", "pdf", "page", "volume", "issue", "collId", "itemId", "topic"],
@@ -102,6 +108,27 @@ export function buildIndex(articles: Article[], catalog: CatalogDoc[]) {
   });
   ms.addAll(docs);
   return { index: ms, docs };
+}
+
+// One catalog index for the page, shared by Discover and the search box. `key` is App's mapLoadKey,
+// which changes each time another collection streams in, so the index grows by the new items
+// instead of being rebuilt; it is rebuilt only when items go away.
+type Built = ReturnType<typeof buildIndex>;
+let shared: { key: string; built: Built; ids: Set<string> } | null = null;
+export function catalogIndex(key: string, items: ItemRef[]): Built {
+  if (shared?.key === key) return shared.built;
+  const docs = items.flatMap((r) => (r.data ? [toSearchDoc(r.collId, r.data)] : []));
+  const ids = new Set(docs.map((d) => d.id));
+  const added = shared && [...shared.ids].every((id) => ids.has(id))
+    ? docs.filter((d) => !shared!.ids.has(d.id)) : null;
+  if (!shared || !added) {
+    shared = { key, built: buildIndex([], docs), ids };
+    return shared.built;
+  }
+  const fresh = toHits([], added);
+  shared.built.index.addAll(fresh);
+  shared = { key, built: { index: shared.built.index, docs: [...shared.built.docs, ...fresh] }, ids };
+  return shared.built;
 }
 
 // The one item a whole-id query names: an exact search, with no prefix or typo matching, of the whole

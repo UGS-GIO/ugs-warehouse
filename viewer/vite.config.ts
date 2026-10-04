@@ -79,5 +79,6 @@ export default defineConfig({
   server: { fs: { allow: [".."] } },
   // Default environment stays node — component tests opt into jsdom with a `@vitest-environment`
   // docblock, so the pure tests keep running in milliseconds.
-  test: { setupFiles: ["./src/test-setup.ts"] },
+  // Node 25+ ships its own localStorage, which shadows jsdom's in the test workers.
+  test: { setupFiles: ["./src/test-setup.ts"], execArgv: ["--no-experimental-webstorage"] },
 });

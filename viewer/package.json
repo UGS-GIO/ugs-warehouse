@@ -39,6 +39,7 @@
     "@tanstack/react-router": "^1.170.16",
     "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.5",
+    "@turf/bbox": "^7.4.0",
     "@utahdts/utah-design-system-header": "^5.1.0",
     "comlink": "^4.4.2",
     "fflate": "^0.8.3",

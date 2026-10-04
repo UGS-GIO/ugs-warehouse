@@ -38,11 +38,11 @@ filter on these columns, tools such as DuckDB read only the rows in your area.
 
 1. Open <https://data.geology.utah.gov/> and click **Catalog**, or use the search box.
 2. Open a layer or a geologic map. The page shows a map preview, the fields and the metadata.
-3. Under **Downloads** and **Services**, copy the URL for the format that your tool uses. Each URL
-   has a **copy** button.
+3. Under **Assets** and **Links**, copy the URL for the format that your tool uses. Each URL has a
+   **copy** button. Under **Export**, the viewer converts the GeoParquet to another file format.
 
 The layer id, for example `hazards_qfaults`, is the last part of the GeoParquet and PMTiles URLs.
-For a scanned geologic map, the COG URL is under **Services** on the map's page.
+For a scanned geologic map, the COG URL is under **Assets** on the map's page.
 
 ---
 
@@ -50,8 +50,8 @@ For a scanned geologic map, the COG URL is under **Services** on the map's page.
 
 ### Metadata and fields
 
-Each layer page in the viewer shows the layer's description and other metadata. **Data schema**
-lists each field and its data type. Under **Downloads**, each layer has an ISO 19139 metadata file
+Each layer page in the viewer shows the layer's description and other metadata. **Fields**
+lists each field and its data type. Under **Assets**, each layer has an ISO 19139 metadata file
 (XML) that you can load into ArcGIS Pro or a metadata catalog.
 
 ### Citation
@@ -140,8 +140,8 @@ with no visit.
 
 1. Open the menu and tap **Offline data**.
 2. Under **Offline basemap**, tap **All of Utah** to save the full basemap.
-3. To save a layer, go to **Map**, open **Layers**, and turn the layer on. Under **On the map**,
-   tap the download button beside the layer.
+3. To save a layer, tap **Save offline** on the layer's page. Or go to **Map**, open **Layers**, and
+   turn the layer on. Under **On the map**, tap the download button beside the layer.
 
 ![Step 1: Menu with Offline data](img/offline/menu.png){ width="320" }
 ![Step 2: Offline data page](img/offline/offline-page.png){ width="320" }
@@ -177,7 +177,7 @@ the UGS symbology. You cannot query or edit the features.
 2. Paste the service URL, for example
    `https://ugs-warehouse-tiles-xedvkyurga-uc.a.run.app/rest/services/hazards_qfaults/VectorTileServer`.
 
-You can copy this URL from **Services** > **ArcGIS vector tiles** on the layer page in the viewer.
+You can copy this URL from **Links** > **ArcGIS vector tiles** on the layer page in the viewer.
 
 ### Geologic map rasters (COG)
 

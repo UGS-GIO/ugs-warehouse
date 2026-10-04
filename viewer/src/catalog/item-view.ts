@@ -245,5 +245,15 @@ export const curatedDerived = (props: Record<string, unknown>): { curated: MetaR
   };
 };
 
+// The curated record a reader wants on a layer's page: where the data comes from, how it may be used,
+// and who to ask.
+const ABOUT_DEFS: MetaDef[] = [
+  { key: "ugs:lineage", label: "Source" },
+  { key: "ugs:use_constraints", label: "Use constraints" },
+  { key: "ugs:point_of_contact", label: "Contact" },
+  { key: "ugs:topic_category", label: "Topic" },
+];
+export const aboutRows = (props: Record<string, unknown>): MetaRow[] => rowsFrom(props, ABOUT_DEFS);
+
 // Re-export the column-schema type so item-detail's schema table can import one thing from here.
 export type { TableColumn };

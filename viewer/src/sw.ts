@@ -15,7 +15,7 @@ import { assemble, parseBlockMeta } from "./offline/cog-blocks";
 import { finished } from "./offline/guards";
 import { fileNameFor, isLive, versionOf } from "./offline/opfs-name";
 import { contentTypeFor, rangeHeaders, rangeStatus, resolveRange, STORABLE } from "./offline/range";
-import { isAppAsset, isCatalogJson, isShell } from "./sw-routes";
+import { isAppAsset, isCatalogJson, isLayerStyle, isShell } from "./sw-routes";
 
 declare const self: ServiceWorkerGlobalScope & { __WB_MANIFEST: Array<{ url: string; revision: string | null }> };
 
@@ -78,6 +78,15 @@ registerRoute(isCatalogJson, new StaleWhileRevalidate({
   cacheName: "ugs-stac-json",
   plugins: [
     new ExpirationPlugin({ maxEntries: 500, maxAgeSeconds: 60 * 60 * 24 * 30 }),
+    new CacheableResponsePlugin({ statuses: [200] }),
+  ],
+}));
+
+// Layer styles, cached as layers are viewed, so a layer saved for offline keeps its colors.
+registerRoute(isLayerStyle, new StaleWhileRevalidate({
+  cacheName: "ugs-layer-styles",
+  plugins: [
+    new ExpirationPlugin({ maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 }),
     new CacheableResponsePlugin({ statuses: [200] }),
   ],
 }));

@@ -18,7 +18,7 @@ import { BasemapMenu } from "./basemap-menu";
 import lightThumb from "@/assets/basemaps/light.webp";
 import satelliteThumb from "@/assets/basemaps/satellite.webp";
 import streetsThumb from "@/assets/basemaps/streets.webp";
-import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, slugOf, validBbox } from "./map-model";
+import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, pickFeature, slugOf, validBbox } from "./map-model";
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
@@ -315,7 +315,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const easeZoomTo = (z: number) => mapRef.current?.getMap().easeTo({ zoom: z, duration: 600 });
 
   const onClick = (e: MapLayerMouseEvent) => {
-    const f = e.features?.[0];
+    const f = pickFeature(e, allInteractiveIds);
     if (!f) { setPopup(null); onSelectFeature?.(null); setHlGeom(null); return; }
     if (f.layer.id === "coverage-fill") {
       // A footprint: popup its title + a link to open the item (don't yank the user off the map).

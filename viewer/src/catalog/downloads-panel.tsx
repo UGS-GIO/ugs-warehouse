@@ -1,18 +1,17 @@
-// Every way to save a file, as one grid. Assets read over HTTP instead of saved belong in
-// "Services" — see `endpoints-panel.tsx`.
+// Export: the GeoParquet converted to another format in the browser. The published files themselves
+// are the Assets panel, in `endpoints-panel.tsx`.
 import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
 import { type ExportFormat, FORMATS } from "@/data/export-formats";
-import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
+import { parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
 
+import { Panel } from "./panel";
 import { exportFindings, type Finding, findingsHeading } from "./export-findings";
 import { to2d } from "@/lib/bbox";
-
-const SERVICE_KEYS = new Set(["pmtiles", "style", "xyz", "ducklake", "tiles"]);
 
 const EPSG_ITEMS = [
   { value: "4326", label: "WGS 84 (EPSG:4326)" },
@@ -22,45 +21,27 @@ const EPSG_ITEMS = [
   { value: "other", label: "Other (any EPSG)…" },
 ];
 
-const HINTS: Record<ExportFormat, string> = {
-  shp: "ArcMap · universal",
-  gpkg: "QGIS · ArcGIS Pro",
-  gdb: "ArcGIS Pro",
-  fgb: "streaming · web",
-  geojson: "web · always WGS 84",
-  csv: "spreadsheet · WKT geometry",
-};
-
-/** `…/thing.parquet?x=1` → `parquet` */
-const extOf = (href: string) => href.split(/[?#]/)[0].match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase();
-
-/**
- * `related` assets are skipped — the Related tables section already offers each one.
- *
- * Zarr stores are skipped too: the href is a store PREFIX, not an object, so a plain GET returns
- * the bucket's NoSuchKey XML. Nothing here can save one as a file — an Icechunk store is
- * content-addressed chunks plus manifests, with no single object holding a variable or a
- * timestep. It is read over HTTP, so per this file's own split it belongs in Services.
- */
-const fileAssets = (item: StacDoc): [string, Asset][] =>
-  Object.entries(item.assets ?? {})
-    .filter(([key, a]) => !SERVICE_KEYS.has(key)
-      && !a.roles?.includes("related")
-      && assetKind(a) !== "zarr");
-
 // Formats that pull gdal3.js (~40 MB) on first use, versus DuckDB's few MB.
 const GDAL_FORMATS = new Set<ExportFormat>(["shp", "gpkg", "gdb", "fgb"]);
 
-const TILE = "flex items-start justify-between gap-2 rounded-md border border-border bg-card px-3 py-2 " +
-  "text-left text-sm text-foreground no-underline hover:border-primary hover:text-primary " +
-  // aria-disabled, not :disabled — the buttons stay focusable, so the native variant never matches.
-  "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed aria-disabled:hover:border-border " +
-  "aria-disabled:hover:text-foreground";
-const SUB = "mt-0.5 block text-xs font-normal text-muted-foreground";
+// One row per format, the name and its hint on one line, so the list stays short.
+const ROW = "flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-sm text-foreground " +
+  "no-underline hover:bg-muted hover:text-primary aria-disabled:cursor-not-allowed aria-disabled:opacity-50";
+const ROW_SUB = "ml-2 text-xs font-normal text-muted-foreground";
 const BBOX_LABELS = ["W", "S", "E", "N"];
 
 // Carries its own format, so rendering it never reaches back into the mutation's variables.
 type Warning = { fmt: ExportFormat; findings: Finding[] };
+
+// What each export is, by file, without naming an application.
+const FILE_HINTS: Record<ExportFormat, string> = {
+  shp: ".shp in a zip",
+  gpkg: ".gpkg",
+  gdb: ".gdb in a zip",
+  fgb: ".fgb",
+  geojson: ".geojson · always WGS 84",
+  csv: ".csv · geometry as WKT",
+};
 
 export function DownloadsPanel({ item }: { item: StacDoc }) {
   const parquet = parquetAsset(item);
@@ -113,42 +94,26 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
   const warn = run.data;
   const tooBig = warn?.findings.some((f) => f.level === "too-big");
 
-  const files = fileAssets(item);
-  if (!files.length) return null;
-  const data = files.filter(([, a]) => isParquetAsset(a));
-  const sidecars = files.filter(([, a]) => !isParquetAsset(a));
-
-  const assetTile = ([key, a]: [string, Asset]) => (
-    <a key={key} href={a.href} target="_blank" rel="noopener" className={TILE}>
-      <span className="font-medium">
-        {a.title ?? key}
-        <span className={SUB}>{extOf(a.href)}</span>
-      </span>
-      <span aria-hidden className="shrink-0 text-primary">↓</span>
-    </a>
-  );
+  if (!parquet) return null;
 
   return (
-    <section className="mt-3 rounded-lg border border-border bg-muted p-3">
-      <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Downloads</h3>
-      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
-        {data.map(assetTile)}
-        {parquet && FORMATS.map((f) => (
-          <button key={f.id} aria-disabled={run.isPending} aria-busy={busy === f.id}
+    <Panel title="Export" note="Converted from the GeoParquet in your browser when you click.">
+      <div className="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
+        {FORMATS.map((f) => (
+          <button key={f.id} type="button" aria-disabled={run.isPending} aria-busy={busy === f.id}
             onClick={(e) => {
               if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
               invoker.current = e.currentTarget;
               run.mutate({ fmt: f.id });
             }}
-            aria-label={`Download ${f.label}`} className={TILE}>
+            aria-label={`Download ${f.label}`} className={ROW}>
             <span className="font-medium">
               {f.label}
-              <span className={SUB}>{HINTS[f.id]}</span>
+              <span className={ROW_SUB}>{FILE_HINTS[f.id]}</span>
             </span>
             <span aria-hidden className="shrink-0 text-primary">{busy === f.id ? "…" : "↓"}</span>
           </button>
         ))}
-        {sidecars.map(assetTile)}
       </div>
       {/* Always mounted: a live region created with its text is announced unreliably. Announces
           the end as well as the start, since neither is otherwise visible to a screen reader.
@@ -171,51 +136,49 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         </button>
       ))}
 
-      {parquet && (
-        <details className="mt-2 border-t border-border pt-2">
-          <summary className="cursor-pointer text-sm text-muted-foreground">Projection &amp; area</summary>
-          <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+      <details className="mt-2 border-t border-border pt-2">
+        <summary className="cursor-pointer text-sm text-muted-foreground">Projection &amp; area</summary>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">
+          <label className="flex items-center gap-1">
+            Output CRS
+            <UiSelect value={customEpsg ? "other" : String(epsg)} className="px-1.5 py-0.5"
+              onValueChange={(v) => {
+                if (v === "other") setCustomEpsg(true);
+                else { setCustomEpsg(false); setEpsg(Number(v)); }
+              }}
+              items={EPSG_ITEMS} />
+          </label>
+          {customEpsg && (
             <label className="flex items-center gap-1">
-              Output CRS
-              <UiSelect value={customEpsg ? "other" : String(epsg)} className="px-1.5 py-0.5"
-                onValueChange={(v) => {
-                  if (v === "other") setCustomEpsg(true);
-                  else { setCustomEpsg(false); setEpsg(Number(v)); }
-                }}
-                items={EPSG_ITEMS} />
+              EPSG:
+              <input type="number" min={1024} max={999999} value={epsg} autoFocus
+                onChange={(e) => setEpsg(Number(e.target.value))}
+                className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
             </label>
-            {customEpsg && (
-              <label className="flex items-center gap-1">
-                EPSG:
-                <input type="number" min={1024} max={999999} value={epsg} autoFocus
-                  onChange={(e) => setEpsg(Number(e.target.value))}
-                  className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
-              </label>
+          )}
+        </div>
+        {fullBbox && (
+          <div className="mt-2 text-sm">
+            <label className="flex items-center gap-1.5 text-muted-foreground">
+              <input type="checkbox" checked={clipOn} onChange={(e) => setClipOn(e.target.checked)} />
+              Clip to an area (bbox, EPSG:4326)
+            </label>
+            {clipOn && (
+              <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+                {bbox.map((v, i) => (
+                  <label key={i} className="flex items-center gap-1 text-muted-foreground">
+                    {BBOX_LABELS[i]}
+                    <input type="number" step="0.01" value={v}
+                      onChange={(e) => setBbox((b) => b.map((x, j) => (j === i ? Number(e.target.value) : x)) as typeof b)}
+                      className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
+                  </label>
+                ))}
+                <button type="button" onClick={() => setBbox(fullBbox)} className="text-primary">reset</button>
+              </div>
             )}
           </div>
-          {fullBbox && (
-            <div className="mt-2 text-sm">
-              <label className="flex items-center gap-1.5 text-muted-foreground">
-                <input type="checkbox" checked={clipOn} onChange={(e) => setClipOn(e.target.checked)} />
-                Clip to an area (bbox, EPSG:4326)
-              </label>
-              {clipOn && (
-                <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
-                  {bbox.map((v, i) => (
-                    <label key={i} className="flex items-center gap-1 text-muted-foreground">
-                      {BBOX_LABELS[i]}
-                      <input type="number" step="0.01" value={v}
-                        onChange={(e) => setBbox((b) => b.map((x, j) => (j === i ? Number(e.target.value) : x)) as typeof b)}
-                        className="w-24 rounded border border-input bg-card px-1.5 py-0.5 text-foreground" />
-                    </label>
-                  ))}
-                  <button onClick={() => setBbox(fullBbox)} className="text-primary">reset</button>
-                </div>
-              )}
-            </div>
-          )}
-        </details>
-      )}
+        )}
+      </details>
 
       {warn && (
         <div aria-labelledby="dl-warn-title" aria-describedby="dl-warn-why" tabIndex={-1} ref={focusWarning}
@@ -246,6 +209,6 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
           </div>
         </div>
       )}
-    </section>
+    </Panel>
   );
 }

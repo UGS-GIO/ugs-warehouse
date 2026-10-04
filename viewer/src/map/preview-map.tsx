@@ -23,8 +23,8 @@ type Ctx = {
   featureRelated: { relatedKey: string; value: string } | null;
   openRelated: (relatedKey: string, value: string) => void;
   clearRelated: () => void;
-  selectedFeature: { props: Record<string, unknown>; fid: number | null } | null;
-  selectFeature: (props: Record<string, unknown>, fid: number | null) => void;
+  selectedFeature: { props: Record<string, unknown>; fid: number | null; bbox?: FocusSel["bbox"] } | null;
+  selectFeature: (props: Record<string, unknown>, fid: number | null, bbox?: FocusSel["bbox"]) => void;
   clearSelection: () => void;
   // Set when the map finds a row's id on another record: the map and table are different versions.
   mapMismatch: boolean;
@@ -43,7 +43,7 @@ export function usePreviewMap(): Ctx {
 // Held as one value, exposed as the derived `selectedFeature` + `featureRelated` pair so consumers
 // didn't change. Nesting `related` is what makes a new feature drop an open related table.
 type Sel = {
-  feature: { props: Record<string, unknown>; fid: number | null };
+  feature: { props: Record<string, unknown>; fid: number | null; bbox?: FocusSel["bbox"] };
   related: { relatedKey: string; value: string } | null;
 } | null;
 
@@ -70,7 +70,7 @@ export function PreviewMapProvider({ children }: { children: React.ReactNode }) 
   const setSpec = useCallback((s: PreviewSpec) => { setSpecState(s); if (s) setArmed(true); }, []);
   const registerSlot = useCallback((el: HTMLElement | null) => setSlotEl(el), []);
   const onFeatureClick = useCallback((id: number, props?: Record<string, unknown>) => setPick((p) => nextPick(p, id, props)), [setPick]);
-  const selectFeature = useCallback((props: Record<string, unknown>, fid: number | null) => setSel({ feature: { props, fid }, related: null }), [setSel]);
+  const selectFeature = useCallback((props: Record<string, unknown>, fid: number | null, bbox?: FocusSel["bbox"]) => setSel({ feature: { props, fid, bbox }, related: null }), [setSel]);
   const clearSelection = useCallback(() => setSel(null), [setSel]);
   const openRelated = useCallback((relatedKey: string, value: string) => setSel((s) => (s ? { ...s, related: { relatedKey, value } } : s)), [setSel]);
   const clearRelated = useCallback(() => setSel((s) => (s ? { ...s, related: null } : s)), [setSel]);

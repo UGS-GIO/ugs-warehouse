@@ -71,6 +71,17 @@ export function CheckIcon() {
   );
 }
 
+// Remove a saved copy.
+export function TrashIcon() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={ICON} aria-hidden>
+      <path d="M3 6h18" />
+      <path d="M8 6V4h8v2" />
+      <path d="M19 6l-1 14H6L5 6" />
+    </svg>
+  );
+}
+
 // Save-for-offline. An SVG rather than a glyph: "⭳" is missing from common phone fonts and
 // rendered as a crossed box.
 export function DownloadIcon() {

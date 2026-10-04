@@ -5,6 +5,7 @@
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
 import type { StacDoc } from "@/stac";
 import { to2d } from "@/lib/bbox";
+import type { MapLayerMouseEvent } from "react-map-gl/maplibre";
 
 // Which map surface an item needs. A single consolidated map renders the right sources per kind, so
 // switching between items of different kinds swaps sources instead of remounting a whole component
@@ -215,4 +216,13 @@ export function orderedSublayerIds(
       ? Array.from({ length: n }, (_, li) => `pm-${s}-${li}`)
       : [`pm-${s}-fill`, `pm-${s}-line`, `pm-${s}-circle`];
   });
+}
+
+// A fingertip is wider than a 1 px fault line, so a tap with nothing right under it looks in a box
+// around the point. The feature under the point still wins.
+export function pickFeature(e: MapLayerMouseEvent, layers: string[]) {
+  if (e.features?.length || !layers.length) return e.features?.[0];
+  const r = matchMedia("(pointer: coarse)").matches ? 12 : 3;
+  const { x, y } = e.point;
+  return e.target.queryRenderedFeatures([[x - r, y - r], [x + r, y + r]], { layers })[0];
 }

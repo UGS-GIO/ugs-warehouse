@@ -17,6 +17,7 @@ import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
 import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
@@ -143,7 +144,7 @@ function useViewState() {
   const view: View = isView(seg) ? seg : sp.i || sp.c ? "catalog" : "discover";
   const collectionUrl = sp.c;
   const itemUrl = sp.i;
-  const layerIds = parseLayerParam(sp.l);
+  const urlLayerIds = parseLayerParam(sp.l);
   const seriesSel = sp.s ? sp.s.split(",").filter(Boolean) : undefined;
 
   // Navigate by setting the nav search params; override/spike params are preserved. push for user nav
@@ -362,6 +363,18 @@ function useViewState() {
   // Still streaming, so Discover's category index doesn't show counts that are still climbing.
   const mapItemsLoading = mapColls.length > 0
     && (root.isLoading || mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
+  // Opened with no layers chosen, the Map shows the ones saved for offline, so a layer saved from
+  // its page is on when you come back without a connection. Choosing layers (or none) takes over.
+  const offline = useOffline();
+  const savedUrls = new Set(offline.files.map((f) => f.url));
+  const savedLayerIds = view === "map" && !urlLayerIds && savedUrls.size
+    ? mapItems.flatMap((r) => {
+        const l = toLayer(r);
+        const href = l?.pmHref ?? l?.rasterPmHref ?? l?.cogHref;
+        return l && href && savedUrls.has(href) ? [l.id] : [];
+      })
+    : [];
+  const layerIds = urlLayerIds ?? (savedLayerIds.length ? savedLayerIds : undefined);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
   const layerRows: LayerRow[] = useMemo(() => mapItems

@@ -116,6 +116,7 @@ Costs:
 
 - **A one-time URL change for every publication.** The publication id moves from an Item to a Collection, which breaks `items.json`, viewer `?c=`/`?i=` links, edition links and the mosaic `derived_from` links once. The builder re-derives all of them in the same run, and the viewer maps old item links to the new Collection.
 - **Portolan paperwork per data-bearing Collection:** a README with the join columns, license, providers and a collection thumbnail, plus embedded band statistics in the plate COGs (PTL-DAT-009).
+- **Search and the catalog index.** `core/stac.py` `_group_items` registers only `<id>/<id>.json` Items, so a publication Collection with no Items would drop out of `items.json` and the viewer's Discover search, which indexes Items only. `refresh_catalog` needs one index entry per publication Collection so every publication stays one result, and layer and table entries need their parent publication so Discover can roll them up under it rather than listing ~190 separate `DescriptionOfMapUnits` hits. The viewer also assumes one nesting level under a catalog today.
 - **Large series.** M has 326 publications. Check whether Portolan's sub-catalog rule for more than 20 children (CORE-078) is a MUST before building.
 
 Current state (verified 2026-10-03 against origin/main and prod): `pubs/vectors.py` (Cloud Run job `ugs-pubs-vectors`) already extracts every shapefile and every `.gdb` layer in a publication's GIS zip to Parquet and writes a `_manifest.json`. Only 5 publications have been extracted in prod. `pubs/sink_stac.py` attaches the layers as assets on the publication Item, and `table:columns` is never populated (`pubs/ingest.py` passes `columns: None`). Spreadsheet attachments (xls, xlsx, csv) are not converted.
@@ -139,6 +140,7 @@ Current state (verified 2026-10-03 against origin/main and prod): `pubs/vectors.
 - **`featureserv/`:** aspatial items are now items, so they *could* become OGC API Features collections; decide in §7.
 - **`pubs/vectors.py`:** raise or collect errors instead of skipping a layer or `.gdb` it cannot read; record per-layer bbox, geometry type, CRS, row count and columns in the manifest; run `--all` over every publication with a GIS zip.
 - **`pubs/sink_stac.py`, `pubs/ingest.py`:** build the publication Collection with its collection-level assets and one Item per plate, layer and table; move the edition, mosaic and `cite-as` links to match (§4.6).
+- **`core/stac.py` `refresh_catalog`, viewer Discover:** index publication Collections, tag child entries with their publication and roll them up in results; keep table AOIs off the Discover map.
 - **Spreadsheet attachments:** convert xls, xlsx and csv to Parquet table Items, keeping the original as a `source` asset.
 
 ---

@@ -21,6 +21,9 @@ steps:
       - -c
       - |
         set -e
+        # The harvest shells out to gdalinfo / gdal_translate, as in its image (Dockerfile.harvest).
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -qq && apt-get install -y -qq --no-install-recommends gdal-bin > /dev/null
         pip install -e ".[dev]"
         ruff check .
         python -m pytest -q

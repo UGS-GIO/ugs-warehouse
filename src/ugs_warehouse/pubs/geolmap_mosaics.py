@@ -51,8 +51,8 @@ import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from pmtiles.tile import Compression, TileType, tileid_to_zxy, zxy_to_tileid
-from pmtiles.writer import Writer
+from pmtiles.convert import disk_to_pmtiles
+from pmtiles.reader import MmapSource, Reader
 
 from ..core import config, gcs, stac
 from . import editions, identity, scale, source
@@ -251,45 +251,15 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
 
 
 def _write_pmtiles(tile_dir: str, out: str, *, bounds: list[float], name: str) -> tuple[int, int, int]:
-    """Write a `gdal raster tile` XYZ tree ({z}/{x}/{y}.webp) into a PMTiles archive. Tiles are copied
-    VERBATIM — no re-encode, zero added loss — in tile-id order, so the archive is clustered. Each tile
-    file is deleted once copied, so the tree and the archive are never both whole on a RAM-backed /tmp.
-    Returns (n_tiles, minz, maxz)."""
-    if not os.path.isdir(tile_dir):
-        raise RuntimeError(f"gdal raster tile produced no output dir {tile_dir}")
-    tiles = []
-    for zd in os.listdir(tile_dir):
-        if not (zd.isdigit() and os.path.isdir(zpath := os.path.join(tile_dir, zd))):
-            continue
-        for xd in os.listdir(zpath):
-            if not (xd.isdigit() and os.path.isdir(xpath := os.path.join(zpath, xd))):
-                continue
-            for yf in os.listdir(xpath):
-                ystr, ext = os.path.splitext(yf)
-                if not ystr.isdigit() or not ext:
-                    continue                    # skip sidecars (.aux.xml etc.)
-                if ext.lower() != ".webp":
-                    raise RuntimeError(f"unexpected tile {xpath}/{yf}; expected .webp")
-                tiles.append((zxy_to_tileid(int(zd), int(xd), int(ystr)), os.path.join(xpath, yf)))
-    if not tiles:
-        raise RuntimeError(f"no tile files under {tile_dir}")
-    tiles.sort()
-    minz, maxz = tileid_to_zxy(tiles[0][0])[0], tileid_to_zxy(tiles[-1][0])[0]
-    w, s, e, n = bounds
-    with open(out, "wb") as f:
-        writer = Writer(f)
-        for tid, path in tiles:
-            with open(path, "rb") as fh:
-                writer.write_tile(tid, fh.read())
-            os.remove(path)
-        writer.finalize({
-            "tile_type": TileType.WEBP, "tile_compression": Compression.NONE,
-            "min_lon_e7": int(w * 1e7), "min_lat_e7": int(s * 1e7),
-            "max_lon_e7": int(e * 1e7), "max_lat_e7": int(n * 1e7),
-            "center_zoom": minz,                # opens at the coarsest zoom, not maxz
-            "center_lon_e7": int((w + e) / 2 * 1e7), "center_lat_e7": int((s + n) / 2 * 1e7),
-        }, {"name": name, "type": "overlay", "format": "webp", "minzoom": str(minz), "maxzoom": str(maxz)})
-    return len(tiles), minz, maxz
+    """Write a `gdal raster tile` XYZ tree into a PMTiles archive with the pmtiles library's own
+    directory converter. Tiles are copied verbatim. Returns (n_tiles, minz, maxz) from the header."""
+    with open(os.path.join(tile_dir, "metadata.json"), "w") as fh:
+        json.dump({"name": name, "type": "overlay", "format": "webp",
+                   "bounds": ",".join(str(v) for v in bounds)}, fh)
+    disk_to_pmtiles(tile_dir, out, "auto")
+    with open(out, "rb") as fh:
+        h = Reader(MmapSource(fh)).header()
+    return h["addressed_tiles_count"], h["min_zoom"], h["max_zoom"]
 
 
 def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
@@ -385,7 +355,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         subprocess.run(
             ["gdal", "raster", "tile", "--resampling", base_resampling,
              "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
-             "--skip-blank", "--convention", "xyz",
+             "--skip-blank", "--convention", "xyz", "--webviewer", "none",
              "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
              vrt, tiledir], env=gdal_env, check=True)
 

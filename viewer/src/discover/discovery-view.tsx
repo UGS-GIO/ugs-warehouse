@@ -47,8 +47,6 @@ const DENSITIES = [{ value: "comfortable" as const, label: "Comfy" }, { value: "
 const SORT_ITEMS = SORTS.map((s) => ({ value: s.key, label: s.label }));
 const SORT_ITEMS_WITHOUT_MATCH = SORT_ITEMS.filter((s) => s.value !== "relevance");
 const PAGE = 48; // cards per "Show more" step (reference parity)
-// Results follow the box as you type; the URL (and so the results) catches up this long after the
-// last keystroke, so a fast typist doesn't search every prefix.
 const TYPE_DEBOUNCE_MS = 180;
 const SCALE_MAX = SCALE_STEPS.length - 1;
 const FILTERS_DIALOG = Dialog.createHandle();   // ties the phone Filters button to its panel
@@ -109,8 +107,7 @@ export function DiscoveryView({
     patch({ [key]: cur.includes(value) ? cur.filter((k) => k !== value) : [...cur, value] });
   };
 
-  // The box holds what's typed; ?q= follows it after a short pause, and the results follow ?q=. A q
-  // that changes from outside (Back, a chip, a link) resets the box.
+  // ?q= follows the box after a pause; a q changed from outside (Back, a chip) resets the box.
   const [text, setText] = useState(q);
   const sentQ = useRef(q);
   const typeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
@@ -155,7 +152,6 @@ export function DiscoveryView({
   );
   // Survey Notes articles, in a SECOND index. Not merged into the item index: an article has no
   // collection, geometry or date, so it cannot ride the ItemRef pipeline the facets/map/sort use.
-  // Lazy: nothing fetches the corpus until someone presses Enter or asks for articles.
   const corpus = useCorpus(deep && q.trim().length >= 2);
   const articleIndex = useMemo(
     () => (corpus.data?.length ? buildIndex(corpus.data, []).index : null),
@@ -227,18 +223,14 @@ export function DiscoveryView({
   const results = useMemo(() => sortItems(filterResults(queried, st), sort),
     [queried, filterK, sort]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Search hits the filters hide, and which filter hides how many. Only for a search: without one,
-  // "outside your filters" is just everything else in the catalog.
   const searching = q.trim().length >= 2 || !isEmptyQuery(query);
   const hidden = useMemo(() => (searching && queried.length > results.length
     ? { n: queried.length - results.length, reliefs: reliefs(queried, st, results.length) }
     : null), [queried, results, searching]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // The item a typed series id names (M-181), pinned first by searchCatalog; its card says why.
   const namedId = useMemo(() => (q.trim() ? idMatch(index, q.trim())?.id : undefined), [index, q]);
 
-  // Year + scale: their spans come from the whole catalog (stable), their histograms from what the
-  // other filters leave (so they describe what you'd get).
+  // Histograms count what the other filters leave, so they describe what you'd get.
   const span = useMemo(() => yearSpan(withData), [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
   const yearPool = useMemo(() => filterResults(queried, st, "years"), [queried, filterK]); // eslint-disable-line react-hooks/exhaustive-deps
   const scalePool = useMemo(() => filterResults(queried, st, "scales"), [queried, filterK]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -251,8 +243,6 @@ export function DiscoveryView({
   const unscaled = useMemo(() => (st.scales ? scalePool.filter((it) => scaleDenominator(it) === null).length : 0),
     [scalePool, scalesK]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // A place typed into the box: offer it as a pill above the results. Picking it narrows to that area
-  // and stays here (the header search's place pick flies the Map view instead).
   const typed = text.trim();
   const placeQ = useQuery({
     queryKey: qk.placeSuggest(typed),
@@ -342,8 +332,7 @@ export function DiscoveryView({
   const activeFilters = chips.length;
   const resetAll = () => patch(CLEAR_ALL);
 
-  // The filter groups, shared by the rail (md and up) and the phone filter panel. On a phone only
-  // the first groups start open, so the panel opens as a short list of headings, not a long scroll.
+  // Shared by the rail and the phone panel; on a phone most groups start closed.
   const filterSections = (phone: boolean) => (
     <>
       <FacetSection label="Category" facets={withSelected(facets.categories, cats, categoryLabel)} defaultOpen selected={new Set(cats)}
@@ -396,12 +385,10 @@ export function DiscoveryView({
       </p>
       {/* ── Top bar: search · count · (map-area) · sort · density · layout · map toggle ────────── */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border bg-background px-3 py-2">
-        {/* The Map page's search bar, without its suggestion list: here the results are the list. */}
         <LiveSearchBar value={text} className="min-w-[12rem] flex-1 sm:max-w-md"
           placeholder="Search titles, series IDs, authors and places"
           onChange={(v) => { setText(v); sendQ(v); }} onEnter={submit}
           onClear={() => { setText(""); sendQ("", true); }} />
-        {/* Phones: the rail is hidden, so its groups open in a full-screen panel from here. */}
         <Dialog.Trigger handle={FILTERS_DIALOG}
           className="flex shrink-0 items-center gap-1.5 rounded-full border border-input bg-card px-3 py-1 text-sm text-foreground hover:border-primary md:hidden">
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
@@ -529,7 +516,6 @@ export function DiscoveryView({
               Place lookup failed: {placeQ.error instanceof Error ? placeQ.error.message : String(placeQ.error)}
             </p>
           )}
-          {/* Search hits the filters hide: say how many and offer the way back, instead of a dead end. */}
           {hidden && (
             <div className="mb-3 space-y-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm dark:border-amber-700 dark:bg-amber-950/40">
               <p className="text-foreground">
@@ -672,7 +658,6 @@ export function DiscoveryView({
         )}
       </div>
 
-      {/* ── Phone filter panel: every rail group, with a live count on the way back to the results. ── */}
       <Dialog.Root handle={FILTERS_DIALOG} open={panelOpen} onOpenChange={(open) => {
         // Commit a half-typed From/To box before the panel unmounts it (a tapped button doesn't take
         // focus on iOS, so its blur would never fire).

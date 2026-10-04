@@ -1,11 +1,5 @@
-// The shared result card + list row for Discover. The whole card is a single <a> (keyboard-focusable,
-// cmd/middle-click opens a new tab) whose plain left-click the caller intercepts for in-app nav; the
-// caller passes the mouse handlers for map↔card hover sync.
-//
-// A publication card leads with what tells it apart from its neighbors (the quadrangle, the edition
-// year), then what kind of work and where, then one line of series ID · year · scale · author. Many
-// titles share their first 30 characters ("Photogeologic map of the Moab-1… quadrangle"), so the
-// title in title order is the worst way to scan them. The full title is the card's tooltip.
+// Discover's result card + list row: one <a> each, so cmd/middle-click opens a new tab. Publications
+// lead with the part of the title that differs (many share their first 30 characters).
 import type { ReactNode } from "react";
 
 import { Link } from "@tanstack/react-router";
@@ -58,8 +52,6 @@ function Badges({ interim, idMatch }: { interim: boolean; idMatch?: boolean }) {
   );
 }
 
-// series id · year · scale · author, the id set apart so a run of near-identical cards reads by it.
-// A layer has no such line; it keeps its own id (seriesLabel), as before.
 function Meta({ it, meta }: { it: ItemRef; meta: string[] }) {
   if (!meta.length) {
     const sid = seriesLabel(it);
@@ -83,8 +75,6 @@ const formatBadges = (it: ItemRef) =>
     .slice(0, 4)
     .map(([k, a]) => <span key={k} className={C.badge}>{a.title ?? k}</span>);
 
-// Gallery card: thumbnail beside the heading, kind and place, and the id line (+ format chips when
-// roomy).
 export function ResultCard({ it, density, on, link, addSlot, idMatch }: CardProps) {
   const saver = useDataSaver();   // data saver: no images the person did not ask for
   const th = thumbnailAsset(it.data);
@@ -116,8 +106,6 @@ export function ResultCard({ it, density, on, link, addSlot, idMatch }: CardProp
   );
 }
 
-// List row: one dense line for scanning many at once. The heading leads, kind and place follow
-// muted, then the id (and year · scale · author when roomy).
 export function ResultRow({ it, density, on, link, addSlot, idMatch }: CardProps) {
   const c = cardText(it);
   const compact = density === "compact";

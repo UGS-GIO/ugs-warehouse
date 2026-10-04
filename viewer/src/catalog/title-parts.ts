@@ -1,7 +1,5 @@
-// Splits a publication title into the part that tells it apart from its neighbors and the rest, so a
-// card can lead with "Moab-12 quadrangle" instead of 30 characters of "Photogeologic map of the" that
-// every sibling shares. Display only: the full title stays on the card, and a title no pattern fits
-// returns null so the caller shows it whole rather than a bad guess.
+// A publication title split into the part that tells it apart ("Moab-12 quadrangle") and the rest.
+// Display only; a title no pattern fits returns null and is shown whole rather than guessed at.
 export type TitleParts = { lead: string; kind: string; where: string };
 
 // "<kind> of the <X quadrangle(s)>, <counties>"
@@ -13,7 +11,6 @@ const SUBTITLE = /^(?<lead>[^:]+?)(?::| -) (?<kind>.+)$/;
 
 const cap = (s: string) => (s ? s[0].toUpperCase() + s.slice(1) : s);
 
-// The counties, without a trailing ", Utah" (every UGS title has it) or a "with emphasis on..." tail.
 const tidyWhere = (w: string) => w.split(/,\s*with |\s+-\s+/)[0].trim().replace(/(^|,\s*)Utah$/, "");
 
 export function titleParts(title: string): TitleParts | null {

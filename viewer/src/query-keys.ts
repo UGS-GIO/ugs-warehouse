@@ -48,7 +48,6 @@ export const qk = {
   // Search
   articleCorpus: (url: string) => ["article-corpus", url] as const,
   pubFts: (q: string) => ["pub-fts", q] as const,
-  /** Place-name suggestions for typed text (the UGRC locator). */
   placeSuggest: (text: string) => ["place-suggest", text] as const,
 
   // Review deploy

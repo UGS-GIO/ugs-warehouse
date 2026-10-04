@@ -15,6 +15,7 @@ dependencies = [
   "uvicorn[standard]>=0.32",
   "asyncpg>=0.29",       # review-comments CRUD (serve.py) → review.comments in mapping-db (review_writer)
   "google-auth>=2.40",   # verifies IAP JWTs (iap.py) and Firebase ID tokens (comments.py)
+  "requests>=2.31",      # ...through google-auth's requests transport
   "cryptography>=42",   # ...which are ES256, and google-auth only verifies EC keys with it
   "CacheControl>=0.14",  # ...and caches Google's signing keys for as long as they say
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion

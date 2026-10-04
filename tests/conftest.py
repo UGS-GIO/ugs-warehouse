@@ -48,7 +48,7 @@ class FakeIap:
 
     def install(self, monkeypatch, module):
         body = json.dumps(self.certs).encode()
-        fetch = lambda url, method="GET", **kw: SimpleNamespace(status=200, data=body)  # noqa: E731
+        fetch = lambda url, method="GET", **kw: SimpleNamespace(status=200, headers={}, data=body)  # noqa: E731
         monkeypatch.setattr(module, "cached_request", fetch)
         monkeypatch.setattr(module, "_audience", lambda: self.audience)
 

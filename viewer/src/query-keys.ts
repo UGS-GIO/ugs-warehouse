@@ -46,7 +46,7 @@ export const qk = {
   threeDColors: (itemId: unknown) => ["3d-colors", itemId] as const,
 
   // Search
-  articleCorpus: (url: string) => ["article-corpus", url] as const,
+  articleSearch: (url: string, q: string) => ["article-search", url, q] as const,
   pubFts: (q: string) => ["pub-fts", q] as const,
 
   // Review deploy

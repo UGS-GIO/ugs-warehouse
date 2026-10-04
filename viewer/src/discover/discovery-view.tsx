@@ -21,7 +21,7 @@ import { OpenMapPill } from "./open-map-pill";
 import { itemLink, type LinkAttrs, ResultCard, ResultRow } from "@/catalog/result-card";
 import { useQuery } from "@tanstack/react-query";
 
-import { ArticleHit, useCorpus } from "./article-search";
+import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { buildIndex, type Hit, searchCatalog, toSearchDoc } from "./search-index";
@@ -111,14 +111,10 @@ export function DiscoveryView({
     () => buildIndex([], withData.map((it) => toSearchDoc(it.collId, it.data!))),
     [itemsKey], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  // Survey Notes articles, in a SECOND index. Not merged into the item index: an article has no
-  // collection, geometry or date, so it cannot ride the ItemRef pipeline the facets/map/sort use.
-  // Lazy — nothing fetches the corpus until someone actually types.
-  const corpus = useCorpus(q.trim().length >= 2);
-  const articleIndex = useMemo(
-    () => (corpus.data?.length ? buildIndex(corpus.data, []).index : null),
-    [corpus.data],
-  );
+  // Survey Notes articles, in a SECOND index, built in a worker. Not merged into the item index: an
+  // article has no collection, geometry or date, so it cannot ride the ItemRef pipeline the
+  // facets/map/sort use. Lazy — nothing fetches the corpus until someone searches.
+  const articleHits = useArticleSearch(q).data ?? [];
   // "DS-9" -> its collection, from the loaded items; the series prefix is the fallback for a pub
   // that has not streamed in yet.
   const collOfPub = useMemo(() => {
@@ -144,14 +140,6 @@ export function DiscoveryView({
   // "exact phrase", -exclude and series:GQ — the same parser the publication BM25 path uses, so one
   // box speaks one language across all three corpora.
   const query = useMemo(() => parseQuery(q), [q]);
-
-  const articleHits = useMemo(() => {
-    if (!articleIndex || (q.trim().length < 2 && isEmptyQuery(query))) return [];
-    const base = baseTerms(query);
-    if (!base) return [];   // a field-only query addresses catalog metadata, not article prose
-    return (articleIndex.search(base) as unknown as Hit[])
-      .filter((h) => matchesQuery(query, h as SearchDoc)).slice(0, 20);
-  }, [articleIndex, q, query]);
 
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {

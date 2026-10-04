@@ -4,8 +4,6 @@ DuckDB binds values, not identifiers, and has no `quote_ident`. Escaping wouldn'
 anyway: `vector/source.stream_transformed` wraps its statement in a `$pgq$` fence that a name
 containing that sequence terminates, and several of these names also become paths, GCS keys and
 argv. So reject rather than escape.
-
-`featureserv/gen_db.py` keeps its own copy — its image installs that file, not the package.
 """
 from __future__ import annotations
 

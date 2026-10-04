@@ -68,7 +68,7 @@ export const FLOWS: Flow[] = [
       { id: "CDN", label: "CDN|maps-assets.geology.utah.gov", status: "done" },
       { id: "EXT", label: "external catalogs (USWB)", status: "done" },
       { id: "VW", label: "STAC viewer|browse · map · datacubes · export", status: "done" },
-      { id: "FS", label: "OGC API Features|duckdb_featureserv", status: "done", unit: "ugs-warehouse-features" },
+      { id: "FS", label: "OGC API Features|pygeoapi", status: "done", unit: "ugs-warehouse-features" },
       { id: "TS", label: "tiles service|XYZ · MapLibre styles · Esri VTS", status: "done", unit: "ugs-warehouse-tiles" },
       { id: "PGFS", label: "pg_featureserv|parallel · config stale", status: "partial", unit: "ugs-warehouse-api" },
       { id: "POOL", label: "ArcGIS Pro · QGIS · AGOL", status: "done" },

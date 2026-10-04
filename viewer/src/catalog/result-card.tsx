@@ -1,14 +1,15 @@
-// The shared result card + list row for the discovery experience. Lifted out of discovery-view.tsx so
-// the Landing "Recently updated" strip and the Discover result grid render one identical card. The
-// whole card is a single <a> (keyboard-focusable, cmd/middle-click opens a new tab) whose plain
-// left-click the caller intercepts for in-app nav; a caller that wants map↔card hover sync passes the
-// mouse handlers, and one that doesn't (Landing) omits them.
+// The result card + list row for Discover. The whole card is a single <a> (keyboard-focusable,
+// cmd/middle-click opens a new tab) whose plain left-click the caller intercepts for in-app nav; a
+// caller that wants map↔card hover sync passes the mouse handlers.
+import type { ReactNode } from "react";
+
 import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { collectionLabel, dateOf, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
 import { thumbnailAsset } from "@/stac";
 import { C } from "@/ui/ui";
+import { useDataSaver } from "@/lib/data-saver";
 
 export type Density = "comfortable" | "compact";
 
@@ -22,7 +23,10 @@ export type LinkAttrs = {
   onMouseLeave?: () => void;
 };
 
-type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs };
+// addSlot is an optional caller-supplied control (the "+ Add to map" button on Discover). It's a
+// slot, not a bool, so this card stays presentational and free of the @/app graph — the same reason
+// the mouse handlers are passed in rather than wired here.
+type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs; addSlot?: ReactNode };
 
 /** Where a result card points. Wide opens the Discover drawer and must PRESERVE the filter keys —
  *  a plain object replaces the search and silently clears them. Narrow leaves for the full page,
@@ -49,39 +53,46 @@ const formatBadges = (it: ItemRef) =>
 const FOCUS_RING = "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring";
 
 // Gallery card — the centerpiece: thumbnail + series + title + meta (+ format chips when roomy).
-export function ResultCard({ it, density, on, link }: CardProps) {
+export function ResultCard({ it, density, on, link, addSlot }: CardProps) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   const th = thumbnailAsset(it.data);
   const sid = seriesLabel(it);
   const compact = density === "compact";
+  // The border/hover live on the outer container so the add control can sit in a footer BELOW the
+  // link — a button can't be a valid descendant of the card's <a>, and no overlaid corner clears both
+  // the title (top) and the format badges (bottom) on a narrow grid card.
   return (
-    <Link {...link}
-      className={`flex cursor-pointer gap-3 rounded-lg border bg-card p-3 text-inherit no-underline transition hover:border-primary hover:shadow-sm ${FOCUS_RING} ${on ? "border-primary ring-1 ring-primary" : "border-border"}`}>
-      <div className={`${compact ? "h-12 w-12" : "h-20 w-20"} flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted`}>
-        {/* No placeholder text: at 48-80px the id just clips ("geolmap_strat_columns_geol…"), so an
-            empty slot reads as "no thumbnail" more honestly than a truncated machine name. */}
-        {th && <img src={th.href} alt="" loading="lazy" className="h-full w-full object-cover" />}
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="flex items-baseline gap-1.5">
-          <p className={`min-w-0 flex-1 font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{title(it)}</p>
-          {hasGeometry(it) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
+    <div className={`flex flex-col overflow-hidden rounded-lg border bg-card transition hover:border-primary hover:shadow-sm ${on ? "border-primary ring-1 ring-primary" : "border-border"}`}>
+      <Link {...link}
+        className={`flex flex-1 cursor-pointer gap-3 p-3 text-inherit no-underline ${FOCUS_RING}`}>
+        <div className={`${compact ? "h-12 w-12" : "h-20 w-20"} flex shrink-0 items-center justify-center overflow-hidden rounded-md border border-border bg-muted`}>
+          {/* No placeholder text: at 48-80px the id just clips ("geolmap_strat_columns_geol…"), so an
+              empty slot reads as "no thumbnail" more honestly than a truncated machine name. */}
+          {th && !saver && <img src={th.href} alt="" loading="lazy" className="h-full w-full object-cover" />}
         </div>
-        {sid && <div className="truncate font-mono text-[11px] text-muted-foreground" title={sid}>{sid}</div>}
-        <div className="mt-1 truncate text-xs text-muted-foreground" title={metaLine(it)}>{metaLine(it)}</div>
-        {!compact && <div className="mt-1">{formatBadges(it)}</div>}
-      </div>
-    </Link>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-1.5">
+            <p className={`min-w-0 flex-1 font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{title(it)}</p>
+            {hasGeometry(it) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
+          </div>
+          {sid && <div className="truncate font-mono text-[11px] text-muted-foreground" title={sid}>{sid}</div>}
+          <div className="mt-1 truncate text-xs text-muted-foreground" title={metaLine(it)}>{metaLine(it)}</div>
+          {!compact && <div className="mt-1">{formatBadges(it)}</div>}
+        </div>
+      </Link>
+      {addSlot && <div className="flex justify-end border-t border-border/60 px-2 py-1.5">{addSlot}</div>}
+    </div>
   );
 }
 
 // List row — one dense line for scanning many at once.
-export function ResultRow({ it, density, on, link }: CardProps) {
+export function ResultRow({ it, density, on, link, addSlot }: CardProps) {
   const compact = density === "compact";
   const sid = seriesLabel(it);
   return (
-    <li>
+    <li className={`flex items-center gap-1 ${on ? "bg-primary/10" : "hover:bg-hover"}`}>
       <Link {...link}
-        className={`flex cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING} ${on ? "bg-primary/10" : "hover:bg-hover"}`}>
+        className={`flex min-w-0 flex-1 cursor-pointer items-baseline gap-2 px-3 text-inherit no-underline ${compact ? "py-1" : "py-2"} ${FOCUS_RING}`}>
         <span className="truncate text-sm text-foreground" title={title(it)}>{title(it)}</span>
         {sid && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{sid}</span>}
         {!compact && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{collectionLabel(it.collId)}</span>}
@@ -91,6 +102,7 @@ export function ResultRow({ it, density, on, link }: CardProps) {
           </span>
         )}
       </Link>
+      {addSlot && <div className="shrink-0 pr-2">{addSlot}</div>}
     </li>
   );
 }

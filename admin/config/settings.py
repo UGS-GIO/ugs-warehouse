@@ -1,8 +1,9 @@
 """ugs-warehouse-admin — minimal Django + HTMX ops console behind Google Cloud IAP.
 
-Stateless: no domain DB (SQLite is ephemeral, only for Django's own tables). AuthN is IAP
-(the load balancer verifies the user before the request arrives); authZ is an email allowlist
-(`ADMIN_EMAILS`). The app reads the STAC catalog and triggers Cloud Run jobs — it stores nothing.
+Stateless: no domain DB (SQLite is ephemeral, only for Django's own tables). AuthN and authZ are
+direct Cloud Run IAP: only principals granted IAP access on the service get through, and the app
+verifies IAP's signed JWT (core/iap_auth.py). It reads the STAC catalog and triggers Cloud Run
+jobs; it stores nothing.
 """
 import os
 from pathlib import Path
@@ -21,6 +22,9 @@ CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
 # In DEBUG with DEV_IAP_EMAIL set, that email is treated as the logged-in user.
 DEV_IAP_EMAIL = env("DEV_IAP_EMAIL", default="")
+# The aud IAP stamps on its JWT. Unset on Cloud Run it is derived from the metadata server
+# (/projects/NUMBER/locations/REGION/services/K_SERVICE); set it only to override that.
+IAP_AUDIENCE = env("IAP_AUDIENCE", default="")
 
 # GCP — the project/region the warehouse Cloud Run jobs live in, and the STAC catalog base.
 GCP_PROJECT = env("GCP_PROJECT", default="ut-dnr-ugs-backend-tools")
@@ -32,7 +36,7 @@ SERVICES_REGION = env("SERVICES_REGION", default=GCP_REGION)
 STAC_BASE = env("STAC_BASE", default="https://maps-assets.geology.utah.gov/warehouse/stac").rstrip("/")
 # Viewer deep-link base — pub item opens at {VIEWER_BASE}?c={series_code}&i={series_id}. The viewer
 # is on Firebase Hosting now, so a real route is fine; /catalog is the view those params address.
-VIEWER_BASE = env("VIEWER_BASE", default="https://data-geology-utah-gov.web.app/catalog")
+VIEWER_BASE = env("VIEWER_BASE", default="https://data.geology.utah.gov/catalog")
 
 # Serving surfaces to ping for the health row. Add more (api, featureserv) via HEALTH_CHECKS env
 # as "Name|url,Name|url". Defaults cover the public CDN surfaces the admin can always reach.

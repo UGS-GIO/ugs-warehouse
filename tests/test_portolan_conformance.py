@@ -4,9 +4,8 @@ This checks OUR CODE, not the published bucket. The builders write a small catal
 directory through the same `core.stac` path an ingest uses, and rashid reads it back.
 
 `GUARDED` names the rules we have actually fixed. Anything outside that set is reported but not
-enforced, because the remaining failures are open decisions rather than regressions — the missing
-`AGENTS.md`/`README.md` per collection (#250), the Portolan schema URI we deliberately withhold
-until we pass, and the collection-level thumbnails that depend on the layout question. Widen
+enforced, because the remaining failures are open decisions rather than regressions, such as the
+collection-level thumbnails and single-file collections that depend on the layout question (#257). Widen
 `GUARDED` as those land; never widen it to something we have not fixed, or the fence stops meaning
 anything.
 """
@@ -26,6 +25,8 @@ rashid = pytest.importorskip("rashid", reason="rashid is an optional dev depende
 # Rules this repo has fixed and must not break again. Each maps to work already merged.
 GUARDED = {
     "PTL-GEN-000",  # a readable root catalog.json
+    "PTL-CNF-001",  # every catalog and collection declares the Portolan profile
+    "PTL-SCH-001",  # and validates against it
     "PTL-STR-001",  # valid STAC 1.1.0 — the keyword list and the empty-string properties (#246)
     "PTL-TTL-001",  # every catalog and collection has a title and description (#216)
     "PTL-TTL-003",  # every child and item link carries a title (#216)
@@ -36,6 +37,7 @@ GUARDED = {
     "PTL-TMP-002",  # RFC 3339 datetimes, start before end
     "PTL-AST-001",  # every asset has a media type and a role
     "PTL-AST-002",  # absolute asset hrefs use https (#249)
+    "PTL-AST-006",  # a publisher's plain TIFF is a `source` asset, exempt from the COG requirement
     "PTL-FIL-001",  # README.md + AGENTS.md beside every catalog and collection
     "PTL-FIL-002",  # AGENTS.md linked rel:"agents"
     "PTL-FIL-003",  # README.md linked rel:"describedby"
@@ -90,6 +92,34 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
         {"series_id": "MD-50", "series": "MD", "pub_year": "1954", "pub_publisher": "",
          "pub_name": "Mining district file 50"}, [], override={}))
 
+    # An undated mining district file: no pub_year, so a null datetime with the source's interval.
+    stac.write_item(pubs_sink.build_item(
+        {"series_id": "MD-134-6", "series": "MD", "pub_year": "", "pub_publisher": "",
+         "pub_name": "List of Beaver County Properties"}, [], override={}))
+
+    # A mining district file whose only file is the publisher's plain TIFF scan.
+    stac.write_item(pubs_sink.build_item(
+        {"series_id": "MD-1002", "series": "MD", "pub_year": "1956", "pub_publisher": "",
+         "pub_name": "Geophysical Sonic Log", "pub_url": "uranium_data/MD01002.tif"}, [], override={}))
+
+    # An edition pair: a current map and its deprecated predecessor, both with a COG (exercises the
+    # version/deprecated properties, predecessor/successor/latest links, and the currency-gated
+    # related link — ALL-5954).
+    _current_href = config.public_url(stac.item_object_path(
+        pubs_sink.collection_group({"series_id": "M-296DM"}) + "/M", "M-296DM"))
+    stac.write_item(pubs_sink.build_item(
+        {"series_id": "M-296DM", "series": "M", "pub_year": "2022", "pub_publisher": "UGS",
+         "pub_name": "Geologic map of the Park City East quadrangle", "pub_scale": "1:24,000"},
+        [], has_cog=True,
+        edition={"version": "2022", "deprecated": False, "predecessor_href": None,
+                 "successor_href": None, "latest_href": None}, override={}))
+    stac.write_item(pubs_sink.build_item(
+        {"series_id": "GQ-852", "series": "GQ", "pub_year": "1971", "pub_publisher": "USGS",
+         "pub_name": "Geologic map of the Park City East quadrangle", "pub_scale": "1:24,000"},
+        [], has_cog=True,
+        edition={"version": "1971", "deprecated": True, "predecessor_href": None,
+                 "successor_href": _current_href, "latest_href": _current_href}, override={}))
+
     stac.refresh_catalog()
 
     root = tmp_path / "catalog"
@@ -106,7 +136,7 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
 def test_the_builders_produce_a_catalog_that_passes_the_rules_we_have_fixed(monkeypatch, tmp_path):
     root = _catalog_on_disk(monkeypatch, tmp_path)
 
-    report = rashid.validate(root, data=False)
+    report = rashid.validate(root, data=False, schema=True)
     broken = [f for f in report.findings if f.rule_id in GUARDED]
 
     assert not broken, "\n".join(

@@ -1,4 +1,4 @@
-"""Raster identity + STAC mapping (warehouse consumer, docs/RASTER_SPEC.md + ugs-ingest #169)."""
+"""Raster identity + STAC mapping (warehouse consumer, docs/RASTER.md + ugs-ingest #169)."""
 import pytest
 
 from ugs_warehouse.raster import consume, sink_stac, source

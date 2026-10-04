@@ -7,6 +7,7 @@ import {
 import { useMemo, useState } from "react";
 
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { idOf, useViewCtx } from "@/app";
 import { AssetChips } from "./asset-viewer";
 import { rootGroupOf } from "./catalog";
@@ -20,6 +21,7 @@ import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAss
 import { DataTable, Pager } from "@/data/table";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { C, humanize, toggle } from "@/ui/ui";
+import { useDataSaver } from "@/lib/data-saver";
 
 const itemIdOf = (it: ItemRef): string =>
   String(it.data?.id ?? it.href.replace(/\/[^/]+\.json.*$/, "").split("/").pop() ?? it.href);
@@ -126,6 +128,7 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
   collections: CollectionSummary[]; heading: string; onOpen: (href: string) => void;
   onOpenItem: (href: string) => void;
 }) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   if (!collections.length) return <p className={`${C.muted} mt-4`}>Nothing here yet.</p>;
   return (
     <>
@@ -145,7 +148,7 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
               </div>
               <div className="mt-0.5 font-mono text-xs text-muted-foreground">{c.id}</div>
               {desc && <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">{desc}</p>}
-              {c.covers && c.covers.length > 0 && (
+              {!saver && c.covers && c.covers.length > 0 && (
                 <div className="mt-2.5 grid grid-cols-4 gap-1.5" title="Latest covers — click to open">
                   {c.covers.slice(0, 4).map((cv) => (
                     <img key={cv.href} src={cv.thumb} alt={cv.title ?? ""} loading="lazy" title={cv.title ?? ""}
@@ -193,12 +196,13 @@ function Breadcrumb({ crumbs }: { crumbs: { label: string; onClick?: () => void 
 // under "Volume N" headers, newest volume first; otherwise a single flat grid.
 const THUMB_GRID = "grid grid-cols-1 gap-3 sm:grid-cols-2 md:grid-cols-4 lg:grid-cols-6";
 function ThumbCard({ it, onOpen }: { it: ItemRef; onOpen: (href: string) => void }) {
+  const saver = useDataSaver();   // data saver: no images the person did not ask for
   const th = thumbnailAsset(it.data);
   return (
     <div onClick={() => onOpen(it.href)}
       className="cursor-pointer overflow-hidden rounded-md border border-border bg-card hover:border-primary">
       <div className="flex aspect-[3/4] items-center justify-center overflow-hidden bg-muted">
-        {th ? <img src={th.href} alt={gTitle(it)} loading="lazy" className="h-full w-full object-cover" />
+        {th && !saver ? <img src={th.href} alt={gTitle(it)} loading="lazy" className="h-full w-full object-cover" />
             : <span className="p-2 text-center font-mono text-xs text-muted-foreground">{gSeries(it)}</span>}
       </div>
       <div className="p-1.5">
@@ -261,7 +265,7 @@ function BulkItemComposer({ itemIds, onDone }: { itemIds: string[]; onDone: () =
   const [body, setBody] = useState("");
   const add = useMutation({
     mutationFn: () => createComment(itemIds, body, { kind: "item" }),
-    onSuccess: () => { setBody(""); qc.invalidateQueries({ queryKey: ["comments-all"] }); itemIds.forEach((id) => qc.invalidateQueries({ queryKey: ["comments", id] })); onDone(); },
+    onSuccess: () => { setBody(""); qc.invalidateQueries({ queryKey: qk.comments.all }); itemIds.forEach((id) => qc.invalidateQueries({ queryKey: qk.comments.item(id) })); onDone(); },
   });
   return (
     <div className="mb-2 rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-2 text-xs">
@@ -615,8 +619,7 @@ export function CollectionsGrid({
 
   return (
     <>
-      {/* The catalog landing gets the same title band as the content pages — it IS the front door,
-          and the search that opens the whole catalog belongs in it rather than above a bare list. */}
+      {/* The catalog root gets the same title band as the content pages. */}
       {atRoot && (
         <PageHero title="Data Catalog"
           lead="Geologic maps, hazard layers and publications." />
@@ -665,7 +668,7 @@ export function Browse() {
   if (c.collectionId && c.itemUrl) {
     return (
       <div className={C.wrap}>
-        <ItemDetail collectionId={c.collectionId} item={c.item.data} layout="page"
+        <ItemDetail collectionId={c.collectionId} item={c.item.data} error={c.item.error} layout="page"
           onBack={() => c.go({ view: "catalog", c: c.collectionUrl, s: c.seriesSel })}
           onMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl,
                               l: c.itemUrl ? [idOf(c.itemUrl)] : c.layerIds })} />

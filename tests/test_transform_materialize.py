@@ -13,17 +13,18 @@ import pytest
 from ugs_warehouse.vector import transform
 
 
-def _global_sort(rel: str) -> str:
+def _global_sort(con, rel: str) -> str:
     """The one-shot global sort materialize() replaces — the reference for the assertions below.
 
     Hashes the HYDRATED row, exactly as the original did; hashing the pre-hydration source instead
     breaks ties differently and the ids diverge.
     """
+    con.execute(f"CREATE OR REPLACE TEMP TABLE _ref_hydrated AS {transform._select(rel)}")
+    key = transform.hilbert_key(transform.centroid_extent(con, "_ref_hydrated"))
     return (
         f"WITH hydrated AS ({transform._select(rel)}) "
-        f"SELECT *, row_number() OVER (ORDER BY ST_Hilbert(ST_Centroid(geom)), hash(hydrated)) "
-        f"  AS feature_id "
-        f"FROM hydrated ORDER BY ST_Hilbert(ST_Centroid(geom)), hash(hydrated)"
+        f"SELECT *, row_number() OVER (ORDER BY {key}, hash(hydrated)) AS feature_id "
+        f"FROM hydrated ORDER BY {key}, hash(hydrated)"
     )
 
 
@@ -65,7 +66,7 @@ def test_feature_ids_match_a_single_global_sort():
     """The chunked path must be a drop-in: same ids, or every consumer's join key shifts."""
     con = _con()
     rel = _seed(con, 20_000)
-    con.execute(f"CREATE OR REPLACE TABLE reference AS {_global_sort(rel)}")
+    con.execute(f"CREATE OR REPLACE TABLE reference AS {_global_sort(con, rel)}")
     transform.materialize(con, rel, name="chunked")
 
     assert _ids(con, "chunked") == _ids(con, "reference")
@@ -96,7 +97,7 @@ def test_survives_a_cap_the_global_sort_dies_on():
     rel = _seed(con, 600_000, pad=400)
 
     with pytest.raises(duckdb.OutOfMemoryException):
-        con.execute(f"CREATE OR REPLACE TABLE reference AS {_global_sort(rel)}")
+        con.execute(f"CREATE OR REPLACE TABLE reference AS {_global_sort(con, rel)}")
 
     transform.materialize(con, rel, name="chunked")
     assert con.execute("SELECT count(*) FROM chunked").fetchone()[0] == 600_000
@@ -138,3 +139,30 @@ def test_partitioned_scans_give_the_same_result_as_one_scan():
     assert _ids(con, "partitioned") == _ids(con, "one_scan")
     assert _is_physically_ordered(con, "partitioned")
     con.close()
+
+
+def test_nearby_rows_get_nearby_ids():
+    """Row-group pruning needs nearby rows stored together. Four tight clusters at the corners of
+    Utah must each come out as one contiguous run of ids, not interleaved across the state."""
+    con = _con()
+    con.execute("""
+        CREATE OR REPLACE TABLE src AS
+        SELECT i, c, ST_Point(x + (i % 50) / 5000.0, y + (i % 47) / 5000.0) AS geom
+        FROM range(400) s(i),
+             (VALUES (0, -114.0, 37.0), (1, -114.0, 42.0), (2, -109.0, 37.0), (3, -109.0, 42.0))
+               AS corners(c, x, y)
+        WHERE i % 4 = c
+    """)
+    rel = "(SELECT i, c, ST_AsWKB(geom) AS geom_wkb, 4326 AS target_epsg FROM src)"
+    transform.materialize(con, rel, name="out")
+    runs = con.execute(
+        "SELECT count(*) FROM (SELECT c, lag(c) OVER (ORDER BY feature_id) AS p FROM out) "
+        "WHERE p IS NOT NULL AND c <> p"
+    ).fetchone()[0]
+    assert runs == 3   # four clusters, three boundaries between them
+    con.close()
+
+
+def test_hilbert_key_survives_a_single_point():
+    assert "BOX_2D" in transform.hilbert_key((-112.0, 40.0, -112.0, 40.0))
+    assert transform.hilbert_key(None) == "ST_Hilbert(ST_Centroid(geom))"

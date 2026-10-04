@@ -2,8 +2,9 @@
 // wasm + worker ship from our own bundle (vite `?url` → hashed assets in dist/), NOT jsDelivr, so the
 // read path has no third-party runtime dependency. `selectBundle` picks the `eh` build on modern
 // browsers (only that one wasm is fetched), `mvp` as the fallback — both lazy, nothing loads until the
-// first search. The remote `.duckdb` is ATTACHed over HTTP and **range-read** (206 partials — duckdb
-// fetches only the index pages a query touches, never the whole file).
+// first search. Remote files (the `.duckdb` ATTACHed here, and the GeoParquet the data explorer reads)
+// are **range-read** (206 partials) because newDb() opens with forceFullHTTPReads off, so duckdb
+// fetches only the pages/chunks a query touches, never the whole file.
 // Asset URLs are static `?url` imports (vite emits hashed asset paths — tiny strings, no engine code),
 // so the heavy duckdb-wasm JS + onnxruntime stay out of the main bundle and load lazily (below).
 import mvpWasm from "@duckdb/duckdb-wasm/dist/duckdb-mvp.wasm?url";
@@ -12,6 +13,9 @@ import ehWasm from "@duckdb/duckdb-wasm/dist/duckdb-eh.wasm?url";
 import ehWorker from "@duckdb/duckdb-wasm/dist/duckdb-browser-eh.worker.js?url";
 
 export type Conn = { query: (sql: string) => Promise<{ toArray: () => Record<string, unknown>[] }> };
+
+/** The engine's .wasm on modern browsers (the `eh` build): what an offline table needs cached. */
+export const ENGINE_WASM = ehWasm;
 
 const BUNDLES = {
   mvp: { mainModule: mvpWasm, mainWorker: mvpWorker },
@@ -33,6 +37,13 @@ async function newDb(duckdb: typeof import("@duckdb/duckdb-wasm")) {
   const worker = new Worker(bundle.mainWorker!);
   const db = new duckdb.AsyncDuckDB(new duckdb.ConsoleLogger(), worker);
   await db.instantiate(bundle.mainModule, bundle.pthreadWorker);
+  // duckdb-wasm >= 1.30 defaults forceFullHTTPReads=true, so every HTTP-registered file (parquet
+  // here, the .duckdb ATTACH for pub search) is downloaded WHOLE into the WASM heap on first open
+  // (1.3-2 GB for the wetlands layers), which OOMs the tab. Opening with it off makes DuckDB HTTP
+  // range-read (206 partials): footer + only the projected column chunks per query. allowFullHTTPReads
+  // off means a server without range support fails the query loudly instead of silently downloading
+  // the whole file. Must run before any connect()/query. (ALL-6001)
+  await db.open({ filesystem: { forceFullHTTPReads: false, allowFullHTTPReads: false } });
   return db;
 }
 

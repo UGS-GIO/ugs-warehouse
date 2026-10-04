@@ -3,6 +3,7 @@
 import { createRouter } from "@tanstack/react-router";
 
 import { toBasepath } from "./lib/mount";
+import { queryClient } from "./query-client";
 import { routeTree } from "./routeTree.gen";
 
 // Path routes have to know where the bundle is mounted or they'd read the mount prefix as part of
@@ -10,7 +11,10 @@ import { routeTree } from "./routeTree.gen";
 export const router = createRouter({
   routeTree,
   basepath: toBasepath(import.meta.env.BASE_URL),
-  defaultPreload: false,
+  // The query client rides the context so a route loader can prefetch into the cache the components
+  // read. "intent" warms a route's code-split chunk on hover/touch-start.
+  context: { queryClient },
+  defaultPreload: "intent",
 });
 
 declare module "@tanstack/react-router" {

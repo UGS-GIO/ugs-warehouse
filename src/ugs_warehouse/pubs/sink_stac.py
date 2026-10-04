@@ -10,13 +10,18 @@ Ported from ugs-geolmap-cog-poc/catalog/build_pubs_stac.py — adapted to `core.
 """
 from __future__ import annotations
 
+import datetime
+import math
 import os
 import re
+import sys
 import urllib.parse
 
 from ..core import config, stac
 from . import counties, identity, topic
+from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
+from .vectors import VECTORS_PREFIX
 
 UGSPUB = identity.UGSPUB
 LANDING = "https://geology.utah.gov/publication-details/?pub="
@@ -25,6 +30,9 @@ UGS_NAMES = {"UGS", "UGMS", "UTAH GEOLOGICAL SURVEY", "UTAH GEOLOGICAL AND MINER
 # A client picks a viewer, a downloader or nothing at all from the media type, so an unmapped
 # extension falling back to `application/octet-stream` costs the reader the file. `.tif` here is
 # the publisher's plain scan; a COG we produced carries COG_MIME, set on the asset directly.
+# The earliest pub_year in the publications source: the start of an undated item's interval.
+EARLIEST_RECORD = "1886-01-01T00:00:00Z"
+
 MEDIA = {".pdf": "application/pdf", ".zip": "application/zip",
          ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
          ".xls": "application/vnd.ms-excel",
@@ -149,24 +157,85 @@ def collection_group(p: dict) -> str:
     return identity.EXTERNAL_COLLECTION
 
 
+# Fixed-purpose keys build_item claims elsewhere in this function. Most are added to `assets`
+# before the vector-layer/companion-table loops run, so a live collision already shows up there —
+# but `fence_*` is added AFTER (see has_3d below), so it needs listing here too, or a layer named
+# e.g. "fence_mesh" would grab that bare key only to be silently overwritten once has_3d runs.
+_RESERVED_ASSET_KEYS = frozenset({
+    "publication", "cog", "thumbnail", "preview", "units",
+    "fence_polygons", "fence_lines", "fence_mesh",
+})
+
+
+def cog_asset_fields(ds) -> dict:
+    """STAC 1.1 asset fields for an open COG, read from its header with rio-stac (no pixel reads).
+
+    rio-stac emits projection v1.1 `proj:epsg` and `eo:bands`; both map to their STAC 1.1 forms
+    here (`proj:code` and common `bands`). Its `raster:bands` reads pixel statistics, so data type
+    and nodata come from the header directly.
+    """
+    from rio_stac.stac import get_eobands_info, get_projection_info
+
+    proj = get_projection_info(ds)
+    epsg = proj.pop("epsg")
+    proj.pop("geometry")
+    fields = {f"proj:{k}": v for k, v in proj.items()}
+    if epsg:
+        fields["proj:code"] = f"EPSG:{epsg}"
+    bands = get_eobands_info(ds)
+    if len(set(ds.dtypes)) == 1:
+        fields["data_type"] = ds.dtypes[0]
+    else:
+        for band, dtype in zip(bands, ds.dtypes):
+            band["data_type"] = dtype
+    if ds.nodata is not None:
+        fields["nodata"] = ds.nodata if math.isfinite(ds.nodata) else str(ds.nodata)
+    fields["bands"] = bands
+    return fields
+
+
 def build_item(p: dict, attachments: list[dict], *,
                geom: dict | None = None, bbox: list[float] | None = None,
                fp_source: str | None = None,
-               has_cog: bool = False, has_units: bool = False,
+               has_cog: bool = False, cog_fields: dict | None = None,
+               has_units: bool = False,
                has_thumb: bool = False, has_cover: bool = False,
                has_3d: bool = False, classes_3d: list[dict] | None = None,
+               vector_layers: list[str] | None = None,
+               companion_tables: list[dict] | None = None,
                override: dict | None = None,
                contents: list[dict] | None = None,
-               mirrored: set[str] | None = None) -> dict:
+               mirrored: set[str] | None = None,
+               edition: dict | None = None,
+               mosaic_tier: str | None = None) -> dict:
     """Build a pub STAC Item (collection-nested, via core.stac.build_item).
 
     `mirrored` is the set of object paths the warehouse holds copies of (see pubs/mirror.py).
     Source files in it are served from our CDN; the rest stay linked to the publisher's host.
+
+    `edition` = `{"version", "deprecated", "predecessor_href", "successor_href", "latest_href"}`
+    (edition detection, a later task) — when given, stamps `version`/`deprecated` on the item
+    (Versioning Indicators ext auto-declared by core.stac.build_item) and
+    predecessor/successor/latest-version links.
+
+    `vector_layers` and `companion_tables` mirror what pubs/vectors.py extracted to
+    `{VECTORS_PREFIX}/{series_id}/` (see its `_manifest.json`): one asset per spatial layer, keyed
+    by its label, and one per non-spatial GeMS companion table (DescriptionOfMapUnits, …), keyed by
+    its label with `table:columns` when the column list is known. Additive to the single hardcoded
+    `units` asset above, which stays for backward compatibility.
     """
     sid = (p.get("series_id") or "").strip()
     item_id = item_id_for(sid)
     yr = (p.get("pub_year") or "").strip()
     dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
+    # STAC has no "unknown" date: a null datetime needs an interval. For an undated publication the
+    # only true one runs from the source's earliest dated record to now, flagged so no reader takes
+    # it for a publication date.
+    undated = {} if dt else {
+        "start_datetime": EARLIEST_RECORD,
+        "end_datetime": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT00:00:00Z"),
+        "ugs:date_unknown": True,
+    }
 
     # A mirrored file is served from OUR CDN, with the publisher's URL kept as an `alternate` —
     # same bytes, two locations. Provenance survives, and a client that wants the publisher's copy
@@ -179,44 +248,85 @@ def build_item(p: dict, attachments: list[dict], *,
                 "alternate": {"publisher": {"href": h, "alternate:name": "UGS publications site",
                                             "title": "Publisher copy (ugspub.nr.utah.gov)"}}}
 
+    # A publisher's plain TIFF is the upstream original, not our raster data: Portolan's `source`
+    # role, which is exempt from the COG requirement. Our own raster is the `cog` asset below.
+    def roles_for(mtype: str) -> list[str]:
+        return ["source"] if mtype == "image/tiff" else ["data"]
+
     assets: dict = {}
     main_pdf = href(p.get("pub_url"))
     if main_pdf:
-        assets["publication"] = source_asset(main_pdf, type=media_type(main_pdf),
-                                             title="Publication", roles=["data"])
+        mtype = media_type(main_pdf)
+        assets["publication"] = source_asset(main_pdf, type=mtype, title="Publication",
+                                             roles=roles_for(mtype))
     for a in attachments:
         h = href(a.get("pub_url"))
         if not h:
             continue
+        mtype = media_type(h)
         key = re.sub(r"[^a-z0-9]+", "_", (a.get("extra_data") or "file").strip().lower()).strip("_") or "file"
-        assets.setdefault(key, source_asset(h, type=media_type(h),
-                                            title=(a.get("extra_data") or "").strip(), roles=["data"]))
+        assets.setdefault(key, source_asset(h, type=mtype,
+                                            title=(a.get("extra_data") or "").strip(), roles=roles_for(mtype)))
     if has_cog:
-        # The COG is warped to EPSG:3857 (harvest.py: gdalwarp -t_srs + rio-cogeo web_optimized),
-        # which differs from the item-level proj:code (4326, the footprint/units CRS). The projection
-        # ext allows per-asset overrides, so stamp the COG's real CRS on the asset itself — otherwise
-        # a client reads the item-level 4326 and mis-places the raster.
-        # harvest produces an RGBA uint8 WebP COG (gdalwarp -dstalpha → rio-cogeo). Bands are the
-        # STAC 1.1 common `bands` construct (NOT deprecated raster:bands); data_type is deduped to
-        # the asset per 1.1 best practice. Alpha carries transparency, so no separate nodata.
+        # The COG's own CRS (3857) differs from the item-level proj:code (4326), so it rides on the
+        # asset as a per-asset override; `cog_fields` (see cog_asset_fields) carries it.
         assets["cog"] = {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
                          "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
-                         "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857",
-                         "data_type": "uint8",
-                         "bands": [{"name": "red"}, {"name": "green"},
-                                   {"name": "blue"}, {"name": "alpha"}]}
+                         "roles": ["data", "cloud-optimized"], **(cog_fields or {})}
     if has_thumb:
-        assets["thumbnail"] = {"href": config.public_url(f"{identity.COG_PREFIX}/{sid.upper()}.thumb.png"),
-                               "type": "image/png", "title": "Thumbnail", "roles": ["thumbnail"]}
+        assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
+                               "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
     # PDF first-page cover — a preview for ANY pub (incl. non-spatial). The harvested COG thumb (above)
     # is preferred when present (added first → the viewer picks it); this covers everything else.
     if has_cover:
-        assets["preview"] = {"href": config.public_url(f"{identity.PUB_THUMB_PREFIX}/{sid.upper()}.png"),
-                             "type": "image/png", "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
+        assets["preview"] = {"href": config.public_url(identity.pub_cover_object(sid)),
+                             "type": config.WEBP_MIME, "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
     if has_units:
         assets["units"] = {
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
             "type": PARQUET_MIME, "title": "Geologic unit polygons (GeoParquet)", "roles": ["data"]}
+
+    def place_asset(label: str, asset: dict, prefix: str) -> None:
+        """Add a vector-layer/companion-table asset under `label`, without clobbering an existing
+        or reserved key.
+
+        GDB layers are namespaced (`{gstem}__{name}`) and collision-safe, but a bare shapefile
+        label (`units.shp` -> `units`) can land on a reserved key, an attachment key, or a sibling
+        layer's own label. `assets[label] = ...` would silently drop whichever asset lost the race
+        — a broken source-download link, or the canonical `units` GeoParquet gone with no trace. On
+        a collision the new asset moves to a namespaced key instead (deduped further with a numeric
+        suffix if THAT's also taken), so both survive, and the rename is warned to stderr since
+        nothing else would surface it.
+        """
+        key = label
+        if key in assets or key in _RESERVED_ASSET_KEYS:
+            key, n = f"{prefix}_{label}", 2
+            while key in assets or key in _RESERVED_ASSET_KEYS:
+                key = f"{prefix}_{label}_{n}"
+                n += 1
+            print(f"[pubs] {item_id}: extracted {prefix} layer {label!r} collides with an "
+                  f"existing asset key — keeping both, this one filed under {key!r}",
+                  file=sys.stderr)
+        assets[key] = asset
+
+    # Every layer pubs/vectors.py extracted from the GIS bundle (shapefiles + every GDB layer),
+    # one asset each, keyed by its label — same {VECTORS_PREFIX}/{series_id}/{label}.parquet the
+    # extractor uploaded to. Additive to `units` above: a series can carry both.
+    for label in vector_layers or []:
+        place_asset(label, {
+            "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
+            "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}, "vector")
+    # Non-spatial GeMS companion tables (DescriptionOfMapUnits, CorrelationOfMapUnits, ...) —
+    # same storage layout as the spatial layers above, plus `table:columns` when the extractor
+    # recorded the schema (declares the table extension below).
+    for t in companion_tables or []:
+        label = t["label"]
+        asset = {
+            "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
+            "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}
+        if t.get("columns"):
+            asset["table:columns"] = t["columns"]
+        place_asset(label, asset, "table")
     # Cloud-native 3D fence diagram (GeoParquet-3D polys/lines + glTF mesh), converted by pubs/threed
     # from the pub's CSA_3D gdb + .mapx. Presence-driven like the COG: the convert step writes the
     # artifacts, this stamps the assets. classification:classes (authored per-unit colors) rides in
@@ -240,17 +350,42 @@ def build_item(p: dict, attachments: list[dict], *,
     if has_ugs_doi(p.get("pub_publisher")):
         extra_links.append({"rel": "cite-as", "href": f"https://doi.org/10.34191/{quoted_sid}"})
 
+    ed = edition or {}
+    if ed.get("predecessor_href"):
+        extra_links.append({"rel": "predecessor-version", "href": ed["predecessor_href"],
+                            "type": "application/geo+json"})
+    if ed.get("successor_href"):
+        extra_links.append({"rel": "successor-version", "href": ed["successor_href"],
+                            "type": "application/geo+json"})
+    if ed.get("latest_href"):
+        extra_links.append({"rel": "latest-version", "href": ed["latest_href"],
+                            "type": "application/geo+json"})
+
+    # A COG map is stitched into its portal layer's seamless raster mosaic (geolmap_mosaics.py); the
+    # caller passes that tier (`scale.mosaic_tier_of` over the map's footprints), or None for a map
+    # in no tiered layer. The pub carries only its raw `ugs:scale` and reaches its tier through this link.
+    if has_cog and mosaic_tier and not ed.get("deprecated"):
+        link_tier = mosaic_tier
+        extra_links.append({
+            "rel": "related",
+            "href": config.public_url(stac.item_object_path("ugs-geologic-maps",
+                                                             f"geologic-maps-{link_tier}")),
+            "type": "application/geo+json",
+            "title": f"Utah geologic maps — {MOSAIC_TIER_LABEL.get(link_tier, link_tier)} seamless mosaic"})
+
     # No web-map-links here: that extension's rels are [xyz, wms, wmts, tilejson, pmtiles, 3d-tiles]
     # — it has no `cog`, and declaring it forces one of those (which a raster pub lacks). The COG is
     # advertised by its `cog` ASSET (media type `…;profile=cloud-optimized`), which STAC Browser and
     # our viewer both render natively, and which `_is_mappable`/`cogAsset` detect. No link needed.
     extensions: list[str] = []
-    if has_cog:
+    if any(k.startswith("proj:") for k in assets.get("cog", {})):
         extensions.append(stac.PROJ_EXT)  # asset-level proj:code on the COG (EPSG:3857)
     if any("alternate" in a for a in assets.values()):
         extensions.append(stac.ALTERNATE_ASSETS_EXT)  # mirrored file + publisher copy
     if has_3d and classes_3d:
         extensions.append(stac.CLASSIFICATION_EXT)  # per-unit authored colors for the 3D fence
+    if any("table:columns" in a for a in assets.values()):
+        extensions.append(stac.TABLE_EXT)  # companion-table column schema
 
     code = series_code(sid)
     group = collection_group(p)  # top-level: UGS catalog / mining-district files / external
@@ -267,6 +402,7 @@ def build_item(p: dict, attachments: list[dict], *,
         geometry=geom, bbox=bbox, datetime_iso=dt,
         properties={
             "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop
+            **undated,
             "title": title,
             # STAC gives `description` a minimum length, so a pub with no citation omits the field
             # rather than publishing "". Same for the UGS-prefixed strings below: an empty value
@@ -276,6 +412,10 @@ def build_item(p: dict, attachments: list[dict], *,
             **({"ugs:series": s} if (s := (p.get("series") or "").strip()) else {}),
             **({"ugs:scale": sc} if (sc := (p.get("pub_scale") or "").strip()) else {}),
             **({"ugs:author": au} if (au := (p.get("pub_author") or "").strip()) else {}),
+            # Edition version/deprecated (Versioning Indicators ext, auto-declared by
+            # core.stac.build_item from these two properties — see `edition` above).
+            **({"version": v} if (v := ed.get("version")) else {}),
+            **({"deprecated": True} if ed.get("deprecated") else {}),
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
             # ISO topic category. AUTHORED, not defaulted: a UGS publication is our own product, so
             # asserting the category is a statement about our own work — unlike a serving topic,

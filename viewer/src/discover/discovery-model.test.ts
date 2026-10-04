@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
-  extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery, sortItems, typeOf,
+  effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery,
+  sortItems, typeOf,
 } from "./discovery-model";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
@@ -102,12 +103,12 @@ describe("bboxIntersects / filterByViewport", () => {
 });
 
 describe("sortItems", () => {
-  // A fixture with distinct titles + datetimes; DS-9 is deliberately undated.
+  // Publications with distinct titles + publication dates; Delta is deliberately undated.
   const dated: ItemRef[] = [
-    item("c", "b-item", { title: "Beta", datetime: "2021-05-01T00:00:00Z" }),
-    item("c", "a-item", { title: "Alpha", datetime: "2023-01-01T00:00:00Z" }),
-    item("c", "c-item", { title: "Gamma", datetime: "2019-09-01T00:00:00Z" }),
-    item("c", "d-item", { title: "Delta" }), // undated
+    item("c", "b-item", { title: "Beta", "ugs:series_id": "B-1", datetime: "2021-05-01T00:00:00Z" }),
+    item("c", "a-item", { title: "Alpha", "ugs:series_id": "A-1", datetime: "2023-01-01T00:00:00Z" }),
+    item("c", "c-item", { title: "Gamma", "ugs:series_id": "C-1", datetime: "2019-09-01T00:00:00Z" }),
+    item("c", "d-item", { title: "Delta", "ugs:series_id": "D-1" }), // undated
   ];
   const titles = (out: ItemRef[]) => out.map((it) => String(it.data!.properties!.title));
 
@@ -128,6 +129,22 @@ describe("sortItems", () => {
 
   it("oldest sorts by datetime asc, undated still last", () => {
     expect(titles(sortItems(dated, "oldest"))).toEqual(["Gamma", "Beta", "Alpha", "Delta"]);
+  });
+
+  it("does not count a layer's load date as new or old", () => {
+    const layer = item("ugs-serving-topics/hazards", "hazards_qfaults",
+      { title: "Quaternary faults", "ugs:dbt_schema": "hazards", datetime: "2026-09-30T18:00:00Z" });
+    const mixed = [layer, ...dated.slice(0, 2)];
+    expect(titles(sortItems(mixed, "newest"))).toEqual(["Alpha", "Beta", "Quaternary faults"]);
+    expect(titles(sortItems(mixed, "oldest"))).toEqual(["Beta", "Alpha", "Quaternary faults"]);
+  });
+
+  it("still orders layers among themselves by when they were loaded", () => {
+    const loaded = (title: string, datetime: string) =>
+      item("ugs-serving-topics/hazards", title, { title, "ugs:dbt_schema": "hazards", datetime });
+    const layers = [loaded("Older load", "2026-08-01T00:00:00Z"), loaded("Newer load", "2026-09-30T00:00:00Z")];
+    expect(titles(sortItems(layers, "newest"))).toEqual(["Newer load", "Older load"]);
+    expect(titles(sortItems(layers, "oldest"))).toEqual(["Older load", "Newer load"]);
   });
 });
 
@@ -218,5 +235,21 @@ describe("activeChips", () => {
   });
   it("has no chips for a pristine state", () => {
     expect(activeChips(DEFAULT_DISCOVERY, labelFor)).toEqual([]);
+  });
+});
+
+describe("effectiveSort", () => {
+  const at = (q: string, sort: DiscoveryState["sort"] = "relevance") =>
+    effectiveSort({ ...DEFAULT_DISCOVERY, q, sort });
+  it("lists newest first when there are no words to rank by", () => {
+    expect(at("")).toBe("newest");
+    expect(at("series:GQ")).toBe("newest");
+  });
+  it("keeps best match for a word query", () => {
+    expect(at("salt lake")).toBe("relevance");
+  });
+  it("keeps a sort the user picked", () => {
+    expect(at("", "title")).toBe("title");
+    expect(at("salt lake", "oldest")).toBe("oldest");
   });
 });

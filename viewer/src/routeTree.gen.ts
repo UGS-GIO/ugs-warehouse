@@ -16,8 +16,10 @@ import { Route as DevelopersRouteImport } from './routes/developers'
 import { Route as DiscoverRouteImport } from './routes/discover'
 import { Route as GuideRouteImport } from './routes/guide'
 import { Route as MapRouteImport } from './routes/map'
+import { Route as OfflineRouteImport } from './routes/offline'
 import { Route as PreviewRouteImport } from './routes/preview'
 import { Route as ReviewRouteImport } from './routes/review'
+import { Route as SettingsRouteImport } from './routes/settings'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -54,6 +56,11 @@ const MapRoute = MapRouteImport.update({
   path: '/map',
   getParentRoute: () => rootRouteImport,
 } as any)
+const OfflineRoute = OfflineRouteImport.update({
+  id: '/offline',
+  path: '/offline',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const PreviewRoute = PreviewRouteImport.update({
   id: '/preview',
   path: '/preview',
@@ -62,6 +69,11 @@ const PreviewRoute = PreviewRouteImport.update({
 const ReviewRoute = ReviewRouteImport.update({
   id: '/review',
   path: '/review',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 
@@ -73,8 +85,10 @@ export interface FileRoutesByFullPath {
   '/discover': typeof DiscoverRoute
   '/guide': typeof GuideRoute
   '/map': typeof MapRoute
+  '/offline': typeof OfflineRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -84,8 +98,10 @@ export interface FileRoutesByTo {
   '/discover': typeof DiscoverRoute
   '/guide': typeof GuideRoute
   '/map': typeof MapRoute
+  '/offline': typeof OfflineRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -96,8 +112,10 @@ export interface FileRoutesById {
   '/discover': typeof DiscoverRoute
   '/guide': typeof GuideRoute
   '/map': typeof MapRoute
+  '/offline': typeof OfflineRoute
   '/preview': typeof PreviewRoute
   '/review': typeof ReviewRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -109,8 +127,10 @@ export interface FileRouteTypes {
     | '/discover'
     | '/guide'
     | '/map'
+    | '/offline'
     | '/preview'
     | '/review'
+    | '/settings'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -120,8 +140,10 @@ export interface FileRouteTypes {
     | '/discover'
     | '/guide'
     | '/map'
+    | '/offline'
     | '/preview'
     | '/review'
+    | '/settings'
   id:
     | '__root__'
     | '/'
@@ -131,8 +153,10 @@ export interface FileRouteTypes {
     | '/discover'
     | '/guide'
     | '/map'
+    | '/offline'
     | '/preview'
     | '/review'
+    | '/settings'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -143,8 +167,10 @@ export interface RootRouteChildren {
   DiscoverRoute: typeof DiscoverRoute
   GuideRoute: typeof GuideRoute
   MapRoute: typeof MapRoute
+  OfflineRoute: typeof OfflineRoute
   PreviewRoute: typeof PreviewRoute
   ReviewRoute: typeof ReviewRoute
+  SettingsRoute: typeof SettingsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -198,6 +224,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof MapRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/offline': {
+      id: '/offline'
+      path: '/offline'
+      fullPath: '/offline'
+      preLoaderRoute: typeof OfflineRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/preview': {
       id: '/preview'
       path: '/preview'
@@ -212,6 +245,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ReviewRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -223,8 +263,10 @@ const rootRouteChildren: RootRouteChildren = {
   DiscoverRoute: DiscoverRoute,
   GuideRoute: GuideRoute,
   MapRoute: MapRoute,
+  OfflineRoute: OfflineRoute,
   PreviewRoute: PreviewRoute,
   ReviewRoute: ReviewRoute,
+  SettingsRoute: SettingsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

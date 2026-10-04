@@ -17,7 +17,10 @@ dependencies = [
   "uvicorn[standard]>=0.32",
   "asyncpg>=0.29",       # review-comments CRUD (serve.py) → review.comments in mapping-db (review_writer)
   "firebase-admin>=6.5",  # verify Firebase/Entra ID tokens from the hazards-review app (non-IAP review path)
+  "google-auth>=2.40",   # iap.py verifies IAP JWTs
+  "cryptography>=42",   # ...which are ES256, and google-auth only verifies EC keys with it
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
+  "rustac>=0.9",         # writes the stac-geoparquet item mirror (core/item_mirror.py); no deps
   # NB: no pyarrow / shapely — the vector ingest streams Postgres→DuckDB→CDN entirely in DuckDB
   # (no Python materialization). They live in the [pubs] extra (geopandas/pyogrio need them).
 ]
@@ -33,13 +36,18 @@ dependencies = [
 # real builders write. It pulls the raster stack (rasterio, pyarrow, pyproj), which the base
 # install deliberately avoids — the cost is ~400MB in CI and nothing in the runtime images. The
 # test skips when it is absent, so a lean local env still runs the rest of the suite.
+# geopandas/shapely: without them, test_pubs_vectors.py importorskips the GeoParquet writer away.
+# rio-stac: test_stac_validation.py reads a real COG's asset fields with it (rashid brings rasterio).
+# geoparquet-io: test_archive_gpio.py runs `gpio check` on the archive writer's output. It pins
+# duckdb below 1.6, so CI tests a 1.5 duckdb until gpio moves.
 dev = ["pytest>=8", "ruff==0.16.0", "pre-commit>=3.7", "pystac[validation]>=1.11", "httpx>=0.27",
-       "rashid>=0.1.8"]
+       "rashid>=0.1.8", "geopandas>=1.0", "shapely>=2.0", "rio-stac>=0.12", "geoparquet-io>=1.6"]
 # pubs/COG producer — heavy raster deps; installed in Dockerfile.harvest (needs system
 # GDAL CLI + poppler too). duckdb is in the base deps.
 pubs = [
   "rasterio>=1.3",
   "rio-cogeo>=5",
+  "rio-stac>=0.12",      # COG asset bands/projection from the header — pubs/sink_stac.py
   "geopandas>=1.0",
   "pyogrio>=0.9",
   "pyarrow>=17",         # geopandas parquet IO (base ingest no longer needs it)
@@ -49,6 +57,7 @@ pubs = [
   "requests>=2.31",
   "pymysql>=1.1",        # optional: live pub metadata from MySQL (else vendored CSV snapshot)
   "fastembed>=0.3",      # semantic-search embeddings (bge-small via ONNX, no torch) — pubs/embed.py
+  "geoparquet-io>=1.6",  # GeoParquet writes (pubs/geoparquet.py); pins duckdb >=1.5.5,<1.6
 ]
 # topics-thumbnail job — headless MapLibre render of styled PMTiles → PNG (vector/thumbs.py).
 # Installed in Dockerfile.topics-thumbs, which also runs `playwright install --with-deps chromium`.
@@ -66,7 +75,7 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 
 [tool.setuptools.package-data]
-"ugs_warehouse.pubs" = ["data/*.csv"]   # vendored pub metadata snapshot
+"ugs_warehouse.pubs" = ["data/*.geojson"]   # vendored SGID county boundaries (counties.py)
 "ugs_warehouse.vector" = ["render_assets/*"]   # vendored maplibre-gl + pmtiles browser libs (topics thumbnails)
 
 [tool.pytest.ini_options]

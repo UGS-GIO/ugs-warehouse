@@ -1,36 +1,56 @@
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { sameFeature } from "@/lib/same-feature";
+import { qk } from "@/query-keys";
 import { type ColumnDef, flexRender, getCoreRowModel, type SortingState, useReactTable } from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useDebounced } from "@/lib/use-debounced";
+import { usePerItem } from "@/lib/use-per-item";
 
 import { CommentsPanel } from "@/review/comments-panel";
+import { buildFilters } from "./build-filters";
 import type { ColFilter } from "./download";
 import { PAGE_SIZES } from "./paging";
-import type { FocusSel } from "@/map/map-model";
+import type { FocusSel, MapPick } from "@/map/map-model";
 import { IS_REVIEW } from "@/stac";
 import { C } from "@/ui/ui";
 import { RecordCards } from "@/catalog/record-cards";
 import { UiSegmented } from "@/ui/segmented";
 import { UiSelect } from "@/ui/select";
 import { useIsDesktop } from "@/ui/use-breakpoint";
+import { Unavailable } from "@/offline/offline-notice";
+import { isNetworkError, useOnline } from "@/offline/online";
+import { TableOffline } from "@/offline/table-offline";
+import { useOffline } from "@/offline/store";
 
 
 // Full dataset explorer — the whole GeoParquet, paged/sorted/searched in the browser via
 // DuckDB-WASM (HTTP range reads; never downloads the whole file). Server-style manual paging:
-// the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 7000-row tables.
+// the page query carries LIMIT/OFFSET/ORDER BY/WHERE, so this scales to the 400k+-row layers.
 // Geometry is excluded (use Download / OGC API / the map for geometry).
 // Page sizes come from ./paging, shared with the catalog item lists so both pagers offer the
 // same choices. This one opens at the smallest: a row here is a full data record, not a title.
 const PAGE_SIZE = PAGE_SIZES[0];
-// "All" fetches up to this many rows in one page (the largest tables are ~7k); rows are virtualized
-// so only the visible window renders. Capped so a pathological table can't OOM the tab.
+// One empty array, not a new `[]` per render while the first page loads: the table takes a new
+// array as new data and queues a re-render, which queued another, and the tab froze.
+const NO_ROWS: Record<string, unknown>[] = [];
+// "All" fetches up to this many rows in one virtualized page. Capped so a pathological table can't
+// OOM the tab; the largest layers (e.g. wetlandsoutline ~426k) exceed it, so "All" truncates them
+// (surfaced as "capped at 100,000") and paging is the way through the full table.
 const ALL_CAP = 100_000;
-export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk", summaryFields }: {
-  href: string; onPick?: (sel: FocusSel) => void;
-  mapPick?: { id: number; nonce: number } | null;
+export function DataExplorer({ href, title, onPick, mapPick, mapMismatch, reviewItemId, rowKey = "pk", summaryFields, presetFilter, onClearPreset, fill, startCollapsed = false }: {
+  href: string; title?: string; onPick?: (sel: FocusSel) => void;
+  mapPick?: MapPick | null;
+  mapMismatch?: boolean;   // the map found a row's id on another record (preview-map)
   reviewItemId?: string;  // review deploy: enables per-row + multi-select row comments
   rowKey?: string;        // the stable-key column (e.g. 'pk') a row comment is keyed on
   summaryFields?: readonly string[];   // item's `ugs:summary_fields` — leads the record cards
+  presetFilter?: ColFilter;  // exact-match filter ANDed ahead of the user's own filters (e.g. clicked feature's FK)
+  onClearPreset?: () => void;  // clears presetFilter — wired to the chip's ✕
+  fill?: boolean;  // fill the parent's height (docked contexts) instead of the fixed h-112
+  // Start closed, reading nothing until opened: a layer page should cost little more than itself,
+  // so someone on a poor connection can reach the download without loading rows they don't want.
+  startCollapsed?: boolean;
 }) {
   const review = Boolean(IS_REVIEW && reviewItemId);
   // Row comments: selected STABLE-key values (the pk column), tracked as a Set of string values — not
@@ -38,14 +58,13 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // differs from the map viewer). A pk resolves to the same row across apps.
   const [selPks, setSelPks] = useState<Set<string>>(new Set());
   const [composeOpen, setComposeOpen] = useState(false);
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed, setCollapsed] = useState(startCollapsed);
   // Callers key this component by href, so a new dataset arrives as a fresh mount — no reset effect.
   const togglePk = (pk: string) => setSelPks((prev) => {
     const next = new Set(prev);
     if (next.has(pk)) next.delete(pk); else next.add(pk);
     return next;
   });
-  const [pageIndex, setPageIndex] = useState(0);
   const [pageSize, setPageSize] = useState<number>(PAGE_SIZE);
   const [showAll, setShowAll] = useState(false);  // "All" rows in one virtualized page
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -55,58 +74,79 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const [narrowView, setNarrowView] = useState<"cards" | "table">("cards");
   const asCards = !desktop && narrowView === "cards";
   const scrollRef = useRef<HTMLDivElement>(null);  // virtualizer scroll viewport (the resizable box)
+  const pickSeq = useRef(0);  // bumps per row-click so the map re-flies/re-highlights even on the same row
   const [search, setSearch] = useState("");
   // feature_id of the row picked from the map (or a table click) — highlighted in the table.
   const [highlightId, setHighlightId] = useState<number | null>(null);
-  // Raw per-column filter inputs (strings, as typed) → debounced into `applied` (SQL-ready).
   const [draft, setDraft] = useState<Record<string, { min?: string; max?: string; text?: string }>>({});
-  const [applied, setApplied] = useState<{ search: string; filters: ColFilter[] }>({ search: "", filters: [] });
   const [colFilters, setColFilters] = useState(false);
+  const settledSearch = useDebounced(search);
+  const settledDraft = useDebounced(draft);
+  // From the schema, not a page: a page is fetched WITH these filters, so that would be circular.
+  const { data: types } = useQuery({
+    queryKey: qk.parquetTypes(href),
+    enabled: !collapsed,
+    queryFn: async () => (await import("./parquet-lite")).columnTypes(href),
+    staleTime: Infinity,
+  });
+  const applied = useMemo(
+    () => ({ search: settledSearch, filters: buildFilters(settledDraft, types) }),
+    [settledSearch, settledDraft, types],
+  );
 
   const sort = sorting[0];
+  // Nothing a query engine is needed for: no sort, search or column filter, and at most the
+  // related-rows exact match.
+  const plain = !sort && !applied.search.trim() && !applied.filters.length
+    && (!presetFilter || presetFilter.kind === "exact");
   const filterKey = JSON.stringify(applied.filters);
+  const presetKey = JSON.stringify(presetFilter);
+  // Scoped to what the rows are OF, so a change reads back as page 0 in the same render — one fetch.
+  const [pageIndex, setPageIndex] = usePerItem(`${presetKey}|${filterKey}|${applied.search}`, 0);
   // The query key IS the dependency list, so a stale response can no longer land after a newer one
   // (what the `live` flag was guarding by hand). `placeholderData` keeps the previous page on
   // screen while the next one loads, so paging does not blank the table between fetches.
+  // A table saved by area has only that area's row groups on the device. When the whole table
+  // can't be read (offline, or a connection that reaches nothing, which navigator.onLine misses),
+  // read it clipped to those areas, so DuckDB touches only saved row groups (offline/table-area.ts).
+  const online = useOnline();
+  const device = useOffline();
+  const wholeSaved = device.files.some((f) => f.url === href);
+  const areas = device.areas.find((a) => a.url === href)?.bboxes;
+  const saved = !wholeSaved && areas?.length ? areas : undefined;
   const { data: page, error, isFetching: loading } = useQuery({
-    queryKey: ["parquet-page", href, pageIndex, pageSize, showAll,
-               sort?.id, sort?.desc, applied.search, filterKey],
+    queryKey: qk.parquetPage(href, [pageIndex, pageSize, showAll,
+                              sort?.id, sort?.desc, applied.search, filterKey, presetKey, saved?.length ?? 0, online]),
     queryFn: async () => {
+      const range = { limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize };
+      // The plain view (file order, or a related-rows match) reads rows with hyparquet; only
+      // search, column filters and sorting need DuckDB, whose engine is a 36 MB download. A table
+      // saved by area goes to DuckDB too, which can clip the read to the saved row groups.
+      if (plain && !saved) {
+        const lite = await import("./parquet-lite");
+        const rows = presetFilter?.kind === "exact"
+          ? await lite.readMatching(href, presetFilter.col, presetFilter.value, range)
+          : await lite.readPage(href, range);
+        return { ...rows, clipped: false };
+      }
       const { queryParquet } = await import("./download");
-      return queryParquet(href, {
-        limit: showAll ? ALL_CAP : pageSize, offset: showAll ? 0 : pageIndex * pageSize,
-        orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
+      const read = (clip?: typeof saved) => queryParquet(href, {
+        ...range, orderBy: sort?.id, desc: sort?.desc, search: applied.search,
+        filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
+        clip,
       });
+      if (!saved) return { ...(await read()), clipped: false };
+      if (!online) return { ...(await read(saved)), clipped: true };
+      try {
+        return { ...(await read()), clipped: false };
+      } catch {
+        return { ...(await read(saved)), clipped: true };
+      }
     },
-    placeholderData: keepPreviousData,
-    staleTime: 30_000,   // paging back is served from cache; the parquet is immutable per ingest
+    enabled: !collapsed && device.ready,
+    placeholderData: keepPreviousData,   // paging back is served from cache
   });
   const err = error ? (error instanceof Error ? error.message : String(error)) : undefined;
-
-  // Debounce search + per-column filters into the applied query; a filter/search change resets to
-  // page 1. Numeric columns → range (min/max), others → substring (kind from the loaded types).
-  // `types` is read via a ref, NOT a dep: it's a fresh object on every page fetch, so depending on
-  // it would re-run this (→ setPageIndex(0)) every time you advance a page — snapping back to 1.
-  const typesRef = useRef(page?.types);
-  typesRef.current = page?.types;
-  useEffect(() => {
-    const t = setTimeout(() => {
-      const filters: ColFilter[] = [];
-      for (const [col, d] of Object.entries(draft)) {
-        const kind = typesRef.current?.[col] ?? "text";
-        if (kind === "number") {
-          const min = d.min?.trim() ? Number(d.min) : undefined;
-          const max = d.max?.trim() ? Number(d.max) : undefined;
-          if (Number.isFinite(min) || Number.isFinite(max)) filters.push({ col, kind, min, max });
-        } else if (d.text?.trim()) {
-          filters.push({ col, kind: "text", contains: d.text });
-        }
-      }
-      setApplied({ search, filters });
-      setPageIndex(0);
-    }, 300);
-    return () => clearTimeout(t);
-  }, [search, draft]);
 
 
   const columns = useMemo<ColumnDef<Record<string, unknown>, unknown>[]>(
@@ -124,7 +164,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   // Server-side sort/page: TanStack renders + drives the sort UI only (manualSorting), the SQL
   // does the work. Resetting to page 1 on a sort change keeps offset valid.
   const table = useReactTable({
-    data: page?.rows ?? [], columns, state: { sorting },
+    data: page?.rows ?? NO_ROWS, columns, state: { sorting },
     manualSorting: true, onSortingChange: (u) => { setSorting(u); setPageIndex(0); },
     getCoreRowModel: getCoreRowModel(),
   });
@@ -132,8 +172,8 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const total = page?.total ?? 0;
   const pageCount = showAll ? 1 : Math.max(1, Math.ceil(total / pageSize));
 
-  // Virtualize the rows so "All" (up to ~7k) renders only the visible window. Works for paged views
-  // too (small counts → negligible overhead). Scroll viewport = the resizable box (scrollRef).
+  // Virtualize the rows so "All" (up to ALL_CAP) renders only the visible window. Works for paged
+  // views too (small counts → negligible overhead). Scroll viewport = the resizable box (scrollRef).
   const rowModel = table.getRowModel().rows;
   const rowVirt = useVirtualizer({
     count: rowModel.length,
@@ -161,35 +201,45 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   const pageSomeSelected = pagePks.some((p) => selPks.has(p));
   const selArr = [...selPks];
 
-  // Row click → zoom + highlight. Fire the bbox immediately (instant feedback), then fetch the
-  // real geometry (same filter+sort, offset = page start + row index) and upgrade the highlight.
-  const pick = (i: number, bbox: [number, number, number, number]) => {
+  // Row click → fly to the bbox + outline the exact feature on the map. The feature id drives a
+  // setFeatureState highlight on the PMTiles tile, so no geometry is read from the parquet (that
+  // pulls the whole geom column and OOMs the tab on large layers). bbox drives the fly. The key
+  // carries a per-click nonce so clicking the same row again still re-fires both effects. (ALL-6001)
+  const pick = (i: number, bbox: [number, number, number, number], featureId?: number) => {
     if (!onPick) return;
-    const offset = pageIndex * pageSize + i;
-    const key = `row:${offset}`;          // same key for both onPick calls → one fly per click
-    onPick({ bbox, key });
-    import("./download").then(({ fetchGeometry }) => fetchGeometry(href,
-      { orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters }, offset))
-      .then((g) => { if (g) onPick({ bbox, geometry: g, key }); })
-      .catch(() => {});
+    onPick({ bbox, featureId, props: page?.rows[i], key: `row:${pageIndex * pageSize + i}#${pickSeq.current++}` });
   };
+
+  // The row a map click found by id, unless it is another record: the map and this table are
+  // then different versions of the layer (a saved area beside a newer table, or the reverse).
+  const pickedRow = mapPick ? page?.rows.find((r) => Number(r.feature_id) === mapPick.id) : undefined;
+  const versionsDiffer = !!(pickedRow && mapPick?.props && !sameFeature(mapPick.props, pickedRow));
+  const isHighlighted = (row: Record<string, unknown>) =>
+    row.feature_id != null && Number(row.feature_id) === highlightId && !(versionsDiffer && row === pickedRow);
 
   // Map-feature click → highlight + fly to the real feature (looked up by id, independent of the
   // current filter) AND page the table to it under the current sort/filter. Paging is skipped if
   // the feature is filtered out of the visible set (ordinal null); the highlight + fly still fire.
-  // Depends only on the click nonce, so it captures the sort/filter as of the click (re-running on
-  // every filter keystroke would yank the page around).
+  // Depends only on the click nonce, so it captures the sort/filter as of the click — re-running on
+  // every filter keystroke would yank the page around.
   useEffect(() => {
     if (!mapPick) return;
     let live = true;
     setHighlightId(mapPick.id);
-    const key = `map:${mapPick.nonce}`;   // unique per map click → always re-flies
+    // A collapsed table shows no page, so it reads nothing to find one.
+    if (collapsed) return;
     (async () => {
-      const { fetchRowById, ordinalByFeatureId } = await import("./download");
-      const row = await fetchRowById(href, mapPick.id);
-      if (live && row && onPick) onPick({ bbox: row.bbox, geometry: row.geometry, key });
-      const pos = await ordinalByFeatureId(href, mapPick.id, {
-        orderBy: sort?.id, desc: sort?.desc, search: applied.search, filters: applied.filters,
+      // No parquet geometry read on map-click. The clicked feature is already on the map and
+      // preview-map highlights it from the tile. We only page the table to it here. (ALL-6001)
+      const pos = plain
+        ? await (await import("./parquet-lite")).ordinalOf(href, mapPick.id,
+          presetFilter?.kind === "exact" ? { col: presetFilter.col, value: presetFilter.value } : undefined)
+        : await (await import("./download")).ordinalByFeatureId(href, mapPick.id, {
+        orderBy: sort?.id, desc: sort?.desc, search: applied.search,
+        // Same combined filters as the page query, or the computed ordinal is over a different set
+        // than the table shows and the jump lands on the wrong page.
+        filters: presetFilter ? [presetFilter, ...applied.filters] : applied.filters,
+        clip: page?.clipped ? saved : undefined,   // the same rows the table is showing
       });
       if (live && pos != null) setPageIndex(Math.floor(pos / pageSize));
     })();
@@ -198,7 +248,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
   }, [mapPick?.nonce]);
 
   return (
-    <div className="mt-2">
+    <div className={fill ? "mt-2 flex min-h-0 flex-1 flex-col" : "mt-2"}>
       {/* One header line that says what this is and how big it is — the row count used to float
           mid-toolbar and the disclosure was a bare chevron on its own line. */}
       <div className="mb-1.5 flex flex-wrap items-center gap-2">
@@ -222,6 +272,14 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
               {showColFilters ? "Hide column filters" : "Filter columns"}
             </button>
             {hasFilters && <button className="text-xs text-primary" onClick={clearAll}>clear filters</button>}
+            <TableOffline href={href} title={title ?? href.split("/").pop() ?? href} />
+            {page?.clipped && <span className="text-xs text-muted-foreground">Offline: rows in your saved area only</span>}
+            {presetFilter && (
+              <span className="inline-flex items-center gap-1 rounded border border-primary/40 bg-primary/10 px-2 py-0.5 text-xs text-primary">
+                Showing rows for the clicked feature
+                <button type="button" onClick={onClearPreset} aria-label="Clear feature filter" className="hover:opacity-80">✕</button>
+              </span>
+            )}
           </>
         )}
       </div>
@@ -234,7 +292,14 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           )}
         </div>
       )}
-      {err && <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>}
+      {(versionsDiffer || mapMismatch) && (
+        <div className="mb-1.5 text-xs text-muted-foreground">
+          The map and this table are different versions of the layer, so rows and map features can't be matched. Update the saved copy on Offline data.
+        </div>
+      )}
+      {err && (online && !isNetworkError(error)
+        ? <div className="mb-1.5 text-xs text-destructive">explorer failed: {err}</div>
+        : <div className="mb-1.5"><Unavailable what="the data table" error={error} /></div>)}
       {review && selPks.size > 0 && (
         <div className="mb-1.5 flex items-center gap-2 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-xs">
           <span className="font-medium text-amber-700 dark:text-amber-400">{selPks.size} row{selPks.size === 1 ? "" : "s"} selected</span>
@@ -249,20 +314,18 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
         <RecordCards
           rows={rowModel}
           summaryFields={summaryFields}
-          highlight={(r) => {
-            const fid = r.original.feature_id;
-            return fid != null && Number(fid) === highlightId;
-          }}
+          highlight={(r) => isHighlighted(r.original)}
           onPick={onPick ? (r) => {
             const bbox = page?.bboxes[r.index] ?? null;
             if (!bbox) return;
-            pick(r.index, bbox);
             const fid = r.original.feature_id;
-            if (fid != null) setHighlightId(Number(fid));
+            const nfid = fid != null ? Number(fid) : undefined;
+            pick(r.index, bbox, nfid);
+            if (nfid != null) setHighlightId(nfid);
           } : undefined}
         />
       )}
-      <div ref={scrollRef} className={`max-w-full resize-y overflow-auto rounded-md border border-border text-xs ${collapsed || asCards ? "hidden" : "h-112 min-h-40"}`}>
+      <div ref={scrollRef} className={`max-w-full overflow-auto rounded-md border border-border text-xs ${collapsed || asCards ? "hidden" : fill ? "h-full min-h-40" : "h-112 min-h-40 resize-y"}`}>
         <table className="w-auto min-w-full border-collapse">
           <thead className="sticky top-0 z-10 bg-card">
             {table.getHeaderGroups().map((hg) => (
@@ -295,7 +358,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
             <tr className={showColFilters ? "" : "hidden"}>
               {review && <th className="border-b border-border" />}
               {(page?.columns ?? []).map((col) => {
-                const kind = page?.types[col] ?? "text";
+                const kind = types?.[col] ?? "text";
                 const d = draft[col] ?? {};
                 const set = (patch: Partial<{ min: string; max: string; text: string }>) =>
                   setDraft((prev) => ({ ...prev, [col]: { ...prev[col], ...patch } }));
@@ -320,7 +383,7 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
           </thead>
           <tbody>
             {/* Virtualized window: only the visible rows are in the DOM; spacer rows hold the scroll
-                height above/below so "All" (up to ~7k rows) stays smooth. */}
+                height above/below so "All" (up to ALL_CAP rows) stays smooth. */}
             {padTop > 0 && <tr aria-hidden style={{ height: padTop }}><td colSpan={colCount} /></tr>}
             {vItems.map((vi) => {
               const r = rowModel[vi.index];
@@ -330,12 +393,12 @@ export function DataExplorer({ href, onPick, mapPick, reviewItemId, rowKey = "pk
               const nfid = fid != null ? Number(fid) : null;
               const pkRaw = r.original[rowKey];
               const pkStr = pkRaw != null ? String(pkRaw) : null;
-              const hl = nfid != null && nfid === highlightId;
+              const hl = isHighlighted(r.original);
               return (
                 <tr key={r.id} data-index={vi.index} ref={rowVirt.measureElement}
                   className={`${hl ? "bg-amber-100 dark:bg-amber-900/40" : ""} ${clickable ? "cursor-pointer hover:bg-hover" : ""}`.trim() || undefined}
                   title={clickable ? "Zoom to feature on map" : undefined}
-                  onClick={clickable ? () => { pick(r.index, bbox!); if (nfid != null) setHighlightId(nfid); } : undefined}>
+                  onClick={clickable ? () => { pick(r.index, bbox!, nfid ?? undefined); if (nfid != null) setHighlightId(nfid); } : undefined}>
                   {review && (
                     <td className="w-8 px-1 text-center align-middle" onClick={(e) => e.stopPropagation()}>
                       {pkStr != null ? (

@@ -1,26 +1,29 @@
 // The maplibre half of the preview map, loaded on demand — the catalog, search and doc views never
 // draw one. Mounted once by PreviewMapProvider and NEVER torn down: its DOM is portaled into
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
+import turfBbox from "@turf/bbox";
 import { useEffect, useRef, useState } from "react";
+import { useNavigate, useSearch } from "@tanstack/react-router";
+import { sameFeature } from "@/lib/same-feature";
 import { createPortal } from "react-dom";
-import maplibregl from "maplibre-gl";
+import maplibregl from "@/map/maplibre-lib";
+import type { TerrainSpecification } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { MapControl } from "./map-control";
-import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Popup, Source } from "react-map-gl/maplibre";
+import { GeolocateControl, Layer, type LayerProps, Map as MapGL, type MapLayerMouseEvent, type MapRef, NavigationControl, Source } from "react-map-gl/maplibre";
 import { ensureCogProtocol } from "./cog";
+import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { CommentsPanel } from "@/review/comments-panel";
-import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
-import { classificationEntries, defaultStyleUrl, IS_REVIEW, primaryKeyOf, useLiveLegend, useStyleLayers } from "@/stac";
-import { bboxPolygon, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
-import { usePerItem } from "@/lib/use-per-item";
+import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, validBbox } from "./map-model";
+import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
+import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
 
 ensurePmtilesProtocol();   // this module is lazy, so registration happens the first time a map loads
 
-const POSITRON = "https://tiles.openfreemap.org/styles/positron";
+const LIGHT_BASEMAP = protomapsStyle("white", DIRECT);
 
 // Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders, not
 // faux cartography. fill/line/circle all added so any geometry type shows.
@@ -54,10 +57,13 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, renders, sel, onSel }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
-  focus: FocusSel | null; onFeatureClick: (id: number) => void;
+  focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
+  onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
+  onFeatureSelect?: (props: Record<string, unknown>, fid: number | null, bbox?: FocusSel["bbox"]) => void;
+  onClearSelection?: () => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
@@ -69,7 +75,9 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   const [container] = useState(() => document.createElement("div"));
   const holderRef = useRef<HTMLDivElement>(null);
   const [mapLoaded, setMapLoaded] = useState(false);
-  const [showDem, setShowDem] = useState(false);
+  // In the URL, so a reload or a shared link keeps it. Changing item drops it (app.tsx go()).
+  const showDem = useSearch({ from: "__root__", select: (s) => s.terrain === true });
+  const navigate = useNavigate();
   const [cogReady, setCogReady] = useState(false);
 
   const isVector = spec?.kind === "vector";
@@ -87,9 +95,6 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   // goes stale as soon as a style publishes, so it's only the fallback.
   const liveLegend = useLiveLegend(styleUrl, item ? String(item.id ?? "") : undefined, sel);
   const [spriteReady, setSpriteReady] = useState(false);
-  const [popup, setPopup] = usePerItem<{ lng: number; lat: number; props: Record<string, unknown>; fid: number | null } | null>(itemId, null);
-  const [reviewFeature, setReviewFeature] = usePerItem<{ pkVal: string; props: Record<string, unknown> } | null>(itemId, null);
-  const pkCol = isVector && item ? primaryKeyOf(item) : "";
 
   // Preload the render's sprite (icon renders) before its symbol layers mount.
   useEffect(() => {
@@ -118,7 +123,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     const map = mapRef.current?.getMap();
     if (!spec || !map || !mapLoaded || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
-    setShowDem(false);  // terrain resets per item
+    map.setPitch(showDem ? 48 : 0);
     if (spec.kind === "cog") {
       let live = true;
       (async () => {
@@ -134,14 +139,16 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
     }
     const b = boundsOf(spec.item);
     if (b) map.fitBounds(b, { padding: 16, duration: 0 });
-  }, [fitKey, mapLoaded, spec]);
+  }, [fitKey, mapLoaded, spec, showDem]);
 
-  // Fly to a picked feature (table row click). Keyed on focus.key so re-picking the same row re-flies.
+  // Fly to a picked feature (table row click, or Zoom to on the feature card). Keyed on focus.key so re-picking the same row re-flies.
   const fb = focus?.bbox;
   const focusKey = focus?.key;
   useEffect(() => {
     if (!fb || !mapRef.current) return;
     mapRef.current.fitBounds([[fb[0], fb[1]], [fb[2], fb[3]]], { padding: 60, maxZoom: 14, duration: 800 });
+    // On a phone the map can be above the screen by now; bring it back so the fly is seen.
+    mapRef.current.getContainer().scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [focusKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Move the stable container into the active slot (or the hidden holder when none), then resize —
@@ -161,16 +168,66 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
   // mounted, so NEUTRAL_LAYERS (ungated) can't make a loading style look hidden.
   const gate = gateOf(layers);
   const gateDirection = useGateDir(mapRef, gate, mapLoaded);
-  const hlGeom: GeoJSON.Geometry | null = isVector ? (focus?.geometry ?? (fb ? bboxPolygon(fb) : null)) : null;
+  // The picked/clicked feature is outlined by setting feature-state `hl` on its PMTiles tile feature
+  // (keyed by feature_id), NOT by reading geometry from the parquet, which pulls the whole geom
+  // column and OOMs the tab on large layers. One writer (highlightFeature) so only ever one feature
+  // is lit, and it survives the fly: feature-state applies to the feature whenever its tile loads, so
+  // setting it before the camera arrives is fine. Tracks the sourceLayer it lit under, so the clear
+  // targets the right tile even across an item switch. (ALL-6001)
+  const sourceLayer = spec?.kind === "vector" ? spec.sourceLayer : undefined;
+  const hlRef = useRef<{ id: number; sourceLayer: string } | null>(null);
+  const highlightFeature = (fid: number | null) => {
+    const map = mapRef.current?.getMap();
+    // No pm-prev source (non-vector item, or not added yet) means nothing to light or clear; any
+    // prior state died with the source it was set on. Guarding on the source keeps setFeatureState
+    // from throwing on the one expected case, so a genuinely unexpected error still surfaces.
+    if (!map || !map.getSource("pm-prev")) { hlRef.current = null; return; }
+    const prev = hlRef.current;
+    // Only clear within the same source-layer. A cross-item change swaps sourceLayer, but that also
+    // remounts the Source (key={itemId}), which drops its feature-state — so clearing the old layer
+    // here is redundant, and on the new tiles (which lack it) it is at best a no-op.
+    if (prev && prev.sourceLayer === sourceLayer && prev.id !== fid) {
+      map.setFeatureState({ source: "pm-prev", sourceLayer, id: prev.id }, { hl: false });
+    }
+    if (fid != null && sourceLayer) {
+      map.setFeatureState({ source: "pm-prev", sourceLayer, id: fid }, { hl: true });
+      hlRef.current = { id: fid, sourceLayer };
+    } else {
+      hlRef.current = null;
+    }
+  };
+  // Table row-click → outline focus.featureId. Keyed on focus.key so re-picking the same row re-lights
+  // it; on itemId (source swap) so a stale id can't light a same-id feature in the next dataset; on
+  // mapLoaded so a focus set before the map is ready applies once it is. Map clicks call
+  // highlightFeature directly (below) without touching focus, so they don't retrigger this.
+  // Once the tiles are in, the lit feature must be the row's record: a map and table from
+  // different ingests number rows differently (lib/same-feature). A mismatch is left unlit.
+  useEffect(() => {
+    const fid = focus?.featureId ?? null;
+    highlightFeature(fid);
+    const map = mapRef.current?.getMap();
+    const props = focus?.props;
+    if (!map || fid == null || !props || !sourceLayer) return;
+    const check = () => {
+      const [f] = map.querySourceFeatures("pm-prev", { sourceLayer, filter: ["==", ["id"], fid] });
+      if (f && !sameFeature(f.properties ?? {}, props)) { highlightFeature(null); onMismatch?.(); }
+    };
+    map.once("idle", check);
+    return () => { map.off("idle", check); };
+  },
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [itemId, focusKey, mapLoaded]);
 
   const onMapClick = (e: MapLayerMouseEvent) => {
     if (!isVector) return;
-    const f = e.features?.[0];
-    if (!f) { setPopup(null); return; }
+    const f = pickFeature(e, layerIds);
+    if (!f) { highlightFeature(null); onClearSelection?.(); return; }
     const props = (f.properties ?? {}) as Record<string, unknown>;
     const fid = f.id != null ? Number(f.id) : null;
-    setPopup({ lng: e.lngLat.lng, lat: e.lngLat.lat, props, fid });
-    if (fid != null) onFeatureClick(fid);
+    highlightFeature(fid);  // exact outline via the tile's feature-state, no parquet read
+    // The tile's copy of the geometry, so a long line is cut at the tile edge; near enough to zoom to.
+    onFeatureSelect?.(props, fid, turfBbox(f.geometry) as FocusSel["bbox"]);
+    if (fid != null) onFeatureClick(fid, props);
   };
 
   const cluster = (
@@ -182,24 +239,29 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
             items={renderKeys.map((k) => ({ value: k, label: String(renders[k].title ?? k) }))} />
         </div>
       )}
-      <div className="mt-2 h-96 w-full overflow-hidden rounded-md border border-border bg-muted">
+      {/* One card: the map, sized by its width, with its legend as the footer when it has one. */}
+      <div className="mt-2 overflow-hidden rounded-md border border-border">
+      <div className="aspect-[4/3] max-h-[75svh] w-full bg-muted sm:aspect-[16/10] lg:max-h-[55svh]">
         <MapGL
           ref={mapRef}
+          // The page scrolls past the map; zooming takes Ctrl/⌘ + scroll, or two fingers on a phone.
+          cooperativeGestures
           mapLib={maplibregl}
           onLoad={() => setMapLoaded(true)}
           initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
-          mapStyle={POSITRON}
+          mapStyle={LIGHT_BASEMAP}
           interactiveLayerIds={isVector ? layerIds : undefined}
           onClick={onMapClick}
           style={{ width: "100%", height: "100%" }}
           maxPitch={85}
-          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : undefined}
+          // null, not undefined: react-map-gl skips an undefined terrain, so it never turned off.
+          terrain={showDem ? { source: "terrain-rgb-source", exaggeration: 1.5 } : null as unknown as TerrainSpecification}
         >
           <MapControl position="top-right">
             <button
               onClick={() => {
                 const next = !showDem;
-                setShowDem(next);
+                navigate({ to: ".", replace: true, search: (prev) => ({ ...prev, terrain: next || undefined }) });
                 mapRef.current?.getMap().easeTo({ pitch: next ? 48 : 0, duration: 500 });
               }}
               className={`flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md shadow-sm border transition ${
@@ -231,20 +293,27 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
               encoding="terrarium" tileSize={256} />
           )}
 
-          {/* Vector PMTiles */}
+          {/* Vector PMTiles + the highlight layers over it (same source/source-layer). The picked or
+              clicked feature is outlined straight from the tile via feature-state, so no geometry is
+              read from the parquet. Each paint uses ['feature-state','hl'] so only the lit feature
+              draws; the geometry filters keep the circle off polygon/line vertices, and the layers
+              sit after the styled ones so the outline draws on top. (ALL-6001)
+              Keyed by itemId so a vector→vector nav rebuilds the source and its layers with the new
+              item's source-layer (react-map-gl updates a url in place but never re-points an existing
+              layer's source-layer), and each item starts with clean feature-state. */}
           {isVector && spec && (
-            <Source id="pm-prev" type="vector" url={`pmtiles://${spec.pmHref}`}>
+            <Source key={itemId} id="pm-prev" type="vector" url={`pmtiles://${spec.pmHref}`}>
               {layers.map((l, i) => (
                 <Layer key={layerIds[i]} {...({ ...l, id: layerIds[i], source: "pm-prev", "source-layer": spec.sourceLayer } as unknown as LayerProps)} />
               ))}
-            </Source>
-          )}
-          {isVector && hlGeom && (
-            <Source id="pm-hl" type="geojson" data={{ type: "Feature", properties: {}, geometry: hlGeom }}>
-              <Layer id="pm-hl-fill" type="fill" paint={{ "fill-color": "#f59e0b", "fill-opacity": 0.25 }} />
-              <Layer id="pm-hl-line" type="line" paint={{ "line-color": "#f59e0b", "line-width": 3 }} />
-              {/* Point-only — an unfiltered circle layer draws a dot on every polygon/line vertex. */}
-              <Layer id="pm-hl-pt" type="circle" filter={GEOM_FILTER.point} paint={{ "circle-radius": 7, "circle-color": "#f59e0b", "circle-stroke-color": "#fff", "circle-stroke-width": 2 }} />
+              <Layer {...({ id: "pm-hl-fill", type: "fill", source: "pm-prev", "source-layer": spec.sourceLayer, filter: GEOM_FILTER.fill,
+                paint: { "fill-color": "#f59e0b", "fill-opacity": ["case", ["boolean", ["feature-state", "hl"], false], 0.3, 0] } } as unknown as LayerProps)} />
+              <Layer {...({ id: "pm-hl-line", type: "line", source: "pm-prev", "source-layer": spec.sourceLayer, filter: GEOM_FILTER.line,
+                paint: { "line-color": "#f59e0b", "line-width": ["case", ["boolean", ["feature-state", "hl"], false], 3, 0] } } as unknown as LayerProps)} />
+              <Layer {...({ id: "pm-hl-pt", type: "circle", source: "pm-prev", "source-layer": spec.sourceLayer, filter: GEOM_FILTER.point,
+                paint: { "circle-color": "#f59e0b", "circle-stroke-color": "#fff",
+                  "circle-radius": ["case", ["boolean", ["feature-state", "hl"], false], 7, 0],
+                  "circle-stroke-width": ["case", ["boolean", ["feature-state", "hl"], false], 2, 0] } } as unknown as LayerProps)} />
             </Source>
           )}
 
@@ -268,50 +337,16 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, render
               <Layer id="fp-mini-line" type="line" paint={{ "line-color": "#888", "line-width": 1.5 }} />
             </Source>
           )}
-
-          {isVector && popup && (
-            <Popup longitude={popup.lng} latitude={popup.lat} onClose={() => setPopup(null)} closeButton maxWidth="320px">
-              <div className="max-h-56 overflow-auto">
-                <table className="border-collapse text-xs">
-                  <tbody>
-                    {Object.entries(popup.props).filter(([, v]) => v !== null && v !== "").map(([k, v]) => (
-                      <tr key={k}>
-                        <td className="whitespace-nowrap py-0.5 pr-2 align-top text-gray-500">{k}</td>
-                        <td className="py-0.5 text-gray-900">{String(v)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-                {IS_REVIEW && popup.props[pkCol] != null && (
-                  <button
-                    className="mt-1.5 rounded border border-amber-500/50 bg-amber-500/10 px-2 py-1 text-xs font-medium text-amber-700 hover:bg-amber-500/20"
-                    onClick={() => { setReviewFeature({ pkVal: String(popup.props[pkCol]), props: popup.props }); setPopup(null); }}>
-                    💬 Comment on this feature
-                  </button>
-                )}
-              </div>
-            </Popup>
-          )}
         </MapGL>
       </div>
 
-      {isVector && IS_REVIEW && reviewFeature && item && (
-        <div className="mt-2 rounded-md border border-amber-500/40 bg-amber-500/[0.04] p-3">
-          <div className="flex items-center justify-between">
-            <h3 className="text-sm font-semibold">Feature review</h3>
-            <button className="text-xs text-muted-foreground hover:underline" onClick={() => setReviewFeature(null)}>close</button>
-          </div>
-          <CommentsPanel itemId={String(item.id ?? "")} target={{ kind: "row", rowKey: pkCol, rowVal: reviewFeature.pkVal }}
-            label={`Comments on ${pkCol} ${reviewFeature.pkVal}`} />
-        </div>
-      )}
-
       {isVector && item && (
-        <Legend layers={styleLayers ?? undefined}
+        <Legend key={itemId} layers={styleLayers ?? undefined}
           entries={liveLegend?.entries ?? active?.legend ?? classificationEntries(item)}
-          title={liveLegend?.field ?? (active?.legend ? "box type" : undefined)}
-          name={String(item.properties?.title ?? item.id)} />
+          title={liveLegend?.field}
+          name={String(item.properties?.title ?? item.id)} attached />
       )}
+      </div>
     </>
   );
 

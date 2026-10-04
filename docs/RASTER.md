@@ -1,77 +1,120 @@
 # Raster path
 
-**Status: mostly design, with a provisional scaffold.** The raster→STAC mapping is **built and
-tested** (`raster/consume.py` `stac_item_from_record`, `raster/sink_stac.py`, `tests/test_raster.py`)
-— a raster record becomes a STAC item in the shared catalog. What's **blocked / not wired**: the COG
-**promote** step (`promote()` raises `NotImplementedError` — the staged COG lives in a separate bucket
-and needs a cross-bucket copy) and the `raw.raster_catalog` schema, both pending **ugs-ingest #169**;
-the module isn't called from the live ingest/service yet. Driver: the soil-water-model project (raster
-time-series) plus one-off raster layers. This doc captures the target design.
+Standalone raster layers (a slope grid, a scanned map edition) reach the catalog
+through `src/ugs_warehouse/raster/`. ugs-ingest validates and stages each raster; the warehouse
+copies the staged COG to the public bucket and writes a STAC item into the shared catalog.
+Publication plates and the geologic-map mosaics are a separate path (the pubs producer).
 
-## Principle
+## Why it looks like this
 
-A raster layer-at-a-point-in-time is, at the **catalog** level, the same as a vector
-one: a STAC item. So the discovery surface (STAC) and the storage substrate (GCS via
-obstore) and the orchestration shape (`source → transform → sinks`) are **shared**.
+- **COG is the primary artifact.** It is the raster analog of GeoParquet: an open, cloud-native
+  format that GDAL, QGIS, rasterio and web maps read directly with HTTP range requests. There is
+  no tile server in the read path; the viewer draws COGs client-side
+  (`viewer/src/map/cog.ts`, `@geomatico/maplibre-cog-protocol`).
+- **One catalog, separate pipeline.** A raster edition is a STAC item like any vector topic or
+  publication, so it goes through the shared `core.stac` builder and catalog refresh. Storage and
+  transforms differ (pixels, not features), so the raster code does not extend the vector ingest.
+- **ugs-ingest owns processing, the warehouse owns publishing.** GDAL work (COG build, web-mercator
+  derivative, thumbnail) happens in ugs-ingest. The warehouse only copies finished files and catalogs them,
+  so the warehouse service stays light.
 
-What differs is **storage + serving** — rasters are gridded pixel arrays, not features.
-So this is a **parallel pipeline** (`raster_ingest`), not an extension of `ingest.py`.
-Don't overload the vector transform/sinks.
+## Flow
 
-## Surface mapping (mirror the vector stack)
+```
+ugs-ingest: stage COG -> gs://stagedrasters/...  +  row in raw.raster_catalog
+dataELT raster promote -> Pub/Sub ugs-warehouse-raster-promote  {"item_id": "..."}
+  -> push subscription ugs-warehouse-raster-push -> POST /raster  (service/main.py)
+  -> raster.consume.consume(item_id)
+       source.fetch_record   SELECT the edition from raw.raster_catalog
+       consume.promote       copy COG (+ web-mercator COG, thumbnail) into the public bucket
+       sink_stac.write       build item, attach ugs-styles renders, upload item JSON
+       core.stac.refresh_catalog()
+```
 
-| Vector (built) | Raster (analog) | Role |
+- `POST /raster` (`service/main.py`) takes `{"item_id": ..., "layer": ...}`; `item_id` is
+  required. A malformed id returns 400. An `item_id` with no catalog row (not promoted to prod
+  yet) is acked and skipped, so Pub/Sub does not retry it.
+- `scripts/provision.sh` creates the topic, the push subscription (600 s ack deadline, dead-letter
+  topic `ugs-warehouse-raster-dlq`), and a topic-level publisher grant for the dataELT service
+  account.
+- There is no CLI. For a manual run, call `consume(item_id)` from `ugs_warehouse.raster.consume`.
+
+## Record contract (`raw.raster_catalog` to record)
+
+`source.fetch_record` runs the SELECT on the Postgres side through DuckDB's `postgres_query`, so
+`ST_AsGeoJSON` executes in PostGIS. `item_id` must match `[a-z0-9_]+` before it reaches that SQL.
+
+| Record key | Column | Transform |
 |---|---|---|
-| GeoParquet archive | **COG** (Cloud-Optimized GeoTIFF) | open, vendor-neutral download/interop — the primary artifact |
-| DuckLake table | **RaQuet** (raster-in-parquet) | raster queryable in the lakehouse alongside vectors — optional |
-| PMTiles | raster tiles / titiler | web-map serving |
-| STAC item + catalog | **STAC item + catalog** | discovery — shared, format-agnostic |
+| `layer`, `item_id`, `collection` | same | verbatim (ingest-authored) |
+| `datetime` | `publication_date` | ISO 8601 `YYYY-MM-DDT00:00:00Z` |
+| `bbox` | `bbox_4326` | JSON `[w, s, e, n]` |
+| `geometry` | `footprint_geom` | GeoJSON; null falls back to the bbox polygon |
+| `epsg` | `native_crs` (`"EPSG:26912"`) | integer; unparseable omits `proj:code` |
+| `staged_cog_uri` | same | must be `gs://` in an allowlisted bucket |
+| `title`, `description`, `data_type`, `units`, `ugs_author`, `ugs_pub_type`, `pub_id`, `is_mosaic`, `has_thumbnail` | same | verbatim |
 
-## Recommendation
+Editions are append-only: ingest writes one row per edition and `is_current` marks the live one.
+The warehouse fetches by exact `item_id`, so every edition gets its own dated COG and item.
+`Raster` (`identity.py`) rejects a `layer` or `item_id` that is not a bare `\w` token and a
+`collection` path with `..` or empty segments, since all three become GCS object paths.
 
-1. **Primary: COG + STAC.** COG is the raster analog of GeoParquet — the cloud-native
-   standard, read by GDAL/QGIS/titiler/every web map, zero lock-in. For "expose a raster
-   layer," this is the whole answer. Build first.
-2. **RaQuet: optional, experimental.** Lets rasters be SQL-queried in DuckDB alongside
-   vectors (raster↔vector joins) — the unified-warehouse upside. But it's CARTO-origin,
-   lower adoption, and DuckDB support is a **community extension** ([raquet ext](https://duckdb.org/community_extensions/extensions/raquet))
-   — the same security-review + maintenance-rot risk that ruled out the `gcs` community
-   ext. So: analytical convenience layer, **not** the interop/serving surface partners
-   depend on. Gate on security review.
-3. **Don't put rasters through httpfs for GCS** — same HMAC block as vectors. Reuse the
-   obstore / obstore-fsspec path (see `AGENTS.md` "GCS IO").
+## Promote
 
-## Time dimension
+`consume.promote` copies with a server-side GCS rewrite (`core.gcs.copy_from_uri`), so no bytes
+pass through the service's memory. Copies get `Cache-Control: immutable`.
 
-This is the real fork (a single raster is the easy case, not the common one):
+| Source (staged) | Destination (public bucket) | Required |
+|---|---|---|
+| `<name>.cog.tif` | `cog/<layer>/<item_id>.cog.tif` | yes |
+| `<name>_3857.cog.tif` | `cog/<layer>/<item_id>_3857.cog.tif` | no; skipped if absent |
+| `<name>.thumb.png` | `cog/<layer>/<item_id>.thumb.png` | only when `has_thumbnail` |
 
-- **One-off snapshot** → single COG + one STAC item. Simplest; fits the current model.
-- **Time-series** (the soil-water model) → either
-  - a STAC **collection** of COGs, one item per timestamp ("give me date X"), or
-  - a **Zarr datacube** (xarray) if consumers need to *slice an array across time/space*.
-  Zarr is the established datacube standard; prefer it when the access pattern is
-  multi-dimensional array math rather than per-date file download.
+The source bucket must be in `WAREHOUSE_STAGED_SOURCE_BUCKETS`: `staged_cog_uri` is a catalog
+value, and whatever it names ends up on the CDN.
 
-Decide per consumer need: file-download-per-date → COG collection; array analytics → Zarr.
+## STAC item
 
-## Shared vs new
+- Path: `warehouse/stac/ugs-rasters/<layer>/<item_id>/<item_id>.json`. The record's
+  `collection` is the layout path (`ugs-rasters/<layer>`); the STAC `collection` id is its last
+  segment (`<layer>`).
+- `properties`: `datetime`, `title`, `description`, `data_type`, `units`, `ugs:author`,
+  `ugs:pub_type`, `ugs:pub_id`, `ugs:is_mosaic`. Empty values are dropped. A `data_type` outside
+  the STAC pixel-type enum (e.g. `categorical`) is published as `other`, with the original on
+  `ugs:data_type`, so the item still validates.
+- `proj:code` (projection extension) from `epsg`; `file:size` on each copied asset.
+- `ugs:renders` and a `style` asset when ugs-styles has an entry for the item id.
 
-**Reuse:** STAC item + the auto-refreshed root catalog (`sink_stac`), GCS substrate,
-obstore IO, the `source → transform → sinks` pattern, the per-sink isolation + geometry
-(here: validity) guard idea.
+| Asset key | Href | Roles | Present when |
+|---|---|---|---|
+| `cog` | native-CRS COG | `data` | always |
+| `visual` | EPSG:3857 COG | `visual` | the web-mercator copy landed |
+| `thumbnail` | PNG | `thumbnail` | `has_thumbnail` |
 
-**New (`raster_ingest`):**
-- source: GeoTIFF / NetCDF / Zarr / arrays (not PostGIS `geom`)
-- transform: warp/reproject to 4326 (or the target grid), retile, build overviews
-- sinks: `sink_cog`, optional `sink_raquet`, optional raster-tiles, and the STAC item
-  (reusing the vector STAC catalog so vector + raster share one discovery surface)
+The native COG is `data` only. A client that takes `visual` literally tries to draw it on a
+web-mercator map, which fails for a UTM raster, so `visual` is reserved for the reprojected copy.
+The COG is advertised as an asset, not a web-map-links `cog` link; that extension defines no such
+rel.
 
-## Open questions
+On refresh, each `ugs-rasters/<layer>` collection also gets a `thumbnail` asset (from its newest
+item with one). Every collection, raster or not, gets an `items` asset: `items.parquet`, a
+stac-geoparquet mirror of its items that rustac writes (`core/item_mirror.py`).
 
-- Source of truth for raster inputs — where does the soil-water model publish (GCS COGs
-  already? NetCDF? a compute job output)? Determines the `source` shape.
-- One catalog for both vector + raster, or separate collections under one root? (Lean:
-  one root catalog, a raster collection alongside vector items.)
-- Zarr vs COG-collection for the soil-water time-series — pending the consumer access
-  pattern.
-- titiler / dynamic raster serving — needed, or are static COGs + a viewer enough?
+## Environment
+
+| Variable | Default | Used by |
+|---|---|---|
+| `POSTGRES_DSN`, `PGPASSWORD` | local proxy DSN | `source.py` |
+| `WAREHOUSE_STAGED_SOURCE_BUCKETS` | `stagedrasters` | `consume._staged_source` |
+| `WAREHOUSE_RASTER_COG_PREFIX` | `cog` | `identity.py` object paths |
+| `WAREHOUSE_BUCKET`, `WAREHOUSE_PUBLIC_BASE_URL`, `WAREHOUSE_STAC_PREFIX` | see `core/config.py` | shared |
+
+The runtime service account needs read on the staged bucket.
+
+## Not built
+
+- Time-series datacubes (Zarr / Icechunk): no warehouse code writes one. The viewer can read a
+  STAC zarr asset (`viewer/src/zarr/store.ts`) if a producer adds it.
+- RaQuet (raster in Parquet for DuckDB queries) and a dynamic tile server (titiler).
+
+Tests: `tests/test_raster.py`.

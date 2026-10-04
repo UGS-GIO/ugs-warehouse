@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, cogAsset, cogRenderAsset, isDrawableCog, hasItemsIndex } from "./stac";
+import { assetUsages, catalogItemHref, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins } from "./stac";
+import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 
@@ -41,6 +42,12 @@ describe("cog asset selection", () => {
   it("draws the visual derivative, not whichever COG comes first", () => {
     expect(cogRenderAsset(twoCogs)?.href).toBe("https://x/a_3857.cog.tif");
     expect(cogAsset(twoCogs)?.href).toBe("https://x/a_3857.cog.tif");
+  });
+
+  it("draws the visual derivative from an items.json entry, which has no proj:code", () => {
+    const entry = { assets: { cog: { href: "https://x/a.cog.tif", type: COG, roles: ["data"] },
+      visual: { href: "https://x/a_3857.cog.tif", type: COG, roles: ["visual"] } } };
+    expect(cogRenderAsset(entry)?.href).toBe("https://x/a_3857.cog.tif");
   });
 
   it("draws a lone COG that is already web mercator, or says nothing to draw", () => {
@@ -93,5 +100,116 @@ describe("isDrawableCog", () => {
   it("treats an item that states no projection as drawable", () => {
     const plain = { assets: { cog: { href: "https://x/p.cog.tif", type: COG, roles: ["data"] } } };
     expect(isDrawableCog(plain.assets.cog, plain)).toBe(true);
+  });
+});
+
+describe("relatedJoins", () => {
+  // Real shape (hazards_floodanddebrisflow): the related child asset carries the FK back to the
+  // clicked parent — child.relate_id = parent.flhhazardunit.
+  const doc: StacDoc = {
+    assets: {
+      data: { href: "https://x/parent.parquet", roles: ["data"] },
+      hazards_unitdescriptions: {
+        href: "https://x/unitdescriptions.parquet", title: "Unit Descriptions", roles: ["data", "related"],
+        "ugs:foreign_keys": [{ fields: ["relate_id"], reference: { resource: "hazards_floodanddebrisflow", fields: ["flhhazardunit"] } }],
+      },
+    },
+  };
+
+  it("resolves a related asset's FK into a click-join descriptor (child field, parent field)", () => {
+    expect(relatedJoins(doc)).toEqual([{
+      key: "hazards_unitdescriptions", title: "Unit Descriptions", href: "https://x/unitdescriptions.parquet",
+      childField: "relate_id", parentField: "flhhazardunit",
+    }]);
+  });
+
+  it("falls back to the asset key when the related asset has no title", () => {
+    const noTitle: StacDoc = { assets: { child: {
+      href: "https://x/c.parquet", roles: ["related"],
+      "ugs:foreign_keys": [{ fields: ["fk"], reference: { resource: "p", fields: ["pk"] } }],
+    } } };
+    expect(relatedJoins(noTitle)[0].title).toBe("child");
+  });
+
+  it("skips composite (multi-column) keys — a partial join would be wrong data (not yet supported)", () => {
+    const composite: StacDoc = { assets: { child: {
+      href: "https://x/c.parquet", roles: ["related"],
+      "ugs:foreign_keys": [{ fields: ["a", "b"], reference: { resource: "p", fields: ["x", "y"] } }],
+    } } };
+    expect(relatedJoins(composite)).toEqual([]);
+  });
+
+  it("is empty when there are no related assets", () => {
+    expect(relatedJoins({ assets: { data: { href: "https://x/p.parquet", roles: ["data"] } } })).toEqual([]);
+    expect(relatedJoins(undefined)).toEqual([]);
+  });
+});
+
+describe("collKeyOf", () => {
+  const base = "https://maps-assets.geology.utah.gov/warehouse/stac/";
+  it("keeps the full multi-segment path for a nested collection", () => {
+    expect(collKeyOf(`${base}ugs-serving-topics/wetlands/collection.json`)).toBe("ugs-serving-topics/wetlands");
+  });
+  it("derives the collection key from an item href (drops /<id>/<id>.json)", () => {
+    expect(collKeyOf(`${base}ugs-serving-topics/wetlands/wetlands_plants_site/wetlands_plants_site.json`))
+      .toBe("ugs-serving-topics/wetlands");
+  });
+  it("handles a single-segment collection", () => {
+    expect(collKeyOf(`${base}ugs-publications/collection.json`)).toBe("ugs-publications");
+  });
+  it("ignores a ?query / #hash on the href", () => {
+    expect(collKeyOf(`${base}ugs-serving-topics/wetlands/wetlands_plants_site/wetlands_plants_site.json?t=1#x`))
+      .toBe("ugs-serving-topics/wetlands");
+  });
+  it("is idempotent on a bare key, and undefined for no href", () => {
+    expect(collKeyOf("ugs-serving-topics/wetlands")).toBe("ugs-serving-topics/wetlands");
+    expect(collKeyOf(undefined)).toBeUndefined();
+  });
+});
+
+describe("catalogItemHref", () => {
+  const base = "https://maps-assets.geology.utah.gov/warehouse/stac/";
+  // A nested-collection related link must resolve to the FULL collection key. Capturing only the last
+  // folder (c=wetlands, not c=ugs-serving-topics/wetlands) never matched a loaded collection, so the
+  // item page hung on "Loading…", the blank page in warehouse#348.
+  it("routes a nested-collection item to the full-path c=", () => {
+    expect(catalogItemHref(`${base}ugs-serving-topics/wetlands/wetlands_plants_projects/wetlands_plants_projects.json`))
+      .toBe("?c=ugs-serving-topics%2Fwetlands&i=wetlands_plants_projects");
+  });
+  it("routes a single-segment-collection item", () => {
+    expect(catalogItemHref(`${base}ugs-publications/OFR-123/OFR-123.json`)).toBe("?c=ugs-publications&i=OFR-123");
+  });
+  it("resolves a relative catalog href and ignores a ?query / #hash", () => {
+    expect(catalogItemHref("ugs-publications/OFR-123/OFR-123.json")).toBe("?c=ugs-publications&i=OFR-123");
+    expect(catalogItemHref(`${base}ugs-publications/OFR-123/OFR-123.json?t=1#x`)).toBe("?c=ugs-publications&i=OFR-123");
+  });
+  it("leaves a foreign (non-catalog) href as a direct link", () => {
+    const foreign = "https://ubm-assets.geology.utah.gov/stac/ubm-x/item/item.json";
+    expect(catalogItemHref(foreign)).toBe(foreign);
+  });
+});
+
+describe("rasterTilesAsset", () => {
+  const pm = (extra: Record<string, unknown>) => ({ href: "https://x/a.pmtiles", type: "application/vnd.pmtiles", roles: ["visual"], ...extra });
+  it("finds the raster mosaic by its ugs:render mark", () => {
+    const d: StacDoc = { assets: { tiles: pm({ "ugs:render": "raster" }) } };
+    expect(rasterTilesAsset(d)?.href).toBe("https://x/a.pmtiles");
+  });
+  it("leaves a vector layer's visual PMTiles alone", () => {
+    const d: StacDoc = { assets: { pmtiles: pm({}) } };
+    expect(rasterTilesAsset(d)).toBeUndefined();
+  });
+});
+
+
+describe("rootIndexItems", () => {
+  it("resolves each self link from the root and skips an entry without one", () => {
+    const refs = rootIndexItems({ items: [
+      { id: "M-1", links: [{ rel: "self", href: "./ugs-publications/M/M-1/M-1.json" }] },
+      { id: "broken", links: [] },
+    ] } as never);
+    expect(refs).toHaveLength(1);
+    expect(refs[0].href).toBe(new URL("./ugs-publications/M/M-1/M-1.json", ROOT_INDEX_URL).href);
+    expect(refs[0].collId).toBe("ugs-publications/M");
   });
 });

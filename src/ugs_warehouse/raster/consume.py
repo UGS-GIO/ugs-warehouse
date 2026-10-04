@@ -1,15 +1,15 @@
-"""Warehouse-side raster consumer — Track A of docs/RASTER_SPEC.md.
+"""Warehouse-side raster consumer (see docs/RASTER.md).
 
 ugs-ingest (PR #169) writes validated raster editions to `raw.raster_catalog` (append-only,
 one row per edition, `is_current` marks the live one); dataELT flips them dev->prod; the
 warehouse then (1) promotes the staged COG to the public bucket and (2) emits a STAC item into
 the unified catalog.
 
-Wiring (end-to-end): ugs-ingest's promote (#183) publishes `{item_id}` → the `POST /raster` push
-handler (`service/main.py`) → `consume(item_id)` → `source.fetch_record` SELECTs + aliases the row →
-`promote()` copies the COG + emits STAC → `core.stac.refresh_catalog()`. DEPLOY FOLLOW-UP: provision
-the raster promote topic + a push subscription to `<service>/raster` (mirror `scripts/provision.sh`),
-and grant the runtime SA read on the staged bucket (`gs://stagedrasters`).
+Wiring (end-to-end): the raster promote message `{item_id}` → the `POST /raster` push handler
+(`service/main.py`) → `consume(item_id)` → `source.fetch_record` SELECTs + aliases the row →
+`promote()` copies the COG + emits STAC → `core.stac.refresh_catalog()`. `scripts/provision.sh`
+creates the topic and the push subscription; the runtime SA's read on the staged bucket
+(`gs://stagedrasters`) is not granted by anything in this repo.
 
 `promote()`/`stac_item_from_record()` take a `record` dict in the CONTRACT shape below — the raw
 `raw.raster_catalog` row aliased/transformed by `source.py` (never the raw row directly).

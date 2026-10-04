@@ -47,3 +47,13 @@ iap_group = "nrugsall@utah.gov"
 # trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/534590904912-compute@developer.gserviceaccount.com"
 # The PR-preview triggers run as the least-trusted identity, not the Compute SA above:
 # preview_trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/ugs-warehouse-preview-build@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
+
+# Basemap build (basemap-refresh.tf): its SA, created by hand first (the file's header). Empty: none of it.
+# basemap_trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/ugs-basemap-build@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"
+# basemap_schedule = "0 6 1 * *"   # empty: runs only by hand
+
+# Cost/volume alert recipients (no default, so the list stays out of the repo).
+alert_emails = ["you@utah.gov", "teammate@utah.gov"]
+
+# PR CI trigger identity, logs only. Empty → trigger_service_account.
+# ci_trigger_service_account = "projects/ut-dnr-ugs-backend-tools/serviceAccounts/ugs-warehouse-ci@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"

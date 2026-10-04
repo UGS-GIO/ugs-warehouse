@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { qk } from "@/query-keys";
 import { type ItemStatus, ITEM_STATUSES, listItemStatuses, setItemStatus } from "./comments";
 import { UiSelect } from "@/ui/select";
 
@@ -20,7 +21,7 @@ export const statusClass = (s: string): string => ({
 
 // Shared query for all layer statuses (dashboard summary + each item's current value read from it).
 export function useItemStatuses() {
-  return useQuery({ queryKey: ["item-status"], queryFn: listItemStatuses, retry: false });
+  return useQuery({ queryKey: qk.itemStatus, queryFn: listItemStatuses, retry: false });
 }
 
 // A labelled dropdown that sets one layer's review status.
@@ -30,7 +31,7 @@ export function LayerStatusControl({ itemId }: { itemId: string }) {
   const current = all.find((s: ItemStatus) => s.item_id === itemId)?.status ?? "pending";
   const set = useMutation({
     mutationFn: (status: string) => setItemStatus(itemId, status),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["item-status"] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: qk.itemStatus }),
   });
   return (
     <label className="flex items-center gap-2 text-xs">

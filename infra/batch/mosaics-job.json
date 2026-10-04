@@ -1,0 +1,86 @@
+{
+  "taskGroups": [
+    {
+      "taskCount": 1,
+      "taskSpec": {
+        "runnables": [
+          {
+            "displayName": "sql-proxy",
+            "background": true,
+            "container": {
+              "imageUri": "gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.25.4@sha256:88501f0a695a586988add1b8a206fdf3f29f9a1a3deeb9b45ef2b1481ea6be83",
+              "options": "--network host",
+              "commands": [
+                "--run-connection-test", "--address=127.0.0.1",
+                "--port=5432",
+                "ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db"
+              ]
+            }
+          },
+          {
+            "displayName": "wait-for-sql-proxy",
+            "script": {
+              "text": "#!/bin/bash\nfor _ in $(seq 60); do (echo > /dev/tcp/127.0.0.1/5432) 2>/dev/null && exit 0; sleep 1; done\necho 'cloud-sql-proxy never listened on 127.0.0.1:5432' >&2; exit 1\n"
+            }
+          },
+          {
+            "displayName": "mosaics",
+            "container": {
+              "imageUri": "SET_BY_submit_mosaics_batch.sh",
+              "options": "--network host",
+              "volumes": ["/mnt/disks/mosaic-work:/mnt/mosaic-work"],
+              "commands": ["SET_BY_submit_mosaics_batch.sh"]
+            },
+            "environment": {
+              "variables": {
+                "MOSAIC_WORK_DIR": "/mnt/mosaic-work",
+                "GDAL_CACHEMAX": "8192",
+                "PUBS_DB_URL": "host=127.0.0.1 port=5432 dbname=ucrc user=schema_reader",
+                "PUBS_TABLE": "publications.pubs_feed_v1",
+                "PUBS_ATT_TABLE": "publications.pubs_attachments_feed_v1"
+              },
+              "secretVariables": {
+                "PGPASSWORD": "projects/ut-dnr-ugs-backend-tools/secrets/schema-reader-db-password/versions/latest"
+              }
+            }
+          }
+        ],
+        "volumes": [
+          {
+            "deviceName": "mosaic-work",
+            "mountPath": "/mnt/disks/mosaic-work",
+            "mountOptions": "rw,async"
+          }
+        ],
+        "maxRunDuration": "43200s",
+        "maxRetryCount": 1
+      }
+    }
+  ],
+  "allocationPolicy": {
+    "location": {"allowedLocations": ["regions/us-west3"]},
+    "serviceAccount": {"email": "warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com"},
+    "network": {
+      "networkInterfaces": [
+        {
+          "network": "projects/ut-dnr-ugs-backend-tools/global/networks/ugs-batch",
+          "subnetwork": "projects/ut-dnr-ugs-backend-tools/regions/us-west3/subnetworks/ugs-batch-us-west3"
+        }
+      ]
+    },
+    "instances": [
+      {
+        "policy": {
+          "machineType": "n2d-standard-8",
+          "provisioningModel": "STANDARD",
+          "bootDisk": {"type": "pd-balanced", "sizeGb": 50},
+          "disks": [
+            {"deviceName": "mosaic-work", "newDisk": {"type": "pd-balanced", "sizeGb": 200}}
+          ]
+        }
+      }
+    ]
+  },
+  "labels": {"app": "ugs-mosaics"},
+  "logsPolicy": {"destination": "CLOUD_LOGGING"}
+}

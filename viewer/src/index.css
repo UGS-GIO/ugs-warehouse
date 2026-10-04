@@ -1,5 +1,22 @@
 @import "tailwindcss";
 
+/* A finger needs a 44 px target (WCAG 2.5.5); a mouse keeps the dense layout. min-* wins over a
+   fixed height or width, so small icon buttons grow too. */
+@media (pointer: coarse) {
+  :is(button, summary, [role="button"], select, input:not([type="checkbox"], [type="radio"], [type="range"])):not(.maplibregl-ctrl-attrib-button) {
+    min-height: 44px;
+  }
+  :is(button, [role="button"]):not(.maplibregl-ctrl-attrib-button) { min-width: 44px; }
+  .maplibregl-ctrl.maplibregl-ctrl-group button { width: 44px; height: 44px; }
+}
+
+/* Tailwind v4 dropped the pointer cursor from buttons; a click target should still look like one. */
+@layer base {
+  :is(button, [role="button"]):not(:disabled, [aria-disabled="true"]) {
+    cursor: pointer;
+  }
+}
+
 /* class-based dark mode (matches ugs-map-viewer: `.dark` on <html>) */
 @custom-variant dark (&:where(.dark, .dark *));
 
@@ -98,12 +115,21 @@ body {
 #utah-design-system { flex: none; }
 #root { flex: 1 1 auto; min-height: 0; }
 
-/* The DS title band stays on desktop — it is the state identity. On a phone it costs ~90px of a
-   map-first screen, and our own bar already carries the logo + app name, so it drops there only.
-   The "official website of Utah" strip is a separate element and always stays. */
-@media (max-width: 767px) {
+/* The DS title band shows only on tall desktop screens. On a phone or a short screen (most laptops)
+   it costs 60-90px of a map-first view, so it drops and our bar carries the UGS emblem instead, as in
+   the BASIN viewer. The "official website of Utah" strip is a separate element and always stays. */
+.app-emblem { display: none; }
+@media (max-width: 767px), (max-height: 900px) {
   header.utah-design-system.utds-header { display: none; }
+  .app-emblem { display: flex; }
 }
+/* Phone map (map-shell.tsx): the sheet's peek covers the map's bottom edge, so the bottom corner
+   controls (attribution) sit above it; the search spans the top, so the top-right controls start
+   below it. Unlayered, to beat maplibre-gl.css. */
+.phone-map .maplibregl-ctrl-bottom-left,
+.phone-map .maplibregl-ctrl-bottom-right { bottom: var(--peek); }
+.phone-map .maplibregl-ctrl-top-right { top: 3rem; }
+
 /* The DS ships no dark header — `.utds-header` hardcodes `background-color: white`, with no CSS
    variable to flip — so a dark app sat under a full-width white slab. We theme it ourselves: the
    band follows our card token, and the emblem (one navy ink, its detail carved by alpha) is driven
@@ -218,3 +244,7 @@ div.utds-footer.utah-design-system { display: none !important; }
 .maplibregl-ctrl.maplibregl-ctrl-group button + button { border-top-color: var(--color-border); }
 .maplibregl-ctrl.maplibregl-ctrl-group button:not(:disabled):hover { background-color: var(--color-hover); }
 .dark .maplibregl-ctrl.maplibregl-ctrl-group button .maplibregl-ctrl-icon { filter: invert(1); }
+
+/* Images that failed to load (see main.tsx): hide the broken-image icon, keep the layout box. */
+img[data-broken] { visibility: hidden; }
+

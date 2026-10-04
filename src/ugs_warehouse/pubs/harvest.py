@@ -829,8 +829,9 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             return "fail:not_8bit"
         if kind == "lineart":
             plate = _lineart_to_byte(plate, work)
-        # -dstalpha carries the transparency; no nodata tag, or white paper could turn clear.
-        cast_args = ["-ot", "Byte", "-dstnodata", "None"] if kind == "color" else []
+        # -dstalpha carries the transparency; no nodata tag, or white paper could turn clear. INIT_DEST
+        # is explicit because, with no nodata, GDAL 3.11 exits 1 on its default and leaves a partial file.
+        cast_args = ["-ot", "Byte", "-dstnodata", "None", "-wo", "INIT_DEST=0"] if kind == "color" else []
 
         clipped = os.path.join(work, "clipped.tif")
         # No footprint in the index → empty cutline → gdalwarp "cannot compute bounds of cutline".

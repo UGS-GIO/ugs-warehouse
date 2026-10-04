@@ -19,6 +19,7 @@ dependencies = [
   "firebase-admin>=6.5",  # verify Firebase/Entra ID tokens from the hazards-review app (non-IAP review path)
   "google-auth>=2.40",   # iap.py verifies IAP JWTs
   "cryptography>=42",   # ...which are ES256, and google-auth only verifies EC keys with it
+  "CacheControl>=0.14",  # ...and caches Google's IAP keys for as long as gstatic says
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
   "rustac>=0.9",         # writes the stac-geoparquet item mirror (core/item_mirror.py); no deps
   # NB: no pyarrow / shapely — the vector ingest streams Postgres→DuckDB→CDN entirely in DuckDB

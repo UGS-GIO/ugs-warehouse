@@ -1,4 +1,6 @@
+import json
 import time
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -45,7 +47,8 @@ class FakeIap:
         return jwt.encode(self._signer, claims).decode()
 
     def install(self, monkeypatch, module):
-        monkeypatch.setattr(module, "_iap_certs", lambda refresh=False: self.certs)
+        body = json.dumps(self.certs).encode()
+        monkeypatch.setattr(module, "_request", lambda url, method="GET", **kw: SimpleNamespace(status=200, data=body))
         monkeypatch.setattr(module, "_audience", lambda: self.audience)
 
 

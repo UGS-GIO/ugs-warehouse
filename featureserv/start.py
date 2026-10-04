@@ -48,7 +48,8 @@ def main() -> None:
     with open(CONFIG, "w") as f:
         yaml.safe_dump(config, f)
     os.environ.update(PYGEOAPI_CONFIG=CONFIG, PYGEOAPI_OPENAPI=OPENAPI)
-    subprocess.run(["pygeoapi", "openapi", "generate", CONFIG, "--output-file", OPENAPI], check=True)
+    subprocess.run(["pygeoapi", "openapi", "generate", CONFIG, "--output-file", OPENAPI],
+                   check=True)
     print(f"[featureserv] serving {len(layers)} collections", flush=True)
     # One process, so the 4 threads match Cloud Run's --concurrency=4.
     os.execvp("gunicorn", ["gunicorn", "--workers=1", "--threads=4", "--timeout=120",

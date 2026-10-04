@@ -4,6 +4,7 @@ The upstream provider (0.24) has two gaps:
 - it reads geometry only from a column named `geometry`; ours is `geom` (the `primary_column`)
 - its bbox filter keeps features inside the box, where OGC API Features wants every feature that
   intersects it, so features crossing the edge of a client's view go missing
+It also filters a GeoParquet 1.0 archive, which has no bbox covering, on its flat bbox_* columns.
 
 pygeoapi builds a provider per request, so per-request state on the instance is safe.
 """
@@ -42,6 +43,9 @@ class GeoParquetProvider(ParquetProvider):
         column = geo.get("primary_column") or "geometry"
         meta = (geo.get("columns") or {}).get(column) or {}
         self._covering = (meta.get("covering") or {}).get("bbox")
+        flat = {k: [f"bbox_{k}"] for k in ("xmin", "ymin", "xmax", "ymax")}
+        if not self._covering and all(c in self.ds.schema.names for [c] in flat.values()):
+            self._covering = flat  # GeoParquet 1.0 archives carry the bbox as flat columns
         if column not in self.ds.schema.names:
             raise ProviderQueryError(f"{self.source} has no geometry column {column!r}")
         self.ds = _RenamedGeometry(self.ds, column)

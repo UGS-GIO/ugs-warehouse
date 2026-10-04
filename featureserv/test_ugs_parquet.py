@@ -65,3 +65,18 @@ def test_metadata_naming_a_missing_geometry_column_fails_clearly(tmp_path):
     with pytest.raises(Exception, match="no geometry column"):
         GeoParquetProvider({"name": "x", "type": "feature", "id_field": "feature_id",
                             "data": {"source": str(path)}})
+
+
+def test_bbox_on_flat_columns_without_a_covering(tmp_path):
+    """Our GeoParquet 1.0 archives have bbox_xmin..bbox_ymax columns but no covering metadata."""
+    path = tmp_path / "v10.parquet"
+    gdf = gpd.GeoDataFrame(
+        {"feature_id": [1, 2, 3], "name": ["inside", "crosses the edge", "outside"]},
+        geometry=gpd.GeoSeries([box(1, 1, 2, 2), box(9, 9, 12, 12), box(20, 20, 21, 21)],
+                               crs="OGC:CRS84"))
+    b = gdf.bounds
+    gdf = gdf.assign(bbox_xmin=b.minx, bbox_ymin=b.miny, bbox_xmax=b.maxx, bbox_ymax=b.maxy)
+    gdf.rename_geometry("geom").to_parquet(path)
+    p = GeoParquetProvider({"name": "x", "type": "feature", "id_field": "feature_id",
+                            "data": {"source": str(path)}})
+    assert names(p.query(bbox=BOX)) == ["crosses the edge", "inside"]

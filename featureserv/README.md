@@ -23,6 +23,9 @@ not touch it.
 | Geometry is read only from a column named `geometry` | our column is `geom` (the GeoParquet `primary_column`), so every feature has a null geometry |
 | `bbox` keeps features inside the box | OGC API Features wants every feature that intersects it, so features crossing the edge of a client's view go missing |
 
+It also filters the GeoParquet 1.0 archives (the `hazards_*` layers), which have no bbox covering,
+on their flat `bbox_*` columns.
+
 pygeoapi is pinned exactly in `requirements.txt`. `test_ugs_parquet.py` runs in the image build,
 so an upgrade that breaks the plugin fails the build. Delete the plugin when upstream fixes both.
 

@@ -73,10 +73,10 @@ def _store(bucket: str | None = None) -> GCSStore:
 
 
 def _gcs_client() -> gcloud_storage.Client:
-    # A secondary google-cloud-storage client (ADC auth, no new footprint — already installed
-    # transitively via firebase-admin). Two uses: copy_from_uri's server-side cross-bucket rewrite
-    # (obstore has no cross-bucket copy primitive), and the get_bytes/exists fallback for gzipped
-    # objects obstore can't read (GCS strips Content-Length under decompressive transcoding).
+    # A secondary google-cloud-storage client (ADC auth). Two uses: copy_from_uri's server-side
+    # cross-bucket rewrite (obstore has no cross-bucket copy primitive), and the get_bytes/exists
+    # fallback for gzipped objects obstore can't read (GCS strips Content-Length under decompressive
+    # transcoding).
     global _cached_gcs_client
     if _cached_gcs_client is None:
         _cached_gcs_client = gcloud_storage.Client()

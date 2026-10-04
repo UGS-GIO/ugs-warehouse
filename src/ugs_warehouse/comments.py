@@ -17,6 +17,7 @@ import os
 import re
 
 from fastapi import APIRouter, HTTPException, Request
+from google.oauth2 import id_token
 from pydantic import BaseModel, Field
 
 from ugs_warehouse import iap
@@ -171,7 +172,7 @@ async def init_schema() -> None:
 
 # Firebase project that issues the hazards-review app's ID tokens (same GCP project as this service).
 FIREBASE_PROJECT_ID = os.environ.get("FIREBASE_PROJECT_ID", "ut-dnr-ugs-maps-prod")
-_fb_app = None  # lazily initialized firebase_admin app
+_FIREBASE_ISSUER = f"https://securetoken.google.com/{FIREBASE_PROJECT_ID}"
 
 
 def _bearer_token(request: Request) -> str | None:
@@ -184,18 +185,17 @@ def _verify_firebase_email(token: str) -> str | None:
     """Verify a Firebase ID token (from the ugs-map-viewer /hazards-review app) and return the reviewer's
     email. Firebase re-issues its own signed JWT after the Entra OIDC exchange, so one verifier covers
     whichever upstream IdP the user came through. Returns None on any failure (never raises) — so a bad
-    token just falls through to a 401, not a 500. Needs ADC (present on Cloud Run in the same project)."""
-    global _fb_app
+    token just falls through to a 401, not a 500. google-auth checks the signature, expiry and
+    audience. This checks the issuer and subject."""
     try:
-        import firebase_admin
-        from firebase_admin import auth as fb_auth
-        if _fb_app is None:
-            _fb_app = firebase_admin.initialize_app(options={"projectId": FIREBASE_PROJECT_ID})
-        claims = fb_auth.verify_id_token(token)
+        claims = id_token.verify_firebase_token(token, iap.cached_request, audience=FIREBASE_PROJECT_ID)
+        if claims.get("iss") != _FIREBASE_ISSUER or not claims.get("sub"):
+            log.warning("firebase token has unexpected iss %r or no sub", claims.get("iss"))
+            return None
         # Prefer `email`; fall back to the Entra UPN claims if the email scope wasn't surfaced.
         email = claims.get("email") or claims.get("upn") or claims.get("preferred_username")
         return email if email else None
-    except Exception:  # noqa: BLE001 — invalid/expired token, or firebase-admin not initializable
+    except Exception:  # noqa: BLE001 — invalid/expired token, or the keys unreachable
         log.warning("firebase token verification failed", exc_info=True)
         return None
 

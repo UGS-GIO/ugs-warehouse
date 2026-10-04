@@ -242,7 +242,9 @@ export function DiscoveryView({
     staleTime: Infinity, retry: false,
     placeholderData: keepPreviousData,   // keep the pill steady while the next keystroke's lookup runs
   });
-  const placeHit = placeQ.data?.find((s) => s.text.toLowerCase().startsWith(typed.toLowerCase()));
+  const placeHit = typed.length >= 3 && !area
+    ? placeQ.data?.find((s) => s.text.toLowerCase().startsWith(typed.toLowerCase()))
+    : undefined;
   const [placeError, setPlaceError] = useState<string | null>(null);
   useEffect(() => setPlaceError(null), [typed]);
   const [picking, setPicking] = useState(false);
@@ -504,7 +506,7 @@ export function DiscoveryView({
             </button>
           )}
           {placeError && <p role="alert" className="mb-3 text-xs text-destructive">{placeError}</p>}
-          {placeQ.isError && (
+          {placeQ.isError && typed.length >= 3 && (
             <p className="mb-3 text-xs text-destructive">
               Place lookup failed: {placeQ.error instanceof Error ? placeQ.error.message : String(placeQ.error)}
             </p>

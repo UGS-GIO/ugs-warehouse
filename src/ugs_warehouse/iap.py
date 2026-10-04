@@ -27,8 +27,9 @@ _ISSUER = "https://cloud.google.com/iap"
 _METADATA = "http://metadata.google.internal/computeMetadata/v1/"
 _CLOCK_SKEW_S = 30  # Google's guide allows 30 s between IAP's clock and ours
 
-# Google's IAP keys are kept for as long as gstatic's Cache-Control allows, then refetched.
-_request = google.auth.transport.requests.Request(session=cachecontrol.CacheControl(requests.Session()))
+# Google's signing keys (IAP here, Firebase in comments.py) are kept as long as their Cache-Control
+# allows, then refetched.
+cached_request = google.auth.transport.requests.Request(session=cachecontrol.CacheControl(requests.Session()))
 
 
 @functools.cache
@@ -57,7 +58,7 @@ def verified_email(headers) -> str:
         if audience is None:
             log.warning("IAP token present but no audience (not on Cloud Run, IAP_AUDIENCE unset)")
             return ""
-        claims = id_token.verify_token(token, _request, audience=audience, certs_url=_CERTS_URL,
+        claims = id_token.verify_token(token, cached_request, audience=audience, certs_url=_CERTS_URL,
                                        clock_skew_in_seconds=_CLOCK_SKEW_S)
     except Exception:  # noqa: BLE001 (expired/forged/wrong-audience token, or keys/metadata unreachable)
         log.warning("IAP token verification failed", exc_info=True)

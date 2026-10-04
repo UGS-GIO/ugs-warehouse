@@ -10,16 +10,13 @@ dependencies = [
   "google-cloud-run>=0.10",  # service/main.py starts the ingest job instead of ingesting in-request
   "google-cloud-storage>=2.18",  # core/gcs.py copy_from_uri only — server-side rewrite for
                                  # cross-bucket copies (obstore's copy() is single-store only).
-                                 # Already transitive via firebase-admin; declared explicitly
-                                 # since it's now a direct import, not just incidentally installed.
   "fsspec>=2024.6",      # obstore fsspec adapter -> DuckLake GCS IO (no httpfs/HMAC)
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
   "asyncpg>=0.29",       # review-comments CRUD (serve.py) → review.comments in mapping-db (review_writer)
-  "firebase-admin>=6.5",  # verify Firebase/Entra ID tokens from the hazards-review app (non-IAP review path)
-  "google-auth>=2.40",   # iap.py verifies IAP JWTs
+  "google-auth>=2.40",   # verifies IAP JWTs (iap.py) and Firebase ID tokens (comments.py)
   "cryptography>=42",   # ...which are ES256, and google-auth only verifies EC keys with it
-  "CacheControl>=0.14",  # ...and caches Google's IAP keys for as long as gstatic says
+  "CacheControl>=0.14",  # ...and caches Google's signing keys for as long as they say
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
   "rustac>=0.9",         # writes the stac-geoparquet item mirror (core/item_mirror.py); no deps
   # NB: no pyarrow / shapely — the vector ingest streams Postgres→DuckDB→CDN entirely in DuckDB

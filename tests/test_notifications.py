@@ -36,3 +36,13 @@ def test_bearer_token_extraction():
 def test_verify_firebase_email_returns_none_on_bad_token():
     # No ADC / garbage token → None, never raises (falls through to 401, not 500).
     assert comments._verify_firebase_email("not-a-real-token") is None
+
+
+def test_verify_firebase_email_checks_issuer_and_subject(monkeypatch):
+    # google-auth checks signature, expiry and audience; the issuer and subject are ours to check.
+    good = {"iss": comments._FIREBASE_ISSUER, "sub": "uid-1", "email": "r@utah.gov"}
+    for claims, want in [(good, "r@utah.gov"),
+                         ({**good, "iss": "https://securetoken.google.com/other-project"}, None),
+                         ({**good, "sub": ""}, None)]:
+        monkeypatch.setattr(comments.id_token, "verify_firebase_token", lambda *a, c=claims, **k: c)
+        assert comments._verify_firebase_email("t") == want

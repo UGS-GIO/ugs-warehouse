@@ -11,6 +11,10 @@ not touch it.
 - `start.py` reads that file at startup, writes the pygeoapi config (`pygeoapi.base.yml` plus one
   resource per layer) and the OpenAPI document, then starts gunicorn. A new layer is served on the
   next cold start after a refresh. The image build reads nothing from the catalog.
+- Until a refresh has written that file (the first deploy, a new environment), `start.py` builds
+  the list from the serving-topics `items.json` instead, with titles for descriptions.
+- `start.py` opens every layer before it writes the config. A layer whose file does not open is
+  left out and logged by name, so one bad file never stops the service.
 - The service reads the GeoParquet from the bucket as the runtime service account. pyarrow reads
   only the columns and row groups a query needs.
 

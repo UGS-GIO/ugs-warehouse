@@ -11,6 +11,7 @@ RUN python -m pytest -q -p no:cacheprovider test_ugs_parquet.py && rm test_ugs_p
 USER nonroot
 ENV PYTHONPATH=/app \
     FEATURES_COLLECTIONS=gs://ut-dnr-ugs-maps-prod-public/warehouse/featureserv/collections.json \
+    FEATURES_INDEX=gs://ut-dnr-ugs-maps-prod-public/warehouse/stac/ugs-serving-topics/items.json \
     SERVER_URL=https://ugs-warehouse-features-xedvkyurga-uc.a.run.app
 EXPOSE 9000
 CMD ["python", "start.py"]

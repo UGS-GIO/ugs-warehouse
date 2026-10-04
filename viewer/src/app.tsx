@@ -359,9 +359,6 @@ function useViewState() {
   // they arrive only that way, and always after the indexes.
   const mapLoadKey = `root:${root.data?.count ?? 0}|` + mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
     + `|fb:${mapFbDocs.docs.filter((d) => d?.data).length}`;
-  // Still streaming, so Discover's category index doesn't show counts that are still climbing.
-  const mapItemsLoading = mapColls.length > 0
-    && (root.isLoading || mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
   const layerRows: LayerRow[] = useMemo(() => mapItems
@@ -523,7 +520,7 @@ function useViewState() {
     layerRows.some((r) => r.id === id) || (!!itemUrl && idOf(itemUrl) === id && drawsAsLayer(item.data));
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
-    catalogDocs, mapItems, mapLoadKey, mapItemsLoading,
+    catalogDocs, mapItems, mapLoadKey,
     searchIsLayer, pickPlace, pickSearchItem,
     openItem, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, collectionId, collectionUrl, layerIds, seriesSel,

@@ -48,6 +48,7 @@ export const qk = {
   // Search
   articleCorpus: (url: string) => ["article-corpus", url] as const,
   pubFts: (q: string) => ["pub-fts", q] as const,
+  placeSuggest: (text: string) => ["place-suggest", text] as const,
 
   // Review deploy
   comments,

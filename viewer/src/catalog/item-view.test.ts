@@ -3,7 +3,7 @@ import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatsOf, hasGeometry, itemKind, kindLabel, recordCountLabel, rowCount, scale,
-  series, title, typeOf, year,
+  series, title, typeOf, year, parseScale, scaleDenominator, firstAuthor,
 } from "./item-view";
 
 // Minimal item factory — the fields the view-model reads (collId, id, bbox, properties, assets).
@@ -201,5 +201,35 @@ describe("seriesLabel", () => {
   it("keeps an id carrying something the title does not say", () => {
     expect(seriesLabel(item("ugs-serving-topics/hazards", "qfaults_2024", { title: "Quaternary Faults" })))
       .toBe("qfaults_2024");
+  });
+});
+
+describe("parseScale / scaleDenominator", () => {
+  it("reads the forms pubs/scale.py reads", () => {
+    expect(parseScale("1:24,000")).toBe(24000);
+    expect(parseScale("1:24000")).toBe(24000);
+    expect(parseScale("1:24 000")).toBe(24000);
+    expect(parseScale("1 inch = 200 feet")).toBe(2400);
+    expect(parseScale("1 inch = 1 mile")).toBe(63360);
+    expect(parseScale("0.180555556")).toBeNull();
+    expect(parseScale("")).toBeNull();
+  });
+  it("prefers the producer's number over the raw text", () => {
+    expect(scaleDenominator(item("ugs-publications/M", "M-1", { "ugs:scale": "1:24,000", "ugs:scale_denominator": 100000 })))
+      .toBe(100000);
+    expect(scaleDenominator(item("ugs-publications/M", "M-2", { "ugs:scale": "1:62,500" }))).toBe(62500);
+    expect(scaleDenominator(item("ugs-publications/M", "M-3"))).toBeNull();
+  });
+});
+
+describe("firstAuthor", () => {
+  const by = (a: string) => firstAuthor(item("ugs-publications/M", "M-1", { "ugs:author": a }));
+  it("takes the first surname and marks co-authors", () => {
+    expect(by("Larry M. Trimble; Hellmut H. Doelling")).toBe("Trimble et al.");
+    expect(by("William L. Stokes")).toBe("Stokes");
+    expect(by("Sanchez, J.D.; Hayes, P.T.")).toBe("Sanchez et al.");
+    expect(by("Thomas C. Chidsey, Jr")).toBe("Chidsey");
+    expect(by("Robert P. Fischer Jr.")).toBe("Fischer");
+    expect(by("")).toBe("");
   });
 });

@@ -1122,3 +1122,15 @@ def test_the_readme_carries_what_the_rule_asks_for(monkeypatch):
     # Derived from the assets the items actually carry, so the advice cannot describe a format
     # this collection does not publish.
     assert "PMTiles" in md and "GeoParquet" not in md
+
+
+def test_pub_carries_its_scale_as_a_number(capsys):
+    item = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"})
+    assert item["properties"]["ugs:scale_denominator"] == 24000
+    assert stac._index_entry(item)["properties"]["ugs:scale_denominator"] == 24000
+    # A scale that is there but unreadable keeps its text, gets no number, and says so.
+    odd = _build({"series_id": "M-1", "series": "M", "pub_scale": "0.180555556"})
+    assert odd["properties"]["ugs:scale"] == "0.180555556"
+    assert "ugs:scale_denominator" not in odd["properties"]
+    assert "M-1: scale '0.180555556' is not a readable 1:N scale" in capsys.readouterr().err
+    assert "ugs:scale_denominator" not in _build({"series_id": "M-2", "series": "M"})["properties"]

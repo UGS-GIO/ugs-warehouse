@@ -5,12 +5,15 @@ Reads the per-pub text sidecars (`pubs/fulltext/{SID}.txt`, written by the thumb
 metadata, loads them into a `docs` table, runs `PRAGMA create_fts_index`, and uploads the `.duckdb`
 to the CDN. The viewer queries it **client-side via duckdb-wasm range reads** — no server, the
 browser fetches only the index pages a query touches (spiked + confirmed). Run as its own Cloud Run
-job after the thumbs full-text pass.
+job after the thumbs full-text pass. It skips the rebuild when no sidecar and no pub's stored fields
+changed since the last build.
 
-    python -m ugs_warehouse.pubs.fts
+    python -m ugs_warehouse.pubs.fts [--force]
 """
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import shutil
 import tempfile
@@ -21,30 +24,66 @@ from . import identity, sink_stac, source
 
 # Object the .duckdb lands at on the CDN; the viewer ATTACHes this URL.
 FTS_OBJECT = os.environ.get("PUB_FTS_OBJECT", "pubs/search/pubs-fts.duckdb")
+# What the last build was made from. Bump BUILD_VERSION when build() changes what the database holds.
+FINGERPRINT_OBJECT = f"{FTS_OBJECT}.fingerprint"
+BUILD_VERSION = "1"
 
 
-def build() -> int:
-    """List the fulltext sidecars, join pub metadata, build the FTS .duckdb, upload it. Returns rows."""
-    import duckdb
+def _fields(p: dict) -> tuple[str, str, str, str]:
+    """A pub's title, series, year and PDF URL, as the database stores them."""
+    return ((p.get("pub_name") or "").strip(), (p.get("series") or "").strip(),
+            str(p.get("pub_year") or "").strip(), sink_stac.href(p.get("pub_url")))
 
+
+def _sid(path: str) -> str:
+    return path.rsplit("/", 1)[-1][:-len(".txt")].upper()
+
+
+def fingerprint(etags: dict[str, str], meta: dict[str, dict]) -> str:
+    """Changes when a sidecar is added, removed or rewritten, or a pub's stored fields change."""
+    rows = [(path, etag, _fields(meta.get(_sid(path), {}))) for path, etag in sorted(etags.items())]
+    return hashlib.sha256(json.dumps([BUILD_VERSION, rows]).encode()).hexdigest()
+
+
+def build(force: bool = False) -> int:
+    """List the fulltext sidecars, join pub metadata, build the FTS .duckdb, upload it. Returns rows,
+    or 0 when nothing changed since the last build."""
     meta = {(p.get("series_id") or "").strip().upper(): p for p in source.read_pubs()}
-    paths = [p for p in gcs.list_paths(identity.PUB_FULLTEXT_PREFIX) if p.endswith(".txt")]
-    print(f"[fts] {len(paths)} fulltext docs; {len(meta)} pubs in metadata")
-    if not paths:
+    etags = {p: e for p, e in gcs.list_etags(identity.PUB_FULLTEXT_PREFIX).items()
+             if p.endswith(".txt")}
+    print(f"[fts] {len(etags)} fulltext docs; {len(meta)} pubs in metadata")
+    if not etags:
         print("[fts] no fulltext sidecars — run the thumbs full-text pass first; skipping")
         return 0
+    fp = fingerprint(etags, meta)
+    if not force and gcs.exists(FTS_OBJECT) and _last_fingerprint() == fp:
+        print("[fts] sidecars and metadata unchanged since the last build; skipping")
+        return 0
+    n = _build_db(sorted(etags), meta)
+    gcs.put_bytes(fp.encode(), FINGERPRINT_OBJECT, content_type="text/plain",
+                  cache_control=gcs.CACHE_MUTABLE)
+    return n
+
+
+def _last_fingerprint() -> str | None:
+    try:
+        return gcs.get_bytes(FINGERPRINT_OBJECT).decode()
+    except FileNotFoundError:
+        return None
+
+
+def _build_db(paths: list[str], meta: dict[str, dict]) -> int:
+    import duckdb
 
     def load(path: str) -> tuple | None:
-        sid = path.rsplit("/", 1)[-1][:-len(".txt")].upper()
+        sid = _sid(path)
         try:
             body = gcs.get_bytes(path).decode("utf-8", "ignore")
         except Exception:  # noqa: BLE001
             return None
         if not body.strip():
             return None
-        p = meta.get(sid, {})
-        return (sid, (p.get("pub_name") or "").strip(), (p.get("series") or "").strip(),
-                str(p.get("pub_year") or "").strip(), sink_stac.href(p.get("pub_url")), body)
+        return (sid, *_fields(meta.get(sid, {})), body)
 
     work = tempfile.mkdtemp(prefix="fts_")
     db_path = os.path.join(work, "pubs-fts.duckdb")
@@ -80,7 +119,11 @@ def build() -> int:
 
 
 def main() -> int:
-    return 0 if build() >= 0 else 1
+    import argparse
+
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument("--force", action="store_true", help="rebuild even when nothing changed")
+    return 0 if build(force=ap.parse_args().force) >= 0 else 1
 
 
 if __name__ == "__main__":

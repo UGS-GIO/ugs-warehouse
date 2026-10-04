@@ -261,6 +261,15 @@ def delete(object_path: str) -> None:
         pass
 
 
+def list_etags(prefix: str) -> dict[str, str]:
+    """{path: etag} for every object under `prefix`. An etag changes whenever the object is
+    rewritten, so this fingerprints a prefix without reading any object."""
+    out: dict[str, str] = {}
+    for batch in obs.list(_store(), prefix=prefix):
+        out.update((m["path"], m.get("e_tag") or "") for m in batch)
+    return out
+
+
 def list_paths(prefix: str, *, bucket: str | None = None) -> list[str]:
     """All object paths under `prefix` in `bucket` (default BUCKET); obstore yields batches of
     metadata dicts."""

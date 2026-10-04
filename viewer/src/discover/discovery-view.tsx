@@ -11,7 +11,7 @@ import { qk } from "@/query-keys";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, CLEAR_ALL, discoveryPatch, type DiscoveryState, discoveryTitle, docIdOf, effectiveSort,
-  extractFacets, type FacetCount, withSelected, type FacetSelection, filterResults, nearestStep, parseDiscovery,
+  extractFacets, type FacetCount, GEOM_HAS, withSelected, type FacetSelection, filterResults, nearestStep, parseDiscovery,
   publishedYear, ranksByWords, reliefs, SCALE_STEPS, scaleBins, scalesLabel, sortItems, type SortKey, SORTS, yearBins,
   yearsLabel, yearSpan,
 } from "./discovery-model";
@@ -34,7 +34,7 @@ import type { StacDoc } from "@/stac";
 import { ItemDetail } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
 import { UiSelect } from "@/ui/select";
-import { useIsWide } from "@/ui/use-breakpoint";
+import { useIsDesktop, useIsWide } from "@/ui/use-breakpoint";
 import { ResizeHandle } from "@/ui/resizable";
 import { useResizable } from "@/ui/use-resizable";
 
@@ -51,6 +51,7 @@ const PAGE = 48; // cards per "Show more" step (reference parity)
 // last keystroke, so a fast typist doesn't search every prefix.
 const TYPE_DEBOUNCE_MS = 180;
 const SCALE_MAX = SCALE_STEPS.length - 1;
+const FILTERS_DIALOG = Dialog.createHandle();   // ties the phone Filters button to its panel
 const fmtDenom = (d: number) => d.toLocaleString("en-US");
 // Detail drawer width: drag-resizable and remembered, since how much room the preview deserves
 // depends on the item (a long abstract vs. a thumbnail). CSS caps it on narrow viewports.
@@ -95,9 +96,12 @@ export function DiscoveryView({
   // undoes them one at a time; replace for typing + view prefs (layout/density) so they don't pile up.
   // It merges onto the URL as it is when the navigation runs, not this render's `st`, so a delayed
   // patch (the typing debounce, a place lookup) can't undo a filter set in the meantime.
+  // While the phone filter panel is open its changes replace the history entry, so the phone's Back
+  // closes the panel rather than undoing filters one by one behind it.
+  const inPanel = useRef(false);
   const patch = (p: Partial<DiscoveryState>, replace = false) => {
     // `to: "."` is the current route — a same-route search patch, and it is what types the reducer.
-    navigate({ to: ".", replace,
+    navigate({ to: ".", replace: replace || inPanel.current,
       search: (prev) => ({ ...prev, ...discoveryPatch({ ...parseDiscovery(prev), ...p }) }) });
   };
   const toggleList = (key: "collections" | "categories" | "types" | "formats", value: string) => {
@@ -342,38 +346,42 @@ export function DiscoveryView({
   // the first groups start open, so the panel opens as a short list of headings, not a long scroll.
   const filterSections = (phone: boolean) => (
     <>
-            <FacetSection label="Category" facets={withSelected(facets.categories, cats, categoryLabel)} defaultOpen selected={new Set(cats)}
-              onToggle={(k) => toggleList("categories", k)} />
-            <FacetSection label="Collection" defaultOpen={!phone} facets={withSelected(facets.collections, colls, collectionLabel)} selected={new Set(colls)}
-              onToggle={(k) => toggleList("collections", k)} />
-            <FacetSection label="Type" defaultOpen={!phone} facets={withSelected(facets.types, types, String)} selected={new Set(types)}
-              onToggle={(k) => toggleList("types", k)} />
-            <FacetSection label="Format" defaultOpen={!phone} facets={withSelected(facets.formats, formats, String)} selected={new Set(formats)}
-              onToggle={(k) => toggleList("formats", k)} />
-            {span && span[0] < span[1] && (
-              <RangeFacet label="Year published" defaultOpen summary={st.years ? yearsLabel(st.years) : "Any"}
-                min={span[0]} max={span[1]} value={[st.years?.[0] ?? span[0], st.years?.[1] ?? span[1]]}
-                bins={yearHist}
-                onCommit={(lo, hi, replace) => patch({ years: lo <= span[0] && hi >= span[1] ? null
-                  : [lo <= span[0] ? null : lo, hi >= span[1] ? null : hi] }, replace)}
-                toText={String} fromText={(s) => (/^\d{4}$/.test(s.trim()) ? Number(s.trim()) : null)}
-                labels={["Earliest year", "Latest year"]}
-                note={undated ? `${undated.toLocaleString()} without a publication year hidden` : undefined} />
-            )}
-            <RangeFacet label="Map scale" defaultOpen={!phone} summary={st.scales ? scalesLabel(st.scales) : "Any"}
-              min={0} max={SCALE_MAX}
-              value={[st.scales?.[0] != null ? nearestStep(st.scales[0]) : 0, st.scales?.[1] != null ? nearestStep(st.scales[1]) : SCALE_MAX]}
-              bins={scaleHist}
-              onCommit={(lo, hi, replace) => patch({ scales: lo === 0 && hi === SCALE_MAX ? null
-                : [lo === 0 ? null : SCALE_STEPS[lo], hi === SCALE_MAX ? null : SCALE_STEPS[hi]] }, replace)}
-              toText={(i) => fmtDenom(SCALE_STEPS[i])}
-              fromText={(s) => { const n = Number(s.replace(/^\s*1\s*:/, "").replace(/[,\s]/g, "")); return n >= 1 ? nearestStep(n) : null; }}
-              prefix="1:" ends={["More detailed", "Less detailed"]} labels={["Most detailed scale", "Least detailed scale"]}
-              note={unscaled ? `${unscaled.toLocaleString()} without a scale hidden` : undefined} />
-            <GeometrySection defaultOpen={!phone} facets={facets.geometry} value={geometry} onChange={(v) => patch({ geometry: v })} />
+      <FacetSection label="Category" facets={withSelected(facets.categories, cats, categoryLabel)} defaultOpen selected={new Set(cats)}
+        onToggle={(k) => toggleList("categories", k)} />
+      <FacetSection label="Collection" defaultOpen={!phone} facets={withSelected(facets.collections, colls, collectionLabel)} selected={new Set(colls)}
+        onToggle={(k) => toggleList("collections", k)} />
+      <FacetSection label="Type" defaultOpen={!phone} facets={withSelected(facets.types, types, String)} selected={new Set(types)}
+        onToggle={(k) => toggleList("types", k)} />
+      <FacetSection label="Format" defaultOpen={!phone} facets={withSelected(facets.formats, formats, String)} selected={new Set(formats)}
+        onToggle={(k) => toggleList("formats", k)} />
+      {span && span[0] < span[1] && (
+        <RangeFacet label="Year published" defaultOpen summary={st.years ? yearsLabel(st.years) : "Any"}
+          min={span[0]} max={span[1]} value={[st.years?.[0] ?? span[0], st.years?.[1] ?? span[1]]}
+          bins={yearHist}
+          onCommit={(lo, hi, replace) => patch({ years: lo <= span[0] && hi >= span[1] ? null
+            : [lo <= span[0] ? null : lo, hi >= span[1] ? null : hi] }, replace)}
+          toText={String} fromText={(s) => (/^\d{4}$/.test(s.trim()) ? Number(s.trim()) : null)}
+          labels={["Earliest year", "Latest year"]}
+          note={undated ? `${undated.toLocaleString()} without a publication year hidden` : undefined} />
+      )}
+      <RangeFacet label="Map scale" defaultOpen={!phone} summary={st.scales ? scalesLabel(st.scales) : "Any"}
+        min={0} max={SCALE_MAX}
+        value={[st.scales?.[0] != null ? nearestStep(st.scales[0]) : 0, st.scales?.[1] != null ? nearestStep(st.scales[1]) : SCALE_MAX]}
+        bins={scaleHist}
+        onCommit={(lo, hi, replace) => patch({ scales: lo === 0 && hi === SCALE_MAX ? null
+          : [lo === 0 ? null : SCALE_STEPS[lo], hi === SCALE_MAX ? null : SCALE_STEPS[hi]] }, replace)}
+        toText={(i) => fmtDenom(SCALE_STEPS[i])}
+        fromText={(s) => { const n = Number(s.replace(/^\s*1\s*:/, "").replace(/[,\s]/g, "")); return n >= 1 ? nearestStep(n) : null; }}
+        prefix="1:" ends={["More detailed", "Less detailed"]} labels={["Most detailed scale", "Least detailed scale"]}
+        note={unscaled ? `${unscaled.toLocaleString()} without a scale hidden` : undefined} />
+      <GeometrySection defaultOpen={!phone}
+        facets={withSelected(facets.geometry, geometry === "all" ? [] : [geometry], (k) => (k === GEOM_HAS ? "On the map" : "No footprint"))} value={geometry} onChange={(v) => patch({ geometry: v })} />
     </>
   );
   const [filtersOpen, setFiltersOpen] = useState(false);
+  const isDesktop = useIsDesktop();               // md and up: the rail shows, so the panel never does
+  const panelOpen = filtersOpen && !isDesktop;
+  inPanel.current = panelOpen;
 
   return (
     <div className="relative flex h-full min-h-0 flex-col overflow-hidden bg-background text-foreground">
@@ -394,12 +402,16 @@ export function DiscoveryView({
           onChange={(v) => { setText(v); sendQ(v); }} onEnter={submit}
           onClear={() => { setText(""); sendQ("", true); }} />
         {/* Phones: the rail is hidden, so its groups open in a full-screen panel from here. */}
-        <button type="button" onClick={() => setFiltersOpen(true)}
-          className="flex shrink-0 items-center gap-1.5 rounded-full border border-input bg-card px-3 py-1 text-sm text-foreground hover:border-primary md:hidden pointer-coarse:min-h-11">
+        <Dialog.Trigger handle={FILTERS_DIALOG}
+          className="flex shrink-0 items-center gap-1.5 rounded-full border border-input bg-card px-3 py-1 text-sm text-foreground hover:border-primary md:hidden">
           <svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M4 6h16M7 12h10M10 18h4" /></svg>
           Filters
-          {activeFilters > 0 && <span className="rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">{activeFilters}</span>}
-        </button>
+          {activeFilters > 0 && (
+            <span className="rounded-full bg-primary px-1.5 text-xs font-semibold text-primary-foreground">
+              <span className="sr-only">, </span>{activeFilters}<span className="sr-only"> active</span>
+            </span>
+          )}
+        </Dialog.Trigger>
         <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
           <b className="text-foreground">{results.length}</b> of {withData.length}
         </span>
@@ -661,17 +673,22 @@ export function DiscoveryView({
       </div>
 
       {/* ── Phone filter panel: every rail group, with a live count on the way back to the results. ── */}
-      <Dialog.Root open={filtersOpen} onOpenChange={setFiltersOpen}>
+      <Dialog.Root handle={FILTERS_DIALOG} open={panelOpen} onOpenChange={(open) => {
+        // Commit a half-typed From/To box before the panel unmounts it (a tapped button doesn't take
+        // focus on iOS, so its blur would never fire).
+        if (!open) (document.activeElement as HTMLElement | null)?.blur();
+        setFiltersOpen(open);
+      }}>
         <Dialog.Portal>
           <Dialog.Backdrop className="fixed inset-0 z-[3100] bg-black/40" />
-          <Dialog.Popup className="fixed inset-0 z-[3101] flex flex-col bg-background">
+          <Dialog.Popup aria-modal="true" className="fixed inset-0 z-[3101] flex flex-col bg-background">
             <div className="flex shrink-0 items-center gap-2 border-b border-border px-3 py-2">
               <Dialog.Title className="flex-1 text-base font-semibold">Filters</Dialog.Title>
               {activeFilters > 0 && (
-                <button type="button" onClick={resetAll} className="px-2 text-sm text-primary hover:underline pointer-coarse:min-h-11">Clear all</button>
+                <button type="button" onClick={resetAll} className="px-2 text-sm text-primary hover:underline">Clear all</button>
               )}
               <Dialog.Close aria-label="Close filters"
-                className="rounded px-2 text-muted-foreground hover:text-foreground pointer-coarse:min-h-11 pointer-coarse:min-w-11">✕</Dialog.Close>
+                className="rounded px-2 text-muted-foreground hover:text-foreground">✕</Dialog.Close>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto">{filterSections(true)}</div>
             <div className="shrink-0 border-t border-border p-3">
@@ -785,7 +802,7 @@ function GeometrySection({ facets, value, onChange, defaultOpen = true }: {
   defaultOpen?: boolean;
 }) {
   const [open, setOpen] = useState(defaultOpen || value !== "all");
-  if (facets.length < 2) return null;
+  if (facets.length < 2 && value === "all") return null;
   return (
     <section className="border-t border-border px-2 py-2">
       <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open}

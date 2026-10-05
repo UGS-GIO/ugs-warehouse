@@ -70,12 +70,25 @@ variable "deploy_included_files" {
   description = "included_files for ugs-warehouse-deploy."
 }
 
+# Paths that need a dev image rebuild. Everything NOT listed here — viewer/**, docs/** — must not
+# fire the dev deploy. Kept as a variable so the scope is one reviewable list, not a flag buried in
+# a create command.
+variable "dev_included_files" {
+  type = list(string)
+  default = [
+    "src/**", "api/**", "admin/**", "featureserv/**", "tiles/**",
+    "Dockerfile.admin", "pyproject.toml", "cloudbuild-dev.yaml",
+  ]
+  description = "included_files for ugs-warehouse-dev."
+}
+
 locals {
   manage_triggers         = var.build_repository != "" && var.trigger_service_account != "" ? 1 : 0
   manage_preview_triggers = var.build_repository != "" && var.preview_trigger_service_account != "" ? 1 : 0
 }
 
-# The full deploy: images + Cloud Run. Builds no viewer (see cloudbuild.yaml).
+# The production deploy: images + Cloud Run, on a push to main. main only takes merges from develop
+# (or an admin hotfix), so each push is a release. Builds no viewer (see cloudbuild.yaml).
 # ALREADY EXISTS — import before the first apply, or the create 409s:
 #   tofu import google_cloudbuild_trigger.deploy \
 #     projects/ut-dnr-ugs-backend-tools/locations/us-central1/triggers/ugs-warehouse-deploy
@@ -85,7 +98,7 @@ resource "google_cloudbuild_trigger" "deploy" {
   project         = var.build_project
   location        = var.region
   name            = "ugs-warehouse-deploy"
-  description     = "Images + Cloud Run. Scoped: viewer-only pushes must not rebuild every image."
+  description     = "Production images + Cloud Run, on a push to main. Scoped: viewer-only pushes must not rebuild every image."
   service_account = var.trigger_service_account
 
   repository_event_config {
@@ -97,6 +110,27 @@ resource "google_cloudbuild_trigger" "deploy" {
 
   filename       = "cloudbuild.yaml"
   included_files = var.deploy_included_files
+}
+
+# The develop environment: `-dev` copies of the read-side services, on every push to develop.
+resource "google_cloudbuild_trigger" "dev" {
+  count = local.manage_triggers
+
+  project         = var.build_project
+  location        = var.region
+  name            = "ugs-warehouse-dev"
+  description     = "Develop environment: -dev Cloud Run services on push to develop. Code only, writes no data."
+  service_account = var.trigger_service_account
+
+  repository_event_config {
+    repository = var.build_repository
+    push {
+      branch = "^develop$"
+    }
+  }
+
+  filename       = "cloudbuild-dev.yaml"
+  included_files = var.dev_included_files
 }
 
 # The review viewer's fast path — Vite build + rsync to the private review bucket, no image builds.
@@ -187,7 +221,7 @@ resource "google_cloudbuild_trigger" "viewer_preview" {
   repository_event_config {
     repository = var.build_repository
     pull_request {
-      branch          = "^main$"
+      branch          = "^(main|develop)$"
       comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
     }
   }
@@ -208,7 +242,7 @@ resource "google_cloudbuild_trigger" "tiles_preview" {
   repository_event_config {
     repository = var.build_repository
     pull_request {
-      branch          = "^main$"
+      branch          = "^(main|develop)$"
       comment_control = "COMMENTS_ENABLED_FOR_EXTERNAL_CONTRIBUTORS_ONLY"
     }
   }

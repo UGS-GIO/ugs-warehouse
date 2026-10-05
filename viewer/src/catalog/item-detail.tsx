@@ -283,7 +283,6 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
             {facts.join(" · ")}
             {IS_REVIEW && item.id && <> <ReviewBadge itemId={String(item.id)} /></>}
           </p>
-          {typeof p.description === "string" && <p className="mt-3 text-muted-foreground">{p.description}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
           {/* Phones only: from lg up the Downloads list is already in view beside the map. */}
@@ -296,6 +295,12 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
           {cite && <a href={cite.href} target="_blank" rel="noopener" className={SECONDARY}>Cite (DOI) ↗</a>}
         </div>
       </div>
+      {/* Same grid as the map below, so the description wraps at the map's width. */}
+      {typeof p.description === "string" && (
+        <div className={`mt-3 grid gap-8 ${page ? "lg:grid-cols-3" : ""}`}>
+          <p className="min-w-0 text-muted-foreground lg:col-span-2">{p.description}</p>
+        </div>
+      )}
     </>
   );
 

@@ -1,8 +1,9 @@
 import json
-import sqlite3
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pmtiles.reader import MmapSource, Reader
+from pmtiles.tile import TileType
 
 from ugs_warehouse.pubs import geolmap_mosaics as gm
 from ugs_warehouse.pubs import identity
@@ -261,71 +262,39 @@ def test_vrt_order_puts_unparseable_years_at_the_bottom_and_breaks_ties_by_sid()
     assert gm._vrt_order(["M-1", "M-2", "M-3", "M-4"], by_sid) == ["M-2", "M-3", "M-1", "M-4"]
 
 
-def test_pack_tiles_to_mbtiles_flips_y_verbatim_and_skips_sidecars(tmp_path):
-    """The packer copies `gdal raster tile`'s XYZ tree into MBTiles byte-for-byte (no re-encode) and
-    flips y to TMS. Non-tile sidecars (.aux.xml) are skipped; metadata carries format/zoom/bounds so
-    `pmtiles convert` can read it."""
-    tiles = {(14, 3, 6): b"webp-A", (14, 3, 7): b"webp-B", (13, 1, 2): b"webp-C"}
+def _tree(root, tiles):
     for (z, x, y), blob in tiles.items():
-        d = tmp_path / "t" / str(z) / str(x)
+        d = root / str(z) / str(x)
         d.mkdir(parents=True, exist_ok=True)
         (d / f"{y}.webp").write_bytes(blob)
-    (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")   # sidecar, must be skipped
 
-    mb = tmp_path / "out.mbtiles"
-    n, minz, maxz = gm._pack_tiles_to_mbtiles(
-        str(tmp_path / "t"), str(mb), bounds=[-114.0, 37.0, -109.0, 42.0], name="geologic-maps-24k")
+
+def test_write_pmtiles_copies_tiles_verbatim(tmp_path):
+    """Tiles land byte-for-byte at their XYZ address; the header carries the real bounds, zoom
+    range and WebP type, opens at the coarsest zoom, and the archive is clustered."""
+    tiles = {(14, 3, 6): b"webp-A", (14, 3, 7): b"webp-B", (13, 1, 2): b"webp-C"}
+    _tree(tmp_path / "t", tiles)
+
+    out = tmp_path / "out.pmtiles"
+    n, minz, maxz = gm._write_pmtiles(
+        str(tmp_path / "t"), str(out), bounds=[-114.0, 37.0, -109.0, 42.0], name="geologic-maps-24k")
     assert (n, minz, maxz) == (3, 13, 14)
 
-    con = sqlite3.connect(str(mb))
-    rows = {(z, x, y): blob for z, x, y, blob in
-            con.execute("SELECT zoom_level, tile_column, tile_row, tile_data FROM tiles")}
-    meta = dict(con.execute("SELECT name, value FROM metadata"))
-    con.close()
-    # y flipped XYZ->TMS: (14,3,6) -> row 2^14-1-6, blob byte-identical
-    assert rows[(14, 3, (1 << 14) - 1 - 6)] == b"webp-A"
-    assert rows[(14, 3, (1 << 14) - 1 - 7)] == b"webp-B"
-    assert rows[(13, 1, (1 << 13) - 1 - 2)] == b"webp-C"
-    assert meta["format"] == "webp"
-    assert meta["minzoom"] == "13" and meta["maxzoom"] == "14"
-    assert meta["bounds"] == "-114.0,37.0,-109.0,42.0"
-    assert meta["center"] == "-111.5,39.5,13"               # opens at the coarsest zoom, not maxz
-    con = sqlite3.connect(str(mb))
-    with pytest.raises(sqlite3.IntegrityError):             # MBTiles spec: metadata.name is unique
-        con.execute("INSERT INTO metadata VALUES ('format', 'png')")
-    con.close()
+    with open(out, "rb") as f:
+        reader = Reader(MmapSource(f))
+        header, meta = reader.header(), reader.metadata()
+        assert {zxy: reader.get(*zxy) for zxy in tiles} == tiles
+    assert header["tile_type"] == TileType.WEBP and header["clustered"]
+    assert header["center_zoom"] == 13
+    assert (header["min_lon_e7"], header["max_lat_e7"]) == (-1140000000, 420000000)
+    assert meta["name"] == "geologic-maps-24k"
 
 
-def test_pack_tiles_to_mbtiles_raises_when_every_zoom_dir_is_empty(tmp_path):
-    """A fully blank build can leave only empty zoom dirs; that must not become an empty MBTiles."""
+def test_write_pmtiles_fails_on_an_empty_tree(tmp_path):
+    """A fully blank build can leave only empty zoom dirs; that must not become an empty archive."""
     (tmp_path / "t" / "14" / "3").mkdir(parents=True)
-    (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")
-    with pytest.raises(RuntimeError, match="no tile files"):
-        gm._pack_tiles_to_mbtiles(str(tmp_path / "t"), str(tmp_path / "x.mbtiles"),
-                                  bounds=[-1, -1, 1, 1], name="x")
-
-
-def test_pack_tiles_to_mbtiles_raises_when_the_tile_dir_is_missing(tmp_path):
-    with pytest.raises(RuntimeError, match="no output dir"):
-        gm._pack_tiles_to_mbtiles(str(tmp_path / "nope"), str(tmp_path / "x.mbtiles"),
-                                  bounds=[-1, -1, 1, 1], name="x")
-
-
-def test_pack_tiles_to_mbtiles_rejects_a_tile_in_another_format(tmp_path):
-    """Metadata says webp, so a .png tile would be silently mislabelled; refuse it."""
-    d = tmp_path / "t" / "14" / "3"
-    d.mkdir(parents=True)
-    (d / "6.png").write_bytes(b"b")
-    with pytest.raises(RuntimeError, match="expected .webp"):
-        gm._pack_tiles_to_mbtiles(str(tmp_path / "t"), str(tmp_path / "x.mbtiles"),
-                                  bounds=[-1, -1, 1, 1], name="x")
-
-
-def test_pack_tiles_to_mbtiles_raises_on_empty_tree(tmp_path):
-    (tmp_path / "empty").mkdir()
-    with pytest.raises(RuntimeError):
-        gm._pack_tiles_to_mbtiles(str(tmp_path / "empty"), str(tmp_path / "x.mbtiles"),
-                                  bounds=[-1, -1, 1, 1], name="x")
+    with pytest.raises(Exception):
+        gm._write_pmtiles(str(tmp_path / "t"), str(tmp_path / "x.pmtiles"), bounds=[-1, -1, 1, 1], name="x")
 
 
 def test_vrt_zoom_and_bounds_reads_zoom_and_real_extent():
@@ -374,7 +343,7 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
     """build_tier's `gdal raster tile` argv: -r nearest at/above the mosaic's native zoom (the aligned
     masters copy through pixel-exact), -r average when a tier caps BELOW native; the full provisional
     flag set is always passed (guards a silent typo on a GDAL bump); and the mosaic's REAL bounds
-    (not the statewide UTAH_BBOX) reach the packer."""
+    (not the statewide UTAH_BBOX) reach the PMTiles writer."""
     by_sid = {"M-1": {"pub_year": "2022"}}
     extent = [-112.0, 39.0, -111.5, 39.4]
     calls: list[list[str]] = []
@@ -384,7 +353,7 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
         calls.append(cmd)
         return MagicMock(returncode=0, stdout="", stderr="")
 
-    def fake_pack(tiledir, mbtiles, *, bounds, name):
+    def fake_pack(tiledir, out, *, bounds, name):
         captured["bounds"] = bounds
         return (10, min(gm.MOSAIC_MINZOOM, 17), 17)
 
@@ -394,7 +363,7 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
              patch.object(gm, "_vrt_zoom_and_bounds", return_value=(17, aligned, extent)), \
              patch.object(gm, "_band_types", return_value={"M-1": ["Byte"] * 4}), \
              patch.object(gm, "_check_vrt_sources") as check, \
-             patch.object(gm, "_pack_tiles_to_mbtiles", side_effect=fake_pack), \
+             patch.object(gm, "_write_pmtiles", side_effect=fake_pack), \
              patch.object(gm.os.path, "getsize", return_value=1 << 20), \
              patch.object(gm.os, "remove"), patch.object(gm.shutil, "rmtree"), \
              patch.object(gm.gcs, "upload"), patch.object(gm, "MOSAIC_WORK_DIR", str(tmp_path)):
@@ -407,7 +376,7 @@ def test_build_tier_tiling_argv_resampling_and_real_bounds(tmp_path):
     for flag in ("--overview-resampling", "--skip-blank", "--convention", "--min-zoom", "--max-zoom",
                  "-f", "--co"):
         assert flag in tile, f"missing {flag}"
-    assert tile[tile.index("--convention") + 1] == "xyz"               # the packer's y-flip assumes XYZ
+    assert tile[tile.index("--convention") + 1] == "xyz"               # the writer reads the tree as XYZ
     assert tile[tile.index("-f") + 1] == "WEBP"
     assert tile[tile.index("--co") + 1] == f"QUALITY={gm.TILE_QUALITY}"
     assert tile[tile.index("--max-zoom") + 1] == "17"

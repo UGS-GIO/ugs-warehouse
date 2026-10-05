@@ -47,6 +47,7 @@ pubs = [
   "rasterio>=1.3",
   "rio-cogeo>=5",
   "rio-stac>=0.12",      # COG asset bands/projection from the header — pubs/sink_stac.py
+  "pmtiles>=3.8",        # writes the raster mosaic archives — pubs/geolmap_mosaics.py
   "geopandas>=1.0",
   "pyogrio>=0.9",
   "pyarrow>=17",         # geopandas parquet IO (base ingest no longer needs it)

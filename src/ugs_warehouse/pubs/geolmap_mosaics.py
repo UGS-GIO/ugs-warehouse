@@ -8,7 +8,7 @@ geolmap/mosaics/geologic-maps-{tier}.pmtiles. The viewer toggles them like the o
 Pipeline per tier (GDAL, COGs read in place over /vsigs):
   gdalbuildvrt (-resolution highest, over /vsigs/<bucket>/...)  ->  `gdal raster tile`
   (multithreaded WebP tiles; GDAL owns adjacent-quad overlap via VRT last-wins + alpha-collar
-  fallthrough)  ->  pack the tile tree into MBTiles  ->  `pmtiles convert`  ->  upload
+  fallthrough)  ->  write the tile tree into PMTiles  ->  upload
 
 `gdal raster tile` (GDAL 3.11+) replaces the old serial `gdal_translate -of MBTILES` + `gdaladdo`,
 which read every COG per tile from one thread and timed out statewide. The base renders with
@@ -44,13 +44,15 @@ import json
 import math
 import os
 import shutil
-import sqlite3
 import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+
+from pmtiles.convert import disk_to_pmtiles
+from pmtiles.reader import MmapSource, Reader
 
 from ..core import config, gcs, stac
 from . import editions, identity, scale, source
@@ -76,7 +78,7 @@ TIER_MAXZOOM = {"24k": 14, "100k": 12, "250k": 12, "500k": 12}
 MOSAIC_MINZOOM = max(0, int(os.environ.get("MOSAIC_MINZOOM", "4")))
 # WebP tile quality, clamped to WebP's valid 1-100 (out-of-range crashes the GDAL WebP driver).
 TILE_QUALITY = max(1, min(100, int(os.environ.get("MOSAIC_WEBP_QUALITY", "90"))))
-# Work dir for the (large) intermediate tile tree + MBTiles. Unset -> the system temp (/tmp, which is
+# Work dir for the (large) intermediate tile tree + PMTiles. Unset -> the system temp (/tmp, which is
 # RAM on Cloud Run — fine for the small tiers, NOT for statewide z17). Point it at a mounted disk for
 # the big builds; None lets tempfile use the default.
 MOSAIC_WORK_DIR = os.environ.get("MOSAIC_WORK_DIR") or None
@@ -205,7 +207,7 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
     the finest member COG's m/px; the nearest zoom is the mosaic's native max zoom, but only a source
     ON that zoom's pixel grid copies through pixel-exact under `nearest` (a 0.9 m/px COG rounds to z17
     yet has to be downsampled). The WGS84 extent is the mosaic's REAL footprint, so the packed
-    MBTiles/PMTiles metadata describes the actual coverage instead of always claiming the whole state."""
+    PMTiles metadata describes the actual coverage instead of always claiming the whole state."""
     # stdout only: stderr streams to the job log, so a failed /vsigs read shows GDAL's real reason.
     info = json.loads(subprocess.run(["gdalinfo", "-json", "-nofl", vrt], env=env,
                                      stdout=subprocess.PIPE, text=True, check=True).stdout)
@@ -248,63 +250,16 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
     return zoom, aligned, bounds
 
 
-def _pack_tiles_to_mbtiles(tile_dir: str, mbtiles: str, *, bounds: list[float], name: str,
-                           tile_format: str = "webp") -> tuple[int, int, int]:
-    """Pack a `gdal raster tile` XYZ tree ({z}/{x}/{y}.{ext}) into an MBTiles so `pmtiles convert` can
-    read it (go-pmtiles takes MBTiles, not a tile directory). Tiles are copied VERBATIM — no re-encode,
-    zero added loss. MBTiles rows are TMS (y flipped from the XYZ tree). Returns (n_tiles, minz, maxz)."""
-    if not os.path.isdir(tile_dir):
-        raise RuntimeError(f"gdal raster tile produced no output dir {tile_dir}")
-    zdirs = sorted(int(d) for d in os.listdir(tile_dir)
-                   if d.isdigit() and os.path.isdir(os.path.join(tile_dir, d)))
-    if not zdirs:
-        raise RuntimeError(f"gdal raster tile produced no tiles under {tile_dir}")
-    minz, maxz = zdirs[0], zdirs[-1]
-    con = sqlite3.connect(mbtiles)
-    try:
-        # A throwaway temp file: skip the rollback journal and fsyncs; a crash just reruns the bake.
-        con.execute("PRAGMA journal_mode = OFF")
-        con.execute("PRAGMA synchronous = OFF")
-        cur = con.cursor()
-        cur.execute("CREATE TABLE metadata (name text NOT NULL UNIQUE, value text)")
-        cur.execute("CREATE TABLE tiles (zoom_level int, tile_column int, tile_row int, tile_data blob)")
-        cur.execute("CREATE UNIQUE INDEX tile_index ON tiles (zoom_level, tile_column, tile_row)")
-        counted = [0]
-
-        def rows():
-            # A generator, not a list: a statewide tree is millions of tiles.
-            for z in zdirs:
-                zdir = os.path.join(tile_dir, str(z))
-                for xd in os.listdir(zdir):
-                    xpath = os.path.join(zdir, xd)
-                    if not (xd.isdigit() and os.path.isdir(xpath)):
-                        continue
-                    for yf in os.listdir(xpath):
-                        ystr, ext = os.path.splitext(yf)
-                        if not ystr.isdigit() or not ext:
-                            continue                    # skip sidecars (.aux.xml etc.)
-                        if ext.lower() != f".{tile_format}":
-                            raise RuntimeError(f"unexpected tile {xpath}/{yf}; expected .{tile_format}")
-                        with open(os.path.join(xpath, yf), "rb") as fh:
-                            blob = fh.read()
-                        counted[0] += 1
-                        yield z, int(xd), (1 << z) - 1 - int(ystr), blob   # XYZ (top) -> TMS (bottom)
-
-        # Plain INSERT, not OR REPLACE: the unique index makes any duplicate z/x/y fail loud.
-        cur.executemany("INSERT INTO tiles VALUES (?,?,?,?)", rows())
-        n = counted[0]
-        if n == 0:
-            raise RuntimeError(f"no tile files under {tile_dir} (zoom dirs {zdirs} were empty)")
-        w, s, e, nth = bounds
-        cur.executemany("INSERT INTO metadata VALUES (?,?)", (
-            ("name", name), ("format", tile_format), ("type", "overlay"),
-            ("minzoom", str(minz)), ("maxzoom", str(maxz)),
-            ("bounds", f"{w},{s},{e},{nth}"),
-            ("center", f"{(w + e) / 2},{(s + nth) / 2},{minz}")))
-        con.commit()
-    finally:
-        con.close()
-    return n, minz, maxz
+def _write_pmtiles(tile_dir: str, out: str, *, bounds: list[float], name: str) -> tuple[int, int, int]:
+    """Write a `gdal raster tile` XYZ tree into a PMTiles archive with the pmtiles library's own
+    directory converter. Tiles are copied verbatim. Returns (n_tiles, minz, maxz) from the header."""
+    with open(os.path.join(tile_dir, "metadata.json"), "w") as fh:
+        json.dump({"name": name, "type": "overlay", "format": "webp",
+                   "bounds": ",".join(str(v) for v in bounds)}, fh)
+    disk_to_pmtiles(tile_dir, out, "auto")
+    with open(out, "rb") as fh:
+        h = Reader(MmapSource(fh)).header()
+    return h["addressed_tiles_count"], h["min_zoom"], h["max_zoom"]
 
 
 def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
@@ -376,7 +331,6 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
             fh.write("\n".join(members) + "\n")
         vrt = os.path.join(tmp, f"{tier}.vrt")
         tiledir = os.path.join(tmp, f"{tier}-tiles")
-        mbtiles = os.path.join(tmp, f"{tier}.mbtiles")
         pmtiles = os.path.join(tmp, f"{tier}.pmtiles")
 
         # `-resolution highest` keeps the VRT at the finest member COG's m/px, so at the mosaic's
@@ -401,20 +355,15 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         subprocess.run(
             ["gdal", "raster", "tile", "--resampling", base_resampling,
              "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
-             "--skip-blank", "--convention", "xyz",
+             "--skip-blank", "--convention", "xyz", "--webviewer", "none",
              "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
              vrt, tiledir], env=gdal_env, check=True)
 
-        # go-pmtiles converts an MBTiles (not a tile tree), so pack the XYZ tree first (verbatim copy).
-        # Free each stage as it's consumed: the work dir defaults to the RAM-backed /tmp, so keeping the
-        # tile tree + MBTiles + PMTiles all alive at once would triple peak usage for no reason.
-        print(f"[mosaics] {tier}: packing tiles -> MBTiles")
-        n_tiles, minz, maxz_built = _pack_tiles_to_mbtiles(
-            tiledir, mbtiles, bounds=bounds, name=f"geologic-maps-{tier}")
+        print(f"[mosaics] {tier}: writing tiles -> PMTiles")
+        n_tiles, minz, maxz_built = _write_pmtiles(
+            tiledir, pmtiles, bounds=bounds, name=f"geologic-maps-{tier}")
         shutil.rmtree(tiledir)
-        print(f"[mosaics] {tier}: {n_tiles} tiles (z{minz}-{maxz_built}) -> PMTiles")
-        subprocess.run(["pmtiles", "convert", mbtiles, pmtiles], check=True)
-        os.remove(mbtiles)
+        print(f"[mosaics] {tier}: {n_tiles} tiles (z{minz}-{maxz_built})")
 
         obj = mosaic_object(tier, suffix=suffix)
         size_mb = os.path.getsize(pmtiles) // 1024 // 1024
@@ -533,6 +482,8 @@ def main() -> int:
                          "*-test-current or *-test-all pmtiles (matching --editions), no STAC "
                          "item, and never touches the real tier — inspect via the printed URL.")
     args = ap.parse_args()
+    # The PMTiles writer stages tile data in a tempfile; keep it on the work disk with the rest.
+    tempfile.tempdir = MOSAIC_WORK_DIR
     if args.quads is not None and not any(q.strip() for q in args.quads.split(",")):
         ap.error("--quads contained no usable quad names")
     picked = args.scale or ["all"]

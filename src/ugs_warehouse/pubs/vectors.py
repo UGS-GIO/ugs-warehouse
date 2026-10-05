@@ -28,6 +28,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs
 from . import geoparquet, harvest, identity, source
@@ -235,8 +236,10 @@ def extracted_series() -> set[str]:
     listing of the vectors prefix. A series with errors, or with layers but no manifest, is left
     out, so every run retries it and reports it again instead of the failure going quiet."""
     pfx = VECTORS_PREFIX.rstrip("/") + "/"
-    return {p.removeprefix(pfx).split("/", 1)[0] for p in gcs.list_paths(pfx)
-            if p.endswith("/_manifest.json") and _clean_manifest(p)}
+    paths = [p for p in gcs.list_paths(pfx) if p.endswith("/_manifest.json")]
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        clean = list(ex.map(_clean_manifest, paths))
+    return {p.removeprefix(pfx).split("/", 1)[0] for p, ok in zip(paths, clean) if ok}
 
 
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,

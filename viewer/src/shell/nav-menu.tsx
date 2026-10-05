@@ -8,11 +8,12 @@ import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
 import { CheckIcon, CopyIcon, copyCatalogUrl } from "@/catalog/stac-url-chip";
-import { LEGAL_LINKS } from "./legal-footer";
+import { BUILD_URL, LEGAL_LINKS } from "./legal-footer";
 
 export type NavPage = { id: string; label: string; onSelect: () => void };
 
-const ITEM = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm pointer-coarse:min-h-11 outline-none data-[highlighted]:bg-muted";
+const ITEM_BASE = "flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 pointer-coarse:min-h-11 outline-none data-[highlighted]:bg-muted";
+const ITEM = `${ITEM_BASE} text-sm`;
 const HEADING = "px-2 py-1 text-sm font-semibold uppercase tracking-wider text-muted-foreground";
 
 export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
@@ -105,9 +106,10 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                   {l.label}
                 </Menu.Item>
               ))}
-              <p className="px-2 py-1 text-xs text-muted-foreground" title={`viewer build ${__BUILD_HASH__}`}>
+              <Menu.Item className={`${ITEM_BASE} text-xs text-muted-foreground`} nativeButton={false}
+                render={<a href={BUILD_URL} target="_blank" rel="noreferrer" title={`viewer build ${__BUILD_HASH__} on GitHub`} />}>
                 build {__BUILD_DATE__} · {__BUILD_HASH__}
-              </p>
+              </Menu.Item>
             </div>
           </Menu.Popup>
         </Menu.Positioner>

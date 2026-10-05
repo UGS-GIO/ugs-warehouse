@@ -271,6 +271,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
   const page = layout === "page";
   const glanceRows = [...glance, ...meta.curated, ...aboutRows(p)];
   const atAGlance = glanceRows.length > 0 && <Section title="At a glance"><MetaList rows={glanceRows} /></Section>;
+  const description = typeof p.description === "string" && p.description;
   // Title, facts, description and actions, shared by both layouts.
   const head = (
     <>
@@ -283,7 +284,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
             {facts.join(" · ")}
             {IS_REVIEW && item.id && <> <ReviewBadge itemId={String(item.id)} /></>}
           </p>
-          {typeof p.description === "string" && <p className="mt-3 text-muted-foreground">{p.description}</p>}
+          {!page && description && <p className="mt-3 text-muted-foreground">{description}</p>}
         </div>
         <div className="flex flex-wrap gap-2">
           {/* Phones only: from lg up the Downloads list is already in view beside the map. */}
@@ -296,6 +297,12 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
           {cite && <a href={cite.href} target="_blank" rel="noopener" className={SECONDARY}>Cite (DOI) ↗</a>}
         </div>
       </div>
+      {/* Same grid as the map below, so the description wraps at the map's width. */}
+      {page && description && (
+        <div className="mt-3 grid gap-8 lg:grid-cols-3">
+          <p className="min-w-0 text-muted-foreground lg:col-span-2">{description}</p>
+        </div>
+      )}
     </>
   );
 

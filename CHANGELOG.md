@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.2.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.1.0...v1.2.0) (2026-10-05)
+
+
+### Features
+
+* **viewer:** link the source on GitHub ([#526](https://github.com/UGS-GIO/ugs-warehouse/issues/526)) ([85a8820](https://github.com/UGS-GIO/ugs-warehouse/commit/85a8820ea61b5f634af707d05909204231ab0f62))
+
+
+### Bug Fixes
+
+* **viewer:** wrap item description at the map's width ([#525](https://github.com/UGS-GIO/ugs-warehouse/issues/525)) ([6b7d147](https://github.com/UGS-GIO/ugs-warehouse/commit/6b7d147662134125bbb329577d1bc937dcae1a08))
+
 ## [1.1.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.0.0...v1.1.0) (2026-10-05)
 
 

@@ -297,8 +297,8 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
       </div>
       {/* Same grid as the map below, so the description wraps at the map's width. */}
       {typeof p.description === "string" && (
-        <div className={`mt-3 grid gap-8 ${page ? "lg:grid-cols-3" : ""}`}>
-          <p className="min-w-0 text-muted-foreground lg:col-span-2">{p.description}</p>
+        <div className={page ? "mt-3 grid gap-8 lg:grid-cols-3" : "mt-3"}>
+          <p className={`min-w-0 text-muted-foreground ${page ? "lg:col-span-2" : ""}`}>{p.description}</p>
         </div>
       )}
     </>

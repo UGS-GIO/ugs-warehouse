@@ -30,11 +30,11 @@ export { idOf } from "./stac";
 
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-export type View = "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review" | "offline" | "settings";
+export type View = "catalog" | "map" | "discover" | "guide" | "developers" | "preview" | "review" | "offline" | "settings";
 // `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
 // route tree — a computed `/${view}` string would not, which is what the old cast papered over.
 const VIEW_PATH = {
-  catalog: "/catalog", map: "/map", discover: "/discover", arch: "/arch",
+  catalog: "/catalog", map: "/map", discover: "/discover",
   guide: "/guide", developers: "/developers", preview: "/preview",
   review: "/review", offline: "/offline", settings: "/settings",
 } satisfies Record<View, string>;
@@ -89,7 +89,6 @@ const PRIMARY_VIEWS: { id: View; label: string }[] = [
 ];
 // Secondary views — always in the NavMenu overflow (desktop + mobile) so the tab row never overflows.
 const OVERFLOW_VIEWS: { id: View; label: string }[] = [
-  { id: "arch", label: "Architecture" },
   { id: "guide", label: "Guide" },
   { id: "offline", label: "Offline data" },
   { id: "settings", label: "Settings" },
@@ -177,7 +176,7 @@ function useViewState() {
       },
     });
   };
-  // Tabs: catalog + map share the selection (c/i/l/s); the content views (search/arch/guide) reset
+  // Tabs: catalog + map share the selection (c/i/l/s); the content views (search/guide) reset
   // it, so the URL stays clean and returning to the catalog doesn't dump you back on an old item.
   // In a transition so switching to a heavy view keeps the current one interactive + flags `pending`.
   const [pending, startTransition] = useTransition();

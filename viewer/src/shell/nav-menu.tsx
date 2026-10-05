@@ -17,7 +17,7 @@ const HEADING = "px-2 py-1 text-sm font-semibold uppercase tracking-wider text-m
 
 export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
   pages: NavPage[];      // the primary tabs — shown here only below md, where the tab row is hidden
-  overflow?: NavPage[];  // secondary views (Architecture/Guide/Offline data/Settings/Review) — always in the menu
+  overflow?: NavPage[];  // secondary views (Guide/Offline data/Settings/Review) — always in the menu
   current: string; catalogUrl?: string;
 }) {
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
@@ -30,7 +30,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
     // Closing resets the copy state — the menu's own lifetime is the feedback's, so no timer.
     <Menu.Root onOpenChange={(open) => !open && setCopied("idle")}>
       {/* One menu, two faces: a hamburger below md (it carries the views too), and a labeled
-          "More" on desktop. A bare theme icon here hid Architecture and the Guide behind
+          "More" on desktop. A bare theme icon here hid the Guide behind
           something that read as a light-switch — the word is what makes them findable. */}
       <Menu.Trigger
         aria-label={pages.length ? "Menu" : "More"}

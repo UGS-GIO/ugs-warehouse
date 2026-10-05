@@ -49,7 +49,6 @@
     "hyparquet-compressors": "^1.1.2",
     "icechunk-js": "^0.6.0",
     "maplibre-gl": "^6.11.2",
-    "mermaid": "^11.15.0",
     "minisearch": "^7.2.0",
     "pbf": "^4.0.2",
     "pmtiles": "^4.4.1",

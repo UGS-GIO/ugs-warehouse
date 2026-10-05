@@ -4,6 +4,7 @@
 import { type ReactNode, useMemo } from "react";
 
 import type { CollectionSummary } from "@/catalog/browse";
+import { REPO_URL } from "@/shell/legal-footer";
 import { humanize } from "@/ui/ui";
 
 // CDN origin behind the catalog (…/warehouse/stac/catalog.json → https://maps-assets.geology.utah.gov).
@@ -75,6 +76,12 @@ export function Developers({ catalogUrl, groups }: { catalogUrl: string; groups:
           The catalog is static <strong className="font-semibold text-foreground">STAC</strong> on the CDN. You need no key, and
           a browser can read it directly. The data is GeoParquet, PMTiles and COG. Vector layers also have an OGC API
           Features service.
+        </p>
+        <p className="max-w-2xl text-muted-foreground">
+          The code that builds the catalog and this viewer is{" "}
+          <a href={REPO_URL} target="_blank" rel="noopener" className="text-primary hover:underline">on GitHub ↗</a>.
+          Report a problem or ask for a layer in{" "}
+          <a href={`${REPO_URL}/issues`} target="_blank" rel="noopener" className="text-primary hover:underline">its issues ↗</a>.
         </p>
       </header>
 

@@ -48,11 +48,13 @@ import subprocess
 import sys
 import tempfile
 import xml.etree.ElementTree as ET
+from array import array
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-from pmtiles.convert import disk_to_pmtiles
-from pmtiles.reader import MmapSource, Reader
+from pmtiles.convert import mbtiles_to_header_json
+from pmtiles.tile import tileid_to_zxy, zxy_to_tileid
+from pmtiles.writer import Writer
 
 from ..core import config, gcs, stac
 from . import editions, identity, scale, source
@@ -251,15 +253,47 @@ def _vrt_zoom_and_bounds(vrt: str, env: dict) -> tuple[int, bool, list[float]]:
 
 
 def _write_pmtiles(tile_dir: str, out: str, *, bounds: list[float], name: str) -> tuple[int, int, int]:
-    """Write a `gdal raster tile` XYZ tree into a PMTiles archive with the pmtiles library's own
-    directory converter. Tiles are copied verbatim. Returns (n_tiles, minz, maxz) from the header."""
-    with open(os.path.join(tile_dir, "metadata.json"), "w") as fh:
-        json.dump({"name": name, "type": "overlay", "format": "webp",
-                   "bounds": ",".join(str(v) for v in bounds)}, fh)
-    disk_to_pmtiles(tile_dir, out, "auto")
-    with open(out, "rb") as fh:
-        h = Reader(MmapSource(fh)).header()
-    return h["addressed_tiles_count"], h["min_zoom"], h["max_zoom"]
+    """Write a `gdal raster tile` XYZ tree ({z}/{x}/{y}.webp) into a PMTiles archive. Tiles are copied
+    verbatim, in tile-id order so the archive is clustered. Returns (n_tiles, minz, maxz).
+
+    Not `pmtiles.convert.disk_to_pmtiles`: it reads a `6.webp.aux.xml` sidecar as tile 6 and writes the
+    XML over the real tile, and it keeps every tile file until the end, so the tree, the writer's
+    tempfile and the archive are all on disk at once. Here each tile file is deleted once copied."""
+    if not os.path.isdir(tile_dir):
+        raise RuntimeError(f"gdal raster tile produced no output dir {tile_dir}")
+    # Tile ids only, 8 bytes each: a statewide z17 tree is millions of tiles. The path is rebuilt
+    # from the id when the tile is copied.
+    tiles = array("Q")
+    for zd in os.listdir(tile_dir):
+        if not (zd.isdigit() and os.path.isdir(zpath := os.path.join(tile_dir, zd))):
+            continue
+        for xd in os.listdir(zpath):
+            if not (xd.isdigit() and os.path.isdir(xpath := os.path.join(zpath, xd))):
+                continue
+            for yf in os.listdir(xpath):
+                ystr, ext = os.path.splitext(yf)
+                if not ystr.isdigit() or not ext:
+                    continue                    # skip sidecars (.aux.xml etc.)
+                if ext.lower() != ".webp":
+                    raise RuntimeError(f"unexpected tile {xpath}/{yf}; expected .webp")
+                tiles.append(zxy_to_tileid(int(zd), int(xd), int(ystr)))
+    if not tiles:
+        raise RuntimeError(f"no tile files under {tile_dir}")
+    tiles = array("Q", sorted(tiles))
+    minz, maxz = tileid_to_zxy(tiles[0])[0], tileid_to_zxy(tiles[-1])[0]
+    # The library's own MBTiles-metadata mapper; with no `center` it opens at the coarsest zoom.
+    header, metadata = mbtiles_to_header_json({
+        "name": name, "type": "overlay", "format": "webp", "minzoom": minz, "maxzoom": maxz,
+        "bounds": ",".join(str(v) for v in bounds)})
+    with open(out, "wb") as f:
+        writer = Writer(f)
+        for tid in tiles:
+            path = os.path.join(tile_dir, "{}/{}/{}.webp".format(*tileid_to_zxy(tid)))
+            with open(path, "rb") as fh:
+                writer.write_tile(tid, fh.read())
+            os.remove(path)
+        writer.finalize(header, metadata)
+    return len(tiles), minz, maxz
 
 
 def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:

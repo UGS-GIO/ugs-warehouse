@@ -269,16 +269,18 @@ def _tree(root, tiles):
         (d / f"{y}.webp").write_bytes(blob)
 
 
-def test_write_pmtiles_copies_tiles_verbatim(tmp_path):
-    """Tiles land byte-for-byte at their XYZ address; the header carries the real bounds, zoom
-    range and WebP type, opens at the coarsest zoom, and the archive is clustered."""
+def test_write_pmtiles_copies_tiles_verbatim_and_skips_sidecars(tmp_path):
+    """Tiles land byte-for-byte at their XYZ address and a .aux.xml sidecar never replaces one; the
+    header carries the real bounds, zoom range and WebP type; each tile file is gone once copied."""
     tiles = {(14, 3, 6): b"webp-A", (14, 3, 7): b"webp-B", (13, 1, 2): b"webp-C"}
     _tree(tmp_path / "t", tiles)
+    (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")
 
     out = tmp_path / "out.pmtiles"
     n, minz, maxz = gm._write_pmtiles(
         str(tmp_path / "t"), str(out), bounds=[-114.0, 37.0, -109.0, 42.0], name="geologic-maps-24k")
     assert (n, minz, maxz) == (3, 13, 14)
+    assert not list((tmp_path / "t").rglob("*.webp"))
 
     with open(out, "rb") as f:
         reader = Reader(MmapSource(f))
@@ -290,10 +292,25 @@ def test_write_pmtiles_copies_tiles_verbatim(tmp_path):
     assert meta["name"] == "geologic-maps-24k"
 
 
-def test_write_pmtiles_fails_on_an_empty_tree(tmp_path):
+def test_write_pmtiles_raises_when_every_zoom_dir_is_empty(tmp_path):
     """A fully blank build can leave only empty zoom dirs; that must not become an empty archive."""
     (tmp_path / "t" / "14" / "3").mkdir(parents=True)
-    with pytest.raises(Exception):
+    (tmp_path / "t" / "14" / "3" / "6.webp.aux.xml").write_text("<PAMDataset/>")
+    with pytest.raises(RuntimeError, match="no tile files"):
+        gm._write_pmtiles(str(tmp_path / "t"), str(tmp_path / "x.pmtiles"), bounds=[-1, -1, 1, 1], name="x")
+
+
+def test_write_pmtiles_raises_when_the_tile_dir_is_missing(tmp_path):
+    with pytest.raises(RuntimeError, match="no output dir"):
+        gm._write_pmtiles(str(tmp_path / "nope"), str(tmp_path / "x.pmtiles"), bounds=[-1, -1, 1, 1], name="x")
+
+
+def test_write_pmtiles_rejects_a_tile_in_another_format(tmp_path):
+    """The header says WebP, so a .png tile would be silently mislabelled; refuse it."""
+    d = tmp_path / "t" / "14" / "3"
+    d.mkdir(parents=True)
+    (d / "6.png").write_bytes(b"b")
+    with pytest.raises(RuntimeError, match="expected .webp"):
         gm._write_pmtiles(str(tmp_path / "t"), str(tmp_path / "x.pmtiles"), bounds=[-1, -1, 1, 1], name="x")
 
 

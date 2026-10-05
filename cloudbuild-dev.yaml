@@ -1,0 +1,169 @@
+# Develop environment: on every push to develop, build the service images and deploy `-dev` copies of
+# the read-side Cloud Run services. Production deploys from cloudbuild.yaml when develop merges to main.
+#
+# Code only, by design. The dev services read the same public catalog and database as prod
+# (read-only roles), and nothing here deploys a job or the ingest handler, so dev never writes data.
+# The dev admin console runs with JOBS_DRY_RUN=True so it cannot start a prod job.
+#
+# Images are tagged with the commit and `dev`, never `latest`: prod builds and the Cloud Batch
+# mosaic bake read `latest`.
+
+substitutions:
+  _REGION: us-central1
+  _AR_REPO: ugs-warehouse
+  _RUNTIME_SA: warehouse-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com
+  _SQL_INSTANCE: ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db
+  _API_SERVICE: ugs-warehouse-api-dev
+  _FEATURES_SERVICE: ugs-warehouse-features-dev
+  _TILES_SERVICE: ugs-warehouse-tiles-dev
+  _ADMIN_SERVICE: ugs-warehouse-admin-dev
+  _ADMIN_SA: warehouse-admin-run@ut-dnr-ugs-backend-tools.iam.gserviceaccount.com
+  _ADMIN_HOSTS: .run.app
+  _ADMIN_SECRET: warehouse-admin-secret-key
+  _API_DB_USER: schema_reader
+  _API_SECRET: schema-reader-db-password
+  _TAG: $SHORT_SHA
+
+steps:
+  - id: build-api
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api:dev
+      - api/
+    env:
+      - DOCKER_BUILDKIT=1
+
+  - id: build-features
+    waitFor: ['-']
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:dev
+      - featureserv/
+
+  - id: build-tiles
+    waitFor: ['-']
+    name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:dev
+      - tiles/
+
+  - id: build-admin
+    waitFor: ['-']
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        IMG=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin
+        # Cache from the last develop build, else from prod's.
+        docker pull "$$IMG:dev" || docker pull "$$IMG:latest" || true
+        DOCKER_BUILDKIT=1 docker build -f Dockerfile.admin \
+          --build-arg BUILDKIT_INLINE_CACHE=1 \
+          --cache-from "$$IMG:dev" --cache-from "$$IMG:latest" \
+          -t "$$IMG:${_TAG}" -t "$$IMG:dev" .
+
+  - id: push-api
+    waitFor: [build-api]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api']
+
+  - id: push-features
+    waitFor: [build-features]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features']
+
+  - id: push-tiles
+    waitFor: [build-tiles]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles']
+
+  - id: push-admin
+    waitFor: [build-admin]
+    name: gcr.io/cloud-builders/docker
+    args: [push, --all-tags, '${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin']
+
+  - id: deploy-api
+    waitFor: [push-api]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_API_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-api:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --set-cloudsql-instances=${_SQL_INSTANCE}
+      - --set-secrets=PGPASSWORD=${_API_SECRET}:latest
+      - --set-env-vars=^|^DATABASE_URL=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}|PGFS_DATABASE_DBCONNECTION=postgresql://${_API_DB_USER}@/seamlessgeolmap?host=/cloudsql/${_SQL_INSTANCE}
+      - --allow-unauthenticated
+      - --max-instances=5
+
+  - id: deploy-features
+    waitFor: [push-features]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_FEATURES_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-features:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --allow-unauthenticated
+      - --port=9000
+      - --cpu=1
+      - --memory=2Gi
+      - --timeout=120
+      - --concurrency=4
+      - --max-instances=5
+
+  - id: deploy-tiles
+    waitFor: [push-tiles]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_TILES_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-tiles:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_RUNTIME_SA}
+      - --allow-unauthenticated
+      - --port=8080
+      - --cpu=1
+      - --memory=512Mi
+      - --timeout=60
+      - --max-instances=5
+
+  - id: deploy-admin
+    waitFor: [push-admin]
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_ADMIN_SERVICE}
+      - --image=${_REGION}-docker.pkg.dev/$PROJECT_ID/${_AR_REPO}/ugs-warehouse-admin:${_TAG}
+      - --region=${_REGION}
+      - --service-account=${_ADMIN_SA}
+      - --ingress=all
+      - --iap
+      - --no-allow-unauthenticated
+      - --set-secrets=SECRET_KEY=${_ADMIN_SECRET}:latest
+      - --set-env-vars=^|^DEBUG=False|JOBS_DRY_RUN=True|ALLOWED_HOSTS=${_ADMIN_HOSTS}|GCP_PROJECT=$PROJECT_ID|GCP_REGION=${_REGION}
+
+options:
+  logging: CLOUD_LOGGING_ONLY

@@ -62,13 +62,15 @@ All steps run in parallel (`waitFor: ["-"]`); any failing fails the build → th
 
 ## Deploy + docs triggers
 
-`ugs-warehouse-deploy` (→ `cloudbuild.yaml`, scoped to backend paths — see `deploy_included_files`
-in `infra/cloudbuild-triggers.tf`) and `ugs-warehouse-docs` (→ `cloudbuild-docs.yaml`, scoped to
-`docs/**`, `mkdocs.yml`, `docs-requirements.txt`, `cloudbuild-docs.yaml`) exist alongside
-`ugs-warehouse-pr-ci`.
+`ugs-warehouse-deploy` (→ `cloudbuild.yaml`, production, on main, scoped by `deploy_included_files`),
+`ugs-warehouse-dev` (→ `cloudbuild-dev.yaml`, the develop environment, on develop, scoped by
+`dev_included_files` in `infra/cloudbuild-triggers.tf`) and `ugs-warehouse-docs`
+(→ `cloudbuild-docs.yaml`, scoped to `docs/**`, `mkdocs.yml`, `docs-requirements.txt`,
+`cloudbuild-docs.yaml`) exist alongside `ugs-warehouse-pr-ci`.
 
 `cloudbuild.yaml` no longer builds or deploys **any** viewer — the public one deploys via
-`.github/workflows/firebase-hosting-merge.yml` (`docs/DEPLOY.md` §5), the review bundle via
+`.github/workflows/firebase-hosting-merge.yml` and the dev one via `firebase-hosting-develop.yml`
+(`docs/DEPLOY.md` §5), the review bundle via
 `cloudbuild-review-viewer.yaml` on its own trigger (`ugs-warehouse-review-viewer`). Both
 `ugs-warehouse-deploy`'s path scope and the review-viewer trigger's existence are now applied —
 a viewer-only change no longer fires the backend image-build pipeline, and `/review/viewer/`
@@ -123,9 +125,10 @@ console/CLI-created (§ One-time setup above), not Terraform-managed either.
 |---|---|---|---|---|
 | `ugs-warehouse-pr-ci` | `cloudbuild-ci.yaml` | PR, any branch | none (all paths) | default Compute SA |
 | `ugs-warehouse-deploy` | `cloudbuild.yaml` | push to `main` | scoped to backend paths (`deploy_included_files`) | default Compute SA |
+| `ugs-warehouse-dev` | `cloudbuild-dev.yaml` | push to `develop` | read-side service paths (`dev_included_files`) | default Compute SA |
 | `ugs-warehouse-docs` | `cloudbuild-docs.yaml` | push to `main` | `docs/**`, `mkdocs.yml`, `docs-requirements.txt`, `cloudbuild-docs.yaml` | default Compute SA |
-| `ugs-warehouse-viewer-preview` | `cloudbuild-viewer-preview.yaml` | PR to `main` | `viewer/**` | `ugs-warehouse-preview-build@` |
-| `ugs-warehouse-tiles-preview` | `cloudbuild-service-preview.yaml` | PR to `main` | `tiles/**` | `ugs-warehouse-preview-build@` |
+| `ugs-warehouse-viewer-preview` | `cloudbuild-viewer-preview.yaml` | PR to `main` or `develop` | `viewer/**` | `ugs-warehouse-preview-build@` |
+| `ugs-warehouse-tiles-preview` | `cloudbuild-service-preview.yaml` | PR to `main` or `develop` | `tiles/**` | `ugs-warehouse-preview-build@` |
 | `ugs-warehouse-review-viewer` | `cloudbuild-review-viewer.yaml` | push to `main` | `viewer/**` | default Compute SA |
 | `ugs-warehouse-basemap` | `cloudbuild-basemap.yaml` | Pub/Sub `ugs-warehouse-basemap` (monthly Cloud Scheduler, or by hand) | n/a | `ugs-basemap-build@` |
 
@@ -138,7 +141,7 @@ Cloud Build on events the trigger config can't express:
 | workflow | fires on | submits | runs as |
 |---|---|---|---|
 | `.github/workflows/preview-cleanup.yml` | PR `closed` (no trigger equivalent for this event) | `cloudbuild-preview-cleanup.yaml` | `ugs-warehouse-preview-build@` (WIF, no key) |
-| `.github/workflows/firebase-hosting-merge.yml` / `-pull-request.yml` | push to `main` / PR, `viewer/**` | nothing — deploys directly via `firebase-tools`, no Cloud Build involved | Firebase service-account key (`FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` repo secret, see `docs/DEPLOY.md` §5) |
+| `.github/workflows/firebase-hosting-merge.yml` / `-develop.yml` / `-pull-request.yml` | push to `main` (live site) / push to `develop` (dev site) / PR, `viewer/**` | nothing — deploys directly via `firebase-tools`, no Cloud Build involved | Firebase service-account key (`FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` repo secret, see `docs/DEPLOY.md` §5) |
 
 `-pull-request.yml` also upserts the single PR comment carrying **both** preview links — the public
 Firebase channel it just deployed, and the IAP review preview from `cloudbuild-viewer-preview.yaml`

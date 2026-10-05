@@ -71,6 +71,15 @@ gcloud storage buckets add-iam-policy-binding gs://ut-dnr-ugs-maps-prod-public \
 
 ## 2. Build + deploy (every release)
 
+Feature PRs merge to `develop`, which deploys the develop environment (`cloudbuild-dev.yaml`: `-dev`
+read-side services, no jobs, no data writes) and the dev viewer site. release-please keeps a release
+PR open on `develop`; merging it bumps the version and tags it. A PR from `develop` to `main`, merged
+with a merge commit, ships the release: the push to `main` runs `cloudbuild.yaml` and the live viewer
+deploy. A ruleset on `main` requires the `main source` check, so only `develop` merges there; an admin
+can bypass it for a hotfix, which then merges back into `develop`.
+
+The trigger runs this; by hand:
+
 ```bash
 gcloud builds submit --config cloudbuild.yaml --project=$DEPLOY_PROJECT \
   --substitutions=_REGION=$REGION,_AR_REPO=$AR_REPO,_RUNTIME_SA=$RUNTIME_SA,_SQL_INSTANCE=$SQL_INSTANCE,_SECRET=$SECRET
@@ -153,6 +162,7 @@ The viewer deploys from **GitHub Actions**, not Cloud Build:
 | workflow | trigger | lands on |
 |---|---|---|
 | `.github/workflows/firebase-hosting-merge.yml` | push to `main` touching `viewer/**` | live site `data-geology-utah-gov` |
+| `.github/workflows/firebase-hosting-develop.yml` | push to `develop` touching `viewer/**` | dev site `dev-data-geology-utah-gov` |
 | `.github/workflows/firebase-hosting-pull-request.yml` | PR touching `viewer/**` | preview channel `pr-<n>`, public no-login URL, 7-day expiry |
 
 Both use `FirebaseExtended/action-hosting-deploy` with a service-account secret — the same pattern

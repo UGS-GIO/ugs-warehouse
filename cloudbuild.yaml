@@ -1,9 +1,6 @@
-# Build the warehouse images, push to Artifact Registry, deploy the Cloud Run services.
-#
-# Trigger options (pick one):
-#   - Cloud Build GitHub trigger on push to main (simplest), or
-#   - GH Actions (Workload Identity Federation, keyless) -> `gcloud builds submit`, or
-#   - manual `gcloud builds submit --config cloudbuild.yaml`.
+# Production: build the warehouse images, push to Artifact Registry, deploy the Cloud Run services
+# and jobs. Runs on a push to main (ugs-warehouse-deploy, infra/cloudbuild-triggers.tf), which only
+# takes merges from develop. Pushes to develop deploy the develop environment from cloudbuild-dev.yaml.
 #
 # Fill the _SUBSTITUTIONS below for your project (or pass --substitutions=...).
 # The Cloud Build service account needs: artifactregistry.writer, run.developer,

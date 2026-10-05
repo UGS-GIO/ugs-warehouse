@@ -173,7 +173,7 @@ export const effectiveSort = (s: DiscoveryState): SortKey =>
 // The Discover view's whole filter/sort/layout state lives in the URL so a category tile or a shared
 // link reproduces the view. These two pure functions are the validated boundary: parse the raw search
 // (all strings, possibly bad) into a typed state, and serialize a state back to a search patch that
-// drops defaults (so a pristine view stays a clean `/discover`). Namespaced keys — q / collections
+// drops defaults (so a pristine view stays a clean `/`). Namespaced keys — q / collections
 // / types / category / formats / geometry / sort / layout / density / area — never touch App's c/i/l/s.
 export type Layout = "gallery" | "list";
 export type Density = "comfortable" | "compact";
@@ -234,7 +234,7 @@ export function parseDiscovery(sp: Record<string, unknown>): DiscoveryState {
 const csv = (list: string[]): string | undefined => (list.length ? list.join(",") : undefined);
 
 /** A DiscoveryState → a search patch (each Discover key set or cleared). Defaults serialize to
- *  `undefined` so they drop out of the URL, keeping a pristine view a bare `/discover`. */
+ *  `undefined` so they drop out of the URL, keeping a pristine view a bare `/`. */
 export function discoveryPatch(s: DiscoveryState): Record<string, string | undefined> {
   return {
     // Keep the RAW query (internal + trailing spaces intact) whenever it has real content — the box is

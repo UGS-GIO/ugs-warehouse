@@ -106,7 +106,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                 </Menu.Item>
               ))}
               <Menu.Item className={`${ITEM} text-xs text-muted-foreground`} nativeButton={false}
-                render={<a href={BUILD_URL} target="_blank" rel="noreferrer" />}>
+                render={<a href={BUILD_URL} target="_blank" rel="noreferrer" title={`viewer build ${__BUILD_HASH__} on GitHub`} />}>
                 build {__BUILD_DATE__} · {__BUILD_HASH__}
               </Menu.Item>
             </div>

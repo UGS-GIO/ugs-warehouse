@@ -16,7 +16,7 @@ export type Density = "comfortable" | "compact";
 // A <Link> descriptor, not an <a>. The router builds the href (basepath applied), does SPA nav on a
 // plain click and leaves modifier/middle-click to the browser — all of which this used to hand-roll.
 export type LinkAttrs = {
-  to: "/catalog" | "/discover";
+  to: "/catalog" | "/";
   search: Record<string, unknown> | ((prev: Record<string, unknown>) => Record<string, unknown>);
   "data-href": string;
   onMouseEnter?: () => void;
@@ -34,7 +34,7 @@ type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs; 
 export const itemLink = (it: ItemRef, wide: boolean): LinkAttrs => {
   const sel = { c: it.collId, i: it.href.split("/").slice(-2)[0] };
   return {
-    to: wide ? "/discover" : "/catalog",
+    to: wide ? "/" : "/catalog",
     search: wide ? (prev: Record<string, unknown>) => ({ ...prev, ...sel }) : sel,
     "data-href": it.href,
   };

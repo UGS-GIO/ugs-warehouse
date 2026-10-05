@@ -34,7 +34,7 @@ export type View = "catalog" | "map" | "discover" | "guide" | "developers" | "pr
 // `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
 // route tree — a computed `/${view}` string would not, which is what the old cast papered over.
 const VIEW_PATH = {
-  catalog: "/catalog", map: "/map", discover: "/discover",
+  catalog: "/catalog", map: "/map", discover: "/",
   guide: "/guide", developers: "/developers", preview: "/preview",
   review: "/review", offline: "/offline", settings: "/settings",
 } satisfies Record<View, string>;
@@ -136,11 +136,10 @@ function useViewState() {
   // (catalog, m, ftsdb, …) ride in the same search untouched (see router.tsx validateSearch).
   const sp = useSearch({ from: "__root__" });
   const navigate = useNavigate();
-  // The view is the PATH, not a ?view= param — see routes.tsx for why. "/" redirects to Discover
-  // (routes/index.tsx); a bare "/" with a selection still means the catalog, so old ?c=/?i= links work.
+  // The view is the PATH, not a ?view= param — see routes.tsx for why. "/" is Discover.
   const pathname = useRouterState({ select: (st) => st.location.pathname });
   const seg = pathname.replace(/^\/+|\/+$/g, "").split("/")[0];
-  const view: View = isView(seg) ? seg : sp.i || sp.c ? "catalog" : "discover";
+  const view: View = isView(seg) ? seg : "discover";
   const collectionUrl = sp.c;
   const itemUrl = sp.i;
   const urlLayerIds = parseLayerParam(sp.l);
@@ -577,7 +576,7 @@ export function AppLayout() {
       : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
-        <Link to="/" title="Home — catalog root"
+        <Link to="/" title="Home"
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
           {/* The emblem shows only where index.css hides the state band (phones, short screens). Where
               the band shows it already carries the beehive, and a second copy read as a duplicate. */}

@@ -142,7 +142,7 @@ def stamp_file_meta(item: dict, index: dict[str, gcs.FileMeta] | None = None) ->
     missing = {k: p for k, a in (item.get("assets") or {}).items()
                if "file:checksum" not in a and (p := object_path_of(a.get("href", "")))}
     if index is None:
-        index = {p: m for p in missing.values() if (m := gcs.get_file_meta(p)) is not None}
+        index = {p: m for p in set(missing.values()) if (m := gcs.get_file_meta(p)) is not None}
     n = 0
     for key, path in missing.items():
         asset, fields = item["assets"][key], file_fields(index.get(path))

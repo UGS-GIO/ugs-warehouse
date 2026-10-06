@@ -29,9 +29,13 @@ def _read_items() -> dict[str, dict]:
     """{object_path: item} for every item the catalog refresh would index."""
     groups = stac._group_items(gcs.list_paths(config.STAC_PREFIX))
     paths = [stac.item_object_path(c, i) for c, ids in groups.items() for i in ids]
+    def read(path: str) -> dict | None:
+        try:
+            return json.loads(gcs.get_bytes(path))
+        except FileNotFoundError:  # deleted between the listing and the read
+            return None
     with ThreadPoolExecutor(max_workers=64) as ex:
-        docs = ex.map(lambda p: json.loads(gcs.get_bytes(p)), paths)
-        return dict(zip(paths, docs))
+        return {p: d for p, d in zip(paths, ex.map(read, paths)) if d is not None}
 
 
 def _targets(items: dict[str, dict]) -> set[str]:
@@ -41,7 +45,7 @@ def _targets(items: dict[str, dict]) -> set[str]:
 
 def _index(targets: set[str]) -> dict[str, gcs.FileMeta]:
     """One listing per two-segment prefix the targets live under (`geolmap/cogs/`, …)."""
-    prefixes = sorted({"/".join(p.split("/")[:2]) + "/" for p in targets})
+    prefixes = sorted({"/".join(parts[:2]) + "/" for p in targets if (parts := p.split("/")[:-1])})
     index: dict[str, gcs.FileMeta] = {}
     with ThreadPoolExecutor(max_workers=16) as ex:
         for part in ex.map(gcs.list_file_meta, prefixes):

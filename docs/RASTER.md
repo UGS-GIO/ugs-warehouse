@@ -82,7 +82,7 @@ value, and whatever it names ends up on the CDN.
   `ugs:pub_type`, `ugs:pub_id`, `ugs:is_mosaic`. Empty values are dropped. A `data_type` outside
   the STAC pixel-type enum (e.g. `categorical`) is published as `other`, with the original on
   `ugs:data_type`, so the item still validates.
-- `proj:code` (projection extension) from `epsg`; `file:size` on each copied asset.
+- `proj:code` (projection extension) from `epsg`; `file:size` on each copied asset, and `file:checksum` once `scripts/backfill_file_meta.py` has hashed it (a server-side copy never reads the bytes).
 - `ugs:renders` and a `style` asset when ugs-styles has an entry for the item id.
 
 | Asset key | Href | Roles | Present when |

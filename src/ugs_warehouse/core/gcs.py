@@ -6,7 +6,8 @@ immutable/dated artifacts (a dated archive, a content-addressed COG) cache long.
 
 Every write returns a `FileMeta` — the size and sha256 the caller needs for the STAC `file`
 extension (`file:size` / `file:checksum`). Computed from the bytes as they are written, so no
-object is read back to describe it.
+object is read back to describe it. The write also stores both as object metadata, so a builder
+that only links to the object (a pub cover, a COG) reads them from a listing (`list_file_meta`).
 """
 from __future__ import annotations
 
@@ -37,6 +38,10 @@ CACHE_CATALOG = "public, max-age=60, stale-while-revalidate=600"
 # STAC's file extension requires multihash encoding, not a bare hex digest.
 _MULTIHASH_SHA2_256 = "1220"
 _HASH_CHUNK = 1 << 20  # stream the file past the hasher — a COG never lands in memory
+# Object metadata keys (x-goog-meta-*). The size is stored too: a gzipped object's stored size is
+# not the size a consumer receives.
+META_SIZE = "file-size"
+META_CHECKSUM = "file-checksum"
 
 
 class FileMeta(NamedTuple):
@@ -84,21 +89,26 @@ def _gcs_client() -> gcloud_storage.Client:
 
 
 def _attrs(content_type: str, cache_control: str | None,
-           content_encoding: str | None = None) -> dict[str, str]:
+           content_encoding: str | None = None, meta: FileMeta | None = None) -> dict[str, str]:
     attrs = {"Content-Type": content_type}
     if cache_control:
         attrs["Cache-Control"] = cache_control
     if content_encoding:
         attrs["Content-Encoding"] = content_encoding
+    if meta is not None:  # any other key becomes user metadata (x-goog-meta-*)
+        attrs[META_SIZE] = str(meta.size)
+        if meta.checksum:
+            attrs[META_CHECKSUM] = meta.checksum
     return attrs
 
 
 def upload(local_path: str, object_path: str, *, content_type: str,
            cache_control: str | None = None) -> FileMeta:
     """Upload a local file to `gs://{BUCKET}/{object_path}`."""
+    meta = _file_meta(local_path)
     obs.put(_store(), object_path, Path(local_path),
-            attributes=_attrs(content_type, cache_control))
-    return _file_meta(local_path)
+            attributes=_attrs(content_type, cache_control, meta=meta))
+    return meta
 
 
 def put_bytes(data: bytes, object_path: str, *, content_type: str,
@@ -116,7 +126,7 @@ def put_bytes(data: bytes, object_path: str, *, content_type: str,
     meta = FileMeta(len(data), multihash_sha256(hashlib.sha256(data).digest()))
     body = gzip.compress(data, 6) if compress else data
     obs.put(_store(), object_path, body,
-            attributes=_attrs(content_type, cache_control, "gzip" if compress else None))
+            attributes=_attrs(content_type, cache_control, "gzip" if compress else None, meta))
     return meta
 
 
@@ -268,6 +278,46 @@ def list_etags(prefix: str) -> dict[str, str]:
     for batch in obs.list(_store(), prefix=prefix):
         out.update((m["path"], m.get("e_tag") or "") for m in batch)
     return out
+
+
+def _meta_of(blob) -> FileMeta | None:
+    """FileMeta from a listed blob: stored metadata first, else the stored size (not for a gzipped
+    object, whose stored size is not what a consumer receives)."""
+    md = blob.metadata or {}
+    if md.get(META_SIZE, "").isdigit():
+        return FileMeta(int(md[META_SIZE]), md.get(META_CHECKSUM) or None)
+    if blob.content_encoding == "gzip" or not blob.size:
+        return None
+    return FileMeta(blob.size)
+
+
+def list_file_meta(prefix: str) -> dict[str, FileMeta]:
+    """{path: FileMeta} for every object under `prefix`, from one listing (no object is read).
+
+    google-cloud-storage, not obstore: only the JSON API listing returns custom metadata.
+    """
+    blobs = _gcs_client().list_blobs(
+        config.BUCKET, prefix=prefix,
+        fields="items(name,size,contentEncoding,metadata),nextPageToken")
+    return {b.name: m for b in blobs if (m := _meta_of(b)) is not None}
+
+
+def hash_object(object_path: str) -> FileMeta:
+    """Size + sha256 of an existing object, streamed (for objects written before the metadata)."""
+    h = hashlib.sha256()
+    size = 0
+    for chunk in obs.get(_store(), object_path).stream(min_chunk_size=_HASH_CHUNK):
+        h.update(chunk)
+        size += len(chunk)
+    return FileMeta(size, multihash_sha256(h.digest()))
+
+
+def set_file_meta(object_path: str, meta: FileMeta) -> None:
+    """Store `meta` on an existing object (metadata-only PATCH; the bytes are untouched)."""
+    blob = _gcs_client().bucket(config.BUCKET).blob(object_path)
+    blob.metadata = {META_SIZE: str(meta.size),
+                     **({META_CHECKSUM: meta.checksum} if meta.checksum else {})}
+    blob.patch()
 
 
 def list_paths(prefix: str, *, bucket: str | None = None) -> list[str]:

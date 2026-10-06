@@ -24,6 +24,9 @@ def _in_memory_gcs(monkeypatch):
     monkeypatch.setattr(gcs, "_cached_stores", {})
     monkeypatch.setattr(gcs, "GCSStore", lambda bucket=None, **_k: MemoryStore())
     monkeypatch.setattr(gcs, "_gcs_client", _no_client)
+    # MemoryStore keeps no custom metadata, so the listing builders stamp from is empty by default.
+    monkeypatch.setattr(gcs, "list_file_meta", lambda _prefix: {})
+    monkeypatch.setattr(gcs, "get_file_meta", lambda _path: None)
 
 
 class FakeIap:

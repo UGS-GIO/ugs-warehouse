@@ -148,6 +148,6 @@ def agents(*, title: str, kind: str, path: str, children: int,
                "its own `proj:code`, which overrides the item's.\n"
                "- Fields prefixed `ugs:` are ours and are not part of any STAC extension. Standard "
                "clients ignore them safely.\n"
-               "- Assets carry `file:size` where the warehouse wrote the bytes, and `file:checksum` "
-               "where it could compute one; an absent value means it could not, not that it is zero.\n")
+               "- Assets the warehouse hosts carry `file:size` and `file:checksum`; one without a "
+               "checksum has not been hashed yet. Files linked on other hosts carry neither.\n")
     return "".join(out)

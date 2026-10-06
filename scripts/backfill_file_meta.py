@@ -63,7 +63,9 @@ def main() -> int:
     todo = [t for t in targets if t in index and not index[t].checksum]
     big = [t for t in todo if args.max_bytes is not None and index[t].size > args.max_bytes]
     todo = [t for t in todo if t not in big]
-    gb = lambda paths: sum(index[p].size for p in paths) / 1e9  # noqa: E731
+
+    def gb(paths: list[str]) -> float:
+        return sum(index[p].size for p in paths) / 1e9
     print(f"{len(items)} items ({unreadable} unreadable), {len(targets)} assets in our bucket without a checksum; "
           f"hash {len(todo)} objects ({gb(todo):.2f} GB), skip {len(big)} over --max-bytes "
           f"({gb(big):.2f} GB), {len(missing)} not found")
@@ -96,11 +98,11 @@ def main() -> int:
     changed = {p: it for p, it in items.items() if stac.stamp_file_meta(it, index)}
     print(f"{'stamping' if args.apply else 'would stamp'} {len(changed)} items")
     if args.apply and changed:
+        def put_item(path: str, item: dict) -> None:
+            gcs.put_bytes(json.dumps(item, indent=2).encode(), path,
+                          content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
         with ThreadPoolExecutor(max_workers=64) as ex:
-            list(ex.map(lambda kv: gcs.put_bytes(
-                json.dumps(kv[1], indent=2).encode(), kv[0],
-                content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG),
-                changed.items()))
+            list(ex.map(put_item, changed.keys(), changed.values()))
         stac.refresh_catalog()
     return rc
 

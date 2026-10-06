@@ -126,6 +126,32 @@ def file_fields(meta: gcs.FileMeta | None) -> dict:
     return {"file:size": meta.size, **({"file:checksum": meta.checksum} if meta.checksum else {})}
 
 
+def object_path_of(href: str) -> str | None:
+    """The bucket object path behind a CDN href, or None for an off-warehouse href."""
+    base = config.PUBLIC_BASE_URL.rstrip("/") + "/"
+    return href.removeprefix(base).split("?", 1)[0] if href.startswith(base) else None
+
+
+def stamp_file_meta(item: dict, index: dict[str, gcs.FileMeta] | None = None) -> int:
+    """Add `file:size`/`file:checksum` to our-bucket assets that lack a checksum (mutates item).
+
+    `index` comes from `gcs.list_file_meta`; without one, each asset is looked up on its own.
+    """
+    missing = {k: p for k, a in (item.get("assets") or {}).items()
+               if "file:checksum" not in a and (p := object_path_of(a.get("href", "")))}
+    if index is None:
+        index = {p: m for p in set(missing.values()) if (m := gcs.get_file_meta(p)) is not None}
+    n = 0
+    for key, path in missing.items():
+        asset, fields = item["assets"][key], file_fields(index.get(path))
+        if fields and ("file:checksum" in fields or "file:size" not in asset):
+            asset.update(fields)
+            n += 1
+    if n and FILE_EXT not in (exts := item.setdefault("stac_extensions", [])):
+        exts.append(FILE_EXT)
+    return n
+
+
 def build_item(*, item_id: str, collection: str, geometry: dict | None,
                bbox: list[float] | None, datetime_iso: str | None,
                properties: dict, assets: dict,

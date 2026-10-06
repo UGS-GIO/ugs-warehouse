@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.3.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.2.0...v1.3.0) (2026-10-06)
+
+
+### Features
+
+* **stac:** stamp file:size and file:checksum from object metadata ([#531](https://github.com/UGS-GIO/ugs-warehouse/issues/531)) ([4343419](https://github.com/UGS-GIO/ugs-warehouse/commit/4343419a31651dc3ef5094c10f45a9229eba4eb6))
+
 ## [1.2.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.1.0...v1.2.0) (2026-10-05)
 
 

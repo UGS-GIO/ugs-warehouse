@@ -315,19 +315,39 @@ export const defaultStyleUrl = (d: StacDoc | undefined): string | undefined => {
   return (renders.default ?? Object.values(renders)[0])?.style_url;
 };
 
+// The URL each fetched doc came from: static catalogs link relatively (`../collection.json`) and
+// often carry no `self`, so resolving a doc's links needs it.
+const fetchedFrom = new WeakMap<object, string>();
+
 async function fetchJson(url: string): Promise<StacDoc> {
   const r = await fetch(url);
   if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);
-  return r.json();
+  const doc = await r.json() as StacDoc;
+  if (doc && typeof doc === "object") fetchedFrom.set(doc, url);
+  return doc;
+}
+
+/** The query that fetches one STAC doc, shared by useStac and anything else needing the same doc. */
+export const stacDocQuery = (url: string) => ({ queryKey: qk.stac(url), queryFn: () => fetchJson(url) });
+
+/** A doc's collection, as an absolute URL: its `collection` (else `parent`) link, resolved against
+ *  `base`, else the URL it was fetched from, else its `self` link. */
+export function collectionHrefOf(doc: StacDoc | undefined, base?: string): string | undefined {
+  const links = doc?.links ?? [];
+  const link = links.find((l) => l.rel === "collection") ?? links.find((l) => l.rel === "parent");
+  const absolute = (u?: string) => (u && /^[a-z][a-z0-9+.-]*:/i.test(u) ? u : undefined);
+  const from = absolute(base) ?? (doc ? fetchedFrom.get(doc) : undefined) ?? absolute(links.find((l) => l.rel === "self")?.href);
+  if (!link) return undefined;
+  try {
+    return new URL(link.href, from).href;
+  } catch {
+    return undefined;   // relative link and nothing to resolve it against
+  }
 }
 
 /** Fetch + cache any STAC doc by URL. `enabled` gates on a selected url. */
 export function useStac(url?: string) {
-  return useQuery({
-    queryKey: qk.stac(url),
-    queryFn: () => fetchJson(url as string),
-    enabled: Boolean(url),
-  });
+  return useQuery({ ...stacDocQuery(url as string), enabled: Boolean(url) });
 }
 
 /** Fetch many STAC docs by URL in parallel (shares the ["stac", url] cache with
@@ -661,9 +681,9 @@ export function resolveSelection(
 type StacRender = { assets?: string[]; rescale?: number[][]; variable?: string };
 
 /**
- * A datacube variable's display stretch from STAC: the standard render extension (`renders`), then
- * the warehouse's `ugs:renders` (same shape). The render naming this variable wins, else `default`.
- * Undefined when neither says, and the viewer samples one.
+ * A datacube variable's display stretch from one STAC doc (an item, or its collection): the standard
+ * render extension (`renders`), then the warehouse's `ugs:renders` (same shape). The render naming
+ * this variable wins, else `default`. Undefined when the doc says nothing.
  */
 export function cubeRenderRescale(item: StacDoc, variable: string): [number, number] | undefined {
   const props = (item.properties ?? {}) as Record<string, unknown>;

@@ -137,7 +137,8 @@ export type ActiveLayer = {
     href: string; variable: string; variables: string[];
     stepDims: Record<string, CubeStep[]>; selection: Record<string, number>;
     rescale?: [number | undefined, number | undefined];   // the user's Min/Max, if set
-    stacRescale?: [number, number];   // the STAC render's stretch for this variable, if any
+    stacRescale?: [number, number];   // the item's STAC render stretch for this variable, if any
+    collectionHref?: string;          // where the collection's render stretch is looked up otherwise
   };
 };
 

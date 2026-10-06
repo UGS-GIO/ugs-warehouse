@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetKind, cubeRenderRescale, cubeSteps, cubeVariables, nonSpatialDimensions, resolveSelection, stepKey, timeDimensionOf } from "@/stac";
+import { assetKind, collectionHrefOf, cubeRenderRescale, cubeSteps, cubeVariables, nonSpatialDimensions, resolveSelection, stepKey, timeDimensionOf } from "@/stac";
 import { decodeFillValue, fillValueOf } from "./store";
 import { effectiveNoData, maskNaN, NODATA_SENTINEL } from "./tile";
 import { cubeParam, parseCubeParam, pickedRescale } from "./cube-picks";
@@ -230,6 +230,25 @@ describe("cubeRenderRescale", () => {
   it("ignores a malformed or empty range", () => {
     expect(cubeRenderRescale(item({ renders: { default: { rescale: [[10, 10]] } } }), "AET")).toBeUndefined();
     expect(cubeRenderRescale(item({ renders: { default: { rescale: [] } } }), "AET")).toBeUndefined();
+  });
+});
+
+describe("collectionHrefOf", () => {
+  const item = { links: [{ rel: "parent", href: "../p.json" }, { rel: "collection", href: "../collection.json" }] };
+
+  it("resolves the collection link against the item's URL", () => {
+    expect(collectionHrefOf(item, "https://cdn/stac/ubm/DAYMET/DAYMET.json")).toBe("https://cdn/stac/ubm/collection.json");
+  });
+
+  it("falls back to an absolute self link, and gives up with nothing absolute to resolve against", () => {
+    expect(collectionHrefOf({ links: [...item.links, { rel: "self", href: "https://cdn/a/b/i.json" }] }, "DAYMET"))
+      .toBe("https://cdn/a/collection.json");
+    expect(collectionHrefOf(item, "DAYMET")).toBeUndefined();
+  });
+
+  it("reads a collection's renders the same way as an item's", () => {
+    const coll = { type: "Collection", renders: { default: { assets: ["data"], rescale: [[0, 100]] } } };
+    expect(cubeRenderRescale(coll, "AET")).toEqual([0, 100]);
   });
 });
 

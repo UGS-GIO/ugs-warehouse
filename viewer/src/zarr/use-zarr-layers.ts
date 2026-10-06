@@ -11,19 +11,42 @@ import type { Device } from "@luma.gl/core";
 import { useQueries, useQuery } from "@tanstack/react-query";
 import { useMemo, useRef, useState } from "react";
 
-import type { CubeStep } from "@/stac";
+import { type CubeStep, cubeRenderRescale, stacDocQuery, type StacDoc } from "@/stac";
 import { makeLocalEpsgResolver } from "./epsg";
 import { openZarr, sampleStretch, type Stretch, type ZarrSource } from "./store";
 import { makeGetTileData, makeRenderTile } from "./tile";
 
 /** `selection` = an index for every non-spatial dim; ZarrLayer throws unless all are pinned.
- *  `rescale` = the user's Min/Max; either end falls back to `stacRescale` (the STAC render's),
- *  else to a sampled stretch. */
+ *  `rescale` = the user's Min/Max; either end falls back to STAC's stretch (`stacRescale`, the item's
+ *  render, else the render on the collection at `collectionHref`), else to a sampled one. */
 export type ZarrSpec = {
   id: string; href: string; variable: string; selection: Record<string, number>;
   rescale?: [number | undefined, number | undefined];
   stacRescale?: [number, number];
+  collectionHref?: string;
 };
+
+type StacStretch = { rescale?: [number, number]; settled: boolean };
+
+/** STAC's stretch per spec: the item's render, else its collection's (one cached fetch per
+ *  collection). `settled` once that answer is known, so sampling never starts only to be dropped. */
+function useStacStretches(specs: Pick<ZarrSpec, "variable" | "stacRescale" | "collectionHref">[]): StacStretch[] {
+  const colls = useQueries({
+    queries: specs.map((s) => ({
+      ...stacDocQuery(s.collectionHref ?? ""),
+      enabled: Boolean(s.collectionHref) && !s.stacRescale,
+      retry: false,
+      staleTime: Infinity,
+    })),
+  });
+  return specs.map((s, i) => {
+    if (s.stacRescale) return { rescale: s.stacRescale, settled: true };
+    if (!s.collectionHref) return { settled: true };
+    const q = colls[i];
+    const doc = q?.data as StacDoc | undefined;
+    return { rescale: doc ? cubeRenderRescale(doc, s.variable) : undefined, settled: Boolean(q?.data || q?.error) };
+  });
+}
 
 // STAC can list more steps than the store holds (a catalog updated ahead of its data).
 const dimLength = (src: ZarrSource, dim: string): number | undefined => {
@@ -86,20 +109,28 @@ export function useCubeSteps(
     : stepDims), [src, stepDims]);
 }
 
-/** Sampling a stretch, only for a cube whose STAC names none: it reads ~24 steps. */
-const zarrStretchQuery = (s: Pick<ZarrSpec, "href" | "variable" | "stacRescale">, src?: ZarrSource) => ({
+/** Sampling a stretch, only for a cube whose STAC names none (item or collection): it reads ~24 steps. */
+const zarrStretchQuery = (s: Pick<ZarrSpec, "href" | "variable">, stac: StacStretch, src?: ZarrSource) => ({
   queryKey: qk.zarrStretch(s.href, s.variable),
   queryFn: () => sampleStretch(src!),
-  enabled: Boolean(src) && !s.stacRescale,
+  enabled: Boolean(src) && stac.settled && !stac.rescale,
   retry: false,
   staleTime: Infinity,
 });
 
 /** The cube's default stretch, for the Min/Max sliders: STAC's when set, else the sampled one. */
-export function useCubeStretch(spec: Pick<ZarrSpec, "href" | "variable" | "stacRescale">): Stretch | undefined {
+export function useCubeStretch(
+  spec: Pick<ZarrSpec, "href" | "variable" | "stacRescale" | "collectionHref">,
+): Stretch | undefined {
   const src = useQuery({ ...zarrSourceQuery(spec), enabled: Boolean(spec.variable) }).data?.src;
-  const sampled = useQuery(zarrStretchQuery(spec, src)).data;
-  return spec.stacRescale ? { range: spec.stacRescale } : sampled;
+  const [stac] = useStacStretches([spec]);
+  const sampled = useQuery(zarrStretchQuery(spec, stac, src)).data;
+  // Stable identity: callers hand it to effects, and a fresh object each render loops them.
+  const [lo, hi] = stac.rescale ?? [];
+  return useMemo(
+    () => (lo !== undefined && hi !== undefined ? { range: [lo, hi] as [number, number] } : sampled),
+    [lo, hi, sampled],
+  );
 }
 
 export interface ZarrLayersResult {
@@ -113,11 +144,12 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
   const colormapTexture = useColormapTexture(device);
 
   const results = useQueries({ queries: specs.map(zarrSourceQuery) });
-  const sampled = useQueries({ queries: specs.map((s, i) => zarrStretchQuery(s, results[i]?.data?.src)) });
+  const stac = useStacStretches(specs);
+  const sampled = useQueries({ queries: specs.map((s, i) => zarrStretchQuery(s, stac[i], results[i]?.data?.src)) });
 
   // Query objects are new every render, so the memo keys off the specs and each query's settled
   // state instead. Rebuilding a ZarrLayer needlessly re-reads chunks.
-  const specKey = specs.map((s) => `${s.id}:${s.href}:${s.variable}:${selKey(s.selection)}:${s.rescale?.join("~")}:${s.stacRescale}`)
+  const specKey = specs.map((s, i) => `${s.id}:${s.href}:${s.variable}:${selKey(s.selection)}:${s.rescale?.join("~")}:${stac[i]?.rescale}`)
     .join("|");
   const readyKey = results.map((r) => (r.data ? "1" : r.error ? "e" : "0")).join("")
     + sampled.map((r) => (r.data ? "1" : "0")).join("");
@@ -139,7 +171,7 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
         return held ? [held.layer] : [];
       }
       const { src } = data;
-      const base = s.stacRescale ?? sampled[i]?.data?.range;
+      const base = stac[i]?.rescale ?? sampled[i]?.data?.range;
       if (!base) {
         if (held) keep.add(held.key);
         return held ? [held.layer] : [];

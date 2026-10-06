@@ -71,18 +71,29 @@ def main() -> int:
     for p in missing[:10]:
         print(f"  not found: {p}")
 
+    failed = 0
     if args.apply:
-        def hash_one(path: str) -> None:
-            meta = gcs.hash_object(path)
-            gcs.set_file_meta(path, meta)
-            index[path] = meta
+        def hash_one(path: str) -> gcs.FileMeta | None:
+            try:
+                meta = gcs.hash_object(path)
+                gcs.set_file_meta(path, meta)
+                return meta
+            except Exception as e:  # noqa: BLE001 — one bad object must not stop the rest; rc says so
+                print(f"  failed {path}: {type(e).__name__}: {e}", file=sys.stderr)
+                return None
         with ThreadPoolExecutor(max_workers=args.workers) as ex:
-            for n, _ in enumerate(ex.map(hash_one, todo), 1):
+            for n, (path, meta) in enumerate(zip(todo, ex.map(hash_one, todo)), 1):
+                if meta is None:
+                    failed += 1
+                else:
+                    index[path] = meta
                 if n % 500 == 0:
                     print(f"  hashed {n}/{len(todo)}")
+        print(f"hashed {len(todo) - failed}, failed {failed}")
 
+    rc = 1 if failed else 0
     if args.skip_items:
-        return 0
+        return rc
     changed = {p: it for p, it in items.items() if stac.stamp_file_meta(it, index)}
     print(f"{'stamping' if args.apply else 'would stamp'} {len(changed)} items")
     if args.apply and changed:
@@ -92,7 +103,7 @@ def main() -> int:
                 content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG),
                 changed.items()))
         stac.refresh_catalog()
-    return 0
+    return rc
 
 
 if __name__ == "__main__":

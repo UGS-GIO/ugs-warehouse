@@ -129,22 +129,20 @@ def file_fields(meta: gcs.FileMeta | None) -> dict:
 def object_path_of(href: str) -> str | None:
     """The bucket object path behind a CDN href, or None for an off-warehouse href."""
     base = config.PUBLIC_BASE_URL.rstrip("/") + "/"
-    return href[len(base):].split("?", 1)[0] if href.startswith(base) else None
+    return href.removeprefix(base).split("?", 1)[0] if href.startswith(base) else None
 
 
 def stamp_file_meta(item: dict, index: dict[str, gcs.FileMeta] | None = None) -> int:
     """Add `file:size`/`file:checksum` to assets in our bucket that lack them (mutates item).
 
-    `index` is `{object_path: FileMeta}` from `gcs.list_file_meta`; when None, each missing asset's
-    directory is listed. A checksum already on the asset wins; a size-only asset (a server-side
+    `index` is `{object_path: FileMeta}` from `gcs.list_file_meta`; when None, each missing asset is
+    looked up on its own (a raster layer's directory can hold thousands of COGs). A checksum already on the asset wins; a size-only asset (a server-side
     copy) takes the stored checksum. Returns the number of assets stamped.
     """
     missing = {k: p for k, a in (item.get("assets") or {}).items()
                if "file:checksum" not in a and (p := object_path_of(a.get("href", "")))}
     if index is None:
-        index = {}
-        for d in {p.rsplit("/", 1)[0] + "/" for p in missing.values()}:
-            index.update(gcs.list_file_meta(d))
+        index = {p: m for p in missing.values() if (m := gcs.get_file_meta(p)) is not None}
     n = 0
     for key, path in missing.items():
         asset, fields = item["assets"][key], file_fields(index.get(path))

@@ -180,13 +180,13 @@ def test_stamp_file_meta_fills_only_our_assets_that_lack_a_checksum():
     assert stac.FILE_EXT in item["stac_extensions"]
 
 
-def test_stamp_file_meta_lists_each_asset_directory_once_without_an_index(monkeypatch):
-    listed = []
-    monkeypatch.setattr(gcs, "list_file_meta", lambda p: listed.append(p) or {
-        "warehouse/thumbs/t/t.png": gcs.FileMeta(3, "1220aa")})
+def test_stamp_file_meta_looks_up_each_missing_asset_without_an_index(monkeypatch):
+    fetched = []
+    monkeypatch.setattr(gcs, "get_file_meta", lambda p: fetched.append(p) or (
+        gcs.FileMeta(3, "1220aa") if p.endswith("t.png") else None))
     item = {"assets": {"thumbnail": {"href": _url("warehouse/thumbs/t/t.png")},
                        "style": {"href": _url("styles/styles/t/default.json")}}}
 
     assert stac.stamp_file_meta(item) == 1
-    assert sorted(listed) == ["styles/styles/t/", "warehouse/thumbs/t/"]
+    assert sorted(fetched) == ["styles/styles/t/default.json", "warehouse/thumbs/t/t.png"]
     assert "stac_extensions" in item and "file:size" not in item["assets"]["style"]

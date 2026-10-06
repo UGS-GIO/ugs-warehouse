@@ -302,6 +302,12 @@ def list_file_meta(prefix: str) -> dict[str, FileMeta]:
     return {b.name: m for b in blobs if (m := _meta_of(b)) is not None}
 
 
+def get_file_meta(object_path: str) -> FileMeta | None:
+    """FileMeta for one object, or None when it does not exist (a metadata GET, not a listing)."""
+    blob = _gcs_client().bucket(config.BUCKET).get_blob(object_path)
+    return _meta_of(blob) if blob is not None else None
+
+
 def hash_object(object_path: str) -> FileMeta:
     """Size + sha256 of an existing object, streamed (for objects written before the metadata)."""
     h = hashlib.sha256()

@@ -8,7 +8,7 @@ import maplibregl from "@/map/maplibre-lib";
 import { useEffect, useMemo, useState } from "react";
 import { Map as MapGL, NavigationControl } from "react-map-gl/maplibre";
 
-import { type Asset, cubeStepDims, cubeVariables, resolveSelection, type StacDoc } from "@/stac";
+import { type Asset, cubeStepDims, cubeVariables, idOf, resolveSelection, type StacDoc } from "@/stac";
 import { DIRECT, protomapsStyle } from "@/map/basemap-style";
 import { ensurePmtilesProtocol } from "@/map/pmtiles-protocol";
 import { DeckOverlay } from "./zarr-overlay";
@@ -29,7 +29,7 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
 
   const variables = useMemo(() => Object.keys(cubeVariables(item)), [item]);
   // Keyed like the map's layers (the URL's item id), so the pick follows "View on map".
-  const itemId = useSearch({ from: "__root__", select: (s) => s.i }) ?? String(item.id ?? "");
+  const itemId = useSearch({ from: "__root__", select: (s) => (s.i ? idOf(s.i) : undefined) }) ?? String(item.id ?? "");
   const [picks, pick] = useCubePicks(itemId);
   const variable = picks[VAR] && variables.includes(picks[VAR]) ? picks[VAR] : variables[0];
   const stepDims = useCubeSteps({ href: asset.href, variable: variable ?? "" }, useMemo(() => cubeStepDims(item), [item]));

@@ -7,7 +7,7 @@ import { useSearch } from "@tanstack/react-router";
 import { type ReactNode, useContext, useState } from "react";
 
 import { Panel } from "@/catalog/panel";
-import { resolveSelection } from "@/stac";
+import { idOf, resolveSelection } from "@/stac";
 import { type CubeOffer, Ctx, OfferCtx } from "./cube-offer";
 import { useCubePicks } from "./cube-picks";
 import { CubeControls } from "./step-picker";
@@ -21,7 +21,8 @@ export function CubeStepsProvider({ children }: { children: ReactNode }) {
 
 export function CubeStepsPanel() {
   const offer = useContext(OfferCtx);
-  const itemId = useSearch({ from: "__root__", select: (s) => s.i });
+  // `i` may be a full item URL; picks are keyed by the short id, like the map's layers.
+  const itemId = useSearch({ from: "__root__", select: (s) => (s.i ? idOf(s.i) : undefined) });
   const [picks, pick] = useCubePicks(itemId);
   if (!offer || !hasCubeControls(offer.variables, offer.stepDims)) return null;
   return (

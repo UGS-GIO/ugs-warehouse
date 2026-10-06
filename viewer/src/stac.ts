@@ -606,6 +606,7 @@ export function cubeSteps(item: StacDoc, dim: string): CubeStep[] {
     const m = typeof d.step === "string" ? /^P(\d+)([YMD])$/.exec(d.step) : null;
     if (!m) return [];
     const n = Number(m[1]), res = m[2] as Resolution;
+    if (n <= 0) return [];   // P0D would never advance
     const out: CubeStep[] = [];
     for (let i = 0; out.length < MAX_STEPS; i += n) {
       const t = new Date(Date.UTC(

@@ -125,6 +125,10 @@ describe("cubeSteps", () => {
     expect(daily[1].day).toBe(2);
   });
 
+  it("rejects a zero step rather than repeating one date", () => {
+    expect(cubeSteps(cube("time", { type: "temporal", extent: ["2020-01-01", "2020-12-01"], step: "P0M" }), "time")).toEqual([]);
+  });
+
   it("can't enumerate a sub-daily step without values", () => {
     expect(cubeSteps(cube("time", { type: "temporal", extent: ["2020-01-01", "2020-01-02"], step: "PT1H" }), "time")).toEqual([]);
   });

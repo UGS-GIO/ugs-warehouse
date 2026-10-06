@@ -227,6 +227,12 @@ describe("cubeRenderRescale", () => {
     expect(cubeRenderRescale(item({}), "AET")).toBeUndefined();
   });
 
+  it("takes ugs-styles' flat [min, max] as well as the nested per-band form", () => {
+    expect(cubeRenderRescale(item({ "ugs:renders": { default: { rescale: [0, 100] } } }), "AET")).toEqual([0, 100]);
+    const coll = { type: "Collection", renders: { default: { rescale: [0, 100] } } };
+    expect(cubeRenderRescale(coll, "AET")).toEqual([0, 100]);
+  });
+
   it("ignores a malformed or empty range", () => {
     expect(cubeRenderRescale(item({ renders: { default: { rescale: [[10, 10]] } } }), "AET")).toBeUndefined();
     expect(cubeRenderRescale(item({ renders: { default: { rescale: [] } } }), "AET")).toBeUndefined();

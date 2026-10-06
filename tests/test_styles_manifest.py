@@ -96,3 +96,11 @@ def test_refresh_drops_the_cache_immediately(monkeypatch):
     styles._manifest()
     assert styles.refresh() == 1
     assert calls["n"] == 2
+
+
+def test_manifest_skips_collection_bound_entries(monkeypatch):
+    monkeypatch.setattr(styles, "_cache", None)
+    monkeypatch.setattr(styles.gcs, "get_bytes", lambda p: (
+        b'[{"itemId": "hazards_qfaults", "render": "default"},'
+        b' {"collectionId": "ubm-ensemble-raster", "render": "default", "layer": "ubm_ensemble_raster"}]'))
+    assert [styles._entry_key(e) for e in styles._manifest()] == ["hazards_qfaults"]

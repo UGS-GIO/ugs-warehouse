@@ -678,7 +678,7 @@ export function resolveSelection(
 
 // A render-extension block (stac-extensions/render), titiler-style; `variable` picks a datacube
 // variable the way titiler-xarray does.
-type StacRender = { assets?: string[]; rescale?: number[][]; variable?: string };
+type StacRender = { assets?: string[]; rescale?: number[][] | number[]; variable?: string };
 
 /**
  * A datacube variable's display stretch from one STAC doc (an item, or its collection): the standard
@@ -691,7 +691,9 @@ export function cubeRenderRescale(item: StacDoc, variable: string): [number, num
     const renders = (props[key] ?? (item as Record<string, unknown>)[key]) as Record<string, StacRender> | undefined;
     if (!renders) continue;
     const r = Object.values(renders).find((x) => x.variable === variable) ?? renders.default;
-    const [lo, hi] = r?.rescale?.[0] ?? [];
+    // The render extension nests one [min, max] per band; ugs-styles writes the single band flat.
+    const rs = r?.rescale;
+    const [lo, hi] = (Array.isArray(rs?.[0]) ? rs[0] : rs ?? []) as number[];
     if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) return [lo, hi];
   }
   return undefined;

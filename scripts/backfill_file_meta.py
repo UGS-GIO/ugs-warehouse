@@ -53,6 +53,7 @@ def main() -> int:
     ap.add_argument("--apply", action="store_true", help="write (default: dry run)")
     ap.add_argument("--max-bytes", type=int, default=None, help="skip hashing objects larger than this")
     ap.add_argument("--skip-items", action="store_true", help="hash objects only; leave items alone")
+    ap.add_argument("--limit", type=int, default=None, help="hash at most this many objects")
     ap.add_argument("--workers", type=int, default=16)
     args = ap.parse_args()
 
@@ -62,7 +63,7 @@ def main() -> int:
     missing = sorted(t for t in targets if t not in index)  # gone, or gzipped with no metadata
     todo = [t for t in targets if t in index and not index[t].checksum]
     big = [t for t in todo if args.max_bytes is not None and index[t].size > args.max_bytes]
-    todo = [t for t in todo if t not in big]
+    todo = sorted(t for t in todo if t not in big)[:args.limit]
 
     def gb(paths: list[str]) -> float:
         return sum(index[p].size for p in paths) / 1e9

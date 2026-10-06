@@ -16,17 +16,21 @@ from concurrent.futures import ThreadPoolExecutor
 from ugs_warehouse.core import config, gcs, stac
 
 
-def _read_items() -> dict[str, dict]:
-    """{object_path: item} for every item the catalog refresh would index."""
+def _read_items() -> tuple[dict[str, dict], int]:
+    """({object_path: item} for every item the catalog refresh indexes, unreadable count)."""
     groups = stac._group_items(gcs.list_paths(config.STAC_PREFIX))
     paths = [stac.item_object_path(c, i) for c, ids in groups.items() for i in ids]
     def read(path: str) -> dict | None:
         try:
             return json.loads(gcs.get_bytes(path))
         except FileNotFoundError:  # deleted between the listing and the read
+            return {}
+        except Exception as e:  # noqa: BLE001 — skip it, finish the rest, exit 1
+            print(f"  unreadable {path}: {type(e).__name__}: {e}", file=sys.stderr)
             return None
     with ThreadPoolExecutor(max_workers=64) as ex:
-        return {p: d for p, d in zip(paths, ex.map(read, paths)) if d is not None}
+        docs = dict(zip(paths, ex.map(read, paths)))
+    return {p: d for p, d in docs.items() if d}, sum(d is None for d in docs.values())
 
 
 def _targets(items: dict[str, dict]) -> set[str]:
@@ -52,7 +56,7 @@ def main() -> int:
     ap.add_argument("--workers", type=int, default=16)
     args = ap.parse_args()
 
-    items = _read_items()
+    items, unreadable = _read_items()
     targets = _targets(items)
     index = _index(targets)
     missing = sorted(t for t in targets if t not in index)  # gone, or gzipped with no metadata
@@ -60,7 +64,7 @@ def main() -> int:
     big = [t for t in todo if args.max_bytes is not None and index[t].size > args.max_bytes]
     todo = [t for t in todo if t not in big]
     gb = lambda paths: sum(index[p].size for p in paths) / 1e9  # noqa: E731
-    print(f"{len(items)} items, {len(targets)} assets in our bucket without a checksum; "
+    print(f"{len(items)} items ({unreadable} unreadable), {len(targets)} assets in our bucket without a checksum; "
           f"hash {len(todo)} objects ({gb(todo):.2f} GB), skip {len(big)} over --max-bytes "
           f"({gb(big):.2f} GB), {len(missing)} not found")
     for p in missing[:10]:
@@ -86,7 +90,7 @@ def main() -> int:
                     print(f"  hashed {n}/{len(todo)}")
         print(f"hashed {len(todo) - failed}, failed {failed}")
 
-    rc = 1 if failed else 0
+    rc = 1 if failed or unreadable else 0
     if args.skip_items:
         return rc
     changed = {p: it for p, it in items.items() if stac.stamp_file_meta(it, index)}

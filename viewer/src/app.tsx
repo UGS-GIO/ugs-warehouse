@@ -16,9 +16,10 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
+import { type CubePicks, parseCubeParam, VAR } from "./zarr/cube-picks";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
 import { useDataSaver } from "./lib/data-saver";
@@ -43,7 +44,7 @@ export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
 // null when the item carries none of them — it isn't a layer.
-export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
+export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveLayer | null {
   if (!ref?.data) return null;
   const id = idOf(ref.href);
   const title = String(ref.data.properties?.title ?? id);
@@ -64,11 +65,13 @@ export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };
   const zarr = zarrAsset(ref.data);
   // No drawable variable → not a layer, rather than a row that can never render.
-  const variable = zarr && Object.keys(cubeVariables(ref.data))[0];
-  if (zarr && variable) {
+  const variables = Object.keys(cubeVariables(ref.data));
+  if (zarr && variables.length) {
+    const stepDims = cubeStepDims(ref.data);
+    const variable = cube[VAR] && variables.includes(cube[VAR]) ? cube[VAR] : variables[0];
     return {
       id, title, bbox: ref.data.bbox,
-      zarr: { href: zarr.href, variable, pinDims: nonSpatialDimensions(ref.data) },
+      zarr: { href: zarr.href, variable, variables, stepDims, selection: resolveSelection(stepDims, cube) },
     };
   }
   return null;
@@ -504,7 +507,9 @@ function useViewState() {
   const byId = new Map([...mapItems, ...allItems].map((r) => [idOf(r.href), r]));
   if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
   const idsForMap = layerIds ?? (itemUrl ? [idOf(itemUrl)] : []);
-  const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
+  const cubePicks = parseCubeParam(sp.cube);
+  const activeLayers = idsForMap.map((id) => toLayer(byId.get(id), cubePicks[id]))
+    .filter((l): l is ActiveLayer => l !== null);
 
   // Coverage overlay data: every loaded item that has a bbox → a footprint rectangle. Lets the map
   // show WHAT IS MAPPED WHERE across the open collection, including items with no COG/PMTiles asset

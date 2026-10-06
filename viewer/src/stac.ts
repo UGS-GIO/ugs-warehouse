@@ -541,7 +541,7 @@ export const cubeVariables = (item: StacDoc): Record<string, CubeVariable> => {
   return Object.fromEntries(data.length ? data : Object.entries(all));
 };
 
-// The dim a time slider would drive. `type` is authoritative; the name is the fallback.
+// The dim a time picker drives. `type` is authoritative; the name is the fallback.
 export const timeDimensionOf = (item: StacDoc): string | undefined =>
   Object.entries(cubeDimensions(item)).find(([n, d]) => d.type === "temporal" || n === "time")?.[0];
 
@@ -551,6 +551,109 @@ export const nonSpatialDimensions = (item: StacDoc): string[] =>
   Object.entries(cubeDimensions(item))
     .filter(([n, d]) => d.type !== "spatial" && !["x", "y", "lat", "lon", "latitude", "longitude"].includes(n))
     .map(([n]) => n);
+
+// One position along a non-spatial dim. The calendar fields a dated series resolves to drive the
+// picker's selects (yearly: year; monthly: + month; daily: + day); anything else is just a label.
+export type CubeStep = { label: string; year?: number; month?: number; day?: number };
+
+export const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+type Resolution = "Y" | "M" | "D";
+
+const monthStep = (month: number): CubeStep => ({ label: MONTH_NAMES[month - 1], month });
+
+function dateStep(d: Date, res: Resolution): CubeStep {
+  const year = d.getUTCFullYear(), month = d.getUTCMonth() + 1, day = d.getUTCDate();
+  if (res === "Y") return { label: String(year), year };
+  if (res === "M") return { label: `${MONTH_NAMES[month - 1]} ${year}`, year, month };
+  return { label: `${MONTH_NAMES[month - 1]} ${day}, ${year}`, year, month, day };
+}
+
+const parseDate = (v: unknown): Date | undefined => {
+  const d = typeof v === "string" ? new Date(v) : undefined;
+  return d && !Number.isNaN(d.getTime()) ? d : undefined;
+};
+
+// Listed dates carry no step: the finest field that ever varies is the resolution.
+const inferResolution = (ds: Date[]): Resolution =>
+  ds.some((d) => d.getUTCDate() !== 1) ? "D" : ds.some((d) => d.getUTCMonth() !== 0) ? "M" : "Y";
+
+// Generating more than this from an extent means a step we misread, not a real axis.
+const MAX_STEPS = 5000;
+
+/**
+ * The steps of a non-spatial dim, in array order: from `values` when listed, else from `extent` +
+ * `step` (yearly/monthly/daily ISO durations, or integers). Empty when STAC can't enumerate it.
+ */
+export function cubeSteps(item: StacDoc, dim: string): CubeStep[] {
+  const d = cubeDimensions(item)[dim];
+  if (!d) return [];
+  const isMonth = dim === "month" || (d as { unit?: string }).unit === "month";
+  const asMonth = (v: unknown) => (isMonth && Number.isInteger(v) && (v as number) >= 1 && (v as number) <= 12
+    ? monthStep(v as number) : undefined);
+
+  if (Array.isArray(d.values) && d.values.length) {
+    const dates = d.values.map(parseDate);
+    if (dates.every(Boolean)) {
+      const res = inferResolution(dates as Date[]);
+      return (dates as Date[]).map((t) => dateStep(t, res));
+    }
+    return d.values.map((v) => asMonth(v) ?? { label: String(v) });
+  }
+  const [lo, hi] = d.extent ?? [];
+  const start = parseDate(lo), end = parseDate(hi);
+  if (start && end) {
+    const m = typeof d.step === "string" ? /^P(\d+)([YMD])$/.exec(d.step) : null;
+    if (!m) return [];
+    const n = Number(m[1]), res = m[2] as Resolution;
+    const out: CubeStep[] = [];
+    for (let i = 0; out.length < MAX_STEPS; i += n) {
+      const t = new Date(Date.UTC(
+        start.getUTCFullYear() + (res === "Y" ? i : 0),
+        start.getUTCMonth() + (res === "M" ? i : 0),
+        start.getUTCDate() + (res === "D" ? i : 0),
+      ));
+      if (t > end) break;
+      out.push(dateStep(t, res));
+    }
+    return out;
+  }
+  if (typeof lo === "number" && typeof hi === "number") {
+    const step = typeof d.step === "number" && d.step > 0 ? d.step : 1;
+    if ((hi - lo) / step >= MAX_STEPS) return [];
+    const out: CubeStep[] = [];
+    for (let v = lo; v <= hi; v += step) out.push(asMonth(v) ?? { label: String(v) });
+    return out;
+  }
+  return [];
+}
+
+// Every pinned dim with its steps — what the step pickers draw and the layer slices by.
+export const cubeStepDims = (item: StacDoc): Record<string, CubeStep[]> =>
+  Object.fromEntries(nonSpatialDimensions(item).map((n) => [n, cubeSteps(item, n)]));
+
+// A step as it reads in a URL: the date for a dated series (2010, 2010-07, 2010-07-15), the month
+// number for a month dim, else the index. Survives the series growing at either end.
+export function stepKey(step: CubeStep, index: number): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  if (step.year !== undefined) {
+    return [String(step.year), step.month && pad(step.month), step.day && pad(step.day)].filter(Boolean).join("-");
+  }
+  return step.month !== undefined ? String(step.month) : String(index);
+}
+
+/** The picked step per dim, by key, as indexes. Unpicked or unknown: the latest step of a dated
+ *  series (what people come for), else the first. */
+export function resolveSelection(
+  stepDims: Record<string, CubeStep[]>,
+  picked: Record<string, string> = {},
+): Record<string, number> {
+  return Object.fromEntries(Object.entries(stepDims).map(([d, steps]) => {
+    const at = picked[d] === undefined ? -1 : steps.findIndex((st, i) => stepKey(st, i) === picked[d]);
+    const last = Math.max(0, steps.length - 1);
+    return [d, at >= 0 ? at : steps[last]?.year !== undefined ? last : 0];
+  }));
+}
 
 export const zarrAsset = (item: StacDoc | undefined): Asset | undefined =>
   Object.values(item?.assets ?? {}).find((a) => assetKind(a) === "zarr");

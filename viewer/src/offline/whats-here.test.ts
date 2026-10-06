@@ -8,7 +8,7 @@ const layers: ActiveLayer[] = [
   { id: "faults", title: "Quaternary Faults", pmHref: "https://cdn/faults.pmtiles", bbox: STATE },
   { id: "plate", title: "Geologic map of SLC North", cogHref: "https://cdn/slc.cog.tif", bbox: [-112, 40.75, -111.875, 40.875] },
   { id: "mosaic", title: "1:500,000 mosaic", rasterPmHref: "https://cdn/500k.pmtiles", bbox: STATE },
-  { id: "cube", title: "Temperature cube", zarr: { href: "https://cdn/cube.zarr", variable: "t", pinDims: [] }, bbox: STATE },
+  { id: "cube", title: "Temperature cube", zarr: { href: "https://cdn/cube.zarr", variable: "t", variables: ["t"], stepDims: {}, selection: {} }, bbox: STATE },
   { id: "moab", title: "Moab plate", cogHref: "https://cdn/moab.cog.tif", bbox: [-109.6, 38.5, -109.5, 38.6] },
   { id: "nobox", title: "Aspatial table", pmHref: "https://cdn/x.pmtiles" },
 ];

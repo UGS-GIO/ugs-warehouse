@@ -271,7 +271,7 @@ describe("orderedSublayerIds", () => {
   it("omits a COG until its protocol is ready, and a zarr datacube always (the deck overlay draws it)", () => {
     expect(orderedSublayerIds([L("dem", { cogHref: "x" })], { styledCount: () => undefined, cogReady: false }))
       .toEqual([]);
-    expect(orderedSublayerIds([L("cube", { zarr: { href: "x", variable: "v", pinDims: [] } })],
+    expect(orderedSublayerIds([L("cube", { zarr: { href: "x", variable: "v", variables: ["v"], stepDims: {}, selection: {} } })],
       { styledCount: () => undefined, cogReady: true })).toEqual([]);
   });
 

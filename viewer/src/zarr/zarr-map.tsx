@@ -1,19 +1,22 @@
 /**
  * Item-detail pane for a zarr datacube. Generic over any store: `cube:variables` names what is
  * drawable, `cube:dimensions` which axes are non-spatial, and the store's own GeoZarr `spatial:*` /
- * `proj:wkt2` attrs place it. Variable and step are pinned to the first of each (#139 phase 2 adds
- * the pickers).
+ * `proj:wkt2` attrs place it. Variable and steps are picked into the URL (cube-picks).
  */
 import type { Device } from "@luma.gl/core";
 import maplibregl from "@/map/maplibre-lib";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Map as MapGL, NavigationControl } from "react-map-gl/maplibre";
 
-import { type Asset, cubeVariables, nonSpatialDimensions, type StacDoc } from "@/stac";
+import { type Asset, cubeStepDims, cubeVariables, resolveSelection, type StacDoc } from "@/stac";
 import { DIRECT, protomapsStyle } from "@/map/basemap-style";
 import { ensurePmtilesProtocol } from "@/map/pmtiles-protocol";
 import { DeckOverlay } from "./zarr-overlay";
-import { useZarrLayers } from "./use-zarr-layers";
+import { useSearch } from "@tanstack/react-router";
+import { useCubePicks, VAR } from "./cube-picks";
+import { useCubeOfferSink } from "./cube-offer";
+import { CubeControls } from "./step-picker";
+import { useCubeSteps, useZarrLayers } from "./use-zarr-layers";
 import { to2d } from "@/lib/bbox";
 
 ensurePmtilesProtocol();
@@ -25,13 +28,22 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
   const [device, setDevice] = useState<Device | null>(null);
 
   const variables = useMemo(() => Object.keys(cubeVariables(item)), [item]);
-  const variable = variables[0];
-  const specs = useMemo(
-    () => (variable
-      ? [{ id: String(item.id ?? "cube"), href: asset.href, variable, pinDims: nonSpatialDimensions(item) }]
-      : []),
-    [item, asset.href, variable],
-  );
+  // Keyed like the map's layers (the URL's item id), so the pick follows "View on map".
+  const itemId = useSearch({ from: "__root__", select: (s) => s.i }) ?? String(item.id ?? "");
+  const [picks, pick] = useCubePicks(itemId);
+  const variable = picks[VAR] && variables.includes(picks[VAR]) ? picks[VAR] : variables[0];
+  const stepDims = useCubeSteps({ href: asset.href, variable: variable ?? "" }, useMemo(() => cubeStepDims(item), [item]));
+  const selection = resolveSelection(stepDims, picks);
+  // On the item page the controls sit in the side column: offer them there.
+  const offerTo = useCubeOfferSink();
+  useEffect(() => {
+    if (!offerTo || !variable) return;
+    offerTo({ variables, variable, stepDims });
+    return () => offerTo(null);
+  }, [offerTo, variables, variable, stepDims]);
+  const specs = variable
+    ? [{ id: String(item.id ?? "cube"), href: asset.href, variable, selection }]
+    : [];
   const { layers, states } = useZarrLayers(specs, device);
   const state = states[0];
 
@@ -57,12 +69,16 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
           <DeckOverlay layers={layers} onDeviceInitialized={setDevice} />
         </MapGL>
       </div>
-      <p className="mt-1.5 text-xs text-muted-foreground">
-        {state?.isLoading
-          ? "Opening datacube…"
-          : <><code>{variable}</code> · viridis, 2–98% of a sampled window</>}
-        {others > 0 && <> · {others} other variable{others > 1 ? "s" : ""} in this cube</>}
-      </p>
+      <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
+        {!offerTo && <CubeControls variables={variables} variable={variable} stepDims={stepDims}
+          selection={selection} onPick={pick} />}
+        <p className="text-xs text-muted-foreground">
+          {state?.isLoading
+            ? "Opening datacube…"
+            : <><code>{variable}</code> · viridis, 2–98% of a sampled window</>}
+          {others > 0 && <> · {others} other variable{others > 1 ? "s" : ""} in this cube</>}
+        </p>
+      </div>
     </div>
   );
 }

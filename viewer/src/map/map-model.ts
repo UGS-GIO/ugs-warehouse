@@ -3,7 +3,7 @@
 // so these tests guard the parts we CAN check deterministically).
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
-import type { StacDoc } from "@/stac";
+import type { CubeStep, StacDoc } from "@/stac";
 import { to2d } from "@/lib/bbox";
 import type { MapLayerMouseEvent } from "react-map-gl/maplibre";
 
@@ -131,7 +131,12 @@ export type ActiveLayer = {
   rasterPmHref?: string;
   // Zarr datacube — one object, because the store is useless without the variable and the dims to
   // pin. Resolved from STAC once, so the layer list and the map agree on what is drawn.
-  zarr?: { href: string; variable: string; pinDims: string[] };
+  // `variable`/`selection` = what is drawn (the URL's pick, else the defaults); `variables` and
+  // `stepDims` = what the layer row's pickers offer.
+  zarr?: {
+    href: string; variable: string; variables: string[];
+    stepDims: Record<string, CubeStep[]>; selection: Record<string, number>;
+  };
 };
 
 // Geometry gates for the unstyled fallback render — without them its circle layer puts a dot on

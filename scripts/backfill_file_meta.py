@@ -1,19 +1,10 @@
 """Backfill `file:size` / `file:checksum` onto published STAC items without a reingest.
 
-Writes store both as object metadata (`core.gcs`), so builders stamp them from a listing. Objects
-written before that carry none, and items built before it lack the fields. This:
+Hashes our-bucket assets that have no stored checksum, stores it on the object, stamps the items
+in place, and refreshes the catalog. Re-runnable; `--max-bytes` defers large COGs to a GCP run.
 
-  1. reads every item under the STAC prefix and collects the assets in our bucket that lack a
-     checksum (off-warehouse hrefs, like the legacy publication host, are left alone),
-  2. hashes each object with no stored checksum and stores it (a metadata PATCH; bytes untouched),
-  3. stamps the fields onto the items in place and refreshes the catalog.
-
-Re-runnable: hashed objects are skipped next time. `--max-bytes` leaves large objects (COGs) for
-a run inside GCP, where reading them is fast and egress-free.
-
-    python -m scripts.backfill_file_meta                        # dry run: counts and bytes
-    python -m scripts.backfill_file_meta --apply --max-bytes 500000000
-    python -m scripts.backfill_file_meta --apply --skip-items  # hash only
+    python -m scripts.backfill_file_meta            # dry run: counts and bytes
+    python -m scripts.backfill_file_meta --apply
 """
 from __future__ import annotations
 

@@ -133,11 +133,9 @@ def object_path_of(href: str) -> str | None:
 
 
 def stamp_file_meta(item: dict, index: dict[str, gcs.FileMeta] | None = None) -> int:
-    """Add `file:size`/`file:checksum` to assets in our bucket that lack them (mutates item).
+    """Add `file:size`/`file:checksum` to our-bucket assets that lack a checksum (mutates item).
 
-    `index` is `{object_path: FileMeta}` from `gcs.list_file_meta`; when None, each missing asset is
-    looked up on its own (a raster layer's directory can hold thousands of COGs). A checksum already on the asset wins; a size-only asset (a server-side
-    copy) takes the stored checksum. Returns the number of assets stamped.
+    `index` comes from `gcs.list_file_meta`; without one, each asset is looked up on its own.
     """
     missing = {k: p for k, a in (item.get("assets") or {}).items()
                if "file:checksum" not in a and (p := object_path_of(a.get("href", "")))}

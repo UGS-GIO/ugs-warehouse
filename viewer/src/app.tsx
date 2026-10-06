@@ -19,7 +19,7 @@ import { PreviewMapProvider } from "./map/preview-map";
 import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
-import { type CubePicks, parseCubeParam, VAR } from "./zarr/cube-picks";
+import { type CubePicks, parseCubeParam, pickedRescale, VAR } from "./zarr/cube-picks";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
 import { useDataSaver } from "./lib/data-saver";
@@ -71,7 +71,10 @@ export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveL
     const variable = cube[VAR] && variables.includes(cube[VAR]) ? cube[VAR] : variables[0];
     return {
       id, title, bbox: ref.data.bbox,
-      zarr: { href: zarr.href, variable, variables, stepDims, selection: resolveSelection(stepDims, cube) },
+      zarr: {
+        href: zarr.href, variable, variables, stepDims,
+        selection: resolveSelection(stepDims, cube), rescale: pickedRescale(cube),
+      },
     };
   }
   return null;

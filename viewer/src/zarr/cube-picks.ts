@@ -5,9 +5,17 @@
  */
 import { useNavigate, useSearch } from "@tanstack/react-router";
 
-/** `var` = the variable; any other key is a dim name → its step key (stac.stepKey). */
+/** `var` = the variable; `min`/`max` = the stretch; any other key is a dim name → its step key. */
 export type CubePicks = Record<string, string>;
 export const VAR = "var";
+export const MIN = "min";
+export const MAX = "max";
+
+/** The user's Min/Max, each undefined when unset (the sampled stretch fills it). */
+export function pickedRescale(picks: CubePicks): [number | undefined, number | undefined] {
+  const num = (v?: string) => (v !== undefined && v !== "" && Number.isFinite(Number(v)) ? Number(v) : undefined);
+  return [num(picks[MIN]), num(picks[MAX])];
+}
 
 export function parseCubeParam(raw: unknown): Record<string, CubePicks> {
   if (typeof raw !== "string" || !raw) return {};
@@ -29,17 +37,25 @@ export function cubeParam(all: Record<string, CubePicks>): string | undefined {
 }
 
 /** One cube's picks and a setter. Replaces history: stepping through months shouldn't fill Back. */
-export function useCubePicks(id: string | undefined): [CubePicks, (key: string, value: string) => void] {
+export type SetPick = (key: string | Record<string, string | undefined>, value?: string) => void;
+
+export function useCubePicks(id: string | undefined): [CubePicks, SetPick] {
   const raw = useSearch({ from: "__root__", select: (s) => s.cube });
   const navigate = useNavigate();
   const picks = (id && parseCubeParam(raw)[id]) || {};
-  const set = (key: string, value: string) => {
+  // `undefined` clears a key; a record sets several in one navigation. A new variable clears the
+  // stretch: its range is the old variable's.
+  const set: SetPick = (key, value) => {
+    const changes = typeof key === "string" ? { [key]: value } : key;
     if (!id) return;
     navigate({
       to: ".", replace: true,
       search: (prev) => {
         const all = parseCubeParam(prev.cube);
-        return { ...prev, cube: cubeParam({ ...all, [id]: { ...all[id], [key]: value } }) };
+        const next = { ...all[id], ...changes };
+        if (VAR in changes) { delete next[MIN]; delete next[MAX]; }
+        const clean = Object.fromEntries(Object.entries(next).filter(([, v]) => v !== undefined)) as CubePicks;
+        return { ...prev, cube: cubeParam({ ...all, [id]: clean }) };
       },
     });
   };

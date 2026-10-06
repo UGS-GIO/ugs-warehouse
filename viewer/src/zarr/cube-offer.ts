@@ -2,8 +2,11 @@
 import { createContext, useContext } from "react";
 
 import type { CubeStep } from "@/stac";
+import type { Stretch } from "./store";
 
-export type CubeOffer = { variables: string[]; variable: string; stepDims: Record<string, CubeStep[]> };
+export type CubeOffer = {
+  variables: string[]; variable: string; stepDims: Record<string, CubeStep[]>; stretch?: Stretch;
+};
 
 export const Ctx = createContext<((offer: CubeOffer | null) => void) | null>(null);
 export const OfferCtx = createContext<CubeOffer | null>(null);

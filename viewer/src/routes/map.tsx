@@ -18,7 +18,6 @@ import { WhatsHerePicker } from "@/offline/whats-here-picker";
 import type { Target } from "@/offline/whats-here";
 import { useZarrProblems } from "@/zarr/use-zarr-layers";
 import { LayerCubeControls } from "@/zarr/layer-cube-controls";
-import { hasCubeControls } from "@/zarr/steps";
 
 // The Info dock shows one of three things, strictly nested: a related table is only reachable from a
 // selected feature. No floating feature popup anywhere — stakeholder requirement.
@@ -45,7 +44,7 @@ function MapView() {
   // A datacube's row picks its variable and steps into the URL, which toLayer reads back.
   const cubeControlsOf = (id: string) => {
     const z = c.activeLayers.find((l) => l.id === id)?.zarr;
-    return z && hasCubeControls(z.variables, z.stepDims) ? <LayerCubeControls id={id} zarr={z} /> : undefined;
+    return z ? <LayerCubeControls id={id} zarr={z} /> : undefined;
   };
 
   // A clicked layer's related tables, named from the compact index (its asset summaries carry the

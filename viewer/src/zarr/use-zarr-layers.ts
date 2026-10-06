@@ -13,11 +13,15 @@ import { useMemo, useRef, useState } from "react";
 
 import type { CubeStep } from "@/stac";
 import { makeLocalEpsgResolver } from "./epsg";
-import { openZarr, sampleRange, type ZarrSource } from "./store";
+import { openZarr, sampleStretch, type Stretch, type ZarrSource } from "./store";
 import { makeGetTileData, makeRenderTile } from "./tile";
 
-/** `selection` = an index for every non-spatial dim; ZarrLayer throws unless all are pinned. */
-export type ZarrSpec = { id: string; href: string; variable: string; selection: Record<string, number> };
+/** `selection` = an index for every non-spatial dim; ZarrLayer throws unless all are pinned.
+ *  `rescale` = the user's Min/Max, either end falling back to the sampled stretch. */
+export type ZarrSpec = {
+  id: string; href: string; variable: string; selection: Record<string, number>;
+  rescale?: [number | undefined, number | undefined];
+};
 
 // STAC can list more steps than the store holds (a catalog updated ahead of its data).
 const dimLength = (src: ZarrSource, dim: string): number | undefined => {
@@ -43,7 +47,7 @@ export const zarrSourceQuery = (s: Pick<ZarrSpec, "href" | "variable">) => ({
   queryKey: qk.zarrSource(s.href, s.variable),
   queryFn: async () => {
     const src = await openZarr(s.href, s.variable);
-    return { src, range: await sampleRange(src) };
+    return { src, stretch: await sampleStretch(src) };
   },
   retry: false,
   staleTime: Infinity,
@@ -80,6 +84,11 @@ export function useCubeSteps(
     : stepDims), [src, stepDims]);
 }
 
+/** The cube's sampled stretch, for the Min/Max sliders. Reads the overlay's cache. */
+export function useCubeStretch(spec: Pick<ZarrSpec, "href" | "variable">): Stretch | undefined {
+  return useQuery({ ...zarrSourceQuery(spec), enabled: Boolean(spec.variable) }).data?.stretch;
+}
+
 export interface ZarrLayersResult {
   // LayersList, not ZarrLayer[] — ZarrLayer's generics resolve to our tile-data shape, which isn't
   // assignable to the class's default instantiation.
@@ -94,7 +103,8 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
 
   // Query objects are new every render, so the memo keys off the specs and each query's settled
   // state instead. Rebuilding a ZarrLayer needlessly re-reads chunks.
-  const specKey = specs.map((s) => `${s.id}:${s.href}:${s.variable}:${selKey(s.selection)}`).join("|");
+  const specKey = specs.map((s) => `${s.id}:${s.href}:${s.variable}:${selKey(s.selection)}:${s.rescale?.join("~")}`)
+    .join("|");
   const readyKey = results.map((r) => (r.data ? "1" : r.error ? "e" : "0")).join("");
 
   // The last layer per cube whose viewport finished loading. A step or variable change draws it
@@ -108,17 +118,21 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
     const keep = new Set<string>();
     const out = specs.flatMap((s, i) => {
       const data = results[i]?.data;
-      const held = loaded[s.id] ? built.current.get(loaded[s.id]) : undefined;
+      const held = loaded[s.id] ? heldLayer(built.current, loaded[s.id]) : undefined;
       if (!data) {
-        if (held) keep.add(held.id);
-        return held ? [held] : [];
+        if (held) keep.add(held.key);
+        return held ? [held.layer] : [];
       }
-      const { src, range } = data;
+      const { src, stretch } = data;
+      const rescale: [number, number] = [s.rescale?.[0] ?? stretch.range[0], s.rescale?.[1] ?? stretch.range[1]];
       const selection = Object.fromEntries(Object.entries(s.selection)
         .map(([d, i]) => [d, Math.min(i, (dimLength(src, d) ?? i + 1) - 1)]));
       // The step is in the id: the tile cache never refetches on a selection change alone.
       const id = `zarr-${s.id}-${s.variable}-${selKey(selection)}`;
-      const layer = built.current.get(id) ?? new ZarrLayer({
+      // Cached per stretch too: a Min/Max change rebuilds the instance but keeps the id, so deck
+      // re-colours the loaded tiles (updateTriggers) instead of refetching them.
+      const cacheKey = `${id}|${rescale.join("~")}`;
+      const layer = built.current.get(cacheKey) ?? new ZarrLayer({
         id,
         node: src.array,
         // One index per non-spatial dim, so what reaches the GPU is a 2D (y, x) slice.
@@ -130,16 +144,17 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
           colormapTexture,
           colormapIndex: COLORMAP_INDEX.viridis,
           noDataValue: src.noDataValue,
-          rescaleMin: range[0],
-          rescaleMax: range[1],
+          rescaleMin: rescale[0],
+          rescaleMax: rescale[1],
         }),
+        updateTriggers: { renderTile: rescale },
         onViewportLoad: () => setLoaded((p) => (p[s.id] === id ? p : { ...p, [s.id]: id })),
       });
-      built.current.set(id, layer);
-      keep.add(id);
-      if (held && held.id !== id) {
-        keep.add(held.id);
-        return [held, layer];
+      built.current.set(cacheKey, layer);
+      keep.add(cacheKey);
+      if (held && held.layer.id !== id) {
+        keep.add(held.key);
+        return [held.layer, layer];
       }
       return [layer];
     });
@@ -150,6 +165,13 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
 
   const states = results.map((r) => ({ isLoading: r.isLoading, error: r.error ?? null }));
   return { layers, states };
+}
+
+// The newest built instance for a layer id (a stretch change adds instances under the same id).
+function heldLayer(built: Map<string, Layer>, id: string): { key: string; layer: Layer } | undefined {
+  const keys = [...built.keys()].filter((k) => k.startsWith(`${id}|`));
+  const key = keys.at(-1);
+  return key ? { key, layer: built.get(key)! } : undefined;
 }
 
 const selKey = (sel: Record<string, number>) => Object.entries(sel).map(([d, i]) => `${d}=${i}`).join(",");

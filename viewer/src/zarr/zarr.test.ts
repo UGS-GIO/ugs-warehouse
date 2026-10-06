@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { assetKind, cubeSteps, cubeVariables, nonSpatialDimensions, resolveSelection, stepKey, timeDimensionOf } from "@/stac";
 import { decodeFillValue, fillValueOf } from "./store";
 import { effectiveNoData, maskNaN, NODATA_SENTINEL } from "./tile";
-import { cubeParam, parseCubeParam } from "./cube-picks";
+import { cubeParam, parseCubeParam, pickedRescale } from "./cube-picks";
 import { stepFor } from "./steps";
 import { describeZarrError } from "./use-zarr-layers";
 
@@ -199,6 +199,14 @@ describe("cube param", () => {
     expect(cubeParam({ A: {} })).toBeUndefined();
     expect(parseCubeParam("A~bad~time=2010,~x=1")).toEqual({ A: { time: "2010" } });
     expect(parseCubeParam(undefined)).toEqual({});
+  });
+});
+
+describe("pickedRescale", () => {
+  it("reads either end, leaving the other to the sampled stretch", () => {
+    expect(pickedRescale({ min: "0", max: "120.5" })).toEqual([0, 120.5]);
+    expect(pickedRescale({ max: "80" })).toEqual([undefined, 80]);
+    expect(pickedRescale({ min: "abc" })).toEqual([undefined, undefined]);
   });
 });
 

@@ -136,6 +136,7 @@ export type ActiveLayer = {
   zarr?: {
     href: string; variable: string; variables: string[];
     stepDims: Record<string, CubeStep[]>; selection: Record<string, number>;
+    rescale?: [number | undefined, number | undefined];   // the user's Min/Max, if set
   };
 };
 

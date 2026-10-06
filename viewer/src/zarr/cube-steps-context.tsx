@@ -9,7 +9,7 @@ import { type ReactNode, useContext, useState } from "react";
 import { Panel } from "@/catalog/panel";
 import { idOf, resolveSelection } from "@/stac";
 import { type CubeOffer, Ctx, OfferCtx } from "./cube-offer";
-import { useCubePicks } from "./cube-picks";
+import { pickedRescale, useCubePicks } from "./cube-picks";
 import { CubeControls } from "./step-picker";
 import { hasCubeControls } from "./steps";
 
@@ -24,10 +24,11 @@ export function CubeStepsPanel() {
   // `i` may be a full item URL; picks are keyed by the short id, like the map's layers.
   const itemId = useSearch({ from: "__root__", select: (s) => (s.i ? idOf(s.i) : undefined) });
   const [picks, pick] = useCubePicks(itemId);
-  if (!offer || !hasCubeControls(offer.variables, offer.stepDims)) return null;
+  if (!offer || !(offer.stretch || hasCubeControls(offer.variables, offer.stepDims))) return null;
   return (
     <Panel title="Datacube">
-      <CubeControls {...offer} selection={resolveSelection(offer.stepDims, picks)} onPick={pick} />
+      <CubeControls {...offer} selection={resolveSelection(offer.stepDims, picks)}
+        rescale={pickedRescale(picks)} onPick={pick} />
     </Panel>
   );
 }

@@ -13,10 +13,10 @@ import { DIRECT, protomapsStyle } from "@/map/basemap-style";
 import { ensurePmtilesProtocol } from "@/map/pmtiles-protocol";
 import { DeckOverlay } from "./zarr-overlay";
 import { useSearch } from "@tanstack/react-router";
-import { useCubePicks, VAR } from "./cube-picks";
+import { pickedRescale, useCubePicks, VAR } from "./cube-picks";
 import { useCubeOfferSink } from "./cube-offer";
 import { CubeControls } from "./step-picker";
-import { useCubeSteps, useZarrLayers } from "./use-zarr-layers";
+import { useCubeSteps, useCubeStretch, useZarrLayers } from "./use-zarr-layers";
 import { to2d } from "@/lib/bbox";
 
 ensurePmtilesProtocol();
@@ -34,15 +34,17 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
   const variable = picks[VAR] && variables.includes(picks[VAR]) ? picks[VAR] : variables[0];
   const stepDims = useCubeSteps({ href: asset.href, variable: variable ?? "" }, useMemo(() => cubeStepDims(item), [item]));
   const selection = resolveSelection(stepDims, picks);
+  const stretch = useCubeStretch({ href: asset.href, variable: variable ?? "" });
+  const rescale = pickedRescale(picks);
   // On the item page the controls sit in the side column: offer them there.
   const offerTo = useCubeOfferSink();
   useEffect(() => {
     if (!offerTo || !variable) return;
-    offerTo({ variables, variable, stepDims });
+    offerTo({ variables, variable, stepDims, stretch });
     return () => offerTo(null);
-  }, [offerTo, variables, variable, stepDims]);
+  }, [offerTo, variables, variable, stepDims, stretch]);
   const specs = variable
-    ? [{ id: String(item.id ?? "cube"), href: asset.href, variable, selection }]
+    ? [{ id: String(item.id ?? "cube"), href: asset.href, variable, selection, rescale }]
     : [];
   const { layers, states } = useZarrLayers(specs, device);
   const state = states[0];
@@ -71,11 +73,11 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
       </div>
       <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1">
         {!offerTo && <CubeControls variables={variables} variable={variable} stepDims={stepDims}
-          selection={selection} onPick={pick} />}
+          selection={selection} stretch={stretch} rescale={rescale} onPick={pick} />}
         <p className="text-xs text-muted-foreground">
           {state?.isLoading
             ? "Opening datacube…"
-            : <><code>{variable}</code> · viridis, 2–98% of a sampled window</>}
+            : <><code>{variable}</code> · viridis</>}
           {others > 0 && <> · {others} other variable{others > 1 ? "s" : ""} in this cube</>}
         </p>
       </div>

@@ -656,6 +656,27 @@ export function resolveSelection(
   }));
 }
 
+// A render-extension block (stac-extensions/render), titiler-style; `variable` picks a datacube
+// variable the way titiler-xarray does.
+type StacRender = { assets?: string[]; rescale?: number[][]; variable?: string };
+
+/**
+ * A datacube variable's display stretch from STAC: the standard render extension (`renders`), then
+ * the warehouse's `ugs:renders` (same shape). The render naming this variable wins, else `default`.
+ * Undefined when neither says, and the viewer samples one.
+ */
+export function cubeRenderRescale(item: StacDoc, variable: string): [number, number] | undefined {
+  const props = (item.properties ?? {}) as Record<string, unknown>;
+  for (const key of ["renders", "ugs:renders"]) {
+    const renders = (props[key] ?? (item as Record<string, unknown>)[key]) as Record<string, StacRender> | undefined;
+    if (!renders) continue;
+    const r = Object.values(renders).find((x) => x.variable === variable) ?? renders.default;
+    const [lo, hi] = r?.rescale?.[0] ?? [];
+    if (Number.isFinite(lo) && Number.isFinite(hi) && hi > lo) return [lo, hi];
+  }
+  return undefined;
+}
+
 export const zarrAsset = (item: StacDoc | undefined): Asset | undefined =>
   Object.values(item?.assets ?? {}).find((a) => assetKind(a) === "zarr");
 

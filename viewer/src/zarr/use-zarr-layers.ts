@@ -17,10 +17,12 @@ import { openZarr, sampleStretch, type Stretch, type ZarrSource } from "./store"
 import { makeGetTileData, makeRenderTile } from "./tile";
 
 /** `selection` = an index for every non-spatial dim; ZarrLayer throws unless all are pinned.
- *  `rescale` = the user's Min/Max, either end falling back to the sampled stretch. */
+ *  `rescale` = the user's Min/Max; either end falls back to `stacRescale` (the STAC render's),
+ *  else to a sampled stretch. */
 export type ZarrSpec = {
   id: string; href: string; variable: string; selection: Record<string, number>;
   rescale?: [number | undefined, number | undefined];
+  stacRescale?: [number, number];
 };
 
 // STAC can list more steps than the store holds (a catalog updated ahead of its data).
@@ -47,7 +49,7 @@ export const zarrSourceQuery = (s: Pick<ZarrSpec, "href" | "variable">) => ({
   queryKey: qk.zarrSource(s.href, s.variable),
   queryFn: async () => {
     const src = await openZarr(s.href, s.variable);
-    return { src, stretch: await sampleStretch(src) };
+    return { src };
   },
   retry: false,
   staleTime: Infinity,
@@ -84,9 +86,20 @@ export function useCubeSteps(
     : stepDims), [src, stepDims]);
 }
 
-/** The cube's sampled stretch, for the Min/Max sliders. Reads the overlay's cache. */
-export function useCubeStretch(spec: Pick<ZarrSpec, "href" | "variable">): Stretch | undefined {
-  return useQuery({ ...zarrSourceQuery(spec), enabled: Boolean(spec.variable) }).data?.stretch;
+/** Sampling a stretch, only for a cube whose STAC names none: it reads ~24 steps. */
+const zarrStretchQuery = (s: Pick<ZarrSpec, "href" | "variable" | "stacRescale">, src?: ZarrSource) => ({
+  queryKey: qk.zarrStretch(s.href, s.variable),
+  queryFn: () => sampleStretch(src!),
+  enabled: Boolean(src) && !s.stacRescale,
+  retry: false,
+  staleTime: Infinity,
+});
+
+/** The cube's default stretch, for the Min/Max sliders: STAC's when set, else the sampled one. */
+export function useCubeStretch(spec: Pick<ZarrSpec, "href" | "variable" | "stacRescale">): Stretch | undefined {
+  const src = useQuery({ ...zarrSourceQuery(spec), enabled: Boolean(spec.variable) }).data?.src;
+  const sampled = useQuery(zarrStretchQuery(spec, src)).data;
+  return spec.stacRescale ? { range: spec.stacRescale } : sampled;
 }
 
 export interface ZarrLayersResult {
@@ -100,12 +113,14 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
   const colormapTexture = useColormapTexture(device);
 
   const results = useQueries({ queries: specs.map(zarrSourceQuery) });
+  const sampled = useQueries({ queries: specs.map((s, i) => zarrStretchQuery(s, results[i]?.data?.src)) });
 
   // Query objects are new every render, so the memo keys off the specs and each query's settled
   // state instead. Rebuilding a ZarrLayer needlessly re-reads chunks.
-  const specKey = specs.map((s) => `${s.id}:${s.href}:${s.variable}:${selKey(s.selection)}:${s.rescale?.join("~")}`)
+  const specKey = specs.map((s) => `${s.id}:${s.href}:${s.variable}:${selKey(s.selection)}:${s.rescale?.join("~")}:${s.stacRescale}`)
     .join("|");
-  const readyKey = results.map((r) => (r.data ? "1" : r.error ? "e" : "0")).join("");
+  const readyKey = results.map((r) => (r.data ? "1" : r.error ? "e" : "0")).join("")
+    + sampled.map((r) => (r.data ? "1" : "0")).join("");
 
   // The last layer per cube whose viewport finished loading. A step or variable change draws it
   // under its replacement until that one has loaded too, so the map swaps pictures, never blanks.
@@ -123,8 +138,13 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
         if (held) keep.add(held.key);
         return held ? [held.layer] : [];
       }
-      const { src, stretch } = data;
-      const rescale: [number, number] = [s.rescale?.[0] ?? stretch.range[0], s.rescale?.[1] ?? stretch.range[1]];
+      const { src } = data;
+      const base = s.stacRescale ?? sampled[i]?.data?.range;
+      if (!base) {
+        if (held) keep.add(held.key);
+        return held ? [held.layer] : [];
+      }
+      const rescale: [number, number] = [s.rescale?.[0] ?? base[0], s.rescale?.[1] ?? base[1]];
       const selection = Object.fromEntries(Object.entries(s.selection)
         .map(([d, i]) => [d, Math.min(i, (dimLength(src, d) ?? i + 1) - 1)]));
       // The step is in the id: the tile cache never refetches on a selection change alone.

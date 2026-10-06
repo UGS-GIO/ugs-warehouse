@@ -16,7 +16,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { type CubePicks, parseCubeParam, pickedRescale, VAR } from "./zarr/cube-picks";
@@ -74,6 +74,7 @@ export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveL
       zarr: {
         href: zarr.href, variable, variables, stepDims,
         selection: resolveSelection(stepDims, cube), rescale: pickedRescale(cube),
+        stacRescale: cubeRenderRescale(ref.data, variable),
       },
     };
   }

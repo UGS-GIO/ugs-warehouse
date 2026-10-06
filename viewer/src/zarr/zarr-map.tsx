@@ -8,7 +8,7 @@ import maplibregl from "@/map/maplibre-lib";
 import { useEffect, useMemo, useState } from "react";
 import { Map as MapGL, NavigationControl } from "react-map-gl/maplibre";
 
-import { type Asset, cubeStepDims, cubeVariables, idOf, resolveSelection, type StacDoc } from "@/stac";
+import { type Asset, cubeRenderRescale, cubeStepDims, cubeVariables, idOf, resolveSelection, type StacDoc } from "@/stac";
 import { DIRECT, protomapsStyle } from "@/map/basemap-style";
 import { ensurePmtilesProtocol } from "@/map/pmtiles-protocol";
 import { DeckOverlay } from "./zarr-overlay";
@@ -34,7 +34,8 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
   const variable = picks[VAR] && variables.includes(picks[VAR]) ? picks[VAR] : variables[0];
   const stepDims = useCubeSteps({ href: asset.href, variable: variable ?? "" }, useMemo(() => cubeStepDims(item), [item]));
   const selection = resolveSelection(stepDims, picks);
-  const stretch = useCubeStretch({ href: asset.href, variable: variable ?? "" });
+  const stacRescale = useMemo(() => (variable ? cubeRenderRescale(item, variable) : undefined), [item, variable]);
+  const stretch = useCubeStretch({ href: asset.href, variable: variable ?? "", stacRescale });
   const rescale = pickedRescale(picks);
   // On the item page the controls sit in the side column: offer them there.
   const offerTo = useCubeOfferSink();
@@ -44,7 +45,7 @@ export function ZarrMap({ asset, item }: { asset: Asset; item: StacDoc }) {
     return () => offerTo(null);
   }, [offerTo, variables, variable, stepDims, stretch]);
   const specs = variable
-    ? [{ id: String(item.id ?? "cube"), href: asset.href, variable, selection, rescale }]
+    ? [{ id: String(item.id ?? "cube"), href: asset.href, variable, selection, rescale, stacRescale }]
     : [];
   const { layers, states } = useZarrLayers(specs, device);
   const state = states[0];

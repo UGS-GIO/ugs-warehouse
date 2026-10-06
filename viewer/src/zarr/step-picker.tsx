@@ -39,37 +39,44 @@ export function CubeControls({ variables, variable, stepDims, selection, stretch
 const fmt = (v: number) => (Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(1) : v.toPrecision(2));
 
 /**
- * Min/Max sliders plus two presets, because the right stretch depends on the question: "Typical"
- * (2nd–80th percentile, the default) shows where values run high even if peaks clip; "Full range"
- * shows the true max and where it is.
+ * Min/Max sliders plus presets, because the right stretch depends on the question: "Default" (STAC's
+ * render, else the sampled 2nd–80th percentile) shows where values run high even if peaks clip;
+ * "Full range" (sampled cubes only) shows the true max and where it is.
  */
 function StretchSliders({ stretch, rescale, onPick }: {
   stretch: Stretch;
   rescale: [number | undefined, number | undefined];
   onPick: SetPick;
 }) {
-  // The span stretches to an override set past it (a shared link, a hand-edited URL).
-  const lo = Math.min(stretch.full[0], rescale[0] ?? Infinity);
-  const hi = Math.max(stretch.full[1], rescale[1] ?? -Infinity);
+  // Sampled: the record's min to max. STAC-set: 3× the range, like the soil-water viewer's 0–300
+  // over 0–100. Either stretches to an override set past it (a shared link, a hand-edited URL).
+  const [r0, r1] = stretch.range;
+  const span = stretch.full ?? [Math.min(0, r0), r0 + 3 * (r1 - r0)];
+  const lo = Math.min(span[0], rescale[0] ?? Infinity);
+  const hi = Math.max(span[1], rescale[1] ?? -Infinity);
   const step = (hi - lo) / 200;
   const min = rescale[0] ?? stretch.range[0];
   const max = rescale[1] ?? stretch.range[1];
   const num = (v: number) => String(Number(v.toPrecision(4)));
   const typical = rescale[0] === undefined && rescale[1] === undefined;
-  const full = min === Number(num(stretch.full[0])) && max === Number(num(stretch.full[1]));
+  const full = Boolean(stretch.full) && min === Number(num(stretch.full![0])) && max === Number(num(stretch.full![1]));
   const preset = (on: boolean) => `rounded px-1.5 py-0.5 ${on ? "bg-muted font-medium text-foreground" : "hover:text-foreground"}`;
   return (
     <div className="mt-1 flex flex-col gap-1 text-xs text-muted-foreground">
       <div className="flex items-center gap-1">
         <span className="mr-auto">Stretch</span>
         <button type="button" className={preset(typical)} aria-pressed={typical}
-          title="2nd–80th percentile across the record" onClick={() => onPick({ [MIN]: undefined, [MAX]: undefined })}>
-          Typical
+          title={stretch.full ? "2nd–80th percentile across the record" : "The dataset's own stretch"}
+          onClick={() => onPick({ [MIN]: undefined, [MAX]: undefined })}>
+          Default
         </button>
-        <button type="button" className={preset(full)} aria-pressed={full}
-          title="The record's true minimum and maximum" onClick={() => onPick({ [MIN]: num(stretch.full[0]), [MAX]: num(stretch.full[1]) })}>
-          Full range
-        </button>
+        {stretch.full && (
+          <button type="button" className={preset(full)} aria-pressed={full}
+            title="The record's true minimum and maximum"
+            onClick={() => onPick({ [MIN]: num(stretch.full![0]), [MAX]: num(stretch.full![1]) })}>
+            Full range
+          </button>
+        )}
       </div>
       <label className="flex items-center gap-2">
         <span className="w-20 shrink-0 tabular-nums">Min {fmt(min)}</span>

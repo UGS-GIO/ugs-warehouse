@@ -109,9 +109,9 @@ export function decodeFillValue(raw: unknown): number | undefined {
   return undefined;
 }
 
-/** `range` = the default stretch (2nd–80th percentile); `full` = the sample's true min and max,
- *  for "Full range" and the span of the Min/Max sliders. */
-export type Stretch = { range: [number, number]; full: [number, number] };
+/** `range` = the default stretch (STAC's, else the sampled 2nd–80th percentile); `full` = the
+ *  sample's true min and max, for "Full range" — absent when STAC set the range and nothing was sampled. */
+export type Stretch = { range: [number, number]; full?: [number, number] };
 
 // Steps sampled across the record, and values kept in all: enough for stable percentiles.
 const SAMPLE_STEPS = 24;

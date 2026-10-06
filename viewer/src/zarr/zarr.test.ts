@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetKind, cubeSteps, cubeVariables, nonSpatialDimensions, resolveSelection, stepKey, timeDimensionOf } from "@/stac";
+import { assetKind, cubeRenderRescale, cubeSteps, cubeVariables, nonSpatialDimensions, resolveSelection, stepKey, timeDimensionOf } from "@/stac";
 import { decodeFillValue, fillValueOf } from "./store";
 import { effectiveNoData, maskNaN, NODATA_SENTINEL } from "./tile";
 import { cubeParam, parseCubeParam, pickedRescale } from "./cube-picks";
@@ -207,6 +207,29 @@ describe("pickedRescale", () => {
     expect(pickedRescale({ min: "0", max: "120.5" })).toEqual([0, 120.5]);
     expect(pickedRescale({ max: "80" })).toEqual([undefined, 80]);
     expect(pickedRescale({ min: "abc" })).toEqual([undefined, undefined]);
+  });
+});
+
+describe("cubeRenderRescale", () => {
+  const item = (props: Record<string, unknown>) => ({ properties: props });
+
+  it("reads the standard render extension, preferring the render named for the variable", () => {
+    const it = item({ renders: {
+      default: { assets: ["data"], rescale: [[0, 100]] },
+      soil: { assets: ["data"], variable: "Soil_Water_End_Of_Previous_Timestep", rescale: [[0, 400]] },
+    } });
+    expect(cubeRenderRescale(it, "AET")).toEqual([0, 100]);
+    expect(cubeRenderRescale(it, "Soil_Water_End_Of_Previous_Timestep")).toEqual([0, 400]);
+  });
+
+  it("falls back to ugs:renders, then to nothing", () => {
+    expect(cubeRenderRescale(item({ "ugs:renders": { default: { rescale: [[5, 50]] } } }), "AET")).toEqual([5, 50]);
+    expect(cubeRenderRescale(item({}), "AET")).toBeUndefined();
+  });
+
+  it("ignores a malformed or empty range", () => {
+    expect(cubeRenderRescale(item({ renders: { default: { rescale: [[10, 10]] } } }), "AET")).toBeUndefined();
+    expect(cubeRenderRescale(item({ renders: { default: { rescale: [] } } }), "AET")).toBeUndefined();
   });
 });
 

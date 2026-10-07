@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import urllib.error
 import urllib.request
 from dataclasses import dataclass
 
@@ -19,7 +20,15 @@ CDN_BUCKET = "warehouse"  # the first path segment, which a path-style cloud con
 STAC = f"https://{CDN_HOST}/{CDN_BUCKET}/stac"
 TOPICS = f"{STAC}/ugs-serving-topics"
 _CHUNK = 1 << 20
-RASTER_THEME = "geologic maps (raster)"
+RASTER_THEME = "rasters"
+# What the dialog calls each theme; a schema not named here shows title-cased.
+THEME_NAMES = {"emp": "Energy and Minerals", "hazards": "Geologic Hazards",
+               "mapping": "Geologic Mapping", "wetlands": "Wetlands",
+               RASTER_THEME: "Scanned Geologic Maps"}
+
+
+def theme_name(theme: str) -> str:
+    return THEME_NAMES.get(theme) or theme.replace("_", " ").title()
 # Names a file geodatabase gives its own fields.
 _RESERVED = {"objectid", "shape", "shape_length", "shape_area", "fid"}
 
@@ -384,12 +393,27 @@ def toolbox_branch(folder: str) -> str:
         return "main"
 
 
+class VersionNotFound(LookupError):
+    pass
+
+
+def _pr_number(version: str) -> str | None:
+    v = version.strip().lstrip("#")
+    return v if v.isdigit() else None
+
+
 def _commit(branch: str, timeout: float) -> str:
-    """The commit `branch` points at, or the branch itself when the API cannot say.
+    """The commit a version points at: a branch (`main`) or a pull request number (`535`).
 
     raw.githubusercontent.com caches a branch-name URL for minutes after a push; a commit URL
-    cannot go stale, so fetching by commit sees a push at once.
+    cannot go stale, so fetching by commit sees a push at once. When the API cannot say, a branch
+    falls back to its own (cached) URL.
     """
+    if pr := _pr_number(branch):
+        try:
+            return get_json(f"{REPO_API}/pulls/{pr}")["head"]["sha"]
+        except Exception as e:  # noqa: BLE001 - a pull request has no raw URL to fall back to
+            raise VersionNotFound(f"pull request {pr}: {e}") from e
     req = urllib.request.Request(f"{REPO_API}/commits/{branch}",
                                  headers={"Accept": "application/vnd.github.sha"})
     try:
@@ -405,8 +429,13 @@ def _fetch_toolbox(branch: str, timeout: float = 60) -> dict[str, bytes]:
     ref = _commit(branch, timeout)
     fresh = {}
     for name in TOOLBOX_FILES:
-        with urllib.request.urlopen(f"{REPO_RAW}/{ref}/arcgis-pro/{name}", timeout=timeout) as r:
-            body = r.read()
+        try:
+            with urllib.request.urlopen(f"{REPO_RAW}/{ref}/arcgis-pro/{name}", timeout=timeout) as r:
+                body = r.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                raise VersionNotFound(branch) from e
+            raise
         if len(body) < 100:  # an empty body compiles; it would wipe the toolbox
             raise ValueError(f"{name} from '{branch}' is only {len(body)} bytes")
         compile(body, name, "exec")

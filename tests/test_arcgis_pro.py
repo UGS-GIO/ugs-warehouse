@@ -9,6 +9,7 @@ import hashlib
 import importlib.machinery
 import importlib.util
 import sys
+import tempfile
 import types
 from pathlib import Path
 
@@ -193,6 +194,7 @@ class FakeArcpy(types.SimpleNamespace):
         self.added, self.removed, self.connections, self.inserted = [], [], [], []
         self.refuse, self.broken = set(refuse), set(broken)
         self.fc = {}
+        self.home = tempfile.mkdtemp()
         arcpy = self
 
         def add(path):
@@ -224,7 +226,9 @@ class FakeArcpy(types.SimpleNamespace):
             ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
             Exists=lambda p: False, SpatialReference=lambda code: f"SR{code}",
             FromWKB=lambda wkb, sr: ("geom", bytes(wkb), sr), CreateUniqueName=lambda n, ws: n,
-            mp=types.SimpleNamespace(ArcGISProject=lambda name: types.SimpleNamespace(activeMap=the_map)),
+            mp=types.SimpleNamespace(ArcGISProject=lambda name: types.SimpleNamespace(
+                activeMap=the_map, homeFolder=arcpy.home)),
+            env=types.SimpleNamespace(scratchFolder="/scratch"),
             da=types.SimpleNamespace(InsertCursor=Cursor),
             management=types.SimpleNamespace(
                 CreateCloudStorageConnectionFile=connect, GetCount=lambda lyr: ["7"],
@@ -266,7 +270,9 @@ def test_theme_narrows_the_layer_list(monkeypatch):
     tool = mod.AddLayer()
     params = tool.getParameterInfo()
     assert len(params[2].filter.list) == 3  # two vector layers and one raster
-    params[0].value, params[0].altered = "hazards", True
+    assert params[0].filter.list == ["All", "Energy and Minerals", "Geologic Hazards",
+                                     "Scanned Geologic Maps"]
+    params[0].value, params[0].altered = "Geologic Hazards", True
     tool.updateParameters(params)
     assert params[2].filter.list == ["Quaternary Faults [hazards_qfaults]"]
 
@@ -292,7 +298,7 @@ def test_streams_through_the_web_connection_and_styles_like_the_viewer(monkeypat
     assert arcpy.connections == [("WEB", "warehouse", {"end_point": "maps-assets.geology.utah.gov"})]
     (lyr,) = arcpy.added
     assert lyr.path == str(tmp_path / "ugs_cdn_web.acs" / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
-    assert lyr.name == "Quaternary Faults" and any("WEB" in m for m in log)
+    assert lyr.name == "Quaternary Faults" and "  Opened online. (WEB)" in log
     assert lyr.metadata.saved and lyr.metadata.title == "Quaternary Faults"
     r = lyr.symbology.renderer
     assert r.type == "UniqueValueRenderer" and r.fields == ["QffHazardUnit"]  # the layer's own casing
@@ -331,7 +337,7 @@ def test_old_pro_copies_instead_of_streaming(monkeypatch, tmp_path):
     tool = mod.AddLayer()
     params = tool.getParameterInfo()
     tool.updateMessages(params)
-    assert "3.5" in params[3].warning
+    assert "can't open these layers online" in params[3].warning
     monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
     monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
     monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name: f"gdb/{name}")
@@ -517,3 +523,41 @@ def test_a_raster_is_added_from_its_cog_with_metadata_and_no_style(monkeypatch, 
     assert lyr.path == "https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif"
     assert arcpy.connections == [] and lyr.symbology.renderer is None
     assert lyr.metadata.summary == "A 1:24,000 map." and lyr.metadata.credits == "Personius"
+
+
+def test_downloads_default_to_the_project_folder(monkeypatch):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    params = mod.AddLayer().getParameterInfo()
+    assert params[4].value == str(Path(arcpy.home) / "UGS Warehouse")
+    assert Path(params[4].value).is_dir()
+
+    def no_project(name):
+        raise OSError("no project open")
+
+    monkeypatch.setattr(arcpy.mp, "ArcGISProject", no_project)
+    assert mod._default_folder() == "/scratch"
+
+
+def test_a_pull_request_number_resolves_to_its_head_commit(monkeypatch):
+    monkeypatch.undo()  # the real _commit
+    monkeypatch.setattr(cat, "get_json", lambda url: {"head": {"sha": "b" * 40}} if url.endswith("/pulls/535") else {})
+    assert cat._commit("#535", 2) == "b" * 40
+
+    def gone(url):
+        raise OSError("404")
+
+    monkeypatch.setattr(cat, "get_json", gone)
+    with pytest.raises(cat.VersionNotFound):
+        cat._commit("999", 2)
+
+
+def test_a_missing_version_is_reported_as_not_found(monkeypatch, tmp_path):
+    import urllib.error
+
+    def urlopen(url, timeout=0):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    monkeypatch.setattr(cat.urllib.request, "urlopen", urlopen)
+    with pytest.raises(cat.VersionNotFound):
+        cat.update_toolbox(str(tmp_path), "main")

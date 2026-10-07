@@ -6,6 +6,7 @@ testable off Windows.
 """
 from __future__ import annotations
 
+import gzip
 import hashlib
 import json
 import os
@@ -18,6 +19,7 @@ CDN_BUCKET = "warehouse"  # the first path segment, which a path-style cloud con
 STAC = f"https://{CDN_HOST}/{CDN_BUCKET}/stac"
 TOPICS = f"{STAC}/ugs-serving-topics"
 _CHUNK = 1 << 20
+RASTER_THEME = "geologic maps (raster)"
 # Names a file geodatabase gives its own fields.
 _RESERVED = {"objectid", "shape", "shape_length", "shape_area", "fid"}
 
@@ -26,8 +28,14 @@ _RESERVED = {"objectid", "shape", "shape_length", "shape_area", "fid"}
 class Layer:
     id: str
     title: str
-    theme: str  # the dbt schema, which is the serving-topics collection
+    theme: str  # the dbt schema for a vector layer; RASTER_THEME for a raster
     keywords: tuple[str, ...] = ()
+    href: str = ""  # a raster's COG; a vector layer's data comes from its item
+    properties: tuple = ()  # a raster's index properties, as items(), for its metadata
+
+    @property
+    def is_raster(self) -> bool:
+        return self.theme == RASTER_THEME
 
     def matches(self, query: str | None) -> bool:
         """True when every word of `query` is in the title, id or a keyword (case-insensitive)."""
@@ -37,6 +45,10 @@ class Layer:
     @property
     def item_url(self) -> str:
         return f"{TOPICS}/{self.theme}/{self.id}/{self.id}.json"
+
+    @property
+    def collection_url(self) -> str:
+        return f"{TOPICS}/{self.theme}/collection.json"
 
     @property
     def choice(self) -> str:
@@ -55,8 +67,13 @@ def cdn_key(href: str) -> str | None:
 
 
 def get_json(url: str) -> dict:
-    with urllib.request.urlopen(url, timeout=60) as r:  # urllib asks for no gzip, so bytes are plain
-        return json.load(r)
+    """JSON from `url`, asking for gzip: the catalog indexes are ~25x smaller compressed."""
+    req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})
+    with urllib.request.urlopen(req, timeout=60) as r:
+        body = r.read()
+        if r.headers.get("Content-Encoding") == "gzip":
+            body = gzip.decompress(body)
+    return json.loads(body)
 
 
 def layers(index: dict | None = None) -> list[Layer]:
@@ -68,6 +85,41 @@ def layers(index: dict | None = None) -> list[Layer]:
         out.append(Layer(i["id"], p.get("title") or i["id"], p.get("ugs:dbt_schema") or "",
                          tuple(p.get("keywords") or ())))
     return sorted(out, key=lambda x: (x.theme, x.title.lower()))
+
+
+def rasters(index: dict | None = None) -> list[Layer]:
+    """Every item with a COG on the CDN (the geologic map scans and ugs-rasters), by title."""
+    index = index if index is not None else get_json(f"{STAC}/items.json")
+    out = []
+    for i in index.get("items") or []:
+        cog = (i.get("assets") or {}).get("cog") or {}
+        if not cog.get("href", "").startswith(f"https://{CDN_HOST}/"):
+            continue
+        p = i.get("properties") or {}
+        words = (p.get("ugs:series_id"), p.get("ugs:author"), p.get("ugs:scale"), *(p.get("keywords") or ()))
+        out.append(Layer(i["id"], p.get("title") or i["id"], RASTER_THEME,
+                         tuple(w for w in words if w), cog["href"], tuple(p.items())))
+    return sorted(out, key=lambda x: x.title.lower())
+
+
+def metadata(props: dict, collection: dict | None = None, source: str = "") -> dict[str, str]:
+    """Pro metadata fields (title, summary, description, tags, credits, accessConstraints)."""
+    collection = collection or {}
+    desc = (props.get("description") or "").strip()
+    summary = desc.split(". ")[0].rstrip(".") + "." if desc else ""
+    providers = [p.get("name") for p in collection.get("providers") or [] if p.get("name")]
+    credits = ", ".join(providers) or props.get("ugs:point_of_contact") or props.get("ugs:author") or ""
+    lic = collection.get("license") or ""
+    lic_url = next((lk["href"] for lk in collection.get("links") or [] if lk.get("rel") == "license"), "")
+    access = " ".join(x for x in (lic, lic_url) if x)
+    return {k: v for k, v in {
+        "title": props.get("title") or "",
+        "summary": summary,
+        "description": "\n\n".join(x for x in (desc, f"Source: {source}" if source else "") if x),
+        "tags": ", ".join(props.get("keywords") or ()),
+        "credits": credits,
+        "accessConstraints": access,
+    }.items() if v}
 
 
 def _rgb(color: str) -> tuple[int, int, int] | None:

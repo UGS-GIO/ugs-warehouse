@@ -24,6 +24,18 @@ INDEX = {"items": [
     {"id": "enmin_powerplants", "properties": {"title": "Power Plants", "ugs:dbt_schema": "emp"}},
 ]}
 
+HREF_PLACEHOLDER = "https://maps-assets.geology.utah.gov/warehouse/geoparquet/x/x.parquet"
+ROOT = {"items": [  # the root index: one CDN COG, one scan on the legacy host, one vector layer
+    {"id": "M-180", "properties": {"title": "Geologic map of the Salt Lake City quadrangle",
+                                   "ugs:series_id": "M-180", "ugs:author": "Personius",
+                                   "description": "A 1:24,000 map. Scanned."},
+     "assets": {"cog": {"href": "https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif"}}},
+    {"id": "OLD-1", "properties": {"title": "Old scan"},
+     "assets": {"publication": {"href": "https://ugspub.nr.utah.gov/x.tif"}}},
+    {"id": "hazards_qfaults", "properties": {"title": "Quaternary Faults"},
+     "assets": {"data": {"href": HREF_PLACEHOLDER}}},
+]}
+
 PER_LAYER = {"layers": [  # one layer per value, as the hazards_qfaults style is written
     {"type": "line", "filter": ["==", ["downcase", ["to-string", ["get", "qffhazardunit"]]], "u150wcqff"],
      "paint": {"line-color": "#e60000"}},
@@ -44,6 +56,25 @@ def test_layers_sort_by_theme_and_round_trip_their_pick_list_entry():
     assert [x.id for x in got] == ["enmin_powerplants", "hazards_qfaults"]
     assert cat.id_of(got[1].choice) == "hazards_qfaults"
     assert got[1].item_url.endswith("/ugs-serving-topics/hazards/hazards_qfaults/hazards_qfaults.json")
+
+
+def test_rasters_are_the_cdn_cogs_searchable_by_series_and_author():
+    (m180,) = cat.rasters(ROOT)
+    assert m180.is_raster and m180.href.endswith("/geolmap/cogs/M-180.cog.tif")
+    assert m180.matches("personius m-180") and not m180.matches("faults")
+
+
+def test_metadata_takes_the_catalog_fields_and_the_collection_license():
+    props = {"title": "Quaternary Faults", "description": "Fault traces in Utah. Many more words.",
+             "keywords": ["faults", "utah"], "ugs:point_of_contact": "UGS"}
+    collection = {"license": "CC-BY-4.0", "providers": [{"name": "Utah Geological Survey"}],
+                  "links": [{"rel": "license", "href": "https://creativecommons.org/licenses/by/4.0/"}]}
+    md = cat.metadata(props, collection, "https://example/item.json")
+    assert md == {"title": "Quaternary Faults", "summary": "Fault traces in Utah.",
+                  "description": "Fault traces in Utah. Many more words.\n\nSource: https://example/item.json",
+                  "tags": "faults, utah", "credits": "Utah Geological Survey",
+                  "accessConstraints": "CC-BY-4.0 https://creativecommons.org/licenses/by/4.0/"}
+    assert cat.metadata({"title": "x"}) == {"title": "x"}  # nothing invented for what is absent
 
 
 def test_one_layer_per_value_takes_the_legend_labels_in_order():
@@ -106,7 +137,8 @@ def test_download_verifies_and_reuses_a_matching_copy(monkeypatch, tmp_path):
 # ---------------------------------------------------------------- the .pyt against a fake arcpy
 
 HREF = "https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet"
-STYLED_ITEM = {"assets": {"data": {"href": HREF, "file:size": 3}}, "properties": {"ugs:renders": {
+STYLED_ITEM = {"assets": {"data": {"href": HREF, "file:size": 3}}, "properties": {
+    "title": "Quaternary Faults", "ugs:renders": {
     "default": {"style_url": "style", "legend": [{"label": "<150 years"}, {"label": "<15,000 years"}]}}}}
 
 
@@ -133,7 +165,10 @@ class FakeParameter:
 class FakeLayer:
     def __init__(self, path, field_values, broken=False):
         self.path, self.name, self.isBroken = path, "", broken
+        self.dataSource = path
         self._field_values = field_values
+        self.metadata = types.SimpleNamespace(isReadOnly=False, saved=False)
+        self.metadata.save = lambda: setattr(self.metadata, "saved", True)
         self.symbology = types.SimpleNamespace(renderer=None, updateRenderer=self._update)
 
     def _update(self, kind):
@@ -205,8 +240,9 @@ def _load(monkeypatch, arcpy):
     spec = importlib.util.spec_from_loader("ugs_pyt", loader)
     mod = importlib.util.module_from_spec(spec)
     loader.exec_module(mod)
-    listed = cat.layers(INDEX)  # mod.cat is this same module, so list before stubbing it
+    listed, scans = cat.layers(INDEX), cat.rasters(ROOT)  # mod.cat is this module: list, then stub
     monkeypatch.setattr(mod.cat, "layers", lambda index=None: listed)
+    monkeypatch.setattr(mod.cat, "rasters", lambda index=None: scans)
     monkeypatch.setattr(mod.cat, "get_json", lambda url: PER_LAYER if url == "style" else STYLED_ITEM)
     mod._cache.clear()
     mod._cache["stale"] = None  # no GitHub check unless a test asks for one
@@ -229,7 +265,7 @@ def test_theme_narrows_the_layer_list(monkeypatch):
     mod = _load(monkeypatch, FakeArcpy())
     tool = mod.AddLayer()
     params = tool.getParameterInfo()
-    assert len(params[2].filter.list) == 2
+    assert len(params[2].filter.list) == 3  # two vector layers and one raster
     params[0].value, params[0].altered = "hazards", True
     tool.updateParameters(params)
     assert params[2].filter.list == ["Quaternary Faults [hazards_qfaults]"]
@@ -257,6 +293,7 @@ def test_streams_through_the_web_connection_and_styles_like_the_viewer(monkeypat
     (lyr,) = arcpy.added
     assert lyr.path == str(tmp_path / "ugs_cdn_web.acs" / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
     assert lyr.name == "Quaternary Faults" and any("WEB" in m for m in log)
+    assert lyr.metadata.saved and lyr.metadata.title == "Quaternary Faults"
     r = lyr.symbology.renderer
     assert r.type == "UniqueValueRenderer" and r.fields == ["QffHazardUnit"]  # the layer's own casing
     assert lyr.added_all
@@ -420,3 +457,18 @@ def test_the_dialog_warns_when_out_of_date(monkeypatch):
     params = tool.getParameterInfo()
     tool.updateMessages(params)
     assert "Update Toolbox" in params[0].warning
+
+
+def test_a_raster_is_added_from_its_cog_with_metadata_and_no_style(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    tool = mod.AddLayer()
+    params = tool.getParameterInfo()
+    params[2].values = ["Geologic map of the Salt Lake City quadrangle [M-180]"]
+    params[4].value = str(tmp_path)
+    tool.execute(params, types.SimpleNamespace(addMessage=lambda m: None, addWarningMessage=lambda m: None))
+
+    (lyr,) = arcpy.added
+    assert lyr.path == "https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif"
+    assert arcpy.connections == [] and lyr.symbology.renderer is None
+    assert lyr.metadata.summary == "A 1:24,000 map." and lyr.metadata.credits == "Personius"

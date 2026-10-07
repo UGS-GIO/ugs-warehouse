@@ -33,7 +33,7 @@ def _layers() -> list[cat.Layer]:
     """The catalog's layers, or [] when it cannot be reached (the tool then says so)."""
     if "layers" not in _cache:
         try:
-            _cache["layers"] = cat.layers()
+            _cache["layers"] = cat.layers() + cat.rasters()
         except OSError as e:
             _cache["error"] = f"Could not read the UGS catalog: {e}"
             return []
@@ -149,6 +149,24 @@ def _copy(m, asset: dict, folder: str, name: str, messages):
     return m.addDataFromPath(_to_fgdb(cat.pro_ready(path), folder, name))
 
 
+def _apply_metadata(lyr, fields: dict[str, str], messages) -> None:
+    """Title, description, tags, credits and use limits from the catalog, on the layer.
+
+    A layer that shows its source's metadata is read-only; then it goes on a geodatabase copy's
+    feature class instead. A streamed file keeps none, which the messages say.
+    """
+    md = lyr.metadata
+    if getattr(md, "isReadOnly", False):
+        source = getattr(lyr, "dataSource", "")
+        if not (source and ".gdb" in source.lower()):
+            messages.addMessage(f"  {lyr.name}: Pro keeps this layer's metadata read-only")
+            return
+        md = arcpy.metadata.Metadata(source)
+    for key, value in fields.items():
+        setattr(md, key, value)
+    md.save()
+
+
 def _apply_style(lyr, item: dict, messages) -> None:
     """A renderer from the layer's GL style: same field, colors and legend labels."""
     renders = (item.get("properties") or {}).get("ugs:renders") or {}
@@ -199,8 +217,8 @@ class Toolbox:
 class AddLayer:
     def __init__(self):
         self.label = "Add Warehouse Layer"
-        self.description = ("Add UGS warehouse vector layers to the active map, styled with the "
-                            "web viewer's colors and legend.")
+        self.description = ("Add UGS warehouse layers to the active map: vector layers styled with "
+                            "the web viewer's colors and legend, and geologic map rasters.")
 
     def getParameterInfo(self):
         theme = arcpy.Parameter(displayName="Theme", name="theme", datatype="GPString",
@@ -264,13 +282,26 @@ class AddLayer:
         for choice in picks.values:
             layer = by_id[cat.id_of(choice)]
             messages.addMessage(layer.title)
-            item = cat.get_json(layer.item_url)
-            asset = item["assets"]["data"]
-            lyr = _stream(m, asset, work, messages) if source.valueAsText == STREAM else None
-            if lyr is None:
-                lyr = _copy(m, asset, work, layer.id, messages)
+            if layer.is_raster:  # a COG: Pro reads it from its URL, range by range
+                lyr = m.addDataFromPath(layer.href)
+                fields = cat.metadata(dict(layer.properties), source=layer.href)
+            else:
+                item = cat.get_json(layer.item_url)
+                asset = item["assets"]["data"]
+                lyr = _stream(m, asset, work, messages) if source.valueAsText == STREAM else None
+                if lyr is None:
+                    lyr = _copy(m, asset, work, layer.id, messages)
+                try:
+                    collection = cat.get_json(layer.collection_url)
+                except OSError:
+                    collection = None
+                fields = cat.metadata(item.get("properties") or {}, collection, layer.item_url)
             lyr.name = layer.title
-            if style.value:
+            try:
+                _apply_metadata(lyr, fields, messages)
+            except Exception as e:  # noqa: BLE001 — the layer is on the map; metadata is extra
+                messages.addWarningMessage(f"{layer.title}: metadata not written ({e})")
+            if style.value and not layer.is_raster:
                 try:
                     _apply_style(lyr, item, messages)
                 except Exception as e:  # noqa: BLE001 — the layer is on the map; styling is extra

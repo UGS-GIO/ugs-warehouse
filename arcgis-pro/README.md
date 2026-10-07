@@ -1,6 +1,7 @@
 # UGS Warehouse toolbox for ArcGIS Pro
 
-Adds warehouse vector layers to the active map, styled with the web viewer's colors and legend.
+Adds warehouse layers to the active map: vector layers styled with the web viewer's colors and
+legend, and geologic map rasters.
 
 ## Install
 
@@ -13,7 +14,8 @@ Nothing else to install; the toolbox uses only Pro's own Python (including its `
 
 Open **UGS Warehouse → Add Warehouse Layer**:
 
-- **Theme** narrows the list (`emp`, `hazards`, `mapping`, `wetlands`).
+- **Theme** narrows the list (`emp`, `hazards`, `mapping`, `wetlands`, and
+  `geologic maps (raster)`: the 870 map scans and rasters with a COG on the CDN).
 - **Search** narrows it further: every word must appear in the layer's title, id or keywords.
 - **Layers**: pick one or more.
 - **Source**:
@@ -25,6 +27,10 @@ Open **UGS Warehouse → Add Warehouse Layer**:
     folder, for offline work or editing.
 - **Style like the web viewer**: categories, colors and legend labels from the layer's style. A
   layer with no style, or a style with no simple equivalent, keeps Pro's default symbol.
+
+A raster is added from its COG URL; Pro reads only the part in view. Every layer gets the
+catalog's title, summary, description, tags, credits and license in its metadata (a geodatabase
+copy's feature class gets it when Pro keeps the layer's own metadata read-only).
 
 If streaming does not work on a machine, or Pro is older than 3.5, the tool copies the layer
 instead and says so in its messages, so a run always ends with the layer on the map.

@@ -157,7 +157,7 @@ def _apply_metadata(lyr, fields: dict[str, str], messages) -> None:
     """
     md = lyr.metadata
     if getattr(md, "isReadOnly", False):
-        source = getattr(lyr, "dataSource", "")
+        source = getattr(lyr, "dataSource", "") or ""
         if not (source and ".gdb" in source.lower()):
             messages.addMessage(f"  {lyr.name}: Pro keeps this layer's metadata read-only")
             return

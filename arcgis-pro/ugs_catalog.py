@@ -63,7 +63,7 @@ def id_of(choice: str) -> str:
 def cdn_key(href: str) -> str | None:
     """The path of a CDN href below the bucket segment (`geoparquet/x/x.parquet`), else None."""
     base = f"https://{CDN_HOST}/{CDN_BUCKET}/"
-    return href[len(base):] if href.startswith(base) else None
+    return href.removeprefix(base) if href.startswith(base) else None
 
 
 def get_json(url: str) -> dict:
@@ -299,7 +299,7 @@ def pro_ready(path: str) -> str:
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    out = path[: -len(".parquet")] + ".pro.parquet"
+    out = path.removesuffix(".parquet") + ".pro.parquet"
     if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(path):
         return out
     table = pq.read_table(path)
@@ -398,7 +398,10 @@ def _fetch_toolbox(branch: str, timeout: float = 60) -> dict[str, bytes]:
 
 def _local(folder: str, name: str) -> bytes | None:
     path = os.path.join(folder, name)
-    return open(path, "rb").read() if os.path.exists(path) else None
+    if not os.path.exists(path):
+        return None
+    with open(path, "rb") as fh:  # closed at once: Windows will not replace an open file
+        return fh.read()
 
 
 def stale_files(folder: str, branch: str, timeout: float = 2) -> list[str] | None:
@@ -417,19 +420,17 @@ def update_toolbox(folder: str, branch: str = "main") -> list[str]:
     leaves the working toolbox alone. The old files are kept as `.bak`.
     """
     fresh = _fetch_toolbox(branch)
-    changed = []
-    for name, body in fresh.items():
-        path = os.path.join(folder, name)
-        old = _local(folder, name)
-        if old == body:
-            continue
+    todo = {n: (os.path.join(folder, n), _local(folder, n), b) for n, b in fresh.items()}
+    todo = {n: t for n, t in todo.items() if t[1] != t[2]}
+    for path, old, body in todo.values():  # write everything first, so a full disk breaks nothing
         if old is not None:
             with open(path + ".bak", "wb") as fh:
                 fh.write(old)
         with open(path + ".part", "wb") as fh:
             fh.write(body)
+    for path, _, _ in todo.values():
         os.replace(path + ".part", path)
-        changed.append(name)
+    changed = list(todo)
     with open(os.path.join(folder, BRANCH_FILE), "w") as fh:  # only once both files are in place
         fh.write(branch)
     return changed

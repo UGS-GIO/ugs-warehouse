@@ -401,7 +401,7 @@ def stale_files(folder: str, branch: str, timeout: float = 5) -> list[str] | Non
     """The toolbox files that differ from `branch`, or None when GitHub could not be checked."""
     try:
         fresh = _fetch_toolbox(branch, timeout)
-    except Exception:  # noqa: BLE001 — offline, bad branch: no verdict rather than a false alarm
+    except Exception:  # noqa: BLE001 - offline, bad branch: no verdict rather than a false alarm
         return None
     return [n for n, body in fresh.items() if _local(folder, n) != body]
 

@@ -74,7 +74,7 @@ def _usable(m, lyr) -> bool:
     try:
         if not getattr(lyr, "isBroken", False) and int(arcpy.management.GetCount(lyr)[0]) >= 0:
             return True
-    except Exception:  # noqa: BLE001 — any failure to read it means it is not usable
+    except Exception:  # noqa: BLE001 - any failure to read it means it is not usable
         pass
     m.removeLayer(lyr)
     return False
@@ -95,7 +95,7 @@ def _stream(m, asset: dict, folder: str, messages):
                 messages.addMessage(f"  streamed through a {provider} connection")
                 return lyr
             messages.addMessage(f"  {provider} connection: Pro could not open the file")
-        except Exception as e:  # noqa: BLE001 — try the next way in
+        except Exception as e:  # noqa: BLE001 - try the next way in
             messages.addMessage(f"  {provider} connection failed: {e}")
     return None
 
@@ -122,7 +122,7 @@ def _to_fgdb(parquet: str, folder: str, name: str) -> str:
     if arcpy.Exists(fc):
         try:
             arcpy.management.Delete(fc)
-        except Exception:  # noqa: BLE001 — in use on a map: write alongside it
+        except Exception:  # noqa: BLE001 - in use on a map: write alongside it
             fc = arcpy.CreateUniqueName(name, gdb)
     sr = arcpy.SpatialReference(4326)
     arcpy.management.CreateFeatureclass(gdb, os.path.basename(fc), shape, spatial_reference=sr,
@@ -299,12 +299,12 @@ class AddLayer:
             lyr.name = layer.title
             try:
                 _apply_metadata(lyr, fields, messages)
-            except Exception as e:  # noqa: BLE001 — the layer is on the map; metadata is extra
+            except Exception as e:  # noqa: BLE001 - the layer is on the map; metadata is extra
                 messages.addWarningMessage(f"{layer.title}: metadata not written ({e})")
             if style.value and not layer.is_raster:
                 try:
                     _apply_style(lyr, item, messages)
-                except Exception as e:  # noqa: BLE001 — the layer is on the map; styling is extra
+                except Exception as e:  # noqa: BLE001 - the layer is on the map; styling is extra
                     messages.addWarningMessage(f"{layer.title}: not styled ({e})")
 
 
@@ -329,7 +329,7 @@ class UpdateToolbox:
         branch = parameters[0].valueAsText.strip()
         try:
             changed = cat.update_toolbox(folder, branch)
-        except Exception as e:  # noqa: BLE001 — nothing was replaced; say why
+        except Exception as e:  # noqa: BLE001 - nothing was replaced; say why
             raise arcpy.ExecuteError(f"Update from '{branch}' failed, toolbox unchanged: {e}")
         if not changed:
             messages.addMessage(f"Already up to date with '{branch}'.")

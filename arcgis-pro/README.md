@@ -29,6 +29,13 @@ Open **UGS Warehouse → Add Warehouse Layer**:
 If streaming does not work on a machine, or Pro is older than 3.5, the tool copies the layer
 instead and says so in its messages, so a run always ends with the layer on the map.
 
+## Update
+
+Run **UGS Warehouse → Update Toolbox**. It downloads both files from GitHub, replaces them only if
+both arrived whole (keeping `.bak` copies), and says what changed. **Branch** is `main` for
+released versions; enter a pull request's branch to test it. Afterwards, right-click the toolbox
+and choose **Refresh**: Pro reads a `.pyt` once.
+
 ## How streaming works
 
 The tool tries two cloud storage connections to the CDN, in order, and remembers the one that

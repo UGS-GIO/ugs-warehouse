@@ -341,3 +341,34 @@ def test_pro_ready_drops_nested_columns_and_fixes_names(tmp_path):
     assert out.column_names == ["publication_date", "objectid_2", "geom"]
     meta = json.loads(out.schema.metadata[b"geo"])
     assert meta["primary_column"] == "geom" and "covering" not in meta["columns"]["geom"]
+
+
+def test_update_replaces_both_files_only_when_both_are_good(monkeypatch, tmp_path):
+    served = {"UGSWarehouse.pyt": b"x = 1\n", "ugs_catalog.py": b"y = 2\n"}
+
+    class Resp:
+        def __init__(self, body):
+            self.body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return self.body
+
+    urls = []
+    monkeypatch.setattr(cat.urllib.request, "urlopen",
+                        lambda url, timeout=0: urls.append(url) or Resp(served[url.rsplit("/", 1)[1]]))
+    (tmp_path / "UGSWarehouse.pyt").write_bytes(b"x = 0\n")
+    (tmp_path / "ugs_catalog.py").write_bytes(b"y = 2\n")
+
+    assert cat.update_toolbox(str(tmp_path), "feat/x") == ["UGSWarehouse.pyt"]
+    assert urls[0].endswith("/ugs-warehouse/feat/x/arcgis-pro/UGSWarehouse.pyt")
+    assert (tmp_path / "UGSWarehouse.pyt").read_bytes() == b"x = 1\n"
+    assert (tmp_path / "UGSWarehouse.pyt.bak").read_bytes() == b"x = 0\n"
+    assert cat.update_toolbox(str(tmp_path), "feat/x") == []  # nothing new the second time
+
+    served["ugs_catalog.py"] = b"<html>404: Not Found"  # a bad branch name, or a cut-off download
+    with pytest.raises(SyntaxError):
+        cat.update_toolbox(str(tmp_path), "nope")
+    assert (tmp_path / "ugs_catalog.py").read_bytes() == b"y = 2\n"  # neither file was touched

@@ -175,7 +175,7 @@ class Toolbox:
     def __init__(self):
         self.label = "UGS Warehouse"
         self.alias = "ugswarehouse"
-        self.tools = [AddLayer]
+        self.tools = [AddLayer, UpdateToolbox]
 
 
 class AddLayer:
@@ -255,3 +255,28 @@ class AddLayer:
                     _apply_style(lyr, item, messages)
                 except Exception as e:  # noqa: BLE001 — the layer is on the map; styling is extra
                     messages.addWarningMessage(f"{layer.title}: not styled ({e})")
+
+
+class UpdateToolbox:
+    def __init__(self):
+        self.label = "Update Toolbox"
+        self.description = "Replace this toolbox's files with the latest version from GitHub."
+
+    def getParameterInfo(self):
+        branch = arcpy.Parameter(displayName="Branch", name="branch", datatype="GPString",
+                                 parameterType="Required", direction="Input")
+        branch.value = "main"
+        return [branch]
+
+    def execute(self, parameters, messages):
+        folder = os.path.dirname(os.path.abspath(__file__))
+        branch = parameters[0].valueAsText.strip()
+        try:
+            changed = cat.update_toolbox(folder, branch)
+        except Exception as e:  # noqa: BLE001 — nothing was replaced; say why
+            raise arcpy.ExecuteError(f"Update from '{branch}' failed, toolbox unchanged: {e}")
+        if not changed:
+            messages.addMessage(f"Already up to date with '{branch}'.")
+            return
+        messages.addMessage(f"Updated {', '.join(changed)} from '{branch}'.")
+        messages.addWarningMessage("Right-click the UGS Warehouse toolbox and choose Refresh.")

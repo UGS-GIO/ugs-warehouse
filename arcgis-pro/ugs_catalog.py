@@ -314,3 +314,36 @@ def esri_value(v):
     if isinstance(v, dt.datetime) and v.tzinfo is not None:
         return v.astimezone(dt.timezone.utc).replace(tzinfo=None)
     return v
+
+
+REPO_RAW = "https://raw.githubusercontent.com/UGS-GIO/ugs-warehouse"
+TOOLBOX_FILES = ("UGSWarehouse.pyt", "ugs_catalog.py")
+
+
+def update_toolbox(folder: str, branch: str = "main") -> list[str]:
+    """Replace the toolbox files in `folder` with the ones on `branch`. Returns the files changed.
+
+    Both files download and must compile before either is replaced, so a failed or partial update
+    leaves the working toolbox alone. The old files are kept as `.bak`.
+    """
+    fresh = {}
+    for name in TOOLBOX_FILES:
+        url = f"{REPO_RAW}/{branch}/arcgis-pro/{name}"
+        with urllib.request.urlopen(url, timeout=60) as r:
+            body = r.read()
+        compile(body, name, "exec")  # a truncated or HTML response raises here
+        fresh[name] = body
+    changed = []
+    for name, body in fresh.items():
+        path = os.path.join(folder, name)
+        old = open(path, "rb").read() if os.path.exists(path) else None
+        if old == body:
+            continue
+        if old is not None:
+            with open(path + ".bak", "wb") as fh:
+                fh.write(old)
+        with open(path + ".part", "wb") as fh:
+            fh.write(body)
+        os.replace(path + ".part", path)
+        changed.append(name)
+    return changed

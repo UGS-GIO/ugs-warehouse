@@ -33,8 +33,11 @@ instead and says so in its messages, so a run always ends with the layer on the 
 
 Run **UGS Warehouse → Update Toolbox**. It downloads both files from GitHub, replaces them only if
 both arrived whole (keeping `.bak` copies), and says what changed. **Branch** is `main` for
-released versions; enter a pull request's branch to test it. Afterwards, right-click the toolbox
-and choose **Refresh**: Pro reads a `.pyt` once.
+released versions; enter a pull request's branch to test it, and the toolbox remembers it.
+Afterwards, right-click the toolbox and choose **Refresh**: Pro reads a `.pyt` once.
+
+When GitHub has a newer version, **Add Warehouse Layer** says so at the top of its dialog. It
+checks once per Pro session and stays quiet when GitHub cannot be reached.
 
 ## How streaming works
 

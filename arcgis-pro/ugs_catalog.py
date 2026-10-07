@@ -318,6 +318,40 @@ def esri_value(v):
 
 REPO_RAW = "https://raw.githubusercontent.com/UGS-GIO/ugs-warehouse"
 TOOLBOX_FILES = ("UGSWarehouse.pyt", "ugs_catalog.py")
+BRANCH_FILE = "UGSWarehouse.branch"  # the branch the last update came from
+
+
+def toolbox_branch(folder: str) -> str:
+    try:
+        with open(os.path.join(folder, BRANCH_FILE)) as fh:
+            return fh.read().strip() or "main"
+    except OSError:
+        return "main"
+
+
+def _fetch_toolbox(branch: str, timeout: float = 60) -> dict[str, bytes]:
+    """Both toolbox files from `branch`. Each must compile, so a truncated or HTML body raises."""
+    fresh = {}
+    for name in TOOLBOX_FILES:
+        with urllib.request.urlopen(f"{REPO_RAW}/{branch}/arcgis-pro/{name}", timeout=timeout) as r:
+            body = r.read()
+        compile(body, name, "exec")
+        fresh[name] = body
+    return fresh
+
+
+def _local(folder: str, name: str) -> bytes | None:
+    path = os.path.join(folder, name)
+    return open(path, "rb").read() if os.path.exists(path) else None
+
+
+def stale_files(folder: str, branch: str, timeout: float = 5) -> list[str] | None:
+    """The toolbox files that differ from `branch`, or None when GitHub could not be checked."""
+    try:
+        fresh = _fetch_toolbox(branch, timeout)
+    except Exception:  # noqa: BLE001 — offline, bad branch: no verdict rather than a false alarm
+        return None
+    return [n for n, body in fresh.items() if _local(folder, n) != body]
 
 
 def update_toolbox(folder: str, branch: str = "main") -> list[str]:
@@ -326,17 +360,13 @@ def update_toolbox(folder: str, branch: str = "main") -> list[str]:
     Both files download and must compile before either is replaced, so a failed or partial update
     leaves the working toolbox alone. The old files are kept as `.bak`.
     """
-    fresh = {}
-    for name in TOOLBOX_FILES:
-        url = f"{REPO_RAW}/{branch}/arcgis-pro/{name}"
-        with urllib.request.urlopen(url, timeout=60) as r:
-            body = r.read()
-        compile(body, name, "exec")  # a truncated or HTML response raises here
-        fresh[name] = body
+    fresh = _fetch_toolbox(branch)
+    with open(os.path.join(folder, BRANCH_FILE), "w") as fh:
+        fh.write(branch)
     changed = []
     for name, body in fresh.items():
         path = os.path.join(folder, name)
-        old = open(path, "rb").read() if os.path.exists(path) else None
+        old = _local(folder, name)
         if old == body:
             continue
         if old is not None:

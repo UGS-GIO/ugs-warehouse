@@ -40,6 +40,20 @@ def _layers() -> list[cat.Layer]:
     return _cache["layers"]
 
 
+def _here() -> str:
+    return os.path.dirname(os.path.abspath(__file__))
+
+
+def _update_notice() -> str | None:
+    """A note when GitHub has a newer toolbox than this folder, checked once per session."""
+    if "stale" not in _cache:
+        branch = cat.toolbox_branch(_here())
+        stale = cat.stale_files(_here(), branch)
+        _cache["stale"] = (f"A newer version of this toolbox is on '{branch}'. Run Update Toolbox, "
+                           "then right-click the toolbox and choose Refresh.") if stale else None
+    return _cache["stale"]
+
+
 def _pro_version() -> tuple[int, ...]:
     v = arcpy.GetInstallInfo().get("Version", "0")
     return tuple(int(p) for p in v.split(".")[:2] if p.isdigit())
@@ -226,6 +240,8 @@ class AddLayer:
                                  or lyr.choice in chosen]
 
     def updateMessages(self, parameters):
+        if notice := _update_notice():
+            parameters[0].setWarningMessage(notice)
         if "error" in _cache:
             parameters[2].setErrorMessage(_cache["error"])
         source = parameters[3]
@@ -265,11 +281,16 @@ class UpdateToolbox:
     def getParameterInfo(self):
         branch = arcpy.Parameter(displayName="Branch", name="branch", datatype="GPString",
                                  parameterType="Required", direction="Input")
-        branch.value = "main"
+        branch.value = cat.toolbox_branch(_here())
         return [branch]
 
+    def updateMessages(self, parameters):
+        notice = _update_notice()
+        if notice:
+            parameters[0].setWarningMessage(notice)
+
     def execute(self, parameters, messages):
-        folder = os.path.dirname(os.path.abspath(__file__))
+        folder = _here()
         branch = parameters[0].valueAsText.strip()
         try:
             changed = cat.update_toolbox(folder, branch)
@@ -278,5 +299,6 @@ class UpdateToolbox:
         if not changed:
             messages.addMessage(f"Already up to date with '{branch}'.")
             return
+        _cache.pop("stale", None)
         messages.addMessage(f"Updated {', '.join(changed)} from '{branch}'.")
         messages.addWarningMessage("Right-click the UGS Warehouse toolbox and choose Refresh.")

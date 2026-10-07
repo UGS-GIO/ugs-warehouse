@@ -203,6 +203,7 @@ def _load(monkeypatch, arcpy):
     monkeypatch.setattr(mod.cat, "layers", lambda index=None: listed)
     monkeypatch.setattr(mod.cat, "get_json", lambda url: PER_LAYER if url == "style" else STYLED_ITEM)
     mod._cache.clear()
+    mod._cache["stale"] = None  # no GitHub check unless a test asks for one
     return mod
 
 
@@ -372,3 +373,43 @@ def test_update_replaces_both_files_only_when_both_are_good(monkeypatch, tmp_pat
     with pytest.raises(SyntaxError):
         cat.update_toolbox(str(tmp_path), "nope")
     assert (tmp_path / "ugs_catalog.py").read_bytes() == b"y = 2\n"  # neither file was touched
+
+
+def test_reports_stale_files_and_remembers_the_branch(monkeypatch, tmp_path):
+    served = {"UGSWarehouse.pyt": b"x = 1\n", "ugs_catalog.py": b"y = 2\n"}
+
+    class Resp:
+        def __init__(self, body):
+            self.body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return self.body
+
+    def urlopen(url, timeout=0):
+        if "/offline/" in url:
+            raise OSError("no network")
+        return Resp(served[url.rsplit("/", 1)[1]])
+
+    monkeypatch.setattr(cat.urllib.request, "urlopen", urlopen)
+    (tmp_path / "UGSWarehouse.pyt").write_bytes(b"x = 0\n")
+    (tmp_path / "ugs_catalog.py").write_bytes(b"y = 2\n")
+    assert cat.toolbox_branch(str(tmp_path)) == "main"
+    assert cat.stale_files(str(tmp_path), "main") == ["UGSWarehouse.pyt"]
+    assert cat.stale_files(str(tmp_path), "offline") is None  # no verdict, not a false alarm
+
+    cat.update_toolbox(str(tmp_path), "feat/x")
+    assert cat.toolbox_branch(str(tmp_path)) == "feat/x"
+    assert cat.stale_files(str(tmp_path), "feat/x") == []
+
+
+def test_the_dialog_warns_when_out_of_date(monkeypatch):
+    mod = _load(monkeypatch, FakeArcpy())
+    monkeypatch.setattr(mod.cat, "stale_files", lambda folder, branch, timeout=5: ["ugs_catalog.py"])
+    mod._cache.pop("stale")
+    tool = mod.AddLayer()
+    params = tool.getParameterInfo()
+    tool.updateMessages(params)
+    assert "Update Toolbox" in params[0].warning

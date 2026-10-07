@@ -176,8 +176,12 @@ def _apply_style(lyr, item: dict, messages) -> None:
     sym = lyr.symbology
     sym.updateRenderer("UniqueValueRenderer")
     sym.renderer.fields = [names[field.lower()]]
+    if hasattr(sym.renderer, "addAllValues"):
+        sym.renderer.addAllValues()
     for group in sym.renderer.groups:
         for entry in group.items:
+            if not (entry.values and entry.values[0]):  # the "all other values" entry
+                continue
             match = lookup.get(str(entry.values[0][0]).lower())
             if match:
                 entry.label = match[0]

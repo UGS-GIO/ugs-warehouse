@@ -201,7 +201,7 @@ def verify(path: str, size: int | None, checksum: str | None) -> bool:
     with open(path, "rb") as fh:
         while chunk := fh.read(_CHUNK):
             h.update(chunk)
-    return h.hexdigest() == checksum[4:]
+    return h.hexdigest() == checksum.removeprefix("1220")
 
 
 def download(asset: dict, folder: str, name: str) -> str:

@@ -140,9 +140,15 @@ class FakeLayer:
         entries = [types.SimpleNamespace(values=[[v]], label=v,
                                          symbol=types.SimpleNamespace(color=None))
                    for v in self._field_values]
+        entries.append(types.SimpleNamespace(values=[], label="<all other values>",
+                                             symbol=types.SimpleNamespace(color=None)))
+        self.added_all = False
         self.symbology.renderer = types.SimpleNamespace(
             type=kind, fields=[], groups=[types.SimpleNamespace(items=entries)],
-            symbol=types.SimpleNamespace(color=None))
+            symbol=types.SimpleNamespace(color=None), addAllValues=self._add_all)
+
+    def _add_all(self):
+        self.added_all = True
 
 
 class FakeArcpy(types.SimpleNamespace):
@@ -253,7 +259,8 @@ def test_streams_through_the_web_connection_and_styles_like_the_viewer(monkeypat
     assert lyr.name == "Quaternary Faults" and any("WEB" in m for m in log)
     r = lyr.symbology.renderer
     assert r.type == "UniqueValueRenderer" and r.fields == ["QffHazardUnit"]  # the layer's own casing
-    got = {e.values[0][0]: (e.label, e.symbol.color) for e in r.groups[0].items}
+    assert lyr.added_all
+    got = {e.values[0][0]: (e.label, e.symbol.color) for e in r.groups[0].items if e.values}
     assert got["U150WCQFF"] == ("<150 years", {"RGB": [230, 0, 0, 100]})
     assert got["u15kwcqff"] == ("<15,000 years", {"RGB": [230, 152, 0, 100]})
     assert got["other"] == ("other", None)  # a value the style does not name keeps Pro's default

@@ -371,6 +371,7 @@ def esri_value(v):
 
 
 REPO_RAW = "https://raw.githubusercontent.com/UGS-GIO/ugs-warehouse"
+REPO_API = "https://api.github.com/repos/UGS-GIO/ugs-warehouse"
 TOOLBOX_FILES = ("UGSWarehouse.pyt", "ugs_catalog.py")
 BRANCH_FILE = "UGSWarehouse.branch"  # the branch the last update came from
 
@@ -383,11 +384,28 @@ def toolbox_branch(folder: str) -> str:
         return "main"
 
 
+def _commit(branch: str, timeout: float) -> str:
+    """The commit `branch` points at, or the branch itself when the API cannot say.
+
+    raw.githubusercontent.com caches a branch-name URL for minutes after a push; a commit URL
+    cannot go stale, so fetching by commit sees a push at once.
+    """
+    req = urllib.request.Request(f"{REPO_API}/commits/{branch}",
+                                 headers={"Accept": "application/vnd.github.sha"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            sha = r.read().decode().strip()
+        return sha if re.fullmatch(r"[0-9a-f]{40}", sha) else branch
+    except Exception:  # noqa: BLE001 - rate limit or offline: the branch URL still works, just cached
+        return branch
+
+
 def _fetch_toolbox(branch: str, timeout: float = 60) -> dict[str, bytes]:
     """Both toolbox files from `branch`. Each must compile, so a truncated or HTML body raises."""
+    ref = _commit(branch, timeout)
     fresh = {}
     for name in TOOLBOX_FILES:
-        with urllib.request.urlopen(f"{REPO_RAW}/{branch}/arcgis-pro/{name}", timeout=timeout) as r:
+        with urllib.request.urlopen(f"{REPO_RAW}/{ref}/arcgis-pro/{name}", timeout=timeout) as r:
             body = r.read()
         if len(body) < 100:  # an empty body compiles; it would wipe the toolbox
             raise ValueError(f"{name} from '{branch}' is only {len(body)} bytes")

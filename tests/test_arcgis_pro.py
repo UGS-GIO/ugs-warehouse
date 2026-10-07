@@ -388,6 +388,46 @@ def test_pro_ready_drops_nested_columns_and_fixes_names(tmp_path):
     assert meta["primary_column"] == "geom" and "covering" not in meta["columns"]["geom"]
 
 
+@pytest.fixture(autouse=True)
+def _no_commit_lookup(monkeypatch):
+    monkeypatch.setattr(cat, "_commit", lambda branch, timeout: branch)
+
+
+def test_update_fetches_by_commit_so_a_push_shows_at_once(monkeypatch):
+    seen = []
+
+    class Resp:
+        def __init__(self, body):
+            self.body = body
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+        def read(self):
+            return self.body
+
+    def urlopen(req, timeout=0):
+        url = getattr(req, "full_url", req)
+        seen.append(url)
+        if "api.github.com" in url:
+            return Resp(b"a" * 40)
+        return Resp(b"x = 1\n" + b"#" * 100)
+
+    monkeypatch.undo()  # the real _commit
+    monkeypatch.setattr(cat.urllib.request, "urlopen", urlopen)
+    cat._fetch_toolbox("feat/x")
+    assert seen[0].endswith("/commits/feat/x")
+    assert all(f"/{'a' * 40}/arcgis-pro/" in u for u in seen[1:])
+
+    def offline(req, timeout=0):
+        if "api.github.com" in getattr(req, "full_url", req):
+            raise OSError("rate limited")
+        return Resp(b"x = 1\n" + b"#" * 100)
+
+    monkeypatch.setattr(cat.urllib.request, "urlopen", offline)
+    assert cat._commit("feat/x", 2) == "feat/x"  # falls back to the branch URL
+
+
 def test_update_replaces_both_files_only_when_both_are_good(monkeypatch, tmp_path):
     served = {"UGSWarehouse.pyt": b"x = 1\n" + b"#" * 100, "ugs_catalog.py": b"y = 2\n" + b"#" * 100}
 

@@ -634,7 +634,7 @@ export function cubeSteps(item: StacDoc, dim: string): CubeStep[] {
         start.getUTCMonth() + (res === "M" ? i : 0),
         start.getUTCDate() + (res === "D" ? i : 0),
       ));
-      if (t > end) break;
+      if (Number.isNaN(t.getTime()) || t > end) break;   // past Date's range reads as NaN
       out.push(dateStep(t, res));
     }
     return out;

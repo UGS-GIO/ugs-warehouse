@@ -118,6 +118,11 @@ describe("cubeSteps", () => {
     expect(steps).toEqual([{ label: "2000", year: 2000 }, { label: "2001", year: 2001 }, { label: "2002", year: 2002 }]);
   });
 
+  it("stops at a step past the range a Date can hold", () => {
+    const steps = cubeSteps(cube("time", { type: "temporal", extent: ["2000-01-01", "9999-12-31"], step: "P1000000Y" }), "time");
+    expect(steps).toEqual([{ label: "2000", year: 2000 }]);
+  });
+
   it("infers the resolution of listed dates", () => {
     const yearly = cubeSteps(cube("time", { values: ["2001-01-01", "2002-01-01"] }), "time");
     expect(yearly[0]).toEqual({ label: "2001", year: 2001 });

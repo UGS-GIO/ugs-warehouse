@@ -178,7 +178,7 @@ export function useZarrLayers(specs: ZarrSpec[], device: Device | null): ZarrLay
       }
       const rescale: [number, number] = [s.rescale?.[0] ?? base[0], s.rescale?.[1] ?? base[1]];
       const selection = Object.fromEntries(Object.entries(s.selection)
-        .map(([d, i]) => [d, Math.min(i, (dimLength(src, d) ?? i + 1) - 1)]));
+        .map(([d, step]) => [d, Math.min(step, (dimLength(src, d) ?? step + 1) - 1)]));
       // The step is in the id: the tile cache never refetches on a selection change alone.
       const id = `zarr-${s.id}-${s.variable}-${selKey(selection)}`;
       // Cached per stretch too: a Min/Max change rebuilds the instance but keeps the id, so deck

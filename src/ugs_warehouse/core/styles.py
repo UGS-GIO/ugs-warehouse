@@ -38,8 +38,12 @@ _cache: tuple[float, tuple[dict, ...]] | None = None
 
 
 def _parse(raw: bytes) -> tuple[dict, ...]:
-    data = json.loads(raw.decode())
-    return tuple(e for e in data if isinstance(e, dict)) if isinstance(data, list) else ()
+    """Item-bound entries only. A `collectionId` entry styles a federated collection (UBM's datacubes),
+    which its own catalog attaches; the warehouse mints no such items, so it would only read as an orphan."""
+    data = json.loads(raw)
+    if not isinstance(data, list):
+        return ()
+    return tuple(e for e in data if isinstance(e, dict) and not e.get("collectionId"))
 
 
 def _fetch() -> tuple[dict, ...]:

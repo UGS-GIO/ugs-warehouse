@@ -109,27 +109,57 @@ export function decodeFillValue(raw: unknown): number | undefined {
   return undefined;
 }
 
+/** `range` = the default stretch (STAC's, else the sampled 2nd–80th percentile); `full` = the
+ *  sample's true min and max, for "Full range" — absent when STAC set the range and nothing was sampled. */
+export type Stretch = { range: [number, number]; full?: [number, number] };
+
+// Steps sampled across the record, and values kept in all: enough for stable percentiles.
+const SAMPLE_STEPS = 24;
+const SAMPLE_VALUES = 1_500_000;
+
 /**
- * Colour stretch from one sampled window: a 512² corner of the first step, clipped 2–98%.
- * Approximate by construction, and only needed because STAC carries no statistics for these cubes —
- * a producer-side `raster:bands` statistic should replace it.
+ * Static stretch for a variable, so a colour means the same value in every step: 2nd–80th
+ * percentile of pixels pooled from ~24 steps (a 512² window at the grid's centre). The 80th, not
+ * the 98th, follows the modellers' choice: good range for most months, sliders for the rest.
+ * Reads whole time chunks spread over the record: a chunk holding 32 months decodes once either
+ * way, and 12+ consecutive months cover every season. Producer statistics should replace it.
  */
-export async function sampleRange(src: ZarrSource): Promise<[number, number]> {
+export async function sampleStretch(src: ZarrSource): Promise<Stretch> {
   const { array, noDataValue } = src;
   const dims = array.shape.length;
   const [h, w] = array.shape.slice(-2);
-  const win = (n: number) => zarr.slice(0, Math.min(n, 512));
-  const sel = dims > 2
-    ? [...Array<number>(dims - 2).fill(0), win(h), win(w)]   // first index of each non-spatial dim
-    : [win(h), win(w)];
+  const win = (n: number) => {
+    const size = Math.min(n, 512);
+    const start = Math.floor((n - size) / 2);
+    return zarr.slice(start, start + size);
+  };
+  // Spread along the first non-spatial dim (time, or month); any further ones stay at step 0.
+  const len = dims > 2 ? array.shape[0] : 1;
+  const per = dims > 2 ? Math.max(1, array.chunks[0]) : 1;
+  const nChunks = Math.ceil(len / per);
+  const take = Math.min(nChunks, Math.max(1, Math.ceil(SAMPLE_STEPS / per)));
+  const picks = [...new Set(Array.from({ length: take }, (_, i) =>
+    Math.round(((i + 0.5) * nChunks) / take - 0.5)))];
 
-  const chunk = await zarr.get(array, sel);
-  const vals = Array.from(chunk.data as ArrayLike<number>)
-    .filter((v) => Number.isFinite(v) && v !== noDataValue)
-    .sort((a, b) => a - b);
-  if (vals.length === 0) return [0, 1];
+  const reads = await Promise.all(picks.map(async (c) => {
+    const t0 = c * per, t1 = Math.min(len, t0 + per);
+    const lead = dims > 2 ? [zarr.slice(t0, t1), ...Array<number>(dims - 3).fill(0)] : [];
+    return (await zarr.get(array, [...lead, win(h), win(w)])).data as ArrayLike<number>;
+  }));
+  const total = reads.reduce((n, d) => n + d.length, 0);
+  const stride = Math.max(1, Math.floor(total / SAMPLE_VALUES));
+  const vals: number[] = [];
+  for (const data of reads) {
+    for (let i = 0; i < data.length; i += stride) {
+      const v = data[i];
+      if (Number.isFinite(v) && v !== noDataValue) vals.push(v);
+    }
+  }
+  vals.sort((a, b) => a - b);
+  if (vals.length === 0) return { range: [0, 1], full: [0, 1] };
 
   const at = (q: number) => vals[Math.min(vals.length - 1, Math.floor(q * vals.length))];
-  const [lo, hi] = [at(0.02), at(0.98)];
-  return hi > lo ? [lo, hi] : [lo, lo + 1];   // flat window — avoid a zero-width stretch
+  const lo = at(0.02), hi = at(0.8);
+  const [min, max] = [vals[0], vals[vals.length - 1]];
+  return { range: hi > lo ? [lo, hi] : [lo, lo + 1], full: max > min ? [min, max] : [min, min + 1] };
 }

@@ -169,13 +169,14 @@ ArcGIS Pro 3.2 or later is recommended.
 
 ### Vector layers with UGS symbology (toolbox)
 
-The UGS Warehouse toolbox adds a layer by name, with the web viewer's colors and legend. It can
-download the layer's GeoParquet (Pro 3.5 or later) or add it live from the OGC API service.
+The UGS Warehouse toolbox adds layers by theme or search, with the web viewer's colors and legend.
+It streams the layer's GeoParquet from the CDN (Pro 3.5 or later) or copies it to a file
+geodatabase (any version).
 
 1. Download `UGSWarehouse.pyt` and `ugs_catalog.py` from
    [`arcgis-pro/`](https://github.com/UGS-GIO/ugs-warehouse/tree/main/arcgis-pro) into one folder.
 2. In the Catalog pane, right-click **Toolboxes** > **Add Toolbox** and pick `UGSWarehouse.pyt`.
-3. Run **Add Warehouse Layer**, pick a theme and one or more layers.
+3. Run **Add Warehouse Layer**, pick a theme or search, then one or more layers.
 
 ### Vector tiles with UGS symbology
 

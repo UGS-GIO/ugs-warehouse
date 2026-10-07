@@ -1,20 +1,25 @@
 """Read the UGS warehouse STAC catalog for the ArcGIS Pro toolbox.
 
-Standard library only, so it runs in Pro's Python with nothing installed. No arcpy here: the
-toolbox (`UGSWarehouse.pyt`) does the map work, and this module stays testable off Windows.
+Standard library plus pyarrow, which Pro's own Python ships (3.3 and later), so nothing is
+installed. No arcpy here: the toolbox (`UGSWarehouse.pyt`) does the map work, and this module stays
+testable off Windows.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 import os
+import re
 import urllib.request
 from dataclasses import dataclass
 
-STAC = "https://maps-assets.geology.utah.gov/warehouse/stac"
+CDN_HOST = "maps-assets.geology.utah.gov"
+CDN_BUCKET = "warehouse"  # the first path segment, which a path-style cloud connection calls a bucket
+STAC = f"https://{CDN_HOST}/{CDN_BUCKET}/stac"
 TOPICS = f"{STAC}/ugs-serving-topics"
-FEATURES = "https://ugs-warehouse-features-xedvkyurga-uc.a.run.app"
 _CHUNK = 1 << 20
+# Names a file geodatabase gives its own fields.
+_RESERVED = {"objectid", "shape", "shape_length", "shape_area", "fid"}
 
 
 @dataclass(frozen=True)
@@ -22,14 +27,16 @@ class Layer:
     id: str
     title: str
     theme: str  # the dbt schema, which is the serving-topics collection
+    keywords: tuple[str, ...] = ()
+
+    def matches(self, query: str | None) -> bool:
+        """True when every word of `query` is in the title, id or a keyword (case-insensitive)."""
+        text = " ".join((self.title, self.id, *self.keywords)).lower()
+        return all(word in text for word in (query or "").lower().split())
 
     @property
     def item_url(self) -> str:
         return f"{TOPICS}/{self.theme}/{self.id}/{self.id}.json"
-
-    @property
-    def features_url(self) -> str:
-        return f"{FEATURES}/collections/{self.id}"
 
     @property
     def choice(self) -> str:
@@ -41,6 +48,12 @@ def id_of(choice: str) -> str:
     return choice.rsplit("[", 1)[-1].rstrip("]")
 
 
+def cdn_key(href: str) -> str | None:
+    """The path of a CDN href below the bucket segment (`geoparquet/x/x.parquet`), else None."""
+    base = f"https://{CDN_HOST}/{CDN_BUCKET}/"
+    return href[len(base):] if href.startswith(base) else None
+
+
 def get_json(url: str) -> dict:
     with urllib.request.urlopen(url, timeout=60) as r:  # urllib asks for no gzip, so bytes are plain
         return json.load(r)
@@ -49,9 +62,11 @@ def get_json(url: str) -> dict:
 def layers(index: dict | None = None) -> list[Layer]:
     """Every serving-topic layer, sorted by theme then title."""
     index = index if index is not None else get_json(f"{TOPICS}/items.json")
-    out = [Layer(i["id"], (i.get("properties") or {}).get("title") or i["id"],
-                 (i.get("properties") or {}).get("ugs:dbt_schema") or "")
-           for i in index.get("items") or []]
+    out = []
+    for i in index.get("items") or []:
+        p = i.get("properties") or {}
+        out.append(Layer(i["id"], p.get("title") or i["id"], p.get("ugs:dbt_schema") or "",
+                         tuple(p.get("keywords") or ())))
     return sorted(out, key=lambda x: (x.theme, x.title.lower()))
 
 
@@ -197,11 +212,105 @@ def download(asset: dict, folder: str, name: str) -> str:
     if os.path.exists(path) and verify(path, size, checksum):
         return path
     tmp = path + ".part"
-    with urllib.request.urlopen(asset["href"], timeout=300) as r, open(tmp, "wb") as fh:
-        while chunk := r.read(_CHUNK):
-            fh.write(chunk)
+    try:
+        with urllib.request.urlopen(asset["href"], timeout=300) as r, open(tmp, "wb") as fh:
+            while chunk := r.read(_CHUNK):
+                fh.write(chunk)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+        raise
     if not verify(tmp, size, checksum):
         os.remove(tmp)
         raise OSError(f"{name}: download does not match the catalog's size or checksum")
     os.replace(tmp, path)
     return path
+
+
+def esri_name(name: str, taken: set[str]) -> str:
+    """A column name Pro accepts: starts with a letter, letters/digits/underscores, at most 32."""
+    base = re.sub(r"[^A-Za-z0-9_]", "_", name).lstrip("_0123456789") or "field"
+    base, out, n = base[:32], base[:32], 1
+    while out.lower() in taken:
+        n += 1
+        out = f"{base[:32 - len(str(n)) - 1]}_{n}"
+    taken.add(out.lower())
+    return out
+
+
+def pro_ready(path: str) -> str:
+    """A copy of a GeoParquet that Pro opens: no nested columns, Esri-valid names. Returns its path.
+
+    Pro rejects nested columns, and GeoParquet 1.1's `bbox` covering is a struct; the flat
+    `bbox_*` columns carry the same extent. The copy is reused while it is newer than the source.
+    """
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    out = path[: -len(".parquet")] + ".pro.parquet"
+    if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(path):
+        return out
+    table = pq.read_table(path)
+    nested = [f.name for f in table.schema if pa.types.is_nested(f.type)]
+    table = table.drop_columns(nested)
+    meta = dict(table.schema.metadata or {})
+    geo = json.loads(meta.get(b"geo", b"{}"))
+    primary = geo.get("primary_column", "geom")
+    taken = set(_RESERVED)
+    names = [esri_name(n, taken) for n in table.column_names]
+    renamed = dict(zip(table.column_names, names))
+    cols = {}
+    for name, spec in (geo.get("columns") or {}).items():
+        spec.pop("covering", None)
+        cols[renamed.get(name, name)] = spec
+    if geo:
+        geo["columns"], geo["primary_column"] = cols, renamed.get(primary, primary)
+        meta[b"geo"] = json.dumps(geo).encode()
+    table = table.rename_columns(names).replace_schema_metadata(meta)
+    pq.write_table(table, out + ".part", compression="zstd")
+    os.replace(out + ".part", out)
+    return out
+
+
+def esri_field(arrow_type, column, pro: tuple[int, ...]) -> tuple[str, int | None] | None:
+    """(Esri field type, text length) for an Arrow column, or None to leave it out."""
+    import pyarrow as pa
+
+    modern = pro >= (3, 2)  # BIGINTEGER and DATEONLY arrived in Pro 3.2
+    t = arrow_type
+    if pa.types.is_string(t) or pa.types.is_large_string(t):
+        longest = max((len(v) for v in column.to_pylist() if v is not None), default=1)
+        return "TEXT", max(longest, 1)
+    if pa.types.is_boolean(t) or t in (pa.int8(), pa.int16(), pa.uint8()):
+        return "SHORT", None
+    if t in (pa.int32(), pa.uint16()):
+        return "LONG", None
+    if pa.types.is_integer(t):
+        return ("BIGINTEGER" if modern else "DOUBLE"), None
+    if t in (pa.float16(), pa.float32()):
+        return "FLOAT", None
+    if pa.types.is_floating(t) or pa.types.is_decimal(t):
+        return "DOUBLE", None
+    if pa.types.is_date(t):
+        return ("DATEONLY" if modern else "DATE"), None
+    if pa.types.is_timestamp(t):
+        return "DATE", None
+    if pa.types.is_time(t):
+        return "TEXT", 16
+    return None  # binary and anything nested
+
+
+def esri_value(v):
+    """A Python value an insert cursor accepts."""
+    import datetime as dt
+    import decimal
+
+    if isinstance(v, bool):
+        return int(v)
+    if isinstance(v, decimal.Decimal):
+        return float(v)
+    if isinstance(v, dt.time):
+        return v.isoformat()
+    if isinstance(v, dt.datetime) and v.tzinfo is not None:
+        return v.astimezone(dt.timezone.utc).replace(tzinfo=None)
+    return v

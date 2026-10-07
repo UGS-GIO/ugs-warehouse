@@ -19,7 +19,8 @@ sys.path.insert(0, str(DIR))
 import ugs_catalog as cat  # noqa: E402
 
 INDEX = {"items": [
-    {"id": "hazards_qfaults", "properties": {"title": "Quaternary Faults", "ugs:dbt_schema": "hazards"}},
+    {"id": "hazards_qfaults", "properties": {"title": "Quaternary Faults", "ugs:dbt_schema": "hazards",
+                                             "keywords": ["slip rate", "neotectonics"]}},
     {"id": "enmin_powerplants", "properties": {"title": "Power Plants", "ugs:dbt_schema": "emp"}},
 ]}
 
@@ -104,6 +105,11 @@ def test_download_verifies_and_reuses_a_matching_copy(monkeypatch, tmp_path):
 
 # ---------------------------------------------------------------- the .pyt against a fake arcpy
 
+HREF = "https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet"
+STYLED_ITEM = {"assets": {"data": {"href": HREF, "file:size": 3}}, "properties": {"ugs:renders": {
+    "default": {"style_url": "style", "legend": [{"label": "<150 years"}, {"label": "<15,000 years"}]}}}}
+
+
 class FakeParameter:
     def __init__(self, displayName="", name="", datatype="", parameterType="", direction="", multiValue=False):
         self.name, self.multiValue = name, multiValue
@@ -120,10 +126,13 @@ class FakeParameter:
     def setErrorMessage(self, msg):
         self.error = msg
 
+    def setWarningMessage(self, msg):
+        self.warning = msg
+
 
 class FakeLayer:
-    def __init__(self, path, field_values):
-        self.path, self.name = path, ""
+    def __init__(self, path, field_values, broken=False):
+        self.path, self.name, self.isBroken = path, "", broken
         self._field_values = field_values
         self.symbology = types.SimpleNamespace(renderer=None, updateRenderer=self._update)
 
@@ -136,21 +145,55 @@ class FakeLayer:
             symbol=types.SimpleNamespace(color=None))
 
 
-@pytest.fixture()
-def pyt(monkeypatch):
-    added: list[FakeLayer] = []
+class FakeArcpy(types.SimpleNamespace):
+    """Records what the toolbox asks for. `refuse` names connection providers that fail."""
 
-    def add(path):
-        added.append(FakeLayer(path, ["U150WCQFF", "u15kwcqff", "other"]))  # upper case, as stored
-        return added[-1]
+    def __init__(self, refuse=(), broken=()):
+        self.added, self.removed, self.connections, self.inserted = [], [], [], []
+        self.refuse, self.broken = set(refuse), set(broken)
+        self.fc = {}
+        arcpy = self
 
-    the_map = types.SimpleNamespace(addDataFromPath=add)
-    arcpy = types.SimpleNamespace(
-        Parameter=FakeParameter, ExecuteError=RuntimeError,
-        GetInstallInfo=lambda: {"Version": "3.5.2"},
-        ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
-        mp=types.SimpleNamespace(ArcGISProject=lambda name: types.SimpleNamespace(activeMap=the_map)),
-    )
+        def add(path):
+            lyr = FakeLayer(path, ["U150WCQFF", "u15kwcqff", "other"],  # upper case, as stored
+                            broken=any(f"ugs_cdn_{p.lower()}" in path for p in arcpy.broken))
+            arcpy.added.append(lyr)
+            return lyr
+
+        def connect(folder, name, provider, bucket, **kw):
+            arcpy.connections.append((provider, bucket, kw))
+            if provider in arcpy.refuse:
+                raise OSError(f"{provider} refused")
+            Path(folder, name + ".acs").write_text("acs")
+
+        class Cursor:
+            def __init__(self, fc, fields):
+                arcpy.fc["insert_fields"] = fields
+            def __enter__(self):
+                return self
+            def __exit__(self, *a):
+                return False
+            def insertRow(self, row):
+                arcpy.inserted.append(row)
+
+        the_map = types.SimpleNamespace(addDataFromPath=add, removeLayer=self.removed.append)
+        super().__init__(
+            Parameter=FakeParameter, ExecuteError=RuntimeError,
+            GetInstallInfo=lambda: {"Version": "3.5.2"},
+            ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
+            Exists=lambda p: False, SpatialReference=lambda code: f"SR{code}",
+            FromWKB=lambda wkb, sr: ("geom", bytes(wkb), sr), CreateUniqueName=lambda n, ws: n,
+            mp=types.SimpleNamespace(ArcGISProject=lambda name: types.SimpleNamespace(activeMap=the_map)),
+            da=types.SimpleNamespace(InsertCursor=Cursor),
+            management=types.SimpleNamespace(
+                CreateCloudStorageConnectionFile=connect, GetCount=lambda lyr: ["7"],
+                CreateFileGDB=lambda folder, name: None,
+                CreateFeatureclass=lambda gdb, name, shape, **kw: arcpy.fc.update(shape=shape, **kw),
+                AddFields=lambda fc, fields: arcpy.fc.update(fields=fields), Delete=lambda p: None),
+        )
+
+
+def _load(monkeypatch, arcpy):
     monkeypatch.setitem(sys.modules, "arcpy", arcpy)
     loader = importlib.machinery.SourceFileLoader("ugs_pyt", str(DIR / "UGSWarehouse.pyt"))
     spec = importlib.util.spec_from_loader("ugs_pyt", loader)
@@ -158,36 +201,55 @@ def pyt(monkeypatch):
     loader.exec_module(mod)
     listed = cat.layers(INDEX)  # mod.cat is this same module, so list before stubbing it
     monkeypatch.setattr(mod.cat, "layers", lambda index=None: listed)
+    monkeypatch.setattr(mod.cat, "get_json", lambda url: PER_LAYER if url == "style" else STYLED_ITEM)
     mod._cache.clear()
-    return mod, added
+    return mod
 
 
-def test_theme_narrows_the_layer_list(pyt):
-    mod, _ = pyt
+def _run(mod, tmp_path, source=None):
     tool = mod.AddLayer()
     params = tool.getParameterInfo()
-    assert len(params[1].filter.list) == 2
+    params[2].values = ["Quaternary Faults [hazards_qfaults]"]
+    params[3].value = source or mod.STREAM
+    params[4].value = str(tmp_path)
+    log = []
+    msgs = types.SimpleNamespace(addMessage=log.append, addWarningMessage=log.append)
+    tool.execute(params, msgs)
+    return log
+
+
+def test_theme_narrows_the_layer_list(monkeypatch):
+    mod = _load(monkeypatch, FakeArcpy())
+    tool = mod.AddLayer()
+    params = tool.getParameterInfo()
+    assert len(params[2].filter.list) == 2
     params[0].value, params[0].altered = "hazards", True
     tool.updateParameters(params)
-    assert params[1].filter.list == ["Quaternary Faults [hazards_qfaults]"]
+    assert params[2].filter.list == ["Quaternary Faults [hazards_qfaults]"]
 
 
-def test_execute_downloads_adds_and_styles_like_the_viewer(pyt, monkeypatch, tmp_path):
-    mod, added = pyt
-    item = {"assets": {"data": {"href": "h", "file:size": 3}}, "properties": {"ugs:renders": {
-        "default": {"style_url": "style", "legend": [{"label": "<150 years"}, {"label": "<15,000 years"}]}}}}
-    monkeypatch.setattr(mod.cat, "get_json", lambda url: PER_LAYER if url == "style" else item)
-    monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
+def test_search_matches_title_id_and_keywords_and_keeps_picks(monkeypatch):
+    mod = _load(monkeypatch, FakeArcpy())
     tool = mod.AddLayer()
     params = tool.getParameterInfo()
-    params[1].values = ["Quaternary Faults [hazards_qfaults]"]
-    params[3].value = str(tmp_path)
-    msgs = types.SimpleNamespace(addMessage=lambda m: None, addWarningMessage=lambda m: None)
+    params[1].value, params[1].altered = "SLIP rate", True
+    tool.updateParameters(params)
+    assert params[2].filter.list == ["Quaternary Faults [hazards_qfaults]"]
+    params[2].values = ["Quaternary Faults [hazards_qfaults]"]
+    params[1].value = "power"
+    tool.updateParameters(params)
+    assert params[2].filter.list == ["Power Plants [enmin_powerplants]", "Quaternary Faults [hazards_qfaults]"]
 
-    tool.execute(params, msgs)
 
-    (lyr,) = added
-    assert lyr.path == f"{tmp_path}/hazards_qfaults.parquet" and lyr.name == "Quaternary Faults"
+def test_streams_through_the_web_connection_and_styles_like_the_viewer(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    log = _run(mod, tmp_path)
+
+    assert arcpy.connections == [("WEB", "warehouse", {"end_point": "maps-assets.geology.utah.gov"})]
+    (lyr,) = arcpy.added
+    assert lyr.path == str(tmp_path / "ugs_cdn_web.acs" / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
+    assert lyr.name == "Quaternary Faults" and any("WEB" in m for m in log)
     r = lyr.symbology.renderer
     assert r.type == "UniqueValueRenderer" and r.fields == ["QffHazardUnit"]  # the layer's own casing
     got = {e.values[0][0]: (e.label, e.symbol.color) for e in r.groups[0].items}
@@ -196,10 +258,86 @@ def test_execute_downloads_adds_and_styles_like_the_viewer(pyt, monkeypatch, tmp
     assert got["other"] == ("other", None)  # a value the style does not name keeps Pro's default
 
 
-def test_old_pro_is_told_to_use_the_live_source(pyt, monkeypatch):
-    mod, _ = pyt
-    monkeypatch.setattr(mod.arcpy, "GetInstallInfo", lambda: {"Version": "3.3.1"})
+def test_falls_back_to_anonymous_s3_on_the_cdn(monkeypatch, tmp_path):
+    arcpy = FakeArcpy(refuse={"WEB"})
+    mod = _load(monkeypatch, arcpy)
+    _run(mod, tmp_path)
+    provider, bucket, kw = arcpy.connections[-1]
+    assert provider == "AMAZON" and kw["end_point"] == "maps-assets.geology.utah.gov"
+    assert ["AWS_NO_SIGN_REQUEST", "YES"] in kw["config_options"]
+    assert "ugs_cdn_amazon.acs" in arcpy.added[-1].path
+
+
+def test_copies_to_a_geodatabase_when_pro_cannot_open_the_stream(monkeypatch, tmp_path):
+    arcpy = FakeArcpy(refuse={"WEB"}, broken={"AMAZON"})
+    mod = _load(monkeypatch, arcpy)
+    monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
+    monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
+    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name: f"{folder}/UGS Warehouse.gdb/{name}")
+    _run(mod, tmp_path)
+    assert len(arcpy.removed) == 1  # the broken streamed layer came off the map
+    assert arcpy.added[-1].path == f"{tmp_path}/UGS Warehouse.gdb/hazards_qfaults"
+
+
+def test_old_pro_copies_instead_of_streaming(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    arcpy.GetInstallInfo = lambda: {"Version": "3.3.1"}
+    mod = _load(monkeypatch, arcpy)
     tool = mod.AddLayer()
     params = tool.getParameterInfo()
     tool.updateMessages(params)
-    assert "3.5" in params[2].error
+    assert "3.5" in params[3].warning
+    monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
+    monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
+    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name: f"gdb/{name}")
+    _run(mod, tmp_path)
+    assert arcpy.connections == [] and arcpy.added[-1].path == "gdb/hazards_qfaults"
+
+
+def test_to_fgdb_writes_fields_rows_and_z(monkeypatch, tmp_path):
+    import datetime as dt
+    import json
+    import struct
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    point_z = struct.pack("<BIddd", 1, 1001, -111.9, 40.7, 1300.0)  # ISO WKB Point Z
+    table = pa.table({"name": ["Wasatch", None], "n": pa.array([1, 2], pa.int64()),
+                      "when": pa.array([dt.date(2020, 1, 2), None], pa.date32()),
+                      "geom": [point_z, None]})
+    geo = {"version": "1.1.0", "primary_column": "geom",
+           "columns": {"geom": {"encoding": "WKB", "geometry_types": ["Point Z"]}}}
+    path = tmp_path / "x.parquet"
+    pq.write_table(table.replace_schema_metadata({b"geo": json.dumps(geo).encode()}), path)
+
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    fc = mod._to_fgdb(str(path), str(tmp_path), "x")
+
+    assert fc.endswith("UGS Warehouse.gdb/x")
+    assert arcpy.fc["shape"] == "POINT" and arcpy.fc["has_z"] == "ENABLED"
+    assert arcpy.fc["fields"] == [["name", "TEXT", "name", 7], ["n", "BIGINTEGER", "n", None],
+                                  ["when", "DATEONLY", "when", None]]
+    assert arcpy.fc["insert_fields"] == ["SHAPE@", "name", "n", "when"]
+    assert arcpy.inserted[0] == [("geom", point_z, "SR4326"), "Wasatch", 1, dt.date(2020, 1, 2)]
+    assert arcpy.inserted[1] == [None, None, 2, None]
+
+
+def test_pro_ready_drops_nested_columns_and_fixes_names(tmp_path):
+    import json
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    bbox = pa.array([{"xmin": 0.0, "ymin": 0.0, "xmax": 1.0, "ymax": 1.0}])
+    table = pa.table({"_publication_date": [1], "objectid": [7], "geom": [b"\x01"], "bbox": bbox})
+    geo = {"version": "1.1.0", "primary_column": "geom", "columns": {"geom": {
+        "encoding": "WKB", "covering": {"bbox": {"xmin": ["bbox", "xmin"]}}}}}
+    src = tmp_path / "t.parquet"
+    pq.write_table(table.replace_schema_metadata({b"geo": json.dumps(geo).encode()}), src)
+
+    out = pq.read_table(cat.pro_ready(str(src)))
+    assert out.column_names == ["publication_date", "objectid_2", "geom"]
+    meta = json.loads(out.schema.metadata[b"geo"])
+    assert meta["primary_column"] == "geom" and "covering" not in meta["columns"]["geom"]

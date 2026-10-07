@@ -389,7 +389,7 @@ def test_pro_ready_drops_nested_columns_and_fixes_names(tmp_path):
 
 
 def test_update_replaces_both_files_only_when_both_are_good(monkeypatch, tmp_path):
-    served = {"UGSWarehouse.pyt": b"x = 1\n", "ugs_catalog.py": b"y = 2\n"}
+    served = {"UGSWarehouse.pyt": b"x = 1\n" + b"#" * 100, "ugs_catalog.py": b"y = 2\n" + b"#" * 100}
 
     class Resp:
         def __init__(self, body):
@@ -405,22 +405,27 @@ def test_update_replaces_both_files_only_when_both_are_good(monkeypatch, tmp_pat
     monkeypatch.setattr(cat.urllib.request, "urlopen",
                         lambda url, timeout=0: urls.append(url) or Resp(served[url.rsplit("/", 1)[1]]))
     (tmp_path / "UGSWarehouse.pyt").write_bytes(b"x = 0\n")
-    (tmp_path / "ugs_catalog.py").write_bytes(b"y = 2\n")
+    (tmp_path / "ugs_catalog.py").write_bytes(served["ugs_catalog.py"])
 
     assert cat.update_toolbox(str(tmp_path), "feat/x") == ["UGSWarehouse.pyt"]
     assert urls[0].endswith("/ugs-warehouse/feat/x/arcgis-pro/UGSWarehouse.pyt")
-    assert (tmp_path / "UGSWarehouse.pyt").read_bytes() == b"x = 1\n"
+    assert (tmp_path / "UGSWarehouse.pyt").read_bytes() == served["UGSWarehouse.pyt"]
     assert (tmp_path / "UGSWarehouse.pyt.bak").read_bytes() == b"x = 0\n"
     assert cat.update_toolbox(str(tmp_path), "feat/x") == []  # nothing new the second time
 
-    served["ugs_catalog.py"] = b"<html>404: Not Found"  # a bad branch name, or a cut-off download
+    good = served["ugs_catalog.py"]
+    served["ugs_catalog.py"] = b"<html>404: Not Found</html>" * 10  # a bad branch, or a cut-off download
     with pytest.raises(SyntaxError):
         cat.update_toolbox(str(tmp_path), "nope")
-    assert (tmp_path / "ugs_catalog.py").read_bytes() == b"y = 2\n"  # neither file was touched
+    served["ugs_catalog.py"] = b""  # empty compiles, so size is checked too
+    with pytest.raises(ValueError):
+        cat.update_toolbox(str(tmp_path), "nope")
+    assert (tmp_path / "ugs_catalog.py").read_bytes() == good  # neither file was touched
+    assert cat.toolbox_branch(str(tmp_path)) == "feat/x"  # a failed update does not move the branch
 
 
 def test_reports_stale_files_and_remembers_the_branch(monkeypatch, tmp_path):
-    served = {"UGSWarehouse.pyt": b"x = 1\n", "ugs_catalog.py": b"y = 2\n"}
+    served = {"UGSWarehouse.pyt": b"x = 1\n" + b"#" * 100, "ugs_catalog.py": b"y = 2\n" + b"#" * 100}
 
     class Resp:
         def __init__(self, body):
@@ -439,7 +444,7 @@ def test_reports_stale_files_and_remembers_the_branch(monkeypatch, tmp_path):
 
     monkeypatch.setattr(cat.urllib.request, "urlopen", urlopen)
     (tmp_path / "UGSWarehouse.pyt").write_bytes(b"x = 0\n")
-    (tmp_path / "ugs_catalog.py").write_bytes(b"y = 2\n")
+    (tmp_path / "ugs_catalog.py").write_bytes(served["ugs_catalog.py"])
     assert cat.toolbox_branch(str(tmp_path)) == "main"
     assert cat.stale_files(str(tmp_path), "main") == ["UGSWarehouse.pyt"]
     assert cat.stale_files(str(tmp_path), "offline") is None  # no verdict, not a false alarm

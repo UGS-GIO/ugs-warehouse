@@ -331,7 +331,9 @@ def esri_field(arrow_type, column, pro: tuple[int, ...]) -> tuple[str, int | Non
     modern = pro >= (3, 2)  # BIGINTEGER and DATEONLY arrived in Pro 3.2
     t = arrow_type
     if pa.types.is_string(t) or pa.types.is_large_string(t):
-        longest = max((len(v) for v in column.to_pylist() if v is not None), default=1)
+        import pyarrow.compute as pc
+
+        longest = pc.max(pc.utf8_length(column)).as_py() or 1
         return "TEXT", max(longest, 1)
     if pa.types.is_boolean(t) or t in (pa.int8(), pa.int16(), pa.uint8()):
         return "SHORT", None
@@ -387,6 +389,8 @@ def _fetch_toolbox(branch: str, timeout: float = 60) -> dict[str, bytes]:
     for name in TOOLBOX_FILES:
         with urllib.request.urlopen(f"{REPO_RAW}/{branch}/arcgis-pro/{name}", timeout=timeout) as r:
             body = r.read()
+        if len(body) < 100:  # an empty body compiles; it would wipe the toolbox
+            raise ValueError(f"{name} from '{branch}' is only {len(body)} bytes")
         compile(body, name, "exec")
         fresh[name] = body
     return fresh
@@ -397,7 +401,7 @@ def _local(folder: str, name: str) -> bytes | None:
     return open(path, "rb").read() if os.path.exists(path) else None
 
 
-def stale_files(folder: str, branch: str, timeout: float = 5) -> list[str] | None:
+def stale_files(folder: str, branch: str, timeout: float = 2) -> list[str] | None:
     """The toolbox files that differ from `branch`, or None when GitHub could not be checked."""
     try:
         fresh = _fetch_toolbox(branch, timeout)
@@ -413,8 +417,6 @@ def update_toolbox(folder: str, branch: str = "main") -> list[str]:
     leaves the working toolbox alone. The old files are kept as `.bak`.
     """
     fresh = _fetch_toolbox(branch)
-    with open(os.path.join(folder, BRANCH_FILE), "w") as fh:
-        fh.write(branch)
     changed = []
     for name, body in fresh.items():
         path = os.path.join(folder, name)
@@ -428,4 +430,6 @@ def update_toolbox(folder: str, branch: str = "main") -> list[str]:
             fh.write(body)
         os.replace(path + ".part", path)
         changed.append(name)
+    with open(os.path.join(folder, BRANCH_FILE), "w") as fh:  # only once both files are in place
+        fh.write(branch)
     return changed

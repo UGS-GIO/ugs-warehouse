@@ -31,12 +31,12 @@ _cache: dict = {}
 
 def _layers() -> list[cat.Layer]:
     """The catalog's layers, or [] when it cannot be reached (the tool then says so)."""
-    if "layers" not in _cache:
+    if "layers" not in _cache:  # one attempt per session: offline must not stall every refresh
         try:
             _cache["layers"] = cat.layers() + cat.rasters()
         except OSError as e:
             _cache["error"] = f"Could not read the UGS catalog: {e}"
-            return []
+            _cache["layers"] = []
     return _cache["layers"]
 
 
@@ -85,7 +85,7 @@ def _stream(m, asset: dict, folder: str, messages):
     key = cat.cdn_key(asset["href"])
     if key is None or _pro_version() < (3, 5):
         return None
-    tries = [c for c in CONNECTIONS if c[0] == _cache.get("stream")] or CONNECTIONS
+    tries = sorted(CONNECTIONS, key=lambda c: c[0] != _cache.get("stream"))  # last good one first
     for provider, options in tries:
         try:
             path = os.path.join(_connection(folder, provider, options), *key.split("/"))

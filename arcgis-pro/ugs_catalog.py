@@ -85,6 +85,28 @@ def cdn_parts(href: str) -> tuple[str, str] | None:
     return (bucket, key) if bucket and key else None
 
 
+# The bucket behind the CDN. It is private: reading it straight takes a Google sign-in with read
+# access, which the toolbox uses when the machine has one (`google_credentials`).
+GCS_BUCKET = "ut-dnr-ugs-maps-prod-public"
+
+
+def bucket_object(href: str) -> str | None:
+    """The bucket object behind a CDN href (`warehouse/geoparquet/x/x.parquet`), else None."""
+    base = f"https://{CDN_HOST}/"
+    return href.removeprefix(base) if href.startswith(base) else None
+
+
+def google_credentials() -> str | None:
+    """The Google sign-in file on this machine, or None: `GOOGLE_APPLICATION_CREDENTIALS`, else
+    the one `gcloud auth application-default login` writes."""
+    env = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
+    if env and os.path.isfile(env):
+        return env
+    root = os.environ.get("APPDATA") or os.path.join(os.path.expanduser("~"), ".config")
+    path = os.path.join(root, "gcloud", "application_default_credentials.json")
+    return path if os.path.isfile(path) else None
+
+
 def get_json(url: str) -> dict:
     """JSON from `url`, asking for gzip: the catalog indexes are ~25x smaller compressed."""
     req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})

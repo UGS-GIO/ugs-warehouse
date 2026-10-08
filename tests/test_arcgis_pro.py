@@ -272,6 +272,7 @@ def _load(monkeypatch, arcpy):
     monkeypatch.setattr(mod.cat, "layers", lambda index=None: listed)
     monkeypatch.setattr(mod.cat, "rasters", lambda index=None: scans)
     monkeypatch.setattr(mod.cat, "get_json", lambda url: PER_LAYER if url == "style" else STYLED_ITEM)
+    monkeypatch.setattr(mod.cat, "google_credentials", lambda: None)  # not signed in unless a test says
     mod._cache.clear()
     mod._cache["stale"] = None  # no GitHub check unless a test asks for one
     return mod
@@ -758,3 +759,39 @@ def test_clearing_search_widens_the_list_again_and_no_match_says_so(monkeypatch)
     tool.updateParameters(params)
     tool.updateMessages(params)
     assert params[2].filter.list == [] and "No layers match" in params[1].warning
+
+
+def test_signed_in_opens_from_the_bucket_first(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    monkeypatch.setattr(mod.cat, "google_credentials", lambda: "/home/me/adc.json")
+    log = _run(mod, tmp_path)
+
+    provider, bucket, kw = arcpy.connections[0]
+    assert provider == "GOOGLE" and bucket == "ut-dnr-ugs-maps-prod-public"
+    assert ["GOOGLE_APPLICATION_CREDENTIALS", "/home/me/adc.json"] in kw["config_options"]
+    assert arcpy.added[0].path == str(tmp_path / "ugs_gcs.acs" / "warehouse" / "geoparquet"
+                                      / "hazards_qfaults" / "hazards_qfaults.parquet")
+    assert "  Opened online. (GOOGLE)" in log
+
+
+def test_not_signed_in_says_so_when_it_falls_back(monkeypatch, tmp_path):
+    arcpy = FakeArcpy(refuse={"WEB", "AMAZON"})
+    mod = _load(monkeypatch, arcpy)
+    monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
+    monkeypatch.setattr(mod.cat, "pro_ready", lambda path, messages=None: path)
+    monkeypatch.setattr(mod, "_to_fgdb", lambda *a, **k: "gdb/x")
+    monkeypatch.setattr(mod.cat, "nested_columns", lambda path: [])
+    log = _run(mod, tmp_path)
+    assert any("GOOGLE (not signed in)" in m for m in log)
+
+
+def test_google_credentials_finds_the_gcloud_sign_in(monkeypatch, tmp_path):
+    monkeypatch.delenv("GOOGLE_APPLICATION_CREDENTIALS", raising=False)
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    assert cat.google_credentials() is None
+    adc = tmp_path / "gcloud" / "application_default_credentials.json"
+    adc.parent.mkdir()
+    adc.write_text("{}")
+    assert cat.google_credentials() == str(adc)
+    assert cat.bucket_object("https://maps-assets.geology.utah.gov/geolmap/cogs/M-1.cog.tif") == "geolmap/cogs/M-1.cog.tif"

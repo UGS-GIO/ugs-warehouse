@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import importlib.machinery
 import importlib.util
+import os
 import sys
 import tempfile
 import types
@@ -329,15 +330,17 @@ def test_search_matches_title_id_and_keywords_and_keeps_picks(monkeypatch):
     assert params[2].filter.list == ["Power Plants [enmin_powerplants]", "Quaternary Faults [hazards_qfaults]"]
 
 
-def test_streams_through_the_web_connection_and_styles_like_the_viewer(monkeypatch, tmp_path):
+def test_streams_from_the_cdn_over_s3_and_styles_like_the_viewer(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
     log = _run(mod, tmp_path)
 
-    assert arcpy.connections == [("WEB", "warehouse", {"end_point": "maps-assets.geology.utah.gov"})]
+    (conn,) = arcpy.connections  # WEB is for rasters only; GeoParquet goes straight to S3-on-CDN
+    assert conn[:2] == ("AMAZON", "warehouse") and conn[2]["end_point"] == "maps-assets.geology.utah.gov"
+    assert os.environ["AWS_RESPONSE_CHECKSUM_VALIDATION"] == "when_required"
     (lyr,) = arcpy.added
-    assert lyr.path == str(tmp_path / "ugs_cdn_web.acs" / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
-    assert lyr.name == "Quaternary Faults" and "  Opened online. (WEB)" in log
+    assert lyr.path == str(tmp_path / "ugs_cdn_amazon.acs" / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
+    assert lyr.name == "Quaternary Faults" and "  Opened online. (AMAZON)" in log
     assert lyr.metadata.saved and lyr.metadata.title == "Quaternary Faults"
     r = lyr.symbology.renderer
     assert r.type == "UniqueValueRenderer" and r.fields == ["QffHazardUnit"]  # the layer's own casing
@@ -348,14 +351,14 @@ def test_streams_through_the_web_connection_and_styles_like_the_viewer(monkeypat
     assert got["other"] == ("other", None)  # a value the style does not name keeps Pro's default
 
 
-def test_falls_back_to_anonymous_s3_on_the_cdn(monkeypatch, tmp_path):
-    arcpy = FakeArcpy(refuse={"WEB"})
+def test_the_cdn_connection_reads_anonymously_path_style(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
     _run(mod, tmp_path)
     provider, bucket, kw = arcpy.connections[-1]
     assert provider == "AMAZON" and kw["end_point"] == "maps-assets.geology.utah.gov"
     assert ["AWS_NO_SIGN_REQUEST", "YES"] in kw["config_options"]
-    assert "ugs_cdn_amazon.acs" in arcpy.added[-1].path
+    assert ["AWS_VIRTUAL_HOSTING", "FALSE"] in kw["config_options"]
 
 
 def test_copies_to_a_geodatabase_when_pro_cannot_open_the_stream(monkeypatch, tmp_path):

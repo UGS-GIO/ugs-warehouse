@@ -60,17 +60,18 @@ checks once per Pro session and stays quiet when GitHub cannot be reached.
 
 ## How streaming works
 
-The tool tries two cloud storage connections to the CDN, in order, and remembers the one that
-works: Pro's generic HTTP provider (`WEB`), then an anonymous S3 connection with the CDN as its
-endpoint. The second works because an unsigned path-style S3 read is a plain https GET, and the
-CDN answers it with the range requests a Parquet reader needs. Esri does not certify S3-compatible
-endpoints, so the messages name the connection that was used. A connection's bucket is the first
-path segment of the file's URL (`warehouse` for GeoParquet, `geolmap` for the map COGs), so each
-gets its own `.acs`.
+ArcGIS Pro opens Parquet only through a cloud storage connection (Amazon S3, Azure, Google), not
+from a web address; Esri's generic HTTP provider (`WEB`) opens rasters only. The toolbox tries, in
+order: the bucket itself with the user's Google sign-in, then an anonymous S3 connection with the
+CDN as its endpoint. "S3" here is only the request format: an unsigned, path-style S3 read is a
+plain https GET, which the CDN answers, range requests included. Nothing goes to Amazon.
 
-Pro rejects nested Parquet columns, and the warehouse GeoParquet carries the GeoParquet 1.1
-`bbox` struct. A copy drops it (the flat `bbox_*` columns keep the extent) and renames columns to
-Esri's rules; a stream reads the file as published.
+One catch: Google storage sends `x-amz-checksum-crc32c` with the whole object's checksum even on a
+range read, so an S3 client that checks it rejects every partial read. The toolbox sets
+`AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` in Pro's process before connecting; stripping that
+header at the CDN would fix it for every client. With that setting, pyarrow's S3 reader opens the
+warehouse GeoParquet from the CDN and reads only what it needs (the 1.9 GB wetlands footer in under
+2 s). Listing a folder is the one S3 call the CDN can't answer.
 
 ## What it reads from the catalog
 

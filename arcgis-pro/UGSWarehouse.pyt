@@ -16,6 +16,12 @@ import ugs_catalog as cat  # noqa: E402
 
 importlib.reload(cat)  # Pro keeps imported modules; pick up an updated ugs_catalog.py
 
+# Google storage puts the WHOLE object's crc32c in `x-amz-checksum-crc32c`, even on a range read,
+# so an S3 client checking it rejects every partial read through the CDN. Check only when the
+# protocol requires it. Read when Pro first starts its S3 client, so set before any connection.
+os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
+os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
+
 STREAM = "Open online (always current)"
 COPY = "Download a copy (works offline)"
 ALL = "All"
@@ -165,6 +171,8 @@ def _stream(m, asset: dict, folder: str, messages):
     else:
         reasons.append(label)
     for provider, options in CONNECTIONS:
+        if provider == "WEB":  # Esri: the generic HTTP provider opens rasters, not Parquet
+            continue
         tries.append((provider, lambda p=provider, o=options:
                       os.path.join(_connection(folder, p, o), *key.split("/"))))
     tries.sort(key=lambda t: t[0] != _cache.get("stream"))  # last good way first

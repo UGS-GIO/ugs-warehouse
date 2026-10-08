@@ -346,6 +346,34 @@ def esri_name(name: str, taken: set[str]) -> str:
     return out
 
 
+def crs_code(geo: dict, column: str) -> tuple[int | None, str | None]:
+    """(EPSG code, problem) for a GeoParquet geometry column's CRS.
+
+    No `crs` key means OGC:CRS84 by the spec, which Esri calls 4326. A PROJJSON CRS gives its
+    `id`. A null CRS is undefined, and one with no EPSG or CRS84 id can't be named here; both
+    come back as (None, why) rather than a guess.
+    """
+    spec = (geo.get("columns") or {}).get(column) or {}
+    if "crs" not in spec:
+        return 4326, None
+    crs = spec["crs"]
+    if crs is None:
+        return None, "the file says its CRS is undefined"
+    ident = (crs.get("id") or {}) if isinstance(crs, dict) else {}
+    authority, code = str(ident.get("authority", "")).upper(), str(ident.get("code", ""))
+    if authority == "EPSG" and code.isdigit():
+        return int(code), None
+    if authority == "OGC" and code.upper() == "CRS84":
+        return 4326, None
+    name = crs.get("name") if isinstance(crs, dict) else crs
+    return None, f"its CRS ({name}) has no EPSG code"
+
+
+def is_geojson(asset: dict) -> bool:
+    href = asset.get("href", "").split("?", 1)[0].lower()
+    return asset.get("type") == "application/geo+json" or href.endswith(".geojson")
+
+
 def nested_columns(path: str) -> list[str]:
     """A GeoParquet's nested columns other than `bbox`, the covering whose values the flat
     bbox_* columns also carry: what a copy for Pro loses."""

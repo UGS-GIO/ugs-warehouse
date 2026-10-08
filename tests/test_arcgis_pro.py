@@ -246,7 +246,7 @@ class FakeArcpy(types.SimpleNamespace):
             Parameter=FakeParameter, ExecuteError=FakeExecuteError,
             GetInstallInfo=lambda: {"Version": "3.5.2"},
             ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
-            Exists=lambda p: False, SpatialReference=lambda code: f"SR{code}",
+            Exists=lambda p: False, SpatialReference=lambda code=None: f"SR{code}",
             ValidateFieldName=lambda name, ws: (name + "_" if name.lower() in ("date", "select")
                                                 else "x" * 64 if name.startswith("long") else name),
             FromWKB=lambda wkb, sr: ("geom", bytes(wkb), sr), CreateUniqueName=lambda n, ws: n,
@@ -254,11 +254,13 @@ class FakeArcpy(types.SimpleNamespace):
                 activeMap=the_map, homeFolder=arcpy.home)),
             env=types.SimpleNamespace(scratchFolder="/scratch"),
             da=types.SimpleNamespace(InsertCursor=Cursor),
+            conversion=types.SimpleNamespace(JSONToFeatures=lambda src, fc: arcpy.fc.update(json=(src, fc))),
             management=types.SimpleNamespace(
                 CreateCloudStorageConnectionFile=connect, GetCount=lambda lyr: ["7"],
                 GetRasterProperties=lambda lyr, prop: types.SimpleNamespace(getOutput=lambda i: "4"),
                 CreateFileGDB=lambda folder, name: None,
                 CreateFeatureclass=lambda gdb, name, shape, **kw: arcpy.fc.update(shape=shape, **kw),
+                CreateTable=lambda gdb, name: arcpy.fc.update(table=name),
                 AddFields=lambda fc, fields: arcpy.fc.update(fields=fields), Delete=lambda p: None),
         )
 
@@ -478,6 +480,59 @@ def test_to_fgdb_validates_names_with_the_gdb_and_warns_on_dropped_columns(monke
     assert arcpy.fc["insert_fields"] == ["SHAPE@", "date_", "select_", long_a, long_b]
     assert arcpy.inserted[0][1:] == ["2020-01-02", "x", 1, 2]
     assert log == ["  Left out columns ArcGIS can't store: blob"]
+
+
+def test_crs_code_follows_the_geoparquet_crs_rules():
+    assert cat.crs_code({"columns": {"g": {}}}, "g") == (4326, None)  # absent: OGC:CRS84
+    utm = {"columns": {"g": {"crs": {"name": "NAD83 / UTM zone 12N", "id": {"authority": "EPSG", "code": 26912}}}}}
+    assert cat.crs_code(utm, "g") == (26912, None)
+    crs84 = {"columns": {"g": {"crs": {"id": {"authority": "OGC", "code": "CRS84"}}}}}
+    assert cat.crs_code(crs84, "g") == (4326, None)
+    assert cat.crs_code({"columns": {"g": {"crs": None}}}, "g")[0] is None
+    code, why = cat.crs_code({"columns": {"g": {"crs": {"name": "Local grid"}}}}, "g")
+    assert code is None and "Local grid" in why
+
+
+def test_to_fgdb_uses_the_files_crs_and_writes_a_table_without_geometry(monkeypatch, tmp_path):
+    import json
+    import struct
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    point = struct.pack("<BIdd", 1, 1, 430000.0, 4500000.0)
+    geo = {"version": "1.0.0", "primary_column": "geom", "columns": {"geom": {
+        "encoding": "WKB", "geometry_types": ["Point"],
+        "crs": {"name": "NAD83 / UTM zone 12N", "id": {"authority": "EPSG", "code": 26912}}}}}
+    utm = tmp_path / "utm.parquet"
+    pq.write_table(pa.table({"unit": ["Qal"], "geom": [point]})
+                   .replace_schema_metadata({b"geo": json.dumps(geo).encode()}), utm)
+    plain = tmp_path / "plain.parquet"
+    pq.write_table(pa.table({"box": ["B-1"], "depth": [12.5]}), plain)
+
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    msgs = types.SimpleNamespace(addWarningMessage=print)
+    mod._to_fgdb(str(utm), str(tmp_path), "utm", msgs)
+    assert arcpy.fc["spatial_reference"] == "SR26912"
+    assert arcpy.inserted[0][0] == ("geom", point, "SR26912")
+
+    arcpy.inserted.clear()
+    mod._to_fgdb(str(plain), str(tmp_path), "plain", msgs)
+    assert arcpy.fc["table"] == "plain" and arcpy.fc["insert_fields"] == ["box", "depth"]
+    assert arcpy.inserted == [["B-1", 12.5]]
+
+
+def test_a_geojson_asset_is_copied_with_esris_tool_and_not_streamed(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
+    asset = {"href": "https://data.example.org/layers/faults.geojson", "type": "application/geo+json"}
+    m = arcpy.mp.ArcGISProject("CURRENT").activeMap
+    msgs = types.SimpleNamespace(addMessage=lambda x: None)
+    assert mod._stream(m, asset, str(tmp_path), msgs) is None and arcpy.connections == []
+    mod._copy(m, asset, str(tmp_path), "faults", msgs)
+    assert arcpy.fc["json"] == (f"{tmp_path}/faults.geojson", "faults")
 
 
 def test_pro_ready_drops_nested_columns_and_fixes_names(tmp_path):

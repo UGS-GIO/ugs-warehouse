@@ -187,7 +187,7 @@ def _open_raster(m, href: str, folder: str, messages):
 
 def _stream(m, asset: dict, folder: str, messages):
     """Add the GeoParquet through a cloud storage connection, or None when it can't be opened."""
-    if _pro_version() < (3, 5):
+    if _pro_version() < (3, 5) or cat.is_geojson(asset):  # Pro streams Parquet, not GeoJSON
         return None
     tries, reasons = _ways_in(asset["href"], folder, raster=False)
     if not tries:
@@ -206,7 +206,8 @@ _GEOMETRY = {"Point": "POINT", "MultiPoint": "MULTIPOINT", "LineString": "POLYLI
 
 
 def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
-    """A feature class in `<folder>/UGS Warehouse.gdb` with the GeoParquet's rows. Any Pro version.
+    """A feature class in `<folder>/UGS Warehouse.gdb` with the GeoParquet's rows, in the CRS its
+    metadata names, or a table for a Parquet with no geometry. Any Pro version.
 
     Field names go through the geodatabase's own validation; columns with no Esri field type
     (binary, nested) are left out and named in a warning."""
@@ -214,7 +215,7 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
 
     table = pq.read_table(parquet)
     geo = json.loads((table.schema.metadata or {}).get(b"geo", b"{}"))
-    gcol = geo.get("primary_column", "geom")
+    gcol = geo.get("primary_column") if geo else None  # no geo metadata: a plain table
     types = [t.replace(" Z", "") for t in geo.get("columns", {}).get(gcol, {}).get("geometry_types", [])]
     shape = "MULTIPOINT" if "MultiPoint" in types else _GEOMETRY.get(types[0] if types else "", "POLYGON")
     has_z = any(t.endswith(" Z") for t in geo.get("columns", {}).get(gcol, {}).get("geometry_types", []))
@@ -228,9 +229,16 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
             arcpy.management.Delete(fc)
         except Exception:  # noqa: BLE001 - in use on a map: write alongside it
             fc = arcpy.CreateUniqueName(name, gdb)
-    sr = arcpy.SpatialReference(4326)
-    arcpy.management.CreateFeatureclass(gdb, os.path.basename(fc), shape, spatial_reference=sr,
-                                        has_z="ENABLED" if has_z else "DISABLED")
+    sr = None
+    if gcol:
+        code, problem = cat.crs_code(geo, gcol)
+        if problem:
+            messages.addWarningMessage(f"  No coordinate system set: {problem}.")
+        sr = arcpy.SpatialReference(code) if code else arcpy.SpatialReference()
+        arcpy.management.CreateFeatureclass(gdb, os.path.basename(fc), shape, spatial_reference=sr,
+                                            has_z="ENABLED" if has_z else "DISABLED")
+    else:
+        arcpy.management.CreateTable(gdb, os.path.basename(fc))
     fields, dropped, taken = [], [], set(cat._RESERVED)  # expects pro_ready's renamed columns
     for f in table.schema:
         if f.name == gcol:
@@ -251,23 +259,40 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
     if fields:  # the alias keeps the column's name when the geodatabase's validation changed it
         arcpy.management.AddFields(fc, [[v, s[0], n, s[1]] for n, v, s in fields])
     names = [n for n, _, _ in fields]
-    with arcpy.da.InsertCursor(fc, ["SHAPE@", *(v for _, v, _ in fields)]) as cur:
+    out = [v for _, v, _ in fields]
+    with arcpy.da.InsertCursor(fc, ["SHAPE@", *out] if gcol else out) as cur:
         for batch in table.to_batches():
-            cols = [batch.column(gcol).to_pylist(), *(batch.column(n).to_pylist() for n in names)]
-            for row in zip(*cols):
-                wkb = row[0]
+            cols = [batch.column(n).to_pylist() for n in names]
+            if not gcol:
+                for row in zip(*cols):
+                    cur.insertRow([cat.esri_value(v) for v in row])
+                continue
+            for wkb, *row in zip(batch.column(gcol).to_pylist(), *cols):
                 cur.insertRow([arcpy.FromWKB(bytearray(wkb), sr) if wkb else None,
-                               *(cat.esri_value(v) for v in row[1:])])
+                               *(cat.esri_value(v) for v in row)])
     return fc
 
 
 def _copy(m, asset: dict, folder: str, name: str, messages):
     mb = (asset.get("file:size") or 0) / 1e6
     messages.addMessage(f"  Downloading ({mb:.1f} MB)...")
+    if cat.is_geojson(asset):
+        path = cat.download(asset, folder, f"{name}.geojson")
+        return m.addDataFromPath(_geojson_to_fgdb(path, folder, name))
     path = cat.download(asset, folder, f"{name}.parquet")
     if nested := cat.nested_columns(path):
         messages.addWarningMessage(f"  Left out nested columns ArcGIS can't store: {', '.join(nested)}")
     return m.addDataFromPath(_to_fgdb(cat.pro_ready(path), folder, name, messages))
+
+
+def _geojson_to_fgdb(path: str, folder: str, name: str) -> str:
+    """A feature class in `<folder>/UGS Warehouse.gdb` from a GeoJSON file, by Esri's own tool."""
+    gdb = os.path.join(folder, "UGS Warehouse.gdb")
+    if not arcpy.Exists(gdb):
+        arcpy.management.CreateFileGDB(folder, "UGS Warehouse.gdb")
+    fc = arcpy.CreateUniqueName(name, gdb)
+    arcpy.conversion.JSONToFeatures(path, fc)
+    return fc
 
 
 def _apply_metadata(lyr, fields: dict[str, str], messages) -> None:

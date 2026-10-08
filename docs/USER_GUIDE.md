@@ -167,6 +167,18 @@ ArcGIS Pro 3.2 or later is recommended.
 3. Expand the connection and drag a collection, for example `hazards_qfaults`, onto the map. Pro
    queries the service as you pan and zoom. It does not download the full layer.
 
+### Vector layers with UGS symbology (toolbox)
+
+The UGS Warehouse toolbox adds layers and geologic map rasters by theme or search, with the web
+viewer's colors and legend and the catalog's metadata.
+It streams the layer's GeoParquet from the CDN (Pro 3.5 or later) or copies it to a file
+geodatabase (any version).
+
+1. Download `UGSWarehouse.pyt` and `ugs_catalog.py` from
+   [`arcgis-pro/`](https://github.com/UGS-GIO/ugs-warehouse/tree/main/arcgis-pro) into one folder.
+2. In the Catalog pane, right-click **Toolboxes** > **Add Toolbox** and pick `UGSWarehouse.pyt`.
+3. Run **Add Warehouse Layer**, pick a theme or search, then one or more layers.
+
 ### Vector tiles with UGS symbology
 
 Each layer that has a published style is also an ArcGIS vector tile service. The tiles draw with

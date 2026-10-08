@@ -30,13 +30,18 @@ _cache: dict = {}
 
 
 def _layers() -> list[cat.Layer]:
-    """The catalog's layers, or [] when it cannot be reached (the tool then says so)."""
+    """The catalog's layers; what can't be read is left out and the tool says so."""
     if "layers" not in _cache:  # one attempt per session: offline must not stall every refresh
-        try:
-            _cache["layers"] = cat.layers() + cat.rasters()
-        except OSError as e:
-            _cache["error"] = f"Can't reach the UGS catalog. Check your internet connection. ({e})"
-            _cache["layers"] = []
+        found, failed = [], []
+        for kind, read in (("map layers", cat.layers), ("scanned geologic maps", cat.rasters)):
+            try:
+                found += read()
+            except (OSError, ValueError) as e:  # ValueError: a cut-off or non-JSON response
+                failed.append(f"{kind}: {e}")
+        if failed:
+            note = f"Can't reach the UGS catalog. Check your internet connection. ({'; '.join(failed)})"
+            _cache["error" if not found else "warning"] = note
+        _cache["layers"] = found
     return _cache["layers"]
 
 
@@ -279,6 +284,8 @@ class AddLayer:
             parameters[0].setWarningMessage(notice)
         if "error" in _cache:
             parameters[2].setErrorMessage(_cache["error"])
+        elif "warning" in _cache:  # some layers listed; the rest could not be read
+            parameters[2].setWarningMessage(_cache["warning"])
         source = parameters[3]
         if source.valueAsText == STREAM and _pro_version() < (3, 5):
             source.setWarningMessage("This version of ArcGIS Pro can't open these layers online, "

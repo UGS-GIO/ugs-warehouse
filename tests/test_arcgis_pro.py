@@ -287,6 +287,20 @@ def test_theme_narrows_the_layer_list(monkeypatch):
     assert params[2].filter.list == ["Quaternary Faults [hazards_qfaults]"]
 
 
+def test_a_failed_raster_index_keeps_the_vector_layers_and_warns(monkeypatch):
+    mod = _load(monkeypatch, FakeArcpy())
+
+    def broken(index=None):
+        raise ValueError("Expecting value: line 1 column 1 (char 0)")
+
+    monkeypatch.setattr(mod.cat, "rasters", broken)
+    tool = mod.AddLayer()
+    params = tool.getParameterInfo()
+    assert params[2].filter.list == ["Power Plants [enmin_powerplants]", "Quaternary Faults [hazards_qfaults]"]
+    tool.updateMessages(params)
+    assert "scanned geologic maps" in params[2].warning and not hasattr(params[2], "error")
+
+
 def test_search_matches_title_id_and_keywords_and_keeps_picks(monkeypatch):
     mod = _load(monkeypatch, FakeArcpy())
     tool = mod.AddLayer()

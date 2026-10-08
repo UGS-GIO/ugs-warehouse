@@ -19,31 +19,31 @@ Open **UGS Warehouse → Add Warehouse Layer**:
 - **Search** narrows it further: every word must appear in the layer's title, id or keywords.
 - **Layers**: pick one or more.
 - **Source**:
-  - **Stream GeoParquet from the CDN** (Pro 3.5 or later): the layer reads the warehouse
-    GeoParquet from `maps-assets.geology.utah.gov` through a cloud storage connection the tool
-    creates in the working folder. Nothing is downloaded by hand.
+  - **Open online** (Pro 3.5 or later): the layer reads the warehouse bucket through a cloud
+    storage connection the tool creates in the working folder. Map images (COGs) open online with
+    a Google sign-in; GeoParquet needs a service account key (see "How streaming works") and is
+    otherwise downloaded.
   - **Copy to a file geodatabase**: any Pro version. Downloads the GeoParquet (checked against the
     catalog's size and checksum) and writes a feature class to `UGS Warehouse.gdb` in the working
     folder, for offline work or editing.
 - **Style like the web viewer**: categories, colors and legend labels from the layer's style. A
   layer with no style, or a style with no simple equivalent, keeps Pro's default symbol.
 
-A raster (a COG) opens through the same kind of connection as the GeoParquet, and its https URL
-is the last try; Pro reads only the part in view. A copy writes each layer in the CRS its
+A raster (a COG) opens through the bucket with your sign-in, then through Esri's generic HTTP
+connection to the CDN; Pro reads only the part in view. A copy writes each layer in the CRS its
 GeoParquet metadata names (WGS84 when it names none; a CRS with no EPSG code gets an unknown one
 and a warning), a Parquet with no geometry as a table, and a GeoJSON through Esri's JSONToFeatures,
 one geometry type per layer. Every layer gets the
 catalog's title, summary, description, tags, credits and license in its metadata (a geodatabase
 copy's feature class gets it when Pro keeps the layer's own metadata read-only).
 
-If streaming does not work on a machine, or Pro is older than 3.5, the tool copies the layer
+If opening online does not work on a machine, or Pro is older than 3.5, the tool copies the layer
 instead and says so in its messages, so a run always ends with the layer on the map.
 
 ## Sign in (to open layers online)
 
-The data sits in a private Google Cloud Storage bucket. ArcGIS Pro opens GeoParquet only from
-cloud storage (Amazon S3, Azure, Google), not from a web address, so opening a layer online reads
-the bucket with your own Google sign-in:
+The data sits in a private Google Cloud Storage bucket. Opening a map image online reads the
+bucket with your own Google sign-in:
 
 1. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
 2. Run **UGS Warehouse → Sign In to UGS Storage** and sign in with your utah.gov account.
@@ -64,21 +64,19 @@ checks once per Pro session and stays quiet when GitHub cannot be reached.
 ## How streaming works
 
 ArcGIS Pro opens Parquet only through a cloud storage connection (Amazon S3, Azure, Google), not
-from a web address; Esri's generic HTTP provider (`WEB`) opens rasters only. The toolbox tries, in
-order: the bucket itself with the user's Google sign-in, then an anonymous S3 connection with the
-CDN as its endpoint. "S3" here is only the request format: an unsigned, path-style S3 read is a
-plain https GET, which the CDN answers, range requests included. Nothing goes to Amazon.
+from a web address, and Esri's generic HTTP provider (`WEB`) opens rasters only. So every layer
+opened online goes through a Google connection to the bucket itself; a raster can also use a
+`WEB` connection to the CDN.
 
-The same works for any asset's host: an https href is read path-style with its host as the
-endpoint and its first path segment as the bucket, and each host and bucket gets its own `.acs`.
-An `s3://` or `gs://` href opens anonymously on that provider's own endpoint.
+Pro's Parquet reader accepts fewer Google options than its raster reader: anonymous access
+(`GS_NO_SIGN_REQUEST`) or a service account key (`GOOGLE_APPLICATION_CREDENTIALS`). A personal
+`gcloud` sign-in opens rasters but not GeoParquet, so the toolbox downloads GeoParquet for it and
+says why. The sign-in file's path goes to Pro with forward slashes: Pro reads backslashes in that
+option as escapes.
 
-One catch: Google storage sends `x-amz-checksum-crc32c` with the whole object's checksum even on a
-range read, so an S3 client that checks it rejects every partial read. The toolbox sets
-`AWS_RESPONSE_CHECKSUM_VALIDATION=when_required` in Pro's process before connecting; stripping that
-header at the CDN would fix it for every client. With that setting, pyarrow's S3 reader opens the
-warehouse GeoParquet from the CDN and reads only what it needs (the 1.9 GB wetlands footer in under
-2 s). Listing a folder is the one S3 call the CDN can't answer.
+An S3 connection with the CDN as its endpoint does not work: Pro sends its requests to Amazon
+instead of the endpoint (or, as MinIO, puts the bucket name in the host name). An `s3://` or
+`gs://` href opens anonymously on that provider's own endpoint.
 
 ## What it reads from the catalog
 

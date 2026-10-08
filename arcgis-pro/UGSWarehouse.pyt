@@ -4,6 +4,7 @@ Keep this file and `ugs_catalog.py` in the same folder. See README.md.
 """
 from __future__ import annotations
 
+import hashlib
 import importlib
 import json
 import os
@@ -16,22 +17,12 @@ import ugs_catalog as cat  # noqa: E402
 
 importlib.reload(cat)  # Pro keeps imported modules; pick up an updated ugs_catalog.py
 
-# Google storage puts the WHOLE object's crc32c in `x-amz-checksum-crc32c`, even on a range read,
-# so an S3 client checking it rejects every partial read through the CDN. Check only when the
-# protocol requires it. Read when Pro first starts its S3 client, so set before any connection.
-os.environ.setdefault("AWS_RESPONSE_CHECKSUM_VALIDATION", "when_required")
-os.environ.setdefault("AWS_REQUEST_CHECKSUM_CALCULATION", "when_required")
-
 STREAM = "Open online (always current)"
 COPY = "Download a copy (works offline)"
 ALL = "All"
-# Cloud storage connections tried in order: Pro's generic-HTTP provider, then S3 read anonymously,
-# which the CDN answers because an unsigned path-style S3 GET is a plain https GET.
-CONNECTIONS = (
-    ("WEB", {}),
-    ("AMAZON", {"region": "us-east-1",
-                "config_options": [["AWS_NO_SIGN_REQUEST", "YES"], ["AWS_VIRTUAL_HOSTING", "FALSE"]]}),
-)
+# An https href's host as a cloud storage connection. Esri's generic HTTP provider opens rasters
+# only; an S3 connection can't stand in for it, as Pro sends S3 requests to Amazon, not the host.
+CONNECTIONS = (("WEB", {}),)
 # An s3:// or gs:// href goes to that provider's own endpoint, read anonymously.
 NATIVE = {"s3": ("AMAZON", {"config_options": [["AWS_NO_SIGN_REQUEST", "YES"]]}),
           "gs": ("GOOGLE", {"config_options": [["GS_NO_SIGN_REQUEST", "YES"]]})}
@@ -100,20 +91,29 @@ def _connection(folder: str, provider: str, options: dict, bucket: str, host: st
     return path
 
 
-def _google(folder: str, href: str):
-    """(label, path) for reading `href` straight from the bucket with this machine's Google
+def _google(folder: str, href: str, raster: bool):
+    """(label, path-maker) for reading `href` straight from the bucket with this machine's Google
     sign-in, or (label, None) with the reason it can't."""
     obj, cred = cat.bucket_object(href), cat.google_credentials()
     if obj is None:
         return "GOOGLE", None
     if cred is None:
         return "GOOGLE (not signed in)", None
-    path = os.path.join(folder, "ugs_gcs.acs")
-    if not os.path.exists(path):
-        arcpy.management.CreateCloudStorageConnectionFile(
-            folder, "ugs_gcs", "GOOGLE", cat.GCS_BUCKET,
-            config_options=[["GOOGLE_APPLICATION_CREDENTIALS", cred], ["GS_NO_SIGN_REQUEST", "NO"]])
-    return "GOOGLE", os.path.join(path, *obj.split("/"))
+    if not raster and cat.google_credential_type(cred) != "service_account":
+        return ("GOOGLE (ArcGIS Pro opens GeoParquet online only with a service account key, "
+                "not a personal sign-in)"), None
+    # Pro reads backslashes in this option as escapes; Windows takes the path with forward slashes.
+    cred = cred.replace("\\", "/")
+    name = "google_ugs_" + hashlib.sha1(cred.encode()).hexdigest()[:6]
+
+    def path() -> str:
+        acs = os.path.join(folder, name + ".acs")
+        if not os.path.exists(acs):
+            arcpy.management.CreateCloudStorageConnectionFile(
+                folder, name, "GOOGLE", cat.GCS_BUCKET,
+                config_options=[["GOOGLE_APPLICATION_CREDENTIALS", cred], ["GS_NO_SIGN_REQUEST", "NO"]])
+        return os.path.join(acs, *obj.split("/"))
+    return "GOOGLE", path
 
 
 def _unusable(m, lyr, raster: bool = False) -> str | None:
@@ -137,13 +137,13 @@ def _unusable(m, lyr, raster: bool = False) -> str | None:
 
 def _ways_in(href: str, folder: str, raster: bool) -> tuple[list, list[str]]:
     """(label, path-maker) pairs for opening `href` through a cloud storage connection, plus the
-    reasons any way was ruled out. The bucket itself with a Google sign-in comes first; an https
-    href then goes path-style to its host; a raster also tries its bare URL last."""
+    reasons any way was ruled out. The bucket itself with a Google sign-in comes first, then a
+    connection to the href's own host or provider."""
     tries, reasons = [], []
-    label, path = _google(folder, href)
+    label, path = _google(folder, href, raster)
     if path:
-        tries.append((label, lambda p=path: p))
-    elif label != "GOOGLE":  # the UGS bucket, but no sign-in; elsewhere it doesn't apply
+        tries.append((label, path))
+    elif label != "GOOGLE":  # the UGS bucket, but no usable sign-in; elsewhere it doesn't apply
         reasons.append(label)
     parts = cat.href_parts(href)
     if parts:
@@ -153,10 +153,8 @@ def _ways_in(href: str, folder: str, raster: bool) -> tuple[list, list[str]]:
         for provider, options in ways:
             tries.append((provider, lambda p=provider, o=options:
                           os.path.join(_connection(folder, p, o, bucket, host), *key.split("/"))))
-    if raster and href.startswith("https://"):
-        tries.append(("URL", lambda: href))
-    if not tries:
-        reasons.append(f"no cloud storage connection or URL reaches {href}")
+    if not tries and not reasons:
+        reasons.append(f"no cloud storage connection reaches {href}")
     return tries, reasons
 
 
@@ -192,8 +190,8 @@ def _stream(m, asset: dict, folder: str, messages):
         return None
     tries, reasons = _ways_in(asset["href"], folder, raster=False)
     if not tries:
-        messages.addMessage("  Not on a host ArcGIS Pro can open online, so it was downloaded "
-                            f"instead. ({'; '.join(reasons) or asset['href']})")
+        messages.addMessage("  Can't open it online, so it was downloaded instead. "
+                            f"({'; '.join(reasons)})")
         return None
     lyr = _open_first(m, tries, reasons, "stream", False, messages)
     if lyr is None:
@@ -279,8 +277,8 @@ def _copy(m, asset: dict, folder: str, name: str, messages):
     if fmt is None:
         raise ValueError(f"the toolbox can't add {asset.get('type') or asset.get('href')}; "
                          "it adds GeoParquet and GeoJSON")
-    mb = (asset.get("file:size") or 0) / 1e6
-    messages.addMessage(f"  Downloading ({mb:.1f} MB)...")
+    size = asset.get("file:size")
+    messages.addMessage(f"  Downloading ({size / 1e6:.1f} MB)..." if size else "  Downloading...")
     path = cat.download(asset, folder, f"{cat.safe_filename(name)}.{fmt}")
     if fmt == "geojson":
         return m.addDataFromPath(_geojson_to_fgdb(path, folder, name, messages))
@@ -517,7 +515,7 @@ class SignIn:
     def __init__(self):
         self.label = "Sign In to UGS Storage"
         self.description = ("Sign in with your Google account once, so Add Warehouse Layer can open "
-                            "layers online. Your account needs read access to UGS storage.")
+                            "map images online. Your account needs read access to UGS storage.")
 
     def getParameterInfo(self):
         return []
@@ -532,11 +530,15 @@ class SignIn:
                 "Install the Google Cloud CLI first (https://cloud.google.com/sdk/docs/install), "
                 "then run this again.")
         messages.addMessage("A browser window will open; sign in with your utah.gov account.")
+        # gcloud runs its own Python, which fails to load if it inherits Pro's.
+        env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("PYTHON", "CONDA"))}
+        env["PATH"] = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep)
+                                      if "arcgis" not in p.lower())
         done = subprocess.run([gcloud, "auth", "application-default", "login"],
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, env=env)
         if done.returncode != 0 or cat.google_credentials() is None:
             raise arcpy.ExecuteError(f"Sign-in didn't finish. ({(done.stderr or '').strip()[-300:]})")
-        messages.addMessage("Signed in. Add Warehouse Layer will now try to open layers online.")
+        messages.addMessage("Signed in. Add Warehouse Layer will now open map images online.")
 
 
 class UpdateToolbox:

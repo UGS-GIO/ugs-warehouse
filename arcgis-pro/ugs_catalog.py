@@ -128,6 +128,17 @@ def google_credentials() -> str | None:
     return path if os.path.isfile(path) else None
 
 
+def google_credential_type(path: str) -> str | None:
+    """A Google sign-in file's `type`: `authorized_user` for a gcloud login, `service_account` for
+    a key. None when the file can't be read."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            cred = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return cred.get("type") if isinstance(cred, dict) else None
+
+
 def get_json(url: str) -> dict:
     """JSON from `url`, asking for gzip: the catalog indexes are ~25x smaller compressed."""
     req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})

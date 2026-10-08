@@ -8,6 +8,7 @@ from __future__ import annotations
 import hashlib
 import importlib.machinery
 import importlib.util
+import json
 import os
 import sys
 import tempfile
@@ -334,17 +335,26 @@ def test_search_matches_title_id_and_keywords_and_keeps_picks(monkeypatch):
     assert params[2].filter.list == ["Power Plants [enmin_powerplants]", "Quaternary Faults [hazards_qfaults]"]
 
 
-def test_streams_from_the_cdn_over_s3_and_styles_like_the_viewer(monkeypatch, tmp_path):
+def _signed_in(monkeypatch, mod, tmp_path, kind="service_account"):
+    path = tmp_path / "adc.json"
+    path.write_text(json.dumps({"type": kind}))
+    monkeypatch.setattr(mod.cat, "google_credentials", lambda: str(path))
+    return str(path)
+
+
+def test_streams_with_a_service_account_and_styles_like_the_viewer(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
+    cred = _signed_in(monkeypatch, mod, tmp_path)
     log = _run(mod, tmp_path)
 
-    (conn,) = arcpy.connections  # WEB is for rasters only; GeoParquet goes straight to S3-on-CDN
-    assert conn[:2] == ("AMAZON", "warehouse") and conn[2]["end_point"] == "maps-assets.geology.utah.gov"
-    assert os.environ["AWS_RESPONSE_CHECKSUM_VALIDATION"] == "when_required"
+    (conn,) = arcpy.connections  # WEB is for rasters only; GeoParquet goes to the bucket itself
+    assert conn == ("GOOGLE", "ut-dnr-ugs-maps-prod-public",
+                    {"config_options": [["GOOGLE_APPLICATION_CREDENTIALS", cred], ["GS_NO_SIGN_REQUEST", "NO"]]})
     (lyr,) = arcpy.added
-    assert lyr.path == str(tmp_path / (cat.connection_name("AMAZON", "maps-assets.geology.utah.gov", "warehouse") + ".acs") / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
-    assert lyr.name == "Quaternary Faults" and "  Opened online. (AMAZON)" in log
+    assert lyr.path.startswith(str(tmp_path / "google_ugs_"))
+    assert lyr.path.endswith(".acs/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet")
+    assert lyr.name == "Quaternary Faults" and "  Opened online. (GOOGLE)" in log
     assert lyr.metadata.saved and lyr.metadata.title == "Quaternary Faults"
     r = lyr.symbology.renderer
     assert r.type == "UniqueValueRenderer" and r.fields == ["QffHazardUnit"]  # the layer's own casing
@@ -355,19 +365,45 @@ def test_streams_from_the_cdn_over_s3_and_styles_like_the_viewer(monkeypatch, tm
     assert got["other"] == ("other", None)  # a value the style does not name keeps Pro's default
 
 
-def test_the_cdn_connection_reads_anonymously_path_style(monkeypatch, tmp_path):
+def test_a_personal_sign_in_downloads_geoparquet_and_says_why(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
-    _run(mod, tmp_path)
-    provider, bucket, kw = arcpy.connections[-1]
-    assert provider == "AMAZON" and kw["end_point"] == "maps-assets.geology.utah.gov"
-    assert ["AWS_NO_SIGN_REQUEST", "YES"] in kw["config_options"]
-    assert ["AWS_VIRTUAL_HOSTING", "FALSE"] in kw["config_options"]
+    _signed_in(monkeypatch, mod, tmp_path, kind="authorized_user")
+    monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
+    monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
+    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages: f"{folder}/UGS Warehouse.gdb/{name}")
+    monkeypatch.setattr(mod.cat, "nested_columns", lambda path: [])
+    log = _run(mod, tmp_path)
+    assert arcpy.connections == []  # Pro's Parquet reader takes no personal sign-in, so none is tried
+    assert any(line.startswith("  Can't open it online") and "service account key" in line for line in log)
+    assert arcpy.added[-1].path == f"{tmp_path}/UGS Warehouse.gdb/hazards_qfaults"
+
+
+def test_the_sign_in_path_reaches_pro_with_forward_slashes(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    monkeypatch.setattr(mod.cat, "google_credentials", lambda: r"C:\Users\npayne\AppData\Roaming\gcloud\adc.json")
+    monkeypatch.setattr(mod.cat, "google_credential_type", lambda path: "authorized_user")
+    label, path = mod._google(str(tmp_path), "https://maps-assets.geology.utah.gov/geolmap/cogs/M-1.cog.tif", True)
+    assert label == "GOOGLE" and path().endswith(os.path.join(".acs", "geolmap", "cogs", "M-1.cog.tif"))
+    (_, _, kw), = arcpy.connections
+    assert kw["config_options"][0] == ["GOOGLE_APPLICATION_CREDENTIALS",
+                                       "C:/Users/npayne/AppData/Roaming/gcloud/adc.json"]
+
+
+def test_google_credential_type_reads_the_sign_in_file(tmp_path):
+    for kind in ("authorized_user", "service_account"):
+        (tmp_path / "c.json").write_text(json.dumps({"type": kind}))
+        assert cat.google_credential_type(str(tmp_path / "c.json")) == kind
+    (tmp_path / "c.json").write_text("not json")
+    assert cat.google_credential_type(str(tmp_path / "c.json")) is None
+    assert cat.google_credential_type(str(tmp_path / "missing.json")) is None
 
 
 def test_copies_to_a_geodatabase_when_pro_cannot_open_the_stream(monkeypatch, tmp_path):
-    arcpy = FakeArcpy(refuse={"WEB"}, broken={"AMAZON"})
+    arcpy = FakeArcpy(broken={"GOOGLE"})
     mod = _load(monkeypatch, arcpy)
+    _signed_in(monkeypatch, mod, tmp_path)
     monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
     monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
     monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages: f"{folder}/UGS Warehouse.gdb/{name}")
@@ -380,6 +416,7 @@ def test_copies_to_a_geodatabase_when_pro_cannot_open_the_stream(monkeypatch, tm
 def test_one_failed_pick_does_not_stop_the_others(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
+    _signed_in(monkeypatch, mod, tmp_path)
     real = mod._add_layer
 
     def flaky(m, layer, *a):
@@ -401,6 +438,7 @@ def test_one_failed_pick_does_not_stop_the_others(monkeypatch, tmp_path):
 def test_a_pick_no_longer_in_the_catalog_fails_alone(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
+    _signed_in(monkeypatch, mod, tmp_path)
     tool = mod.AddLayer()
     params = tool.getParameterInfo()
     params[2].values = ["Gone [retired_layer]", "Power Plants [enmin_powerplants]"]
@@ -755,23 +793,27 @@ def test_a_raster_is_added_from_its_cog_with_metadata_and_no_style(monkeypatch, 
     assert lyr.metadata.summary == "A 1:24,000 map." and lyr.metadata.credits == "Personius"
 
 
-def test_a_raster_falls_back_to_its_url_and_fails_loudly_when_nothing_opens(monkeypatch, tmp_path):
-    arcpy = FakeArcpy(refuse={"WEB"}, broken={"AMAZON"})
+def test_a_raster_tries_the_sign_in_then_its_host_and_fails_loudly(monkeypatch, tmp_path):
+    arcpy = FakeArcpy(broken={"GOOGLE"})
     mod = _load(monkeypatch, arcpy)
+    _signed_in(monkeypatch, mod, tmp_path, kind="authorized_user")  # enough for a raster
+    m = arcpy.mp.ArcGISProject("CURRENT").activeMap
     url = "https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif"
     log = []
     msgs = types.SimpleNamespace(addMessage=log.append)
-    lyr = mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), msgs)
-    assert lyr.path == url and len(arcpy.removed) == 1  # the broken AMAZON layer came off
-    assert log == ["  Opened online. (URL)"]
+    lyr = mod._open_raster(m, url, str(tmp_path), msgs)
+    assert lyr.path.endswith("/cogs/M-180.cog.tif") and len(arcpy.removed) == 1  # broken GOOGLE came off
+    assert log == ["  Opened online. (WEB)"]
     arcpy.added.clear()
-    mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), msgs)
-    assert [x.path for x in arcpy.added] == [url]  # the way that worked is tried first next time
+    mod._open_raster(m, url, str(tmp_path), msgs)
+    assert len(arcpy.added) == 1 and "/web_" in arcpy.added[0].path  # the way that worked goes first
 
-    arcpy.management.GetRasterProperties = lambda lyr, prop: types.SimpleNamespace(getOutput=lambda i: "0")
-    with pytest.raises(RuntimeError, match="WEB: WEB refused; AMAZON: the layer is broken; URL: no bands"):
-        mod._cache.pop("raster")
-        mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), msgs)
+    arcpy.refuse.add("WEB")
+    for f in tmp_path.glob("web_*.acs"):
+        f.unlink()
+    mod._cache.pop("raster")
+    with pytest.raises(RuntimeError, match="GOOGLE: the layer is broken; WEB: WEB refused"):
+        mod._open_raster(m, url, str(tmp_path), msgs)
 
 
 def test_href_parts_reads_https_path_style_and_native_buckets():
@@ -800,7 +842,7 @@ def test_a_raster_nothing_reaches_says_why(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
     m = arcpy.mp.ArcGISProject("CURRENT").activeMap
-    with pytest.raises(RuntimeError, match="no cloud storage connection or URL reaches http://old.org/x.tif"):
+    with pytest.raises(RuntimeError, match="no cloud storage connection reaches http://old.org/x.tif"):
         mod._open_raster(m, "http://old.org/x.tif", str(tmp_path), types.SimpleNamespace(addMessage=print))
 
 
@@ -840,6 +882,7 @@ def test_a_raster_takes_its_description_from_the_full_item(monkeypatch, tmp_path
 def test_a_theme_collection_is_read_once_per_session(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
+    _signed_in(monkeypatch, mod, tmp_path)
     urls = []
 
     def get_json(url):
@@ -907,18 +950,31 @@ def test_clearing_search_widens_the_list_again_and_no_match_says_so(monkeypatch)
     assert params[2].filter.list == [] and "No layers match" in params[1].warning
 
 
-def test_signed_in_opens_from_the_bucket_first(monkeypatch, tmp_path):
+def test_signed_in_opens_a_raster_from_the_bucket_first(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
-    monkeypatch.setattr(mod.cat, "google_credentials", lambda: "/home/me/adc.json")
-    log = _run(mod, tmp_path)
-
+    cred = _signed_in(monkeypatch, mod, tmp_path, kind="authorized_user")
+    log = []
+    m = arcpy.mp.ArcGISProject("CURRENT").activeMap
+    mod._open_raster(m, "https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif", str(tmp_path),
+                     types.SimpleNamespace(addMessage=log.append))
     provider, bucket, kw = arcpy.connections[0]
-    assert provider == "GOOGLE" and bucket == "ut-dnr-ugs-maps-prod-public"
-    assert ["GOOGLE_APPLICATION_CREDENTIALS", "/home/me/adc.json"] in kw["config_options"]
-    assert arcpy.added[0].path == str(tmp_path / "ugs_gcs.acs" / "warehouse" / "geoparquet"
-                                      / "hazards_qfaults" / "hazards_qfaults.parquet")
-    assert "  Opened online. (GOOGLE)" in log
+    assert (provider, bucket) == ("GOOGLE", "ut-dnr-ugs-maps-prod-public")
+    assert ["GOOGLE_APPLICATION_CREDENTIALS", cred] in kw["config_options"]
+    assert arcpy.added[0].path.endswith(".acs/geolmap/cogs/M-180.cog.tif")
+    assert log == ["  Opened online. (GOOGLE)"]
+
+
+def test_sign_in_runs_gcloud_without_pros_python(monkeypatch, tmp_path):
+    mod = _load(monkeypatch, FakeArcpy())
+    seen = {}
+    monkeypatch.setattr("shutil.which", lambda name: "/sdk/bin/gcloud")
+    monkeypatch.setattr("subprocess.run", lambda args, **kw: seen.update(kw) or types.SimpleNamespace(returncode=0, stderr=""))
+    monkeypatch.setattr(mod.cat, "google_credentials", lambda: "/home/me/adc.json")
+    monkeypatch.setenv("PYTHONHOME", "/pro/ArcGIS/bin/Python")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/pro/ArcGIS/bin", "/sdk/bin"]))
+    mod.SignIn().execute([], types.SimpleNamespace(addMessage=lambda m: None))
+    assert "PYTHONHOME" not in seen["env"] and seen["env"]["PATH"] == "/sdk/bin"
 
 
 def test_not_signed_in_says_so_when_it_falls_back(monkeypatch, tmp_path):

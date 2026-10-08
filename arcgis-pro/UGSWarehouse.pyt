@@ -76,25 +76,53 @@ def _pro_version() -> tuple[int, ...]:
     return tuple(int(p) for p in v.split(".")[:2] if p.isdigit())
 
 
-def _connection(folder: str, provider: str, options: dict) -> str:
-    """The `.acs` for the CDN with `provider`, created once in `folder`."""
-    name = f"ugs_cdn_{provider.lower()}"
+def _connection(folder: str, provider: str, options: dict, bucket: str = cat.CDN_BUCKET) -> str:
+    """The `.acs` for one CDN "bucket" (first path segment) with `provider`, created once in `folder`."""
+    name = f"ugs_cdn_{provider.lower()}" + ("" if bucket == cat.CDN_BUCKET else f"_{bucket}")
     path = os.path.join(folder, name + ".acs")
     if not os.path.exists(path):
         arcpy.management.CreateCloudStorageConnectionFile(
-            folder, name, provider, cat.CDN_BUCKET, end_point=cat.CDN_HOST, **options)
+            folder, name, provider, bucket, end_point=cat.CDN_HOST, **options)
     return path
 
 
 def _usable(m, lyr) -> bool:
     """True when Pro opened the layer; a broken one is removed so the fallback can replace it."""
     try:
-        if not getattr(lyr, "isBroken", False) and int(arcpy.management.GetCount(lyr)[0]) >= 0:
-            return True
+        if not getattr(lyr, "isBroken", False):
+            if getattr(lyr, "isRasterLayer", False):
+                bands = arcpy.management.GetRasterProperties(lyr, "BANDCOUNT").getOutput(0)
+                if int(bands) > 0:
+                    return True
+            elif int(arcpy.management.GetCount(lyr)[0]) >= 0:
+                return True
     except Exception:  # noqa: BLE001 - any failure to read it means it is not usable
         pass
     m.removeLayer(lyr)
     return False
+
+
+def _open_raster(m, href: str, folder: str, messages):
+    """A COG through a cloud storage connection to the CDN, which is how Pro reads cloud rasters;
+    the bare https URL is the last try."""
+    tries = []
+    if parts := cat.cdn_parts(href):
+        bucket, key = parts
+        for provider, options in sorted(CONNECTIONS, key=lambda c: c[0] != _cache.get("raster")):
+            tries.append((provider, lambda p=provider, o=options:
+                          os.path.join(_connection(folder, p, o, bucket), *key.split("/"))))
+    tries.append(("URL", lambda: href))
+    reasons = []
+    for how, path in tries:
+        try:
+            lyr = m.addDataFromPath(path())
+            if _usable(m, lyr):
+                _cache["raster"] = how
+                return lyr
+            reasons.append(f"{how}: would not open")
+        except Exception as e:  # noqa: BLE001 - try the next way in
+            reasons.append(f"{how}: {e}")
+    raise RuntimeError(f"ArcGIS Pro couldn't open the map image. ({'; '.join(reasons)})")
 
 
 def _stream(m, asset: dict, folder: str, messages):
@@ -228,8 +256,8 @@ def _apply_style(lyr, item: dict, messages) -> None:
 
 def _add_layer(m, layer: cat.Layer, source: str, work: str, style: bool, messages) -> None:
     """Put one picked layer on `m`, with its metadata and, for a vector, the UGS colors."""
-    if layer.is_raster:  # a COG: Pro reads it from its URL, range by range
-        lyr = m.addDataFromPath(layer.href)
+    if layer.is_raster:  # a COG, read range by range from the CDN
+        lyr = _open_raster(m, layer.href, work, messages)
         fields = cat.metadata(dict(layer.properties), source=layer.href)
     else:
         item = cat.get_json(layer.item_url)

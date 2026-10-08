@@ -210,6 +210,7 @@ class FakeArcpy(types.SimpleNamespace):
         def add(path):
             lyr = FakeLayer(path, ["U150WCQFF", "u15kwcqff", "other"],  # upper case, as stored
                             broken=any(f"ugs_cdn_{p.lower()}" in path for p in arcpy.broken))
+            lyr.isRasterLayer = path.endswith(".tif")
             arcpy.added.append(lyr)
             return lyr
 
@@ -242,6 +243,7 @@ class FakeArcpy(types.SimpleNamespace):
             da=types.SimpleNamespace(InsertCursor=Cursor),
             management=types.SimpleNamespace(
                 CreateCloudStorageConnectionFile=connect, GetCount=lambda lyr: ["7"],
+                GetRasterProperties=lambda lyr, prop: types.SimpleNamespace(getOutput=lambda i: "4"),
                 CreateFileGDB=lambda folder, name: None,
                 CreateFeatureclass=lambda gdb, name, shape, **kw: arcpy.fc.update(shape=shape, **kw),
                 AddFields=lambda fc, fields: arcpy.fc.update(fields=fields), Delete=lambda p: None),
@@ -564,10 +566,30 @@ def test_a_raster_is_added_from_its_cog_with_metadata_and_no_style(monkeypatch, 
     params[4].value = str(tmp_path)
     tool.execute(params, types.SimpleNamespace(addMessage=lambda m: None, addWarningMessage=lambda m: None))
 
-    (lyr,) = arcpy.added
-    assert lyr.path == "https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif"
-    assert arcpy.connections == [] and lyr.symbology.renderer is None
+    (lyr,) = arcpy.added  # through the CDN connection, its bucket the first path segment
+    assert lyr.path == f"{tmp_path}/ugs_cdn_web_geolmap.acs/cogs/M-180.cog.tif"
+    assert arcpy.connections == [("WEB", "geolmap", {"end_point": "maps-assets.geology.utah.gov"})]
+    assert lyr.symbology.renderer is None
     assert lyr.metadata.summary == "A 1:24,000 map." and lyr.metadata.credits == "Personius"
+
+
+def test_a_raster_falls_back_to_its_url_and_fails_loudly_when_nothing_opens(monkeypatch, tmp_path):
+    arcpy = FakeArcpy(refuse={"WEB"}, broken={"AMAZON"})
+    mod = _load(monkeypatch, arcpy)
+    url = "https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif"
+    lyr = mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), None)
+    assert lyr.path == url and len(arcpy.removed) == 1  # the broken AMAZON layer came off
+
+    arcpy.management.GetRasterProperties = lambda lyr, prop: types.SimpleNamespace(getOutput=lambda i: "0")
+    with pytest.raises(RuntimeError, match="WEB: WEB refused; AMAZON: would not open; URL: would not open"):
+        mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), None)
+
+
+def test_cdn_parts_splits_any_cdn_href_at_its_first_segment():
+    assert cat.cdn_parts("https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif") == \
+        ("geolmap", "cogs/M-180.cog.tif")
+    assert cat.cdn_parts("https://ugspub.nr.utah.gov/x.tif") is None
+    assert cat.cdn_parts("https://maps-assets.geology.utah.gov/x.tif") is None
 
 
 def test_downloads_default_to_the_project_folder(monkeypatch):

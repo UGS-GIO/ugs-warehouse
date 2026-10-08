@@ -75,6 +75,14 @@ def cdn_key(href: str) -> str | None:
     return href.removeprefix(base) if href.startswith(base) else None
 
 
+def cdn_parts(href: str) -> tuple[str, str] | None:
+    """(bucket, key) of any CDN href: its first path segment, which a path-style cloud storage
+    connection calls the bucket (`geolmap`), and the rest (`cogs/M-180.cog.tif`). Else None."""
+    base = f"https://{CDN_HOST}/"
+    bucket, _, key = href.removeprefix(base).partition("/") if href.startswith(base) else ("", "", "")
+    return (bucket, key) if bucket and key else None
+
+
 def get_json(url: str) -> dict:
     """JSON from `url`, asking for gzip: the catalog indexes are ~25x smaller compressed."""
     req = urllib.request.Request(url, headers={"Accept-Encoding": "gzip"})

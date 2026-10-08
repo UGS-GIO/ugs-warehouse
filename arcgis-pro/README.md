@@ -76,7 +76,8 @@ warehouse GeoParquet from the CDN and reads only what it needs (the 1.9 GB wetla
 Pro refuses a Parquet with a nested column, and the warehouse archive carries GeoParquet 1.1's
 `bbox` struct. So each serving topic also publishes `{stem}.flat.parquet` (asset `data_flat`): the
 same rows as GeoParquet 1.0, the struct dropped and the flat `bbox_*` columns kept. A stream opens
-that file; a topic without one yet streams the archive.
+that file. A topic without one yet tries the archive, which Pro refuses, so it is downloaded
+until the next ingest writes its flat copy.
 
 ## What it reads from the catalog
 

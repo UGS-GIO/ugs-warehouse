@@ -117,7 +117,7 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         ("pmtiles",  _pmtiles),
     ]
     if unchanged and not sink_archive.flat_present(topic):  # an archive from before the flat copy
-        data_sinks = [("archive_flat", lambda: written.update(sink_archive.write_flat(topic, con, view)))]
+        data_sinks = [("archive_flat", lambda: written.update(sink_archive.write_flat(topic)))]
     data_failed = False
 
     def _stac() -> None:

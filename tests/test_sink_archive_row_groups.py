@@ -145,6 +145,31 @@ def test_the_flat_copy_is_geoparquet_1_0_with_no_nested_column(tmp_path) -> None
     assert first == [(0,), (1,), (2,)]  # the archive's row order, which its sort made
 
 
+def test_the_backfill_derives_the_flat_copy_from_the_published_archive(tmp_path) -> None:
+    import duckdb
+
+    from ugs_warehouse.core import config, gcs
+    from ugs_warehouse.vector.topics import Topic
+
+    con = duckdb.connect()
+    con.execute("INSTALL spatial; LOAD spatial")
+    con.execute("CREATE TABLE v AS SELECT i AS feature_id, ST_Point(-112 + i / 100, 40) AS geom "
+                "FROM range(50) r(i)")
+    topic = Topic(layer="hazards_rockfall_current", schema="hazards")
+    local = str(tmp_path / "a.parquet")
+    sink_archive._copy_geoparquet(con, "v", local)
+    gcs.upload(local, config.archive_path(topic.stem), content_type=sink_archive.PARQUET_MIME)
+
+    assert not sink_archive.flat_present(topic)
+    written = sink_archive.write_flat(topic)
+    assert sink_archive.flat_present(topic) and written["data_flat"].size > 0
+    flat = tmp_path / "f.parquet"
+    flat.write_bytes(gcs.get_bytes(config.archive_flat_path(topic.stem)))
+    cols = [r[0] for r in con.execute(f"SELECT name FROM parquet_schema('{flat}')").fetchall()]
+    assert "bbox" not in cols and "bbox_xmin" in cols
+    assert con.execute(f"SELECT count(*) FROM read_parquet('{flat}')").fetchone()[0] == 50
+
+
 def test_is_current_accepts_only_the_format_write_makes(tmp_path) -> None:
     """Skip-unchanged rebuilds an archive from an older writer: GeoParquet 1.0 has no covering."""
     import duckdb

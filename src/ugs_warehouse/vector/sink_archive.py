@@ -111,6 +111,7 @@ def _copy_flat(src: str, path: str, rows_per_group: int) -> None:
     `geom` as the WKB it is rather than as a GEOMETRY value.
     """
     con = duckdb.connect()
+    con.execute(f"SET max_memory = '{os.environ.get('DUCKDB_MAX_MEMORY', '2GB')}'")  # the ingest cap
     con.execute("SET enable_geoparquet_conversion = false")
     row = con.execute(f"SELECT decode(value) FROM parquet_kv_metadata('{src}') "
                       f"WHERE decode(key) = 'geo'").fetchone()
@@ -121,7 +122,7 @@ def _copy_flat(src: str, path: str, rows_per_group: int) -> None:
     con.execute(
         f"COPY (SELECT * EXCLUDE (bbox) FROM read_parquet('{src}')) TO '{path}' "
         f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {rows_per_group}, "
-        f"GEOPARQUET_VERSION 'NONE', KV_METADATA {{geo: '{json.dumps(geo)}'}})"
+        f"GEOPARQUET_VERSION 'NONE', KV_METADATA {{geo: '{json.dumps(geo).replace(chr(39), chr(39) * 2)}'}})"
     )
 
 
@@ -176,12 +177,17 @@ def flat_present(topic: Topic) -> bool:
     return gcs.exists(config.archive_flat_path(topic.stem))
 
 
-def write_flat(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> dict[str, gcs.FileMeta]:
-    """Only the flat copy, for a topic whose archive is current but predates it."""
+def write_flat(topic: Topic) -> dict[str, gcs.FileMeta]:
+    """Only the flat copy, for a topic whose archive is current but predates it: derived from the
+    published archive, so its rows and groups match that file and nothing is sorted again."""
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, f"{topic.stem}.parquet")
-        rows_per_group = _copy_geoparquet(con, view, local)
-        return {"data_flat": _upload_flat(topic, local, tmp, rows_per_group)}
+        with open(local, "wb") as fh:
+            fh.write(gcs.get_bytes(config.archive_path(topic.stem)))
+        con = duckdb.connect()
+        rows_per_group = con.execute(f"SELECT max(row_group_num_rows) FROM parquet_metadata('{local}')"
+                                     ).fetchone()[0]
+        return {"data_flat": _upload_flat(topic, local, tmp, int(rows_per_group or ROW_GROUP_MAX))}
 
 
 def _upload_flat(topic: Topic, local: str, tmp: str, rows_per_group: int) -> gcs.FileMeta:

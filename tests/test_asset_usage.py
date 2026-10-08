@@ -17,7 +17,7 @@ from ugs_warehouse.vector import sink_stac as vec_sink
 from ugs_warehouse.vector.topics import Topic
 
 
-def _capture(monkeypatch, *, review: bool = False, thumb: bool = False) -> dict:
+def _capture(monkeypatch, *, review: bool = False, thumb: bool = False, flat: bool = False) -> dict:
     """Run vec_sink.write with every DB/GCS touch stubbed, capturing the build_item kwargs."""
     captured: dict = {}
     monkeypatch.setattr(sink_stac, "_bbox", lambda c, v: [0, 1, 2, 3])
@@ -26,7 +26,8 @@ def _capture(monkeypatch, *, review: bool = False, thumb: bool = False) -> dict:
     monkeypatch.setattr(sink_stac.stac, "manual_override", lambda iid: {})
     monkeypatch.setattr(sink_stac.stac, "prior_property", lambda cp, iid, prop: None)
     monkeypatch.setattr(sink_stac.stac, "prior_file_fields", lambda cp, iid: {})
-    monkeypatch.setattr(sink_stac.gcs, "exists", lambda p: thumb)
+    monkeypatch.setattr(sink_stac.gcs, "exists",
+                        lambda p: flat if p.endswith(".flat.parquet") else thumb)
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
@@ -48,6 +49,13 @@ def test_data_and_pmtiles_assets_name_their_purpose(monkeypatch):
     # Roles unchanged: the machine purpose still rides the standard STAC roles, nothing added.
     assert assets["data"]["roles"] == ["data"]
     assert assets["pmtiles"]["roles"] == ["visual"]
+
+
+def test_the_flat_geoparquet_is_cited_only_when_it_exists(monkeypatch):
+    assert "data_flat" not in _capture(monkeypatch)["assets"]
+    flat = _capture(monkeypatch, flat=True)["assets"]["data_flat"]
+    assert flat["href"].endswith("/hazards_qfaults/hazards_qfaults.flat.parquet")
+    assert flat["roles"] == ["data"] and "arcgis pro" in flat["description"].lower()
 
 
 def test_thumbnail_asset_carries_a_description(monkeypatch):

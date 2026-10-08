@@ -106,7 +106,7 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     written: dict[str, gcs.FileMeta] = {}
 
     def _archive() -> None:
-        written["data"] = sink_archive.write(topic, con, view)
+        written.update(sink_archive.write(topic, con, view))
 
     def _pmtiles() -> None:
         written["pmtiles"] = sink_pmtiles.build(topic, con, view)
@@ -116,6 +116,8 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
         ("archive",  _archive),
         ("pmtiles",  _pmtiles),
     ]
+    if unchanged and not sink_archive.flat_present(topic):  # an archive from before the flat copy
+        data_sinks = [("archive_flat", lambda: written.update(sink_archive.write_flat(topic, con, view)))]
     data_failed = False
 
     def _stac() -> None:

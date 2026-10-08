@@ -188,6 +188,11 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
 
     assets = {
         "data": data_asset,
+        **({"data_flat": {"href": config.public_url(config.archive_flat_path(topic.stem)),
+                          "type": PARQUET_MIME, "roles": ["data"],
+                          "title": "GeoParquet 1.0 (no nested column)",
+                          "description": stac.USAGE_DATA_FLAT}}
+           if gcs.exists(config.archive_flat_path(topic.stem)) else {}),
         "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
                     "roles": ["visual"], "title": "PMTiles vector tiles",
                     "description": stac.USAGE_PMTILES},

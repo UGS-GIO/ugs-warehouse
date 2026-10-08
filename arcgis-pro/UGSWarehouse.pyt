@@ -36,11 +36,14 @@ def _layers() -> list[cat.Layer]:
         for kind, read in (("map layers", cat.layers), ("scanned geologic maps", cat.rasters)):
             try:
                 found += read()
-            except (OSError, ValueError) as e:  # ValueError: a cut-off or non-JSON response
-                failed.append(f"{kind}: {e}")
-        if failed:
-            note = f"Can't reach the UGS catalog. Check your internet connection. ({'; '.join(failed)})"
-            _cache["error" if not found else "warning"] = note
+            except OSError as e:
+                failed.append(f"{kind}: can't connect ({e})")
+            except (ValueError, KeyError, TypeError) as e:  # a cut-off, non-JSON or odd response
+                failed.append(f"{kind}: unexpected response ({type(e).__name__}: {e})")
+        if failed and not found:
+            _cache["error"] = f"Can't read the UGS catalog. ({'; '.join(failed)})"
+        elif failed:
+            _cache["warning"] = f"Some of the UGS catalog couldn't be read, so it isn't listed. ({'; '.join(failed)})"
         _cache["layers"] = found
     return _cache["layers"]
 
@@ -86,20 +89,23 @@ def _connection(folder: str, provider: str, options: dict, bucket: str = cat.CDN
     return path
 
 
-def _usable(m, lyr) -> bool:
-    """True when Pro opened the layer; a broken one is removed so the fallback can replace it."""
+def _unusable(m, lyr, raster: bool = False) -> str | None:
+    """Why Pro can't read the layer it just added, or None when it can. An unreadable layer is
+    removed so the next way in can replace it."""
     try:
-        if not getattr(lyr, "isBroken", False):
-            if getattr(lyr, "isRasterLayer", False):
-                bands = arcpy.management.GetRasterProperties(lyr, "BANDCOUNT").getOutput(0)
-                if int(bands) > 0:
-                    return True
-            elif int(arcpy.management.GetCount(lyr)[0]) >= 0:
-                return True
-    except Exception:  # noqa: BLE001 - any failure to read it means it is not usable
-        pass
-    m.removeLayer(lyr)
-    return False
+        if getattr(lyr, "isBroken", False):
+            why = "the layer is broken"
+        elif raster:
+            bands = int(arcpy.management.GetRasterProperties(lyr, "BANDCOUNT").getOutput(0))
+            why = None if bands > 0 else "no bands"
+        else:
+            int(arcpy.management.GetCount(lyr)[0])
+            why = None
+    except Exception as e:  # noqa: BLE001 - the reason goes back to the caller's messages
+        why = str(e) or type(e).__name__
+    if why:
+        m.removeLayer(lyr)
+    return why
 
 
 def _open_raster(m, href: str, folder: str, messages):
@@ -108,18 +114,20 @@ def _open_raster(m, href: str, folder: str, messages):
     tries = []
     if parts := cat.cdn_parts(href):
         bucket, key = parts
-        for provider, options in sorted(CONNECTIONS, key=lambda c: c[0] != _cache.get("raster")):
+        for provider, options in CONNECTIONS:
             tries.append((provider, lambda p=provider, o=options:
                           os.path.join(_connection(folder, p, o, bucket), *key.split("/"))))
     tries.append(("URL", lambda: href))
+    tries.sort(key=lambda t: t[0] != _cache.get("raster"))  # last good way first
     reasons = []
     for how, path in tries:
         try:
             lyr = m.addDataFromPath(path())
-            if _usable(m, lyr):
+            if not (why := _unusable(m, lyr, raster=True)):
                 _cache["raster"] = how
+                messages.addMessage(f"  Opened online. ({how})")
                 return lyr
-            reasons.append(f"{how}: would not open")
+            reasons.append(f"{how}: {why}")
         except Exception as e:  # noqa: BLE001 - try the next way in
             reasons.append(f"{how}: {e}")
     raise RuntimeError(f"ArcGIS Pro couldn't open the map image. ({'; '.join(reasons)})")
@@ -136,11 +144,11 @@ def _stream(m, asset: dict, folder: str, messages):
         try:
             path = os.path.join(_connection(folder, provider, options), *key.split("/"))
             lyr = m.addDataFromPath(path)
-            if _usable(m, lyr):
+            if not (why := _unusable(m, lyr)):
                 _cache["stream"] = provider
                 messages.addMessage(f"  Opened online. ({provider})")
                 return lyr
-            reasons.append(f"{provider}: would not open")
+            reasons.append(f"{provider}: {why}")
         except Exception as e:  # noqa: BLE001 - try the next way in
             reasons.append(f"{provider}: {e}")
     messages.addMessage(f"  Couldn't open it online, so it was downloaded instead. "
@@ -152,7 +160,7 @@ _GEOMETRY = {"Point": "POINT", "MultiPoint": "MULTIPOINT", "LineString": "POLYLI
              "MultiLineString": "POLYLINE", "Polygon": "POLYGON", "MultiPolygon": "POLYGON"}
 
 
-def _to_fgdb(parquet: str, folder: str, name: str, messages=None) -> str:
+def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
     """A feature class in `<folder>/UGS Warehouse.gdb` with the GeoParquet's rows. Any Pro version.
 
     Field names go through the geodatabase's own validation; columns with no Esri field type
@@ -178,7 +186,7 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages=None) -> str:
     sr = arcpy.SpatialReference(4326)
     arcpy.management.CreateFeatureclass(gdb, os.path.basename(fc), shape, spatial_reference=sr,
                                         has_z="ENABLED" if has_z else "DISABLED")
-    fields, dropped, taken = [], [], set()
+    fields, dropped, taken = [], [], set(cat._RESERVED)  # expects pro_ready's renamed columns
     for f in table.schema:
         if f.name == gcol:
             continue
@@ -188,13 +196,13 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages=None) -> str:
             continue
         valid = arcpy.ValidateFieldName(f.name, gdb)
         while valid.lower() in taken:  # validation can map two names to one
-            valid += "_"
+            valid = valid[:63] + "_"
         taken.add(valid.lower())
         fields.append((f.name, valid, spec))
-    if dropped and messages:
+    if dropped:
         messages.addWarningMessage(f"  Left out columns ArcGIS can't store: {', '.join(dropped)}")
-    if fields:
-        arcpy.management.AddFields(fc, [[v, s[0], v, s[1]] for _, v, s in fields])
+    if fields:  # the alias keeps the catalog's name when validation changed it
+        arcpy.management.AddFields(fc, [[v, s[0], n, s[1]] for n, v, s in fields])
     names = [n for n, _, _ in fields]
     with arcpy.da.InsertCursor(fc, ["SHAPE@", *(v for _, v, _ in fields)]) as cur:
         for batch in table.to_batches():
@@ -210,6 +218,8 @@ def _copy(m, asset: dict, folder: str, name: str, messages):
     mb = (asset.get("file:size") or 0) / 1e6
     messages.addMessage(f"  Downloading ({mb:.1f} MB)...")
     path = cat.download(asset, folder, f"{name}.parquet")
+    if nested := cat.nested_columns(path):
+        messages.addWarningMessage(f"  Left out nested columns ArcGIS can't store: {', '.join(nested)}")
     return m.addDataFromPath(_to_fgdb(cat.pro_ready(path), folder, name, messages))
 
 
@@ -276,9 +286,9 @@ def _collection(url: str, messages) -> dict | None:
     if url not in seen:
         try:
             seen[url] = cat.get_json(url)
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError) as e:  # not kept: the next layer tries again
             messages.addWarningMessage(f"  Couldn't read the theme's license and credits. ({e})")
-            seen[url] = None
+            return None
     return seen[url]
 
 
@@ -292,7 +302,7 @@ def _add_layer(m, layer: cat.Layer, source: str, work: str, style: bool, message
                 props = cat.get_json(layer.self_href).get("properties") or props
             except (OSError, ValueError) as e:
                 messages.addWarningMessage(f"  Couldn't read the map's full description. ({e})")
-        fields = cat.metadata(props, source=layer.self_href or layer.href)
+        fields = cat.metadata(props, source=layer.href)
     else:
         item = cat.get_json(layer.item_url)
         asset = item["assets"]["data"]
@@ -301,8 +311,8 @@ def _add_layer(m, layer: cat.Layer, source: str, work: str, style: bool, message
             lyr = _copy(m, asset, work, layer.id, messages)
         collection = _collection(layer.collection_url, messages)
         fields = cat.metadata(item.get("properties") or {}, collection, layer.item_url)
-    lyr.name = layer.title
     try:
+        lyr.name = layer.title
         _apply_metadata(lyr, fields, messages)
     except Exception as e:  # noqa: BLE001 - the layer is on the map; metadata is extra
         messages.addWarningMessage(f"  Couldn't add the layer's description. ({e})")
@@ -391,13 +401,15 @@ class AddLayer:
         by_id = {lyr.id: lyr for lyr in _layers()}
         failed = []
         for choice in picks.values:
-            layer = by_id[cat.id_of(choice)]
-            messages.addMessage(layer.title)
+            messages.addMessage(choice)
             try:
+                layer = by_id.get(cat.id_of(choice))
+                if layer is None:
+                    raise LookupError("it is no longer in the UGS catalog")
                 _add_layer(m, layer, source.valueAsText, work, style.value, messages)
             except Exception as e:  # noqa: BLE001 - finish the other picks, then report this one
                 messages.addWarningMessage(f"  Couldn't add this layer. ({e})")
-                failed.append(layer.title)
+                failed.append(choice)
         if failed:
             raise arcpy.ExecuteError(f"Couldn't add {len(failed)} of {len(picks.values)} layers: "
                                      f"{'; '.join(failed)}. The messages above say why.")

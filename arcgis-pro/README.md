@@ -28,7 +28,8 @@ Open **UGS Warehouse → Add Warehouse Layer**:
 - **Style like the web viewer**: categories, colors and legend labels from the layer's style. A
   layer with no style, or a style with no simple equivalent, keeps Pro's default symbol.
 
-A raster is added from its COG URL; Pro reads only the part in view. Every layer gets the
+A raster (a COG) opens through the same CDN connections as the GeoParquet, with `geolmap` as the
+bucket, and its https URL as the last try; Pro reads only the part in view. Every layer gets the
 catalog's title, summary, description, tags, credits and license in its metadata (a geodatabase
 copy's feature class gets it when Pro keeps the layer's own metadata read-only).
 
@@ -51,7 +52,9 @@ The tool tries two cloud storage connections to the CDN, in order, and remembers
 works: Pro's generic HTTP provider (`WEB`), then an anonymous S3 connection with the CDN as its
 endpoint. The second works because an unsigned path-style S3 read is a plain https GET, and the
 CDN answers it with the range requests a Parquet reader needs. Esri does not certify S3-compatible
-endpoints, so the messages name the connection that was used.
+endpoints, so the messages name the connection that was used. A connection's bucket is the first
+path segment of the file's URL (`warehouse` for GeoParquet, `geolmap` for the map COGs), so each
+gets its own `.acs`.
 
 Pro rejects nested Parquet columns, and the warehouse GeoParquet carries the GeoParquet 1.1
 `bbox` struct. A copy drops it (the flat `bbox_*` columns keep the extent) and renames columns to

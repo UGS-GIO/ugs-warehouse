@@ -117,6 +117,12 @@ def test_a_filtered_first_layer_has_no_single_color():
     assert cat.single_color(style) is None
 
 
+def test_a_geometry_type_filter_still_gives_a_single_color():
+    style = {"layers": [{"type": "fill", "filter": ["==", "$type", "Polygon"],
+                         "paint": {"fill-color": "#0056b3"}}]}
+    assert cat.single_color(style) == (0, 86, 179)
+
+
 def test_download_verifies_and_reuses_a_matching_copy(monkeypatch, tmp_path):
     data = b"PAR1" * 10
     calls = []
@@ -197,6 +203,10 @@ class FakeLayer:
         self.added_all = True
 
 
+class FakeExecuteError(Exception):
+    """arcpy.ExecuteError's stand-in, distinct so a test can't pass on some other failure."""
+
+
 class FakeArcpy(types.SimpleNamespace):
     """Records what the toolbox asks for. `refuse` names connection providers that fail."""
 
@@ -232,7 +242,7 @@ class FakeArcpy(types.SimpleNamespace):
 
         the_map = types.SimpleNamespace(addDataFromPath=add, removeLayer=self.removed.append)
         super().__init__(
-            Parameter=FakeParameter, ExecuteError=RuntimeError,
+            Parameter=FakeParameter, ExecuteError=FakeExecuteError,
             GetInstallInfo=lambda: {"Version": "3.5.2"},
             ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
             Exists=lambda p: False, SpatialReference=lambda code: f"SR{code}",
@@ -351,7 +361,8 @@ def test_copies_to_a_geodatabase_when_pro_cannot_open_the_stream(monkeypatch, tm
     mod = _load(monkeypatch, arcpy)
     monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
     monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
-    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages=None: f"{folder}/UGS Warehouse.gdb/{name}")
+    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages: f"{folder}/UGS Warehouse.gdb/{name}")
+    monkeypatch.setattr(mod.cat, "nested_columns", lambda path: [])
     _run(mod, tmp_path)
     assert len(arcpy.removed) == 1  # the broken streamed layer came off the map
     assert arcpy.added[-1].path == f"{tmp_path}/UGS Warehouse.gdb/hazards_qfaults"
@@ -373,9 +384,22 @@ def test_one_failed_pick_does_not_stop_the_others(monkeypatch, tmp_path):
     params[2].values = ["Quaternary Faults [hazards_qfaults]", "Power Plants [enmin_powerplants]"]
     params[4].value = str(tmp_path)
     log = []
-    with pytest.raises(RuntimeError, match="1 of 2 layers: Quaternary Faults"):
+    with pytest.raises(FakeExecuteError, match="1 of 2 layers: Quaternary Faults"):
         tool.execute(params, types.SimpleNamespace(addMessage=log.append, addWarningMessage=log.append))
     assert len(arcpy.added) == 1 and any("checksum mismatch" in line for line in log)
+
+
+def test_a_pick_no_longer_in_the_catalog_fails_alone(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    tool = mod.AddLayer()
+    params = tool.getParameterInfo()
+    params[2].values = ["Gone [retired_layer]", "Power Plants [enmin_powerplants]"]
+    params[4].value = str(tmp_path)
+    log = []
+    with pytest.raises(FakeExecuteError, match=r"1 of 2 layers: Gone \[retired_layer\]"):
+        tool.execute(params, types.SimpleNamespace(addMessage=log.append, addWarningMessage=log.append))
+    assert len(arcpy.added) == 1 and any("no longer in the UGS catalog" in line for line in log)
 
 
 def test_old_pro_copies_instead_of_streaming(monkeypatch, tmp_path):
@@ -388,7 +412,8 @@ def test_old_pro_copies_instead_of_streaming(monkeypatch, tmp_path):
     assert "can't open these layers online" in params[3].warning
     monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
     monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
-    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages=None: f"gdb/{name}")
+    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages: f"gdb/{name}")
+    monkeypatch.setattr(mod.cat, "nested_columns", lambda path: [])
     _run(mod, tmp_path)
     assert arcpy.connections == [] and arcpy.added[-1].path == "gdb/hazards_qfaults"
 
@@ -412,7 +437,7 @@ def test_to_fgdb_writes_fields_rows_and_z(monkeypatch, tmp_path):
 
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
-    fc = mod._to_fgdb(str(path), str(tmp_path), "x")
+    fc = mod._to_fgdb(str(path), str(tmp_path), "x", types.SimpleNamespace(addWarningMessage=print))
 
     assert fc.endswith("UGS Warehouse.gdb/x")
     assert arcpy.fc["shape"] == "POINT" and arcpy.fc["has_z"] == "ENABLED"
@@ -443,7 +468,7 @@ def test_to_fgdb_validates_names_with_the_gdb_and_warns_on_dropped_columns(monke
     log = []
     mod._to_fgdb(str(path), str(tmp_path), "x", types.SimpleNamespace(addWarningMessage=log.append))
 
-    assert [f[0] for f in arcpy.fc["fields"]] == ["date_", "select_"]
+    assert arcpy.fc["fields"][:2] == [["date_", "TEXT", "date", 10], ["select_", "TEXT", "select", 1]]
     assert arcpy.fc["insert_fields"] == ["SHAPE@", "date_", "select_"]
     assert arcpy.inserted[0][1:] == ["2020-01-02", "x"]
     assert log == ["  Left out columns ArcGIS can't store: blob"]
@@ -584,6 +609,15 @@ def test_a_crlf_checkout_of_the_same_files_is_not_stale(monkeypatch, tmp_path):
     assert cat.stale_files(str(tmp_path), "main") == ["ugs_catalog.py"]
 
 
+def test_update_skips_a_crlf_copy_of_the_same_file(monkeypatch, tmp_path):
+    files = {"UGSWarehouse.pyt": b"a = 1\n" * 30, "ugs_catalog.py": b"c = 3\n" * 30}
+    (tmp_path / "UGSWarehouse.pyt").write_bytes(files["UGSWarehouse.pyt"].replace(b"\n", b"\r\n"))
+    (tmp_path / "ugs_catalog.py").write_bytes(b"c = 4\n" * 30)
+    monkeypatch.setattr(cat, "_fetch_toolbox", lambda branch, timeout=60: files)
+    assert cat.update_toolbox(str(tmp_path), "main") == ["ugs_catalog.py"]
+    assert not (tmp_path / "UGSWarehouse.pyt.bak").exists()
+
+
 def test_the_dialog_warns_when_out_of_date(monkeypatch):
     mod = _load(monkeypatch, FakeArcpy())
     monkeypatch.setattr(mod.cat, "stale_files", lambda folder, branch, timeout=5: ["ugs_catalog.py"])
@@ -614,12 +648,19 @@ def test_a_raster_falls_back_to_its_url_and_fails_loudly_when_nothing_opens(monk
     arcpy = FakeArcpy(refuse={"WEB"}, broken={"AMAZON"})
     mod = _load(monkeypatch, arcpy)
     url = "https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif"
-    lyr = mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), None)
+    log = []
+    msgs = types.SimpleNamespace(addMessage=log.append)
+    lyr = mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), msgs)
     assert lyr.path == url and len(arcpy.removed) == 1  # the broken AMAZON layer came off
+    assert log == ["  Opened online. (URL)"]
+    arcpy.added.clear()
+    mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), msgs)
+    assert [x.path for x in arcpy.added] == [url]  # the way that worked is tried first next time
 
     arcpy.management.GetRasterProperties = lambda lyr, prop: types.SimpleNamespace(getOutput=lambda i: "0")
-    with pytest.raises(RuntimeError, match="WEB: WEB refused; AMAZON: would not open; URL: would not open"):
-        mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), None)
+    with pytest.raises(RuntimeError, match="WEB: WEB refused; AMAZON: the layer is broken; URL: no bands"):
+        mod._cache.pop("raster")
+        mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), msgs)
 
 
 def test_cdn_parts_splits_any_cdn_href_at_its_first_segment():

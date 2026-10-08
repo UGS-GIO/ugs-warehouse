@@ -256,13 +256,21 @@ def _expression_classes(color) -> tuple[str, list[tuple[object, tuple]]] | None:
 def single_color(style: dict) -> tuple[int, int, int] | None:
     """The color of a one-color style (its first fill, line or circle layer), else None.
 
-    A filtered first layer draws only some features, so its color would misstate the rest.
+    A first layer filtered on an attribute draws only some features, so its color would misstate
+    the rest; a filter on geometry type alone still draws every feature of the layer's kind.
     """
     for lyr in style.get("layers") or []:
         if lyr.get("type") in ("fill", "line", "circle"):
             color = _paint_color(lyr)
-            return _rgb(color) if isinstance(color, str) and not lyr.get("filter") else None
+            subset = lyr.get("filter") and not _geometry_type_only(lyr["filter"])
+            return _rgb(color) if isinstance(color, str) and not subset else None
     return None
+
+
+def _geometry_type_only(expr) -> bool:
+    """True for `["==", "$type", "Polygon"]` or `["==", ["geometry-type"], "Polygon"]`."""
+    return (isinstance(expr, list) and len(expr) == 3 and expr[0] in ("==", "!=")
+            and (expr[1] == "$type" or expr[1] == ["geometry-type"]))
 
 
 def verify(path: str, size: int | None, checksum: str | None) -> bool:
@@ -312,6 +320,14 @@ def esri_name(name: str, taken: set[str]) -> str:
         out = f"{base[:32 - len(str(n)) - 1]}_{n}"
     taken.add(out.lower())
     return out
+
+
+def nested_columns(path: str) -> list[str]:
+    """A GeoParquet's nested columns other than `bbox`, the covering whose values the flat
+    bbox_* columns also carry: what a copy for Pro loses."""
+    import pyarrow.parquet as pq
+
+    return [f.name for f in pq.read_schema(path) if f.type.num_fields and f.name != "bbox"]
 
 
 def pro_ready(path: str) -> str:
@@ -472,10 +488,12 @@ def stale_files(folder: str, branch: str, timeout: float = 2) -> list[str] | Non
         fresh = _fetch_toolbox(branch, timeout)
     except Exception:  # noqa: BLE001 - offline, bad branch: no verdict rather than a false alarm
         return None
-    def same(local: bytes | None, body: bytes) -> bool:  # a Git for Windows checkout has CRLF
-        return local is not None and local.replace(b"\r\n", b"\n") == body.replace(b"\r\n", b"\n")
+    return [n for n, body in fresh.items() if not _same(_local(folder, n), body)]
 
-    return [n for n, body in fresh.items() if not same(_local(folder, n), body)]
+
+def _same(local: bytes | None, body: bytes) -> bool:
+    """Equal apart from line endings: a Git for Windows checkout has CRLF."""
+    return local is not None and local.replace(b"\r\n", b"\n") == body.replace(b"\r\n", b"\n")
 
 
 def update_toolbox(folder: str, branch: str = "main") -> list[str]:
@@ -486,7 +504,7 @@ def update_toolbox(folder: str, branch: str = "main") -> list[str]:
     """
     fresh = _fetch_toolbox(branch)
     todo = {n: (os.path.join(folder, n), _local(folder, n), b) for n, b in fresh.items()}
-    todo = {n: t for n, t in todo.items() if t[1] != t[2]}
+    todo = {n: t for n, t in todo.items() if not _same(t[1], t[2])}
     for path, old, body in todo.values():  # write everything first, so a full disk breaks nothing
         if old is not None:
             with open(path + ".bak", "wb") as fh:

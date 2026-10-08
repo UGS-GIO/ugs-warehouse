@@ -226,6 +226,34 @@ def _apply_style(lyr, item: dict, messages) -> None:
     lyr.symbology = sym
 
 
+def _add_layer(m, layer: cat.Layer, source: str, work: str, style: bool, messages) -> None:
+    """Put one picked layer on `m`, with its metadata and, for a vector, the UGS colors."""
+    if layer.is_raster:  # a COG: Pro reads it from its URL, range by range
+        lyr = m.addDataFromPath(layer.href)
+        fields = cat.metadata(dict(layer.properties), source=layer.href)
+    else:
+        item = cat.get_json(layer.item_url)
+        asset = item["assets"]["data"]
+        lyr = _stream(m, asset, work, messages) if source == STREAM else None
+        if lyr is None:
+            lyr = _copy(m, asset, work, layer.id, messages)
+        try:
+            collection = cat.get_json(layer.collection_url)
+        except OSError:
+            collection = None
+        fields = cat.metadata(item.get("properties") or {}, collection, layer.item_url)
+    lyr.name = layer.title
+    try:
+        _apply_metadata(lyr, fields, messages)
+    except Exception as e:  # noqa: BLE001 - the layer is on the map; metadata is extra
+        messages.addWarningMessage(f"  Couldn't add the layer's description. ({e})")
+    if style and not layer.is_raster:
+        try:
+            _apply_style(lyr, item, messages)
+        except Exception as e:  # noqa: BLE001 - the layer is on the map; styling is extra
+            messages.addWarningMessage(f"  Couldn't apply UGS colors. ({e})")
+
+
 class Toolbox:
     def __init__(self):
         self.label = "UGS Warehouse"
@@ -299,33 +327,18 @@ class AddLayer:
         work = folder.valueAsText or _default_folder()
         os.makedirs(work, exist_ok=True)
         by_id = {lyr.id: lyr for lyr in _layers()}
+        failed = []
         for choice in picks.values:
             layer = by_id[cat.id_of(choice)]
             messages.addMessage(layer.title)
-            if layer.is_raster:  # a COG: Pro reads it from its URL, range by range
-                lyr = m.addDataFromPath(layer.href)
-                fields = cat.metadata(dict(layer.properties), source=layer.href)
-            else:
-                item = cat.get_json(layer.item_url)
-                asset = item["assets"]["data"]
-                lyr = _stream(m, asset, work, messages) if source.valueAsText == STREAM else None
-                if lyr is None:
-                    lyr = _copy(m, asset, work, layer.id, messages)
-                try:
-                    collection = cat.get_json(layer.collection_url)
-                except OSError:
-                    collection = None
-                fields = cat.metadata(item.get("properties") or {}, collection, layer.item_url)
-            lyr.name = layer.title
             try:
-                _apply_metadata(lyr, fields, messages)
-            except Exception as e:  # noqa: BLE001 - the layer is on the map; metadata is extra
-                messages.addWarningMessage(f"  Couldn't add the layer's description. ({e})")
-            if style.value and not layer.is_raster:
-                try:
-                    _apply_style(lyr, item, messages)
-                except Exception as e:  # noqa: BLE001 - the layer is on the map; styling is extra
-                    messages.addWarningMessage(f"  Couldn't apply UGS colors. ({e})")
+                _add_layer(m, layer, source.valueAsText, work, style.value, messages)
+            except Exception as e:  # noqa: BLE001 - finish the other picks, then report this one
+                messages.addWarningMessage(f"  Couldn't add this layer. ({e})")
+                failed.append(layer.title)
+        if failed:
+            raise arcpy.ExecuteError(f"Couldn't add {len(failed)} of {len(picks.values)} layers: "
+                                     f"{'; '.join(failed)}. The messages above say why.")
 
 
 class UpdateToolbox:

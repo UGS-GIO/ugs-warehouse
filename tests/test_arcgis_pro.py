@@ -354,6 +354,27 @@ def test_copies_to_a_geodatabase_when_pro_cannot_open_the_stream(monkeypatch, tm
     assert arcpy.added[-1].path == f"{tmp_path}/UGS Warehouse.gdb/hazards_qfaults"
 
 
+def test_one_failed_pick_does_not_stop_the_others(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    real = mod._add_layer
+
+    def flaky(m, layer, *a):
+        if layer.id == "hazards_qfaults":
+            raise OSError("checksum mismatch")
+        return real(m, layer, *a)
+
+    monkeypatch.setattr(mod, "_add_layer", flaky)
+    tool = mod.AddLayer()
+    params = tool.getParameterInfo()
+    params[2].values = ["Quaternary Faults [hazards_qfaults]", "Power Plants [enmin_powerplants]"]
+    params[4].value = str(tmp_path)
+    log = []
+    with pytest.raises(RuntimeError, match="1 of 2 layers: Quaternary Faults"):
+        tool.execute(params, types.SimpleNamespace(addMessage=log.append, addWarningMessage=log.append))
+    assert len(arcpy.added) == 1 and any("checksum mismatch" in line for line in log)
+
+
 def test_old_pro_copies_instead_of_streaming(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     arcpy.GetInstallInfo = lambda: {"Version": "3.3.1"}

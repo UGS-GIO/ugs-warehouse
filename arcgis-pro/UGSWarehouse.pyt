@@ -9,6 +9,7 @@ import importlib
 import json
 import os
 import sys
+import uuid
 
 import arcpy
 
@@ -90,7 +91,20 @@ def _connection(folder: str, provider: str, options: dict, bucket: str, host: st
     return path
 
 
-def _google(folder: str, href: str, raster: bool):
+def _short_path(path: str) -> str:
+    """Windows' 8.3 form of `path` (no spaces) where the volume keeps one, else `path`."""
+    try:
+        import ctypes
+
+        buf = ctypes.create_unicode_buffer(1024)
+        if ctypes.windll.kernel32.GetShortPathNameW(path, buf, len(buf)):
+            return buf.value
+    except (AttributeError, OSError):  # not Windows
+        pass
+    return path
+
+
+def _google(folder: str, href: str):
     """(label, path-maker) for reading `href` straight from the bucket with this machine's Google
     sign-in, or (label, None) with the reason it can't."""
     obj, cred = cat.bucket_object(href), cat.google_credentials()
@@ -101,20 +115,19 @@ def _google(folder: str, href: str, raster: bool):
     kind = cat.google_credential_type(cred)
     if kind is None:
         return f"GOOGLE (can't read the sign-in file {cred}; sign in again)", None
-    if not raster and kind != "service_account":
-        return ("GOOGLE (ArcGIS Pro opens GeoParquet online only with a service account key, "
-                "not a personal sign-in)"), None
-    # Pro reads backslashes in this option as escapes; Windows takes the path with forward slashes.
-    cred = cred.replace("\\", "/")
-    name = "google_ugs_" + hashlib.sha1(cred.encode()).hexdigest()[:6]
+    cred = _short_path(cred).replace("\\", "/")  # Pro reads backslashes here as escapes
+    if " " in cred:  # the options string splits on spaces
+        return f"GOOGLE (the sign-in file's path has a space: {cred})", None
+    # Esri's documented form, which opened GeoParquet in Pro: one string, True/False.
+    options = f"GOOGLE_APPLICATION_CREDENTIALS {cred}; GS_NO_SIGN_REQUEST False"
+    name = "google_ugs_" + hashlib.sha1(options.encode()).hexdigest()[:6]
 
     def path() -> str:
         acs = os.path.join(folder, name + ".acs")
         if not os.path.exists(acs):
             arcpy.management.CreateCloudStorageConnectionFile(
-                folder, name, "GOOGLE", cat.GCS_BUCKET,
-                config_options=[["GOOGLE_APPLICATION_CREDENTIALS", cred], ["GS_NO_SIGN_REQUEST", "NO"]])
-        return os.path.join(acs, *obj.split("/"))
+                folder, name, "GOOGLE", cat.GCS_BUCKET, config_options=options)
+        return f"{acs}/{obj}".replace("\\", "/")
     return "GOOGLE", path
 
 
@@ -142,7 +155,7 @@ def _ways_in(href: str, folder: str, raster: bool) -> tuple[list, list[str]]:
     reasons any way was ruled out. The bucket itself with a Google sign-in comes first, then a
     connection to the href's own host or provider."""
     tries, reasons = [], []
-    label, path = _google(folder, href, raster)
+    label, path = _google(folder, href)
     if path:
         tries.append((label, path))
     elif label != "GOOGLE":  # the UGS bucket, but no usable sign-in; elsewhere it doesn't apply
@@ -160,13 +173,24 @@ def _ways_in(href: str, folder: str, raster: bool) -> tuple[list, list[str]]:
     return tries, reasons
 
 
+def _add_parquet(m, path: str):
+    """A GeoParquet in cloud storage as a layer on `m`. Map.addDataFromPath fails on these
+    ("Possible credentials issue") where MakeFeatureLayer opens the same path."""
+    path = path.replace("\\", "/")
+    made = arcpy.management.MakeFeatureLayer(path, f"ugs_{uuid.uuid4().hex[:8]}").getOutput(0)
+    try:
+        return m.addLayer(made)[0]
+    finally:
+        arcpy.management.Delete(made)  # the map holds its own copy
+
+
 def _open_first(m, tries: list, reasons: list[str], cached: str, raster: bool, messages):
     """The first way in that gives a layer Pro can read (the last good way tried first), or None;
     every failure is added to `reasons`."""
     tries = sorted(tries, key=lambda t: t[0] != _cache.get(cached))
     for how, path in tries:
         try:
-            lyr = m.addDataFromPath(path())
+            lyr = m.addDataFromPath(path()) if raster else _add_parquet(m, path())
             if not (why := _unusable(m, lyr, raster=raster)):
                 _cache[cached] = how
                 messages.addMessage(f"  Opened online. ({how})")
@@ -517,7 +541,7 @@ class SignIn:
     def __init__(self):
         self.label = "Sign In to UGS Storage"
         self.description = ("Sign in with your Google account once, so Add Warehouse Layer can open "
-                            "map images online. Your account needs read access to UGS storage.")
+                            "layers online. Your account needs read access to UGS storage.")
 
     def getParameterInfo(self):
         return []
@@ -544,7 +568,7 @@ class SignIn:
                               capture_output=True, text=True, env=env)
         if done.returncode != 0 or cat.google_credentials() is None:
             raise arcpy.ExecuteError(f"Sign-in didn't finish. ({(done.stderr or '').strip()[-300:]})")
-        messages.addMessage("Signed in. Add Warehouse Layer will now open map images online.")
+        messages.addMessage("Signed in. Add Warehouse Layer will now open layers online.")
 
 
 class UpdateToolbox:

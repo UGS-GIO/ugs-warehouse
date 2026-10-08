@@ -10,8 +10,8 @@ A shell, no Pro window (any saved project; it is opened, never saved over):
 Pro's Python window, with this file next to UGSWarehouse.pyt:
     import sys; sys.path.insert(0, r"<this folder>"); import pro_check; pro_check.run()
   The window run leaves its check maps and layout in the open project; close it without saving.
-Add --big (or big=True) to also open the 1.9 GB wetlands outline online; it needs a sign-in Pro
-opens GeoParquet with (a service account key), so with a personal sign-in it reports a failure.
+Add --big (or big=True) to also open the 1.9 GB wetlands outline online; the first open takes a
+long time while Pro builds its local cache.
 
 Output goes to Documents\\UGS Warehouse check\\<timestamp>: report.json, a PNG per layer added, and,
 from a shell, check.aprx. The shell run exits 1 when any check failed; report.json says which.

@@ -19,10 +19,10 @@ Open **UGS Warehouse → Add Warehouse Layer**:
 - **Search** narrows it further: every word must appear in the layer's title, id or keywords.
 - **Layers**: pick one or more.
 - **Source**:
-  - **Open online** (Pro 3.5 or later): the layer reads the warehouse bucket through a cloud
-    storage connection the tool creates in the working folder. Map images (COGs) open online with
-    a Google sign-in; GeoParquet needs a service account key (see "How streaming works") and is
-    otherwise downloaded.
+  - **Open online** (Pro 3.5 or later): the layer reads the current file from the warehouse
+    bucket, with your Google sign-in, through a cloud storage connection the tool creates in the
+    working folder. Nothing is downloaded by hand. A very large layer (a GB or more) takes a long
+    time to open the first time while Pro builds its local cache.
   - **Copy to a file geodatabase**: any Pro version. Downloads the GeoParquet (checked against the
     catalog's size and checksum) and writes a feature class to `UGS Warehouse.gdb` in the working
     folder, for offline work or editing.
@@ -40,17 +40,17 @@ copy's feature class gets it when Pro keeps the layer's own metadata read-only).
 If opening online does not work on a machine, or Pro is older than 3.5, the tool copies the layer
 instead and says so in its messages, so a run always ends with the layer on the map.
 
-## Sign in (to open map images online)
+## Sign in (to open layers online)
 
-The data sits in a private Google Cloud Storage bucket. Opening a map image online reads the
-bucket with your own Google sign-in:
+The data sits in a private Google Cloud Storage bucket. Opening a layer online reads the bucket
+with your own Google sign-in:
 
 1. Install the [Google Cloud CLI](https://cloud.google.com/sdk/docs/install).
 2. Run **UGS Warehouse → Sign In to UGS Storage** and sign in with your utah.gov account.
 
 Your account needs read access to the bucket (ask the warehouse admins). Without a sign-in, or
-without access, a map image falls back to the CDN, and if nothing opens it the tool names each
-reason. GeoParquet is downloaded either way, as "How streaming works" explains.
+without access, a vector layer is downloaded instead and a map image falls back to the CDN; the
+messages say why.
 
 ## Update
 
@@ -69,11 +69,16 @@ from a web address, and Esri's generic HTTP provider (`WEB`) opens rasters only.
 opened online goes through a Google connection to the bucket itself; a raster can also use a
 `WEB` connection to the CDN.
 
-Pro's Parquet reader accepts fewer Google options than its raster reader: anonymous access
-(`GS_NO_SIGN_REQUEST`) or a service account key (`GOOGLE_APPLICATION_CREDENTIALS`). A personal
-`gcloud` sign-in opens rasters but not GeoParquet, so the toolbox downloads GeoParquet for it and
-says why. The sign-in file's path goes to Pro with forward slashes: Pro reads backslashes in that
-option as escapes.
+Two details make GeoParquet open. The layer is made with `MakeFeatureLayer` and then added to
+the map: `Map.addDataFromPath` fails on Parquet in cloud storage ("Possible credentials issue")
+for any connection, even an anonymous public bucket. And the connection's options are written
+the way Esri's docs write them, one string with True/False values
+(`GOOGLE_APPLICATION_CREDENTIALS <path>; GS_NO_SIGN_REQUEST False`); the sign-in file's path uses
+forward slashes, since Pro reads backslashes in it as escapes. With both, the `gcloud` sign-in
+file opens GeoParquet as well as rasters.
+
+Pro caches a Parquet layer locally and rebuilds the cache when the file changes, so a layer stays
+current; the first open of a very large file is slow while that cache is built.
 
 An S3 connection with the CDN as its endpoint does not work: Pro sends its requests to Amazon
 instead of the endpoint (or, as MinIO, puts the bucket name in the host name). An `s3://` or

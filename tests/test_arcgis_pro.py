@@ -213,7 +213,7 @@ class FakeArcpy(types.SimpleNamespace):
     """Records what the toolbox asks for. `refuse` names connection providers that fail."""
 
     def __init__(self, refuse=(), broken=()):
-        self.added, self.removed, self.connections, self.inserted = [], [], [], []
+        self.added, self.removed, self.connections, self.inserted, self.made = [], [], [], [], []
         self.refuse, self.broken = set(refuse), set(broken)
         self.fc = {}
         self.home = tempfile.mkdtemp()
@@ -242,7 +242,12 @@ class FakeArcpy(types.SimpleNamespace):
             def insertRow(self, row):
                 arcpy.inserted.append(row)
 
-        the_map = types.SimpleNamespace(addDataFromPath=add, removeLayer=self.removed.append)
+        def make_layer(path, name):  # MakeFeatureLayer: a layer not yet on any map
+            arcpy.made.append(path)
+            return types.SimpleNamespace(getOutput=lambda i: types.SimpleNamespace(path=path))
+
+        the_map = types.SimpleNamespace(addDataFromPath=add, removeLayer=self.removed.append,
+                                        addLayer=lambda made: [add(made.path)])
         super().__init__(
             Parameter=FakeParameter, ExecuteError=FakeExecuteError,
             GetInstallInfo=lambda: {"Version": "3.5.2"},
@@ -260,6 +265,7 @@ class FakeArcpy(types.SimpleNamespace):
                 JSONToFeatures=lambda src, fc, shape=None: arcpy.fc.update(json=(src, fc, shape))),
             management=types.SimpleNamespace(
                 CreateCloudStorageConnectionFile=connect, GetCount=lambda lyr: ["7"],
+                MakeFeatureLayer=make_layer,
                 GetRasterProperties=lambda lyr, prop: types.SimpleNamespace(getOutput=lambda i: "4"),
                 CreateFileGDB=lambda folder, name: None,
                 CreateFeatureclass=lambda gdb, name, shape, **kw: arcpy.fc.update(shape=shape, **kw),
@@ -342,16 +348,17 @@ def _signed_in(monkeypatch, mod, tmp_path, kind="service_account"):
     return str(path)
 
 
-def test_streams_with_a_service_account_and_styles_like_the_viewer(monkeypatch, tmp_path):
+def test_streams_with_a_google_sign_in_and_styles_like_the_viewer(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
-    cred = _signed_in(monkeypatch, mod, tmp_path)
+    cred = _signed_in(monkeypatch, mod, tmp_path, kind="authorized_user")
     log = _run(mod, tmp_path)
 
     (conn,) = arcpy.connections  # WEB is for rasters only; GeoParquet goes to the bucket itself
     assert conn == ("GOOGLE", "ut-dnr-ugs-maps-prod-public",
-                    {"config_options": [["GOOGLE_APPLICATION_CREDENTIALS", cred], ["GS_NO_SIGN_REQUEST", "NO"]]})
+                    {"config_options": f"GOOGLE_APPLICATION_CREDENTIALS {cred}; GS_NO_SIGN_REQUEST False"})
     (lyr,) = arcpy.added
+    assert arcpy.made == [lyr.path] and "\\" not in lyr.path  # MakeFeatureLayer, then addLayer
     assert lyr.path.startswith(str(tmp_path / "google_ugs_"))
     assert lyr.path.endswith(".acs/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.parquet")
     assert lyr.name == "Quaternary Faults" and "  Opened online. (GOOGLE)" in log
@@ -365,37 +372,31 @@ def test_streams_with_a_service_account_and_styles_like_the_viewer(monkeypatch, 
     assert got["other"] == ("other", None)  # a value the style does not name keeps Pro's default
 
 
-def test_a_personal_sign_in_downloads_geoparquet_and_says_why(monkeypatch, tmp_path):
-    arcpy = FakeArcpy()
-    mod = _load(monkeypatch, arcpy)
-    _signed_in(monkeypatch, mod, tmp_path, kind="authorized_user")
-    monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
-    monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
-    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages: f"{folder}/UGS Warehouse.gdb/{name}")
-    monkeypatch.setattr(mod.cat, "nested_columns", lambda path: [])
-    log = _run(mod, tmp_path)
-    assert arcpy.connections == []  # Pro's Parquet reader takes no personal sign-in, so none is tried
-    assert any(line.startswith("  Can't open it online") and "service account key" in line for line in log)
-    assert arcpy.added[-1].path == f"{tmp_path}/UGS Warehouse.gdb/hazards_qfaults"
-
-
 def test_the_sign_in_path_reaches_pro_with_forward_slashes(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
     monkeypatch.setattr(mod.cat, "google_credentials", lambda: r"C:\Users\npayne\AppData\Roaming\gcloud\adc.json")
     monkeypatch.setattr(mod.cat, "google_credential_type", lambda path: "authorized_user")
-    label, path = mod._google(str(tmp_path), "https://maps-assets.geology.utah.gov/geolmap/cogs/M-1.cog.tif", True)
-    assert label == "GOOGLE" and path().endswith(os.path.join(".acs", "geolmap", "cogs", "M-1.cog.tif"))
-    (_, _, kw), = arcpy.connections
-    assert kw["config_options"][0] == ["GOOGLE_APPLICATION_CREDENTIALS",
-                                       "C:/Users/npayne/AppData/Roaming/gcloud/adc.json"]
+    label, path = mod._google(str(tmp_path), "https://maps-assets.geology.utah.gov/geolmap/cogs/M-1.cog.tif")
+    assert label == "GOOGLE" and path().endswith(".acs/geolmap/cogs/M-1.cog.tif")
+    (_, _, kw), = arcpy.connections  # Esri's form: one string, True/False, forward slashes
+    assert kw["config_options"] == ("GOOGLE_APPLICATION_CREDENTIALS "
+                                    "C:/Users/npayne/AppData/Roaming/gcloud/adc.json; GS_NO_SIGN_REQUEST False")
+
+
+def test_a_sign_in_path_with_a_space_says_so(monkeypatch, tmp_path):
+    mod = _load(monkeypatch, FakeArcpy())
+    (tmp_path / "John Smith").mkdir()
+    _signed_in(monkeypatch, mod, tmp_path / "John Smith", kind="authorized_user")
+    label, path = mod._google(str(tmp_path), "https://maps-assets.geology.utah.gov/geolmap/cogs/M-1.cog.tif")
+    assert path is None and "has a space" in label
 
 
 def test_an_unreadable_sign_in_says_so(monkeypatch, tmp_path):
     mod = _load(monkeypatch, FakeArcpy())
     (tmp_path / "adc.json").write_text("not json")
     monkeypatch.setattr(mod.cat, "google_credentials", lambda: str(tmp_path / "adc.json"))
-    label, path = mod._google(str(tmp_path), "https://maps-assets.geology.utah.gov/geolmap/cogs/M-1.cog.tif", True)
+    label, path = mod._google(str(tmp_path), "https://maps-assets.geology.utah.gov/geolmap/cogs/M-1.cog.tif")
     assert path is None and "can't read the sign-in file" in label
 
 
@@ -968,8 +969,8 @@ def test_signed_in_opens_a_raster_from_the_bucket_first(monkeypatch, tmp_path):
                      types.SimpleNamespace(addMessage=log.append))
     provider, bucket, kw = arcpy.connections[0]
     assert (provider, bucket) == ("GOOGLE", "ut-dnr-ugs-maps-prod-public")
-    assert ["GOOGLE_APPLICATION_CREDENTIALS", cred] in kw["config_options"]
-    assert arcpy.added[0].path.endswith(".acs/geolmap/cogs/M-180.cog.tif")
+    assert kw["config_options"] == f"GOOGLE_APPLICATION_CREDENTIALS {cred}; GS_NO_SIGN_REQUEST False"
+    assert arcpy.added[0].path.endswith(".acs/geolmap/cogs/M-180.cog.tif") and arcpy.made == []
     assert log == ["  Opened online. (GOOGLE)"]
 
 

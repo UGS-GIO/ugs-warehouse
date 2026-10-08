@@ -111,7 +111,8 @@ def _copy_flat(src: str, path: str, rows_per_group: int) -> None:
     `geom` as the WKB it is rather than as a GEOMETRY value.
     """
     con = duckdb.connect()
-    con.execute(f"SET max_memory = '{os.environ.get('DUCKDB_MAX_MEMORY', '2GB')}'")  # the ingest cap
+    # The ingest's cap; with none set (a local run) it takes 2GB rather than the ingest's 128MB.
+    con.execute(f"SET max_memory = '{os.environ.get('DUCKDB_MAX_MEMORY', '2GB')}'")
     con.execute("SET enable_geoparquet_conversion = false")
     row = con.execute(f"SELECT decode(value) FROM parquet_kv_metadata('{src}') "
                       f"WHERE decode(key) = 'geo'").fetchone()

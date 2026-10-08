@@ -537,7 +537,7 @@ export const isParquetAsset = (a: Asset): boolean =>
 
 export const parquetAsset = (item: StacDoc): Asset | undefined =>
   (item.assets?.data && isParquetAsset(item.assets.data) ? item.assets.data : undefined)
-  ?? Object.values(item.assets ?? {}).find(isParquetAsset);
+  ?? shownAssets(item.assets).find(([, a]) => isParquetAsset(a))?.[1];
 
 // `data_flat` is `data` again without its nested bbox column, for readers that refuse one (ArcGIS
 // Pro). The viewer reads `data`, so listing both would show the same rows twice.

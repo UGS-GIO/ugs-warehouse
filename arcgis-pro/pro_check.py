@@ -38,10 +38,13 @@ import ugs_catalog as cat  # noqa: E402
 SMALL = "hazards_qfaults"  # 4.4 MB, one row group, 3D lines, a nested bbox column
 BIG = "wetlands_wetlandsoutline"  # 1.9 GB, 105 row groups
 # Layers the tool runs on: lines, polygons, points, a `date` column, a style with an `in` filter,
-# and one geologic map COG that `run` adds.
+# and the RASTERS below.
 PICKS = ("hazards_qfaults", "hazards_alluvialfan", "enmin_powerplants", "enmin_oilgasfields_ogm",
          "enmin_ccus_geochemistry")
 SLC = (-112.0, 40.6, -111.8, 40.8)  # a small Salt Lake City extent for the spatial-filter read
+# Most publication COGs are WebP-compressed inside the TIFF, which Esri doesn't document reading;
+# one of each kind shows whether Pro opens them.
+RASTERS = {"FSM-18": "WebP", "UU-MS-601": "DEFLATE"}
 GOOGLE = ("GOOGLE", {"config_options": [["GS_NO_SIGN_REQUEST", "YES"]]})
 
 
@@ -351,11 +354,12 @@ def run(aprx_path: str | None = None, big: bool = False, out: str | None = None)
     work = os.path.join(out, "work")
     os.makedirs(work, exist_ok=True)
     aprx = arcpy.mp.ArcGISProject(aprx_path or "CURRENT")
-    raster = next((x.id for x in cat.rasters() if x.href.startswith(f"https://{cat.CDN_HOST}/")), None)
-    picks = [*PICKS, *([raster] if raster else [])]
+    listed = {x.id for x in cat.rasters()}
+    picks = [*PICKS, *(r for r in RASTERS if r in listed)]
     maps = {"stream": aprx.createMap(f"UGS check stream {stamp}"),
             "copy": aprx.createMap(f"UGS check copy {stamp}")}
-    report: dict = {"started": stamp, "out": out, "picks": picks}
+    report: dict = {"started": stamp, "out": out, "picks": picks,
+                    "raster_compression": {r: c for r, c in RASTERS.items() if r in listed}}
 
     def step(name, fn):
         print(f"[pro_check] {name} ...")

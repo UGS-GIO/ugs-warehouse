@@ -574,6 +574,16 @@ def test_reports_stale_files_and_remembers_the_branch(monkeypatch, tmp_path):
     assert cat.stale_files(str(tmp_path), "feat/x") == []
 
 
+def test_a_crlf_checkout_of_the_same_files_is_not_stale(monkeypatch, tmp_path):
+    files = {"UGSWarehouse.pyt": b"a = 1\nb = 2\n", "ugs_catalog.py": b"c = 3\n"}
+    for name, body in files.items():
+        (tmp_path / name).write_bytes(body.replace(b"\n", b"\r\n"))
+    monkeypatch.setattr(cat, "_fetch_toolbox", lambda branch, timeout=60: files)
+    assert cat.stale_files(str(tmp_path), "main") == []
+    (tmp_path / "ugs_catalog.py").write_bytes(b"c = 4\r\n")
+    assert cat.stale_files(str(tmp_path), "main") == ["ugs_catalog.py"]
+
+
 def test_the_dialog_warns_when_out_of_date(monkeypatch):
     mod = _load(monkeypatch, FakeArcpy())
     monkeypatch.setattr(mod.cat, "stale_files", lambda folder, branch, timeout=5: ["ugs_catalog.py"])

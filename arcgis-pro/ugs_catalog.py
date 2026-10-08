@@ -468,7 +468,10 @@ def stale_files(folder: str, branch: str, timeout: float = 2) -> list[str] | Non
         fresh = _fetch_toolbox(branch, timeout)
     except Exception:  # noqa: BLE001 - offline, bad branch: no verdict rather than a false alarm
         return None
-    return [n for n, body in fresh.items() if _local(folder, n) != body]
+    def same(local: bytes | None, body: bytes) -> bool:  # a Git for Windows checkout has CRLF
+        return local is not None and local.replace(b"\r\n", b"\n") == body.replace(b"\r\n", b"\n")
+
+    return [n for n, body in fresh.items() if not same(_local(folder, n), body)]
 
 
 def update_toolbox(folder: str, branch: str = "main") -> list[str]:

@@ -140,9 +140,8 @@ def _unusable(m, lyr, raster: bool = False) -> str | None:
         elif raster:
             bands = int(arcpy.management.GetRasterProperties(lyr, "BANDCOUNT").getOutput(0))
             why = None if bands > 0 else "no bands"
-        else:
-            int(arcpy.management.GetCount(lyr)[0])
-            why = None
+        else:  # Describe reads the file's metadata; a row count makes Pro cache the whole file
+            why = None if arcpy.Describe(lyr).dataType else "no data type"
     except Exception as e:  # noqa: BLE001 - the reason goes back to the caller's messages
         why = str(e) or type(e).__name__
     if why:

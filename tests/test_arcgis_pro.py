@@ -253,6 +253,7 @@ class FakeArcpy(types.SimpleNamespace):
             GetInstallInfo=lambda: {"Version": "3.5.2"},
             ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
             Exists=lambda p: False, SpatialReference=lambda code=None: f"SR{code}",
+            Describe=lambda x: types.SimpleNamespace(dataType="FeatureLayer"),
             ValidateTableName=lambda name, ws: name.replace("-", "_"),
             ValidateFieldName=lambda name, ws: (name + "_" if name.lower() in ("date", "select")
                                                 else "x" * 64 if name.startswith("long") else name),
@@ -382,6 +383,20 @@ def test_the_sign_in_path_reaches_pro_with_forward_slashes(monkeypatch, tmp_path
     (_, _, kw), = arcpy.connections  # Esri's form: one string, True/False, forward slashes
     assert kw["config_options"] == ("GOOGLE_APPLICATION_CREDENTIALS "
                                     "C:/Users/npayne/AppData/Roaming/gcloud/adc.json; GS_NO_SIGN_REQUEST False")
+
+
+def test_checking_a_streamed_layer_never_counts_its_rows(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+
+    def count(lyr):
+        raise AssertionError("GetCount makes Pro cache the whole file")
+
+    arcpy.management.GetCount = count
+    lyr = FakeLayer("x.acs/warehouse/geoparquet/big/big.parquet", [])
+    assert mod._unusable(arcpy.mp.ArcGISProject("CURRENT").activeMap, lyr) is None
+    lyr.isBroken = True
+    assert mod._unusable(arcpy.mp.ArcGISProject("CURRENT").activeMap, lyr) == "the layer is broken"
 
 
 def test_a_sign_in_path_with_a_space_says_so(monkeypatch, tmp_path):

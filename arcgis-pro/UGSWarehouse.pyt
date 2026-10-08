@@ -270,21 +270,36 @@ def _apply_style(lyr, item: dict, messages) -> None:
     lyr.symbology = sym
 
 
+def _collection(url: str, messages) -> dict | None:
+    """A theme's collection.json (its license and providers), read once per session."""
+    seen = _cache.setdefault("collections", {})
+    if url not in seen:
+        try:
+            seen[url] = cat.get_json(url)
+        except (OSError, ValueError) as e:
+            messages.addWarningMessage(f"  Couldn't read the theme's license and credits. ({e})")
+            seen[url] = None
+    return seen[url]
+
+
 def _add_layer(m, layer: cat.Layer, source: str, work: str, style: bool, messages) -> None:
     """Put one picked layer on `m`, with its metadata and, for a vector, the UGS colors."""
     if layer.is_raster:  # a COG, read range by range from the CDN
         lyr = _open_raster(m, layer.href, work, messages)
-        fields = cat.metadata(dict(layer.properties), source=layer.href)
+        props = dict(layer.properties)
+        if layer.self_href:
+            try:
+                props = cat.get_json(layer.self_href).get("properties") or props
+            except (OSError, ValueError) as e:
+                messages.addWarningMessage(f"  Couldn't read the map's full description. ({e})")
+        fields = cat.metadata(props, source=layer.self_href or layer.href)
     else:
         item = cat.get_json(layer.item_url)
         asset = item["assets"]["data"]
         lyr = _stream(m, asset, work, messages) if source == STREAM else None
         if lyr is None:
             lyr = _copy(m, asset, work, layer.id, messages)
-        try:
-            collection = cat.get_json(layer.collection_url)
-        except OSError:
-            collection = None
+        collection = _collection(layer.collection_url, messages)
         fields = cat.metadata(item.get("properties") or {}, collection, layer.item_url)
     lyr.name = layer.title
     try:

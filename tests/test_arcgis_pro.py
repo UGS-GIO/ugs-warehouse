@@ -629,6 +629,39 @@ def test_cdn_parts_splits_any_cdn_href_at_its_first_segment():
     assert cat.cdn_parts("https://maps-assets.geology.utah.gov/x.tif") is None
 
 
+def test_a_raster_takes_its_description_from_the_full_item(monkeypatch, tmp_path):
+    entry = dict(ROOT["items"][0], links=[{"rel": "self", "href": "./ugs-publications/M/M-180/M-180.json"}])
+    entry["properties"] = {k: v for k, v in entry["properties"].items() if k != "description"}
+    scans = cat.rasters({"items": [entry]})  # before _load stubs rasters()
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    assert scans[0].self_href.endswith("/warehouse/stac/ugs-publications/M/M-180/M-180.json")
+    monkeypatch.setattr(mod.cat, "rasters", lambda index=None: scans)
+    full = {"properties": {**entry["properties"], "description": "The full map text. More."}}
+    monkeypatch.setattr(mod.cat, "get_json", lambda url: full)
+    tool = mod.AddLayer()
+    params = tool.getParameterInfo()
+    params[2].values = ["Geologic map of the Salt Lake City quadrangle [M-180]"]
+    params[4].value = str(tmp_path)
+    tool.execute(params, types.SimpleNamespace(addMessage=lambda m: None, addWarningMessage=lambda m: None))
+    assert arcpy.added[0].metadata.summary == "The full map text."
+
+
+def test_a_theme_collection_is_read_once_per_session(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    urls = []
+
+    def get_json(url):
+        urls.append(url)
+        return PER_LAYER if url == "style" else STYLED_ITEM
+
+    monkeypatch.setattr(mod.cat, "get_json", get_json)
+    _run(mod, tmp_path)
+    _run(mod, tmp_path)
+    assert sum(u.endswith("/hazards/collection.json") for u in urls) == 1
+
+
 def test_downloads_default_to_the_project_folder(monkeypatch):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)

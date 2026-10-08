@@ -12,6 +12,7 @@ import json
 import os
 import re
 import urllib.error
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
@@ -41,6 +42,7 @@ class Layer:
     keywords: tuple[str, ...] = ()
     href: str = ""  # a raster's COG; a vector layer's data comes from its item
     properties: tuple = ()  # a raster's index properties, as items(), for its metadata
+    self_href: str = ""  # a raster's full item; the index leaves out its description
 
     @property
     def is_raster(self) -> bool:
@@ -114,8 +116,10 @@ def rasters(index: dict | None = None) -> list[Layer]:
             continue
         p = i.get("properties") or {}
         words = (p.get("ugs:series_id"), p.get("ugs:author"), p.get("ugs:scale"), *(p.get("keywords") or ()))
+        self_href = next((urllib.parse.urljoin(f"{STAC}/", lk["href"]) for lk in i.get("links") or []
+                          if lk.get("rel") == "self" and lk.get("href")), "")
         out.append(Layer(i["id"], p.get("title") or i["id"], RASTER_THEME,
-                         tuple(w for w in words if w), cog["href"], tuple(p.items())))
+                         tuple(w for w in words if w), cog["href"], tuple(p.items()), self_href))
     return sorted(out, key=lambda x: x.title.lower())
 
 

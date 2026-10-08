@@ -2,7 +2,8 @@
 
 Answers what the fake-arcpy tests cannot: which cloud storage connections reach the CDN, which
 GeoParquet shapes Pro opens (the published file with its nested `bbox`, a flat copy, a native
-GEOMETRY copy), and what Add Warehouse Layer actually puts on a map from each source.
+GEOMETRY copy), what Add Warehouse Layer actually puts on a map from each source, and whether a
+geodatabase copy keeps a non-WGS84 layer in its own CRS.
 
 A shell, no Pro window (any saved project; it is opened, never saved over):
     "C:\\Program Files\\ArcGIS\\Pro\\bin\\Python\\scripts\\propy.bat" pro_check.py --aprx <project.aprx>
@@ -217,6 +218,26 @@ def check_big(work: str, provider: str) -> dict:
     return out
 
 
+def check_copy_crs(work: str) -> dict:
+    """Copy a publication's unit polygons to the geodatabase and confirm the feature class lands
+    in the CRS its GeoParquet names rather than WGS84."""
+    import pyarrow.parquet as pq
+
+    root = cat.get_json(f"{cat.STAC}/items.json")
+    entry = next((i for i in root.get("items") or [] if (i.get("assets") or {}).get("units")), None)
+    if entry is None:
+        return {"ok": False, "error": "no item in the root index has a units asset"}
+    asset = entry["assets"]["units"]
+    path = cat.download(asset, work, f"{cat.safe_filename(entry['id'])}.units.parquet")
+    geo = json.loads(pq.read_schema(path).metadata[b"geo"])
+    expected, problem = cat.crs_code(geo, geo.get("primary_column", "geom"))
+    msgs = Messages()
+    fc = _load_toolbox()._to_fgdb(cat.pro_ready(path), work, f"{entry['id']}_units", msgs)
+    got = arcpy.Describe(fc).spatialReference.factoryCode
+    return {"ok": got == expected, "item": entry["id"], "expected": expected, "got": got,
+            "problem": problem, "rows": int(arcpy.management.GetCount(fc)[0]), "messages": msgs.lines}
+
+
 def _symbology(lyr) -> dict:
     try:
         if lyr.isRasterLayer:
@@ -350,6 +371,7 @@ def run(aprx_path: str | None = None, big: bool = False, out: str | None = None)
     step("shapes", lambda: check_shapes(work))
     step("tool_stream", lambda: run_tool(maps["stream"], "stream", os.path.join(work, "stream"), picks))
     step("tool_copy", lambda: run_tool(maps["copy"], "copy", os.path.join(work, "copy"), picks))
+    step("copy_crs", lambda: check_copy_crs(os.path.join(work, "crs")))
     if big:
         good = [p for p, r in (report.get("connections") or {}).items() if isinstance(r, dict) and r.get("ok")]
         step("big", (lambda: check_big(work, good[0])) if good

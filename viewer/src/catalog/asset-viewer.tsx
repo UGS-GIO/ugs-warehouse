@@ -9,7 +9,7 @@ import { DataExplorer } from "@/data/data-explorer";
 import { FeatureCard } from "@/map/feature-card";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
 import { type Asset, type AssetKind, assetKind, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
-  summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
+  shownAssets, summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
 import { C, toggle } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
 
@@ -23,7 +23,7 @@ const ZarrMap = lazy(() => import("@/zarr/zarr-map").then((m) => ({ default: m.Z
 export function AssetChips({ assets }: { assets: Record<string, Asset> }) {
   return (
     <>
-      {Object.entries(assets).map(([k, a]) => (
+      {shownAssets(assets).map(([k, a]) => (
         <a key={k} className={C.chip} href={a.href} target="_blank" rel="noopener"
           onClick={(e) => e.stopPropagation()}>{a.title ?? k}</a>
       ))}
@@ -188,7 +188,7 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
 // get a tab + inline pane; the rest are listed as download links. The default tab is the
 // highest-priority file (map > pdf > data > image > text).
 function AssetViewer({ item }: { item: StacDoc }) {
-  const entries = useMemo(() => Object.entries(item.assets ?? {})
+  const entries = useMemo(() => shownAssets(item.assets)
     // thumbnails are redundant with the real image/cog; skip as their own tab
     .filter(([, a]) => !a.roles?.includes("thumbnail"))
     .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))

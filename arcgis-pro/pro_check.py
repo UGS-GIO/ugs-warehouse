@@ -111,9 +111,11 @@ def _env() -> dict:
     return out
 
 
-def _asset(layer_id: str) -> dict:
+def _asset(layer_id: str, flat: bool = False) -> dict:
+    """The layer's GeoParquet asset: the archive, or with `flat` the copy the toolbox streams."""
     layer = next(x for x in cat.layers() if x.id == layer_id)
-    return cat.get_json(layer.item_url)["assets"]["data"]
+    assets = cat.get_json(layer.item_url)["assets"]
+    return (assets.get("data_flat") if flat else None) or assets["data"]
 
 
 def _key(asset: dict) -> list[str]:
@@ -146,7 +148,7 @@ def _acs(work: str, provider: str, options: dict) -> str:
 
 def check_connections(work: str) -> dict:
     """Each connection type against the small file: does Pro open GeoParquet through it?"""
-    key = _key(_asset(SMALL))
+    key = _key(_asset(SMALL, flat=True))
     out = {}
     for provider, options in _connections():
         try:
@@ -188,7 +190,7 @@ def check_shapes(work: str) -> dict:
 
 def check_big(work: str, provider: str) -> dict:
     """Open the 1.9 GB file through a connection that worked, then read one small extent."""
-    asset = _asset(BIG)
+    asset = _asset(BIG, flat=True)
     path = os.path.join(_acs(work, provider, dict(_connections())[provider]), *_key(asset))
     out = {"provider": provider, "file_bytes": asset.get("file:size")}
     before = _io()

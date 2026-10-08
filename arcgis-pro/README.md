@@ -73,6 +73,11 @@ header at the CDN would fix it for every client. With that setting, pyarrow's S3
 warehouse GeoParquet from the CDN and reads only what it needs (the 1.9 GB wetlands footer in under
 2 s). Listing a folder is the one S3 call the CDN can't answer.
 
+Pro refuses a Parquet with a nested column, and the warehouse archive carries GeoParquet 1.1's
+`bbox` struct. So each serving topic also publishes `{stem}.flat.parquet` (asset `data_flat`): the
+same rows as GeoParquet 1.0, the struct dropped and the flat `bbox_*` columns kept. A stream opens
+that file; a topic without one yet streams the archive.
+
 ## What it reads from the catalog
 
 A catalog change to any of these can break the toolbox; check here first.
@@ -81,7 +86,7 @@ A catalog change to any of these can break the toolbox; check here first.
 |---|---|
 | `warehouse/stac/ugs-serving-topics/items.json` | `items[].id`; `properties.title`, `ugs:dbt_schema`, `keywords` |
 | `warehouse/stac/items.json` (root) | `items[].id`; `assets.cog.href` on the CDN; `properties.title`, `ugs:series_id`, `ugs:author`, `ugs:scale`, `keywords` |
-| Item `ugs-serving-topics/<schema>/<id>/<id>.json` | `assets.data.href`, `file:size`, `file:checksum`; `properties.title`, `description`, `keywords`, `ugs:point_of_contact`, `ugs:renders.default.style_url` and `.legend` |
+| Item `ugs-serving-topics/<schema>/<id>/<id>.json` | `assets.data.href`, `file:size`, `file:checksum`; `assets.data_flat.href` (streamed when present); `properties.title`, `description`, `keywords`, `ugs:point_of_contact`, `ugs:renders.default.style_url` and `.legend` |
 | `ugs-serving-topics/<schema>/collection.json` | `license`, the `rel: license` link, `providers[].name` |
 | The GeoParquet | the `geo` metadata's `primary_column` and `geometry_types`; WKB geometry |
 | The MapLibre style | `fill`/`line`/`circle` layers: `filter`, and `fill-color`/`line-color`/`circle-color` |

@@ -361,6 +361,16 @@ def test_the_cdn_connection_reads_anonymously_path_style(monkeypatch, tmp_path):
     assert ["AWS_VIRTUAL_HOSTING", "FALSE"] in kw["config_options"]
 
 
+def test_streams_the_flat_copy_when_the_item_has_one(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    flat = "https://maps-assets.geology.utah.gov/warehouse/geoparquet/hazards_qfaults/hazards_qfaults.flat.parquet"
+    item = {**STYLED_ITEM, "assets": {**STYLED_ITEM["assets"], "data_flat": {"href": flat}}}
+    monkeypatch.setattr(mod.cat, "get_json", lambda url: PER_LAYER if url == "style" else item)
+    _run(mod, tmp_path)
+    assert arcpy.added[0].path.endswith("geoparquet/hazards_qfaults/hazards_qfaults.flat.parquet")
+
+
 def test_copies_to_a_geodatabase_when_pro_cannot_open_the_stream(monkeypatch, tmp_path):
     arcpy = FakeArcpy(refuse={"WEB"}, broken={"AMAZON"})
     mod = _load(monkeypatch, arcpy)

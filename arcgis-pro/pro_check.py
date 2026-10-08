@@ -42,7 +42,6 @@ PICKS = ("hazards_qfaults", "hazards_alluvialfan", "enmin_powerplants", "enmin_o
          "enmin_ccus_geochemistry")
 SLC = (-112.0, 40.6, -111.8, 40.8)  # a small Salt Lake City extent for the spatial-filter read
 GOOGLE = ("GOOGLE", {"config_options": [["GS_NO_SIGN_REQUEST", "YES"]]})
-STREAM, COPY = "Stream GeoParquet from the CDN", "Copy to a file geodatabase"
 
 
 class Messages:
@@ -231,9 +230,11 @@ def _symbology(lyr) -> dict:
         return {"error": _err()}
 
 
-def run_tool(m, source: str, work: str, picks: list[str]) -> dict:
-    """Run Add Warehouse Layer as Pro would, onto its own map `m`, and record what landed there."""
+def run_tool(m, mode: str, work: str, picks: list[str]) -> dict:
+    """Run Add Warehouse Layer as Pro would, onto its own map `m`, and record what landed there.
+    `mode` is "stream" or "copy"; the option's label comes from the toolbox, so a rename holds."""
     tbx = _load_toolbox()
+    source = {"stream": tbx.STREAM, "copy": tbx.COPY}[mode]
     tool = tbx.AddLayer()
     params = tool.getParameterInfo()
     by_id = {x.id: x for x in tbx._layers()}
@@ -343,8 +344,8 @@ def run(aprx_path: str | None = None, big: bool = False, out: str | None = None)
     step("env", _env)
     step("connections", lambda: check_connections(work))
     step("shapes", lambda: check_shapes(work))
-    step("tool_stream", lambda: run_tool(maps["stream"], STREAM, os.path.join(work, "stream"), picks))
-    step("tool_copy", lambda: run_tool(maps["copy"], COPY, os.path.join(work, "copy"), picks))
+    step("tool_stream", lambda: run_tool(maps["stream"], "stream", os.path.join(work, "stream"), picks))
+    step("tool_copy", lambda: run_tool(maps["copy"], "copy", os.path.join(work, "copy"), picks))
     if big:
         good = [p for p, r in (report.get("connections") or {}).items() if isinstance(r, dict) and r.get("ok")]
         step("big", (lambda: check_big(work, good[0])) if good

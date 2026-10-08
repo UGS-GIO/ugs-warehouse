@@ -628,3 +628,20 @@ def test_a_missing_version_is_reported_as_not_found(monkeypatch, tmp_path):
     monkeypatch.setattr(cat.urllib.request, "urlopen", urlopen)
     with pytest.raises(cat.VersionNotFound):
         cat.update_toolbox(str(tmp_path), "main")
+
+
+def test_clearing_search_widens_the_list_again_and_no_match_says_so(monkeypatch):
+    mod = _load(monkeypatch, FakeArcpy())
+    tool = mod.AddLayer()
+    params = tool.getParameterInfo()
+    params[1].value, params[1].altered = "power", True
+    tool.updateParameters(params)
+    assert params[2].filter.list == ["Power Plants [enmin_powerplants]"]
+    params[1].value, params[1].altered = None, False  # Pro: a cleared box is back at its default
+    tool.updateParameters(params)
+    assert len(params[2].filter.list) == 3
+
+    params[1].value = "nothing like this"
+    tool.updateParameters(params)
+    tool.updateMessages(params)
+    assert params[2].filter.list == [] and "No layers match" in params[1].warning

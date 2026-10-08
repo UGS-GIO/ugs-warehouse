@@ -326,18 +326,21 @@ class AddLayer:
         return [theme, search, picks, source, folder, style]
 
     def updateParameters(self, parameters):
+        # Every time, not only when altered: a cleared Search box reads as unaltered, and the list
+        # must widen again. Pro calls this when a box loses focus (Enter or Tab), not per keystroke.
         theme, search, picks = parameters[:3]
-        if theme.altered or search.altered:
-            want, query = theme.valueAsText, search.valueAsText
-            chosen = set(picks.values or [])  # keep what is already picked while the list narrows
-            picks.filter.list = [lyr.choice for lyr in _layers()
-                                 if (want in (None, ALL, cat.theme_name(lyr.theme))
-                                     and lyr.matches(query))
-                                 or lyr.choice in chosen]
+        want, query = theme.valueAsText, search.valueAsText
+        chosen = set(picks.values or [])  # keep what is already picked while the list narrows
+        picks.filter.list = [lyr.choice for lyr in _layers()
+                             if (want in (None, ALL, cat.theme_name(lyr.theme)) and lyr.matches(query))
+                             or lyr.choice in chosen]
 
     def updateMessages(self, parameters):
         if notice := _update_notice():
             parameters[0].setWarningMessage(notice)
+        search, picks = parameters[1], parameters[2]
+        if search.valueAsText and not picks.filter.list and "error" not in _cache:
+            search.setWarningMessage(f"No layers match '{search.valueAsText}'.")
         if "error" in _cache:
             parameters[2].setErrorMessage(_cache["error"])
         elif "warning" in _cache:  # some layers listed; the rest could not be read

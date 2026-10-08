@@ -214,8 +214,9 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
     (binary, nested) are left out and named in a warning."""
     import pyarrow.parquet as pq
 
-    table = pq.read_table(parquet)
-    geo = json.loads((table.schema.metadata or {}).get(b"geo", b"{}"))
+    src = pq.ParquetFile(parquet)  # read a batch at a time: a layer can be several GB
+    schema = src.schema_arrow
+    geo = json.loads((schema.metadata or {}).get(b"geo", b"{}"))
     gcol = geo.get("primary_column", "geom") if geo else None  # no geo metadata: a plain table
     types = [t.replace(" Z", "") for t in geo.get("columns", {}).get(gcol, {}).get("geometry_types", [])]
     shape = "MULTIPOINT" if "MultiPoint" in types else _GEOMETRY.get(types[0] if types else "", "POLYGON")
@@ -239,10 +240,11 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
     else:
         arcpy.management.CreateTable(gdb, os.path.basename(fc))
     fields, dropped, taken = [], [], set(cat._RESERVED)  # expects pro_ready's renamed columns
-    for f in table.schema:
+    longest = cat.text_lengths(parquet)
+    for f in schema:
         if f.name == gcol:
             continue
-        spec = cat.esri_field(f.type, table.column(f.name), _pro_version())
+        spec = cat.esri_field(f.type, longest.get(f.name, 1), _pro_version())
         if spec is None:
             dropped.append(f.name)
             continue
@@ -260,7 +262,7 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
     names = [n for n, _, _ in fields]
     out = [v for _, v, _ in fields]
     with arcpy.da.InsertCursor(fc, ["SHAPE@", *out] if gcol else out) as cur:
-        for batch in table.to_batches():
+        for batch in src.iter_batches(batch_size=20_000, columns=[gcol, *names] if gcol else names):
             cols = [batch.column(n).to_pylist() for n in names]
             if not gcol:
                 for row in zip(*cols):

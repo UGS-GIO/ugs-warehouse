@@ -427,7 +427,8 @@ def pro_ready(path: str) -> str:
     """A copy of a GeoParquet that Pro opens: no nested columns, Esri-valid names. Returns its path.
 
     Pro rejects nested columns, and GeoParquet 1.1's `bbox` covering is a struct; the flat
-    `bbox_*` columns carry the same extent. The copy is reused while it is newer than the source.
+    `bbox_*` columns carry the same extent. Written a row group at a time, so a multi-GB file
+    never sits in memory whole. The copy is reused while it is newer than the source.
     """
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -435,15 +436,14 @@ def pro_ready(path: str) -> str:
     out = path.removesuffix(".parquet") + ".pro.parquet"
     if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(path):
         return out
-    table = pq.read_table(path)
-    nested = [f.name for f in table.schema if pa.types.is_nested(f.type)]
-    table = table.drop_columns(nested)
-    meta = dict(table.schema.metadata or {})
+    src = pq.ParquetFile(path)
+    keep = [f.name for f in src.schema_arrow if not pa.types.is_nested(f.type)]
+    meta = dict(src.schema_arrow.metadata or {})
     geo = json.loads(meta.get(b"geo", b"{}"))
     primary = geo.get("primary_column", "geom")
     taken = set(_RESERVED)
-    names = [esri_name(n, taken) for n in table.column_names]
-    renamed = dict(zip(table.column_names, names))
+    names = [esri_name(n, taken) for n in keep]
+    renamed = dict(zip(keep, names))
     cols = {}
     for name, spec in (geo.get("columns") or {}).items():
         spec.pop("covering", None)
@@ -451,23 +451,41 @@ def pro_ready(path: str) -> str:
     if geo:
         geo["columns"], geo["primary_column"] = cols, renamed.get(primary, primary)
         meta[b"geo"] = json.dumps(geo).encode()
-    table = table.rename_columns(names).replace_schema_metadata(meta)
-    pq.write_table(table, out + ".part", compression="zstd")
+    schema = pa.schema([src.schema_arrow.field(n).with_name(renamed[n]) for n in keep], metadata=meta)
+    with pq.ParquetWriter(out + ".part", schema, compression="zstd") as writer:
+        for batch in src.iter_batches(columns=keep):
+            writer.write_batch(pa.RecordBatch.from_arrays(batch.columns, schema=schema))
     os.replace(out + ".part", out)
     return out
 
 
-def esri_field(arrow_type, column, pro: tuple[int, ...]) -> tuple[str, int | None] | None:
-    """(Esri field type, text length) for an Arrow column, or None to leave it out."""
+def text_lengths(path: str) -> dict[str, int]:
+    """The longest value, in characters, of each text column of a Parquet: one pass over just those
+    columns, a batch at a time."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+    import pyarrow.parquet as pq
+
+    src = pq.ParquetFile(path)
+    text = [f.name for f in src.schema_arrow if pa.types.is_string(f.type) or pa.types.is_large_string(f.type)]
+    longest = dict.fromkeys(text, 1)
+    if text:
+        for batch in src.iter_batches(columns=text):
+            for name in text:
+                n = pc.max(pc.utf8_length(batch.column(name))).as_py()
+                longest[name] = max(longest[name], n or 1)
+    return longest
+
+
+def esri_field(arrow_type, longest_text: int, pro: tuple[int, ...]) -> tuple[str, int | None] | None:
+    """(Esri field type, text length) for an Arrow column, or None to leave it out. `longest_text`
+    is the column's longest value when it is text."""
     import pyarrow as pa
 
     modern = pro >= (3, 2)  # BIGINTEGER and DATEONLY arrived in Pro 3.2
     t = arrow_type
     if pa.types.is_string(t) or pa.types.is_large_string(t):
-        import pyarrow.compute as pc
-
-        longest = pc.max(pc.utf8_length(column)).as_py() or 1
-        return "TEXT", max(longest, 1)
+        return "TEXT", max(longest_text, 1)
     if pa.types.is_boolean(t) or t in (pa.int8(), pa.int16(), pa.uint8()):
         return "SHORT", None
     if t in (pa.int32(), pa.uint16()):

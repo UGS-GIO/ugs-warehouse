@@ -571,6 +571,19 @@ def test_an_unsupported_asset_fails_before_any_download(monkeypatch, tmp_path):
                   str(tmp_path), "a", types.SimpleNamespace(addMessage=print))
 
 
+def test_text_lengths_and_pro_ready_read_every_row_group(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    names = ["a"] * 999 + ["a much longer unit name"]  # the longest value is in the last group
+    src = tmp_path / "groups.parquet"
+    pq.write_table(pa.table({"name": names, "bbox": [{"xmin": 0.0}] * 1000}), src, row_group_size=100)
+    assert pq.ParquetFile(src).num_row_groups == 10
+    assert cat.text_lengths(str(src)) == {"name": 23}
+    out = pq.read_table(cat.pro_ready(str(src)))
+    assert out.num_rows == 1000 and out.column_names == ["name"]
+
+
 def test_pro_ready_drops_nested_columns_and_fixes_names(tmp_path):
     import json
 

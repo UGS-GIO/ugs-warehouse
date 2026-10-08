@@ -28,8 +28,11 @@ Open **UGS Warehouse → Add Warehouse Layer**:
 - **Style like the web viewer**: categories, colors and legend labels from the layer's style. A
   layer with no style, or a style with no simple equivalent, keeps Pro's default symbol.
 
-A raster (a COG) opens through the same CDN connections as the GeoParquet, with `geolmap` as the
-bucket, and its https URL as the last try; Pro reads only the part in view. Every layer gets the
+A raster (a COG) opens through the same kind of connection as the GeoParquet, and its https URL
+is the last try; Pro reads only the part in view. A copy writes each layer in the CRS its
+GeoParquet metadata names (WGS84 when it names none; a CRS with no EPSG code gets an unknown one
+and a warning), a Parquet with no geometry as a table, and a GeoJSON through Esri's JSONToFeatures,
+one geometry type per layer. Every layer gets the
 catalog's title, summary, description, tags, credits and license in its metadata (a geodatabase
 copy's feature class gets it when Pro keeps the layer's own metadata read-only).
 
@@ -65,6 +68,10 @@ from a web address; Esri's generic HTTP provider (`WEB`) opens rasters only. The
 order: the bucket itself with the user's Google sign-in, then an anonymous S3 connection with the
 CDN as its endpoint. "S3" here is only the request format: an unsigned, path-style S3 read is a
 plain https GET, which the CDN answers, range requests included. Nothing goes to Amazon.
+
+The same works for any asset's host: an https href is read path-style with its host as the
+endpoint and its first path segment as the bucket, and each host and bucket gets its own `.acs`.
+An `s3://` or `gs://` href opens anonymously on that provider's own endpoint.
 
 One catch: Google storage sends `x-amz-checksum-crc32c` with the whole object's checksum even on a
 range read, so an S3 client that checks it rejects every partial read. The toolbox sets

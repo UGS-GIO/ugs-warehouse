@@ -77,16 +77,35 @@ def href_parts(href: str) -> tuple[str, str, str, str] | None:
     `s3://b/k` and `gs://b/k` name their bucket. An https href is read path-style: its first path
     segment is the "bucket" and its host the endpoint (`https://maps-assets.../geolmap/cogs/M-1.tif`
     -> host `maps-assets...`, bucket `geolmap`), which any static host answers with plain GETs.
+    The key is percent-decoded, since a connection path names the object itself.
     """
-    scheme, sep, rest = href.partition("://")
-    if not sep or scheme not in ("https", "s3", "gs"):
+    url = urllib.parse.urlsplit(href)
+    if url.scheme not in ("https", "s3", "gs"):
         return None
-    if scheme == "https":
-        host, _, rest = rest.partition("/")
+    if url.scheme == "https":
+        if not url.hostname or url.username:  # no host, or credentials that must not reach an .acs
+            return None
+        host, path = url.hostname + (f":{url.port}" if url.port else ""), url.path.lstrip("/")
     else:
-        host = ""
-    bucket, _, key = rest.split("?", 1)[0].partition("/")
-    return (scheme, host, bucket, key) if bucket and key else None
+        host, path = "", f"{url.netloc}{url.path}"
+    bucket, _, key = path.partition("/")
+    key = urllib.parse.unquote(key)
+    return (url.scheme, host, bucket, key) if bucket and key else None
+
+
+def connection_name(provider: str, host: str, bucket: str) -> str:
+    """A readable, collision-free `.acs` name: `a.b` and `a-b` slug alike, so a short hash of the
+    exact provider, host and bucket keeps them apart."""
+    import hashlib
+
+    slug = re.sub(r"[^a-z0-9_]", "_", f"{provider}_{host or 'native'}_{bucket}".lower())[:60]
+    tag = hashlib.sha1(f"{provider}|{host}|{bucket}".encode()).hexdigest()[:6]
+    return f"{slug}_{tag}"
+
+
+def safe_filename(name: str) -> str:
+    """`name` as one file name: an item id can hold `/` or other characters a path can't."""
+    return re.sub(r"[^\w.-]", "_", name).strip(".") or "layer"
 
 
 GCS_BUCKET = "ut-dnr-ugs-maps-prod-public"
@@ -359,19 +378,41 @@ def crs_code(geo: dict, column: str) -> tuple[int | None, str | None]:
     crs = spec["crs"]
     if crs is None:
         return None, "the file says its CRS is undefined"
-    ident = (crs.get("id") or {}) if isinstance(crs, dict) else {}
-    authority, code = str(ident.get("authority", "")).upper(), str(ident.get("code", ""))
-    if authority == "EPSG" and code.isdigit():
-        return int(code), None
-    if authority == "OGC" and code.upper() == "CRS84":
-        return 4326, None
-    name = crs.get("name") if isinstance(crs, dict) else crs
-    return None, f"its CRS ({name}) has no EPSG code"
+    ids = ([crs["id"]] if crs.get("id") else list(crs.get("ids") or [])) if isinstance(crs, dict) else []
+    for ident in (i for i in ids if isinstance(i, dict)):  # PROJJSON: one `id` or an `ids` list
+        authority, code = str(ident.get("authority", "")).upper(), str(ident.get("code", ""))
+        if authority == "EPSG" and code.isdigit():
+            return int(code), None
+        if authority == "OGC" and code.upper() == "CRS84":
+            return 4326, None
+    name = str(crs.get("name") if isinstance(crs, dict) else crs)
+    return None, f"its CRS ({name[:80]}) has no EPSG code"
 
 
-def is_geojson(asset: dict) -> bool:
-    href = asset.get("href", "").split("?", 1)[0].lower()
-    return asset.get("type") == "application/geo+json" or href.endswith(".geojson")
+def asset_format(asset: dict) -> str | None:
+    """"parquet" or "geojson" for a vector asset the toolbox can add, by media type then
+    extension; None for anything else."""
+    kind = (asset.get("type") or "").split(";", 1)[0].strip().lower()
+    path = urllib.parse.urlsplit(asset.get("href", "")).path.lower()
+    if "parquet" in kind or path.endswith(".parquet"):
+        return "parquet"
+    if kind == "application/geo+json" or path.endswith(".geojson"):
+        return "geojson"
+    return None
+
+
+def geojson_types(path: str) -> dict[str, int]:
+    """Feature count per geometry type in a GeoJSON FeatureCollection; raises on anything else."""
+    with open(path, encoding="utf-8") as fh:
+        doc = json.load(fh)
+    if not isinstance(doc, dict) or doc.get("type") != "FeatureCollection":
+        found = doc.get("type") if isinstance(doc, dict) else type(doc).__name__
+        raise ValueError(f"not a GeoJSON FeatureCollection ({found})")
+    counts: dict[str, int] = {}
+    for f in doc.get("features") or []:
+        kind = ((f or {}).get("geometry") or {}).get("type", "None")
+        counts[kind] = counts.get(kind, 0) + 1
+    return counts
 
 
 def nested_columns(path: str) -> list[str]:

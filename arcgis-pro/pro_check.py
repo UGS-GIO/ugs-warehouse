@@ -138,7 +138,7 @@ def _open(path: str) -> dict:
 
 
 def _acs(work: str, provider: str, options: dict, host: str, bucket: str) -> str:
-    name = f"check_{provider.lower()}_{bucket}"
+    name = "check_" + cat.connection_name(provider, host, bucket)
     acs = os.path.join(work, name + ".acs")
     if not os.path.exists(acs):
         endpoint = {"end_point": host} if host else {}

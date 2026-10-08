@@ -7,7 +7,6 @@ from __future__ import annotations
 import importlib
 import json
 import os
-import re
 import sys
 
 import arcpy
@@ -92,7 +91,7 @@ def _pro_version() -> tuple[int, ...]:
 def _connection(folder: str, provider: str, options: dict, bucket: str, host: str = "") -> str:
     """The `.acs` for one bucket on one host with `provider`, created once in `folder`. No host
     means the provider's own endpoint (an s3:// or gs:// href)."""
-    name = re.sub(r"[^A-Za-z0-9_]", "_", f"{provider}_{host or 'native'}_{bucket}").lower()
+    name = cat.connection_name(provider, host, bucket)
     path = os.path.join(folder, name + ".acs")
     if not os.path.exists(path):
         endpoint = {"end_point": host} if host else {}
@@ -156,6 +155,8 @@ def _ways_in(href: str, folder: str, raster: bool) -> tuple[list, list[str]]:
                           os.path.join(_connection(folder, p, o, bucket, host), *key.split("/"))))
     if raster and href.startswith("https://"):
         tries.append(("URL", lambda: href))
+    if not tries:
+        reasons.append(f"no cloud storage connection or URL reaches {href}")
     return tries, reasons
 
 
@@ -187,7 +188,7 @@ def _open_raster(m, href: str, folder: str, messages):
 
 def _stream(m, asset: dict, folder: str, messages):
     """Add the GeoParquet through a cloud storage connection, or None when it can't be opened."""
-    if _pro_version() < (3, 5) or cat.is_geojson(asset):  # Pro streams Parquet, not GeoJSON
+    if _pro_version() < (3, 5) or cat.asset_format(asset) != "parquet":  # Pro streams Parquet only
         return None
     tries, reasons = _ways_in(asset["href"], folder, raster=False)
     if not tries:
@@ -215,20 +216,18 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
 
     table = pq.read_table(parquet)
     geo = json.loads((table.schema.metadata or {}).get(b"geo", b"{}"))
-    gcol = geo.get("primary_column") if geo else None  # no geo metadata: a plain table
+    gcol = geo.get("primary_column", "geom") if geo else None  # no geo metadata: a plain table
     types = [t.replace(" Z", "") for t in geo.get("columns", {}).get(gcol, {}).get("geometry_types", [])]
     shape = "MULTIPOINT" if "MultiPoint" in types else _GEOMETRY.get(types[0] if types else "", "POLYGON")
     has_z = any(t.endswith(" Z") for t in geo.get("columns", {}).get(gcol, {}).get("geometry_types", []))
 
-    gdb = os.path.join(folder, "UGS Warehouse.gdb")
-    if not arcpy.Exists(gdb):
-        arcpy.management.CreateFileGDB(folder, "UGS Warehouse.gdb")
-    fc = os.path.join(gdb, name)
+    gdb = _gdb(folder)
+    fc = os.path.join(gdb, arcpy.ValidateTableName(name, gdb))  # an item id like M-180 isn't one
     if arcpy.Exists(fc):
         try:
             arcpy.management.Delete(fc)
         except Exception:  # noqa: BLE001 - in use on a map: write alongside it
-            fc = arcpy.CreateUniqueName(name, gdb)
+            fc = arcpy.CreateUniqueName(os.path.basename(fc), gdb)
     sr = None
     if gcol:
         code, problem = cat.crs_code(geo, gcol)
@@ -274,24 +273,49 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
 
 
 def _copy(m, asset: dict, folder: str, name: str, messages):
+    fmt = cat.asset_format(asset)
+    if fmt is None:
+        raise ValueError(f"the toolbox can't add {asset.get('type') or asset.get('href')}; "
+                         "it adds GeoParquet and GeoJSON")
     mb = (asset.get("file:size") or 0) / 1e6
     messages.addMessage(f"  Downloading ({mb:.1f} MB)...")
-    if cat.is_geojson(asset):
-        path = cat.download(asset, folder, f"{name}.geojson")
-        return m.addDataFromPath(_geojson_to_fgdb(path, folder, name))
-    path = cat.download(asset, folder, f"{name}.parquet")
+    path = cat.download(asset, folder, f"{cat.safe_filename(name)}.{fmt}")
+    if fmt == "geojson":
+        return m.addDataFromPath(_geojson_to_fgdb(path, folder, name, messages))
     if nested := cat.nested_columns(path):
         messages.addWarningMessage(f"  Left out nested columns ArcGIS can't store: {', '.join(nested)}")
     return m.addDataFromPath(_to_fgdb(cat.pro_ready(path), folder, name, messages))
 
 
-def _geojson_to_fgdb(path: str, folder: str, name: str) -> str:
-    """A feature class in `<folder>/UGS Warehouse.gdb` from a GeoJSON file, by Esri's own tool."""
+_ESRI_SHAPE = {"Point": "POINT", "MultiPoint": "MULTIPOINT", "LineString": "POLYLINE",
+               "MultiLineString": "POLYLINE", "Polygon": "POLYGON", "MultiPolygon": "POLYGON"}
+
+
+def _gdb(folder: str) -> str:
     gdb = os.path.join(folder, "UGS Warehouse.gdb")
     if not arcpy.Exists(gdb):
         arcpy.management.CreateFileGDB(folder, "UGS Warehouse.gdb")
-    fc = arcpy.CreateUniqueName(name, gdb)
-    arcpy.conversion.JSONToFeatures(path, fc)
+    return gdb
+
+
+def _geojson_to_fgdb(path: str, folder: str, name: str, messages) -> str:
+    """A feature class in `<folder>/UGS Warehouse.gdb` from a GeoJSON file, by Esri's own tool.
+
+    JSONToFeatures writes one geometry type per feature class, so a mixed file takes its most
+    common type and the warning counts the features left out."""
+    counts, shapes = cat.geojson_types(path), {}
+    for kind, n in counts.items():
+        if kind in _ESRI_SHAPE:
+            shapes[_ESRI_SHAPE[kind]] = shapes.get(_ESRI_SHAPE[kind], 0) + n
+    if not shapes:
+        raise ValueError("the GeoJSON has no point, line or polygon features")
+    shape = max(shapes, key=shapes.get)
+    if left := sum(counts.values()) - shapes[shape]:  # other types, null and mixed geometries
+        messages.addWarningMessage(f"  Left out {left} features that aren't {shape.lower()}s; "
+                                   "a geodatabase layer holds one geometry type.")
+    gdb = _gdb(folder)
+    fc = arcpy.CreateUniqueName(arcpy.ValidateTableName(name, gdb), gdb)
+    arcpy.conversion.JSONToFeatures(path, fc, shape)
     return fc
 
 

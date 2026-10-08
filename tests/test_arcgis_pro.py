@@ -247,6 +247,7 @@ class FakeArcpy(types.SimpleNamespace):
             GetInstallInfo=lambda: {"Version": "3.5.2"},
             ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
             Exists=lambda p: False, SpatialReference=lambda code=None: f"SR{code}",
+            ValidateTableName=lambda name, ws: name.replace("-", "_"),
             ValidateFieldName=lambda name, ws: (name + "_" if name.lower() in ("date", "select")
                                                 else "x" * 64 if name.startswith("long") else name),
             FromWKB=lambda wkb, sr: ("geom", bytes(wkb), sr), CreateUniqueName=lambda n, ws: n,
@@ -254,7 +255,8 @@ class FakeArcpy(types.SimpleNamespace):
                 activeMap=the_map, homeFolder=arcpy.home)),
             env=types.SimpleNamespace(scratchFolder="/scratch"),
             da=types.SimpleNamespace(InsertCursor=Cursor),
-            conversion=types.SimpleNamespace(JSONToFeatures=lambda src, fc: arcpy.fc.update(json=(src, fc))),
+            conversion=types.SimpleNamespace(
+                JSONToFeatures=lambda src, fc, shape=None: arcpy.fc.update(json=(src, fc, shape))),
             management=types.SimpleNamespace(
                 CreateCloudStorageConnectionFile=connect, GetCount=lambda lyr: ["7"],
                 GetRasterProperties=lambda lyr, prop: types.SimpleNamespace(getOutput=lambda i: "4"),
@@ -341,7 +343,7 @@ def test_streams_from_the_cdn_over_s3_and_styles_like_the_viewer(monkeypatch, tm
     assert conn[:2] == ("AMAZON", "warehouse") and conn[2]["end_point"] == "maps-assets.geology.utah.gov"
     assert os.environ["AWS_RESPONSE_CHECKSUM_VALIDATION"] == "when_required"
     (lyr,) = arcpy.added
-    assert lyr.path == str(tmp_path / "amazon_maps_assets_geology_utah_gov_warehouse.acs" / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
+    assert lyr.path == str(tmp_path / (cat.connection_name("AMAZON", "maps-assets.geology.utah.gov", "warehouse") + ".acs") / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
     assert lyr.name == "Quaternary Faults" and "  Opened online. (AMAZON)" in log
     assert lyr.metadata.saved and lyr.metadata.title == "Quaternary Faults"
     r = lyr.symbology.renderer
@@ -491,6 +493,10 @@ def test_crs_code_follows_the_geoparquet_crs_rules():
     assert cat.crs_code({"columns": {"g": {"crs": None}}}, "g")[0] is None
     code, why = cat.crs_code({"columns": {"g": {"crs": {"name": "Local grid"}}}}, "g")
     assert code is None and "Local grid" in why
+    ids = {"columns": {"g": {"crs": {"ids": [{"authority": "ESRI", "code": 1}, {"authority": "EPSG", "code": 2240}]}}}}
+    assert cat.crs_code(ids, "g") == (2240, None)
+    code, why = cat.crs_code({"columns": {"g": {"crs": "PROJCS[" + "x" * 500 + "]"}}}, "g")
+    assert code is None and len(why) < 140
 
 
 def test_to_fgdb_uses_the_files_crs_and_writes_a_table_without_geometry(monkeypatch, tmp_path):
@@ -515,7 +521,13 @@ def test_to_fgdb_uses_the_files_crs_and_writes_a_table_without_geometry(monkeypa
     msgs = types.SimpleNamespace(addWarningMessage=print)
     mod._to_fgdb(str(utm), str(tmp_path), "utm", msgs)
     assert arcpy.fc["spatial_reference"] == "SR26912"
-    assert arcpy.inserted[0][0] == ("geom", point, "SR26912")
+    geo["columns"]["geom"]["crs"] = None
+    pq.write_table(pa.table({"unit": ["Qal"], "geom": [point]})
+                   .replace_schema_metadata({b"geo": json.dumps(geo).encode()}), utm)
+    warned = []
+    mod._to_fgdb(str(utm), str(tmp_path), "utm", types.SimpleNamespace(addWarningMessage=warned.append))
+    assert arcpy.fc["spatial_reference"] == "SRNone" and "CRS is undefined" in warned[0]
+    arcpy.inserted.clear()
 
     arcpy.inserted.clear()
     mod._to_fgdb(str(plain), str(tmp_path), "plain", msgs)
@@ -526,13 +538,37 @@ def test_to_fgdb_uses_the_files_crs_and_writes_a_table_without_geometry(monkeypa
 def test_a_geojson_asset_is_copied_with_esris_tool_and_not_streamed(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
-    monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
+    import json
+
+    feats = [{"type": "Feature", "properties": {}, "geometry": {"type": t, "coordinates": c}}
+             for t, c in (("LineString", [[0, 0], [1, 1]]), ("MultiLineString", [[[0, 0], [1, 1]]]),
+                          ("Point", [0, 0]))] + [{"type": "Feature", "properties": {}, "geometry": None}]
+
+    def download(asset, folder, name):
+        path = f"{folder}/{name}"
+        with open(path, "w") as fh:
+            json.dump({"type": "FeatureCollection", "features": feats}, fh)
+        return path
+
+    monkeypatch.setattr(mod.cat, "download", download)
     asset = {"href": "https://data.example.org/layers/faults.geojson", "type": "application/geo+json"}
     m = arcpy.mp.ArcGISProject("CURRENT").activeMap
-    msgs = types.SimpleNamespace(addMessage=lambda x: None)
+    log = []
+    msgs = types.SimpleNamespace(addMessage=log.append, addWarningMessage=log.append)
     assert mod._stream(m, asset, str(tmp_path), msgs) is None and arcpy.connections == []
-    mod._copy(m, asset, str(tmp_path), "faults", msgs)
-    assert arcpy.fc["json"] == (f"{tmp_path}/faults.geojson", "faults")
+    mod._copy(m, asset, str(tmp_path), "Q-faults", msgs)
+    assert arcpy.fc["json"] == (f"{tmp_path}/Q-faults.geojson", "Q_faults", "POLYLINE")
+    assert any("Left out 2 features that aren't polylines" in line for line in log)
+
+
+def test_an_unsupported_asset_fails_before_any_download(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    monkeypatch.setattr(mod.cat, "download", lambda *a: pytest.fail("downloaded"))
+    m = arcpy.mp.ArcGISProject("CURRENT").activeMap
+    with pytest.raises(ValueError, match="GeoParquet and GeoJSON"):
+        mod._copy(m, {"href": "https://x.org/b/a.gpkg", "type": "application/geopackage+sqlite3"},
+                  str(tmp_path), "a", types.SimpleNamespace(addMessage=print))
 
 
 def test_pro_ready_drops_nested_columns_and_fixes_names(tmp_path):
@@ -699,7 +735,8 @@ def test_a_raster_is_added_from_its_cog_with_metadata_and_no_style(monkeypatch, 
     tool.execute(params, types.SimpleNamespace(addMessage=lambda m: None, addWarningMessage=lambda m: None))
 
     (lyr,) = arcpy.added  # through the CDN connection, its bucket the first path segment
-    assert lyr.path == f"{tmp_path}/web_maps_assets_geology_utah_gov_geolmap.acs/cogs/M-180.cog.tif"
+    acs = cat.connection_name("WEB", "maps-assets.geology.utah.gov", "geolmap")
+    assert lyr.path == f"{tmp_path}/{acs}.acs/cogs/M-180.cog.tif"
     assert arcpy.connections == [("WEB", "geolmap", {"end_point": "maps-assets.geology.utah.gov"})]
     assert lyr.symbology.renderer is None
     assert lyr.metadata.summary == "A 1:24,000 map." and lyr.metadata.credits == "Personius"
@@ -736,6 +773,24 @@ def test_href_parts_reads_https_path_style_and_native_buckets():
     assert cat.href_parts("./relative/x.tif") is None
 
 
+def test_href_parts_decodes_the_key_and_connection_names_never_collide():
+    assert cat.href_parts("https://h.org/b/a%20b.parquet#x") == ("https", "h.org", "b", "a b.parquet")
+    assert cat.href_parts("https://h.org:8443/b/k.tif")[1] == "h.org:8443"
+    assert cat.href_parts("https://user:pw@h.org/b/k.tif") is None
+    assert cat.href_parts("https:///b/k.tif") is None
+    names = {cat.connection_name("WEB", h, "b") for h in ("a.b", "a-b", "A_B")}
+    assert len(names) == 3 and all(n.startswith("web_") for n in names)
+    assert cat.safe_filename("../a/b c") == "_a_b_c"
+
+
+def test_a_raster_nothing_reaches_says_why(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    m = arcpy.mp.ArcGISProject("CURRENT").activeMap
+    with pytest.raises(RuntimeError, match="no cloud storage connection or URL reaches http://old.org/x.tif"):
+        mod._open_raster(m, "http://old.org/x.tif", str(tmp_path), types.SimpleNamespace(addMessage=print))
+
+
 def test_native_hrefs_open_on_their_own_provider_and_any_https_host_works(monkeypatch, tmp_path):
     arcpy = FakeArcpy()
     mod = _load(monkeypatch, arcpy)
@@ -743,7 +798,8 @@ def test_native_hrefs_open_on_their_own_provider_and_any_https_host_works(monkey
     msgs = types.SimpleNamespace(addMessage=lambda x: None)
     mod._stream(m, {"href": "s3://overturemaps/release/a.parquet"}, str(tmp_path), msgs)
     assert arcpy.connections[-1] == ("AMAZON", "overturemaps", {"config_options": [["AWS_NO_SIGN_REQUEST", "YES"]]})
-    assert arcpy.added[-1].path == f"{tmp_path}/amazon_native_overturemaps.acs/release/a.parquet"
+    acs = cat.connection_name("AMAZON", "", "overturemaps")
+    assert arcpy.added[-1].path == f"{tmp_path}/{acs}.acs/release/a.parquet"
     mod._cache.clear()
     mod._open_raster(m, "https://data.example.org/cogs/x.tif", str(tmp_path), msgs)
     provider, bucket, kw = arcpy.connections[-1]

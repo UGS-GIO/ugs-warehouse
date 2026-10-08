@@ -57,6 +57,20 @@ Pro rejects nested Parquet columns, and the warehouse GeoParquet carries the Geo
 `bbox` struct. A copy drops it (the flat `bbox_*` columns keep the extent) and renames columns to
 Esri's rules; a stream reads the file as published.
 
+## What it reads from the catalog
+
+A catalog change to any of these can break the toolbox; check here first.
+
+| Where | What |
+|---|---|
+| `warehouse/stac/ugs-serving-topics/items.json` | `items[].id`; `properties.title`, `ugs:dbt_schema`, `keywords` |
+| `warehouse/stac/items.json` (root) | `items[].id`; `assets.cog.href` on the CDN; `properties.title`, `ugs:series_id`, `ugs:author`, `ugs:scale`, `keywords` |
+| Item `ugs-serving-topics/<schema>/<id>/<id>.json` | `assets.data.href`, `file:size`, `file:checksum`; `properties.title`, `description`, `keywords`, `ugs:point_of_contact`, `ugs:renders.default.style_url` and `.legend` |
+| `ugs-serving-topics/<schema>/collection.json` | `license`, the `rel: license` link, `providers[].name` |
+| The GeoParquet | the `geo` metadata's `primary_column` and `geometry_types`; WKB geometry |
+| The MapLibre style | `fill`/`line`/`circle` layers: `filter`, and `fill-color`/`line-color`/`circle-color` |
+| Layout | data under `https://maps-assets.geology.utah.gov/warehouse/`, COGs under `/geolmap/` |
+
 ## Code
 
 `ugs_catalog.py` reads the STAC catalog and the layer's MapLibre style and converts types;

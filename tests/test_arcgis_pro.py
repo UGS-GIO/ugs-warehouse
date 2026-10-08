@@ -391,6 +391,14 @@ def test_the_sign_in_path_reaches_pro_with_forward_slashes(monkeypatch, tmp_path
                                        "C:/Users/npayne/AppData/Roaming/gcloud/adc.json"]
 
 
+def test_an_unreadable_sign_in_says_so(monkeypatch, tmp_path):
+    mod = _load(monkeypatch, FakeArcpy())
+    (tmp_path / "adc.json").write_text("not json")
+    monkeypatch.setattr(mod.cat, "google_credentials", lambda: str(tmp_path / "adc.json"))
+    label, path = mod._google(str(tmp_path), "https://maps-assets.geology.utah.gov/geolmap/cogs/M-1.cog.tif", True)
+    assert path is None and "can't read the sign-in file" in label
+
+
 def test_google_credential_type_reads_the_sign_in_file(tmp_path):
     for kind in ("authorized_user", "service_account"):
         (tmp_path / "c.json").write_text(json.dumps({"type": kind}))
@@ -971,14 +979,14 @@ def test_sign_in_runs_gcloud_without_pros_python(monkeypatch, tmp_path):
     monkeypatch.setattr("shutil.which", lambda name: "/sdk/bin/gcloud")
     monkeypatch.setattr("subprocess.run", lambda args, **kw: seen.update(kw) or types.SimpleNamespace(returncode=0, stderr=""))
     monkeypatch.setattr(mod.cat, "google_credentials", lambda: "/home/me/adc.json")
-    monkeypatch.setenv("PYTHONHOME", "/pro/ArcGIS/bin/Python")
-    monkeypatch.setenv("PATH", os.pathsep.join(["/pro/ArcGIS/bin", "/sdk/bin"]))
+    monkeypatch.setenv("PYTHONHOME", sys.prefix)
+    monkeypatch.setenv("PATH", os.pathsep.join([os.path.join(sys.prefix, "Library", "bin"), "/sdk/bin"]))
     mod.SignIn().execute([], types.SimpleNamespace(addMessage=lambda m: None))
     assert "PYTHONHOME" not in seen["env"] and seen["env"]["PATH"] == "/sdk/bin"
 
 
 def test_not_signed_in_says_so_when_it_falls_back(monkeypatch, tmp_path):
-    arcpy = FakeArcpy(refuse={"WEB", "AMAZON"})
+    arcpy = FakeArcpy(refuse={"WEB"})
     mod = _load(monkeypatch, arcpy)
     monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
     monkeypatch.setattr(mod.cat, "pro_ready", lambda path, messages=None: path)

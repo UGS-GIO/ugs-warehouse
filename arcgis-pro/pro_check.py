@@ -1,6 +1,6 @@
 """Check the UGS Warehouse toolbox inside ArcGIS Pro and write a report anyone can read back.
 
-Answers what the fake-arcpy tests cannot: which cloud storage connections reach the CDN, which
+Answers what the fake-arcpy tests cannot: which of the toolbox's ways in open a GeoParquet and a COG, which
 GeoParquet shapes Pro opens (the published file with its nested `bbox`, a flat copy, a native
 GEOMETRY copy), what Add Warehouse Layer actually puts on a map from each source, and whether a
 geodatabase copy keeps a non-WGS84 layer in its own CRS.
@@ -10,7 +10,8 @@ A shell, no Pro window (any saved project; it is opened, never saved over):
 Pro's Python window, with this file next to UGSWarehouse.pyt:
     import sys; sys.path.insert(0, r"<this folder>"); import pro_check; pro_check.run()
   The window run leaves its check maps and layout in the open project; close it without saving.
-Add --big (or big=True) to also open the 1.9 GB wetlands outline over the CDN.
+Add --big (or big=True) to also open the 1.9 GB wetlands outline online; it needs a sign-in Pro
+opens GeoParquet with (a service account key), so with a personal sign-in it reports a failure.
 
 Output goes to Documents\\UGS Warehouse check\\<timestamp>: report.json, a PNG per layer added, and,
 from a shell, check.aprx. The shell run exits 1 when any check failed; report.json says which.
@@ -45,7 +46,6 @@ SLC = (-112.0, 40.6, -111.8, 40.8)  # a small Salt Lake City extent for the spat
 # Most publication COGs are WebP-compressed inside the TIFF, which Esri doesn't document reading;
 # one of each kind shows whether Pro opens them.
 RASTERS = {"FSM-18": "WebP", "UU-MS-601": "DEFLATE"}
-GOOGLE = ("GOOGLE", {"config_options": [["GS_NO_SIGN_REQUEST", "YES"]]})
 
 
 class Messages:
@@ -79,11 +79,6 @@ def _load_toolbox():
     mod = importlib.util.module_from_spec(importlib.util.spec_from_loader(loader.name, loader))
     loader.exec_module(mod)
     return mod
-
-
-def _connections():
-    """The toolbox's own connection list, then GCS with the CDN as its endpoint."""
-    return (*_load_toolbox().CONNECTIONS, GOOGLE)
 
 
 def _io():
@@ -120,15 +115,6 @@ def _asset(layer_id: str) -> dict:
     return cat.get_json(layer.item_url)["assets"]["data"]
 
 
-def _where(asset: dict) -> tuple[str, str, list[str]]:
-    """(host, bucket, key parts) a cloud storage connection reads the asset through."""
-    parts = cat.href_parts(asset["href"])
-    if parts is None:
-        raise ValueError(f"no cloud storage connection reaches {asset['href']}")
-    _, host, bucket, key = parts
-    return host, bucket, key.split("/")
-
-
 def _open(path: str) -> dict:
     """What Pro sees in a dataset: row count, fields, geometry type, and how long that took."""
     try:
@@ -141,25 +127,33 @@ def _open(path: str) -> dict:
         return {"ok": False, "error": _err()}
 
 
-def _acs(work: str, provider: str, options: dict, host: str, bucket: str) -> str:
-    name = "check_" + cat.connection_name(provider, host, bucket)
-    acs = os.path.join(work, name + ".acs")
-    if not os.path.exists(acs):
-        endpoint = {"end_point": host} if host else {}
-        arcpy.management.CreateCloudStorageConnectionFile(
-            work, name, provider, bucket, **endpoint, **options)
-    return acs
+def _open_raster(path: str) -> dict:
+    try:
+        bands, secs = _timed(lambda: int(arcpy.management.GetRasterProperties(path, "BANDCOUNT").getOutput(0)))
+        return {"ok": bands > 0, "bands": bands, "seconds": secs}
+    except Exception:  # noqa: BLE001 - the failure is the finding
+        return {"ok": False, "error": _err()}
+
+
+def _ways(href: str, work: str, raster: bool) -> dict:
+    """Each way the toolbox tries for `href`, opened on its own, plus the ways it ruled out."""
+    tries, reasons = _load_toolbox()._ways_in(href, work, raster)
+    out = {"ruled_out": reasons, "ways": {}}
+    for label, path in tries:
+        try:
+            where = path()
+            out["ways"][label] = {"path": where, **(_open_raster if raster else _open)(where)}
+        except Exception:  # noqa: BLE001 - creating the connection failed
+            out["ways"][label] = {"ok": False, "error": _err()}
+    out["opened_by"] = [label for label, r in out["ways"].items() if r.get("ok")]
+    return out
 
 
 def check_connections(work: str) -> dict:
-    """Each connection type against the small file: does Pro open GeoParquet through it?"""
-    host, bucket, key = _where(_asset(SMALL))
-    out = {}
-    for provider, options in _connections():
-        try:
-            out[provider] = _open(os.path.join(_acs(work, provider, options, host, bucket), *key))
-        except Exception:  # noqa: BLE001 - creating the connection failed
-            out[provider] = {"ok": False, "error": _err()}
+    """The small GeoParquet and a COG through every way the toolbox tries."""
+    out = {"parquet": _ways(_asset(SMALL)["href"], work, raster=False)}
+    cog = next((r for r in cat.rasters() if r.id in RASTERS), None)
+    out["cog"] = _ways(cog.href, work, raster=True) if cog else {"error": "no listed COG to try"}
     return out
 
 
@@ -193,12 +187,12 @@ def check_shapes(work: str) -> dict:
     return out
 
 
-def check_big(work: str, provider: str) -> dict:
-    """Open the 1.9 GB file through a connection that worked, then read one small extent."""
+def check_big(work: str, label: str) -> dict:
+    """Open the 1.9 GB file the way the small one opened, then read one small extent."""
     asset = _asset(BIG)
-    host, bucket, key = _where(asset)
-    path = os.path.join(_acs(work, provider, dict(_connections())[provider], host, bucket), *key)
-    out = {"provider": provider, "file_bytes": asset.get("file:size")}
+    tries, _ = _load_toolbox()._ways_in(asset["href"], work, False)
+    path = dict(tries)[label]()
+    out = {"way": label, "file_bytes": asset.get("file:size")}
     before = _io()
     out["open"] = _open(path)
     out["io_during_open"] = _delta(before, _io())
@@ -338,13 +332,22 @@ def failures(report: dict) -> list[str]:
                 walk(f"{where}[{i}]", v)
 
     for step, node in report.items():
-        walk(step, node)
+        if step != "connections":  # one way in failing is expected while another opens
+            walk(step, node)
+    conns = report.get("connections") or {}
+    if conns.get("error"):
+        bad.append(f"connections: {conns['error']}")
+    for kind in ("parquet", "cog"):
+        node = conns.get(kind) or {}
+        if node.get("error"):
+            bad.append(f"connections.{kind}: {node['error']}")
+        elif node.get("ways") and not node.get("opened_by"):
+            bad.append(f"connections.{kind}: no way in opened it")
+        elif kind == "cog" and "ways" in node and not node["ways"]:
+            bad.append(f"connections.cog: no way in to try ({'; '.join(node.get('ruled_out') or [])})")
     for run in ("tool_stream", "tool_copy"):
         if isinstance(report.get(run), dict) and not report[run].get("layers"):
             bad.append(f"{run}: no layers added")
-    for lyr in (report.get("tool_stream") or {}).get("layers") or []:
-        if not lyr["streamed"] and not lyr["source"].lower().startswith("http"):  # a COG is a URL
-            bad.append(f"tool_stream: {lyr['name']} was copied, not streamed")
     return bad
 
 
@@ -377,9 +380,9 @@ def run(aprx_path: str | None = None, big: bool = False, out: str | None = None)
     step("tool_copy", lambda: run_tool(maps["copy"], "copy", os.path.join(work, "copy"), picks))
     step("copy_crs", lambda: check_copy_crs(os.path.join(work, "crs")))
     if big:
-        good = [p for p, r in (report.get("connections") or {}).items() if isinstance(r, dict) and r.get("ok")]
+        good = ((report.get("connections") or {}).get("parquet") or {}).get("opened_by") or []
         step("big", (lambda: check_big(work, good[0])) if good
-             else (lambda: {"ok": False, "error": "no connection opened the small file"}))
+             else (lambda: {"ok": False, "error": "no way in opened the small file"}))
     step("pngs", lambda: export_pngs(aprx, maps, out))
     if aprx_path:
         step("project_copy", lambda: aprx.saveACopy(os.path.join(out, "check.aprx")) or "check.aprx")
@@ -395,7 +398,7 @@ def run(aprx_path: str | None = None, big: bool = False, out: str | None = None)
 if __name__ == "__main__":
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--aprx", required=True, help="a saved project to open (never saved over)")
-    ap.add_argument("--big", action="store_true", help="also open the 1.9 GB wetlands file over the CDN")
+    ap.add_argument("--big", action="store_true", help="also open the 1.9 GB wetlands file online")
     ap.add_argument("--out", help="output folder (default: Documents\\UGS Warehouse check\\<timestamp>)")
     a = ap.parse_args()
     sys.exit(1 if run(a.aprx, a.big, a.out)["failures"] else 0)

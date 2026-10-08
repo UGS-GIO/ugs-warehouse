@@ -20,8 +20,7 @@ importlib.reload(cat)  # Pro keeps imported modules; pick up an updated ugs_cata
 STREAM = "Open online (always current)"
 COPY = "Download a copy (works offline)"
 ALL = "All"
-# An https href's host as a cloud storage connection. Esri's generic HTTP provider opens rasters
-# only; an S3 connection can't stand in for it, as Pro sends S3 requests to Amazon, not the host.
+# An https href's host as a cloud storage connection. Esri's generic HTTP provider opens rasters only.
 CONNECTIONS = (("WEB", {}),)
 # An s3:// or gs:// href goes to that provider's own endpoint, read anonymously.
 NATIVE = {"s3": ("AMAZON", {"config_options": [["AWS_NO_SIGN_REQUEST", "YES"]]}),
@@ -99,7 +98,10 @@ def _google(folder: str, href: str, raster: bool):
         return "GOOGLE", None
     if cred is None:
         return "GOOGLE (not signed in)", None
-    if not raster and cat.google_credential_type(cred) != "service_account":
+    kind = cat.google_credential_type(cred)
+    if kind is None:
+        return f"GOOGLE (can't read the sign-in file {cred}; sign in again)", None
+    if not raster and kind != "service_account":
         return ("GOOGLE (ArcGIS Pro opens GeoParquet online only with a service account key, "
                 "not a personal sign-in)"), None
     # Pro reads backslashes in this option as escapes; Windows takes the path with forward slashes.
@@ -531,9 +533,13 @@ class SignIn:
                 "then run this again.")
         messages.addMessage("A browser window will open; sign in with your utah.gov account.")
         # gcloud runs its own Python, which fails to load if it inherits Pro's.
+        pro = [os.path.normcase(os.path.abspath(p)) for p in
+               (sys.prefix, sys.exec_prefix, arcpy.GetInstallInfo().get("InstallDir") or sys.prefix)]
         env = {k: v for k, v in os.environ.items() if not k.upper().startswith(("PYTHON", "CONDA"))}
-        env["PATH"] = os.pathsep.join(p for p in os.environ.get("PATH", "").split(os.pathsep)
-                                      if "arcgis" not in p.lower())
+        env["PATH"] = os.pathsep.join(
+            p for p in os.environ.get("PATH", "").split(os.pathsep)
+            if p and not any((os.path.normcase(os.path.abspath(p)) + os.sep).startswith(r + os.sep)
+                             for r in pro))
         done = subprocess.run([gcloud, "auth", "application-default", "login"],
                               capture_output=True, text=True, env=env)
         if done.returncode != 0 or cat.google_credentials() is None:

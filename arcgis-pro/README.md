@@ -40,7 +40,7 @@ copy's feature class gets it when Pro keeps the layer's own metadata read-only).
 If opening online does not work on a machine, or Pro is older than 3.5, the tool copies the layer
 instead and says so in its messages, so a run always ends with the layer on the map.
 
-## Sign in (to open layers online)
+## Sign in (to open map images online)
 
 The data sits in a private Google Cloud Storage bucket. Opening a map image online reads the
 bucket with your own Google sign-in:
@@ -49,7 +49,8 @@ bucket with your own Google sign-in:
 2. Run **UGS Warehouse → Sign In to UGS Storage** and sign in with your utah.gov account.
 
 Your account needs read access to the bucket (ask the warehouse admins). Without a sign-in, or
-without access, Add Warehouse Layer downloads a copy instead and says why.
+without access, a map image falls back to the CDN, and if nothing opens it the tool names each
+reason. GeoParquet is downloaded either way, as "How streaming works" explains.
 
 ## Update
 

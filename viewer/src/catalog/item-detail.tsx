@@ -19,7 +19,7 @@ import { aboutRows, bylineParts, categorize, curatedDerived, kindLabel, type Met
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { type Asset, catalogItemHref, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
-  parquetAsset, pmtilesLink, relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+  pmtilesLink, relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
 import { Unavailable } from "@/offline/offline-notice";
@@ -157,7 +157,8 @@ function IssueContents({ item }: { item: StacDoc }) {
 // item-level comment thread, and a per-column comment button (flag a wrong name/unit/type).
 function CatalogReview({ item }: { item: StacDoc }) {
   const id = String(item.id ?? "");
-  const geoparquet = parquetAsset(item)?.href;
+  const geoparquet = Object.entries(item.assets ?? {})
+    .find(([k, a]) => /parquet/i.test(String(a.type ?? "")) || /parquet|geoparquet/i.test(k))?.[1]?.href;
   const cols = tableColumns(item);
   const [openCol, setOpenCol] = useState<string | null>(null);
   if (!id) return null;

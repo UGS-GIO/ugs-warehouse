@@ -115,61 +115,6 @@ def test_copy_writes_geoparquet_1_1_with_a_bbox_covering(tmp_path) -> None:
     assert con.execute(f"SELECT typeof(geom) FROM read_parquet('{out}') LIMIT 1").fetchone()[0].startswith("GEOMETRY")
 
 
-def test_the_flat_copy_is_geoparquet_1_0_with_no_nested_column(tmp_path) -> None:
-    """ArcGIS Pro opens no Parquet with a nested column; 1.1's covering must be one."""
-    import json
-
-    import duckdb
-
-    con = duckdb.connect()
-    con.execute("INSTALL spatial; LOAD spatial")
-    con.execute("CREATE TABLE v AS SELECT i AS feature_id, ST_Point(-112 + i / 100, 40) AS geom "
-                "FROM range(3000) r(i)")
-    out, flat = str(tmp_path / "o.parquet"), str(tmp_path / "o.flat.parquet")
-    rows_per_group = sink_archive._copy_geoparquet(con, "v", out)
-    sink_archive._copy_flat(out, flat, rows_per_group)
-
-    schema = con.execute(f"SELECT name, type FROM parquet_schema('{flat}')").fetchall()
-    assert "bbox" not in [n for n, _ in schema] and ("geom", "BYTE_ARRAY") in schema
-    assert {"bbox_xmin", "bbox_ymax"} <= {n for n, _ in schema}
-    geo = json.loads(con.execute(
-        f"SELECT decode(value) FROM parquet_kv_metadata('{flat}') WHERE decode(key) = 'geo'").fetchone()[0])
-    assert geo["version"] == "1.0.0" and "covering" not in geo["columns"]["geom"]
-    assert geo["columns"]["geom"]["geometry_types"] == ["Point"]
-    assert con.execute(f"SELECT count(*) FROM read_parquet('{flat}')").fetchone()[0] == 3000
-    def groups(path):
-        return con.execute(f"SELECT count(DISTINCT row_group_id) FROM parquet_metadata('{path}')").fetchone()[0]
-
-    assert groups(flat) == groups(out)  # the archive's grouping, so its bbox_* stats still prune
-    first = con.execute(f"SELECT feature_id FROM read_parquet('{flat}') LIMIT 3").fetchall()
-    assert first == [(0,), (1,), (2,)]  # the archive's row order, which its sort made
-
-
-def test_the_backfill_derives_the_flat_copy_from_the_published_archive(tmp_path) -> None:
-    import duckdb
-
-    from ugs_warehouse.core import config, gcs
-    from ugs_warehouse.vector.topics import Topic
-
-    con = duckdb.connect()
-    con.execute("INSTALL spatial; LOAD spatial")
-    con.execute("CREATE TABLE v AS SELECT i AS feature_id, ST_Point(-112 + i / 100, 40) AS geom "
-                "FROM range(50) r(i)")
-    topic = Topic(layer="hazards_rockfall_current", schema="hazards")
-    local = str(tmp_path / "a.parquet")
-    sink_archive._copy_geoparquet(con, "v", local)
-    gcs.upload(local, config.archive_path(topic.stem), content_type=sink_archive.PARQUET_MIME)
-
-    assert not sink_archive.flat_present(topic)
-    written = sink_archive.write_flat(topic)
-    assert sink_archive.flat_present(topic) and written["data_flat"].size > 0
-    flat = tmp_path / "f.parquet"
-    flat.write_bytes(gcs.get_bytes(config.archive_flat_path(topic.stem)))
-    cols = [r[0] for r in con.execute(f"SELECT name FROM parquet_schema('{flat}')").fetchall()]
-    assert "bbox" not in cols and "bbox_xmin" in cols
-    assert con.execute(f"SELECT count(*) FROM read_parquet('{flat}')").fetchone()[0] == 50
-
-
 def test_is_current_accepts_only_the_format_write_makes(tmp_path) -> None:
     """Skip-unchanged rebuilds an archive from an older writer: GeoParquet 1.0 has no covering."""
     import duckdb

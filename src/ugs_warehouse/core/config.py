@@ -124,12 +124,6 @@ def archive_path(stem: str) -> str:
     return f"{ARCHIVE_PREFIX}/{stem}/{stem}.parquet"
 
 
-def archive_flat_path(stem: str) -> str:
-    """The latest archive as GeoParquet 1.0 with no nested column, for readers that refuse one
-    (ArcGIS Pro). Beside the archive, so retiring the topic's prefix removes it too."""
-    return f"{ARCHIVE_PREFIX}/{stem}/{stem}.flat.parquet"
-
-
 # Styling source — the neighbor repo `ugs-styles` builds MapLibre GL JSON + an `index.json`
 # manifest, published to OUR bucket and served through the CDN. The warehouse reads the manifest at
 # STAC emit and attaches a `renders` block by item id (docs/STYLING.md). Graceful: unreachable

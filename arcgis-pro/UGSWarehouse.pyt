@@ -342,10 +342,8 @@ def _add_layer(m, layer: cat.Layer, source: str, work: str, style: bool, message
         fields = cat.metadata(props, source=layer.self_href or layer.href)  # like a vector: its item
     else:
         item = cat.get_json(layer.item_url)
-        assets = item["assets"]
-        asset = assets["data"]
-        # The flat copy has no nested column, which Pro refuses; the archive is the fallback.
-        lyr = _stream(m, assets.get("data_flat") or asset, work, messages) if source == STREAM else None
+        asset = item["assets"]["data"]
+        lyr = _stream(m, asset, work, messages) if source == STREAM else None
         if lyr is None:
             lyr = _copy(m, asset, work, layer.id, messages)
         collection = _collection(layer.collection_url, messages)

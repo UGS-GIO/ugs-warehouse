@@ -7,7 +7,7 @@ import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { collectionLabel, dateOf, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
-import { shownAssets, thumbnailAsset } from "@/stac";
+import { thumbnailAsset } from "@/stac";
 import { C } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
 
@@ -45,7 +45,7 @@ const metaLine = (it: ItemRef) => [collectionLabel(it.collId), typeOf(it), dateO
 // Muted, NON-anchor format chips — the card is itself an <a>, so it must contain no nested anchors.
 // Thumbnails/images are already the card image, so they're dropped.
 const formatBadges = (it: ItemRef) =>
-  shownAssets(it.data?.assets)
+  Object.entries(it.data?.assets ?? {})
     .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.type?.startsWith("image/"))
     .slice(0, 4)
     .map(([k, a]) => <span key={k} className={C.badge}>{a.title ?? k}</span>);

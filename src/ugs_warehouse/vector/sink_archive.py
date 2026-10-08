@@ -1,9 +1,8 @@
 """Write the transformed topic to GeoParquet on GCS — native geometry, citable.
 
-Three artifacts per ingest:
+Two artifacts per ingest:
   {ARCHIVE_PREFIX}/{stem}/{stem}.parquet               (latest pointer, overwritten -> no-cache)
   {ARCHIVE_PREFIX}/{stem}/{stem}_{YYYYMMDD}.parquet    (dated archive, immutable -> long cache)
-  {ARCHIVE_PREFIX}/{stem}/{stem}.flat.parquet          (latest, no nested column -> no-cache)
 
 The latest pointer is the easy-to-link copy; dated archives are the citable snapshots.
 GCS IO + bucket/prefix/CDN come from `core` (shared with the pubs producer).
@@ -22,7 +21,6 @@ from .topics import Topic
 
 PARQUET_MIME = config.PARQUET_MIME
 GEOPARQUET_VERSION = "1.1.0"
-FLAT_GEOPARQUET_VERSION = "1.0.0"
 
 # A row group is the smallest unit a range-reading client can fetch, so it floors both the viewer's
 # first page and what a clipped export has to download. DuckDB's default (122,880) put
@@ -76,7 +74,7 @@ def _geo_metadata(con: duckdb.DuckDBPyConnection, view: str) -> str:
         "geom": {"encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})
 
 
-def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> int:
+def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
     """COPY the transformed `view` to a GeoParquet file.
 
     GeoParquet 1.1, written by hand: DuckDB writes 1.0, and its 2.0 (Parquet's native GEOMETRY
@@ -85,7 +83,7 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> in
     a bbox (Portolan PTL-DAT-007, -012).
 
     The extent also goes out as four plain columns (bbox_xmin/ymin/xmax/ymax), which the viewer
-    and ugs-map-viewer already read. Returns the rows per group, which the flat copy reuses.
+    and ugs-map-viewer already read.
     """
     rows_per_group = _row_group_size(con, view)
     print(f"[archive] row group size: {rows_per_group} rows (~{TARGET_ROW_GROUP_BYTES // 1024**2} MB)")
@@ -98,32 +96,6 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> in
         f"FROM {view}) TO '{path}' "
         f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {rows_per_group}, "
         f"GEOPARQUET_VERSION 'NONE', KV_METADATA {{geo: '{geo}'}})"
-    )
-    return rows_per_group
-
-
-def _copy_flat(src: str, path: str, rows_per_group: int) -> None:
-    """The archive at `src` without its nested `bbox` column, as GeoParquet 1.0.
-
-    ArcGIS Pro opens no Parquet with a nested column, and 1.1's covering must be one, so the copy
-    for it is 1.0. Rows keep the archive's order and groups, so the flat bbox_* columns' min/max
-    still prune for a reader that filters on them. A fresh connection with conversion off reads
-    `geom` as the WKB it is rather than as a GEOMETRY value.
-    """
-    con = duckdb.connect()
-    # The ingest's cap; with none set (a local run) it takes 2GB rather than the ingest's 128MB.
-    con.execute(f"SET max_memory = '{os.environ.get('DUCKDB_MAX_MEMORY', '2GB')}'")
-    con.execute("SET enable_geoparquet_conversion = false")
-    row = con.execute(f"SELECT decode(value) FROM parquet_kv_metadata('{src}') "
-                      f"WHERE decode(key) = 'geo'").fetchone()
-    geo = json.loads(row[0])
-    geo["version"] = FLAT_GEOPARQUET_VERSION
-    for column in geo["columns"].values():
-        column.pop("covering", None)
-    con.execute(
-        f"COPY (SELECT * EXCLUDE (bbox) FROM read_parquet('{src}')) TO '{path}' "
-        f"(FORMAT PARQUET, COMPRESSION ZSTD, ROW_GROUP_SIZE {rows_per_group}, "
-        f"GEOPARQUET_VERSION 'NONE', KV_METADATA {{geo: '{json.dumps(geo).replace(chr(39), chr(39) * 2)}'}})"
     )
 
 
@@ -162,39 +134,10 @@ def is_current(topic: Topic) -> bool:
     return geo.get("version") == GEOPARQUET_VERSION and "bbox" in (column.get("covering") or {})
 
 
-def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> dict[str, gcs.FileMeta]:
-    """Write `{stem}.parquet` (latest) + dated archive + the flat copy to GCS, keyed by the asset
-    each one backs. DuckDB streams the COPY (with the global hilbert sort) under the memory cap →
-    bounded memory regardless of table size."""
+def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:
+    """Write `{stem}.parquet` (latest) + dated archive to GCS. DuckDB streams the COPY (with the
+    global hilbert sort) under the memory cap → bounded memory regardless of table size."""
     with tempfile.TemporaryDirectory() as tmp:
         local = os.path.join(tmp, f"{topic.stem}.parquet")
-        rows_per_group = _copy_geoparquet(con, view, local)
-        meta = _upload(topic, local)
-        return {"data": meta, "data_flat": _upload_flat(topic, local, tmp, rows_per_group)}
-
-
-def flat_present(topic: Topic) -> bool:
-    """The flat copy exists, so an unchanged topic needs nothing rebuilt for it."""
-    return gcs.exists(config.archive_flat_path(topic.stem))
-
-
-def write_flat(topic: Topic) -> dict[str, gcs.FileMeta]:
-    """Only the flat copy, for a topic whose archive is current but predates it: derived from the
-    published archive, so its rows and groups match that file and nothing is sorted again."""
-    with tempfile.TemporaryDirectory() as tmp:
-        local = os.path.join(tmp, f"{topic.stem}.parquet")
-        with open(local, "wb") as fh:
-            fh.write(gcs.get_bytes(config.archive_path(topic.stem)))
-        con = duckdb.connect()
-        rows_per_group = con.execute(f"SELECT max(row_group_num_rows) FROM parquet_metadata('{local}')"
-                                     ).fetchone()[0]
-        return {"data_flat": _upload_flat(topic, local, tmp, int(rows_per_group or ROW_GROUP_MAX))}
-
-
-def _upload_flat(topic: Topic, local: str, tmp: str, rows_per_group: int) -> gcs.FileMeta:
-    flat = os.path.join(tmp, f"{topic.stem}.flat.parquet")
-    _copy_flat(local, flat, rows_per_group)
-    path = config.archive_flat_path(topic.stem)
-    meta = gcs.upload(flat, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
-    print(f"[{topic.fqn}] archive (flat, GeoParquet {FLAT_GEOPARQUET_VERSION}): {config.public_url(path)}")
-    return meta
+        _copy_geoparquet(con, view, local)
+        return _upload(topic, local)

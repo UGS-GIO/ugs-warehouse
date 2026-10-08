@@ -536,13 +536,7 @@ export const isParquetAsset = (a: Asset): boolean =>
   Boolean(a.type?.includes("parquet")) || a.href.endsWith(".parquet");
 
 export const parquetAsset = (item: StacDoc): Asset | undefined =>
-  (item.assets?.data && isParquetAsset(item.assets.data) ? item.assets.data : undefined)
-  ?? shownAssets(item.assets).find(([, a]) => isParquetAsset(a))?.[1];
-
-// `data_flat` is `data` again without its nested bbox column, for readers that refuse one (ArcGIS
-// Pro). The viewer reads `data`, so listing both would show the same rows twice.
-export const shownAssets = (assets: Record<string, Asset> | undefined): [string, Asset][] =>
-  Object.entries(assets ?? {}).filter(([k]) => k !== "data_flat");
+  Object.values(item.assets ?? {}).find(isParquetAsset);
 
 export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
   Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"

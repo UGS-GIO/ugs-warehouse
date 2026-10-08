@@ -64,8 +64,6 @@ VERSION_EXT = "https://stac-extensions.github.io/version/v1.2.0/schema.json"
 # guessing (#280). One home for the wording so the two producers that stamp them can't drift; kept
 # short (a label, not a how-to — the runnable how-to lives once in the collection AGENTS.md).
 USAGE_DATA = "GeoParquet — full dataset; download, or read in place with DuckDB for analysis"
-USAGE_DATA_FLAT = ("GeoParquet 1.0, the same rows with no nested column — for ArcGIS Pro and "
-                   "other readers that refuse one")
 USAGE_PMTILES = "Vector tiles — web-map display"
 USAGE_DUCKLAKE = "DuckLake table — versioned SQL analysis (review catalog only)"
 USAGE_THUMBNAIL = "Styled preview image"

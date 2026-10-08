@@ -98,7 +98,7 @@ def test_connection_closed_when_a_sink_raises():
 
 # --- #54: the fingerprint gates the DATA sinks, never the STAC sink ------------------------
 
-def _run_unchanged(flat_present=True, **kwargs):
+def _run_unchanged(**kwargs):
     """Ingest a topic whose fingerprint matches the published item."""
     topic = Topic(schema="energy_mineral", layer="enmin_ucrc_wells_current")
     backend = MagicMock()
@@ -109,9 +109,6 @@ def _run_unchanged(flat_present=True, **kwargs):
          patch("ugs_warehouse.vector.fingerprint.is_unchanged", return_value=True), \
          patch("ugs_warehouse.vector.sink_ducklake.write") as ducklake, \
          patch("ugs_warehouse.vector.sink_archive.write") as archive, \
-         patch("ugs_warehouse.vector.sink_archive.flat_present", return_value=flat_present), \
-         patch("ugs_warehouse.vector.sink_archive.write_flat",
-               return_value={"data_flat": "flat-meta"}) as write_flat, \
          patch("ugs_warehouse.vector.sink_pmtiles.build") as pmtiles, \
          patch("ugs_warehouse.vector.sink_stac.write") as stac_write, \
          patch("ugs_warehouse.vector.related.resolve", return_value={}), \
@@ -119,7 +116,6 @@ def _run_unchanged(flat_present=True, **kwargs):
 
         rc = _ingest(topic, dry_run=False, skip_refresh=False, **kwargs)
 
-    _run_unchanged.write_flat = write_flat
     return rc, ducklake, archive, pmtiles, stac_write, refresh, backend
 
 
@@ -141,23 +137,6 @@ def test_unchanged_topic_still_republishes_stac():
     # The curated metadata is read and handed to the STAC sink, not stale-cached.
     backend.read_metadata.assert_called_once()
     assert stac_write.call_args.kwargs["metadata"]["display_name"] == "Curated Title"
-
-
-def test_an_unchanged_topic_without_the_flat_copy_gets_only_that():
-    """Archives from before the flat copy existed: write it, skip the rest, cite it in STAC."""
-    rc, ducklake, archive, pmtiles, stac_write, _refresh, _backend = _run_unchanged(flat_present=False)
-
-    assert rc == 0
-    _run_unchanged.write_flat.assert_called_once()
-    ducklake.assert_not_called()
-    archive.assert_not_called()
-    pmtiles.assert_not_called()
-    assert stac_write.call_args.kwargs["file_meta"] == {"data_flat": "flat-meta"}
-
-
-def test_an_unchanged_topic_with_the_flat_copy_writes_no_data():
-    _run_unchanged(flat_present=True)
-    _run_unchanged.write_flat.assert_not_called()
 
 
 def _run_with_failing(failing=None, published="old-hash"):

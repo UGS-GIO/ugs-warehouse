@@ -220,7 +220,7 @@ class FakeArcpy(types.SimpleNamespace):
 
         def add(path):
             lyr = FakeLayer(path, ["U150WCQFF", "u15kwcqff", "other"],  # upper case, as stored
-                            broken=any(f"ugs_cdn_{p.lower()}" in path for p in arcpy.broken))
+                            broken=any(f"/{p.lower()}_" in path for p in arcpy.broken))
             lyr.isRasterLayer = path.endswith(".tif")
             arcpy.added.append(lyr)
             return lyr
@@ -339,7 +339,7 @@ def test_streams_from_the_cdn_over_s3_and_styles_like_the_viewer(monkeypatch, tm
     assert conn[:2] == ("AMAZON", "warehouse") and conn[2]["end_point"] == "maps-assets.geology.utah.gov"
     assert os.environ["AWS_RESPONSE_CHECKSUM_VALIDATION"] == "when_required"
     (lyr,) = arcpy.added
-    assert lyr.path == str(tmp_path / "ugs_cdn_amazon.acs" / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
+    assert lyr.path == str(tmp_path / "amazon_maps_assets_geology_utah_gov_warehouse.acs" / "geoparquet" / "hazards_qfaults" / "hazards_qfaults.parquet")
     assert lyr.name == "Quaternary Faults" and "  Opened online. (AMAZON)" in log
     assert lyr.metadata.saved and lyr.metadata.title == "Quaternary Faults"
     r = lyr.symbology.renderer
@@ -644,7 +644,7 @@ def test_a_raster_is_added_from_its_cog_with_metadata_and_no_style(monkeypatch, 
     tool.execute(params, types.SimpleNamespace(addMessage=lambda m: None, addWarningMessage=lambda m: None))
 
     (lyr,) = arcpy.added  # through the CDN connection, its bucket the first path segment
-    assert lyr.path == f"{tmp_path}/ugs_cdn_web_geolmap.acs/cogs/M-180.cog.tif"
+    assert lyr.path == f"{tmp_path}/web_maps_assets_geology_utah_gov_geolmap.acs/cogs/M-180.cog.tif"
     assert arcpy.connections == [("WEB", "geolmap", {"end_point": "maps-assets.geology.utah.gov"})]
     assert lyr.symbology.renderer is None
     assert lyr.metadata.summary == "A 1:24,000 map." and lyr.metadata.credits == "Personius"
@@ -669,11 +669,30 @@ def test_a_raster_falls_back_to_its_url_and_fails_loudly_when_nothing_opens(monk
         mod._open_raster(arcpy.mp.ArcGISProject("CURRENT").activeMap, url, str(tmp_path), msgs)
 
 
-def test_cdn_parts_splits_any_cdn_href_at_its_first_segment():
-    assert cat.cdn_parts("https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif") == \
-        ("geolmap", "cogs/M-180.cog.tif")
-    assert cat.cdn_parts("https://ugspub.nr.utah.gov/x.tif") is None
-    assert cat.cdn_parts("https://maps-assets.geology.utah.gov/x.tif") is None
+def test_href_parts_reads_https_path_style_and_native_buckets():
+    assert cat.href_parts("https://maps-assets.geology.utah.gov/geolmap/cogs/M-180.cog.tif") == \
+        ("https", "maps-assets.geology.utah.gov", "geolmap", "cogs/M-180.cog.tif")
+    assert cat.href_parts("https://data.example.org/stac/x.parquet?v=2") == \
+        ("https", "data.example.org", "stac", "x.parquet")
+    assert cat.href_parts("s3://overturemaps/release/a.parquet") == ("s3", "", "overturemaps", "release/a.parquet")
+    assert cat.href_parts("gs://bucket/k/x.tif") == ("gs", "", "bucket", "k/x.tif")
+    assert cat.href_parts("https://maps-assets.geology.utah.gov/x.tif") is None  # no bucket segment
+    assert cat.href_parts("http://insecure.example/b/x.tif") is None
+    assert cat.href_parts("./relative/x.tif") is None
+
+
+def test_native_hrefs_open_on_their_own_provider_and_any_https_host_works(monkeypatch, tmp_path):
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    m = arcpy.mp.ArcGISProject("CURRENT").activeMap
+    msgs = types.SimpleNamespace(addMessage=lambda x: None)
+    mod._stream(m, {"href": "s3://overturemaps/release/a.parquet"}, str(tmp_path), msgs)
+    assert arcpy.connections[-1] == ("AMAZON", "overturemaps", {"config_options": [["AWS_NO_SIGN_REQUEST", "YES"]]})
+    assert arcpy.added[-1].path == f"{tmp_path}/amazon_native_overturemaps.acs/release/a.parquet"
+    mod._cache.clear()
+    mod._open_raster(m, "https://data.example.org/cogs/x.tif", str(tmp_path), msgs)
+    provider, bucket, kw = arcpy.connections[-1]
+    assert (provider, bucket, kw["end_point"]) == ("WEB", "cogs", "data.example.org")
 
 
 def test_a_raster_takes_its_description_from_the_full_item(monkeypatch, tmp_path):

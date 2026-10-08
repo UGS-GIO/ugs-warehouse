@@ -116,11 +116,13 @@ def _asset(layer_id: str) -> dict:
     return cat.get_json(layer.item_url)["assets"]["data"]
 
 
-def _key(asset: dict) -> list[str]:
-    key = cat.cdn_key(asset["href"])
-    if key is None:
-        raise ValueError(f"not a warehouse CDN href: {asset['href']}")
-    return key.split("/")
+def _where(asset: dict) -> tuple[str, str, list[str]]:
+    """(host, bucket, key parts) a cloud storage connection reads the asset through."""
+    parts = cat.href_parts(asset["href"])
+    if parts is None:
+        raise ValueError(f"no cloud storage connection reaches {asset['href']}")
+    _, host, bucket, key = parts
+    return host, bucket, key.split("/")
 
 
 def _open(path: str) -> dict:
@@ -135,22 +137,23 @@ def _open(path: str) -> dict:
         return {"ok": False, "error": _err()}
 
 
-def _acs(work: str, provider: str, options: dict) -> str:
-    name = f"check_{provider.lower()}"
+def _acs(work: str, provider: str, options: dict, host: str, bucket: str) -> str:
+    name = f"check_{provider.lower()}_{bucket}"
     acs = os.path.join(work, name + ".acs")
     if not os.path.exists(acs):
+        endpoint = {"end_point": host} if host else {}
         arcpy.management.CreateCloudStorageConnectionFile(
-            work, name, provider, cat.CDN_BUCKET, end_point=cat.CDN_HOST, **options)
+            work, name, provider, bucket, **endpoint, **options)
     return acs
 
 
 def check_connections(work: str) -> dict:
     """Each connection type against the small file: does Pro open GeoParquet through it?"""
-    key = _key(_asset(SMALL))
+    host, bucket, key = _where(_asset(SMALL))
     out = {}
     for provider, options in _connections():
         try:
-            out[provider] = _open(os.path.join(_acs(work, provider, options), *key))
+            out[provider] = _open(os.path.join(_acs(work, provider, options, host, bucket), *key))
         except Exception:  # noqa: BLE001 - creating the connection failed
             out[provider] = {"ok": False, "error": _err()}
     return out
@@ -189,7 +192,8 @@ def check_shapes(work: str) -> dict:
 def check_big(work: str, provider: str) -> dict:
     """Open the 1.9 GB file through a connection that worked, then read one small extent."""
     asset = _asset(BIG)
-    path = os.path.join(_acs(work, provider, dict(_connections())[provider]), *_key(asset))
+    host, bucket, key = _where(asset)
+    path = os.path.join(_acs(work, provider, dict(_connections())[provider], host, bucket), *key)
     out = {"provider": provider, "file_bytes": asset.get("file:size")}
     before = _io()
     out["open"] = _open(path)

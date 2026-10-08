@@ -71,22 +71,24 @@ def id_of(choice: str) -> str:
     return choice.rsplit("[", 1)[-1].rstrip("]")
 
 
-def cdn_key(href: str) -> str | None:
-    """The path of a CDN href below the bucket segment (`geoparquet/x/x.parquet`), else None."""
-    base = f"https://{CDN_HOST}/{CDN_BUCKET}/"
-    return href.removeprefix(base) if href.startswith(base) else None
+def href_parts(href: str) -> tuple[str, str, str, str] | None:
+    """(scheme, host, bucket, key) of an asset href a cloud storage connection can reach, else None.
+
+    `s3://b/k` and `gs://b/k` name their bucket. An https href is read path-style: its first path
+    segment is the "bucket" and its host the endpoint (`https://maps-assets.../geolmap/cogs/M-1.tif`
+    -> host `maps-assets...`, bucket `geolmap`), which any static host answers with plain GETs.
+    """
+    scheme, sep, rest = href.partition("://")
+    if not sep or scheme not in ("https", "s3", "gs"):
+        return None
+    if scheme == "https":
+        host, _, rest = rest.partition("/")
+    else:
+        host = ""
+    bucket, _, key = rest.split("?", 1)[0].partition("/")
+    return (scheme, host, bucket, key) if bucket and key else None
 
 
-def cdn_parts(href: str) -> tuple[str, str] | None:
-    """(bucket, key) of any CDN href: its first path segment, which a path-style cloud storage
-    connection calls the bucket (`geolmap`), and the rest (`cogs/M-180.cog.tif`). Else None."""
-    base = f"https://{CDN_HOST}/"
-    bucket, _, key = href.removeprefix(base).partition("/") if href.startswith(base) else ("", "", "")
-    return (bucket, key) if bucket and key else None
-
-
-# The bucket behind the CDN. It is private: reading it straight takes a Google sign-in with read
-# access, which the toolbox uses when the machine has one (`google_credentials`).
 GCS_BUCKET = "ut-dnr-ugs-maps-prod-public"
 
 

@@ -7,6 +7,7 @@ from __future__ import annotations
 import importlib
 import json
 import os
+import re
 import sys
 
 import arcpy
@@ -32,6 +33,9 @@ CONNECTIONS = (
     ("AMAZON", {"region": "us-east-1",
                 "config_options": [["AWS_NO_SIGN_REQUEST", "YES"], ["AWS_VIRTUAL_HOSTING", "FALSE"]]}),
 )
+# An s3:// or gs:// href goes to that provider's own endpoint, read anonymously.
+NATIVE = {"s3": ("AMAZON", {"config_options": [["AWS_NO_SIGN_REQUEST", "YES"]]}),
+          "gs": ("GOOGLE", {"config_options": [["GS_NO_SIGN_REQUEST", "YES"]]})}
 _cache: dict = {}
 
 
@@ -85,13 +89,15 @@ def _pro_version() -> tuple[int, ...]:
     return tuple(int(p) for p in v.split(".")[:2] if p.isdigit())
 
 
-def _connection(folder: str, provider: str, options: dict, bucket: str = cat.CDN_BUCKET) -> str:
-    """The `.acs` for one CDN "bucket" (first path segment) with `provider`, created once in `folder`."""
-    name = f"ugs_cdn_{provider.lower()}" + ("" if bucket == cat.CDN_BUCKET else f"_{bucket}")
+def _connection(folder: str, provider: str, options: dict, bucket: str, host: str = "") -> str:
+    """The `.acs` for one bucket on one host with `provider`, created once in `folder`. No host
+    means the provider's own endpoint (an s3:// or gs:// href)."""
+    name = re.sub(r"[^A-Za-z0-9_]", "_", f"{provider}_{host or 'native'}_{bucket}").lower()
     path = os.path.join(folder, name + ".acs")
     if not os.path.exists(path):
+        endpoint = {"end_point": host} if host else {}
         arcpy.management.CreateCloudStorageConnectionFile(
-            folder, name, provider, bucket, end_point=cat.CDN_HOST, **options)
+            folder, name, provider, bucket, **endpoint, **options)
     return path
 
 
@@ -130,65 +136,69 @@ def _unusable(m, lyr, raster: bool = False) -> str | None:
     return why
 
 
-def _open_raster(m, href: str, folder: str, messages):
-    """A COG through a cloud storage connection to the CDN, which is how Pro reads cloud rasters;
-    the bare https URL is the last try."""
+def _ways_in(href: str, folder: str, raster: bool) -> tuple[list, list[str]]:
+    """(label, path-maker) pairs for opening `href` through a cloud storage connection, plus the
+    reasons any way was ruled out. The bucket itself with a Google sign-in comes first; an https
+    href then goes path-style to its host; a raster also tries its bare URL last."""
     tries, reasons = [], []
     label, path = _google(folder, href)
     if path:
         tries.append((label, lambda p=path: p))
-    else:
+    elif label != "GOOGLE":  # the UGS bucket, but no sign-in; elsewhere it doesn't apply
         reasons.append(label)
-    if parts := cat.cdn_parts(href):
-        bucket, key = parts
-        for provider, options in CONNECTIONS:
+    parts = cat.href_parts(href)
+    if parts:
+        scheme, host, bucket, key = parts
+        ways = [NATIVE[scheme]] if scheme in NATIVE else [
+            c for c in CONNECTIONS if raster or c[0] != "WEB"]  # Esri: WEB opens rasters only
+        for provider, options in ways:
             tries.append((provider, lambda p=provider, o=options:
-                          os.path.join(_connection(folder, p, o, bucket), *key.split("/"))))
-    tries.append(("URL", lambda: href))
-    tries.sort(key=lambda t: t[0] != _cache.get("raster"))  # last good way first
+                          os.path.join(_connection(folder, p, o, bucket, host), *key.split("/"))))
+    if raster and href.startswith("https://"):
+        tries.append(("URL", lambda: href))
+    return tries, reasons
+
+
+def _open_first(m, tries: list, reasons: list[str], cached: str, raster: bool, messages):
+    """The first way in that gives a layer Pro can read (the last good way tried first), or None;
+    every failure is added to `reasons`."""
+    tries = sorted(tries, key=lambda t: t[0] != _cache.get(cached))
     for how, path in tries:
         try:
             lyr = m.addDataFromPath(path())
-            if not (why := _unusable(m, lyr, raster=True)):
-                _cache["raster"] = how
+            if not (why := _unusable(m, lyr, raster=raster)):
+                _cache[cached] = how
                 messages.addMessage(f"  Opened online. ({how})")
                 return lyr
             reasons.append(f"{how}: {why}")
         except Exception as e:  # noqa: BLE001 - try the next way in
             reasons.append(f"{how}: {e}")
-    raise RuntimeError(f"ArcGIS Pro couldn't open the map image. ({'; '.join(reasons)})")
+    return None
+
+
+def _open_raster(m, href: str, folder: str, messages):
+    """A COG through a cloud storage connection, which is how Pro reads cloud rasters."""
+    tries, reasons = _ways_in(href, folder, raster=True)
+    lyr = _open_first(m, tries, reasons, "raster", True, messages)
+    if lyr is None:
+        raise RuntimeError(f"ArcGIS Pro couldn't open the map image. ({'; '.join(reasons)})")
+    return lyr
 
 
 def _stream(m, asset: dict, folder: str, messages):
-    """Add the GeoParquet from the CDN through a cloud storage connection, or None."""
-    key = cat.cdn_key(asset["href"])
-    if key is None or _pro_version() < (3, 5):
+    """Add the GeoParquet through a cloud storage connection, or None when it can't be opened."""
+    if _pro_version() < (3, 5):
         return None
-    tries, reasons = [], []
-    label, path = _google(folder, asset["href"])  # the bucket itself, when signed in
-    if path:
-        tries.append((label, lambda p=path: p))
-    else:
-        reasons.append(label)
-    for provider, options in CONNECTIONS:
-        if provider == "WEB":  # Esri: the generic HTTP provider opens rasters, not Parquet
-            continue
-        tries.append((provider, lambda p=provider, o=options:
-                      os.path.join(_connection(folder, p, o), *key.split("/"))))
-    tries.sort(key=lambda t: t[0] != _cache.get("stream"))  # last good way first
-    for how, path in tries:
-        try:
-            lyr = m.addDataFromPath(path())
-            if not (why := _unusable(m, lyr)):
-                _cache["stream"] = how
-                messages.addMessage(f"  Opened online. ({how})")
-                return lyr
-            reasons.append(f"{how}: {why}")
-        except Exception as e:  # noqa: BLE001 - try the next way in
-            reasons.append(f"{how}: {e}")
-    messages.addMessage(f"  Couldn't open it online, so it was downloaded instead. "
-                        f"({'; '.join(reasons)})")
-    return None
+    tries, reasons = _ways_in(asset["href"], folder, raster=False)
+    if not tries:
+        messages.addMessage("  Not on a host ArcGIS Pro can open online, so it was downloaded "
+                            f"instead. ({'; '.join(reasons) or asset['href']})")
+        return None
+    lyr = _open_first(m, tries, reasons, "stream", False, messages)
+    if lyr is None:
+        messages.addMessage(f"  Couldn't open it online, so it was downloaded instead. "
+                            f"({'; '.join(reasons)})")
+    return lyr
 
 
 _GEOMETRY = {"Point": "POINT", "MultiPoint": "MULTIPOINT", "LineString": "POLYLINE",

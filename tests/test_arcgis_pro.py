@@ -246,7 +246,8 @@ class FakeArcpy(types.SimpleNamespace):
             GetInstallInfo=lambda: {"Version": "3.5.2"},
             ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
             Exists=lambda p: False, SpatialReference=lambda code: f"SR{code}",
-            ValidateFieldName=lambda name, ws: name + "_" if name.lower() in ("date", "select") else name,
+            ValidateFieldName=lambda name, ws: (name + "_" if name.lower() in ("date", "select")
+                                                else "x" * 64 if name.startswith("long") else name),
             FromWKB=lambda wkb, sr: ("geom", bytes(wkb), sr), CreateUniqueName=lambda n, ws: n,
             mp=types.SimpleNamespace(ArcGISProject=lambda name: types.SimpleNamespace(
                 activeMap=the_map, homeFolder=arcpy.home)),
@@ -457,7 +458,7 @@ def test_to_fgdb_validates_names_with_the_gdb_and_warns_on_dropped_columns(monke
 
     point = struct.pack("<BIdd", 1, 1, -111.9, 40.7)
     table = pa.table({"date": ["2020-01-02"], "select": ["x"], "blob": pa.array([b"\x00"], pa.binary()),
-                      "geom": [point]})
+                      "long_a": [1], "long_b": [2], "geom": [point]})
     geo = {"version": "1.1.0", "primary_column": "geom",
            "columns": {"geom": {"encoding": "WKB", "geometry_types": ["Point"]}}}
     path = tmp_path / "x.parquet"
@@ -469,8 +470,9 @@ def test_to_fgdb_validates_names_with_the_gdb_and_warns_on_dropped_columns(monke
     mod._to_fgdb(str(path), str(tmp_path), "x", types.SimpleNamespace(addWarningMessage=log.append))
 
     assert arcpy.fc["fields"][:2] == [["date_", "TEXT", "date", 10], ["select_", "TEXT", "select", 1]]
-    assert arcpy.fc["insert_fields"] == ["SHAPE@", "date_", "select_"]
-    assert arcpy.inserted[0][1:] == ["2020-01-02", "x"]
+    long_a, long_b = "x" * 64, "x" * 62 + "_2"  # validated alike, deduped within 64 characters
+    assert arcpy.fc["insert_fields"] == ["SHAPE@", "date_", "select_", long_a, long_b]
+    assert arcpy.inserted[0][1:] == ["2020-01-02", "x", 1, 2]
     assert log == ["  Left out columns ArcGIS can't store: blob"]
 
 

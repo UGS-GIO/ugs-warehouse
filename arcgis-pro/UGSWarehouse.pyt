@@ -194,14 +194,16 @@ def _to_fgdb(parquet: str, folder: str, name: str, messages) -> str:
         if spec is None:
             dropped.append(f.name)
             continue
-        valid = arcpy.ValidateFieldName(f.name, gdb)
+        valid = base = arcpy.ValidateFieldName(f.name, gdb)
+        n = 1
         while valid.lower() in taken:  # validation can map two names to one
-            valid = valid[:63] + "_"
+            n += 1
+            valid = f"{base[:64 - len(str(n)) - 1]}_{n}"
         taken.add(valid.lower())
         fields.append((f.name, valid, spec))
     if dropped:
         messages.addWarningMessage(f"  Left out columns ArcGIS can't store: {', '.join(dropped)}")
-    if fields:  # the alias keeps the catalog's name when validation changed it
+    if fields:  # the alias keeps the column's name when the geodatabase's validation changed it
         arcpy.management.AddFields(fc, [[v, s[0], n, s[1]] for n, v, s in fields])
     names = [n for n, _, _ in fields]
     with arcpy.da.InsertCursor(fc, ["SHAPE@", *(v for _, v, _ in fields)]) as cur:
@@ -302,7 +304,7 @@ def _add_layer(m, layer: cat.Layer, source: str, work: str, style: bool, message
                 props = cat.get_json(layer.self_href).get("properties") or props
             except (OSError, ValueError) as e:
                 messages.addWarningMessage(f"  Couldn't read the map's full description. ({e})")
-        fields = cat.metadata(props, source=layer.href)
+        fields = cat.metadata(props, source=layer.self_href or layer.href)  # like a vector: its item
     else:
         item = cat.get_json(layer.item_url)
         asset = item["assets"]["data"]

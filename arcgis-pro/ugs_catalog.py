@@ -242,11 +242,14 @@ def _expression_classes(color) -> tuple[str, list[tuple[object, tuple]]] | None:
 
 
 def single_color(style: dict) -> tuple[int, int, int] | None:
-    """The color of a one-color style (its first fill, line or circle layer), else None."""
+    """The color of a one-color style (its first fill, line or circle layer), else None.
+
+    A filtered first layer draws only some features, so its color would misstate the rest.
+    """
     for lyr in style.get("layers") or []:
         if lyr.get("type") in ("fill", "line", "circle"):
             color = _paint_color(lyr)
-            return _rgb(color) if isinstance(color, str) else None
+            return _rgb(color) if isinstance(color, str) and not lyr.get("filter") else None
     return None
 
 

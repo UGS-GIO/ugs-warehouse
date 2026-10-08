@@ -107,6 +107,16 @@ def _asset(data: bytes) -> dict:
             "file:checksum": "1220" + hashlib.sha256(data).hexdigest()}
 
 
+def test_a_filtered_first_layer_has_no_single_color():
+    style = {"layers": [  # enmin_ccus_geochemistry: one circle layer per datatype, one an `in` filter
+        {"type": "circle", "filter": ["==", ["get", "datatype"], "core analysis"],
+         "paint": {"circle-color": "#7B1FA2"}},
+        {"type": "circle", "filter": ["in", "average", ["get", "datatype"]],
+         "paint": {"circle-color": "#AB47BC"}}]}
+    assert cat.classes(style) is None
+    assert cat.single_color(style) is None
+
+
 def test_download_verifies_and_reuses_a_matching_copy(monkeypatch, tmp_path):
     data = b"PAR1" * 10
     calls = []

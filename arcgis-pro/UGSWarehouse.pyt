@@ -152,8 +152,11 @@ _GEOMETRY = {"Point": "POINT", "MultiPoint": "MULTIPOINT", "LineString": "POLYLI
              "MultiLineString": "POLYLINE", "Polygon": "POLYGON", "MultiPolygon": "POLYGON"}
 
 
-def _to_fgdb(parquet: str, folder: str, name: str) -> str:
-    """A feature class in `<folder>/UGS Warehouse.gdb` with the GeoParquet's rows. Any Pro version."""
+def _to_fgdb(parquet: str, folder: str, name: str, messages=None) -> str:
+    """A feature class in `<folder>/UGS Warehouse.gdb` with the GeoParquet's rows. Any Pro version.
+
+    Field names go through the geodatabase's own validation; columns with no Esri field type
+    (binary, nested) are left out and named in a warning."""
     import pyarrow.parquet as pq
 
     table = pq.read_table(parquet)
@@ -175,12 +178,25 @@ def _to_fgdb(parquet: str, folder: str, name: str) -> str:
     sr = arcpy.SpatialReference(4326)
     arcpy.management.CreateFeatureclass(gdb, os.path.basename(fc), shape, spatial_reference=sr,
                                         has_z="ENABLED" if has_z else "DISABLED")
-    fields = [(f.name, spec) for f in table.schema if f.name != gcol
-              and (spec := cat.esri_field(f.type, table.column(f.name), _pro_version()))]
+    fields, dropped, taken = [], [], set()
+    for f in table.schema:
+        if f.name == gcol:
+            continue
+        spec = cat.esri_field(f.type, table.column(f.name), _pro_version())
+        if spec is None:
+            dropped.append(f.name)
+            continue
+        valid = arcpy.ValidateFieldName(f.name, gdb)
+        while valid.lower() in taken:  # validation can map two names to one
+            valid += "_"
+        taken.add(valid.lower())
+        fields.append((f.name, valid, spec))
+    if dropped and messages:
+        messages.addWarningMessage(f"  Left out columns ArcGIS can't store: {', '.join(dropped)}")
     if fields:
-        arcpy.management.AddFields(fc, [[n, s[0], n, s[1]] for n, s in fields])
-    names = [n for n, _ in fields]
-    with arcpy.da.InsertCursor(fc, ["SHAPE@", *names]) as cur:
+        arcpy.management.AddFields(fc, [[v, s[0], v, s[1]] for _, v, s in fields])
+    names = [n for n, _, _ in fields]
+    with arcpy.da.InsertCursor(fc, ["SHAPE@", *(v for _, v, _ in fields)]) as cur:
         for batch in table.to_batches():
             cols = [batch.column(gcol).to_pylist(), *(batch.column(n).to_pylist() for n in names)]
             for row in zip(*cols):
@@ -194,7 +210,7 @@ def _copy(m, asset: dict, folder: str, name: str, messages):
     mb = (asset.get("file:size") or 0) / 1e6
     messages.addMessage(f"  Downloading ({mb:.1f} MB)...")
     path = cat.download(asset, folder, f"{name}.parquet")
-    return m.addDataFromPath(_to_fgdb(cat.pro_ready(path), folder, name))
+    return m.addDataFromPath(_to_fgdb(cat.pro_ready(path), folder, name, messages))
 
 
 def _apply_metadata(lyr, fields: dict[str, str], messages) -> None:

@@ -236,6 +236,7 @@ class FakeArcpy(types.SimpleNamespace):
             GetInstallInfo=lambda: {"Version": "3.5.2"},
             ListFields=lambda lyr: [types.SimpleNamespace(name="QffHazardUnit")],
             Exists=lambda p: False, SpatialReference=lambda code: f"SR{code}",
+            ValidateFieldName=lambda name, ws: name + "_" if name.lower() in ("date", "select") else name,
             FromWKB=lambda wkb, sr: ("geom", bytes(wkb), sr), CreateUniqueName=lambda n, ws: n,
             mp=types.SimpleNamespace(ArcGISProject=lambda name: types.SimpleNamespace(
                 activeMap=the_map, homeFolder=arcpy.home)),
@@ -350,7 +351,7 @@ def test_copies_to_a_geodatabase_when_pro_cannot_open_the_stream(monkeypatch, tm
     mod = _load(monkeypatch, arcpy)
     monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
     monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
-    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name: f"{folder}/UGS Warehouse.gdb/{name}")
+    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages=None: f"{folder}/UGS Warehouse.gdb/{name}")
     _run(mod, tmp_path)
     assert len(arcpy.removed) == 1  # the broken streamed layer came off the map
     assert arcpy.added[-1].path == f"{tmp_path}/UGS Warehouse.gdb/hazards_qfaults"
@@ -387,7 +388,7 @@ def test_old_pro_copies_instead_of_streaming(monkeypatch, tmp_path):
     assert "can't open these layers online" in params[3].warning
     monkeypatch.setattr(mod.cat, "download", lambda asset, folder, name: f"{folder}/{name}")
     monkeypatch.setattr(mod.cat, "pro_ready", lambda path: path)
-    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name: f"gdb/{name}")
+    monkeypatch.setattr(mod, "_to_fgdb", lambda parquet, folder, name, messages=None: f"gdb/{name}")
     _run(mod, tmp_path)
     assert arcpy.connections == [] and arcpy.added[-1].path == "gdb/hazards_qfaults"
 
@@ -420,6 +421,32 @@ def test_to_fgdb_writes_fields_rows_and_z(monkeypatch, tmp_path):
     assert arcpy.fc["insert_fields"] == ["SHAPE@", "name", "n", "when"]
     assert arcpy.inserted[0] == [("geom", point_z, "SR4326"), "Wasatch", 1, dt.date(2020, 1, 2)]
     assert arcpy.inserted[1] == [None, None, 2, None]
+
+
+def test_to_fgdb_validates_names_with_the_gdb_and_warns_on_dropped_columns(monkeypatch, tmp_path):
+    import json
+    import struct
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    point = struct.pack("<BIdd", 1, 1, -111.9, 40.7)
+    table = pa.table({"date": ["2020-01-02"], "select": ["x"], "blob": pa.array([b"\x00"], pa.binary()),
+                      "geom": [point]})
+    geo = {"version": "1.1.0", "primary_column": "geom",
+           "columns": {"geom": {"encoding": "WKB", "geometry_types": ["Point"]}}}
+    path = tmp_path / "x.parquet"
+    pq.write_table(table.replace_schema_metadata({b"geo": json.dumps(geo).encode()}), path)
+
+    arcpy = FakeArcpy()
+    mod = _load(monkeypatch, arcpy)
+    log = []
+    mod._to_fgdb(str(path), str(tmp_path), "x", types.SimpleNamespace(addWarningMessage=log.append))
+
+    assert [f[0] for f in arcpy.fc["fields"]] == ["date_", "select_"]
+    assert arcpy.fc["insert_fields"] == ["SHAPE@", "date_", "select_"]
+    assert arcpy.inserted[0][1:] == ["2020-01-02", "x"]
+    assert log == ["  Left out columns ArcGIS can't store: blob"]
 
 
 def test_pro_ready_drops_nested_columns_and_fixes_names(tmp_path):

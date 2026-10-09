@@ -1,11 +1,15 @@
-# Design: Aspatial tables as first-class STAC Items, with a uniform relationship model
+# Design proposal: STAC Items for aspatial tables and publications
+
+> **What this is.** A proposal for one change: how aspatial tables, the relationships between
+> tables, and publications are modeled as STAC objects. It is not the warehouse's overall design;
+> for how the warehouse works today, see [ARCHITECTURE.md](ARCHITECTURE.md). None of it is built yet.
 
 - **Jira:** ALL-6049 (umbrella: decision + rollout; GH issue #413, under epic ALL-3865). Relates: ALL-5913 (superseded conclusion), ALL-5922, ALL-5550, ALL-5557, ALL-5837, ALL-5861 (builder-ownership dependency).
 - **Related:** ALL-5550 / ALL-5557 (canonical dataset+grouping model, in progress), ALL-5837 (land-raw+curate re-arch, GeMS target, in progress), ALL-5911 (geomap corpus load, parent task, in progress), ALL-5913 (companion tables shipped as STAC **assets**, Done — its item-model conclusion is superseded here), ALL-5922 (scale-tier whole/members + `derived_from`, Done — extended here), warehouse #347 / #348 (the bugs this grew from). See §9 for how they reconcile.
 - **Date:** 2026-09-26 (publications section added 2026-10-03)
 - **Status:** Draft for review
 - **Decision owner:** marshallrobinson. Reviewer: clintonlunn (warehouse).
-- **Scope:** How the warehouse catalog models (a) aspatial serving tables, (b) relationships between tables, spatial or not, and (c) publications and the data harvested with them. Verified against the STAC 1.1.0 spec, the STAC Table extension, Portolan v0.2.0, and the largest public Table-extension catalog (Microsoft Planetary Computer). Out of scope: the discovery/browse UI, and the ISO/curation fields.
+- **Scope:** Only how the catalog models (a) aspatial serving tables, (b) relationships between tables, spatial or not, and (c) publications and the data harvested with them. Verified against the STAC 1.1.0 spec, the STAC Table extension, Portolan v0.2.0, and the largest public Table-extension catalog (Microsoft Planetary Computer). Out of scope: the rest of the warehouse's architecture (ingest, serving, tiles, styling; see ARCHITECTURE.md), the discovery/browse UI, and the ISO/curation fields.
 
 ---
 

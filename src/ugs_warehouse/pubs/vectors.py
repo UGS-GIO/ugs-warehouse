@@ -218,8 +218,9 @@ def _extract_and_upload(
 
 
 def _clean_manifest(path: str) -> bool:
-    """True when the manifest at `path` reads as an object with no errors. An unreadable manifest
-    is reported and counts as not done, so the next extraction rewrites it."""
+    """True when the manifest at `path` reads as an object that records per-layer metadata and
+    no errors. An unreadable manifest is reported and counts as not done, and so does one with no
+    `layers` list, so ordinary resumable runs re-extract it instead of needing --force."""
     try:
         doc = json.loads(gcs.get_bytes(path).decode())
     except Exception as e:
@@ -228,7 +229,7 @@ def _clean_manifest(path: str) -> bool:
     if not isinstance(doc, dict):
         print(f"  manifest {path} is not an object, re-extracting", file=sys.stderr)
         return False
-    return not doc.get("errors")
+    return "layers" in doc and not doc.get("errors")
 
 
 def extracted_series() -> set[str]:

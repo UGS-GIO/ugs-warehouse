@@ -281,9 +281,9 @@ def test_a_bbox_outside_the_crs_area_of_use_warns_that_the_prj_may_be_wrong(monk
 def test_extracted_series_leaves_out_a_series_whose_manifest_lists_errors(monkeypatch):
     """A partly failed pub is retried and reported on every run, not skipped as done."""
     pfx = vectors.VECTORS_PREFIX
-    bodies = {f"{pfx}/M-1DM/_manifest.json": b'{"spatial": ["a"], "errors": []}',
-              f"{pfx}/M-2DM/_manifest.json": b'{"spatial": ["a"], "errors": [{"label": "b"}]}',
-              f"{pfx}/M-3DM/_manifest.json": b'{"spatial": ["a"], "tables": []}'}
+    bodies = {f"{pfx}/M-1DM/_manifest.json": b'{"spatial": ["a"], "layers": [], "errors": []}',
+              f"{pfx}/M-2DM/_manifest.json": b'{"spatial": ["a"], "layers": [], "errors": [{"label": "b"}]}',
+              f"{pfx}/M-3DM/_manifest.json": b'{"spatial": ["a"], "layers": []}'}
     monkeypatch.setattr(vectors.gcs, "list_paths",
                         lambda prefix: [*bodies, f"{pfx}/M-2DM/a.parquet"])
     monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: bodies[p])
@@ -291,11 +291,24 @@ def test_extracted_series_leaves_out_a_series_whose_manifest_lists_errors(monkey
     assert vectors.extracted_series() == {"M-1DM", "M-3DM"}
 
 
+def test_an_old_format_manifest_is_re_extracted_by_an_ordinary_run(monkeypatch):
+    """A manifest written before per-layer metadata was recorded has no `layers` list. Counting
+    it as not done lets resumable runs upgrade every pub, since a --force run restarts from the
+    first pub on each attempt and cannot finish within the job timeout."""
+    pfx = vectors.VECTORS_PREFIX
+    bodies = {f"{pfx}/M-1DM/_manifest.json": b'{"spatial": ["a"], "tables": []}',
+              f"{pfx}/M-2DM/_manifest.json": b'{"spatial": ["a"], "layers": [], "errors": []}'}
+    monkeypatch.setattr(vectors.gcs, "list_paths", lambda prefix: list(bodies))
+    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: bodies[p])
+
+    assert vectors.extracted_series() == {"M-2DM"}
+
+
 def test_extracted_series_retries_a_corrupt_manifest_or_a_series_with_no_manifest(monkeypatch, capsys):
     """One unreadable manifest is reported and re-extracted, not fatal to the batch; layers with
     no manifest (its write failed) are not counted as done."""
     pfx = vectors.VECTORS_PREFIX
-    bodies = {f"{pfx}/M-1DM/_manifest.json": b'{"spatial": ["a"]}',
+    bodies = {f"{pfx}/M-1DM/_manifest.json": b'{"spatial": ["a"], "layers": []}',
               f"{pfx}/M-2DM/_manifest.json": b"not json",
               f"{pfx}/M-4DM/_manifest.json": b"null"}
     monkeypatch.setattr(vectors.gcs, "list_paths",
@@ -383,7 +396,8 @@ def test_a_batch_run_visits_only_new_pubs_with_a_gis_zip(monkeypatch):
         return [f"{vectors.VECTORS_PREFIX}/M-1DM/_manifest.json"]
 
     monkeypatch.setattr(vectors.gcs, "list_paths", list_paths)
-    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: b'{"spatial": ["a"], "errors": []}')
+    monkeypatch.setattr(vectors.gcs, "get_bytes",
+                        lambda p: b'{"spatial": ["a"], "layers": [], "errors": []}')
     downloads: list[str] = []
     monkeypatch.setattr(harvest, "download", lambda url, dst: downloads.append(url) or 1 / 0)
     monkeypatch.setattr(sys, "argv", ["vectors", "--all"])

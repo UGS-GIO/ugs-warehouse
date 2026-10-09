@@ -10,6 +10,8 @@ Ported from ugs-geolmap-cog-poc/catalog/build_pubs_stac.py — adapted to `core.
 """
 from __future__ import annotations
 
+import datetime
+import math
 import os
 import re
 import sys
@@ -17,7 +19,7 @@ import urllib.parse
 
 from ..core import config, stac
 from . import counties, identity, topic
-from .scale import DEFAULT_TIER, SCALE_LABEL, tier_of
+from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
 from .vectors import VECTORS_PREFIX
 
@@ -28,6 +30,9 @@ UGS_NAMES = {"UGS", "UGMS", "UTAH GEOLOGICAL SURVEY", "UTAH GEOLOGICAL AND MINER
 # A client picks a viewer, a downloader or nothing at all from the media type, so an unmapped
 # extension falling back to `application/octet-stream` costs the reader the file. `.tif` here is
 # the publisher's plain scan; a COG we produced carries COG_MIME, set on the asset directly.
+# The earliest pub_year in the publications source: the start of an undated item's interval.
+EARLIEST_RECORD = "1886-01-01T00:00:00Z"
+
 MEDIA = {".pdf": "application/pdf", ".zip": "application/zip",
          ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
          ".xls": "application/vnd.ms-excel",
@@ -162,10 +167,38 @@ _RESERVED_ASSET_KEYS = frozenset({
 })
 
 
+def cog_asset_fields(ds) -> dict:
+    """STAC 1.1 asset fields for an open COG, read from its header with rio-stac (no pixel reads).
+
+    rio-stac emits projection v1.1 `proj:epsg` and `eo:bands`; both map to their STAC 1.1 forms
+    here (`proj:code` and common `bands`). Its `raster:bands` reads pixel statistics, so data type
+    and nodata come from the header directly.
+    """
+    from rio_stac.stac import get_eobands_info, get_projection_info
+
+    proj = get_projection_info(ds)
+    epsg = proj.pop("epsg")
+    proj.pop("geometry")
+    fields = {f"proj:{k}": v for k, v in proj.items()}
+    if epsg:
+        fields["proj:code"] = f"EPSG:{epsg}"
+    bands = get_eobands_info(ds)
+    if len(set(ds.dtypes)) == 1:
+        fields["data_type"] = ds.dtypes[0]
+    else:
+        for band, dtype in zip(bands, ds.dtypes):
+            band["data_type"] = dtype
+    if ds.nodata is not None:
+        fields["nodata"] = ds.nodata if math.isfinite(ds.nodata) else str(ds.nodata)
+    fields["bands"] = bands
+    return fields
+
+
 def build_item(p: dict, attachments: list[dict], *,
                geom: dict | None = None, bbox: list[float] | None = None,
                fp_source: str | None = None,
-               has_cog: bool = False, has_units: bool = False,
+               has_cog: bool = False, cog_fields: dict | None = None,
+               has_units: bool = False,
                has_thumb: bool = False, has_cover: bool = False,
                has_3d: bool = False, classes_3d: list[dict] | None = None,
                vector_layers: list[str] | None = None,
@@ -173,7 +206,8 @@ def build_item(p: dict, attachments: list[dict], *,
                override: dict | None = None,
                contents: list[dict] | None = None,
                mirrored: set[str] | None = None,
-               edition: dict | None = None) -> dict:
+               edition: dict | None = None,
+               mosaic_tier: str | None = None) -> dict:
     """Build a pub STAC Item (collection-nested, via core.stac.build_item).
 
     `mirrored` is the set of object paths the warehouse holds copies of (see pubs/mirror.py).
@@ -194,6 +228,14 @@ def build_item(p: dict, attachments: list[dict], *,
     item_id = item_id_for(sid)
     yr = (p.get("pub_year") or "").strip()
     dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
+    # STAC has no "unknown" date: a null datetime needs an interval. For an undated publication the
+    # only true one runs from the source's earliest dated record to now, flagged so no reader takes
+    # it for a publication date.
+    undated = {} if dt else {
+        "start_datetime": EARLIEST_RECORD,
+        "end_datetime": datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT00:00:00Z"),
+        "ugs:date_unknown": True,
+    }
 
     # A mirrored file is served from OUR CDN, with the publisher's URL kept as an `alternate` —
     # same bytes, two locations. Provenance survives, and a client that wants the publisher's copy
@@ -206,40 +248,39 @@ def build_item(p: dict, attachments: list[dict], *,
                 "alternate": {"publisher": {"href": h, "alternate:name": "UGS publications site",
                                             "title": "Publisher copy (ugspub.nr.utah.gov)"}}}
 
+    # A publisher's plain TIFF is the upstream original, not our raster data: Portolan's `source`
+    # role, which is exempt from the COG requirement. Our own raster is the `cog` asset below.
+    def roles_for(mtype: str) -> list[str]:
+        return ["source"] if mtype == "image/tiff" else ["data"]
+
     assets: dict = {}
     main_pdf = href(p.get("pub_url"))
     if main_pdf:
-        assets["publication"] = source_asset(main_pdf, type=media_type(main_pdf),
-                                             title="Publication", roles=["data"])
+        mtype = media_type(main_pdf)
+        assets["publication"] = source_asset(main_pdf, type=mtype, title="Publication",
+                                             roles=roles_for(mtype))
     for a in attachments:
         h = href(a.get("pub_url"))
         if not h:
             continue
+        mtype = media_type(h)
         key = re.sub(r"[^a-z0-9]+", "_", (a.get("extra_data") or "file").strip().lower()).strip("_") or "file"
-        assets.setdefault(key, source_asset(h, type=media_type(h),
-                                            title=(a.get("extra_data") or "").strip(), roles=["data"]))
+        assets.setdefault(key, source_asset(h, type=mtype,
+                                            title=(a.get("extra_data") or "").strip(), roles=roles_for(mtype)))
     if has_cog:
-        # The COG is warped to EPSG:3857 (harvest.py: gdalwarp -t_srs + rio-cogeo web_optimized),
-        # which differs from the item-level proj:code (4326, the footprint/units CRS). The projection
-        # ext allows per-asset overrides, so stamp the COG's real CRS on the asset itself — otherwise
-        # a client reads the item-level 4326 and mis-places the raster.
-        # harvest produces an RGBA uint8 COG (gdalwarp -dstalpha → rio-cogeo). Bands are the
-        # STAC 1.1 common `bands` construct (NOT deprecated raster:bands); data_type is deduped to
-        # the asset per 1.1 best practice. Alpha carries transparency, so no separate nodata.
+        # The COG's own CRS (3857) differs from the item-level proj:code (4326), so it rides on the
+        # asset as a per-asset override; `cog_fields` (see cog_asset_fields) carries it.
         assets["cog"] = {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
                          "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
-                         "roles": ["data", "cloud-optimized"], "proj:code": "EPSG:3857",
-                         "data_type": "uint8",
-                         "bands": [{"name": "red"}, {"name": "green"},
-                                   {"name": "blue"}, {"name": "alpha"}]}
+                         "roles": ["data", "cloud-optimized"], **(cog_fields or {})}
     if has_thumb:
-        assets["thumbnail"] = {"href": config.public_url(f"{identity.COG_PREFIX}/{sid.upper()}.thumb.png"),
-                               "type": "image/png", "title": "Thumbnail", "roles": ["thumbnail"]}
+        assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
+                               "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
     # PDF first-page cover — a preview for ANY pub (incl. non-spatial). The harvested COG thumb (above)
     # is preferred when present (added first → the viewer picks it); this covers everything else.
     if has_cover:
-        assets["preview"] = {"href": config.public_url(f"{identity.PUB_THUMB_PREFIX}/{sid.upper()}.png"),
-                             "type": "image/png", "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
+        assets["preview"] = {"href": config.public_url(identity.pub_cover_object(sid)),
+                             "type": config.WEBP_MIME, "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
     if has_units:
         assets["units"] = {
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
@@ -320,25 +361,24 @@ def build_item(p: dict, attachments: list[dict], *,
         extra_links.append({"rel": "latest-version", "href": ed["latest_href"],
                             "type": "application/geo+json"})
 
-    # A COG map is stitched into its tier's seamless raster mosaic (geolmap_mosaics.py); a
-    # non-COG pub has no mosaic to belong to. The tier is the mosaic's identity, not the pub's — the
-    # pub carries only its raw `ugs:scale` and reaches its tier through this link. Tier here mirrors
-    # `_group_by_tier`'s own fallback exactly, so an unparseable scale still links to DEFAULT_TIER.
-    if has_cog and not ed.get("deprecated"):
-        link_tier = tier_of(p.get("pub_scale")) or DEFAULT_TIER
+    # A COG map is stitched into its portal layer's seamless raster mosaic (geolmap_mosaics.py); the
+    # caller passes that tier (`scale.mosaic_tier_of` over the map's footprints), or None for a map
+    # in no tiered layer. The pub carries only its raw `ugs:scale` and reaches its tier through this link.
+    if has_cog and mosaic_tier and not ed.get("deprecated"):
+        link_tier = mosaic_tier
         extra_links.append({
             "rel": "related",
             "href": config.public_url(stac.item_object_path("ugs-geologic-maps",
                                                              f"geologic-maps-{link_tier}")),
             "type": "application/geo+json",
-            "title": f"Utah geologic maps — {SCALE_LABEL.get(link_tier, link_tier)} seamless mosaic"})
+            "title": f"Utah geologic maps — {MOSAIC_TIER_LABEL.get(link_tier, link_tier)} seamless mosaic"})
 
     # No web-map-links here: that extension's rels are [xyz, wms, wmts, tilejson, pmtiles, 3d-tiles]
     # — it has no `cog`, and declaring it forces one of those (which a raster pub lacks). The COG is
     # advertised by its `cog` ASSET (media type `…;profile=cloud-optimized`), which STAC Browser and
     # our viewer both render natively, and which `_is_mappable`/`cogAsset` detect. No link needed.
     extensions: list[str] = []
-    if has_cog:
+    if any(k.startswith("proj:") for k in assets.get("cog", {})):
         extensions.append(stac.PROJ_EXT)  # asset-level proj:code on the COG (EPSG:3857)
     if any("alternate" in a for a in assets.values()):
         extensions.append(stac.ALTERNATE_ASSETS_EXT)  # mirrored file + publisher copy
@@ -362,6 +402,7 @@ def build_item(p: dict, attachments: list[dict], *,
         geometry=geom, bbox=bbox, datetime_iso=dt,
         properties={
             "ugs:series_id": sid,  # the publication series id (== item id), surfaced as a labeled prop
+            **undated,
             "title": title,
             # STAC gives `description` a minimum length, so a pub with no citation omits the field
             # rather than publishing "". Same for the UGS-prefixed strings below: an empty value
@@ -376,10 +417,8 @@ def build_item(p: dict, attachments: list[dict], *,
             **({"version": v} if (v := ed.get("version")) else {}),
             **({"deprecated": True} if ed.get("deprecated") else {}),
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
-            # ISO topic category. AUTHORED, not defaulted: a UGS publication is our own product, so
-            # asserting the category is a statement about our own work — unlike a serving topic,
-            # where an uncurated value would be a guess about someone else's data and is omitted
-            # instead (#53). Pubs have no schema_registry row, so this is the only place to say it.
+            # AUTHORED, not defaulted: a UGS publication is our own product. A serving topic's
+            # category would be a guess about someone else's data, so it is omitted there.
             "ugs:topic_category": "geoscientificInformation",
             "ugs:footprint_source": fp_source,
             **({"keywords": kw} if (kw := keywords_of(p.get("keywords"))) else {}),

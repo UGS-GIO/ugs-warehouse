@@ -12,6 +12,7 @@ import { lruSet } from "@/lib/lru";
 import { type Asset, classificationColors, cogAsset, type StacDoc } from "@/stac";
 import { buildMeshFrom3DEP, type TerrainMesh } from "@/map/terrain";
 import { UiSlider } from "@/ui/slider";
+import { to2d } from "@/lib/bbox";
 
 const GEOLOGIC_COLORS: Record<string, string> = {
   "red pine shale": "#556B2F",
@@ -122,8 +123,9 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
   const polyUrl = asset.href;
   const lineUrl = polyUrl.replace("_3d_polygons.geojson", "_3d_lines.geojson");
   const cog = cogAsset(item);
-  // Drape the geologic map sheet — the COG's PNG overview (browsers can't texture a COG directly).
-  const sheetImg = cog ? cog.href.replace(/\.cog\.tif$/i, ".thumb.png") : undefined;
+  // Drape the geologic map sheet: the 700 px WebP overview the harvest writes next to every COG
+  // (pubs/harvest.py _write_previews), since browsers can't texture a COG directly.
+  const sheetImg = cog ? cog.href.replace(/\.cog\.tif$/i, ".sheet.webp") : undefined;
 
   useEffect(() => {
     let active = true;
@@ -264,7 +266,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
       setTerrainPending(false);
       return () => { active = false; };
     }
-    const mapBbox = (item.bbox?.slice(0, 4) as [number, number, number, number] | undefined) ?? extent.bbox;
+    const mapBbox = to2d(item.bbox) ?? extent.bbox;
     // Live USGS 3DEP (CORS-open, public domain, 1 m lidar over Utah) — no hosting, any pub's bbox.
     // Progressive: a coarse grid lands in ~1–2 s so the surface shows immediately, then a fine grid
     // samples in the background and swaps in (smooth — no facets, the draped sheet stops looking
@@ -364,7 +366,7 @@ export function ThreeDViewer({ asset, item }: { asset: Asset; item: StacDoc }) {
 
   // Frame the full map sheet (so the fence reads as a transect within it), centred on the map — not
   // the fence — since the fence sits off-centre in the quad.
-  const mb = item.bbox?.slice(0, 4) as [number, number, number, number] | undefined;
+  const mb = to2d(item.bbox);
   const mapCtr: [number, number] = mb && extent
     ? [((mb[0] + mb[2]) / 2 - extent.center[0]) * extent.scale[0], ((mb[1] + mb[3]) / 2 - extent.center[1]) * extent.scale[1]]
     : [0, 0];

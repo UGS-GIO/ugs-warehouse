@@ -119,7 +119,9 @@ def test_extract_and_upload_skips_empty_layers_of_either_type(monkeypatch, tmp_p
     manifest = vectors._extract_and_upload(str(tmp_path), "M-101", srcs)
 
     assert manifest == {"spatial": [], "tables": []}
-    assert store == {}  # nothing uploaded — including no manifest — for an all-empty extraction
+    # No layer uploaded, but an empty manifest marks the pub done so the next run skips the zip.
+    assert store == {f"{vectors.VECTORS_PREFIX}/M-101/_manifest.json":
+                     json.dumps({"spatial": [], "tables": []}).encode()}
 
 
 def test_extract_and_upload_continues_past_a_failed_layer(monkeypatch, tmp_path):
@@ -149,3 +151,31 @@ def test_extract_and_upload_continues_past_a_failed_layer(monkeypatch, tmp_path)
         f"{vectors.VECTORS_PREFIX}/M-102/geo__DescriptionOfMapUnits.parquet",
         f"{vectors.VECTORS_PREFIX}/M-102/_manifest.json",
     }
+
+
+def test_a_batch_run_visits_only_new_pubs_with_a_gis_zip(monkeypatch):
+    """--all lists the extracted series once and skips them, and never looks up a pub that has no
+    GIS zip in its attachments, so a weekly run with nothing new downloads nothing."""
+    import sys
+
+    from ugs_warehouse.pubs import harvest, source, vectors
+
+    monkeypatch.setattr(source, "read_pubs", lambda: [
+        {"series_id": "M-1DM"}, {"series_id": "M-2DM"}, {"series_id": "M-3"}])
+    gis = {"M-1DM": "https://x/m1-gis.zip", "M-2DM": "https://x/m2-gis.zip"}
+    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, gis.get(sid)))
+    listings: list[str] = []
+
+    def list_paths(prefix):
+        listings.append(prefix)
+        return [f"{vectors.VECTORS_PREFIX}/M-1DM/_manifest.json"]
+
+    monkeypatch.setattr(vectors.gcs, "list_paths", list_paths)
+    downloads: list[str] = []
+    monkeypatch.setattr(harvest, "download", lambda url, dst: downloads.append(url) or 1 / 0)
+    monkeypatch.setattr(sys, "argv", ["vectors", "--all"])
+
+    vectors.main()
+
+    assert downloads == ["https://x/m2-gis.zip"]
+    assert listings == [f"{vectors.VECTORS_PREFIX}/"]

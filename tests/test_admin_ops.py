@@ -62,3 +62,12 @@ def test_get_harvest_status():
         pdf_filtered = stac.get_harvest_status(status_filter="pdf_only")
         assert len(pdf_filtered) == 1
         assert pdf_filtered[0]["id"] == "M-94"
+
+
+@pytest.mark.skipif(not HAS_DJANGO, reason="Django not installed in this environment")
+def test_console_cannot_rebuild_the_24k_mosaic_on_cloud_run():
+    """24k runs on Cloud Batch at z17; a Cloud Run rebuild would overwrite it with a z14 mosaic."""
+    from ops import jobs
+    assert {t for t, _ in jobs.JOBS["mosaics"].tiers} == {"100k", "500k"}
+    res = jobs.rebuild_mosaic("24k")
+    assert res["ok"] is False and "unknown mosaic tier" in res["message"]

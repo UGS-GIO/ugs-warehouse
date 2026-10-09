@@ -9,12 +9,13 @@ import type { MouseEvent } from "react";
 
 import { idOf, useViewCtx } from "@/app";
 
-export function AddToMapButton({ layerId, compact = false }: {
+export function AddToMapButton({ layerId, compact = false, large = false }: {
   // The layer to add. Omit ONLY where the component renders inside the open item's own panel (item
   // detail): it then targets the open item — idOf(itemUrl), the authoritative id for that panel.
   // Pass it explicitly (as the cards/rows do) anywhere the shown item may not be the open one.
   layerId?: string;
   compact?: boolean;   // dense chip for a result card/row; default is a detail-panel action button
+  large?: boolean;     // the item page's action row
 }) {
   const c = useViewCtx();
   const id = layerId ?? (c.itemUrl ? idOf(c.itemUrl) : undefined);
@@ -29,7 +30,7 @@ export function AddToMapButton({ layerId, compact = false }: {
     e.stopPropagation();
     (on ? c.removeLayer : c.addLayer)(id);
   };
-  const size = compact ? "px-1.5 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs";
+  const size = compact ? "px-1.5 py-0.5 text-[11px]" : large ? "px-3 py-1.5 text-sm" : "px-2.5 py-1 text-xs";
 
   return (
     <button type="button" onClick={click} aria-pressed={on}

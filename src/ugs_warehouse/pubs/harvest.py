@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import contextvars
 import csv
+import functools
 import json
 import os
 import re
@@ -31,7 +32,7 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from ..core import config, gcs
-from . import identity
+from . import geoparquet, identity, webp
 
 FOOTPRINTS = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/services/"
               "Geologic_Map_Footprints_View/FeatureServer/0/query")
@@ -150,7 +151,8 @@ def _report_begin(series_id: str) -> None:
     global _pub_report
     _pub_report = {"series_id": series_id, "source_zips": [], "found": [],
                    "used": {"plate": None, "units_shp": None}, "tier": None,
-                   "produced": {"cog": None, "units_parquet": None, "thumbnail": None},
+                   "produced": {"cog": None, "units_parquet": None, "thumbnail": None,
+                                "sheet": None},
                    "skipped": [], "status": None, "color_source_sat": None}
 
 
@@ -305,6 +307,20 @@ def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
     return gt, gis
 
 
+def zip_urls(series_id: str) -> tuple[str | None, str | None]:
+    """(geotiff_zip_url, gis_zip_url): the manifest, then the attachments table, then data.php."""
+    gt_url, gis_url = manifest_urls(series_id)
+    if gt_url or gis_url:
+        return gt_url, gis_url
+    gt_url, gis_url = _get_attached_zips(series_id)
+    if gt_url or gis_url:
+        return gt_url, gis_url
+    try:
+        return data_php_urls(series_id)
+    except Exception:  # noqa: BLE001 — the site lookup is a last resort; no URL means skip
+        return None, None
+
+
 def data_php_urls(series_id):
     gt = gis = None
     for k, v in (_get(DATAPHP, {"pub": series_id}).get("downloads") or {}).items():
@@ -457,6 +473,51 @@ def ensure_rgb(tif):
     return tif
 
 
+def _gdalinfo(path, *flags) -> dict:
+    """gdalinfo -json, which (unlike the rasterio wheel) reads WEBP-compressed COGs. stderr is captured
+    because the attempt's handler logs a failure's `e.stderr`."""
+    out = subprocess.run(["gdalinfo", "-json", "-nomd", "-noct", *flags, str(path)],
+                         check=True, capture_output=True, text=True).stdout
+    return json.loads(out)
+
+
+@functools.lru_cache(maxsize=32)
+def _plate_kind(path) -> str:
+    """How a plate raster reaches 8 bits, judged from GDAL's exact per-band min/max (nodata excluded):
+    "byte" (already 8-bit), "color" (3+ integer bands whose values fit 0-255, e.g. a UInt16 plate; the
+    warp casts it), "lineart" (a 1-band 0/1 line scan, 0 = paper and 1 = ink), or "grid" (anything else:
+    a data grid such as a DEM or salinity surface, real 16-bit imagery, or a non-8-bit palette).
+    Cached: plate selection and the attempt probe the same path."""
+    bands = _gdalinfo(path, "-mm").get("bands") or []
+    if not bands:                         # a container (e.g. subdatasets) with no raster bands
+        return "grid"
+    if all(b["type"] == "Byte" for b in bands):
+        return "byte"
+    if (not bands[0]["type"].startswith(("UInt", "Int"))
+            or any(b.get("colorInterpretation") == "Palette" for b in bands)
+            or any("computedMin" not in b for b in bands[:3])):   # all nodata: nothing to judge
+        return "grid"
+    lo = min(b["computedMin"] for b in bands[:3])
+    hi = max(b["computedMax"] for b in bands[:3])
+    if len(bands) >= 3:
+        return "color" if lo >= 0 and hi <= 255 else "grid"
+    return "lineart" if len(bands) == 1 and lo >= 0 and hi <= 1 else "grid"
+
+
+def _lineart_to_byte(path, work) -> str:
+    """Render a 0/1 line scan as 8-bit gray + alpha: 0 -> white paper, 1 -> black ink, nodata ->
+    transparent (the same mapping as the 2-entry color table these plates ship with elsewhere)."""
+    out = os.path.join(work, "plate.lineart.tif")
+    run(["gdal_translate", "-ot", "Byte", "-scale_1", "0", "1", "255", "0", "-b", "1", "-b", "mask",
+         "-colorinterp", "gray,alpha", "-a_nodata", "none", "-co", "TILED=YES",
+         "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER", str(path), out])
+    return out
+
+
+def _band_types(path) -> list[str]:
+    return [b["type"] for b in _gdalinfo(path).get("bands") or []]
+
+
 def _source_saturation(path) -> float:
     """Color-vs-grayscale probe: the mean per-pixel R/G/B spread of a raster over its OPAQUE pixels,
     read cheaply from a decimated 96x96 thumbnail. A palette raster is scored from its colortable's own
@@ -479,8 +540,11 @@ def _source_saturation(path) -> float:
                     spreads = [max(c[:3]) - min(c[:3]) for c in cmap.values()]
                     return float(sum(spreads) / len(spreads)) if spreads else 0.0
                 return 255.0
+            if ds.count == 0:
+                return -1.0                       # no raster bands: not a map candidate
             if ds.count < 3 and str(ds.dtypes[0]) != "uint8":
-                return -1.0                       # 1-2 band non-Byte = DEM / data grid — intentional skip
+                # 1-2 band non-Byte: a 0/1 line scan is a (grayscale) map; anything else is a data grid.
+                return 0.0 if _plate_kind(path) == "lineart" else -1.0
             nb = min(ds.count, 4)
             has_alpha = (nb >= 4 and ds.colorinterp[3] == ColorInterp.alpha
                          and str(ds.dtypes[3]) == "uint8")   # band 4 = real alpha, not RGBN's NIR
@@ -593,6 +657,10 @@ def prepare_plates(zip_paths, work):
         hlog(f"advisory: no color source among {len(tif_candidates)} GeoTIFF candidate(s) "
              f"(best spread {best_sat:.1f} < floor {COLOR_SAT_FLOOR:.0f}) — using name-pick GeoTIFF; a "
              f"color plate that failed to read (spread -1) would show here", step="plate", level="WARNING")
+    if gtif and _plate_kind(f"/vsizip/{target_zip}/{inner_gtif}") == "grid":
+        hlog(f"name-picked {inner_gtif} is a data grid, not a map plate — not using it",
+             step="plate", level="WARNING")
+        gtif = None
     if not gtif:
         _report_derive_skipped(shp)
         return None, shp_path
@@ -696,14 +764,7 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
         hlog("REFUSE overwrite of published COG; publish a revision as a new edition (series_id)",
              step="resolve", level="ERROR", category="attention")
         return "fail:write-once"
-    gt_url, gis_url = manifest_urls(series_id)
-    if not gt_url and not gis_url:
-        gt_url, gis_url = _get_attached_zips(series_id)
-        if not gt_url and not gis_url:
-            try:
-                gt_url, gis_url = data_php_urls(series_id)
-            except Exception:
-                gt_url, gis_url = None, None
+    gt_url, gis_url = zip_urls(series_id)
 
     if dry_run:
         hlog(f"dry-run URLs: gt={gt_url}, gis={gis_url}", step="resolve")
@@ -738,6 +799,19 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
     return status
 
 
+def _write_previews(pub: identity.Pub, cog: str, work: str) -> None:
+    """The map's catalog thumbnail and the sheet the 3D viewer drapes, both WebP (#372), cut from one
+    SHEET_PX-wide overview of the COG, which reads its overviews rather than the full plate."""
+    overview = os.path.join(work, "overview.tif")
+    run(["gdal_translate", "-q", "-of", "GTiff", "-outsize", str(webp.SHEET_PX), "0", "-r", "average",
+         cog, overview])
+    for obj, fit in webp.plate_previews(pub):
+        out = os.path.join(work, obj.rsplit("/", 1)[-1])
+        webp.encode(overview, out, fit=fit)
+        gcs.upload(out, obj, content_type=config.WEBP_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+    _report("produced", thumbnail=pub.thumb_object, sheet=pub.sheet_object)
+
+
 def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     """One harvest attempt over a set of source zip URL(s). Returns 'ok' | 'fail:…'."""
     from rio_cogeo.cogeo import cog_translate, cog_validate
@@ -749,7 +823,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
     # reset the per-attempt report fields; series_id/status stay owned by harvest_one/_report_finish.
     _report(source_zips=list(zurls), found=[], skipped=[], tier=None, color_source_sat=None,
             used={"plate": None, "units_shp": None},
-            produced={"cog": None, "units_parquet": None, "thumbnail": None})
+            produced={"cog": None, "units_parquet": None, "thumbnail": None, "sheet": None})
     work = tempfile.mkdtemp(prefix=f"h_{series_id.replace('/', '_')}_")
     try:
         cut, n_feat = footprint(series_id, work)
@@ -767,6 +841,19 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                  level="ERROR", category="attention", err=True)
             return "fail:noplate"
 
+        # Every COG is 8-bit: WEBP needs it, the mosaic VRT keeps only sources matching the first one's
+        # type, and browsers draw 16-bit plates almost black.
+        kind = _plate_kind(plate)
+        if kind == "grid":
+            hlog("FAIL plate is not 8-bit map imagery (a data grid, or real 16-bit color)", step="plate",
+                 level="ERROR", category="attention", err=True)
+            return "fail:not_8bit"
+        if kind == "lineart":
+            plate = _lineart_to_byte(plate, work)
+        # -dstalpha carries the transparency; no nodata tag, or white paper could turn clear. INIT_DEST
+        # is explicit because, with no nodata, GDAL 3.11 exits 1 on its default and leaves a partial file.
+        cast_args = ["-ot", "Byte", "-dstnodata", "None", "-wo", "INIT_DEST=0"] if kind == "color" else []
+
         clipped = os.path.join(work, "clipped.tif")
         # No footprint in the index → empty cutline → gdalwarp "cannot compute bounds of cutline".
         # Fall back to an uncropped warp (full sheet) instead of failing the pub.
@@ -777,7 +864,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             cutline_args = []
             hlog("no map footprint in the index — warping uncropped (full sheet)",
                  step="cog", level="WARNING")
-        run(["gdalwarp", *cutline_args,
+        run(["gdalwarp", *cutline_args, *cast_args,
              "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
              "-co", "BIGTIFF=YES", "-co", "COMPRESS=DEFLATE", plate, clipped])
         cog = os.path.join(work, f"{series_id}.cog.tif")
@@ -800,7 +887,7 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                           zoom_level_strategy=COG_ZOOM_STRATEGY,
                           overview_resampling="bilinear", quiet=True)
 
-        # webp is 8-bit-only and raises on 16-bit/float plates; lossless lzw keeps web_optimized
+        # webp can still fail to encode a plate; lossless lzw keeps web_optimized
         # so the result is still tiled + overviewed for range reads.
         try:
             cog_translate(rgb_clipped, cog, prof, web_optimized=True,
@@ -840,6 +927,11 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         if not ok:
             hlog("FAIL cog invalid", step="validate", level="ERROR", category="attention", err=True)
             return "fail:cog"
+        cog_types = _band_types(cog)
+        if not cog_types or any(t != "Byte" for t in cog_types):
+            hlog(f"FAIL COG bands are {cog_types}, not 8-bit", step="validate",
+                 level="ERROR", category="attention", err=True)
+            return "fail:not_8bit"
         # "It ran ≠ it's right": a COLOR source that came out grayscale means the pipeline silently
         # dropped the color — never publish it. (No-op for a webp COG the rasterio wheel can't read:
         # _source_saturation returns -1, which fails the `0 <= cog_sat` check.)
@@ -860,23 +952,13 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
                                  "size_mb": os.path.getsize(cog) // 1024 // 1024,
                                  "compress": prof.get("compress", COG_COMPRESS)})
         if shp:
-            import duckdb
             gpq = os.path.join(work, f"{series_id}.units.parquet")
-            con = duckdb.connect()
-            try:
-                con.execute("INSTALL spatial; LOAD spatial;")
-                con.execute(f"COPY (SELECT * FROM ST_Read('{shp}')) TO '{gpq}' (FORMAT PARQUET)")
-            finally:
-                con.close()
+            geoparquet.write(shp, gpq)
             units_obj = f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet"
             gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
             _report("produced", units_parquet=units_obj)
         if THUMBS:
-            th = os.path.join(work, f"{series_id}.thumb.png")
-            thumb_obj = f"{identity.COG_PREFIX}/{series_id}.thumb.png"
-            run(["gdal_translate", "-of", "PNG", "-outsize", "700", "0", cog, th])
-            gcs.upload(th, thumb_obj, content_type="image/png", cache_control=gcs.CACHE_IMMUTABLE)
-            _report("produced", thumbnail=thumb_obj)
+            _write_previews(pub, cog, work)
         used = prof.get("compress", COG_COMPRESS)          # may have fallen back from webp
         qual = f" q{COG_QUALITY}" if used == "webp" else ""
         hlog(f"OK ({COG_DPI}dpi {used}{qual}) → {pub.cog_object}", step="result", category="ok")
@@ -916,7 +998,7 @@ def main() -> int:
 
     ap = argparse.ArgumentParser(description="Harvest UGS geologic-map publications -> COG")
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("series_id", nargs="*", help="Series ID(s) to harvest")
+    g.add_argument("series_id", nargs="*", default=[], help="Series ID(s) to harvest")
     g.add_argument("--all", action="store_true", help="Harvest all series IDs from the metadata database/CSV")
     ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to harvest")
     ap.add_argument("--dry-run", action="store_true", help="Dry run (check and locate metadata URLs only)")

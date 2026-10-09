@@ -130,12 +130,24 @@ gcloud pubsub subscriptions add-iam-policy-binding "${RASTER_SUB}" --project="${
 echo "→ pipeline orchestrator: execute rights on the sub-jobs only (least privilege)"
 # ugs-warehouse-ingest is here because the push handler starts it per topic instead of ingesting
 # in-request (service/main.py).
-for SUBJOB in ugs-pubs-thumbs ugs-pubs-threed ugs-pubs-ingest ugs-pubs-fts ugs-pubs-embed ugs-geolmap-mosaics ugs-pubs-graph ugs-warehouse-ingest; do
+for SUBJOB in ugs-pubs-thumbs ugs-pubs-threed ugs-pubs-vectors ugs-pubs-prune ugs-pubs-ingest ugs-pubs-fts ugs-pubs-embed ugs-geolmap-mosaics ugs-pubs-graph ugs-warehouse-ingest; do
   gcloud run jobs add-iam-policy-binding "${SUBJOB}" --region="${REGION}" --project="${PROJECT}" \
     --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
 done
 gcloud iam service-accounts add-iam-policy-binding "${RUNTIME_SA}" --project="${PROJECT}" \
   --member="serviceAccount:${RUNTIME_SA}" --role=roles/iam.serviceAccountUser --quiet >/dev/null
+
+# Admin console: run and cancel only its own jobs (admin/ops/jobs.py), read-only everywhere else.
+ADMIN_SA="${ADMIN_SA:-warehouse-admin-run@${PROJECT}.iam.gserviceaccount.com}"
+echo "→ admin console: run.developer on its jobs only, run.viewer on the project"
+for JOB in ugs-pubs-pipeline geolmap-harvest ugs-pubs-vectors ugs-pubs-ingest ugs-pubs-thumbs ugs-warehouse-ingest \
+    ugs-warehouse-restyle ugs-warehouse-ducklake-maintain ugs-pubs-fts ugs-pubs-embed \
+    ugs-geolmap-mosaics ugs-topics-thumbs ugs-pubs-graph ugs-warehouse-retire; do
+  gcloud run jobs add-iam-policy-binding "${JOB}" --region="${REGION}" --project="${PROJECT}" \
+    --member="serviceAccount:${ADMIN_SA}" --role=roles/run.developer --quiet >/dev/null
+done
+gcloud projects add-iam-policy-binding "${PROJECT}" --member="serviceAccount:${ADMIN_SA}" \
+  --role=roles/run.viewer --condition=None --quiet >/dev/null
 
 # Daily DuckLake maintenance — Cloud Scheduler triggers the maintenance Cloud Run job so the
 # append-only catalog stays bounded/fast without anyone remembering the ops-console button. The

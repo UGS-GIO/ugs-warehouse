@@ -4,6 +4,8 @@
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
 import type { StacDoc } from "@/stac";
+import { to2d } from "@/lib/bbox";
+import type { MapLayerMouseEvent } from "react-map-gl/maplibre";
 
 // Which map surface an item needs. A single consolidated map renders the right sources per kind, so
 // switching between items of different kinds swaps sources instead of remounting a whole component
@@ -33,8 +35,7 @@ export function hasFootprint(item: StacDoc | undefined): boolean {
 // down; here a bad bbox just means "no auto-fit" (the map keeps its default view).
 export function validBbox(bb: number[] | undefined): [number, number, number, number] | undefined {
   if (!Array.isArray(bb)) return undefined;
-  const h = bb.length >= 6 ? [bb[0], bb[1], bb[3], bb[4]]
-    : bb.length >= 4 ? [bb[0], bb[1], bb[2], bb[3]] : undefined;
+  const h = to2d(bb);
   if (!h) return undefined;
   const [w, s, e, n] = h;
   const okLon = (v: number) => Number.isFinite(v) && v >= -180 && v <= 180;
@@ -50,9 +51,10 @@ export function boundsOf(item: StacDoc | undefined): [[number, number], [number,
 
 // Map feature-click → table selection. The nonce bumps on every click so re-clicking the SAME
 // feature id still re-fires the downstream table effect (a bare id wouldn't change, so it wouldn't).
-export type MapPick = { id: number; nonce: number };
-export function nextPick(prev: MapPick | null, id: number): MapPick {
-  return { id, nonce: (prev?.nonce ?? 0) + 1 };
+// `props` are the tile feature's attributes, checked against the row the id finds (lib/same-feature).
+export type MapPick = { id: number; nonce: number; props?: Record<string, unknown> };
+export function nextPick(prev: MapPick | null, id: number, props?: Record<string, unknown>): MapPick {
+  return { id, nonce: (prev?.nonce ?? 0) + 1, props };
 }
 
 // Mobile sheet snap points, as a fraction of the map area: peek / half / full.
@@ -113,7 +115,10 @@ export function clampSize(n: number, min: number, max: number, fallback: number)
 // so the map re-flies on every distinct pick, even two features at the same lat/lon (identical
 // bbox). `featureId` is the feature to outline via setFeatureState on the PMTiles tile (the exact
 // geometry is already on the map, so nothing is read from the parquet). `bbox` drives the fly.
-export type FocusSel = { bbox?: [number, number, number, number]; featureId?: number; key?: string | number };
+export type FocusSel = {
+  bbox?: [number, number, number, number]; featureId?: number; key?: string | number;
+  props?: Record<string, unknown>;   // the row's attributes, checked against the tile feature
+};
 
 // A topic toggled on in the map. Built by App from the active set × allItems. One of: a vector
 // layer (PMTiles → pmHref/pmLayer), a raster COG (cogHref), or a raster PMTiles mosaic
@@ -121,6 +126,7 @@ export type FocusSel = { bbox?: [number, number, number, number]; featureId?: nu
 export type ActiveLayer = {
   id: string; title: string; bbox?: number[];
   pmHref?: string; pmLayer?: string; styleUrl?: string;
+  tableHref?: string;   // the layer's GeoParquet, for saving its table offline
   cogHref?: string;
   rasterPmHref?: string;
   // Zarr datacube — one object, because the store is useless without the variable and the dims to
@@ -210,4 +216,13 @@ export function orderedSublayerIds(
       ? Array.from({ length: n }, (_, li) => `pm-${s}-${li}`)
       : [`pm-${s}-fill`, `pm-${s}-line`, `pm-${s}-circle`];
   });
+}
+
+// A fingertip is wider than a 1 px fault line, so a tap with nothing right under it looks in a box
+// around the point. The feature under the point still wins.
+export function pickFeature(e: MapLayerMouseEvent, layers: string[]) {
+  if (e.features?.length || !layers.length) return e.features?.[0];
+  const r = matchMedia("(pointer: coarse)").matches ? 12 : 3;
+  const { x, y } = e.point;
+  return e.target.queryRenderedFeatures([[x - r, y - r], [x + r, y + r]], { layers })[0];
 }

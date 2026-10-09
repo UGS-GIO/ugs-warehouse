@@ -10,9 +10,10 @@ Cloud Build, no GHA workflows).
 [`cloudbuild-ci.yaml`](https://github.com/UGS-GIO/ugs-warehouse/blob/main/cloudbuild-ci.yaml) — PR validation, test-only (no push/deploy):
 
 - **backend** (`python:3.11`): `pip install -e ".[dev]"` → `ruff check .` → `pytest -q`
-- **viewer** (`node:20`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run`
+- **docs-links** (`lycheeverse/lychee`): every relative Markdown link in the repo resolves (offline)
+- **viewer** (`node:22`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run` → `npm run build`
 
-Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build → the PR check goes red.
+All steps run in parallel (`waitFor: ["-"]`); any failing fails the build → the PR check goes red.
 
 ## One-time setup
 
@@ -46,7 +47,7 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build �
    already grants `run.admin` + `serviceAccountUser` there, but only to whatever
    `var.build_service_account` in `infra/terraform.tfvars` names, and that's the default Compute SA
    (a prior, already-documented finding from 2026-07-10: `gcloud builds submit` with no
-   `--service-account`, which is what GHA's `deploy.yml`/`viewer.yml` do, runs the build's *steps* as
+   `--service-account`, which is what the since-removed GHA `deploy.yml`/`viewer.yml` did, runs the build's *steps* as
    the project's default Compute SA regardless of which identity authenticated the API call). Matching
    the trigger's SA to that existing grant was the fix — no Terraform/IAM change needed.
 
@@ -61,13 +62,15 @@ Both steps run in parallel (`waitFor: ["-"]`); either failing fails the build �
 
 ## Deploy + docs triggers
 
-`ugs-warehouse-deploy` (→ `cloudbuild.yaml`, scoped to backend paths — see `deploy_included_files`
-in `infra/cloudbuild-triggers.tf`) and `ugs-warehouse-docs` (→ `cloudbuild-docs.yaml`, scoped to
-`docs/**`, `mkdocs.yml`, `docs-requirements.txt`, `cloudbuild-docs.yaml`) exist alongside
-`ugs-warehouse-pr-ci`.
+`ugs-warehouse-deploy` (→ `cloudbuild.yaml`, production, on main, scoped by `deploy_included_files`),
+`ugs-warehouse-dev` (→ `cloudbuild-dev.yaml`, the develop environment, on develop, scoped by
+`dev_included_files` in `infra/cloudbuild-triggers.tf`) and `ugs-warehouse-docs`
+(→ `cloudbuild-docs.yaml`, scoped to `docs/**`, `mkdocs.yml`, `docs-requirements.txt`,
+`cloudbuild-docs.yaml`) exist alongside `ugs-warehouse-pr-ci`.
 
 `cloudbuild.yaml` no longer builds or deploys **any** viewer — the public one deploys via
-`.github/workflows/firebase-hosting-merge.yml` (`docs/DEPLOY.md` §5), the review bundle via
+`.github/workflows/firebase-hosting-merge.yml` and the dev one via `firebase-hosting-develop.yml`
+(`docs/DEPLOY.md` §5), the review bundle via
 `cloudbuild-review-viewer.yaml` on its own trigger (`ugs-warehouse-review-viewer`). Both
 `ugs-warehouse-deploy`'s path scope and the review-viewer trigger's existence are now applied —
 a viewer-only change no longer fires the backend image-build pipeline, and `/review/viewer/`
@@ -122,9 +125,10 @@ console/CLI-created (§ One-time setup above), not Terraform-managed either.
 |---|---|---|---|---|
 | `ugs-warehouse-pr-ci` | `cloudbuild-ci.yaml` | PR, any branch | none (all paths) | default Compute SA |
 | `ugs-warehouse-deploy` | `cloudbuild.yaml` | push to `main` | scoped to backend paths (`deploy_included_files`) | default Compute SA |
+| `ugs-warehouse-dev` | `cloudbuild-dev.yaml` | push to `develop` | read-side service paths (`dev_included_files`) | default Compute SA |
 | `ugs-warehouse-docs` | `cloudbuild-docs.yaml` | push to `main` | `docs/**`, `mkdocs.yml`, `docs-requirements.txt`, `cloudbuild-docs.yaml` | default Compute SA |
-| `ugs-warehouse-viewer-preview` | `cloudbuild-viewer-preview.yaml` | PR to `main` | `viewer/**` | `ugs-warehouse-preview-build@` |
-| `ugs-warehouse-tiles-preview` | `cloudbuild-service-preview.yaml` | PR to `main` | `tiles/**` | `ugs-warehouse-preview-build@` |
+| `ugs-warehouse-viewer-preview` | `cloudbuild-viewer-preview.yaml` | PR to `main` or `develop` | `viewer/**` | `ugs-warehouse-preview-build@` |
+| `ugs-warehouse-tiles-preview` | `cloudbuild-service-preview.yaml` | PR to `main` or `develop` | `tiles/**` | `ugs-warehouse-preview-build@` |
 | `ugs-warehouse-review-viewer` | `cloudbuild-review-viewer.yaml` | push to `main` | `viewer/**` | default Compute SA |
 | `ugs-warehouse-basemap` | `cloudbuild-basemap.yaml` | Pub/Sub `ugs-warehouse-basemap` (monthly Cloud Scheduler, or by hand) | n/a | `ugs-basemap-build@` |
 
@@ -137,7 +141,7 @@ Cloud Build on events the trigger config can't express:
 | workflow | fires on | submits | runs as |
 |---|---|---|---|
 | `.github/workflows/preview-cleanup.yml` | PR `closed` (no trigger equivalent for this event) | `cloudbuild-preview-cleanup.yaml` | `ugs-warehouse-preview-build@` (WIF, no key) |
-| `.github/workflows/firebase-hosting-merge.yml` / `-pull-request.yml` | push to `main` / PR, `viewer/**` | nothing — deploys directly via `firebase-tools`, no Cloud Build involved | Firebase service-account key (`FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` repo secret, see `docs/DEPLOY.md` §5) |
+| `.github/workflows/firebase-hosting-merge.yml` / `-develop.yml` / `-pull-request.yml` | push to `main` (live site) / push to `develop` (dev site) / PR, `viewer/**` | nothing — deploys directly via `firebase-tools`, no Cloud Build involved | Firebase service-account key (`FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` repo secret, see `docs/DEPLOY.md` §5) |
 
 `-pull-request.yml` also upserts the single PR comment carrying **both** preview links — the public
 Firebase channel it just deployed, and the IAP review preview from `cloudbuild-viewer-preview.yaml`

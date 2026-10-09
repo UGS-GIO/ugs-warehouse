@@ -41,6 +41,14 @@
         "destination": "/index.html"
       },
       {
+        "source": "/offline{,/**}",
+        "destination": "/index.html"
+      },
+      {
+        "source": "/settings{,/**}",
+        "destination": "/index.html"
+      },
+      {
         "source": "/review{,/**}",
         "destination": "/index.html"
       }

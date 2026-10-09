@@ -25,13 +25,36 @@ if not apps.ready:
 from django.test import Client, override_settings  # noqa: E402
 from ops import jobs  # noqa: E402
 
+from ugs_warehouse import iap  # noqa: E402
+
 TOPIC = "hazards.hazards_qfaults_current"
 OPERATOR = "geologist@utah.gov"
 
 
 @pytest.fixture()
-def client():
-    return Client(HTTP_X_GOOG_AUTHENTICATED_USER_EMAIL=f"accounts.google.com:{OPERATOR}")
+def client(monkeypatch, fake_iap):
+    fake_iap.install(monkeypatch, iap)
+    return Client(HTTP_X_GOOG_IAP_JWT_ASSERTION=fake_iap.token(OPERATOR))
+
+
+@override_settings(DEBUG=False)
+def test_a_forged_iap_email_header_gets_no_admin(monkeypatch, fake_iap, dispatched):
+    fake_iap.install(monkeypatch, iap)
+    forged = Client(HTTP_X_GOOG_AUTHENTICATED_USER_EMAIL=f"accounts.google.com:{OPERATOR}")
+    res = forged.post("/retire/execute", {"topic": TOPIC, "confirm": TOPIC})
+    assert res.status_code == 403
+    assert dispatched == []
+
+
+@override_settings(DEBUG=False)
+def test_an_invalid_iap_token_gets_no_admin(monkeypatch, fake_iap, other_iap, rejected_token_kwargs,
+                                            dispatched):
+    fake_iap.install(monkeypatch, iap)
+    for token in (fake_iap.token(OPERATOR, **rejected_token_kwargs), other_iap.token(OPERATOR)):
+        res = Client(HTTP_X_GOOG_IAP_JWT_ASSERTION=token).post(
+            "/retire/execute", {"topic": TOPIC, "confirm": TOPIC})
+        assert res.status_code == 403
+    assert dispatched == []
 
 
 @pytest.fixture()

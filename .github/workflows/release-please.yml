@@ -1,0 +1,25 @@
+# Keeps a standing release PR on develop up to date from conventional commits. Merging it bumps the
+# version, writes CHANGELOG.md and tags the release. Shipping it is a separate step: a PR from develop
+# to main, whose push deploys production (cloudbuild.yaml and firebase-hosting-merge.yml).
+name: release-please
+
+on:
+  push:
+    branches: [develop]
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          target-branch: develop

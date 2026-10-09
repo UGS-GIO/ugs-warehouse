@@ -30,7 +30,7 @@ flowchart LR
   subgraph S["Serving"]
     direction TB
     VW["STAC viewer<br/>browse · map · zarr datacubes · export"]
-    FS["OGC Features · tiles<br/>duckdb_featureserv · XYZ · Esri VTS"]
+    FS["OGC Features · tiles<br/>pygeoapi · XYZ · Esri VTS"]
   end
 
   CDN --> VW
@@ -93,6 +93,14 @@ Publications are a second producer into the same STAC catalog: scanned geologic 
 footprints, routed into three collections (`ugs-publications`, `ugs-mining-district-files`,
 `ugs-external`).
 
+Metadata comes from the publications app's live feed (`publications.pubs_feed_v1`); `PUBS_DB_URL`
+is required. The ops console's **Full refresh** runs the jobs in order: cover thumbnails, 3D,
+map layers from each new pub's GIS zip, a prune of items the feed no longer lists, the pubs
+ingest, and the full-text search index. New map plates need **Harvest COGs** first. GeoParquet is
+written with geoparquet-io, and COG band metadata is read with rio-stac. A publisher's plain TIFF
+scan is a `source` asset, and a pub with no year gets a `start_datetime`/`end_datetime` interval
+flagged `ugs:date_unknown`.
+
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so
 the legacy URL's path *is* the object path. A mirrored file's asset serves from our CDN and keeps
@@ -104,11 +112,9 @@ python -m ugs_warehouse.pubs.mirror             # then re-run pubs.ingest to rep
 ```
 
 !!! note "Honest gaps"
-    **Metadata source.** Pluggable via `PUBS_DB_URL` — live MySQL, live Postgres (through the
-    DuckDB postgres extension), or the vendored CSV snapshot. Prod leaves `PUBS_DB_URL` **unset**, so
-    it reads the **vendored CSV snapshot** checked into the repo. That snapshot is point-in-time and
-    goes stale as upstream changes. Wiring a live source (MySQL or a Postgres mirror) is the open
-    item (#121).
+    **Metadata source.** `PUBS_DB_URL` is required: live MySQL, or live Postgres through the
+    DuckDB postgres extension. Prod reads the publications feed on Cloud SQL. There is no file
+    fallback, so a run without the database stops instead of publishing a stale snapshot.
 
     **File hosting.** The mirror is selective by design (#120): map pubs only, ~81 GB of a ~200 GB
     full mirror. Everything else still depends on the legacy host, which sends no CORS header — so
@@ -121,7 +127,7 @@ which preserves object paths.
 
 - Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.
 - STAC viewer: catalog browse + map + COG preview + zarr datacube layers + client-side export.
-- OGC API Features for ArcGIS Pro / QGIS: `duckdb_featureserv` over the GeoParquet, scale-to-zero.
+- OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.
 - `ugs-warehouse-tiles`: XYZ tiles, ready-made MapLibre styles, and an Esri VectorTileServer facade
   so AGOL and Pro can add a layer at all.
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.
@@ -143,6 +149,6 @@ The vector pipeline is end-to-end in production. The honest gaps:
   is trusted text that's never verified against the promoted COG (#83), and promote shares an
   instance with ingest with no dead-letter policy, so one bad message is an outage (#81).
 - 🟧 **STAC `datetime`** is ingest time, not data-validity time — waiting on an upstream validity timestamp.
-- 🟧 **Live publications source** (MySQL or Postgres mirror) instead of the vendored CSV snapshot (#121).
 - 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).
-- 🟧 **FGDC metadata** variant + raster extension (ISO 19139 done for vector + pubs).
+- 🟧 **Legacy pubs** — 1,163 catalog items, mostly legacy mining district scans, have no record in
+  the publications app. The prune keeps them until they are imported or retired (#491).

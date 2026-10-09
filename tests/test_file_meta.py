@@ -111,7 +111,7 @@ def test_sink_stac_stamps_this_runs_writes_and_carries_the_rest(monkeypatch):
     })
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
-    for name in ("attach_renders", "attach_classification", "attach_iso"):
+    for name in ("attach_renders", "attach_classification"):
         monkeypatch.setattr(sink_stac.stac, name, lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
 
@@ -126,3 +126,67 @@ def test_sink_stac_stamps_this_runs_writes_and_carries_the_rest(monkeypatch):
     assert assets["pmtiles"]["file:size"] == 2
     assert "file:checksum" not in assets["pmtiles"]
     assert assets["thumbnail"]["file:checksum"] == "1220thumb"
+
+
+def test_writes_store_size_and_checksum_as_object_metadata(monkeypatch, tmp_path):
+    attrs: dict[str, dict] = {}
+    monkeypatch.setattr(gcs, "_store", lambda: object())
+    monkeypatch.setattr(gcs.obs, "put",
+                        lambda store, path, body, attributes=None: attrs.__setitem__(path, attributes))
+    local = tmp_path / "cover.webp"
+    local.write_bytes(b"RIFF")
+
+    up = gcs.upload(str(local), "pubs/thumbs/M-1.webp", content_type="image/webp")
+    put = gcs.put_bytes(b"{}" * 50, "x/index.json", content_type="application/json", compress=True)
+
+    assert attrs["pubs/thumbs/M-1.webp"][gcs.META_CHECKSUM] == up.checksum
+    # Gzipped on the wire, but the metadata describes what a consumer receives.
+    assert attrs["x/index.json"][gcs.META_SIZE] == "100" == str(put.size)
+
+
+def _blob(size, metadata=None, content_encoding=None):
+    from types import SimpleNamespace
+    return SimpleNamespace(size=size, metadata=metadata, content_encoding=content_encoding)
+
+
+def test_listed_meta_prefers_stored_metadata_and_never_guesses_a_gzipped_size():
+    stored = {gcs.META_SIZE: "100", gcs.META_CHECKSUM: "1220ab"}
+    assert gcs._meta_of(_blob(30, stored, "gzip")) == gcs.FileMeta(100, "1220ab")
+    assert gcs._meta_of(_blob(42)) == gcs.FileMeta(42)          # size is free; no checksum invented
+    assert gcs._meta_of(_blob(30, None, "gzip")) is None       # stored size != delivered size
+
+
+def _url(path):
+    return stac.config.public_url(path)
+
+
+def test_stamp_file_meta_fills_only_our_assets_that_lack_a_checksum():
+    item = {"assets": {
+        "cover": {"href": _url("pubs/thumbs/M-1.webp")},
+        "cog": {"href": _url("geolmap/cogs/M-1.cog.tif"), "file:size": 9},   # server-side copy
+        "data": {"href": _url("geolmap/vectors/M-1/a.parquet"), "file:size": 5, "file:checksum": "1220aa"},
+        "publication": {"href": "https://ugspub.nr.utah.gov/publications/maps/m-1.pdf"},
+    }}
+    index = {"pubs/thumbs/M-1.webp": gcs.FileMeta(4, "1220c0"),
+             "geolmap/cogs/M-1.cog.tif": gcs.FileMeta(9, "1220c1"),
+             "geolmap/vectors/M-1/a.parquet": gcs.FileMeta(6, "1220ff")}
+
+    assert stac.stamp_file_meta(item, index) == 2
+    a = item["assets"]
+    assert a["cover"] == {"href": a["cover"]["href"], "file:size": 4, "file:checksum": "1220c0"}
+    assert a["cog"]["file:checksum"] == "1220c1"
+    assert a["data"]["file:checksum"] == "1220aa"           # what the writer stamped wins
+    assert "file:size" not in a["publication"]              # not our bytes
+    assert stac.FILE_EXT in item["stac_extensions"]
+
+
+def test_stamp_file_meta_looks_up_each_missing_asset_without_an_index(monkeypatch):
+    fetched = []
+    monkeypatch.setattr(gcs, "get_file_meta", lambda p: fetched.append(p) or (
+        gcs.FileMeta(3, "1220aa") if p.endswith("t.png") else None))
+    item = {"assets": {"thumbnail": {"href": _url("warehouse/thumbs/t/t.png")},
+                       "style": {"href": _url("styles/styles/t/default.json")}}}
+
+    assert stac.stamp_file_meta(item) == 1
+    assert sorted(fetched) == ["styles/styles/t/default.json", "warehouse/thumbs/t/t.png"]
+    assert "stac_extensions" in item and "file:size" not in item["assets"]["style"]

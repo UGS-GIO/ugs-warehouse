@@ -16,7 +16,7 @@ describe("itemLink", () => {
   // filtered set silently cleared category/q/sort — the list jumped from 21 results back to 7620.
   it("keeps the Discover filters when opening the drawer", () => {
     const link = itemLink(it_, true);
-    expect(link.to).toBe("/discover");
+    expect(link.to).toBe("/");
     expect(apply(link.search, { category: "energy-minerals", q: "wells", sort: "newest" }))
       .toEqual({
         category: "energy-minerals", q: "wells", sort: "newest",

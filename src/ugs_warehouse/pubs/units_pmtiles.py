@@ -24,7 +24,7 @@ import geopandas as gpd
 import requests
 
 from ..core import config, gcs
-from . import identity, source
+from . import geoparquet, identity, source
 
 DEFAULT_POSTGREST = "https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app"
 POSTGREST = os.environ.get("POSTGREST_URL", DEFAULT_POSTGREST).rstrip("/")
@@ -134,10 +134,8 @@ def build_units(minz: int = 0, maxz: int = 14) -> None:
 
     with tempfile.TemporaryDirectory() as tmp:
         # Lossless source of truth: the full seamless units as GeoParquet (every vertex + attribute).
-        # write_covering_bbox=True emits the GeoParquet 1.1 `covering` bbox struct so spec-aware
-        # readers (GDAL/pyarrow) prune row groups spatially without decoding geometry.
         parquet = os.path.join(tmp, "units.parquet")
-        gdf.to_parquet(parquet, write_covering_bbox=True)
+        geoparquet.write(gdf, parquet)
         print(f"Uploading units.parquet ({os.path.getsize(parquet)//1024//1024} MB) to GCS...")
         gcs.upload(parquet, PARQUET_OBJECT, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
 

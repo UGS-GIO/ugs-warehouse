@@ -23,6 +23,11 @@ export const qk = {
   styleLayers: (styleUrl?: string) => ["gl-style-layers", styleUrl] as const,
   stylesManifest: (url?: string) => ["styles-manifest", url] as const,
 
+  // Offline store (OPFS): one key for the whole stored set, so a download or delete refreshes
+  // every control at once.
+  basemapStyle: (id: string) => ["basemap-style", id] as const,
+  basemapIndex: ["basemap-index"] as const,
+
   // Map + raster
   cogBbox: (href: string) => ["cog-bbox", href] as const,
   cogProtocol: ["cog-protocol"] as const,
@@ -41,7 +46,7 @@ export const qk = {
   threeDColors: (itemId: unknown) => ["3d-colors", itemId] as const,
 
   // Search
-  articleCorpus: (url: string) => ["article-corpus", url] as const,
+  articleSearch: (url: string, q: string) => ["article-search", url, q] as const,
   pubFts: (q: string) => ["pub-fts", q] as const,
 
   // Review deploy

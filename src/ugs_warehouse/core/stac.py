@@ -21,7 +21,8 @@ import json
 import re
 import sys
 
-from . import catalog_docs, config, gcs, iso, item_mirror, styles
+from . import catalog_docs, config, feature_service, gcs, item_mirror, styles
+from .bbox import to_2d_bbox
 
 PGF_BASE_URL = config.PGF_BASE_URL
 
@@ -67,22 +68,22 @@ USAGE_PMTILES = "Vector tiles — web-map display"
 USAGE_DUCKLAKE = "DuckLake table — versioned SQL analysis (review catalog only)"
 USAGE_THUMBNAIL = "Styled preview image"
 USAGE_STYLE = "MapLibre GL style — how to draw this layer"
-USAGE_METADATA = "ISO 19139 metadata (ISO 19115 content model)"
 
 
 def has_feature_service(collection_path: str) -> bool:
     """True when the collection at `collection_path` is served live by OGC API Features
-    (duckdb_featureserv) — the flat collections and the serving-topic schemas. Single source for the
-    collection's `rel:service` link (`_collection_doc`) and the AGENTS.md query-endpoint note
-    (`catalog_docs.agents`), so the link and the prose that describes it can't disagree."""
+    (featureserv/) — the flat collections and the serving-topic schemas. Single source for the
+    collection's `rel:service` link (`_collection_doc`), the AGENTS.md query-endpoint note
+    (`catalog_docs.agents`) and the service's layer list (`feature_service`), so they can't
+    disagree."""
     return "/" not in collection_path or collection_path.startswith(f"{SERVING_TOPICS_CATALOG}/")
 
 
 # ---------------------------------------------------------------- helpers
 
 def bbox_polygon(bbox: list[float]) -> dict:
-    """A GeoJSON Polygon ring from a [minx, miny, maxx, maxy] bbox."""
-    minx, miny, maxx, maxy = bbox
+    """A GeoJSON Polygon ring from a 2D or 3D STAC bbox."""
+    minx, miny, maxx, maxy = to_2d_bbox(bbox)
     return {
         "type": "Polygon",
         "coordinates": [[[minx, miny], [maxx, miny], [maxx, maxy],
@@ -123,6 +124,32 @@ def file_fields(meta: gcs.FileMeta | None) -> dict:
     if meta is None:
         return {}
     return {"file:size": meta.size, **({"file:checksum": meta.checksum} if meta.checksum else {})}
+
+
+def object_path_of(href: str) -> str | None:
+    """The bucket object path behind a CDN href, or None for an off-warehouse href."""
+    base = config.PUBLIC_BASE_URL.rstrip("/") + "/"
+    return href.removeprefix(base).split("?", 1)[0] if href.startswith(base) else None
+
+
+def stamp_file_meta(item: dict, index: dict[str, gcs.FileMeta] | None = None) -> int:
+    """Add `file:size`/`file:checksum` to our-bucket assets that lack a checksum (mutates item).
+
+    `index` comes from `gcs.list_file_meta`; without one, each asset is looked up on its own.
+    """
+    missing = {k: p for k, a in (item.get("assets") or {}).items()
+               if "file:checksum" not in a and (p := object_path_of(a.get("href", "")))}
+    if index is None:
+        index = {p: m for p in set(missing.values()) if (m := gcs.get_file_meta(p)) is not None}
+    n = 0
+    for key, path in missing.items():
+        asset, fields = item["assets"][key], file_fields(index.get(path))
+        if fields and ("file:checksum" in fields or "file:size" not in asset):
+            asset.update(fields)
+            n += 1
+    if n and FILE_EXT not in (exts := item.setdefault("stac_extensions", [])):
+        exts.append(FILE_EXT)
+    return n
 
 
 def build_item(*, item_id: str, collection: str, geometry: dict | None,
@@ -260,33 +287,6 @@ def prior_file_fields(collection_path: str, item_id: str) -> dict[str, dict]:
     return out
 
 
-def attach_iso(item: dict) -> str:
-    """Write an ISO 19139 sidecar next to the item + add a `metadata` asset (mutates item).
-
-    For gov clearinghouses (data.gov / state portals) that harvest ISO, not STAC. Call
-    before `write_item` so the written item references the sidecar; generated from the item
-    as-is so the metadata asset is not yet present (no self-reference).
-    """
-    # An uncurated topic emits an ISO record with no <gmd:topicCategory> — mandatory for datasets,
-    # so the record is knowingly invalid rather than confidently wrong (#53). Say which ones, or the
-    # gap is invisible until a harvester rejects it.
-    if not item.get("properties", {}).get("ugs:topic_category"):
-        print(f"[{item['id']}] ISO: no iso_topic_category curated — omitting <gmd:topicCategory> "
-              "(record will not validate; curate raw.schema_registry to fix)", file=sys.stderr)
-    path = f"{config.STAC_PREFIX}/{_layout_path(item)}/{item['id']}/{item['id']}.iso.xml"
-    gcs.put_bytes(iso.stac_to_iso19139(item).encode(), path,
-                  content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
-    item.setdefault("assets", {})["metadata"] = {
-        "href": config.public_url(path), "type": "application/xml",
-        # `iso-19115` is the STAC + Portolan standard role for an ISO metadata file; our sidecar is
-        # ISO 19139, the XML encoding of the 19115 content model, so it earns that role alongside the
-        # generic `metadata`.
-        "roles": ["metadata", "iso-19115"], "title": "ISO 19139 metadata",
-        "description": USAGE_METADATA,
-    }
-    return path
-
-
 def attach_renders(item: dict) -> None:
     """Attach a `ugs:renders` block (+ a vector `style` asset) by looking the item id up in the
     ugs-styles manifest. No-op when nothing matches (mutates item in place).
@@ -373,7 +373,7 @@ UTAH_BBOX = [-114.1, 36.9, -108.9, 42.1]  # fallback when items carry no bbox
 def _extent(items: list[dict]) -> dict:
     """Real spatial + temporal extent from the collection's items (union bbox, min/max
     datetime). Falls back to the Utah bbox if no item bboxes are present."""
-    bxs = [it["bbox"] for it in items if it.get("bbox") and len(it["bbox"]) >= 4]
+    bxs = [to_2d_bbox(it["bbox"]) for it in items if it.get("bbox") and len(it["bbox"]) in (4, 6)]
     dts = sorted(it["properties"]["datetime"] for it in items
                  if it.get("properties", {}).get("datetime"))
     bbox = ([min(b[0] for b in bxs), min(b[1] for b in bxs),
@@ -459,10 +459,10 @@ def _collection_assets(path: str, items: list[dict], mirror: object | None = Non
     The item is the most recent one that has a thumbnail, ties broken by id, so the preview tracks
     what was published last instead of whichever item happened to sort first.
     """
-    is_raster = path.split("/", 1)[0] == RASTER_CATALOG
-    if not is_raster and path.split("/", 1)[0] not in PUB_SERIES_CATALOGS:
-        return {}
-    mirror_asset = item_mirror.asset(path, mirror) if is_raster else {}
+    mirror_asset = item_mirror.asset(path, mirror)
+    top = path.split("/", 1)[0]
+    if top != RASTER_CATALOG and top not in PUB_SERIES_CATALOGS:
+        return mirror_asset
     with_thumbs = [it for it in items if (it.get("assets") or {}).get("thumbnail", {}).get("href")]
     if not with_thumbs:
         return mirror_asset
@@ -539,7 +539,7 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
 
 
-def _index_entry(item: dict, *, rollup: bool = False) -> dict:
+def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None) -> dict:
     """A compact, list-renderable subset of a STAC item (mini-doc): id, bbox, a few
     properties, asset summaries, a `rel:self` pointer to the full item, and any web-map
     links (pmtiles/cog) for map overlays.
@@ -565,7 +565,7 @@ def _index_entry(item: dict, *, rollup: bool = False) -> dict:
         entry["assets"] = assets
     # Item docs live at `<collection>/<id>/<id>.json`. A leaf index sits inside that
     # collection dir, the rollup one level above it — so only the rollup carries the segment.
-    sub = f"{item['collection']}/" if rollup and item.get("collection") else ""
+    sub = prefix if prefix is not None else f"{item['collection']}/" if rollup and item.get("collection") else ""
     self_link = {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
                  "type": "application/geo+json"}
     wlinks = [{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
@@ -662,12 +662,11 @@ SERIES_DESC = {
 # Serving-topic groups carry NO authored title or description. The group is the dbt mart schema,
 # so its only honest label is the schema name itself (prettified, the same dumb transform items
 # get). A curated name for `emp` or `gengis` would be invention — when upstream publishes one
-# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Same rule as
-# the ISO topicCategory: absent means absent, never defaulted. Pub series differ — SERIES_DESC is
-# verbatim UGS copy from geology.utah.gov/map-pub, inherited rather than written.
+# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Pub series
+# differ — SERIES_DESC is verbatim UGS copy from geology.utah.gov/map-pub, inherited, not written.
 
 # Nesting catalogs that ALSO publish a rollup items.json spanning every child collection. Keeps
-# one-URL consumers (featureserv gen_db, the tiles service, the ops console) working across a split
+# one-URL consumers (the tiles service, the ops console) working across a split
 # without walking N sub-collections. Deliberately NOT pubs: thousands of items in one document.
 ROLLUP_INDEX_CATALOGS = {SERVING_TOPICS_CATALOG}
 
@@ -712,6 +711,8 @@ def refresh_catalog() -> None:
     #    Record per-path {id, title, count} so the hierarchy links can carry counts.
     leaf: dict[str, dict] = {}
     rollup: dict[str, list[dict]] = {}   # nesting catalog -> its children's items (see ROLLUP_INDEX_CATALOGS)
+    everything: list[dict] = []          # every item's index entry, for the root items.json
+    served: list[dict] = []              # the items the OGC API Features service serves
     with ThreadPoolExecutor(max_workers=64) as executor:
         for path, item_ids in groups.items():
             def _fetch_one(iid: str) -> dict | None:
@@ -728,6 +729,8 @@ def refresh_catalog() -> None:
                     return None
 
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
+            if has_feature_service(path):
+                served.extend(items)
             nested = "/" in path
             top, cid = path.split("/")[0], path.split("/")[-1]
             # Title/description are inherited, never authored here: see _group_title. A group with
@@ -743,15 +746,15 @@ def refresh_catalog() -> None:
             item_titles = {it["id"]: it["properties"]["title"] for it in items
                            if it.get("id") and it.get("properties", {}).get("title")}
             # The mirror is derived from these same items, so it is rebuilt whenever the
-            # collection is — the two cannot drift. Raster collections only, for now (#259).
-            mirror = (item_mirror.write(path, items)
-                      if path.startswith(f"{RASTER_CATALOG}/") else None)
+            # collection is — the two cannot drift.
+            mirror = item_mirror.write(path, items)
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
                                         mappable=mappable, description=desc,
                                         item_titles=item_titles,
                                         assets=_collection_assets(path, items, mirror)),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
             _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
+            everything.extend(_index_entry(it, prefix=f"{path}/") for it in items)
             _write_markdown(path, title=title or prettify(cid),
                             description=desc or f"UGS warehouse — {title or cid}.",
                             kind="collection", children=len(item_ids),
@@ -790,8 +793,13 @@ def refresh_catalog() -> None:
                                   "title": leaf[top]["title"], "count": leaf[top]["count"],
                                   "mappable": leaf[top]["mappable"]})
     _write_json(_root_doc(root_children), f"{config.STAC_PREFIX}/catalog.json")
+    # Every item in one index, so a client that wants the whole catalog makes one request.
+    _write_json({"type": "ugs-items-index", "collection": None, "count": len(everything),
+                 "items": sorted(everything, key=lambda e: e["links"][0]["href"])},
+                f"{config.STAC_PREFIX}/items.json")
     _write_markdown("", title=config.CATALOG_TITLE, description=ROOT_DESCRIPTION,
                     kind="catalog", children=len(root_children))
+    feature_service.write(served)
 
     n = sum(len(v) for v in groups.values())
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "

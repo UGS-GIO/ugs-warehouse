@@ -53,10 +53,8 @@ gcloud iam service-accounts create warehouse-admin-run \
   --display-name="Warehouse Admin Console Runtime" --project=$DEPLOY_PROJECT
 
 # Admin Console SA roles:
-#   trigger and monitor Cloud Run jobs
-gcloud projects add-iam-policy-binding $DEPLOY_PROJECT \
-  --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
-  --role=roles/run.developer
+#   trigger and monitor its Cloud Run jobs: job-level run.developer + project run.viewer,
+#   granted by scripts/provision.sh
 #   act as the runtime SA to launch the jobs
 gcloud iam service-accounts add-iam-policy-binding $RUNTIME_SA \
   --member="serviceAccount:warehouse-admin-run@${DEPLOY_PROJECT}.iam.gserviceaccount.com" \
@@ -72,6 +70,15 @@ gcloud storage buckets add-iam-policy-binding gs://ut-dnr-ugs-maps-prod-public \
 ```
 
 ## 2. Build + deploy (every release)
+
+Feature PRs merge to `develop`, which deploys the develop environment (`cloudbuild-dev.yaml`: `-dev`
+read-side services, no jobs, no data writes) and the dev viewer site. release-please keeps a release
+PR open on `develop`; merging it bumps the version and tags it. A PR from `develop` to `main`, merged
+with a merge commit, ships the release: the push to `main` runs `cloudbuild.yaml` and the live viewer
+deploy. A ruleset on `main` requires the `main source` check, so only `develop` merges there; an admin
+can bypass it for a hotfix, which then merges back into `develop`.
+
+The trigger runs this; by hand:
 
 ```bash
 gcloud builds submit --config cloudbuild.yaml --project=$DEPLOY_PROJECT \
@@ -155,6 +162,7 @@ The viewer deploys from **GitHub Actions**, not Cloud Build:
 | workflow | trigger | lands on |
 |---|---|---|
 | `.github/workflows/firebase-hosting-merge.yml` | push to `main` touching `viewer/**` | live site `data-geology-utah-gov` |
+| `.github/workflows/firebase-hosting-develop.yml` | push to `develop` touching `viewer/**` | dev site `dev-data-geology-utah-gov` |
 | `.github/workflows/firebase-hosting-pull-request.yml` | PR touching `viewer/**` | preview channel `pr-<n>`, public no-login URL, 7-day expiry |
 
 Both use `FirebaseExtended/action-hosting-deploy` with a service-account secret — the same pattern
@@ -203,27 +211,19 @@ the comment and diff surfaces. `cloudbuild-review-viewer.yaml` builds the review
 `VITE_CATALOG_URL` pointing at the review catalog is what `stac.ts` derives `IS_REVIEW` from.
 
 Any bundle mounted under a prefix must be told which one, via Vite's `--base` (it is also the
-router basepath, `src/mount.ts`): `/review/viewer/` for the review app, `/viewer/pr-<n>/` for a
+router basepath, `src/lib/mount.ts`): `/review/viewer/` for the review app, `/viewer/pr-<n>/` for a
 review preview. A Firebase channel serves at a host root, so it needs no `--base`.
 `src/ugs_warehouse/serve.py` already serves the right bundle's `index.html` for an unknown path
 under either subtree, so no server change.
 
 ## 5a. Pub search assets → CDN
 
-Client-side pub search (full-text + semantic) reads two kinds of static asset, both served
-same-origin as the viewer (so **no CORS** — only HTTP **range** support matters, see below):
+Discover's publication-text search reads `pubs/search/pubs-fts.duckdb`, built and uploaded by
+the `ugs-pubs-fts` job in the full refresh. Nothing extra to deploy. It is served same-origin as the
+viewer, so there is **no CORS**; only HTTP **range** support matters (below).
 
-- **Search databases** `pubs/search/pubs-fts.duckdb` + `pubs/search/pubs-vss.duckdb` —
-  built and uploaded by the pipeline (the `ugs-pubs-fts` / `ugs-pubs-embed` Cloud Run jobs).
-  Nothing extra to deploy; they appear when the pipeline runs.
-- **Query-embedding model** `pubs/models/Xenova/bge-small-en-v1.5/…` — the bge ONNX weights the
-  browser loads to embed a semantic query. Self-hosted (not HuggingFace) so the read path has no
-  third-party dependency. Vendor it once:
-
-  ```bash
-  ./scripts/vendor_search_assets.sh           # download bge model + rsync → gs://…/pubs/models/
-  # needs storage.objectAdmin on the public bucket (same grant as §5); immutable, ~34MB, one-time
-  ```
+The viewer has no semantic search, so the full refresh no longer runs `ugs-pubs-embed`. The job,
+`pubs/embed.py` and `scripts/vendor_search_assets.sh` (the bge query model) stay for when it returns.
 
 **Range support (the one real prerequisite).** duckdb-wasm queries the `.duckdb` files by
 **range-reading** them (206 Partial Content — it fetches only the index pages a query touches,
@@ -236,8 +236,8 @@ curl -sI -H 'Range: bytes=0-99' \
   https://maps-assets.geology.utah.gov/pubs/search/pubs-fts.duckdb | grep -i '206\|content-range'
 ```
 
-The viewer's engine (duckdb-wasm) and model host are self-hosted by default; `?ftsdb=`, `?vssdb=`,
-`?models=`, and `?extrepo=` override them for local spikes (see `viewer/src/data/duckdb.ts`).
+The viewer's engine (duckdb-wasm) is self-hosted by default; `?ftsdb=` and `?extrepo=` override it
+for local spikes (see `viewer/src/data/duckdb.ts`).
 
 ## 6. Cross-boundary grants — preflight (#223)
 

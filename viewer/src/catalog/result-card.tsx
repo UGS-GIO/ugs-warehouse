@@ -1,8 +1,6 @@
-// The shared result card + list row for the discovery experience. Lifted out of discovery-view.tsx so
-// the Landing "Recently updated" strip and the Discover result grid render one identical card. The
-// whole card is a single <a> (keyboard-focusable, cmd/middle-click opens a new tab) whose plain
-// left-click the caller intercepts for in-app nav; a caller that wants map↔card hover sync passes the
-// mouse handlers, and one that doesn't (Landing) omits them.
+// The result card + list row for Discover. The whole card is a single <a> (keyboard-focusable,
+// cmd/middle-click opens a new tab) whose plain left-click the caller intercepts for in-app nav; a
+// caller that wants map↔card hover sync passes the mouse handlers.
 import type { ReactNode } from "react";
 
 import { Link } from "@tanstack/react-router";
@@ -18,7 +16,7 @@ export type Density = "comfortable" | "compact";
 // A <Link> descriptor, not an <a>. The router builds the href (basepath applied), does SPA nav on a
 // plain click and leaves modifier/middle-click to the browser — all of which this used to hand-roll.
 export type LinkAttrs = {
-  to: "/catalog" | "/discover";
+  to: "/catalog" | "/";
   search: Record<string, unknown> | ((prev: Record<string, unknown>) => Record<string, unknown>);
   "data-href": string;
   onMouseEnter?: () => void;
@@ -27,7 +25,7 @@ export type LinkAttrs = {
 
 // addSlot is an optional caller-supplied control (the "+ Add to map" button on Discover). It's a
 // slot, not a bool, so this card stays presentational and free of the @/app graph — the same reason
-// the mouse handlers are passed in rather than wired here. Landing omits it.
+// the mouse handlers are passed in rather than wired here.
 type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs; addSlot?: ReactNode };
 
 /** Where a result card points. Wide opens the Discover drawer and must PRESERVE the filter keys —
@@ -36,7 +34,7 @@ type CardProps = { it: ItemRef; density: Density; on: boolean; link: LinkAttrs; 
 export const itemLink = (it: ItemRef, wide: boolean): LinkAttrs => {
   const sel = { c: it.collId, i: it.href.split("/").slice(-2)[0] };
   return {
-    to: wide ? "/discover" : "/catalog",
+    to: wide ? "/" : "/catalog",
     search: wide ? (prev: Record<string, unknown>) => ({ ...prev, ...sel }) : sel,
     "data-href": it.href,
   };

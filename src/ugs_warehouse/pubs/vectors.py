@@ -25,7 +25,7 @@ import tempfile
 import zipfile
 
 from ..core import config, gcs
-from . import harvest, identity, source
+from . import geoparquet, harvest, identity, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME
@@ -69,7 +69,7 @@ def _extract_and_upload(
     which labels are spatial vs plain tables. Returns that manifest:
     {"spatial": [...], "tables": [...]}.
 
-    Spatial layers keep their geometry (GeoParquet via geopandas, as before). Non-spatial GeMS
+    Spatial layers keep their geometry (GeoParquet via gpio, plus a bbox column). Non-spatial GeMS
     companion tables are read WITHOUT geometry via pyogrio and written as plain Parquet. Raw
     schema is preserved verbatim either way — no rename, no type coercion. A layer with 0 rows
     is skipped (as before); a layer whose reader raises is logged and skipped, same as today.
@@ -85,7 +85,7 @@ def _extract_and_upload(
                 gdf = gpd.read_file(path, layer=layer, engine="pyogrio")
                 if len(gdf) == 0:
                     continue
-                gdf.to_parquet(dst)
+                geoparquet.write(gdf, dst)
             else:
                 df = pyogrio.read_dataframe(path, layer=layer, read_geometry=False)
                 if len(df) == 0:
@@ -98,15 +98,25 @@ def _extract_and_upload(
         except Exception as e:
             print(f"  layer {label} failed: {e}", file=sys.stderr)
 
-    if manifest["spatial"] or manifest["tables"]:
-        gcs.put_bytes(json.dumps(manifest).encode(),
-                       f"{VECTORS_PREFIX}/{series_id}/_manifest.json",
-                       content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-
+    _write_manifest(series_id, manifest)
     return manifest
 
 
-def extract_one(series_id: str, dry_run: bool = False, force: bool = False) -> str:
+def _write_manifest(series_id: str, manifest: dict[str, list[str]]) -> None:
+    """Also written empty, for a zip with nothing to extract: it marks the pub done, so later runs
+    skip it instead of downloading the zip again. `--force` retries it."""
+    gcs.put_bytes(json.dumps(manifest).encode(), f"{VECTORS_PREFIX}/{series_id}/_manifest.json",
+                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+
+
+def extracted_series() -> set[str]:
+    """Series ids that already have layers on GCS, from one listing of the vectors prefix."""
+    pfx = VECTORS_PREFIX.rstrip("/") + "/"
+    return {p.removeprefix(pfx).split("/", 1)[0] for p in gcs.list_paths(pfx)}
+
+
+def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
+                existing: set[str] | None = None) -> str:
     """Extract and upload all vector layers and non-spatial companion tables for a given
     series_id.
 
@@ -119,18 +129,14 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
         print(f"{series_id}: SKIP (unpublished placeholder)")
         return "skip"
 
-    # For vector extraction, we check if the directory prefix has objects on GCS
-    gcs_dir = f"{VECTORS_PREFIX}/{series_id}/"
-    if not force and not dry_run and list(gcs.list_paths(gcs_dir)):
+    # `existing` is one listing for a batch run; a single pub lists its own prefix.
+    done = (series_id in existing) if existing is not None \
+        else bool(gcs.list_paths(f"{VECTORS_PREFIX}/{series_id}/"))
+    if not force and not dry_run and done:
         print(f"{series_id}: SKIP (vector parquets already exist on GCS)")
         return "skip"
 
-    gt_url, gis_url = harvest.manifest_urls(series_id)
-    if not gt_url and not gis_url:
-        try:
-            gt_url, gis_url = harvest.data_php_urls(series_id)
-        except Exception:
-            pass
+    _, gis_url = harvest.zip_urls(series_id)
 
     if not gis_url:
         print(f"{series_id}: SKIP (no GIS zip URL)")
@@ -149,6 +155,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
 
         srcs = _sources(work)
         if not srcs:
+            _write_manifest(series_id, {"spatial": [], "tables": []})
             print(f"{series_id}: SKIP (no shapefiles, GDB layers, or tables found)")
             return "skip"
 
@@ -171,7 +178,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
 def main() -> int:
     ap = argparse.ArgumentParser(description="Extract GIS publication vector layers to GCS")
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("series_id", nargs="*", help="Series ID(s) to extract")
+    g.add_argument("series_id", nargs="*", default=[], help="Series ID(s) to extract")
     g.add_argument("--all", action="store_true", help="Extract all series IDs from metadata")
     ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to extract")
     ap.add_argument("--dry-run", action="store_true", help="Dry run (check URLs and schema only)")
@@ -179,14 +186,16 @@ def main() -> int:
     args = ap.parse_args()
 
     sids = []
+    existing = None
     if args.all:
         print(f"Loading publications from source: {source.source_name()}")
-        pubs = source.read_pubs()
-        for p in pubs:
-            sid = (p.get("series_id") or "").strip()
-            if sid:
-                sids.append(sid)
-        print(f"Found {len(sids)} publications")
+        all_sids = [s for p in source.read_pubs() if (s := (p.get("series_id") or "").strip())]
+        # A batch run only visits pubs whose attachments list a GIS zip, and checks what is already
+        # extracted with one listing, so a weekly run costs about nothing when nothing is new.
+        sids = [s for s in all_sids if harvest._get_attached_zips(s)[1]]
+        existing = None if args.force else extracted_series()
+        print(f"Found {len(all_sids)} publications, {len(sids)} with a GIS zip, "
+              f"{len(set(sids) & (existing or set()))} already extracted")
     else:
         sids = args.series_id
 
@@ -195,7 +204,7 @@ def main() -> int:
 
     rc = 0
     for sid in sids:
-        res = extract_one(sid, dry_run=args.dry_run, force=args.force)
+        res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing)
         if res.startswith("fail"):
             rc |= 1
     return rc

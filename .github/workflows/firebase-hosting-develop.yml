@@ -1,0 +1,20 @@
+# Publish the viewer to the DEV Firebase Hosting site on every push to develop that touches it.
+name: Viewer deploy (dev)
+
+on:
+  push:
+    branches: [develop]
+    paths: ["viewer/**", "firebase.json"]
+
+permissions:
+  contents: read
+  checks: write
+
+jobs:
+  deploy:
+    uses: ./.github/workflows/viewer-deploy.yml
+    with:
+      site: dev-data-geology-utah-gov
+      features_base: ${{ vars.VITE_FEATURES_BASE_DEV || vars.VITE_FEATURES_BASE }}
+      tiles_base: ${{ vars.VITE_TILES_BASE_DEV || vars.VITE_TILES_BASE }}
+    secrets: inherit

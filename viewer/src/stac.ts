@@ -158,7 +158,7 @@ export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
     ?? assets.find((a) => a.type?.startsWith("image/"));
 };
 
-// OGC API Features endpoint base (the duckdb_featureserv service). Set at build time via
+// OGC API Features endpoint base (the featureserv/ pygeoapi service). Set at build time via
 // VITE_FEATURES_BASE, or per-session via ?features=<url>. Empty → the link is hidden (no dead
 // link). A serving-topic's STAC item id == its featureserv collection id.
 export const FEATURES_BASE = (
@@ -226,9 +226,12 @@ export const isDrawableCog = (a: Asset, d?: StacDoc): boolean => {
 };
 
 // The COG to draw, or undefined when the item has raster data but no render path — drawing nothing
-// beats throwing on a projection this client cannot reproject.
-export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined =>
-  Object.values(d?.assets ?? {}).find((a) => isDrawableCog(a, d));
+// beats throwing on a projection this client cannot reproject. `visual` goes first: an items.json
+// entry carries no proj:code, so the native-CRS COG would also pass as drawable.
+export const cogRenderAsset = (d: StacDoc | undefined): Asset | undefined => {
+  const assets = Object.values(d?.assets ?? {});
+  return assets.find((a) => isCog(a) && a.roles?.includes("visual")) ?? assets.find((a) => isDrawableCog(a, d));
+};
 
 // A RASTER PMTiles asset (the per-scale geologic-map mosaics) — rendered as raster tiles via the
 // pmtiles:// protocol. Marked `ugs:render: raster`: a vector layer's PMTiles is an asset with the
@@ -444,15 +447,39 @@ export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [numb
 // Each entry is a mini StacDoc (id, bbox, a props subset, asset + web-map-link summaries)
 // — enough to render the list table, facets, and map overlays without N item.json fetches.
 // The full item.json stays the source of truth and loads on open (useStac).
-export type ItemsIndex = { type?: string; collection?: string; count?: number; items: StacDoc[] };
+export type ItemsIndex = { type?: string; collection?: string | null; count?: number; items: StacDoc[] };
+
+/** The catalog's root items.json: every item of this catalog in one request. */
+export const ROOT_INDEX_URL = CATALOG_URL.replace(/catalog\.json(\?.*)?$/, "items.json");
+
+export function useRootIndex(enabled: boolean) {
+  return useQuery({
+    queryKey: qk.index(ROOT_INDEX_URL),
+    queryFn: async () => validIndex(await fetchJson(ROOT_INDEX_URL) as ItemsIndex, ROOT_INDEX_URL),
+    enabled,
+    retry: false,
+  });
+}
+
+export const rootIndexItems = (idx: ItemsIndex) => idx.items.flatMap((d) => {
+  const self = d.links?.find((l) => l.rel === "self")?.href;
+  if (!self) return [];
+  const href = new URL(self, ROOT_INDEX_URL).href;
+  return [{ collId: collKeyOf(href) ?? "", href, data: d }];
+});
+
+// An index with no item list is an error, so the caller falls back to per-item links.
+const validIndex = (doc: ItemsIndex, url: string): ItemsIndex => {
+  if (!Array.isArray(doc?.items)) throw new Error(`no items list in ${url}`);
+  return doc;
+};
 
 // items.json sits next to collection.json (…/<collection>/items.json). A nesting sub-catalog may
 // publish one too (ugs-serving-topics), rolling up every child collection into one fetch.
 const indexUrlFor = (collectionHref: string) =>
   collectionHref.replace(/(collection|catalog)\.json(\?.*)?$/, "items.json");
 
-/** `items.json` is our own convention, not STAC. A federated catalog (USWB) is somebody else's
- *  bucket and has no reason to publish one, so asking is three guaranteed 404s per view. */
+/** Whether a collection is in this catalog (same origin). */
 export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL): boolean => {
   try {
     return new URL(collectionHref, LOC.href).origin === new URL(catalogUrl, LOC.href).origin;
@@ -468,18 +495,20 @@ export function useIndexes(collections: { id: string; href: string }[]) {
   const results = useQueries({
     queries: collections.map((c) => ({
       queryKey: qk.index(c.href),
-      queryFn: () => fetchJson(indexUrlFor(c.href)) as Promise<unknown>,
+      // A federated catalog may publish a STAC ItemCollection (`features`).
+      queryFn: async () => {
+        const doc = await fetchJson(indexUrlFor(c.href)) as ItemsIndex & { features?: StacDoc[] };
+        return validIndex(doc?.features ? { ...doc, items: doc.features } : doc, c.href);
+      },
       retry: false,
-      enabled: hasItemsIndex(c.href),
     })),
   });
-  // A foreign catalog reports `missing` without a request — same fallback, no failed fetch.
   return collections.map((c, i) => ({
     id: c.id,
     href: c.href,
     index: results[i].data as ItemsIndex | undefined,
-    isLoading: hasItemsIndex(c.href) && results[i].isLoading,
-    missing: !hasItemsIndex(c.href) || Boolean(results[i].error),
+    isLoading: results[i].isLoading,
+    missing: Boolean(results[i].error),
   }));
 }
 

@@ -31,12 +31,11 @@ mq().addEventListener("change", () => {
   if (getTheme() === "system") applyTheme("system");
 });
 
-// The RESOLVED appearance, for the few things that must render one way or the other (mermaid's
-// theme). A store, so consumers subscribe instead of re-deriving it in an effect.
+// A store, so consumers subscribe instead of re-deriving the theme in an effect.
 const subscribers = new Set<() => void>();
 const subscribe = (notify: () => void) => {
   subscribers.add(notify);
   return () => { subscribers.delete(notify); };
 };
-export const useIsDark = (): boolean =>
-  useSyncExternalStore(subscribe, () => document.documentElement.classList.contains("dark"));
+/** The CHOSEN theme (light, dark or system), for the settings page. */
+export const useThemePref = (): Theme => useSyncExternalStore(subscribe, getTheme, () => "system");

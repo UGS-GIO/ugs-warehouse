@@ -1,9 +1,12 @@
 // Survey Notes article search — the corpus fetch and the article result row, extracted from the
 // standalone /search page so Discover can render article hits beside its catalog results.
-import { useQuery } from "@tanstack/react-query";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import * as Comlink from "comlink";
+
 import { qk } from "@/query-keys";
 
-import type { Article, Hit } from "./search-index";
+import type { ArticleApi } from "./article-worker";
+import type { Hit } from "./search-index";
 
 export const CORPUS_URL = new URL(
   new URLSearchParams(location.search).get("searchCorpus")
@@ -13,15 +16,18 @@ export const CORPUS_URL = new URL(
 
 const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
-export function useCorpus(enabled: boolean) {
+// One worker for the page: it downloads the corpus and builds the index once, on the first search.
+let worker: Comlink.Remote<ArticleApi> | null = null;
+const articles = () => (worker ??= Comlink.wrap<ArticleApi>(
+  new Worker(new URL("./article-worker.ts", import.meta.url), { type: "module" })));
+
+export function useArticleSearch(q: string) {
+  const text = q.trim();
   return useQuery({
-    queryKey: qk.articleCorpus(CORPUS_URL),
-    enabled, staleTime: Infinity, retry: false,
-    queryFn: async () => {
-      const r = await fetch(CORPUS_URL);
-      if (!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-      return (await r.json()) as Article[];
-    },
+    queryKey: qk.articleSearch(CORPUS_URL, text),
+    enabled: text.length >= 2, staleTime: Infinity, retry: false,
+    placeholderData: keepPreviousData,
+    queryFn: () => articles().search(CORPUS_URL, text),
   });
 }
 

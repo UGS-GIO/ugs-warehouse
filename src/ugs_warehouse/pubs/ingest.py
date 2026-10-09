@@ -20,13 +20,32 @@ from ..core import config, gcs, stac
 from . import editions, identity, sink_stac, source, threed, topic, vectors
 
 
+def _names(prefix: str) -> list[str]:
+    return [path.rsplit("/", 1)[-1] for path in gcs.list_paths(prefix)]
+
+
+def _ids(names: list[str], suffix: str) -> set[str]:
+    return {name[: -len(suffix)].upper() for name in names if name.endswith(suffix)}
+
+
 def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
-    out: set[str] = set()
-    for path in gcs.list_paths(prefix):
-        name = path.rsplit("/", 1)[-1]
-        if name.endswith(suffix):
-            out.add(name[: -len(suffix)].upper())
-    return out
+    return _ids(_names(prefix), suffix)
+
+
+def _image_ids() -> tuple[set[str], set[str]]:
+    """(pubs with a harvested map thumbnail, pubs with a cover). Only the WebPs count, since the items
+    point at them. A pub whose preview exists only as a PNG is named in a warning, because its item
+    goes out without that preview until webp_backfill converts it."""
+    plates, covered = _names(identity.COG_PREFIX), _names(identity.PUB_THUMB_PREFIX)
+    thumbs = _ids(plates, identity.COG_THUMB_SUFFIX)
+    covers = _ids(covered, identity.COVER_SUFFIX)
+    png_only = sorted((_ids(plates, identity.PNG_THUMB_SUFFIX) - thumbs)
+                      | (_ids(covered, identity.PNG_COVER_SUFFIX) - covers))
+    if png_only:
+        print(f"[pubs] WARNING: {len(png_only)} pub(s) have a PNG preview but no WebP, so their items "
+              f"go out without it; run pubs.webp_backfill --apply. {', '.join(png_only[:10])}",
+              file=sys.stderr)
+    return thumbs, covers
 
 
 def _contents_by_sid() -> dict[str, list[dict]]:
@@ -129,8 +148,11 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
     return out
 
 
-def _cog_footprints(cog_ids: set[str]) -> dict[str, tuple]:
-    """series_id -> (geometry, bbox, "cog"): each harvested COG's own extent, reprojected to EPSG:4326.
+def _cog_headers(cog_ids: set[str]) -> dict[str, tuple[tuple | None, dict]]:
+    """series_id -> (footprint, COG asset fields) from each harvested COG's header.
+
+    The footprint is `(geometry, bbox, "cog")`, the COG's own extent reprojected to EPSG:4326, or None
+    if it does not reproject. The asset fields are `sink_stac.cog_asset_fields`.
 
     The warehouse derives footprints from ITS OWN output — the COG we produced — with NO external
     service. Footprint coverage therefore tracks COG coverage: a pub gets a footprint once we've
@@ -139,29 +161,45 @@ def _cog_footprints(cog_ids: set[str]) -> dict[str, tuple]:
 
     Reads only the COG header via GDAL /vsicurl (a small range read), parallelised — no full download.
     """
+    from rasterio import Env
     from rasterio import open as rio_open
     from rasterio.warp import transform_bounds
 
     def one(sid: str):
         url = config.public_url(identity.Pub(sid).cog_object)
         try:
-            with rio_open(f"/vsicurl/{url}") as ds:
+            # Without this GDAL lists the CDN "directory" before each open, which is most of the time.
+            # The setting is per thread, so it goes here, not around the pool.
+            with Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR"), rio_open(f"/vsicurl/{url}") as ds:
                 # densify so the reprojected 3857→4326 rectangle hugs the curved edges accurately.
                 w, s, e, n = transform_bounds(ds.crs, "EPSG:4326", *ds.bounds, densify_pts=21)
-            if not all(map(math.isfinite, (w, s, e, n))):
-                return None
-            geom = {"type": "Polygon",
-                    "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
-            return sid, (geom, [w, s, e, n], "cog")
+                fields = sink_stac.cog_asset_fields(ds)
         except Exception:  # noqa: BLE001 — unreadable COG → no footprint (better than a wrong one)
             return None
+        if not all(map(math.isfinite, (w, s, e, n))):
+            return sid, (None, fields)
+        geom = {"type": "Polygon", "coordinates": [[[w, s], [e, s], [e, n], [w, n], [w, s]]]}
+        return sid, ((geom, [w, s, e, n], "cog"), fields)
 
-    out: dict[str, tuple] = {}
+    out: dict[str, tuple[tuple | None, dict]] = {}
     with ThreadPoolExecutor(max_workers=32) as ex:
         for r in ex.map(one, sorted(cog_ids)):
             if r:
                 out[r[0]] = r[1]
     return out
+
+
+FILE_META_PREFIXES = (identity.COG_PREFIX, identity.UNITS_PREFIX, identity.THREED_PREFIX,
+                      identity.PUB_THUMB_PREFIX, identity.PUB_FILES_PREFIX, vectors.VECTORS_PREFIX)
+
+
+def _file_meta_index() -> dict[str, gcs.FileMeta]:
+    """{object_path: FileMeta} for every prefix a pub asset can point into: one listing each."""
+    index: dict[str, gcs.FileMeta] = {}
+    with ThreadPoolExecutor(max_workers=len(FILE_META_PREFIXES)) as ex:
+        for part in ex.map(lambda p: gcs.list_file_meta(p.rstrip("/") + "/"), FILE_META_PREFIXES):
+            index.update(part)
+    return index
 
 
 def build_catalog(limit: int | None = None, series: str | None = None, skip_refresh: bool = False) -> int:
@@ -172,12 +210,16 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     # outside a smoke-test slice, and a filtered run must never blind edition detection to a real
     # predecessor/successor just because this run isn't writing it.
     try:
-        edition_graph = editions.edition_graph(pubs)
+        fp_rows = editions.footprint_rows()
+        layers = editions.layers_by_series(fp_rows)
+        tier_by_sid = editions.mosaic_tier_by_series(layers)
+        edition_graph = editions.edition_graph(pubs, quad_by_sid=editions.quad_by_series(fp_rows),
+                                               tier_by_sid=tier_by_sid)
     except RuntimeError as e:
         print(f"[ingest] WARNING: edition detection skipped — {e}. Items will carry no "
-              "version/deprecated/predecessor/successor/latest links until the footprints "
-              "parquet is built.", file=sys.stderr)
-        edition_graph = {}
+              "version/deprecated/predecessor/successor/latest or mosaic links until the "
+              "footprints parquet is built.", file=sys.stderr)
+        edition_graph, tier_by_sid = {}, {}
     if series:
         series_upper = series.strip().upper()
         pubs = [p for p in pubs if sink_stac.series_code(p.get("series_id")) == series_upper]
@@ -189,18 +231,19 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         att.setdefault((a.get("series_id") or "").strip().upper(), []).append(a)
 
     cogs = _ids_with_suffix(identity.COG_PREFIX, ".cog.tif")
-    thumbs = _ids_with_suffix(identity.COG_PREFIX, ".thumb.png")
-    covers = _ids_with_suffix(identity.PUB_THUMB_PREFIX, ".png")  # PDF first-page covers
+    thumbs, covers = _image_ids()
     threed_ids = _ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")  # converted 3D pubs
     threed_classes = _threed_classes_by_sid()  # authored fence colors (classification:classes)
     overrides_map = _overrides_by_sid()  # hand-authored description/title overrides
     toc = _contents_by_sid()  # Survey Notes "In this issue" sidecars
     units = _unit_ids()
-    foot = _cog_footprints(cogs)  # footprints derived from OUR COGs' bounds (no external service)
+    heads = _cog_headers(cogs)  # footprints + COG asset fields from OUR COGs (no external service)
     mirrored = _mirrored_files()  # source files served from our CDN instead of the publisher's host
     vector_manifests = _vector_manifests_by_sid()  # spatial/table split extracted by pubs/vectors.py
+    file_meta = _file_meta_index()  # file:size/checksum for the assets in our bucket
+    n_foot = sum(1 for f, _ in heads.values() if f)
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
-          f"{len(units)} unit sets, {len(foot)} footprints, {len(threed_ids)} 3D, "
+          f"{len(units)} unit sets, {n_foot} footprints, {len(threed_ids)} 3D, "
           f"{len(mirrored)} mirrored source files, {len(vector_manifests)} vector manifests")
 
     def process_pub(p: dict) -> bool:
@@ -208,19 +251,21 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         if not sid:
             return False
         up = sid.upper()
-        geom, bbox, fp_source = foot.get(up, (None, None, None))
+        footprint, cog_fields = heads.get(up, (None, None))
+        geom, bbox, fp_source = footprint or (None, None, None)
         manifest = vector_manifests.get(up, {"spatial": [], "tables": []})
         item = sink_stac.build_item(
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
-            has_cog=up in cogs, has_units=up in units, has_thumb=up in thumbs,
+            has_cog=up in cogs, cog_fields=cog_fields, has_units=up in units, has_thumb=up in thumbs,
             has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
             vector_layers=manifest["spatial"],
             companion_tables=[{"label": t, "columns": None} for t in manifest["tables"]],
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
             edition=edition_graph.get(sid),
+            mosaic_tier=tier_by_sid.get(up),
         )
         stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
-        stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
+        stac.stamp_file_meta(item, file_meta)
         stac.write_item(item)
         return True
 
@@ -270,7 +315,7 @@ def _build_search_corpus() -> None:
         for arts in ex.map(load, paths):
             corpus.extend(arts)
     gcs.put_bytes(json.dumps(corpus).encode(), f"{prefix}/corpus.json",
-                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE, compress=True)
     print(f"[pubs] search corpus: {len(corpus)} articles from {len(paths)} issues "
           f"-> {config.public_url(prefix + '/corpus.json')}")
 

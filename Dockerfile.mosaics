@@ -1,0 +1,29 @@
+# Raster-mosaic bake (pubs/geolmap_mosaics.py). Needs `gdal raster tile` (GDAL 3.11+); pinned (tag and
+# multi-arch digest) because the unified `gdal` CLI is provisional, so re-check its flags before bumping.
+FROM ghcr.io/osgeo/gdal:ubuntu-full-3.11.3@sha256:984938ae4ffda015d5e806a8048eb29fc4eeddaf97ada04e627f7f27b51feddb
+
+ENV PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
+# The base's Arrow apt repo has a rotating key that breaks apt-get update; nothing here uses it.
+RUN rm -f /etc/apt/sources.list.d/*arrow* \
+    && apt-get update && apt-get install -y --no-install-recommends \
+      ca-certificates curl python3-venv libsqlite3-0 \
+    && rm -rf /var/lib/apt/lists/*
+
+# A venv keeps pip away from the base image's GDAL Python bindings.
+ENV VIRTUAL_ENV=/opt/venv PATH=/opt/venv/bin:$PATH
+RUN python3 -m venv "$VIRTUAL_ENV"
+
+WORKDIR /app
+# Full .[pubs] extra for parity with the harvest image; a slimmer mosaics-only extra is an ALL-5993 follow-up.
+COPY pyproject.toml ./
+RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
+    && pip install --upgrade pip && pip install .[pubs] \
+    && rm -rf src
+
+COPY src ./src
+RUN pip install --no-deps --force-reinstall .
+
+CMD ["python", "-m", "ugs_warehouse.pubs.geolmap_mosaics", "--scale", "all"]

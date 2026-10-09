@@ -17,7 +17,7 @@ import tempfile
 import requests
 
 from ..core import config, gcs
-from . import identity, source, topic
+from . import geoparquet, identity, source, topic
 
 FOOTPRINTS_URL = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/services/"
                   "Geologic_Map_Footprints_View/FeatureServer/0/query")
@@ -64,7 +64,7 @@ def export(minz: int = 2, maxz: int = 11) -> None:
         parquet = os.path.join(tmp, "footprints.parquet")
         geojsonl = os.path.join(tmp, "footprints.geojsonl")
         pmtiles = os.path.join(tmp, "footprints.pmtiles")
-        gdf.to_parquet(parquet)
+        geoparquet.write(gdf, parquet)
         gdf.to_file(geojsonl, driver="GeoJSONSeq")
         subprocess.run(["tippecanoe", "-o", pmtiles, "-l", "footprints", "-n", "UGS map footprints",
                         "-Z", str(minz), "-z", str(maxz), "--drop-densest-as-needed", "--force",
@@ -81,7 +81,7 @@ def geoms() -> dict[str, tuple]:
     dissolved geometry per pub. Raises FileNotFoundError if the parquet hasn't been exported.
 
     DEPRECATED for the pub STAC footprint path: the ingest now derives item footprints from OUR OWN
-    COGs (pubs/ingest.py `_cog_footprints`) instead of this external ArcGIS FeatureServer export. Kept
+    COGs (pubs/ingest.py `_cog_headers`) instead of this external ArcGIS FeatureServer export. Kept
     only for the `footprints.pmtiles` coverage layer that `export()` still builds; do NOT reintroduce
     it as the item-footprint source (that Esri dependency was the reason all pubs had null geometry)."""
     import geopandas as gpd

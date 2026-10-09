@@ -16,6 +16,7 @@ may use it. AGENTS.md tells a program how to read it without downloading everyth
 from __future__ import annotations
 
 from . import config
+from .bbox import to_2d_bbox
 
 README_NAME = "README.md"
 AGENTS_NAME = "AGENTS.md"
@@ -61,9 +62,9 @@ def _formats(items: list[dict]) -> list[tuple[str, str]]:
 
 def _extent_line(extent: dict | None) -> str:
     bbox = ((extent or {}).get("spatial") or {}).get("bbox") or []
-    if not bbox or len(bbox[0]) < 4:
+    if not bbox or len(bbox[0]) not in (4, 6):
         return ""
-    w, s, e, n = bbox[0][:4]
+    w, s, e, n = to_2d_bbox(bbox[0])
     return f"- Extent (WGS84): {w:.3f}, {s:.3f} to {e:.3f}, {n:.3f}\n"
 
 
@@ -92,7 +93,7 @@ def agents(*, title: str, kind: str, path: str, children: int,
            items: list[dict] | None = None, service: bool = False) -> str:
     """What a program needs to use this node without fetching everything first.
 
-    `service` is True for the nodes duckdb_featureserv serves live (flat collections and the
+    `service` is True for the nodes the Features service serves live (flat collections and the
     serving-topic schemas, per `core.stac.has_feature_service`). Those DO have a query endpoint —
     OGC API Features — so the note names it and steers bulk/whole-layer work to the GeoParquet asset
     instead, rather than the old blanket claim that no query endpoint exists (#280).
@@ -119,6 +120,9 @@ def agents(*, title: str, kind: str, path: str, children: int,
     if kind == "catalog":
         out.append(f"Follow the `rel:child` links in `{doc}`. Each carries a title and a "
                    "`ugs:item_count`, so a listing needs one fetch rather than one per child.\n")
+        if not path:
+            out.append("\nTo get every item at once, read `items.json` beside this file: one index "
+                       "of the whole catalog, each entry with a `self` link to its full item.\n")
     else:
         out.append(f"Follow the `rel:item` links in `{doc}`; each carries the item's title, so a "
                    "listing does not need to fetch every item.\n")
@@ -144,6 +148,6 @@ def agents(*, title: str, kind: str, path: str, children: int,
                "its own `proj:code`, which overrides the item's.\n"
                "- Fields prefixed `ugs:` are ours and are not part of any STAC extension. Standard "
                "clients ignore them safely.\n"
-               "- Assets carry `file:size` where the warehouse wrote the bytes, and `file:checksum` "
-               "where it could compute one; an absent value means it could not, not that it is zero.\n")
+               "- Assets the warehouse hosts carry `file:size` and `file:checksum`; one without a "
+               "checksum has not been hashed yet. Files linked on other hosts carry neither.\n")
     return "".join(out)

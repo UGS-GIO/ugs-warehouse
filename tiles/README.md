@@ -79,7 +79,7 @@ and a request under an unseen version tells this process its child is stale, so 
 Because the URL is content-keyed, tiles are served `max-age=31536000, immutable` — aggressive edge
 caching and correctness at the same time, rather than trading one for the other.
 
-Same rule as featureserv's `gen_db`: derive from truth, cache cheaply. Nothing is stored here.
+Derive from truth, cache cheaply. Nothing is stored here.
 
 ## ArcGIS Pro and ArcGIS Online
 

@@ -1,8 +1,9 @@
 """ugs-warehouse-admin — minimal Django + HTMX ops console behind Google Cloud IAP.
 
-Stateless: no domain DB (SQLite is ephemeral, only for Django's own tables). AuthN is IAP
-(the load balancer verifies the user before the request arrives); authZ is an email allowlist
-(`ADMIN_EMAILS`). The app reads the STAC catalog and triggers Cloud Run jobs — it stores nothing.
+Stateless: no domain DB (SQLite is ephemeral, only for Django's own tables). AuthN and authZ are
+direct Cloud Run IAP: only principals granted IAP access on the service get through, and the app
+verifies IAP's signed JWT (core/iap_auth.py). It reads the STAC catalog and triggers Cloud Run
+jobs; it stores nothing.
 """
 import os
 from pathlib import Path

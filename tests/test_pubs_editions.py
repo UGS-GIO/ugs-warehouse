@@ -2,6 +2,8 @@
 ingest wiring that hands each pub's edition to `sink_stac.build_item`."""
 from unittest.mock import patch
 
+import pytest
+
 from ugs_warehouse.pubs import editions
 
 
@@ -139,12 +141,12 @@ def test_build_catalog_wires_edition_into_build_item():
          patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._cog_footprints", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.editions.quad_by_series", return_value={}), \
+         patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[
+             ("M-1", "", "geomaps_24k", ""), ("M-2", "", "geomaps_24k", "7_5_Quads")]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
@@ -165,3 +167,59 @@ def test_build_catalog_wires_edition_into_build_item():
         assert by_sid["M-1"]["successor_href"].endswith("/M-2/M-2.json")
         assert by_sid["M-2"]["deprecated"] is False
         assert by_sid["M-2"]["predecessor_href"].endswith("/M-1/M-1.json")
+        tiers = {c.args[0]["series_id"]: c.kwargs["mosaic_tier"] for c in mock_build.call_args_list}
+        assert tiers == {"M-1": "24k", "M-2": "24k"}   # from each footprint's portal layer
+
+
+def test_editions_never_cross_mosaic_tiers():
+    """A 30' x 60' map and a 1 x 2 degree sheet can share a quad name ("Tooele") and a scale band.
+    Grouped by mosaic tier, the newer 30' x 60' map must not supersede the 1 x 2 sheet."""
+    pubs = [
+        {"series_id": "I-1132", "pub_year": "1980", "pub_scale": "1:250,000"},
+        {"series_id": "M-254DM", "pub_year": "2011", "pub_scale": "1:100,000"},
+    ]
+    qmap = {"I-1132": "Tooele", "M-254DM": "Tooele"}
+    by_band = editions.edition_graph(pubs, quad_by_sid=qmap)
+    assert by_band["I-1132"]["deprecated"] is True        # scale bands alone collide
+    by_tier = editions.edition_graph(pubs, quad_by_sid=qmap,
+                                     tier_by_sid={"I-1132": "250k", "M-254DM": "100k"})
+    assert by_tier["I-1132"]["deprecated"] is False and by_tier["I-1132"]["successor_href"] is None
+    assert by_tier["M-254DM"]["predecessor_href"] is None
+
+
+def test_a_blank_scale_map_with_a_tier_still_joins_its_editions():
+    pubs = [
+        {"series_id": "M-1", "pub_year": "1990", "pub_scale": "1:24,000"},
+        {"series_id": "OFR-780DM", "pub_year": "2026", "pub_scale": ""},
+    ]
+    qmap = {"M-1": "Bryce Canyon Quad", "OFR-780DM": "Bryce Canyon Quad"}
+    g = editions.edition_graph(pubs, quad_by_sid=qmap, tier_by_sid={"M-1": "24k", "OFR-780DM": "24k"})
+    assert g["M-1"]["deprecated"] is True and g["OFR-780DM"]["deprecated"] is False
+
+
+def test_a_scale_band_never_matches_a_mosaic_tier():
+    """An untiered 1:100,000 map (band "250k") must not supersede a tiered 1 x 2 sheet (mosaic
+    "250k") that shares its quad name: the two key spaces never meet."""
+    pubs = [
+        {"series_id": "I-1132", "pub_year": "1980", "pub_scale": "1:250,000"},
+        {"series_id": "X-9", "pub_year": "2015", "pub_scale": "1:100,000"},
+    ]
+    qmap = {"I-1132": "Tooele", "X-9": "Tooele"}
+    g = editions.edition_graph(pubs, quad_by_sid=qmap, tier_by_sid={"I-1132": "250k"})
+    assert g["I-1132"]["deprecated"] is False and g["I-1132"]["successor_href"] is None
+
+
+def test_footprint_rows_reads_the_source_bucket(monkeypatch):
+    """A review bake writes elsewhere but reads the footprints from the source (public) bucket."""
+    from ugs_warehouse.core import config, gcs
+    seen = {}
+
+    def fake_get(obj, *, bucket=None):
+        seen["bucket"] = bucket
+        raise FileNotFoundError(obj)
+
+    monkeypatch.setattr(config, "SOURCE_BUCKET", "ut-dnr-ugs-maps-prod-public")
+    monkeypatch.setattr(gcs, "get_bytes", fake_get)
+    with pytest.raises(RuntimeError, match="unreadable"):
+        editions.footprint_rows()
+    assert seen["bucket"] == "ut-dnr-ugs-maps-prod-public"

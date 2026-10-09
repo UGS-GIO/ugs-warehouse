@@ -37,6 +37,7 @@ exclude_docs: |
   CLOUD_BUILD_CI.md
   REVIEW_FEDERATION.md
   RETIRE.md
+  TABLE_AND_PUBLICATION_ITEMS_DESIGN.md
 
 plugins:
   - search

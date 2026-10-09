@@ -74,7 +74,7 @@ Every serving table is a STAC Item in its schema's collection (`ugs-serving-topi
 
 ### 4.2 AOI footprint, not null geometry (the settled decision)
 
-An aspatial item gets a **real geometry equal to its area of interest**: the union bounding polygon of the spatial items it relates to over the FK graph, falling back to the collection's buffered-Utah extent (`core/stac.py` already defaults to `UTAH_BBOX`). `bbox` is present.
+An aspatial item gets a **real geometry equal to its area of interest**: the union bounding polygon of the spatial items it relates to over the FK graph, falling back to the collection's buffered-Utah extent (`core/stac.py` already defaults to `UTAH_BBOX`). `bbox` is present. The ingest pipeline computes the AOI and passes it to `build_item` as `geometry` and `bbox`, so the builders in `core/stac.py` stay pure (no database or GCS reads).
 
 Why AOI over null geometry, both of which are spec-legal:
 
@@ -102,9 +102,9 @@ Rejected: **null geometry** (honest but discouraged, invisible to spatial search
 
 `related` says two tables are related and lets you navigate; it carries no join detail. `ugs:foreign_keys` carries the mechanical join (which column references which, and which end is the `1`), which is what a consumer needs to actually join the data and what powers the viewer's click-a-feature-see-its-related-rows. STAC has no standard FK construct, so this is the sanctioned "namespaced only when nothing standard fits" case. It shadows Frictionless Table Schema `foreignKeys`. Portolan's current answer for separate-file joins is "document the join columns and a runnable example in the README," which we should also add.
 
-### 4.5 Materialization becomes optional
+### 4.5 Materialization is retired
 
-The inline `roles:["data","related"]` asset on a parent can stay as a viewing convenience (open a related table without navigating away), but it must point at the **same** Parquet href as the child item's `data` asset, never a second copy. Or drop it and let the viewer follow the `related` link to the child item's `data` asset. The child item is canonical either way.
+The materialize-onto-parent path in `vector/related.py` (extra database reads, a second Parquet copy uploaded under `{parent_stem}/related/`) is removed, not kept as an option. Once every table has its own Item, the parent needs no copy: the viewer follows the `related` link and reads the child Item's `data` asset. That removes the duplicate storage and the extra I/O from every parent ingest.
 
 ### 4.6 Publications: each publication is a Collection
 
@@ -129,18 +129,18 @@ Current state (verified 2026-10-03 against origin/main and prod): `pubs/vectors.
 
 ## 5. What this supersedes
 
-- **The four-case projection matrix collapses.** Every relationship becomes one thing: a `rel:related` link between two items. Materialize-onto-parent drops to an optional convenience.
+- **The four-case projection matrix collapses.** Every relationship becomes one thing: a `rel:related` link between two items. Materialize-onto-parent is retired (§4.5).
 - **The `reference.href` / dangling-link class disappears** (warehouse #347). Every FK target now has an item, so every link resolves (Portolan CORE-035 satisfied). The pending #347 follow-up (drop the FK on the data asset when the target is materialized) is subsumed: with the target as its own item, the FK edge is a resolvable `related` link plus `ugs:foreign_keys`, not a dangling archive href.
 
 ---
 
 ## 6. Pipeline changes (bounded)
 
-- **`vector/ingest.py`:** the geometry guard must stop treating "no geometry" as `SKIP`. An aspatial table takes a distinct path: emit an Item with the `data` asset, `table:columns`, the AOI footprint, and the relationship graph, but no PMTiles/tiling sinks (there is no geometry to tile).
-- **`core/stac.py` `build_item`:** derive the AOI footprint (union of related spatial extents, fallback `UTAH_BBOX`) for an aspatial item.
-- **`vector/related.py`:** emit `rel:related` links to and from the aspatial items (both ends), drop the materialize-as-canonical path (keep it only as an optional same-href asset). The outgoing/incoming split stops mattering: it is `related` either way.
+- **`vector/ingest.py`:** the geometry guard tells two cases apart. A table with **no geometry column** is aspatial and takes a distinct path: emit an Item with the `data` asset, `table:columns`, the AOI footprint and the relationship graph, but no PMTiles/tiling sinks (there is no geometry to tile). A table that **has a geometry column but 0 non-null geometry rows** still fails loud (`SKIP`, rc=1, never reaches the sinks), because that means upstream geometry was lost or a reprojection failed, not that the table is aspatial.
+- **`vector/sink_stac.py` / `vector/related.py` (AOI):** compute the AOI footprint (union of related spatial extents, fallback `UTAH_BBOX`) in the ingest pipeline and pass it to `build_item` as `geometry` and `bbox`. `core/stac.py` `build_item` stays a pure builder.
+- **`vector/related.py` (links):** emit `rel:related` links to and from the aspatial items (both ends) and remove the materialize-onto-parent path entirely (§4.5). The outgoing/incoming split stops mattering: it is `related` either way.
 - **`core/item_mirror.py`:** no change needed once items carry an AOI geometry (they are no longer geometry-less, so the skip no longer applies). Verify.
-- **`viewer/`:** an aspatial item now has an item page; it renders the AOI outline on the map (worth an affordance that reads "area of interest, not a footprint") and leads with the table + relationships. Confirm every `items.json` consumer tolerates these items.
+- **`viewer/`:** an aspatial item now has an item page; it renders the AOI outline on the map (worth an affordance that reads "area of interest, not a footprint") and leads with the table + relationships. The related-tables panel, which reads `roles:["data","related"]` assets on the parent today, follows `related` links to the child Items instead. Confirm every `items.json` consumer tolerates these items.
 - **`featureserv/`:** aspatial items are now items, so they *could* become OGC API Features collections; decide in §7.
 - **`pubs/vectors.py`:** raise or collect errors instead of skipping a layer or `.gdb` it cannot read; record per-layer bbox, geometry type, CRS, row count and columns in the manifest; run `--all` over every publication with a GIS zip.
 - **`pubs/sink_stac.py`, `pubs/ingest.py`:** build the publication Collection with its collection-level assets and one Item per plate, layer and table; move the edition, mosaic and `cite-as` links to match (§4.6).
@@ -172,7 +172,7 @@ Current state (verified 2026-10-03 against origin/main and prod): `pubs/vectors.
 This design does not stand alone; it intersects a partly-shipped, partly-in-flight body of work and should be sequenced against it, not merged in isolation.
 
 **Supersedes a shipped conclusion:**
-- **ALL-5913 (Done): companion tables (DMU/CMU) exposed as STAC assets.** The pubs producer today attaches the GeMS non-spatial companion tables (`DescriptionOfMapUnits`, `CorrelationOfMapUnits`, which are the "unit descriptions" authority tables) as `roles:["data"]` assets on the publication item, not as their own items. This design changes the canonical shape: those companion tables become their own Items inside the publication's Collection (§4.6), with the asset kept only as an optional same-href inline convenience. It preserves ALL-5913's data (raw schema verbatim) and supersedes only its item-model conclusion.
+- **ALL-5913 (Done): companion tables (DMU/CMU) exposed as STAC assets.** The pubs producer today attaches the GeMS non-spatial companion tables (`DescriptionOfMapUnits`, `CorrelationOfMapUnits`, which are the "unit descriptions" authority tables) as `roles:["data"]` assets on the publication item, not as their own items. This design changes the canonical shape: those companion tables become their own Items inside the publication's Collection (§4.6), and the copies on the publication are dropped (§4.5). It preserves ALL-5913's data (raw schema verbatim) and supersedes only its item-model conclusion.
 
 **Extends an accepted direction:**
 - **ALL-5922 (Done): scale-tier layers as first-class grouped items (whole/members).** The pubs producer already promotes layers to first-class grouped items with `derived_from`/`related` linkage. This design applies the same "first-class item, grouped" treatment to the aspatial companion/authority tables and reuses `derived_from` for mosaic lineage exactly as ALL-5922 does.

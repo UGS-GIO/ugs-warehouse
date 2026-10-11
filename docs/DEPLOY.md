@@ -107,6 +107,11 @@ gcloud run jobs executions list --job=geolmap-harvest --region=$REGION --project
 Per-series instead of `--all`: override args at execute time —
 `... execute geolmap-harvest --args=M-283 ...`
 
+Source rasters: a map with a raster at `gs://ut-dnr-ugs-maps-prod-public/geolmap/sources/30x60/<series id>.tif`
+takes its plate from that file, and its GIS zip supplies only the units. The folder is the one place
+a map's source raster lives; `index.csv` beside the rasters records where each came from. Each
+raster must already carry its CRS. `GEOLMAP_SOURCE_RASTERS` overrides the object prefix.
+
 ## 4. Pub/Sub event-driven ingest (dataELT #418)
 
 > The code + `cloudbuild.yaml` wiring is done and committed; what's left is two IAM grants

@@ -39,4 +39,7 @@ def test_graph_authors_primary_first_and_deduplicated():
 
 def test_graph_topics_split_keywords():
     assert graph._topics({"keywords": "faults; Utah, , maps"}) == ["faults", "Utah", "maps"]
+
+
+def test_graph_slug():
     assert graph._slug(" Great Salt Lake! ") == "great-salt-lake"

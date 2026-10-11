@@ -26,13 +26,17 @@ class JsonFormatter(logging.Formatter):
         if record.stack_info:
             message += "\n" + self.formatStack(record.stack_info)
         # The standard keys go last so an `extra` field cannot replace them.
-        doc = {**fields, "severity": record.levelname, "message": message, "logger": record.name}
+        doc = {**fields, "severity": record.levelname, "message": message, "logger": record.name,
+               "logging.googleapis.com/sourceLocation": {
+                   "file": record.pathname, "line": record.lineno, "function": record.funcName}}
         return json.dumps(doc, default=str)
 
 
-def setup(level: int = logging.INFO) -> None:
-    """Send the root logger to stdout, as JSON when running on Cloud Run."""
-    handler = logging.StreamHandler(sys.stdout)
+def setup() -> None:
+    """Send the root logger to stderr at LOG_LEVEL (default INFO), as JSON when on Cloud Run.
+    stderr keeps stdout for CLI output such as the ingest --dry-run report."""
+    level = getattr(logging, os.environ.get("LOG_LEVEL", "INFO").upper(), logging.INFO)
+    handler = logging.StreamHandler(sys.stderr)
     on_cloud_run = bool(os.environ.get("K_SERVICE") or os.environ.get("CLOUD_RUN_JOB"))
     handler.setFormatter(JsonFormatter() if on_cloud_run
                          else logging.Formatter("%(asctime)s %(levelname)s %(message)s"))

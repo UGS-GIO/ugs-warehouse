@@ -417,6 +417,12 @@ separate deploy such as review.
 |---|---|---|
 | `TOPIC_THUMB_W`, `TOPIC_THUMB_H`, `TOPIC_THUMB_TIMEOUT_MS` | `480`, `320`, `30000` | Render size and timeout |
 
+### Logging
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | Root log level for the services and jobs that call `core.logs.setup()` |
+
 ### Set by Cloud Run
 
 `PORT`, `K_SERVICE`, `CLOUD_RUN_JOB`, `CLOUD_RUN_TASK_INDEX`, `CLOUD_RUN_TASK_COUNT`. Harvest and 3D split

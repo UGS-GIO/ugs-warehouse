@@ -13,6 +13,7 @@ def _record(msg, **extra):
 
 def test_json_line_carries_severity_message_and_fields():
     doc = json.loads(logs.JsonFormatter().format(_record("sink pmtiles FAILED", topic="a.b_current")))
+    assert doc.pop("logging.googleapis.com/sourceLocation")["line"] == 1
     assert doc == {"severity": "ERROR", "message": "sink pmtiles FAILED",
                    "logger": "ugs-warehouse.ingest", "topic": "a.b_current"}
 

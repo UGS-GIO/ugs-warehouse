@@ -16,12 +16,17 @@ _STANDARD = set(vars(logging.LogRecord("", 0, "", 0, "", (), None))) | {"message
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
-        doc = {"severity": record.levelname, "message": record.getMessage(), "logger": record.name}
-        doc.update({k: v for k, v in vars(record).items() if k not in _STANDARD})
+        fields = {k: v for k, v in vars(record).items()
+                  if k not in _STANDARD and not k.startswith("_")}
+        message = record.getMessage()
         if record.exc_info and not record.exc_text:
             record.exc_text = self.formatException(record.exc_info)
         if record.exc_text:
-            doc["message"] += "\n" + record.exc_text
+            message += "\n" + record.exc_text
+        if record.stack_info:
+            message += "\n" + self.formatStack(record.stack_info)
+        # The standard keys go last so an `extra` field cannot replace them.
+        doc = {**fields, "severity": record.levelname, "message": message, "logger": record.name}
         return json.dumps(doc, default=str)
 
 

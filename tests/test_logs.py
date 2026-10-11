@@ -26,6 +26,17 @@ def test_traceback_goes_into_the_message():
     assert doc["message"].startswith("failed\nTraceback") and "ValueError: boom" in doc["message"]
 
 
+def test_stack_info_goes_into_the_message():
+    rec = _record("failed")
+    rec.stack_info = "Stack (most recent call last):\n  here"
+    assert json.loads(logs.JsonFormatter().format(rec))["message"] == f"failed\n{rec.stack_info}"
+
+
+def test_extra_fields_cannot_replace_the_standard_keys():
+    doc = json.loads(logs.JsonFormatter().format(_record("real", severity="DEBUG", _private=1)))
+    assert doc["severity"] == "ERROR" and doc["message"] == "real" and "_private" not in doc
+
+
 def test_json_only_on_cloud_run(monkeypatch):
     root = logging.getLogger()
     monkeypatch.setattr(root, "handlers", list(root.handlers))  # restored after the test

@@ -36,7 +36,7 @@ _CITE_TOKEN = re.compile(r"\b[A-Za-z]{1,4}-\d{1,5}(?:-\d{1,3})?[A-Za-z]{0,4}\b")
 # Split a secondary-author field into individual names.
 # Names are "First M. Last", comma-separated with an optional Oxford ", and".
 _AUTHOR_SPLIT = re.compile(r"\s*,\s*and\s+|\s+and\s+|\s*[;,&]\s*", re.IGNORECASE)
-_SUFFIX = re.compile(r"(jr|sr|ii|iii|iv)\.?", re.IGNORECASE)
+_SUFFIX = re.compile(r"(jr|sr|i{2,3}|iv|vi{0,3})\.?", re.IGNORECASE)
 
 
 def _slug(s: str) -> str:
@@ -51,8 +51,9 @@ def _authors(p: dict) -> list[str]:
         names.append(primary)
     for n in _AUTHOR_SPLIT.split((p.get("pub_sec_author") or "").strip()):
         n = n.strip()
-        if _SUFFIX.fullmatch(n) and names:
-            names[-1] += f", {n}"  # "Thomas C. Chidsey, Jr" is one person
+        if _SUFFIX.fullmatch(n):
+            if names:
+                names[-1] += f", {n}"  # "Thomas C. Chidsey, Jr" is one person
         elif n:
             names.append(n)
     seen, out = set(), []

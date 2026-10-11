@@ -346,13 +346,12 @@ def footprint(series_id, work):
 def _aux_srs(aux_path):
     """Real CRS from an ESRI .aux.xml — the EPSG of the last WKT in it (the AdjustXform carries the
     true projection)."""
-    import xml.etree.ElementTree as ET
+    import html
 
     from rasterio.crs import CRS
-    try:
-        wkts = [e.text for e in ET.parse(aux_path).iter("WKT") if e.text]
-    except ET.ParseError:
-        return None
+    txt = open(aux_path, encoding="utf-8", errors="replace").read()
+    # A regex, not an XML parser: the file comes from a third-party bundle.
+    wkts = [html.unescape(w) for w in re.findall(r"<WKT>(.*?)</WKT>", txt, re.S)]
     for w in reversed(wkts):
         try:
             epsg = CRS.from_wkt(w).to_epsg()

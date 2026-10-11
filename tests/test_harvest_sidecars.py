@@ -112,7 +112,8 @@ def test_aux_srs_reads_the_last_wkt(tmp_path):
     assert harvest._aux_srs(str(aux)) == "EPSG:26912"
 
 
-def test_aux_srs_none_for_malformed_xml(tmp_path):
+def test_aux_srs_none_without_a_usable_wkt(tmp_path):
+    pytest.importorskip("rasterio")
     aux = tmp_path / "map.tif.aux.xml"
-    aux.write_text("<PAMDataset><WKT>")
+    aux.write_text("<PAMDataset><WKT>not a crs</WKT><WKT>")
     assert harvest._aux_srs(str(aux)) is None

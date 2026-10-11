@@ -10,6 +10,7 @@ Cloud-native warehouse for UGS. The vector producer forks at dataELT's published
 
 ```bash
 pip install -e ".[dev]"          # editable install + pytest/ruff
+uv lock                          # after any pyproject.toml dep change; images + CI install from uv.lock
 
 ruff check src service scripts    # lint (line-length 100)
 python -m pytest tests/ -q        # hermetic: in-memory GCS + fake manifests/DB, no network

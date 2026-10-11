@@ -9,7 +9,7 @@ Cloud Build, no GHA workflows).
 
 [`cloudbuild-ci.yaml`](https://github.com/UGS-GIO/ugs-warehouse/blob/main/cloudbuild-ci.yaml) — PR validation, test-only (no push/deploy):
 
-- **backend** (`python:3.11`): `pip install -e ".[dev]"` → `ruff check .` → `pytest -q`
+- **backend** (`python:3.11`): `uv lock --check` → install from `uv.lock` → `ruff check .` → `pytest -q`
 - **docs-links** (`lycheeverse/lychee`): every relative Markdown link in the repo resolves (offline)
 - **viewer** (`node:22`, `dir: viewer`): `npm ci` → `tsc --noEmit` → `eslint .` → `vitest run` → `npm run build`
 

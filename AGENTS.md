@@ -41,7 +41,7 @@ uvicorn service.main:app --host 0.0.0.0 --port 8080
 
 ## Environment variables
 
-The main ones. Every variable, by component: `docs/DEPLOY.md` § Environment variables.
+The main ones. Every variable, by component: [docs/DEPLOY.md](docs/DEPLOY.md#environment-variables).
 
 | Var | Used by | Notes |
 |---|---|---|

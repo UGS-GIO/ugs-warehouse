@@ -331,7 +331,7 @@ separate deploy such as review.
 | `WAREHOUSE_LICENSE`, `WAREHOUSE_LICENSE_URL` | `CC-BY-4.0` and its URL | License stamped on collections |
 | `WAREHOUSE_STAGED_SOURCE_BUCKETS` | `stagedrasters` | Comma list of buckets a raster promote may copy from |
 | `PGF_BASE_URL` | the features service `run.app` URL | OGC API Features base advertised in the catalog |
-| `STYLES_CDN_BASE`, `STYLES_INDEX_URL`, `STYLES_INDEX_OBJECT` | `{PUBLIC_BASE_URL}/styles`, `…/index.json`, `styles/index.json` | ugs-styles manifest location |
+| `STYLES_CDN_BASE`, `STYLES_INDEX_URL`, `STYLES_INDEX_OBJECT` | `{PUBLIC_BASE_URL}/styles`, `{STYLES_CDN_BASE}/index.json`, `styles/index.json` | ugs-styles manifest location |
 
 ### Database
 
@@ -350,7 +350,7 @@ separate deploy such as review.
 | `WAREHOUSE_TABLE_SUFFIX` | `_current` | Table suffix discovery looks for (`_review` in review) |
 | `DUCKDB_MAX_MEMORY` | `128MB` | DuckDB memory cap for the source read and transform |
 | `DUCKDB_SORT_CHUNK_ROWS` | `50000` | Starting rows per transform pass; halved on OOM |
-| `INGEST_CHUNK_TARGET_BYTES` | 16 MiB | Tables smaller than this are read in one scan |
+| `INGEST_CHUNK_TARGET_BYTES` | `16777216` | Tables smaller than this many bytes are read in one scan |
 | `INGEST_PAGES_PER_CHUNK` | `2000` | Postgres heap pages per read chunk; `0` disables chunking |
 | `DUCKLAKE_DATA_PATH` | `gs://{WAREHOUSE_BUCKET}/warehouse/ducklake/` | DuckLake data files |
 | `DUCKLAKE_METADATA_SCHEMA` | `ducklake_catalog` | Postgres schema for DuckLake metadata |
@@ -375,7 +375,7 @@ separate deploy such as review.
 | Var | Default | Purpose |
 |---|---|---|
 | `PUBS_DB_URL` | none (required) | Publications DB, MySQL URL or Postgres DSN |
-| `PUBS_TABLE`, `PUBS_ATT_TABLE` | `pubs.ugspubsdraft2`, `pubs.attached_data` (Postgres) | Feed tables |
+| `PUBS_TABLE`, `PUBS_ATT_TABLE` | Postgres: `pubs.ugspubsdraft2`, `pubs.attached_data`; MySQL: `pubsdb`, `pubsattacheddata` | Feed tables |
 | `GEOLMAP_{COG,FOOTPRINTS,MOSAIC,UNITS,3D,VECTORS}_PREFIX` | `geolmap/{cogs,footprints,mosaics,units,3d,vectors}` | Pub artifact prefixes |
 | `PUB_{FILES,THUMB,CONTENTS,SEARCH,FULLTEXT,EMB}_PREFIX` | `pubs/{files,thumbs,contents,search,fulltext,embeddings}` | Pub sidecar prefixes |
 | `PUB_GRAPH_PREFIX`, `PUB_FTS_OBJECT`, `PUB_VSS_OBJECT` | `graph`, `pubs/search/pubs-fts.duckdb`, `pubs/search/pubs-vss.duckdb` | Graph and search outputs |
@@ -400,8 +400,8 @@ separate deploy such as review.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `REVIEW_API_ONLY` | off | Serve only `/api/*`, not the review bucket (the public twin service) |
-| `REVIEW_STATIC_ONLY` | off | Serve only the bucket, not the API (preview hosts) |
+| `REVIEW_API_ONLY` | unset | Serve only `/api/*`, not the review bucket (the public twin service) |
+| `REVIEW_STATIC_ONLY` | unset | Serve only the bucket, not the API (preview hosts) |
 | `REVIEW_VIEWER_PREFIX`, `REVIEW_APP_PREFIX` | `review/viewer`, `review/app` | SPA bundles in the review bucket |
 | `REVIEW_CORS_ORIGINS`, `REVIEW_CORS_ORIGIN_REGEX` | none | Allowed browser origins for the API |
 | `REVIEW_DB_DSN` | none | Comments DB URI; else the Cloud SQL socket vars above |

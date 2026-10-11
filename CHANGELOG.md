@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.4.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.3.0...v1.4.0) (2026-10-11)
+
+
+### Features
+
+* **viewer:** pick a datacube's variable and time step, kept in the URL ([#530](https://github.com/UGS-GIO/ugs-warehouse/issues/530)) ([173873f](https://github.com/UGS-GIO/ugs-warehouse/commit/173873fd1c97cd666216c0e49b06876e9e5eab24))
+
+
+### Bug Fixes
+
+* **source:** let libpq read PGPASSWORD instead of splicing it into the DSN ([#545](https://github.com/UGS-GIO/ugs-warehouse/issues/545)) ([e414bc6](https://github.com/UGS-GIO/ugs-warehouse/commit/e414bc67ae89bf7cbb1016e2a5f759b56af50e80))
+
 ## [1.3.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.2.0...v1.3.0) (2026-10-06)
 
 

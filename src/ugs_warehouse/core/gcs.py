@@ -248,6 +248,13 @@ def exists(object_path: str) -> bool:
         return _gcs_client().bucket(config.BUCKET).blob(object_path).exists()
 
 
+def download(object_path: str, dest: str, *, bucket: str | None = None) -> None:
+    """Stream an object to a local file without holding it in memory."""
+    with open(dest, "wb") as f:
+        for chunk in obs.get(_store(bucket), object_path).stream(min_chunk_size=_HASH_CHUNK):
+            f.write(chunk)
+
+
 def get_tail(object_path: str, length: int) -> bytes:
     """The last `length` bytes of an object, such as a Parquet footer, without the rest of it."""
     size = obs.head(_store(), object_path)["size"]

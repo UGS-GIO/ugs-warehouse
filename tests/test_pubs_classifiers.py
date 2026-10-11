@@ -37,6 +37,16 @@ def test_graph_authors_primary_first_and_deduplicated():
     assert graph._authors(p) == ["Grant Willis", "Jones", "Lee"]
 
 
+@pytest.mark.parametrize(("sec", "expected"), [
+    ("Elizabeth L. Miller, and Jeffrey Lee", ["Elizabeth L. Miller", "Jeffrey Lee"]),
+    ("C.L. Hubs, R.R. Miller and E. Antevs", ["C.L. Hubs", "R.R. Miller", "E. Antevs"]),
+    ("W. A. Yonkee, and Thomas C. Chidsey, Jr", ["W. A. Yonkee", "Thomas C. Chidsey, Jr"]),
+    ("S.W. Hazen, Jr.", ["S.W. Hazen, Jr."]),
+])
+def test_graph_authors_real_secondary_formats(sec, expected):
+    assert graph._authors({"pub_sec_author": sec}) == expected
+
+
 def test_graph_topics_split_keywords():
     assert graph._topics({"keywords": "faults; Utah, , maps"}) == ["faults", "Utah", "maps"]
 

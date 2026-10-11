@@ -18,8 +18,10 @@ class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         doc = {"severity": record.levelname, "message": record.getMessage(), "logger": record.name}
         doc.update({k: v for k, v in vars(record).items() if k not in _STANDARD})
-        if record.exc_info:
-            doc["message"] += "\n" + self.formatException(record.exc_info)
+        if record.exc_info and not record.exc_text:
+            record.exc_text = self.formatException(record.exc_info)
+        if record.exc_text:
+            doc["message"] += "\n" + record.exc_text
         return json.dumps(doc, default=str)
 
 

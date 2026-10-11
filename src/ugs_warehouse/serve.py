@@ -184,10 +184,9 @@ def _serve_object(object_path: str, request: Request) -> Response:
     indexes) are buffered + decompressed via get_bytes; everything else streams with Range support.
     Raises 404 if it doesn't exist."""
     if object_path.endswith(".json"):
-        # obstore can't stream a gzipped object (GCS strips Content-Length under decompressive
-        # transcoding, and obs.head fails the same way), and these JSON docs are small and never
-        # Range-requested — so buffer + decompress via get_bytes (its google-cloud fallback reads the
-        # gzipped indexes) and serve plain with an honest Content-Length. (#341)
+        # The catalog indexes are stored gzipped, and these JSON docs are small and never
+        # Range-requested, so buffer + decompress via get_bytes and serve plain with an honest
+        # Content-Length.
         try:
             body = gcs.get_bytes(object_path)
         except FileNotFoundError:

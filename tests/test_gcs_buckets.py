@@ -5,7 +5,7 @@ from ugs_warehouse.core import config, gcs
 
 def test_store_is_cached_per_bucket(monkeypatch):
     made = []
-    monkeypatch.setattr(gcs, "GCSStore", lambda bucket: made.append(bucket) or f"store:{bucket}")
+    monkeypatch.setattr(gcs, "GCSStore", lambda bucket, **_k: made.append(bucket) or f"store:{bucket}")
     monkeypatch.setattr(gcs, "_cached_stores", {})
     monkeypatch.setattr(config, "BUCKET", "out-bucket")
     assert gcs._store() == "store:out-bucket"

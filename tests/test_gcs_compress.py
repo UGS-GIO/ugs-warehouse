@@ -66,21 +66,6 @@ def test_get_bytes_passes_plain_bodies_through() -> None:
         assert gcs.get_bytes("some/path.json") == doc
 
 
-def test_get_bytes_falls_back_to_gcs_client_on_obstore_failure() -> None:
-    # obstore raises on a gzipped object GCS serves with decompressive transcoding (stripped
-    # Content-Length); get_bytes must fall back to google-cloud-storage with raw_download=True and
-    # gunzip the stored bytes, so gzipped indexes / legacy items stay readable. (#341)
-    doc = json.dumps({"hello": "world"}).encode()
-    gcs_client = MagicMock()
-    blob = gcs_client.return_value.bucket.return_value.blob.return_value
-    blob.download_as_bytes.return_value = gzip.compress(doc)
-    with patch.object(gcs, "_store", return_value=object()), \
-         patch.object(gcs.obs, "get", side_effect=RuntimeError("Content-Length Header missing")), \
-         patch.object(gcs, "_gcs_client", gcs_client):
-        assert gcs.get_bytes("stac/catalog.json") == doc
-    blob.download_as_bytes.assert_called_once_with(raw_download=True)
-
-
 def test_get_bytes_reraises_404_without_falling_back() -> None:
     # A genuine 404 (obstore raises FileNotFoundError) must propagate as-is — no wasted second
     # round-trip, and callers that catch FileNotFoundError (review_catalog, prior_property) keep
@@ -94,40 +79,6 @@ def test_get_bytes_reraises_404_without_falling_back() -> None:
     gcs_client.assert_not_called()
 
 
-def test_get_bytes_fallback_passes_a_plain_stored_body_through() -> None:
-    doc = json.dumps({"hello": "world"}).encode()
-    gcs_client = MagicMock()
-    gcs_client.return_value.bucket.return_value.blob.return_value.download_as_bytes.return_value = doc
-    with patch.object(gcs, "_store", return_value=object()), \
-         patch.object(gcs.obs, "get", side_effect=RuntimeError("transient")), \
-         patch.object(gcs, "_gcs_client", gcs_client):
-        assert gcs.get_bytes("stac/item.json") == doc
-
-
-def test_get_bytes_fallback_surfaces_a_permission_error() -> None:
-    # A genuine 403 must NOT be silently reclassified as a gzip quirk — the fallback re-raises it.
-    from google.api_core.exceptions import Forbidden
-    gcs_client = MagicMock()
-    gcs_client.return_value.bucket.return_value.blob.return_value.download_as_bytes.side_effect = \
-        Forbidden("permission denied")
-    with patch.object(gcs, "_store", return_value=object()), \
-         patch.object(gcs.obs, "get", side_effect=RuntimeError("obstore transport")), \
-         patch.object(gcs, "_gcs_client", gcs_client):
-        with pytest.raises(Forbidden):
-            gcs.get_bytes("stac/item.json")
-
-
-def test_exists_falls_back_for_a_gzipped_object() -> None:
-    # obs.head fails the same way as get on a gzipped object; exists() must not report it absent.
-    gcs_client = MagicMock()
-    gcs_client.return_value.bucket.return_value.blob.return_value.exists.return_value = True
-    with patch.object(gcs, "_store", return_value=object()), \
-         patch.object(gcs.obs, "head", side_effect=RuntimeError("Content-Length Header missing")), \
-         patch.object(gcs, "_gcs_client", gcs_client):
-        assert gcs.exists("warehouse/stac/some/item.json") is True
-    gcs_client.return_value.bucket.return_value.blob.return_value.exists.assert_called_once_with()
-
-
 def test_exists_returns_false_on_404_without_falling_back() -> None:
     gcs_client = MagicMock()
     with patch.object(gcs, "_store", return_value=object()), \
@@ -137,16 +88,10 @@ def test_exists_returns_false_on_404_without_falling_back() -> None:
     gcs_client.assert_not_called()
 
 
-def test_get_bytes_fallback_translates_gcs_not_found_to_file_not_found() -> None:
-    # If the object is gone by the time the fallback runs, google-cloud-storage raises NotFound (not
-    # FileNotFoundError). get_bytes must translate it so callers that catch FileNotFoundError (serve,
-    # refresh_catalog) treat it as absent instead of 500ing. (#341)
-    from google.api_core.exceptions import NotFound
-    gcs_client = MagicMock()
-    gcs_client.return_value.bucket.return_value.blob.return_value.download_as_bytes.side_effect = \
-        NotFound("no such object")
-    with patch.object(gcs, "_store", return_value=object()), \
-         patch.object(gcs.obs, "get", side_effect=RuntimeError("obstore transport")), \
-         patch.object(gcs, "_gcs_client", gcs_client):
-        with pytest.raises(FileNotFoundError):
-            gcs.get_bytes("stac/item.json")
+def test_store_asks_gcs_for_the_stored_gzip_bytes(monkeypatch) -> None:
+    # Without it GCS transcodes a gzipped object and drops Content-Length, which obstore can't read.
+    made = {}
+    monkeypatch.setattr(gcs, "_cached_stores", {})
+    monkeypatch.setattr(gcs, "GCSStore", lambda **kw: made.update(kw) or object())
+    gcs._store("b")
+    assert made["client_options"]["default_headers"]["Accept-Encoding"] == "gzip"

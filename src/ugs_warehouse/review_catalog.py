@@ -44,9 +44,8 @@ _store = GCSStore(bucket=config.BUCKET)
 def _read_json(object_path: str) -> dict | None:
     """A JSON object from the review bucket, or None if absent/unparseable."""
     try:
-        # get_bytes handles the gzipped catalog/collection/items indexes — obstore chokes on GCS's
-        # stripped Content-Length, so it falls back to google-cloud-storage — and gunzips; a genuine
-        # 404 still raises FileNotFoundError. Raw obstore here 500'd the crawl on the gzipped root. (#341)
+        # get_bytes gunzips the gzipped catalog/collection/items indexes; a 404 raises
+        # FileNotFoundError.
         raw = gcs.get_bytes(object_path)
     except FileNotFoundError:
         return None

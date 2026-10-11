@@ -419,5 +419,6 @@ separate deploy such as review.
 
 ### Set by Cloud Run
 
-`PORT`, `K_SERVICE`, `CLOUD_RUN_TASK_INDEX`, `CLOUD_RUN_TASK_COUNT` (harvest and 3D split work across
-tasks with these).
+`PORT`, `K_SERVICE`, `CLOUD_RUN_JOB`, `CLOUD_RUN_TASK_INDEX`, `CLOUD_RUN_TASK_COUNT`. Harvest and 3D split
+work across tasks with the last two; `core/logs.py` writes JSON log lines when `K_SERVICE` or
+`CLOUD_RUN_JOB` is set.

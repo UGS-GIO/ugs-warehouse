@@ -297,7 +297,7 @@ ensure_alert "${START_ALERT_NAME}" "$(cat <<JSON
   "conditions": [{
     "displayName": "handler logged could not start ingest job",
     "conditionMatchedLog": {
-      "filter": "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${SERVICE}\" AND textPayload:\"could not start ingest job\""
+      "filter": "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${SERVICE}\" AND (textPayload:\"could not start ingest job\" OR jsonPayload.message:\"could not start ingest job\")"
     }
   }],
   "alertStrategy": { "notificationRateLimit": { "period": "300s" }, "autoClose": "1800s" },

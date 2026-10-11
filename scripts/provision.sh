@@ -234,20 +234,32 @@ ALERT_TOKEN=$(gcloud auth print-access-token)
 # Quotes are pre-escaped: this is interpolated INTO a JSON string below.
 WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\", \"ugs-warehouse-retire\")'
 
-echo "→ alert policy: ${ALERT_NAME}"
-if curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200" \
-     | jq -e --arg n "${ALERT_NAME}" '[.alertPolicies[]? | select(.displayName == $n)] | length > 0' >/dev/null; then
-  echo "  ✓ exists"
-else
-  CHANNELS=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" \
-    "https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels" \
-    | jq -c '[.notificationChannels[]? | select(.type=="email") | .name]')
-  curl -sf -X POST -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" \
-    -d "$(cat <<JSON
+CHANNELS=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" \
+  "https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels" \
+  | jq -c '[.notificationChannels[]? | select(.type=="email") | .name]')
+
+# ensure_alert NAME POLICY_JSON: create the policy unless one with that display name exists.
+ensure_alert() {
+  echo "→ alert policy: $1"
+  local policies
+  policies=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200")
+  if jq -e --arg n "$1" '[.alertPolicies[]? | select(.displayName == $n)] | length > 0' \
+       <<<"${policies}" >/dev/null; then
+    echo "  ✓ exists"
+  elif curl -sf -X POST -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" \
+         -d "$2" "${ALERT_API}" >/dev/null; then
+    echo "  ✓ created"
+  else
+    echo "  ✗ could not create (monitoring.alertPolicyEditor?)" >&2
+    return 1
+  fi
+}
+
+ensure_alert "${ALERT_NAME}" "$(cat <<JSON
 {
   "displayName": "${ALERT_NAME}",
   "documentation": {
-    "content": "A warehouse Cloud Run job execution failed. Nothing retries it: the Pub/Sub push handler starts the ingest job and acks immediately, so a failure here never reaches the dead-letter queue.\n\nTriage: list the executions for the failing job with `gcloud run jobs executions list`, then read that execution's logs by name. Re-run by re-promoting the topic, or by executing the job directly with a topic arg. Placeholders are omitted here because this field renders as markdown and eats angle brackets.",
+    "content": "A warehouse Cloud Run job execution failed. Nothing retries it: the Pub/Sub push handler starts the ingest job and acks immediately, so a failure here never reaches the dead-letter queue.\n\nTriage: list the executions for the failing job with \`gcloud run jobs executions list\`, then read that execution's logs by name. Re-run by re-promoting the topic, or by executing the job directly with a topic arg. Placeholders are omitted here because this field renders as markdown and eats angle brackets.",
     "mimeType": "text/markdown"
   },
   "combiner": "OR",
@@ -270,7 +282,28 @@ else
   "notificationChannels": ${CHANNELS}
 }
 JSON
-)" "${ALERT_API}" >/dev/null && echo "  ✓ created" || echo "  ✗ could not create (monitoring.alertPolicyEditor?)" >&2
-fi
+)"
+
+# A job that never starts has no execution to fail. The handler logs it and acks, so match the log.
+START_ALERT_NAME="Warehouse ingest job could not start"
+ensure_alert "${START_ALERT_NAME}" "$(cat <<JSON
+{
+  "displayName": "${START_ALERT_NAME}",
+  "documentation": {
+    "content": "The Pub/Sub push handler could not start the ingest job, so that publish was acked and dropped. Read the handler log for the topic and the error, fix the cause, then re-promote the topic.",
+    "mimeType": "text/markdown"
+  },
+  "combiner": "OR",
+  "conditions": [{
+    "displayName": "handler logged could not start ingest job",
+    "conditionMatchedLog": {
+      "filter": "resource.type = \"cloud_run_revision\" AND resource.labels.service_name = \"${SERVICE}\" AND textPayload:\"could not start ingest job\""
+    }
+  }],
+  "alertStrategy": { "notificationRateLimit": { "period": "300s" }, "autoClose": "1800s" },
+  "notificationChannels": ${CHANNELS}
+}
+JSON
+)"
 
 echo "✓ provisioned"

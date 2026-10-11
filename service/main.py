@@ -79,9 +79,8 @@ async def pubsub_push(req: Request) -> dict[str, str]:
     payload = _decode(await req.json())
 
     # A payload the Topic rules reject is malformed, not transient — retrying redelivers the same
-    # bytes. The subscription has no dead-letter policy and a 1-day retention, so a non-2xx here
-    # buys 24h of redelivery for a message that can never succeed. Ack + skip, same as the
-    # unsupported-schema gate below.
+    # bytes, so a non-2xx here only walks a message that can never succeed to the dead-letter
+    # topic. Ack + skip, same as the unsupported-schema gate below.
     try:
         topic = from_pubsub(payload)
     except ValueError as e:

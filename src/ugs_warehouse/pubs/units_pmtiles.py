@@ -88,6 +88,7 @@ def _fetch_from_db(dsn: str) -> gpd.GeoDataFrame:
     print(f"Connecting to Postgres to fetch mapping.{TABLE}_current...")
     con = duckdb.connect()
     con.execute("INSTALL postgres; LOAD postgres; INSTALL spatial; LOAD spatial;")
+    dsn = dsn.replace("'", "''")
     con.execute(f"ATTACH '{dsn}' AS db (TYPE POSTGRES, READ_ONLY)")
 
     query = f"SELECT {COLS[:-6]}, ST_AsWKB(shape) as geom_wkb FROM db.mapping.{TABLE}_current"

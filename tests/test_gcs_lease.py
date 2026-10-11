@@ -9,8 +9,9 @@ PATH = "_locks/ingest/hazards.hazards_qfaults_current"
 
 def test_lease_is_released_after_the_block():
     with gcs.lease(PATH, ttl_s=60, wait_s=0):
-        assert gcs.exists(PATH)
-    assert not gcs.exists(PATH)
+        assert float(gcs.get_bytes(PATH)) > time.time()
+    with gcs.lease(PATH, ttl_s=60, wait_s=0):  # the released lease is free at once
+        pass
 
 
 def test_live_lease_blocks_until_the_wait_runs_out():

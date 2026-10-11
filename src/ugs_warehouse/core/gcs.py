@@ -279,17 +279,23 @@ class LeaseTimeout(RuntimeError):
     """Another holder kept the lease past the wait."""
 
 
+def _version(meta) -> dict:
+    """The parts of an object's put/get metadata a versioned put matches on."""
+    return {k: meta[k] for k in ("e_tag", "version") if meta.get(k)}
+
+
 @contextmanager
 def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) -> Iterator[None]:
     """Hold an exclusive lease: an object created only if absent, holding its expiry time.
 
     Waits up to `wait_s` for a live holder. A lease past its expiry belongs to a job that died, so
-    it is taken over with a versioned put (only one taker wins)."""
+    it is taken over with a versioned put (only one taker wins). Release also uses a versioned put,
+    marking the lease expired, so it never clobbers a lease another run has taken over."""
     deadline = time.monotonic() + wait_s
     while True:
         body = str(time.time() + ttl_s).encode()
         try:
-            obs.put(_store(), object_path, body, mode="create")
+            ours = _version(obs.put(_store(), object_path, body, mode="create"))
             break
         except AlreadyExistsError:
             pass
@@ -299,9 +305,8 @@ def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) 
         except FileNotFoundError:
             continue  # released between our put and get
         if time.time() > expires:
-            version = {k: held.meta[k] for k in ("e_tag", "version") if held.meta.get(k)}
             try:
-                obs.put(_store(), object_path, body, mode=version)
+                ours = _version(obs.put(_store(), object_path, body, mode=_version(held.meta)))
                 break
             except PreconditionError:
                 continue  # another waiter took it first
@@ -312,10 +317,11 @@ def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) 
         yield
     finally:
         try:
-            if bytes(obs.get(_store(), object_path).bytes()) == body:  # not taken over since
-                delete(object_path)
-        except FileNotFoundError:
-            pass
+            obs.put(_store(), object_path, b"0", mode=ours)
+        except PreconditionError:
+            pass  # taken over since
+        except Exception as e:  # noqa: BLE001 — keep the caller's exception; the lease expires anyway
+            print(f"[gcs] lease release failed for {object_path}: {e}", file=sys.stderr)
 
 
 def list_etags(prefix: str) -> dict[str, str]:

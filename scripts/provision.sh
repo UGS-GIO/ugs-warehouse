@@ -241,13 +241,17 @@ CHANNELS=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" \
 # ensure_alert NAME POLICY_JSON: create the policy unless one with that display name exists.
 ensure_alert() {
   echo "→ alert policy: $1"
-  if curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200" \
-       | jq -e --arg n "$1" '[.alertPolicies[]? | select(.displayName == $n)] | length > 0' >/dev/null; then
+  local policies
+  policies=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200")
+  if jq -e --arg n "$1" '[.alertPolicies[]? | select(.displayName == $n)] | length > 0' \
+       <<<"${policies}" >/dev/null; then
     echo "  ✓ exists"
+  elif curl -sf -X POST -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" \
+         -d "$2" "${ALERT_API}" >/dev/null; then
+    echo "  ✓ created"
   else
-    curl -sf -X POST -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" \
-      -d "$2" "${ALERT_API}" >/dev/null && echo "  ✓ created" \
-      || echo "  ✗ could not create (monitoring.alertPolicyEditor?)" >&2
+    echo "  ✗ could not create (monitoring.alertPolicyEditor?)" >&2
+    return 1
   fi
 }
 

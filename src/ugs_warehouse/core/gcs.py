@@ -316,7 +316,7 @@ def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) 
             except PreconditionError:
                 continue  # another waiter took it first
         if time.monotonic() >= deadline:
-            raise LeaseTimeout(object_path)
+            raise LeaseTimeout(f"lease {object_path} still held after {wait_s:.0f}s")
         time.sleep(poll_s)
     try:
         yield

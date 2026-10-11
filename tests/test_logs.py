@@ -38,12 +38,13 @@ def test_extra_fields_cannot_replace_the_standard_keys():
 
 
 def test_json_only_on_cloud_run(monkeypatch):
-    root = logging.getLogger()
-    monkeypatch.setattr(root, "handlers", list(root.handlers))  # restored after the test
+    # Stub basicConfig: force=True would close the test runner's own log handlers.
+    calls = []
+    monkeypatch.setattr(logging, "basicConfig", lambda **kw: calls.append(kw))
     monkeypatch.delenv("K_SERVICE", raising=False)
     monkeypatch.delenv("CLOUD_RUN_JOB", raising=False)
     logs.setup()
-    assert not isinstance(logging.getLogger().handlers[0].formatter, logs.JsonFormatter)
     monkeypatch.setenv("CLOUD_RUN_JOB", "ugs-warehouse-ingest")
     logs.setup()
-    assert isinstance(logging.getLogger().handlers[0].formatter, logs.JsonFormatter)
+    plain, cloud = (c["handlers"][0].formatter for c in calls)
+    assert not isinstance(plain, logs.JsonFormatter) and isinstance(cloud, logs.JsonFormatter)

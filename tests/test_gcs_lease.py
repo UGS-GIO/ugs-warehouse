@@ -32,3 +32,9 @@ def test_waiter_runs_once_the_holder_releases(monkeypatch):
     monkeypatch.setattr(gcs.time, "sleep", lambda _s: gcs.delete(PATH))
     with gcs.lease(PATH, ttl_s=60, wait_s=60):
         assert gcs.exists(PATH)
+
+
+def test_a_taken_over_lease_is_left_for_its_new_holder():
+    with gcs.lease(PATH, ttl_s=60, wait_s=0):
+        gcs.put_bytes(b"9999999999", PATH, content_type="text/plain")
+    assert gcs.get_bytes(PATH) == b"9999999999"

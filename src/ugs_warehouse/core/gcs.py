@@ -311,7 +311,11 @@ def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) 
     try:
         yield
     finally:
-        delete(object_path)
+        try:
+            if bytes(obs.get(_store(), object_path).bytes()) == body:  # not taken over since
+                delete(object_path)
+        except FileNotFoundError:
+            pass
 
 
 def list_etags(prefix: str) -> dict[str, str]:

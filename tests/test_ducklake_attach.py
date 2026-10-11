@@ -7,6 +7,14 @@ import pytest
 from ugs_warehouse.vector import ducklake
 
 
+class Result:
+    def __init__(self, row):
+        self.row = row
+
+    def fetchone(self):
+        return self.row
+
+
 class FakeCon:
     def __init__(self, attached=False):
         self.sql, self.filesystems, self._attached = [], [], attached
@@ -14,7 +22,7 @@ class FakeCon:
     def execute(self, sql, params=None):
         self.sql.append(sql)
         row = (1,) if self._attached and "duckdb_databases" in sql else None
-        return type("R", (), {"fetchone": lambda _self: row})()
+        return Result(row)
 
     def register_filesystem(self, fs):
         self.filesystems.append(fs)
@@ -67,5 +75,5 @@ def test_already_attached_is_a_no_op(gs):
 
 def test_missing_dsn_stops(monkeypatch):
     monkeypatch.setattr(ducklake, "CATALOG_DSN", "")
-    with pytest.raises(SystemExit):
+    with pytest.raises(SystemExit, match="DUCKLAKE_CATALOG_DSN not set"):
         ducklake.attach(FakeCon())

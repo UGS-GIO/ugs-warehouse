@@ -25,7 +25,9 @@ def test_county_of_a_point():
     assert counties.county_of_pub({"lat": "37.1", "longitude": "-113.58"}) == "Washington"
 
 
-@pytest.mark.parametrize(("lat", "lon"), [(0, 0), ("nan", "-111"), (None, None), ("x", "y")])
+@pytest.mark.parametrize(("lat", "lon"), [
+    (0, 0), (40.0, -115.0), (35.0, -111.0), ("nan", "-111"), (None, None), ("x", "y"),
+])
 def test_no_county_outside_utah_or_without_coords(lat, lon):
     assert counties.county_of(lat, lon) is None
 

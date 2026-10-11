@@ -14,12 +14,16 @@ from __future__ import annotations
 import gzip
 import hashlib
 import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
 import obstore as obs
 from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcloud_storage
+from obstore.exceptions import AlreadyExistsError, PreconditionError
 from obstore.store import GCSStore
 
 from . import config
@@ -269,6 +273,45 @@ def delete(object_path: str) -> None:
         obs.delete(_store(), object_path)
     except Exception:  # noqa: BLE001 — already gone / race → nothing to clean
         pass
+
+
+class LeaseTimeout(RuntimeError):
+    """Another holder kept the lease past the wait."""
+
+
+@contextmanager
+def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) -> Iterator[None]:
+    """Hold an exclusive lease: an object created only if absent, holding its expiry time.
+
+    Waits up to `wait_s` for a live holder. A lease past its expiry belongs to a job that died, so
+    it is taken over with a versioned put (only one taker wins)."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        body = str(time.time() + ttl_s).encode()
+        try:
+            obs.put(_store(), object_path, body, mode="create")
+            break
+        except AlreadyExistsError:
+            pass
+        try:
+            held = obs.get(_store(), object_path)
+            expires = float(bytes(held.bytes()))
+        except FileNotFoundError:
+            continue  # released between our put and get
+        if time.time() > expires:
+            version = {k: held.meta[k] for k in ("e_tag", "version") if held.meta.get(k)}
+            try:
+                obs.put(_store(), object_path, body, mode=version)
+                break
+            except PreconditionError:
+                continue  # another waiter took it first
+        if time.monotonic() >= deadline:
+            raise LeaseTimeout(object_path)
+        time.sleep(poll_s)
+    try:
+        yield
+    finally:
+        delete(object_path)
 
 
 def list_etags(prefix: str) -> dict[str, str]:

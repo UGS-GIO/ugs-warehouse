@@ -344,15 +344,22 @@ def footprint(series_id, work):
 
 
 def _aux_srs(aux_path):
-    """Real CRS from an ESRI .aux.xml — the AUTHORITY EPSG of the last ProjectedCoordinateSystem
-    WKT (the AdjustXform carries the true projection)."""
-    txt = open(aux_path, encoding="utf-8", errors="replace").read()
-    wkts = re.findall(r"<WKT>(.*?)</WKT>", txt, re.S)
+    """Real CRS from an ESRI .aux.xml — the EPSG of the last WKT in it (the AdjustXform carries the
+    true projection)."""
+    import xml.etree.ElementTree as ET
+
+    from rasterio.crs import CRS
+    try:
+        wkts = [e.text for e in ET.parse(aux_path).iter("WKT") if e.text]
+    except ET.ParseError:
+        return None
     for w in reversed(wkts):
-        w = w.replace("&quot;", '"')
-        m = re.findall(r'AUTHORITY\["EPSG",\s*"?(\d+)"?\]', w)
-        if m:
-            return f"EPSG:{m[-1]}"
+        try:
+            epsg = CRS.from_wkt(w).to_epsg()
+        except Exception:  # noqa: BLE001 — an unparseable WKT just means try the next one
+            continue
+        if epsg:
+            return f"EPSG:{epsg}"
     return None
 
 

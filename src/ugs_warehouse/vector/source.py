@@ -39,13 +39,8 @@ def _connect() -> duckdb.DuckDBPyConnection:
     max_mem = os.environ.get("DUCKDB_MAX_MEMORY", "128MB")
     con.execute(f"SET max_memory='{max_mem}';")
     con.execute("INSTALL postgres; LOAD postgres;")
-    # Set password if provided separately
-    password = os.environ.get("PGPASSWORD")
-    if password:
-        dsn = f"{POSTGRES_DSN} password={password}"
-    else:
-        dsn = POSTGRES_DSN
-    con.execute(f"ATTACH '{dsn}' AS {PG_ALIAS} (TYPE POSTGRES, READ_ONLY)")
+    # libpq reads PGPASSWORD from the environment.
+    con.execute(f"ATTACH '{POSTGRES_DSN}' AS {PG_ALIAS} (TYPE POSTGRES, READ_ONLY)")
     return con
 
 

@@ -24,7 +24,7 @@ import geopandas as gpd
 import requests
 
 from ..core import config, gcs
-from . import geoparquet, identity, source
+from . import geoparquet, identity
 
 DEFAULT_POSTGREST = "https://postgrest-seamlessgeolmap-734948684426.us-central1.run.app"
 POSTGREST = os.environ.get("POSTGREST_URL", DEFAULT_POSTGREST).rstrip("/")
@@ -121,7 +121,6 @@ def build_units(minz: int = 0, maxz: int = 14) -> None:
     is_pg = dsn and (dsn.startswith(("postgres://", "postgresql://")) or "host=" in dsn)
 
     if is_pg:
-        dsn = source.inject_pg_password(dsn)
         gdf = _fetch_from_db(dsn)
     else:
         print(f"Pulling {TABLE} (is_current) from PostgREST: {POSTGREST}")

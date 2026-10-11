@@ -39,3 +39,10 @@ def test_a_taken_over_lease_is_left_for_its_new_holder():
     with gcs.lease(PATH, ttl_s=60, wait_s=0):
         gcs.put_bytes(b"9999999999", PATH, content_type="text/plain")
     assert gcs.get_bytes(PATH) == b"9999999999"
+
+
+def test_a_corrupt_lease_names_itself():
+    gcs.put_bytes(b"garbage", PATH, content_type="text/plain")
+    with pytest.raises(ValueError, match=PATH):
+        with gcs.lease(PATH, ttl_s=60, wait_s=0):
+            pass

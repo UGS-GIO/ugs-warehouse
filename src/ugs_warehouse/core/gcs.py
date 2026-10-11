@@ -301,9 +301,14 @@ def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) 
             pass
         try:
             held = obs.get(_store(), object_path)
-            expires = float(bytes(held.bytes()))
+            raw = bytes(held.bytes())
         except FileNotFoundError:
             continue  # released between our put and get
+        try:
+            expires = float(raw)
+        except ValueError:
+            raise ValueError(f"lease {object_path} holds {raw[:40]!r}, not an expiry time; "
+                             "delete it to unblock") from None
         if time.time() > expires:
             try:
                 ours = _version(obs.put(_store(), object_path, body, mode=_version(held.meta)))

@@ -67,6 +67,8 @@ bronze → silver → gold — and publishes gold as Postgres serving tables.
 
 Every time dataELT promotes a `_current` table it publishes a `{schema, topic}` message; the
 warehouse reacts. No polling, no schedule. A topic whose schema isn't a known mart is acked + skipped.
+One topic ingests at a time: a run holds a lease object (`_locks/ingest/{topic}`), and a second
+publish for that topic waits for it.
 
 ### ③ Warehouse transform + four sinks 🟩
 

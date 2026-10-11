@@ -32,6 +32,10 @@ from . import (
 )
 from .topics import Topic
 
+# The ingest job's --task-timeout is 3600s, so a lease older than that belongs to a dead run.
+LOCK_TTL_S = 3600
+LOCK_WAIT_S = 2700
+
 
 def _backend() -> ModuleType:
     """The source backend: direct Postgres (Cloud SQL). PostgREST is the public viewer's runtime
@@ -167,8 +171,13 @@ def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False
     `skip_unchanged` defaults on — an unchanged topic (fingerprint matches the published item) is
     skipped without rebuilding tiles. Pass `skip_unchanged=False` (CLI `--force`) to always rebuild."""
     try:
-        return _ingest(topic, dry_run=dry_run, skip_refresh=skip_refresh,
-                       skip_unchanged=skip_unchanged)
+        if dry_run:
+            return _ingest(topic, dry_run=True, skip_refresh=skip_refresh,
+                           skip_unchanged=skip_unchanged)
+        # Two publishes for one topic would both rewrite its artifacts. The second waits, then
+        # runs; the fingerprint skip makes it cheap when nothing changed.
+        with gcs.lease(f"_locks/ingest/{topic.fqn}", ttl_s=LOCK_TTL_S, wait_s=LOCK_WAIT_S):
+            return _ingest(topic, skip_refresh=skip_refresh, skip_unchanged=skip_unchanged)
     except Exception as e:
         # Check if it's the "FATAL: no GEOMETRY column found" case (from source.py or transform.py)
         # We can handle non-spatial gracefully by just returning 0 (success, nothing to ingest)

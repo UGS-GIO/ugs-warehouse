@@ -37,7 +37,8 @@ def _from_postgres(table: str) -> list[dict]:
     con = duckdb.connect()
     try:
         con.execute("INSTALL postgres; LOAD postgres;")
-        con.execute(f"ATTACH '{_db_url()}' AS pg_pubs (TYPE POSTGRES, READ_ONLY)")
+        dsn = _db_url().replace("'", "''")
+        con.execute(f"ATTACH '{dsn}' AS pg_pubs (TYPE POSTGRES, READ_ONLY)")
 
         if "." in table:
             schema, name = table.split(".", 1)

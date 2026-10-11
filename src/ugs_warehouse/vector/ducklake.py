@@ -78,9 +78,10 @@ def attach(con: duckdb.DuckDBPyConnection) -> str:
     override = os.environ.get("OVERRIDE_DATA_PATH", "False") == "True"
     
     # libpq reads PGPASSWORD from the environment.
+    dsn, data_path, schema = (v.replace("'", "''") for v in (CATALOG_DSN, DATA_PATH, METADATA_SCHEMA))
     cmd = (
-        f"ATTACH 'ducklake:postgres:{CATALOG_DSN}' AS {CATALOG_ALIAS} "
-        f"(DATA_PATH '{DATA_PATH}', METADATA_SCHEMA '{METADATA_SCHEMA}'"
+        f"ATTACH 'ducklake:postgres:{dsn}' AS {CATALOG_ALIAS} "
+        f"(DATA_PATH '{data_path}', METADATA_SCHEMA '{schema}'"
     )
     if override:
         cmd += ", OVERRIDE_DATA_PATH TRUE"

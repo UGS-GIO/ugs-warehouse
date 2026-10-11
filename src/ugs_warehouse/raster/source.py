@@ -77,7 +77,8 @@ def _connect() -> duckdb.DuckDBPyConnection:
     Postgres side inside postgres_query, so geometry comes back as plain GeoJSON text."""
     con = duckdb.connect()
     con.execute("INSTALL postgres; LOAD postgres;")
-    con.execute(f"ATTACH '{POSTGRES_DSN}' AS {PG_ALIAS} (TYPE POSTGRES, READ_ONLY)")
+    dsn = POSTGRES_DSN.replace("'", "''")
+    con.execute(f"ATTACH '{dsn}' AS {PG_ALIAS} (TYPE POSTGRES, READ_ONLY)")
     return con
 
 

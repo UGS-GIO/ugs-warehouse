@@ -250,8 +250,9 @@ def exists(object_path: str) -> bool:
 
 def download(object_path: str, dest: str, *, bucket: str | None = None) -> None:
     """Stream an object to a local file without holding it in memory."""
+    res = obs.get(_store(bucket), object_path)  # a missing object raises before dest is touched
     with open(dest, "wb") as f:
-        for chunk in obs.get(_store(bucket), object_path).stream(min_chunk_size=_HASH_CHUNK):
+        for chunk in res.stream(min_chunk_size=_HASH_CHUNK):
             f.write(chunk)
 
 

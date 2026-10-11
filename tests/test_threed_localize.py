@@ -1,3 +1,5 @@
+import pytest
+
 from ugs_warehouse.core import config, gcs
 from ugs_warehouse.pubs import threed
 
@@ -12,3 +14,10 @@ def test_localize_streams_a_gs_uri_to_disk(tmp_path):
 
 def test_localize_passes_a_local_path_through(tmp_path):
     assert threed._localize(str(tmp_path), "unused") == str(tmp_path)
+
+
+def test_a_missing_gs_object_leaves_dest_untouched(tmp_path):
+    dest = tmp_path / "gdb.zip"
+    with pytest.raises(FileNotFoundError):
+        threed._localize(f"gs://{config.BUCKET}/pubs/absent.zip", str(dest))
+    assert not dest.exists()

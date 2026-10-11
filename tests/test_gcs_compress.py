@@ -93,5 +93,8 @@ def test_store_asks_gcs_for_the_stored_gzip_bytes(monkeypatch) -> None:
     made = {}
     monkeypatch.setattr(gcs, "_cached_stores", {})
     monkeypatch.setattr(gcs, "GCSStore", lambda **kw: made.update(kw) or object())
+    monkeypatch.setattr(gcs, "_credentials", lambda: "google-auth")
     gcs._store("b")
     assert made["client_options"]["default_headers"]["Accept-Encoding"] == "gzip"
+    # obstore's own token request would carry the header and fail on the gzipped reply.
+    assert made["credential_provider"] == "google-auth"

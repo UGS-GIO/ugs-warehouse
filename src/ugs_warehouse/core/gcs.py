@@ -11,6 +11,7 @@ that only links to the object (a pub cover, a COG) reads them from a listing (`l
 """
 from __future__ import annotations
 
+import functools
 import gzip
 import hashlib
 import sys
@@ -20,8 +21,10 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
+import google.auth
 import obstore as obs
 from google.cloud import storage as gcloud_storage
+from obstore.auth.google import GoogleCredentialProvider
 from obstore.exceptions import AlreadyExistsError, PreconditionError
 from obstore.store import GCSStore
 
@@ -73,13 +76,22 @@ _cached_stores: dict[str, GCSStore] = {}
 _cached_gcs_client: gcloud_storage.Client | None = None
 
 
+@functools.cache
+def _credentials() -> GoogleCredentialProvider:
+    creds, _ = google.auth.default(scopes=["https://www.googleapis.com/auth/devstorage.read_write"])
+    return GoogleCredentialProvider(creds)
+
+
 def _store(bucket: str | None = None) -> GCSStore:
     name = bucket or config.BUCKET
     if name not in _cached_stores:
         # Asking for gzip makes GCS send a gzipped object's stored bytes, with their Content-Length,
-        # instead of transcoding them and dropping the header, which obstore cannot read.
+        # instead of transcoding them and dropping the header, which obstore cannot read. obstore
+        # would send the header to the token endpoint too and fail on the gzipped reply, so
+        # google-auth fetches the token instead.
         _cached_stores[name] = GCSStore(
-            bucket=name, client_options={"default_headers": {"Accept-Encoding": "gzip"}})
+            bucket=name, credential_provider=_credentials(),
+            client_options={"default_headers": {"Accept-Encoding": "gzip"}})
     return _cached_stores[name]
 
 

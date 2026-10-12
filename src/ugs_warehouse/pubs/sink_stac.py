@@ -385,12 +385,16 @@ def build_publication(p: dict, attachments: list[dict], *,
         lb = meta.get("bbox")
         rows = {"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}
         ltitle, ldesc = titles[label]
-        items.append(item(layer_id(label), ltitle, {"data": {
-            "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
-            "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}},
+        data = {"href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
+                "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
+        # The manifest's recorded schema rides the data asset, as on a companion table.
+        if meta.get("columns"):
+            data["table:columns"] = meta["columns"]
+        items.append(item(layer_id(label), ltitle, {"data": data},
             geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
             footprint_source=LAYER_BBOX_SOURCE if lb else aoi_source,
-            extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {})}))
+            extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {})},
+            extensions=[stac.TABLE_EXT] if meta.get("columns") else None))
     for t in companion_tables or []:
         label, meta = t["label"], layer_meta.get(t["label"], {})
         ltitle, ldesc = titles[label]

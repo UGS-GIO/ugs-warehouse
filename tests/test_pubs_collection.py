@@ -297,6 +297,22 @@ def test_layer_and_table_items_carry_readable_titles_and_the_source_dir():
     assert table["properties"]["title"] == "Geounits" and "description" not in table["properties"]
 
 
+def test_a_spatial_layer_carries_its_recorded_columns_on_the_data_asset():
+    cols = [{"name": "OBJECTID", "type": "int64"}, {"name": "geometry", "type": "geometry"}]
+    _, items = _build(layers={"geo__Faults": {"rows": 12, "bbox": None, "columns": cols},
+                              "geo__DMU": {"rows": 41}})
+    layer = next(i for i in items if i["id"].endswith("geo__Faults"))
+    assert layer["assets"]["data"]["table:columns"] == cols
+    assert stac.TABLE_EXT in layer["stac_extensions"]
+    assert "table:columns" not in layer["properties"]
+
+
+def test_a_spatial_layer_without_recorded_columns_has_none():
+    _, items = _build()
+    layer = next(i for i in items if i["id"].endswith("geo__Faults"))
+    assert "table:columns" not in layer["assets"]["data"]
+
+
 def test_layer_titles_name_the_source_dir_when_two_layers_read_alike():
     assert sink_stac.layer_titles(["gems__ContactsAndFaults", "x__ContactsAndFaults",
                                    "contacts_and_faults", "gems__MapUnitPolys"]) == {

@@ -664,7 +664,8 @@ def test_vector_manifests_by_sid_carries_each_layers_rows_and_bbox():
 
     assert out["M-100"]["layers"] == {"geo__Faults": {
         "rows": 12, "bbox": [-112.0, 40.0, -111.0, 41.0], "geometry_types": ["LineString"],
-        "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]"}}
+        "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]",
+        "columns": [{"name": "geometry", "type": "geometry"}]}}
 
 
 def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):

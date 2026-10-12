@@ -681,6 +681,31 @@ def test_build_catalog_writes_a_collection_and_items_per_publication():
     assert by_id["DS-8_geo__DescriptionOfMapUnits"]["assets"]["data"]["table:columns"] == cols
 
 
+def test_build_catalog_stamps_file_meta_on_the_collection_and_its_items():
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    from ugs_warehouse.core import gcs
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    manifests = {"DS-8": {"spatial": ["geo__Faults"], "tables": [], "layers": {}}}
+    cover, layer = identity.pub_cover_object("DS-8"), f"{vectors.VECTORS_PREFIX}/DS-8/geo__Faults.parquet"
+    index = {cover: gcs.FileMeta(4, "1220c0"), layer: gcs.FileMeta(6, "1220ff")}
+    written_items, written_colls = [], []
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, manifests, [{"series_id": "DS-8"}], written_items, written_colls)
+        stack.enter_context(patch("ugs_warehouse.pubs.ingest._image_ids", return_value=(set(), {"DS-8"})))
+        stack.enter_context(patch("ugs_warehouse.pubs.ingest._file_meta_index", return_value=index))
+        assert build_catalog(skip_refresh=True) == 1
+
+    (coll, _), = written_colls
+    assert coll["assets"]["thumbnail"]["file:checksum"] == "1220c0"
+    assert stac.FILE_EXT in coll["stac_extensions"]
+    data = next(it for it in written_items if it["id"] == "DS-8_geo__Faults")["assets"]["data"]
+    assert (data["file:size"], data["file:checksum"]) == (6, "1220ff")
+
+
 def test_a_publication_with_an_unreadable_manifest_fails_and_keeps_its_items(monkeypatch):
     from contextlib import ExitStack
 

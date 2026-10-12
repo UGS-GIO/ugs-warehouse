@@ -120,7 +120,7 @@ def test_aux_srs_none_without_a_usable_wkt(tmp_path):
     assert harvest._aux_srs(str(aux)) is None
 
 
-def test_bundle_prj_georeferences_a_plate_with_only_a_world_file(tmp_path, monkeypatch):
+def test_bundle_prj_georeferences_a_plate_with_only_a_world_file(tmp_path):
     pytest.importorskip("rasterio")
     if not shutil.which("gdal_translate"):
         pytest.skip("needs the GDAL command-line tools")
@@ -133,7 +133,6 @@ def test_bundle_prj_georeferences_a_plate_with_only_a_world_file(tmp_path, monke
         ds.write(np.zeros((1, 4, 4), "uint8"))
     (tmp_path / "plate.tfw").write_text("5\n0\n0\n-5\n245681\n4654971\n")
     (tmp_path / "plate.prj").write_text(CRS.from_epsg(26712).to_wkt())
-    monkeypatch.setattr(harvest, "run", lambda cmd: __import__("subprocess").run(cmd, check=True))
 
     with rasterio.open(harvest.corrected_georef(str(tif), str(tmp_path))) as ds:
         assert ds.crs.to_epsg() == 26712

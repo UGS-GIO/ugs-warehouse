@@ -447,7 +447,7 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
     import html
     escaped_srs = html.escape(srs)
     srs_el = f"<SRS>{escaped_srs}</SRS>"
-    xml, n = re.subn(r"<SRS[^>]*>.*?</SRS>", srs_el, xml, flags=re.S)
+    xml, n = re.subn(r"<SRS[^>]*>.*?</SRS>", lambda _: srs_el, xml, flags=re.S)
     if not n:
         before, root_end, after = xml.rpartition("</VRTDataset>")
         if not root_end:

@@ -698,11 +698,11 @@ def _web_map_links(doc: dict) -> list[dict]:
 
 def _pub_item_index_entry(item: dict, coll: dict, *, prefix: str) -> dict:
     """A publication Item's root-index entry: its `_index_entry`, tagged with the publication's id
-    and title (`ugs:pub_id`, `ugs:pub_title`). A list view drops tagged entries to keep one card per
-    publication; a map layer list keeps them and names the publication beside the layer."""
+    and title (`ugs:in_publication`, `ugs:publication_title`). A list view drops tagged entries to
+    keep one card per publication; a map layer list keeps them and names the publication."""
     entry = _index_entry(item, prefix=prefix)
-    entry["properties"]["ugs:pub_id"] = coll["id"]
-    entry["properties"]["ugs:pub_title"] = coll.get("title") or coll["id"]
+    entry["properties"]["ugs:in_publication"] = coll["id"]
+    entry["properties"]["ugs:publication_title"] = coll.get("title") or coll["id"]
     return entry
 
 
@@ -779,7 +779,7 @@ def _root_doc(children: list[dict]) -> dict:
 
 def _write_markdown(path: str, *, title: str, description: str, kind: str, children: int,
                    extent: dict | None = None, items: list[dict] | None = None,
-                   service: bool = False) -> None:
+                   service: bool = False, publications: bool = False) -> None:
     """Write README.md + AGENTS.md beside a catalog.json or collection.json.
 
     Both are regenerated on every refresh from the same values as the JSON, so the prose cannot
@@ -791,9 +791,10 @@ def _write_markdown(path: str, *, title: str, description: str, kind: str, child
     for name, body in (
         (catalog_docs.README_NAME, catalog_docs.readme(
             title=title, description=description, kind=kind, children=children,
-            extent=extent, items=items)),
+            extent=extent, items=items, publications=publications)),
         (catalog_docs.AGENTS_NAME, catalog_docs.agents(
-            title=title, kind=kind, path=path, children=children, items=items, service=service)),
+            title=title, kind=kind, path=path, children=children, items=items, service=service,
+            publications=publications)),
     ):
         gcs.put_bytes(body.encode(), f"{prefix}/{name}",
                       content_type=catalog_docs.MARKDOWN_MIME, cache_control=gcs.CACHE_CATALOG)
@@ -958,7 +959,8 @@ def _write_pub_series(pub_colls: dict[str, int], has_mappable_item: set[str]
             (_collection_index_entry(docs[p], prefix=f"{p.rsplit('/', 1)[1]}/", item_count=pub_colls[p])
              for p in pubs), key=lambda e: e["id"])),
                     f"{config.STAC_PREFIX}/{spath}/items.json")
-        _write_markdown(spath, title=stitle, description=desc, kind="catalog", children=len(kids))
+        _write_markdown(spath, title=stitle, description=desc, kind="catalog", children=len(kids),
+                        publications=True)
         by_group.setdefault(group, []).append({"id": code, "title": stitle, "file": "catalog.json",
                                                "count": sum(k["count"] for k in kids),
                                                "mappable": sum(k["mappable"] for k in kids)})
@@ -973,8 +975,8 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     wrote and indexes their items. A series still pending stays in the old layout, one
     collection.json over `<SID>/<SID>.json` items, and the new-layout objects in it are ignored.
 
-    Returns the problems found (publication items with no collection.json, unreadable or malformed publication
-    collection.json), each also printed. The root files are always written; `strict` then raises
+    Returns the problems found (publication items with no collection.json, unreadable or malformed
+    publication collection.json, items that failed to load), each also printed. The root files are always written; `strict` then raises
     if there were problems.
 
     Derive-from-truth + idempotent: safe to run after each ingest or on demand. Under
@@ -1010,6 +1012,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     leaf: dict[str, dict] = {}
     rollup: dict[str, list[dict]] = {}   # nesting catalog -> its children's items (see ROLLUP_INDEX_CATALOGS)
     everything: list[dict] = []          # every item's index entry, for the root items.json
+    dropped: list[str] = []              # items that failed to load, reported as problems
     with ThreadPoolExecutor(max_workers=64) as executor:
         for path, item_ids in groups.items():
             def _fetch_one(iid: str) -> dict | None:
@@ -1021,8 +1024,10 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
                     # An item dropping out of items.json is silent data loss — this is how #341 stayed
                     # invisible for weeks. Log it so the next obstore/GCS quirk doesn't repeat that with
                     # zero lines in the log.
-                    print(f"[catalog] dropped {path}/{iid} from the index: "
-                          f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}", file=sys.stderr)
+                    msg = (f"dropped {path}/{iid} from the index: "
+                           f"{type(e).__name__}: {(str(e).splitlines() or [''])[0]}")
+                    print(f"[catalog] {msg}", file=sys.stderr)
+                    dropped.append(msg)
                     return None
 
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
@@ -1030,7 +1035,8 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             top, cid = path.split("/")[0], path.split("/")[-1]
             if _is_pub_collection_path(path):
                 # Publication collections are written by the pubs ingest; refresh only indexes them.
-                pub_colls[path] = len(item_ids)
+                # The count is of Items that loaded, the ones the indexes list.
+                pub_colls[path] = len(items)
                 pub_items[path] = items
                 if any(_is_mappable(it) for it in items):
                     pub_mappable.add(path)
@@ -1069,6 +1075,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     #    becomes a sub-catalog (e.g. ugs-serving-topics → one collection per topic, a publication
     #    group → its series); everything else is a flat collection directly under root. Child
     #    links carry counts.
+    problems += sorted(dropped)
     pub_series, skipped, pub_docs = _write_pub_series(pub_colls, pub_mappable)
     problems += skipped.values()
     # One root entry per publication, plus each of its Items tagged with the publication so map
@@ -1114,10 +1121,13 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     _write_markdown("", title=config.CATALOG_TITLE, description=ROOT_DESCRIPTION,
                     kind="catalog", children=len(root_children))
 
+    # Publication collections are counted once, from pub_colls (Items that loaded), not again
+    # from their listed groups.
     written_pubs = [p for p in pub_colls if p not in skipped]
-    n = sum(len(v) for v in groups.values()) + sum(pub_colls[p] for p in written_pubs)
+    plain = [v for g, v in groups.items() if not _is_pub_collection_path(g)]
+    n = sum(len(v) for v in plain) + sum(pub_colls[p] for p in written_pubs)
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "
-          f"({len(groups) + len(written_pubs)} collections, {n} items)")
+          f"({len(plain) + len(written_pubs)} collections, {n} items)")
     for problem in problems:
         print(f"[catalog] {problem}", file=sys.stderr)
     if strict and problems:

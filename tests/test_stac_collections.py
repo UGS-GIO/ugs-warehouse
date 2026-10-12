@@ -207,6 +207,14 @@ def test_refresh_writes_series_catalogs_over_publication_collections(monkeypatch
     assert f"{p}/ugs-publications/OFR/OFR-1/items.json" not in store
     for node in ("ugs-publications", "ugs-publications/OFR", "ugs-external/B"):
         assert f"{p}/{node}/README.md" in store and f"{p}/{node}/AGENTS.md" in store
+    # The generated docs describe the new indexes: publications plus tagged Items at the root,
+    # publications only in a series.
+    root_agents = store[f"{p}/AGENTS.md"].decode()
+    assert "each publication once" in root_agents and "`ugs:in_publication`" in root_agents
+    series_agents = store[f"{p}/ugs-publications/OFR/AGENTS.md"].decode()
+    assert "lists this series' publications" in series_agents
+    assert "lists the publications in this series" in store[f"{p}/ugs-publications/OFR/README.md"].decode()
+    assert "publications in this series" not in store[f"{p}/ugs-publications/README.md"].decode()
     root = json.loads(store[f"{p}/catalog.json"])
     assert {"./ugs-publications/catalog.json", "./ugs-external/catalog.json"} <= {
         lk["href"] for lk in root["links"] if lk["rel"] == "child"}
@@ -247,8 +255,9 @@ def test_a_publication_with_many_items_is_one_root_entry_with_its_facets_and_pdf
 
     p = config.STAC_PREFIX
     entries = json.loads(store[f"{p}/items.json"])["items"]
-    (entry,) = [e for e in entries if "ugs:pub_id" not in e["properties"]]
-    assert sorted(e["id"] for e in entries if e["properties"].get("ugs:pub_id") == "OFR-9") == sorted(ids)
+    (entry,) = [e for e in entries if "ugs:in_publication" not in e["properties"]]
+    tagged = [e["id"] for e in entries if e["properties"].get("ugs:in_publication") == "OFR-9"]
+    assert sorted(tagged) == sorted(ids)
     assert entry == {
         "id": "OFR-9", "bbox": [-112.5, 40.5, -112.0, 41.0],
         "properties": {
@@ -332,8 +341,8 @@ def test_refresh_indexes_publication_items_and_counts_mappable(monkeypatch):
         "./ugs-publications/OFR/OFR-1/collection.json"]
     assert index["items"][2]["properties"]["ugs:item_count"] == 2
     cog_entry = index["items"][0]
-    assert cog_entry["properties"]["ugs:pub_id"] == "OFR-1"
-    assert cog_entry["properties"]["ugs:pub_title"] == "Pub OFR-1"
+    assert cog_entry["properties"]["ugs:in_publication"] == "OFR-1"
+    assert cog_entry["properties"]["ugs:publication_title"] == "Pub OFR-1"
     assert cog_entry["assets"]["cog"]["href"] == "https://x/p.tif"
     series = json.loads(store[f"{p}/ugs-publications/OFR/catalog.json"])
     assert series["ugs:mappable_count"] == 1
@@ -487,6 +496,24 @@ def test_refresh_strict_raises_after_writing_the_catalog(monkeypatch):
 
     p = config.STAC_PREFIX
     assert f"{p}/catalog.json" in store and f"{p}/ugs-publications/OFR/catalog.json" in store
+
+
+def test_refresh_counts_only_publication_items_that_load_and_reports_the_rest(monkeypatch, capsys):
+    store = _memstore(monkeypatch)
+    _pub(store, "ugs-publications", "OFR", "OFR-1", ["OFR-1_plate", "OFR-1_units"])
+    store[stac.item_object_path("ugs-publications/OFR/OFR-1", "OFR-1_units")] = b"{not json"
+
+    problems = stac.refresh_catalog()
+
+    assert len(problems) == 1
+    assert problems[0].startswith("dropped ugs-publications/OFR/OFR-1/OFR-1_units from the index")
+    p = config.STAC_PREFIX
+    root = json.loads(store[f"{p}/items.json"])["items"]
+    assert [e["id"] for e in root] == ["OFR-1_plate", "OFR-1"]
+    assert root[1]["properties"]["ugs:item_count"] == 1
+    series = json.loads(store[f"{p}/ugs-publications/OFR/catalog.json"])
+    assert next(lk for lk in series["links"] if lk["rel"] == "child")["ugs:item_count"] == 1
+    assert "(1 collections, 1 items)" in capsys.readouterr().out
 
 
 def test_refresh_skips_an_unreadable_publication_collection(monkeypatch, capsys):

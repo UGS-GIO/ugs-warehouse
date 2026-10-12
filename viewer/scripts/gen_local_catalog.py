@@ -219,7 +219,7 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
 
 
-def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None) -> dict:
+def _index_entry(item: dict, *, rollup: bool = False) -> dict:
     """Mirror of core/stac's `_index_entry`: id, bbox, a property allowlist, asset SUMMARIES,
     a `rel:self` to the full item, and web-map links. Keep the two in step — a local catalog
     that carries more than production is a bug the laptop can't reproduce."""
@@ -232,58 +232,19 @@ def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None)
     }
     if props.get("ugs:renders"):
         entry["properties"]["ugs:renders"] = props["ugs:renders"]
-    assets = _asset_summaries(item)
+    assets = {
+        k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
+        for k, a in (item.get("assets") or {}).items()
+    }
     if assets:
         entry["assets"] = assets
-    sub = (prefix if prefix is not None
-           else f"{item['collection']}/" if rollup and item.get("collection") else "")
+    sub = f"{item['collection']}/" if rollup and item.get("collection") else ""
     entry["links"] = [
         {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
          "type": "application/geo+json"},
-        *_web_map_links(item),
+        *[{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
+          for lnk in (item.get("links") or []) if lnk.get("rel") in ("pmtiles", "cog")],
     ]
-    return entry
-
-
-def _pub_item_index_entry(item: dict, coll: dict, *, prefix: str) -> dict:
-    """Mirror of core/stac's `_pub_item_index_entry`: a publication Item's root-index entry,
-    tagged with the publication's id and title."""
-    entry = _index_entry(item, prefix=prefix)
-    entry["properties"]["ugs:pub_id"] = coll["id"]
-    entry["properties"]["ugs:pub_title"] = coll.get("title") or coll["id"]
-    return entry
-
-
-def _asset_summaries(doc: dict) -> dict:
-    return {k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
-            for k, a in (doc.get("assets") or {}).items()}
-
-
-def _web_map_links(doc: dict) -> list[dict]:
-    return [{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
-            for lnk in (doc.get("links") or []) if lnk.get("rel") in ("pmtiles", "cog")]
-
-
-def _collection_index_entry(coll: dict, *, prefix: str, item_count: int | None = None) -> dict:
-    """Mirror of core/stac's `_collection_index_entry`: one item-shaped entry per publication."""
-    props: dict = {k: coll[k] for k in _INDEX_PROP_KEYS
-                   if k not in ("title", "datetime") and coll.get(k) not in (None, "", [])}
-    props["title"] = coll.get("title") or coll["id"]
-    if coll.get("ugs:date_unknown"):
-        props["ugs:date_unknown"] = True
-    else:
-        start = (((coll.get("extent") or {}).get("temporal") or {}).get("interval") or [[None]])[0][0]
-        if start:
-            props["datetime"] = start
-    props["ugs:item_count"] = (item_count if item_count is not None
-                               else sum(1 for lnk in coll.get("links") or [] if lnk.get("rel") == "item"))
-    bboxes = ((coll.get("extent") or {}).get("spatial") or {}).get("bbox") or [None]
-    entry: dict = {"id": coll["id"], "bbox": bboxes[0], "properties": props}
-    assets = _asset_summaries(coll)
-    if assets:
-        entry["assets"] = assets
-    entry["links"] = [{"rel": "self", "href": f"./{prefix}collection.json", "type": "application/json"},
-                      *_web_map_links(coll)]
     return entry
 
 

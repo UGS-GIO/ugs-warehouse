@@ -225,7 +225,7 @@ def thumb_one(item: dict, stac_path: str, force: bool = False) -> tuple[str, dic
                 raw, version = gcs.get_bytes_versioned(stac_path)
             except FileNotFoundError:
                 return "gone", None
-            fresh = json.loads(raw.decode())
+            fresh = json.loads(raw)
             assets = fresh.setdefault("assets", {})
             current = assets.get("thumbnail") or {}
             # Merged onto whatever is there, so the up-to-date path (no `meta`, nothing rendered) keeps
@@ -348,7 +348,7 @@ def thumb_path(path: str, force: bool = False) -> tuple[str, dict | None]:
     stem = _stem(path)
     _series_ctx.set(stem)
     try:
-        item = json.loads(gcs.get_bytes(path).decode())
+        item = json.loads(gcs.get_bytes(path))
     except FileNotFoundError:
         hlog("item gone since the listing (retired)", step="resolve", level="NOTICE", category="expected")
         return "skip:gone", None
@@ -380,7 +380,7 @@ def _index_lags(thumbnails: dict[str, dict]) -> bool:
     if not thumbnails:
         return False
     try:
-        index = json.loads(gcs.get_bytes(ROLLUP_INDEX).decode())
+        index = json.loads(gcs.get_bytes(ROLLUP_INDEX))
         listed = {e.get("id"): (e.get("assets") or {}).get("thumbnail") or {} for e in index.get("items") or []}
     except FileNotFoundError:
         return True

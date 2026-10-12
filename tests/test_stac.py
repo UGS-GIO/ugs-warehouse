@@ -333,6 +333,23 @@ def test_local_catalog_index_entries_match_production():
         assert local._index_entry(item, rollup=rollup) == stac._index_entry(item, rollup=rollup)
 
 
+def test_local_catalog_collection_index_entries_match_production():
+    coll = {"id": "OFR-1", "title": "A map", "ugs:series_id": "OFR-1", "ugs:topic": "Hazards",
+            "keywords": ["x"], "ugs:private": 1,
+            "extent": {"spatial": {"bbox": [[-114.0, 37.0, -109.0, 42.0]]},
+                       "temporal": {"interval": [["2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"]]}},
+            "assets": {"publication": {"href": "https://x/a.pdf", "type": "application/pdf",
+                                       "roles": ["data"], "file:size": 3}},
+            "links": [{"rel": "item", "href": "./a/a.json"},
+                      {"rel": "cog", "href": "https://x/p.tif", "type": "image/tiff"}]}
+    local = _gen_local_catalog()
+    for doc in (coll, {**coll, "ugs:date_unknown": True}, {"id": "B-1", "links": []}):
+        assert (local._collection_index_entry(doc, prefix="g/S/OFR-1/", item_count=4)
+                == stac._collection_index_entry(doc, prefix="g/S/OFR-1/", item_count=4))
+        assert (local._collection_index_entry(doc, prefix="OFR-1/")
+                == stac._collection_index_entry(doc, prefix="OFR-1/"))
+
+
 def test_local_catalog_collection_service_link_matches_production():
     """gen_local_catalog inlines a simplified `_collection_doc`; the OGC API Features service link
     it writes must still match production's, or the local dev catalog advertises a link that 404s

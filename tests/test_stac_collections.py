@@ -163,14 +163,16 @@ def _memstore(monkeypatch):
     return store
 
 
-def _pub(store, group, series, sid, item_ids, assets=None):
+def _pub(store, group, series, sid, item_ids, assets=None, fields=None, extent=None):
     coll = stac.build_collection(
         collection_id=sid, collection_path=f"{group}/{series}/{sid}", title=f"Pub {sid}",
-        description=f"Pub {sid}.", extent={"spatial": {"bbox": [stac.UTAH_BBOX]},
-                                           "temporal": {"interval": [[None, None]]}},
+        description=f"Pub {sid}.",
+        extent=extent or {"spatial": {"bbox": [stac.UTAH_BBOX]},
+                          "temporal": {"interval": [[None, None]]}},
         assets=assets or {"publication": {"href": f"https://x/{sid}.pdf", "type": "application/pdf",
                                           "roles": ["data"]}},
-        item_titles={i: i for i in item_ids}, fields={"ugs:pub_type": "Open File Report"})
+        item_titles={i: i for i in item_ids},
+        fields={"ugs:pub_type": "Open File Report", **(fields or {})})
     stac.write_collection(coll, children=len(item_ids))
     for i in item_ids:
         it = stac.build_item(item_id=i, collection=sid, collection_path=f"{group}/{series}/{sid}",
@@ -210,7 +212,95 @@ def test_refresh_writes_series_catalogs_over_publication_collections(monkeypatch
         lk["href"] for lk in root["links"] if lk["rel"] == "child"}
     index = json.loads(store[f"{p}/items.json"])
     assert [e["links"][0]["href"] for e in index["items"]] == [
-        "./ugs-publications/OFR/OFR-1/OFR-1_plate/OFR-1_plate.json"]
+        "./ugs-external/B/B-9/collection.json", "./ugs-publications/B/B-1/collection.json",
+        "./ugs-publications/OFR/OFR-1/collection.json", "./ugs-publications/OFR/OFR-2/collection.json"]
+
+
+def test_a_report_only_publication_appears_in_the_root_index(monkeypatch):
+    store = _memstore(monkeypatch)
+    _pub(store, "ugs-publications", "OFR", "OFR-2", [])
+
+    stac.refresh_catalog()
+
+    index = json.loads(store[f"{config.STAC_PREFIX}/items.json"])
+    assert [e["id"] for e in index["items"]] == ["OFR-2"]
+    assert index["items"][0]["assets"]["publication"]["href"] == "https://x/OFR-2.pdf"
+    assert index["items"][0]["properties"]["ugs:item_count"] == 0
+
+
+def test_a_publication_with_many_items_is_one_root_entry_with_its_facets_and_pdf(monkeypatch):
+    store = _memstore(monkeypatch)
+    ids = [f"OFR-9_layer{n}" for n in range(19)]
+    _pub(store, "ugs-publications", "OFR", "OFR-9", ids,
+         assets={"publication": {"href": "https://x/OFR-9.pdf", "type": "application/pdf",
+                                 "roles": ["data"], "ugs:private": 1},
+                 "thumbnail": {"href": "https://x/OFR-9.webp", "type": "image/webp",
+                               "roles": ["thumbnail"]}},
+         fields={"ugs:series_id": "OFR-9", "ugs:series": "OFR", "ugs:topic": "Hazards",
+                 "ugs:author": "A. Smith", "keywords": ["landslide"], "ugs:scale": "1:24,000",
+                 "ugs:county": ["Utah"], "ugs:volume": 3, "ugs:topic_category": "dropped"},
+         extent={"spatial": {"bbox": [[-112.5, 40.5, -112.0, 41.0]]},
+                 "temporal": {"interval": [["2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"]]}})
+
+    stac.refresh_catalog()
+
+    p = config.STAC_PREFIX
+    (entry,) = json.loads(store[f"{p}/items.json"])["items"]
+    assert entry == {
+        "id": "OFR-9", "bbox": [-112.5, 40.5, -112.0, 41.0],
+        "properties": {
+            "title": "Pub OFR-9", "datetime": "2020-01-01T00:00:00Z", "ugs:series_id": "OFR-9",
+            "ugs:series": "OFR", "ugs:pub_type": "Open File Report", "ugs:topic": "Hazards",
+            "ugs:scale": "1:24,000", "ugs:author": "A. Smith", "ugs:county": ["Utah"],
+            "ugs:volume": 3, "keywords": ["landslide"], "ugs:item_count": 19},
+        "assets": {"publication": {"href": "https://x/OFR-9.pdf", "type": "application/pdf",
+                                   "roles": ["data"]},
+                   "thumbnail": {"href": "https://x/OFR-9.webp", "type": "image/webp",
+                                 "roles": ["thumbnail"]}},
+        "links": [{"rel": "self", "href": "./ugs-publications/OFR/OFR-9/collection.json",
+                   "type": "application/json"}]}
+
+
+def test_an_undated_publication_entry_carries_the_marker_not_a_datetime():
+    coll = {"id": "OFR-0", "title": "Old", "ugs:date_unknown": True, "links": [],
+            "extent": {"spatial": {"bbox": [stac.UTAH_BBOX]},
+                       "temporal": {"interval": [["1886-01-01T00:00:00Z", "2026-10-12T00:00:00Z"]]}}}
+    props = stac._collection_index_entry(coll, prefix="OFR-0/")["properties"]
+    assert props["ugs:date_unknown"] is True and "datetime" not in props
+
+
+def test_a_series_catalog_publishes_an_items_index_of_its_publications(monkeypatch):
+    store = _memstore(monkeypatch)
+    _pub(store, "ugs-publications", "OFR", "OFR-1", ["OFR-1_plate"])
+    _pub(store, "ugs-publications", "OFR", "OFR-2", [])
+
+    stac.refresh_catalog()
+
+    p = config.STAC_PREFIX
+    series = json.loads(store[f"{p}/ugs-publications/OFR/catalog.json"])
+    link = next(lk for lk in series["links"] if lk["rel"] == stac.INDEX_REL)
+    assert link["href"] == "./items.json"
+    index = json.loads(store[f"{p}/ugs-publications/OFR/items.json"])
+    assert index["type"] == "ugs-items-index" and index["collection"] == "OFR" and index["count"] == 2
+    assert [e["links"][0]["href"] for e in index["items"]] == [
+        "./OFR-1/collection.json", "./OFR-2/collection.json"]
+    assert [e["properties"]["ugs:item_count"] for e in index["items"]] == [1, 0]
+
+
+def test_a_pending_series_is_unchanged_by_a_migrated_series_beside_it(monkeypatch):
+    store = _memstore(monkeypatch)
+    _old_pub("ugs-publications", "OFR", "OFR-1")
+    _old_pub("ugs-publications", "OFR", "OFR-2")
+    stac.refresh_catalog()
+    p = config.STAC_PREFIX
+    pending = {k: v for k, v in store.items() if k.startswith(f"{p}/ugs-publications/OFR/")}
+
+    _pub(store, "ugs-publications", "B", "B-1", ["B-1_plate"])
+    stac.refresh_catalog()
+
+    assert {k: store[k] for k in pending} == pending
+    assert not any(k.startswith(f"{p}/ugs-publications/OFR/") and k not in pending for k in store)
+    assert f"{p}/ugs-publications/OFR/catalog.json" not in store
 
 
 def _old_layout_item(group, series, sid):
@@ -233,8 +323,9 @@ def test_refresh_indexes_publication_items_and_counts_mappable(monkeypatch):
 
     p = config.STAC_PREFIX
     index = json.loads(store[f"{p}/items.json"])
-    hrefs = {e["links"][0]["href"] for e in index["items"]}
-    assert len(hrefs) == 2 and all(h.startswith("./ugs-publications/OFR/OFR-1/") for h in hrefs)
+    assert [e["links"][0]["href"] for e in index["items"]] == [
+        "./ugs-publications/OFR/OFR-1/collection.json"]
+    assert index["items"][0]["properties"]["ugs:item_count"] == 2
     series = json.loads(store[f"{p}/ugs-publications/OFR/catalog.json"])
     assert series["ugs:mappable_count"] == 1
     root = json.loads(store[f"{p}/catalog.json"])
@@ -327,7 +418,7 @@ def test_refresh_switches_a_complete_series_to_its_catalog(monkeypatch):
     assert [lk["href"] for lk in top["links"] if lk["rel"] == "child"] == ["./OFR/catalog.json"]
     assert f"{p}/ugs-publications/OFR/collection.json" not in store
     assert [e["links"][0]["href"] for e in json.loads(store[f"{p}/items.json"])["items"]] == [
-        "./ugs-publications/OFR/OFR-1/OFR-1_plate/OFR-1_plate.json"]
+        "./ugs-publications/OFR/OFR-1/collection.json", "./ugs-publications/OFR/OFR-2/collection.json"]
 
 
 def test_refresh_links_migrated_and_unmigrated_series_in_one_group(monkeypatch):
@@ -347,7 +438,7 @@ def test_refresh_links_migrated_and_unmigrated_series_in_one_group(monkeypatch):
     assert f"{p}/ugs-publications/B/catalog.json" in store
     assert f"{p}/ugs-publications/OFR/collection.json" in store
     assert {e["links"][0]["href"] for e in json.loads(store[f"{p}/items.json"])["items"]} == {
-        "./ugs-publications/B/B-1/B-1_plate/B-1_plate.json", "./ugs-publications/OFR/OFR-1/OFR-1.json"}
+        "./ugs-publications/B/B-1/collection.json", "./ugs-publications/OFR/OFR-1/OFR-1.json"}
 
 
 def _orphan():
@@ -402,4 +493,4 @@ def test_refresh_skips_an_unreadable_publication_collection(monkeypatch, capsys)
     series = json.loads(store[f"{p}/ugs-publications/OFR/catalog.json"])
     assert [lk["href"] for lk in series["links"] if lk["rel"] == "child"] == ["./OFR-1/collection.json"]
     assert [e["links"][0]["href"] for e in json.loads(store[f"{p}/items.json"])["items"]] == [
-        "./ugs-publications/OFR/OFR-1/OFR-1_plate/OFR-1_plate.json"]
+        "./ugs-publications/OFR/OFR-1/collection.json"]

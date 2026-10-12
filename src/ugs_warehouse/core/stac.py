@@ -673,10 +673,7 @@ def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None)
     }
     if props.get("ugs:renders"):  # bound GL style → lets the map view style from the index alone
         entry["properties"]["ugs:renders"] = props["ugs:renders"]
-    assets = {
-        k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
-        for k, a in (item.get("assets") or {}).items()
-    }
+    assets = _asset_summaries(item)
     if assets:
         entry["assets"] = assets
     # Item docs live at `<collection>/<id>/<id>.json`. A leaf index sits inside that
@@ -684,17 +681,56 @@ def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None)
     sub = prefix if prefix is not None else f"{item['collection']}/" if rollup and item.get("collection") else ""
     self_link = {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
                  "type": "application/geo+json"}
-    wlinks = [{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
-              for lnk in (item.get("links") or []) if lnk.get("rel") in ("pmtiles", "cog")]
-    entry["links"] = [self_link, *wlinks]
+    entry["links"] = [self_link, *_web_map_links(item)]
+    return entry
+
+
+def _asset_summaries(doc: dict) -> dict:
+    """href/type/roles/title of each asset of an item or collection."""
+    return {k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
+            for k, a in (doc.get("assets") or {}).items()}
+
+
+def _web_map_links(doc: dict) -> list[dict]:
+    return [{kk: lnk[kk] for kk in ("rel", "href", "type", "pmtiles:layers") if lnk.get(kk) is not None}
+            for lnk in (doc.get("links") or []) if lnk.get("rel") in ("pmtiles", "cog")]
+
+
+def _collection_index_entry(coll: dict, *, prefix: str, item_count: int | None = None) -> dict:
+    """An item-shaped index entry for a publication Collection, so a list view shows one card
+    per publication. `prefix` is the path from the index's directory to the collection's folder
+    (`<SID>/` in a series index, `<group>/<SERIES>/<SID>/` in the root one). An undated
+    publication carries `ugs:date_unknown` instead of `datetime`; `ugs:item_count` counts the
+    collection's Items (its `rel=item` links unless `item_count` is given)."""
+    props: dict = {k: coll[k] for k in _INDEX_PROP_KEYS
+                   if k not in ("title", "datetime") and coll.get(k) not in (None, "", [])}
+    props["title"] = coll.get("title") or coll["id"]
+    if coll.get("ugs:date_unknown"):
+        props["ugs:date_unknown"] = True
+    else:
+        start = (((coll.get("extent") or {}).get("temporal") or {}).get("interval") or [[None]])[0][0]
+        if start:
+            props["datetime"] = start
+    props["ugs:item_count"] = (item_count if item_count is not None
+                               else sum(1 for lnk in coll.get("links") or [] if lnk.get("rel") == "item"))
+    bboxes = ((coll.get("extent") or {}).get("spatial") or {}).get("bbox") or [None]
+    entry: dict = {"id": coll["id"], "bbox": bboxes[0], "properties": props}
+    assets = _asset_summaries(coll)
+    if assets:
+        entry["assets"] = assets
+    entry["links"] = [{"rel": "self", "href": f"./{prefix}collection.json", "type": "application/json"},
+                      *_web_map_links(coll)]
     return entry
 
 
 def _index_doc(collection: str, items: list[dict], *, rollup: bool = False) -> dict:
     """`rollup` = this index spans child collections (ROLLUP_INDEX_CATALOGS), so it sits one
     directory above the items it lists and their `self` hrefs need the collection segment."""
-    entries = [_index_entry(it, rollup=rollup)
-               for it in sorted(items, key=lambda it: it.get("id", ""))]
+    return _entries_doc(collection, [_index_entry(it, rollup=rollup)
+                                     for it in sorted(items, key=lambda it: it.get("id", ""))])
+
+
+def _entries_doc(collection: str | None, entries: list[dict]) -> dict:
     return {"type": "ugs-items-index", "collection": collection,
             "count": len(entries), "items": entries}
 
@@ -849,11 +885,12 @@ def _pub_series_layout(groups: dict[str, list[str]],
     return migrated, pending
 
 
-def _write_pub_series(pub_colls: dict[str, int],
-                      has_mappable_item: set[str]) -> tuple[dict[str, list[dict]], dict[str, str]]:
-    """Write `<group>/<SERIES>/catalog.json` over each migrated series' publication collections,
-    with README/AGENTS beside each. Returns `({group: [series child entries]}, {path: problem})`;
-    a publication whose collection.json is unreadable is left out of its series."""
+def _write_pub_series(pub_colls: dict[str, int], has_mappable_item: set[str]
+                      ) -> tuple[dict[str, list[dict]], dict[str, str], dict[str, dict]]:
+    """Write `<group>/<SERIES>/catalog.json` and an `items.json` of its publication entries over
+    each migrated series' publication collections, with README/AGENTS beside each. Returns
+    `({group: [series child entries]}, {path: problem}, {path: collection doc})`; a publication
+    whose collection.json is unreadable is left out of its series."""
     from concurrent.futures import ThreadPoolExecutor
 
     def _meta(path: str) -> tuple[str, dict | str]:
@@ -880,13 +917,18 @@ def _write_pub_series(pub_colls: dict[str, int],
         stitle = next((docs[p].get("ugs:pub_type") for p in pubs if docs[p].get("ugs:pub_type")),
                       None) or prettify(code)
         desc = SERIES_DESC.get(code) or f"UGS warehouse - {stitle}."
-        _write_json(_subcatalog_doc(code, kids, title=stitle, description=desc, depth=2),
+        _write_json(_subcatalog_doc(code, kids, title=stitle, description=desc, depth=2,
+                                    items_index=True),
                     f"{config.STAC_PREFIX}/{spath}/catalog.json")
+        _write_json(_entries_doc(code, sorted(
+            (_collection_index_entry(docs[p], prefix=f"{p.rsplit('/', 1)[1]}/", item_count=pub_colls[p])
+             for p in pubs), key=lambda e: e["id"])),
+                    f"{config.STAC_PREFIX}/{spath}/items.json")
         _write_markdown(spath, title=stitle, description=desc, kind="catalog", children=len(kids))
         by_group.setdefault(group, []).append({"id": code, "title": stitle, "file": "catalog.json",
                                                "count": sum(k["count"] for k in kids),
                                                "mappable": sum(k["mappable"] for k in kids)})
-    return by_group, skipped
+    return by_group, skipped, {p: d for p, d in docs.items() if isinstance(d, dict)}
 
 
 def refresh_catalog(*, strict: bool = False) -> list[str]:
@@ -925,7 +967,6 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
                              and (g in orphans or g.rsplit("/", 1)[0] not in migrated)):
             del groups[g]
     pub_colls = {p: 0 for p in pub_colls if p.rsplit("/", 1)[0] in migrated}
-    pub_entries: dict[str, list[dict]] = {}
     pub_mappable: set[str] = set()
 
     # 1. Write each leaf collection.json + items.json (flat or nested). collection id = the
@@ -954,7 +995,6 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             top, cid = path.split("/")[0], path.split("/")[-1]
             if _is_pub_collection_path(path):
                 # Publication collections are written by the pubs ingest; refresh only indexes them.
-                pub_entries[path] = [_index_entry(it, prefix=f"{path}/") for it in items]
                 pub_colls[path] = len(item_ids)
                 if any(_is_mappable(it) for it in items):
                     pub_mappable.add(path)
@@ -993,9 +1033,11 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     #    becomes a sub-catalog (e.g. ugs-serving-topics → one collection per topic, a publication
     #    group → its series); everything else is a flat collection directly under root. Child
     #    links carry counts.
-    pub_series, skipped = _write_pub_series(pub_colls, pub_mappable)
+    pub_series, skipped, pub_docs = _write_pub_series(pub_colls, pub_mappable)
     problems += skipped.values()
-    everything.extend(e for path, entries in pub_entries.items() if path not in skipped for e in entries)
+    # One root entry per publication; its layers and tables load when it is opened.
+    everything.extend(_collection_index_entry(doc, prefix=f"{path}/", item_count=pub_colls[path])
+                      for path, doc in pub_docs.items())
     tops: dict[str, list[str]] = {}
     for path in groups:
         if not _is_pub_collection_path(path):
@@ -1034,7 +1076,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
                     kind="catalog", children=len(root_children))
 
     written_pubs = [p for p in pub_colls if p not in skipped]
-    n = sum(len(v) for v in groups.values()) + sum(len(pub_entries.get(p, [])) for p in written_pubs)
+    n = sum(len(v) for v in groups.values()) + sum(pub_colls[p] for p in written_pubs)
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "
           f"({len(groups) + len(written_pubs)} collections, {n} items)")
     for problem in problems:

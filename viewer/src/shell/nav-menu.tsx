@@ -7,8 +7,9 @@
 import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
-import { CheckIcon, CopyIcon, copyCatalogUrl } from "@/catalog/stac-url-chip";
-import { BUILD_URL, LEGAL_LINKS } from "./legal-footer";
+import { copyCatalogUrl } from "@/catalog/stac-url-chip";
+import { CheckIcon, CopyIcon, GitHubIcon } from "@/shell/icons";
+import { BUILD_URL, LEGAL_LINKS, REPO_URL } from "./legal-footer";
 
 export type NavPage = { id: string; label: string; onSelect: () => void };
 
@@ -75,9 +76,16 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                     {p.label}
                   </Menu.Item>
                 ))}
-                <Menu.Separator className="my-1 h-px bg-border" />
+                <Menu.Separator className="my-1 h-px bg-border md:hidden" />
               </div>
             )}
+            {/* Phones only: desktop has the header band and footer. */}
+            <Menu.Item className={`${ITEM} md:hidden`} nativeButton={false}
+              render={<a href={REPO_URL} target="_blank" rel="noreferrer" />}>
+              <GitHubIcon />
+              v{__APP_VERSION__}
+            </Menu.Item>
+            <Menu.Separator className="my-1 h-px bg-border md:hidden" />
             {/* The header chip is desktop-only, so below md this is the one way to get the URL. */}
             {catalogUrl && (
               <div className="md:hidden">

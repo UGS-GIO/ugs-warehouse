@@ -13,8 +13,6 @@ import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { ReactNode, RefObject } from "react";
 import { useRef, useState } from "react";
 
-import { LegalFooter } from "@/shell/legal-footer";
-import { CATALOG_URL } from "@/stac";
 import { DETENTS, parseSheet, sheetParam, type SheetState, type SheetTab } from "./map-model";
 import { useSheetDrag } from "./use-sheet-drag";
 import { useIsDesktop } from "@/ui/use-breakpoint";
@@ -55,7 +53,6 @@ function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
             <span>{dockOpen ? "▾" : "▸"}</span> Item detail
           </button>
           {dockOpen && <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">{info}</div>}
-          <LegalFooter catalogUrl={CATALOG_URL} />
         </section>
       </main>
     </div>
@@ -132,7 +129,6 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
                 )}
                 {tab === "layers" ? layers : info}
               </div>
-              <LegalFooter catalogUrl={CATALOG_URL} />
             </div>
           )}
         </div>

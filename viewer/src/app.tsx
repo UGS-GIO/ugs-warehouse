@@ -110,15 +110,13 @@ const tab = (on: boolean) =>
 
 // The IAP user as a Utah-header action item (top-right of the official banner). Display-only — IAP
 // already gated access; the username shows, the full email is the tooltip. Clicking signs out via
-// IAP's clear-login-cookie flow.
+// IAP's clear-login-cookie flow. The icon is an HTML string, not an element: the header renders each
+// item twice (desktop bar and mobile menu), and one element would be moved into the second.
 function userActionItem(email: string): ActionItem {
-  const icon = document.createElement("span");
-  icon.textContent = "👤";
-  icon.title = `Signed in as ${email}`;
   return {
     title: email.split("@")[0],
     showTitle: true,
-    icon,
+    icon: `<span title="Signed in as ${email.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}">👤</span>`,
     className: "ugs-user-badge",
     // click → IAP sign-out (clears the login cookie, forces re-auth).
     actionFunction: () => { window.location.href = "/?gcp-iap-mode=CLEAR_LOGIN_COOKIE"; },
@@ -582,7 +580,7 @@ export function AppLayout() {
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
     <PreviewMapProvider>
     <div className={lockedView
-      ? "grid h-full grid-cols-1 grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
+      ? "grid h-full grid-cols-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden bg-background text-sm text-foreground"
       : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
@@ -619,7 +617,8 @@ export function AppLayout() {
         </div>
       </header>
 
-      {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
+      {/* Always mounted, empty when there is no error, so the locked grid keeps its rows. */}
+      <div>{catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}</div>
 
       <Suspense fallback={<div className="flex items-center justify-center p-16 text-sm text-muted-foreground">Loading…</div>}>
       <ViewContext.Provider value={state}>
@@ -627,7 +626,8 @@ export function AppLayout() {
         <SavingNotice />
       </ViewContext.Provider>
       </Suspense>
-      {!lockedView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
+      {/* Every view, full-height ones included: it carries the state's required links. */}
+      <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />
     </div>
     </PreviewMapProvider>
   );

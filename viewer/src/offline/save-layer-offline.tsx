@@ -3,7 +3,7 @@ import { Popover } from "@base-ui/react/popover";
 import { type ReactNode, useState } from "react";
 
 import { idOf, useViewCtx } from "@/app";
-import { DownloadIcon } from "@/catalog/stac-url-chip";
+import { DownloadIcon } from "@/shell/icons";
 import { defaultStyleUrl, parquetAsset, pmtilesLink, type StacDoc } from "@/stac";
 
 import { describe } from "./describe";

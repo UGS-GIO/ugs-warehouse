@@ -6,7 +6,7 @@
 // or a download over a field connection. Sizes come from the build's index.json, so each button
 // says what it costs before anyone commits to it.
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { CheckIcon, DownloadIcon } from "@/catalog/stac-url-chip";
+import { CheckIcon, DownloadIcon } from "@/shell/icons";
 import { qk } from "@/query-keys";
 import { BASEMAP_BASE, overviewUrl, quadsInBbox, quadUrl, redundantWithState, stateUrl } from "./basemap";
 import { isRecord } from "./guards";

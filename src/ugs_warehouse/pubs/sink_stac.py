@@ -300,16 +300,25 @@ def build_publication(p: dict, attachments: list[dict], *,
             print(f"[pubs] {pub_id}: no manifest entry for layer {label!r}; "
                   "its item has no CRS or row count", file=sys.stderr)
 
-    reserved = {plate_item_id(sid), f"{pub_id}_units", f"{pub_id}_fence"}
+    reserved = {r.casefold() for r in (plate_item_id(sid), f"{pub_id}_units", f"{pub_id}_fence")}
+    taken: dict[str, str] = {}
 
     def layer_id(label: str) -> str:
-        """The layer's item id, moved off the ids the plate, units and fence items own."""
+        """The layer's item id, moved off the ids the plate, units and fence items own and made
+        unique ignoring case (item directories merge on case-insensitive filesystems)."""
         lid = layer_item_id(sid, label)
-        if lid not in reserved:
-            return lid
-        new = f"{pub_id}_layer_{label}"
-        print(f"[pubs] {pub_id}: layer {label!r} renamed to {new!r} (collides with a reserved item)",
-              file=sys.stderr)
+        if lid.casefold() in reserved:
+            lid = f"{pub_id}_layer_{label}"
+            print(f"[pubs] {pub_id}: layer {label!r} renamed to {lid!r} (collides with a reserved item)",
+                  file=sys.stderr)
+        new, n = lid, 1
+        while taken.get(new.casefold(), new) != new:
+            n += 1
+            new = f"{lid}_{n}"
+        if new != lid:
+            print(f"[pubs] {pub_id}: layer {label!r} renamed to {new!r} (collides ignoring case)",
+                  file=sys.stderr)
+        taken[new.casefold()] = new
         return new
 
     mosaic = ([{"rel": "related",
@@ -366,7 +375,8 @@ def build_publication(p: dict, attachments: list[dict], *,
             extensions=[stac.CLASSIFICATION_EXT] if classes_3d else None))
 
     seen: set[str] = set()
-    dupes = sorted({it["id"] for it in items if it["id"] in seen or seen.add(it["id"])})
+    dupes = sorted({it["id"] for it in items
+                    if it["id"].casefold() in seen or seen.add(it["id"].casefold())})
     if dupes:
         raise ValueError(f"{pub_id}: duplicate item ids {dupes}")
 
@@ -406,7 +416,7 @@ def build_publication(p: dict, attachments: list[dict], *,
     for key, asset in data_assets.items():
         new = key
         n = 1
-        while new in assets or new in ("thumbnail", "overview"):
+        while new.casefold() in {k.casefold() for k in assets} or new in ("thumbnail", "overview"):
             n += 1
             new = f"{key}_{n}"
         if new != key:

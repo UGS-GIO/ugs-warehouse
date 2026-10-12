@@ -331,6 +331,16 @@ def test_local_catalog_index_entries_match_production():
     local = _gen_local_catalog()
     for rollup in (False, True):
         assert local._index_entry(item, rollup=rollup) == stac._index_entry(item, rollup=rollup)
+    assert (local._index_entry(item, prefix="g/S/P-1/")
+            == stac._index_entry(item, prefix="g/S/P-1/"))
+
+
+def test_local_catalog_publication_item_entries_match_production():
+    item = {**_related_item(), "bbox": [-114.0, 37.0, -109.0, 42.0]}
+    local = _gen_local_catalog()
+    for coll in ({"id": "OFR-1", "title": "A map"}, {"id": "OFR-2"}):
+        assert (local._pub_item_index_entry(item, coll, prefix="g/S/OFR-1/")
+                == stac._pub_item_index_entry(item, coll, prefix="g/S/OFR-1/"))
 
 
 def test_local_catalog_collection_index_entries_match_production():

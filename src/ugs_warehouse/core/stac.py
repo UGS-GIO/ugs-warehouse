@@ -696,6 +696,16 @@ def _web_map_links(doc: dict) -> list[dict]:
             for lnk in (doc.get("links") or []) if lnk.get("rel") in ("pmtiles", "cog")]
 
 
+def _pub_item_index_entry(item: dict, coll: dict, *, prefix: str) -> dict:
+    """A publication Item's root-index entry: its `_index_entry`, tagged with the publication's id
+    and title (`ugs:pub_id`, `ugs:pub_title`). A list view drops tagged entries to keep one card per
+    publication; a map layer list keeps them and names the publication beside the layer."""
+    entry = _index_entry(item, prefix=prefix)
+    entry["properties"]["ugs:pub_id"] = coll["id"]
+    entry["properties"]["ugs:pub_title"] = coll.get("title") or coll["id"]
+    return entry
+
+
 def _collection_index_entry(coll: dict, *, prefix: str, item_count: int | None = None) -> dict:
     """An item-shaped index entry for a publication Collection, so a list view shows one card
     per publication. `prefix` is the path from the index's directory to the collection's folder
@@ -992,6 +1002,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             del groups[g]
     pub_colls = {p: 0 for p in pub_colls if p.rsplit("/", 1)[0] in migrated}
     pub_mappable: set[str] = set()
+    pub_items: dict[str, list[dict]] = {}
 
     # 1. Write each leaf collection.json + items.json (flat or nested). collection id = the
     #    path's last segment (a series code when nested); title from the items' pub type.
@@ -1020,6 +1031,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             if _is_pub_collection_path(path):
                 # Publication collections are written by the pubs ingest; refresh only indexes them.
                 pub_colls[path] = len(item_ids)
+                pub_items[path] = items
                 if any(_is_mappable(it) for it in items):
                     pub_mappable.add(path)
                 continue
@@ -1059,9 +1071,12 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     #    links carry counts.
     pub_series, skipped, pub_docs = _write_pub_series(pub_colls, pub_mappable)
     problems += skipped.values()
-    # One root entry per publication; its layers and tables load when it is opened.
-    everything.extend(_collection_index_entry(doc, prefix=f"{path}/", item_count=pub_colls[path])
-                      for path, doc in pub_docs.items())
+    # One root entry per publication, plus each of its Items tagged with the publication so map
+    # layer lists and searches still reach them. The series items.json lists publications only.
+    for path, doc in pub_docs.items():
+        everything.append(_collection_index_entry(doc, prefix=f"{path}/", item_count=pub_colls[path]))
+        everything.extend(_pub_item_index_entry(it, doc, prefix=f"{path}/")
+                          for it in pub_items.get(path, []))
     tops: dict[str, list[str]] = {}
     for path in groups:
         if not _is_pub_collection_path(path):

@@ -219,7 +219,7 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
 
 
-def _index_entry(item: dict, *, rollup: bool = False) -> dict:
+def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None) -> dict:
     """Mirror of core/stac's `_index_entry`: id, bbox, a property allowlist, asset SUMMARIES,
     a `rel:self` to the full item, and web-map links. Keep the two in step — a local catalog
     that carries more than production is a bug the laptop can't reproduce."""
@@ -235,12 +235,22 @@ def _index_entry(item: dict, *, rollup: bool = False) -> dict:
     assets = _asset_summaries(item)
     if assets:
         entry["assets"] = assets
-    sub = f"{item['collection']}/" if rollup and item.get("collection") else ""
+    sub = (prefix if prefix is not None
+           else f"{item['collection']}/" if rollup and item.get("collection") else "")
     entry["links"] = [
         {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
          "type": "application/geo+json"},
         *_web_map_links(item),
     ]
+    return entry
+
+
+def _pub_item_index_entry(item: dict, coll: dict, *, prefix: str) -> dict:
+    """Mirror of core/stac's `_pub_item_index_entry`: a publication Item's root-index entry,
+    tagged with the publication's id and title."""
+    entry = _index_entry(item, prefix=prefix)
+    entry["properties"]["ugs:pub_id"] = coll["id"]
+    entry["properties"]["ugs:pub_title"] = coll.get("title") or coll["id"]
     return entry
 
 

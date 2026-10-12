@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
-  effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery,
+  discoverable, effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery,
   sortItems, typeOf,
 } from "./discovery-model";
 import { rootIndexItems } from "@/stac";
@@ -192,6 +192,21 @@ describe("publication Collection entries", () => {
     expect(f.collections.map((c) => [c.key, c.label, c.n])).toEqual([["ugs-publications/OFR", "OFR", 2]]);
     expect(f.types.map((t) => [t.key, t.n])).toEqual([["Open-File Report", 2]]);
     expect(f.categories.map((c) => c.key)).toEqual(["publications"]);
+    expect(f.formats.map((x) => x.key)).toEqual(["PDF"]);
+  });
+
+  it("leaves the publication's tagged layers and tables out of cards and facets", () => {
+    const layer: ItemRef = rootIndexItems({ items: [{
+      id: "OFR-9_flows", bbox: [-112, 40, -111, 41],
+      properties: { title: "Debris Flow Paths", "ugs:series_id": "OFR-9", "ugs:pub_id": "OFR-9",
+                    "ugs:pub_title": "Geologic map of somewhere" },
+      assets: { cog: { href: "https://x/f.cog.tif", type: "image/tiff; application=geotiff; profile=cloud-optimized" } },
+      links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/OFR-9_flows/OFR-9_flows.json" }],
+    }] })[0];
+    const shown = discoverable([...pubs, layer]);
+    expect(shown.map((it) => it.data!.id)).toEqual(["OFR-9", "OFR-1"]);
+    const f = extractFacets(shown);
+    expect(f.collections.map((c) => [c.key, c.n])).toEqual([["ugs-publications/OFR", 2]]);
     expect(f.formats.map((x) => x.key)).toEqual(["PDF"]);
   });
 

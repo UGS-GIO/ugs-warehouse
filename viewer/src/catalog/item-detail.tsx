@@ -155,7 +155,8 @@ function IssueContents({ item }: { item: StacDoc }) {
   );
 }
 
-// A same-view link to another catalog entry (keeps the view and its other search keys).
+// A same-view link to another catalog entry (keeps the view and its other search keys). `terrain`
+// is cleared because the 3D toggle belongs to the item it was set on; a newly opened one starts 2D.
 function EntryLink({ c, i, className, children }: { c: string; i: string; className?: string; children: ReactNode }) {
   return (
     <Link to="." search={(prev) => ({ ...prev, c, i, terrain: undefined })} className={className}>
@@ -285,10 +286,12 @@ function ReviewBadge({ itemId }: { itemId: string }) {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
 }
 
-export function ItemDetail({ collectionId, item, error, partOf, onBack, onMap, onExplore, layout = "drawer" }: {
+export function ItemDetail({ collectionId, item, raw, error, partOf, crumbs, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
+  raw?: StacDoc;                   // the doc as published, for the JSON panel (item may be normalised)
   error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
   partOf?: PartOf;                 // the publication an Item belongs to
+  crumbs?: { label: string; onClick?: () => void }[];  // a full trail, replacing `collection / id`
   onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
   layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
@@ -335,7 +338,17 @@ export function ItemDetail({ collectionId, item, error, partOf, onBack, onMap, o
     </div>
   );
 
-  const crumb = (
+  const crumb = crumbs ? (
+    <div className="mb-1.5 text-xs">
+      {crumbs.map((c, i) => (
+        <span key={i}>
+          {i > 0 && <span className={C.muted}> / </span>}
+          {c.onClick ? <span className={C.crumb} onClick={c.onClick}>{c.label}</span>
+            : <span className={C.muted}>{c.label}</span>}
+        </span>
+      ))}
+    </div>
+  ) : (
     <div className="mb-1.5 text-xs">
       <span className={C.crumb} onClick={onBack}>{collectionId}</span>
       <span className={C.muted}> / {item.id}</span>
@@ -390,7 +403,7 @@ export function ItemDetail({ collectionId, item, error, partOf, onBack, onMap, o
             </Section>
             <DownloadsPanel key={String(item.id)} item={item} />
             <EndpointsPanel item={item} />
-            <Section title="Developer"><StacJson item={item} title={`${item.id} — STAC JSON`} /></Section>
+            <Section title="Developer"><StacJson item={raw ?? item} title={`${item.id} — STAC JSON`} /></Section>
             <details className="rounded-lg border border-border">
               <summary className="cursor-pointer px-3 py-2 text-sm font-medium text-muted-foreground">All properties</summary>
               <div className="px-3 pb-2"><PropertyTable properties={p} className="mt-0" /></div>

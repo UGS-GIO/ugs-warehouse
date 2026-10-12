@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetUsages, catalogItemHref, citeLink, collectionAsItem, collectionLink, collectionParts, entryCollKeyOf, idOf, indexItemRefs, isCatalogHref, isCollectionHref, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, catalogItemHref, citeLink, collectionAsItem, collectionLink, collectionParts, entryCollKeyOf, idOf, indexItemRefs, isCatalogHref, isCollectionHref, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -247,6 +247,46 @@ describe("publication Collection hrefs", () => {
     expect(isCatalogHref(`${base}ugs-publications/OFR/catalog.json?x=1`)).toBe(true);
     expect(isCatalogHref(pub)).toBe(false);
     expect(isCollectionHref(pub)).toBe(true);
+  });
+});
+
+describe("pubHrefFor", () => {
+  const series = { id: "ugs-publications/OFR",
+    href: "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/catalog.json" };
+  const dir = "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/";
+  it("builds a publication's collection.json from c = <series>", () => {
+    expect(pubHrefFor(series, "ugs-publications/OFR", "OFR-9")).toBe(`${dir}OFR-9/collection.json`);
+  });
+  it("builds an Item inside a publication from c = <series>/<SID>", () => {
+    expect(pubHrefFor(series, "ugs-publications/OFR/OFR-9", "OFR-9_geounits"))
+      .toBe(`${dir}OFR-9/OFR-9_geounits/OFR-9_geounits.json`);
+    expect(pubSidIn(series.id, "ugs-publications/OFR/OFR-9")).toBe("OFR-9");
+  });
+  it("names nothing for another collection, a deeper path, or a collection-type series", () => {
+    expect(pubHrefFor(series, "ugs-publications/B", "B-1")).toBeUndefined();
+    expect(pubHrefFor(series, "ugs-publications/OFR/OFR-9/x", "y")).toBeUndefined();
+    expect(pubHrefFor({ id: series.id, href: `${dir}collection.json` }, series.id, "OFR-9")).toBeUndefined();
+    expect(pubSidIn(series.id, "ugs-publications/OFRX/1")).toBeUndefined();
+  });
+});
+
+describe("publication layers in the root index", () => {
+  const tagged: StacDoc = { id: "OFR-9_flows", properties: {
+    title: "Debris Flow Paths", "ugs:pub_id": "OFR-9", "ugs:pub_title": "Geologic map of X" } };
+  it("reads the publication a tagged entry belongs to, and labels the layer with it", () => {
+    expect(pubOfEntry(tagged)).toEqual({ id: "OFR-9", title: "Geologic map of X" });
+    expect(layerLabel(tagged, "x")).toBe("Debris Flow Paths · Geologic map of X");
+  });
+  it("ignores a raster's provenance ugs:pub_id, which comes without a title", () => {
+    const raster: StacDoc = { id: "r", properties: { title: "Mosaic", "ugs:pub_id": "OFR-123" } };
+    expect(pubOfEntry(raster)).toBeUndefined();
+    expect(layerLabel(raster, "r")).toBe("Mosaic");
+  });
+  it("keeps a tagged entry as a ref the map resolves by its item id", () => {
+    const [ref] = rootIndexItems({ items: [{ ...tagged,
+      links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/OFR-9_flows/OFR-9_flows.json" }] }] });
+    expect(ref.collId).toBe("ugs-publications/OFR/OFR-9");
+    expect(idOf(ref.href)).toBe("OFR-9_flows");
   });
 });
 

@@ -5,7 +5,8 @@ import { createContext, Suspense, useContext, useEffect, useMemo, useRef, useSta
 import { type CatalogDoc } from "./discover/search-index";
 import utahLogo from "./assets/utah-logo.png";
 import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/browse";
-import { layerCollectionIds } from "./catalog/catalog";
+import { catalogTrail, layerCollectionIds, layerRowsOf } from "./catalog/catalog";
+import { discoverable } from "./discover/discovery-model";
 import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetParam } from "./map/map-model";
 import { flyTo, queueFocus, setPin } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
@@ -16,7 +17,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, pubHrefFor, pubSidIn, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
@@ -325,6 +326,9 @@ function useViewState() {
     ...fallbackRefs.map((r, i) => ({ ...r, data: fbDocs.docs[i]?.data })),
   ];
   const itemsLoading = idx.some((r) => r.isLoading) || fbDocs.isLoading;
+  // A catalog leaf lists its entries only through its `ugs-items-index` link; without one the list
+  // says so rather than showing empty.
+  const leafIndexMissing = Boolean(leafColl && isCatalogHref(leafColl.href) && idx[0]?.missing);
 
   // The Map, Discover AND Landing views load every leaf collection's index (all items → the map +
   // facets + the landing tiles/recent strip). Landing reuses this exact cached set — no extra fetch.
@@ -357,16 +361,16 @@ function useViewState() {
     && (root.isLoading || mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
-  const layerRows: LayerRow[] = useMemo(() => mapItems
-    .filter((r) => drawsAsLayer(r.data))
+  const layerRows: LayerRow[] = useMemo(() => layerRowsOf(mapItems, {
+    draws: drawsAsLayer, collTitle,
     // A datacube is a data layer whatever catalog it came from — the sub-catalog allowlist only
     // knows our own ids, so a federated cube would otherwise file under publication plates.
-    .map((r) => ({ id: idOf(r.href), href: r.href, title: String(r.data?.properties?.title ?? idOf(r.href)),
-                   group: collTitle(r.collId), layer: layerCollIds.includes(r.collId) || !!zarrAsset(r.data) }))
-    .sort((a, b) => Number(b.layer) - Number(a.layer)
-                    || a.group.localeCompare(b.group) || a.title.localeCompare(b.title)),
+    isLayer: (r) => layerCollIds.includes(r.collId) || !!zarrAsset(r.data),
+  }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mapLoadKey]);
+  // Discover and the landing list one entry per publication, not its layers and tables.
+  const discoverItems = discoverable(mapItems);
 
   // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
   // an absolute href: construct from the open leaf, else look it up among loaded items.
@@ -385,33 +389,26 @@ function useViewState() {
                  String(rollupHit.id))
     : undefined;
 
-  // An Item inside a publication: `?c=<series>/<SID>&i=<item>`, the series being a catalog leaf.
+  // Under a publication series (a catalog leaf), `?c=<series>&i=<SID>` is the publication and
+  // `?c=<series>/<SID>&i=<item>` an Item inside it; both hrefs are built from the series path.
   const pubSeries = !leafColl && collectionId
-    ? leafColls.find((l) => isCatalogHref(l.href) && collectionId.startsWith(`${l.id}/`)
-                            && !collectionId.slice(l.id.length + 1).includes("/"))
+    ? leafColls.find((l) => isCatalogHref(l.href) && pubSidIn(l.id, collectionId))
     : undefined;
-  const pubItemHref = pubSeries && collectionId && itemUrl
-    ? pubSeries.href.replace(/catalog\.json(\?.*)?$/,
-        [collectionId.slice(pubSeries.id.length + 1), itemUrl, `${itemUrl}.json`].map(encodeURIComponent).join("/"))
-    : undefined;
-  // A publication itself: `?c=<series>&i=<SID>` names an entry of the root or series index, whose
-  // self link is the collection.json. A catalog leaf has no item path to construct.
-  const listedHref = collectionId && itemUrl
-    ? [...mapItems, ...allItems].find((r) => r.collId === collectionId && idOf(r.href) === itemUrl)?.href
-    : undefined;
+  const pubSeriesLeaf = leafColl && isCatalogHref(leafColl.href) ? leafColl : pubSeries;
+  const pubHref = pubSeriesLeaf && collectionId && itemUrl
+    ? pubHrefFor(pubSeriesLeaf, collectionId, itemUrl) : undefined;
 
   const itemHref = isUrl(itemUrl)
     ? itemUrl
     : (leafColl && itemUrl && !isCatalogHref(leafColl.href) ? itemHrefIn(leafColl.href, itemUrl) : undefined)
-      ?? pubItemHref
-      ?? listedHref
+      ?? pubHref
       ?? rollupHref
       ?? allItems.find((r) => idOf(r.href) === itemUrl)?.href;
   const itemQuery = useStac(itemHref);
   // A publication Collection reaches every view in the item shape, so the detail page, the map and
-  // the add-to-map gate read it like any item.
+  // the add-to-map gate read it like any item. `raw` is the doc as published, for the JSON panel.
   const itemData = useMemo(() => itemQuery.data && collectionAsItem(itemQuery.data), [itemQuery.data]);
-  const item = { data: itemData, error: itemQuery.error, isLoading: itemQuery.isLoading };
+  const item = { data: itemData, raw: itemQuery.data, error: itemQuery.error, isLoading: itemQuery.isLoading };
 
   // "Part of <publication>" on an Item whose collection is a publication (listed under a series leaf).
   const partOfHref = item.data && itemHref ? collectionLink(item.data)?.href : undefined;
@@ -505,16 +502,16 @@ function useViewState() {
   // Commit a dragged draw-order back to ?l= (the whole active set stays shareable in the URL).
   const setLayerOrder = (ids: string[]) => go({ view, c: collectionUrl, i: itemUrl, l: ids, s: seriesSel });
 
-  // Breadcrumb trail: Catalog [ / Publications] [ / DS] [ / item]. Each crumb but the last
-  // is clickable. parentOfLeaf is the sub-catalog a series collection hangs under (if any).
-  const parentOfLeaf = leafColl?.parentId ? subCats.find((s) => s.id === leafColl.parentId) : undefined;
-  const crumbs: { label: string; onClick?: () => void }[] = [
-    { label: "Catalog", onClick: collectionId || itemUrl ? () => go({ view }) : undefined },
-  ];
-  if (subCat) crumbs.push({ label: subCat.title ?? subCat.id });
-  if (parentOfLeaf) crumbs.push({ label: parentOfLeaf.title ?? parentOfLeaf.id, onClick: () => go({ view, c: parentOfLeaf.id }) });
-  if (leafColl) crumbs.push({ label: leafColl.title ?? leafColl.id, onClick: itemUrl ? () => go({ view, c: leafColl.id, s: seriesSel }) : undefined });
-  if (itemUrl) crumbs.push({ label: String(itemUrl) });
+  // Breadcrumb trail: Catalog [ / Publications] [ / DS] [ / publication] [ / item]. Each crumb but
+  // the last is clickable. An Item inside a publication walks through its series and publication.
+  const pubSid = pubSeries && collectionId ? pubSidIn(pubSeries.id, collectionId) : undefined;
+  const crumbs = catalogTrail({
+    collectionId, itemUrl, subCat, subCats, leaf: leafColl ?? pubSeries,
+    pub: pubSid ? { sid: pubSid, title: partOf?.title } : undefined,
+  }).map(({ label, to }) => ({
+    label,
+    onClick: to ? () => go({ view, c: to.c, i: to.i, s: to.keepSeries ? seriesSel : undefined }) : undefined,
+  }));
 
   // Active map layers: the toggled set, else fall back to the detail item (so a plain
   // ?c=&i= link still shows its layer). Resolved against fetched item data (for PMTiles).
@@ -553,11 +550,11 @@ function useViewState() {
     layerRows.some((r) => r.id === id) || (!!itemUrl && idOf(itemUrl) === id && drawsAsLayer(item.data));
   return {
     go, view, setView, catalog, lockedView, pending, mapView,
-    catalogDocs, mapItems, mapLoadKey, mapItemsLoading,
+    catalogDocs, mapItems, discoverItems, mapLoadKey, mapItemsLoading,
     searchIsLayer, pickPlace, pickSearchItem,
     openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, partOf, collectionId, collectionUrl, layerIds, seriesSel,
-    rootChildren, cardsWithCovers, allItems, itemsLoading, leafColl, crumbs,
+    rootChildren, cardsWithCovers, allItems, itemsLoading, leafIndexMissing, leafColl, crumbs,
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
     layerCollIds, setSeries,
     revealInfo, activeLayers, footprints, layerRows, idsForMap, toggleLayer, toggleLayers, styleCache,

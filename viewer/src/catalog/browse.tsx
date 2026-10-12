@@ -568,9 +568,10 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 
 // Registry-driven relationships (FK graph): related layers, this layer's references, related tables.
 // One collection's items.
-function CollectionItems({ items, itemsLoading, breadcrumb, series, onOpenItem, onSeries }: {
+function CollectionItems({ items, itemsLoading, noIndex, breadcrumb, series, onOpenItem, onSeries }: {
   items: ItemRef[];
   itemsLoading: boolean;
+  noIndex?: boolean;               // a catalog with no item index: say so instead of an empty list
   breadcrumb: { label: string; onClick?: () => void }[];
   series: string[];
   onOpenItem: (href: string) => void;
@@ -580,7 +581,9 @@ function CollectionItems({ items, itemsLoading, breadcrumb, series, onOpenItem, 
     <div className={C.wrap}>
       <Breadcrumb crumbs={breadcrumb} />
       {itemsLoading && <span className={C.muted}>loading items…</span>}
-      <ItemList items={items} onOpen={onOpenItem} series={series} onSeries={onSeries} />
+      {noIndex
+        ? <p role="status" className="mt-3 text-sm text-muted-foreground">This catalog has no item index.</p>
+        : <ItemList items={items} onOpen={onOpenItem} series={series} onSeries={onSeries} />}
     </div>
   );
 }
@@ -669,8 +672,12 @@ export function Browse() {
   if (c.collectionId && c.itemUrl) {
     return (
       <div className={C.wrap}>
-        <ItemDetail collectionId={c.collectionId} item={c.item.data} error={c.item.error} partOf={c.partOf} layout="page"
-          onBack={() => c.go({ view: "catalog", c: c.collectionUrl, s: c.seriesSel })}
+        <ItemDetail collectionId={c.collectionId} item={c.item.data} raw={c.item.raw} error={c.item.error}
+          partOf={c.partOf} crumbs={c.partOf ? c.crumbs : undefined} layout="page"
+          // An Item inside a publication goes back to the publication, not to a collection list.
+          onBack={() => c.partOf
+            ? c.go({ view: "catalog", c: c.partOf.c, i: c.partOf.i })
+            : c.go({ view: "catalog", c: c.collectionUrl, s: c.seriesSel })}
           onMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl,
                               l: c.itemUrl ? [idOf(c.itemUrl)] : c.layerIds })} />
       </div>
@@ -680,7 +687,7 @@ export function Browse() {
   if (c.leafColl && c.collectionId) {
     return <CollectionItems
       items={c.allItems.filter((it) => it.collId === c.collectionId)}
-      itemsLoading={c.itemsLoading} breadcrumb={c.crumbs} series={series}
+      itemsLoading={c.itemsLoading} noIndex={c.leafIndexMissing} breadcrumb={c.crumbs} series={series}
       onOpenItem={c.openItem} onSeries={c.setSeries} />;
   }
 

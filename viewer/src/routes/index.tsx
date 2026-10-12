@@ -3,12 +3,12 @@ import { createFileRoute } from "@tanstack/react-router";
 import { useViewCtx } from "@/app";
 import { Landing } from "@/discover/landing";
 
-// The param-less front door. Reuses the same loaded item set as Map/Discover (mapItems) — no extra
+// The param-less front door. Reuses the same loaded item set as Discover (discoverItems) — no extra
 // fetch — for its category-tile counts + "recently updated" strip. Everything hands off to Discover.
 function LandingPage() {
-const { mapItems, mapLoadKey, mapItemsLoading, openDiscoverSearch } = useViewCtx();
+const { discoverItems, mapLoadKey, mapItemsLoading, openDiscoverSearch } = useViewCtx();
 return <Landing
-  items={mapItems}
+  items={discoverItems}
   itemsKey={mapLoadKey}
   loading={mapItemsLoading}
   onSearch={(text: string) => openDiscoverSearch({ q: text })}

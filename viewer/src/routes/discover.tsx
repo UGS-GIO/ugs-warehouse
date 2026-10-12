@@ -8,7 +8,7 @@ import { DiscoveryView } from "@/discover/discovery-view";
 function Discover() {
 const c = useViewCtx();
 return <DiscoveryView
-  items={c.mapItems}
+  items={c.discoverItems}
   itemsKey={c.mapLoadKey}
   onOpenItem={c.openItem}
   onOpenPub={(collId, itemId) => c.go({ view: "catalog", c: collId, i: itemId })}

@@ -1,9 +1,9 @@
 // The shared MiniSearch index builder + the flat doc shapes it indexes. Extracted from search.tsx so
 // the Discover view searches the SAME index (one builder, one config) rather than a second engine.
-// No React; MiniSearch is the only runtime import, so this stays out of the main bundle — both
+// No React; MiniSearch is the only heavy runtime import, so this stays out of the main bundle — both
 // consumers (the lazy Search view and the lazy Discover view) pull it into their own chunks.
 import MiniSearch, { type SearchResult } from "minisearch";
-import type { StacDoc } from "@/stac";
+import { pubOfEntry, type StacDoc } from "@/stac";
 
 export type Article = {
   id: string; sid: string; volume: number | null; issue?: string;
@@ -53,6 +53,9 @@ const ID_FIELDS = new Set(["ids", "idBare", "idParts"]);
 export function toSearchDoc(collId: string, d: StacDoc): CatalogDoc {
   const p = (d.properties ?? {}) as Record<string, unknown>;
   const itemId = String(d.id);
+  // A publication's layer shares its series id; only the publication itself answers to it, so a
+  // typed series id still names one result.
+  const seriesId = pubOfEntry(d) ? undefined : p["ugs:series_id"];
   return {
     id: `${collId}/${itemId}`,
     collId,
@@ -60,7 +63,7 @@ export function toSearchDoc(collId: string, d: StacDoc): CatalogDoc {
     title: String(p.title ?? d.id),
     keywords: String(p.keywords ?? ""),
     meta: [p["ugs:series"], p["ugs:topic"], p["ugs:pub_type"]].filter(Boolean).join(" · "),
-    ids: [...new Set([itemId, p["ugs:series_id"]].filter((v): v is string => typeof v === "string" && v !== ""))],
+    ids: [...new Set([itemId, seriesId].filter((v): v is string => typeof v === "string" && v !== ""))],
   };
 }
 

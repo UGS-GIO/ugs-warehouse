@@ -62,6 +62,39 @@ export const entryCollKeyOf = (href?: string): string | undefined => {
 export const itemHrefIn = (collHref: string, id: string) =>
   collHref.replace(/collection\.json(\?.*)?$/, `${encodeURIComponent(id)}/${encodeURIComponent(id)}.json`);
 
+// The publication SID in `c = <series>/<SID>` (an Item inside a publication), else undefined.
+export const pubSidIn = (seriesId: string, c: string): string | undefined => {
+  const sid = c.startsWith(`${seriesId}/`) ? c.slice(seriesId.length + 1) : "";
+  return sid && !sid.includes("/") ? sid : undefined;
+};
+
+// What `?c=&i=` names under a publication series (a catalog leaf): `c = <series>` is the
+// publication `<series>/<i>/collection.json`; `c = <series>/<SID>` is its Item `<SID>/<i>/<i>.json`.
+export const pubHrefFor = (series: { id: string; href: string }, c: string, i: string): string | undefined => {
+  if (!isCatalogHref(series.href)) return undefined;
+  const dir = series.href.replace(/catalog\.json(\?.*)?$/, "");
+  const id = encodeURIComponent(i);
+  if (c === series.id) return `${dir}${id}/collection.json`;
+  const sid = pubSidIn(series.id, c);
+  return sid ? `${dir}${encodeURIComponent(sid)}/${id}/${id}.json` : undefined;
+};
+
+// A publication's layer or table as listed in the root index, tagged with both `ugs:pub_id` and
+// `ugs:pub_title`. Both are required: a raster item carries `ugs:pub_id` alone, as provenance.
+export const pubOfEntry = (d: StacDoc | undefined): { id: string; title: string } | undefined => {
+  const p = d?.properties as Record<string, unknown> | undefined;
+  const id = p?.["ugs:pub_id"];
+  const title = p?.["ugs:pub_title"];
+  return typeof id === "string" && id && typeof title === "string" && title ? { id, title } : undefined;
+};
+
+// A map-list label: the layer's title, then its publication's for context when it has one.
+export const layerLabel = (d: StacDoc | undefined, fallback: string): string => {
+  const title = String(d?.properties?.title ?? fallback);
+  const pub = pubOfEntry(d);
+  return pub ? `${title} · ${pub.title}` : title;
+};
+
 // In-app catalog route (?c=<collection key>&i=<item id>) for a STAC item .json href, reusing
 // collKeyOf so the `c` key matches how the catalog tree keys its collections. A foreign href (not
 // under our catalog root) has no in-app route, so it is returned unchanged as a direct link.

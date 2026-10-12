@@ -8,11 +8,16 @@ import { categorize, collectionLabel, datetimeIsPublished, docIdOf, formatsOf, h
   title, typeOf } from "@/catalog/item-view";
 import { baseTerms, parseQuery, type Query } from "@/data/query";
 import { validBbox } from "@/map/map-model";
+import { pubOfEntry } from "@/stac";
 
 // The field getters now live in item-view.ts (one source of truth, shared with browse.tsx). Re-export
 // the discovery-facing names so this module's API and the view stay unchanged.
 export { collectionLabel, docIdOf, hasGeometry, typeOf };
 export const discoveryTitle = title;
+
+// Discover shows one card per publication, so it leaves out the publication layers and tables the
+// root index also lists (tagged with their publication) for the map.
+export const discoverable = (items: ItemRef[]): ItemRef[] => items.filter((it) => !pubOfEntry(it.data));
 
 export type FacetCount = { key: string; label: string; n: number };
 export type Facets = {

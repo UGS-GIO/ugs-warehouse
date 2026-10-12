@@ -37,6 +37,13 @@ export const catalogTrail = (o: {
   return crumbs;
 };
 
+// Where Back goes from an item page: an Item inside a publication returns to the publication,
+// anything else to its collection's list with the series filter kept.
+export const itemBackTarget = (o: {
+  partOf?: { c: string; i: string }; collectionUrl?: string; seriesSel?: string[];
+}): { c?: string; i?: string; s?: string[] } =>
+  o.partOf ? { c: o.partOf.c, i: o.partOf.i } : { c: o.collectionUrl, s: o.seriesSel };
+
 // Map layer-list rows over the loaded items: those that draw, data layers first, then by group and
 // title. A publication's layer (tagged in the root index) files under its series and names its
 // publication in the title.

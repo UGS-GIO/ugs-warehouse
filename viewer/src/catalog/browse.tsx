@@ -10,7 +10,7 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { idOf, useViewCtx } from "@/app";
 import { AssetChips } from "./asset-viewer";
-import { rootGroupOf } from "./catalog";
+import { itemBackTarget, rootGroupOf } from "./catalog";
 import { createComment } from "@/review/comments";
 import { ItemDetail } from "./item-detail";
 import { author, collectionLabel, county, dateOf, fmtDate, scale, series, title, typeOf, year } from "./item-view";
@@ -567,8 +567,8 @@ function ItemList({ items, showCollection, query, onOpen, series, onSeries, forc
 // A related item's STAC .json href → a viewer deep-link (?c=<collection>&i=<id>).
 
 // Registry-driven relationships (FK graph): related layers, this layer's references, related tables.
-// One collection's items.
-function CollectionItems({ items, itemsLoading, noIndex, breadcrumb, series, onOpenItem, onSeries }: {
+// One collection's items. Exported for the render tests.
+export function CollectionItems({ items, itemsLoading, noIndex, breadcrumb, series, onOpenItem, onSeries }: {
   items: ItemRef[];
   itemsLoading: boolean;
   noIndex?: boolean;               // a catalog with no item index: say so instead of an empty list
@@ -674,10 +674,7 @@ export function Browse() {
       <div className={C.wrap}>
         <ItemDetail collectionId={c.collectionId} item={c.item.data} raw={c.item.raw} error={c.item.error}
           partOf={c.partOf} crumbs={c.partOf ? c.crumbs : undefined} layout="page"
-          // An Item inside a publication goes back to the publication, not to a collection list.
-          onBack={() => c.partOf
-            ? c.go({ view: "catalog", c: c.partOf.c, i: c.partOf.i })
-            : c.go({ view: "catalog", c: c.collectionUrl, s: c.seriesSel })}
+          onBack={() => c.go({ view: "catalog", ...itemBackTarget(c) })}
           onMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl,
                               l: c.itemUrl ? [idOf(c.itemUrl)] : c.layerIds })} />
       </div>

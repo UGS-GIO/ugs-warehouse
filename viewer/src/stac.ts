@@ -79,13 +79,13 @@ export const pubHrefFor = (series: { id: string; href: string }, c: string, i: s
   return sid ? `${dir}${encodeURIComponent(sid)}/${id}/${id}.json` : undefined;
 };
 
-// A publication's layer or table as listed in the root index, tagged with both `ugs:pub_id` and
-// `ugs:pub_title`. Both are required: a raster item carries `ugs:pub_id` alone, as provenance.
+// A publication's layer or table as listed in the root index, tagged `ugs:in_publication` (the
+// publication id) and `ugs:publication_title`, the label; the title falls back to the id.
 export const pubOfEntry = (d: StacDoc | undefined): { id: string; title: string } | undefined => {
   const p = d?.properties as Record<string, unknown> | undefined;
-  const id = p?.["ugs:pub_id"];
-  const title = p?.["ugs:pub_title"];
-  return typeof id === "string" && id && typeof title === "string" && title ? { id, title } : undefined;
+  const id = p?.["ugs:in_publication"];
+  const title = p?.["ugs:publication_title"];
+  return typeof id === "string" && id ? { id, title: typeof title === "string" && title ? title : id } : undefined;
 };
 
 // A map-list label: the layer's title, then its publication's for context when it has one.
@@ -548,10 +548,25 @@ const selfHref = (d: StacDoc, base: string): string | undefined => {
   return self ? new URL(self, base).href : undefined;
 };
 
-export const rootIndexItems = (idx: ItemsIndex) => idx.items.flatMap((d) => {
-  const href = selfHref(d, ROOT_INDEX_URL);
-  return href ? [{ collId: entryCollKeyOf(href) ?? "", href, data: d }] : [];
-});
+// An entry without a self link cannot be opened, so it is dropped; the count is logged once per
+// loaded index (these run on every render).
+const warnedIndexes = new WeakSet<ItemsIndex>();
+const warnDropped = (idx: ItemsIndex, kept: number, where: string) => {
+  const dropped = idx.items.length - kept;
+  if (dropped > 0 && !warnedIndexes.has(idx)) {
+    warnedIndexes.add(idx);
+    console.warn(`${dropped} entr${dropped === 1 ? "y" : "ies"} without a self link dropped from ${where}`);
+  }
+};
+
+export const rootIndexItems = (idx: ItemsIndex) => {
+  const refs = idx.items.flatMap((d) => {
+    const href = selfHref(d, ROOT_INDEX_URL);
+    return href ? [{ collId: entryCollKeyOf(href) ?? "", href, data: d }] : [];
+  });
+  warnDropped(idx, refs.length, ROOT_INDEX_URL);
+  return refs;
+};
 
 // A loaded index's entries as item refs under collection `id`. A catalog's index (a publication
 // series) points at each entry by its self link; a collection's items sit beside it.
@@ -561,10 +576,12 @@ export const indexItemRefs = (r: { id: string; href: string; index?: ItemsIndex 
   if (!isCatalogHref(r.href)) {
     return idx.items.map((d) => ({ collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d }));
   }
-  return idx.items.flatMap((d) => {
+  const refs = idx.items.flatMap((d) => {
     const href = idx.url ? selfHref(d, idx.url) : undefined;
     return href ? [{ collId: r.id, href, data: d }] : [];
   });
+  warnDropped(idx, refs.length, idx.url ?? r.href);
+  return refs;
 };
 
 // An index with no item list is an error, so the caller falls back to per-item links.

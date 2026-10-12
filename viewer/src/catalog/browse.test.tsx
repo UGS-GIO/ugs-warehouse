@@ -2,7 +2,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-import { CollectionsGrid, type CollectionSummary } from "./browse";
+import { CollectionItems, CollectionsGrid, type CollectionSummary } from "./browse";
 
 const card = (id: string, title: string): CollectionSummary =>
   ({ id, title, href: `https://cdn.example/stac/${id}/collection.json`, count: 1 });
@@ -49,5 +49,13 @@ describe("the catalog landing", () => {
   it("gives every collection its own STAC url to hand out", () => {
     atRoot([card("ugs-publications", "Publications")]);
     expect(screen.getByText("STAC ↗").getAttribute("href")).toBe("https://cdn.example/stac/ugs-publications/collection.json");
+  });
+});
+
+describe("a series list", () => {
+  it("says a catalog has no item index instead of showing an empty list", () => {
+    render(<CollectionItems items={[]} itemsLoading={false} noIndex breadcrumb={[{ label: "Catalog" }]}
+      series={[]} onOpenItem={noop} onSeries={noop} />);
+    expect(screen.getByRole("status").textContent).toBe("This catalog has no item index.");
   });
 });

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { assetUsages, catalogItemHref, citeLink, collectionAsItem, collectionLink, collectionParts, entryCollKeyOf, idOf, indexItemRefs, isCatalogHref, isCollectionHref, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
@@ -203,11 +203,17 @@ describe("rasterTilesAsset", () => {
 
 
 describe("rootIndexItems", () => {
-  it("resolves each self link from the root and skips an entry without one", () => {
-    const refs = rootIndexItems({ items: [
+  it("resolves each self link from the root and skips an entry without one, warning once", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const idx = { items: [
       { id: "M-1", links: [{ rel: "self", href: "./ugs-publications/M/M-1/M-1.json" }] },
       { id: "broken", links: [] },
-    ] } as never);
+    ] } as never;
+    const refs = rootIndexItems(idx);
+    rootIndexItems(idx);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain("1 entry without a self link");
+    warn.mockRestore();
     expect(refs).toHaveLength(1);
     expect(refs[0].href).toBe(new URL("./ugs-publications/M/M-1/M-1.json", ROOT_INDEX_URL).href);
     expect(refs[0].collId).toBe("ugs-publications/M");
@@ -272,15 +278,16 @@ describe("pubHrefFor", () => {
 
 describe("publication layers in the root index", () => {
   const tagged: StacDoc = { id: "OFR-9_flows", properties: {
-    title: "Debris Flow Paths", "ugs:pub_id": "OFR-9", "ugs:pub_title": "Geologic map of X" } };
+    title: "Debris Flow Paths", "ugs:in_publication": "OFR-9", "ugs:publication_title": "Geologic map of X" } };
   it("reads the publication a tagged entry belongs to, and labels the layer with it", () => {
     expect(pubOfEntry(tagged)).toEqual({ id: "OFR-9", title: "Geologic map of X" });
     expect(layerLabel(tagged, "x")).toBe("Debris Flow Paths · Geologic map of X");
   });
-  it("ignores a raster's provenance ugs:pub_id, which comes without a title", () => {
+  it("ignores a raster's provenance ugs:pub_id, and labels by the id when the title is missing", () => {
     const raster: StacDoc = { id: "r", properties: { title: "Mosaic", "ugs:pub_id": "OFR-123" } };
     expect(pubOfEntry(raster)).toBeUndefined();
     expect(layerLabel(raster, "r")).toBe("Mosaic");
+    expect(pubOfEntry({ properties: { "ugs:in_publication": "OFR-9" } })).toEqual({ id: "OFR-9", title: "OFR-9" });
   });
   it("keeps a tagged entry as a ref the map resolves by its item id", () => {
     const [ref] = rootIndexItems({ items: [{ ...tagged,
@@ -294,13 +301,19 @@ describe("indexItemRefs", () => {
   const series = "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/catalog.json";
   const seriesIndex = "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/items.json";
   it("resolves a series index's self links from where the index was read", () => {
-    const refs = indexItemRefs({ id: "ugs-publications/OFR", href: series, index: {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const r = { id: "ugs-publications/OFR", href: series, index: {
       url: seriesIndex,
       items: [
         { id: "OFR-9", links: [{ rel: "self", href: "./OFR-9/collection.json" }] },
         { id: "no-self", links: [] },
       ],
-    } });
+    } };
+    const refs = indexItemRefs(r);
+    indexItemRefs(r);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(warn.mock.calls[0][0]).toContain(seriesIndex);
+    warn.mockRestore();
     expect(refs).toHaveLength(1);
     expect(refs[0].collId).toBe("ugs-publications/OFR");
     expect(refs[0].href).toBe("https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/OFR-9/collection.json");

@@ -1,6 +1,6 @@
 // The shared MiniSearch index builder + the flat doc shapes it indexes. Extracted from search.tsx so
 // the Discover view searches the SAME index (one builder, one config) rather than a second engine.
-// No React; MiniSearch is the only heavy runtime import, so this stays out of the main bundle — both
+// No React; MiniSearch is the only heavy runtime import, so this stays out of the main bundle. Both
 // consumers (the lazy Search view and the lazy Discover view) pull it into their own chunks.
 import MiniSearch, { type SearchResult } from "minisearch";
 import { pubOfEntry, type StacDoc } from "@/stac";

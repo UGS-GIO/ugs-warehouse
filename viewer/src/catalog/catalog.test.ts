@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { catalogTrail, layerCollectionIds, layerRowsOf, rootGroupOf, serviceUrlOf } from "./catalog";
+import { catalogTrail, itemBackTarget, layerCollectionIds, layerRowsOf, rootGroupOf, serviceUrlOf } from "./catalog";
 import type { StacDoc } from "@/stac";
 
 describe("layerCollectionIds", () => {
@@ -119,6 +119,18 @@ describe("catalogTrail", () => {
   });
 });
 
+describe("itemBackTarget", () => {
+  it("returns from an Item inside a publication to the publication", () => {
+    expect(itemBackTarget({
+      partOf: { c: "ugs-publications/OFR", i: "OFR-9" }, collectionUrl: "ugs-publications/OFR/OFR-9", seriesSel: ["x"],
+    })).toEqual({ c: "ugs-publications/OFR", i: "OFR-9" });
+  });
+  it("returns from any other item to its collection's list, keeping the series filter", () => {
+    expect(itemBackTarget({ collectionUrl: "ugs-publications/B", seriesSel: ["B"] }))
+      .toEqual({ c: "ugs-publications/B", s: ["B"] });
+  });
+});
+
 describe("layerRowsOf", () => {
   const draws = (d?: StacDoc) => Boolean(d?.assets?.cog);
   const cog = { cog: { href: "https://x/a.tif" } };
@@ -127,8 +139,8 @@ describe("layerRowsOf", () => {
       data: { id: "qf", properties: { title: "Faults" }, assets: cog } },
     // A publication's layer, tagged in the root index; its collection is the publication.
     { collId: "ugs-publications/OFR/OFR-9", href: "https://x/ugs-publications/OFR/OFR-9/OFR-9_flows/OFR-9_flows.json",
-      data: { id: "OFR-9_flows", properties: { title: "Debris Flow Paths", "ugs:pub_id": "OFR-9",
-                                                "ugs:pub_title": "Geologic map of X" }, assets: cog } },
+      data: { id: "OFR-9_flows", properties: { title: "Debris Flow Paths", "ugs:in_publication": "OFR-9",
+                                                "ugs:publication_title": "Geologic map of X" }, assets: cog } },
     { collId: "ugs-publications/OFR", href: "https://x/ugs-publications/OFR/OFR-2/collection.json",
       data: { id: "OFR-2", properties: { title: "Report" } } },
   ];

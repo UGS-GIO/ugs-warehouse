@@ -99,7 +99,7 @@ describe("catalog search by series ID", () => {
 describe("a publication's layers in the index", () => {
   const pub: StacDoc = { id: "OFR-9", properties: { title: "Map of X", "ugs:series_id": "OFR-9" } };
   const layer: StacDoc = { id: "OFR-9_flows", properties: {
-    title: "Debris flow paths", "ugs:series_id": "OFR-9", "ugs:pub_id": "OFR-9", "ugs:pub_title": "Map of X" } };
+    title: "Debris flow paths", "ugs:series_id": "OFR-9", "ugs:in_publication": "OFR-9", "ugs:publication_title": "Map of X" } };
 
   it("answers to its own id only, so a typed series id still names the publication", () => {
     expect(toSearchDoc("ugs-publications/OFR/OFR-9", layer).ids).toEqual(["OFR-9_flows"]);

@@ -755,7 +755,6 @@ def test_build_catalog_writes_a_collection_and_items_per_publication():
 
 def test_a_publication_with_an_unreadable_manifest_fails_and_keeps_its_items(monkeypatch):
     from contextlib import ExitStack
-    from unittest.mock import patch
 
     from ugs_warehouse.core import config
     from ugs_warehouse.pubs import ingest

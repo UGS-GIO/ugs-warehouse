@@ -150,7 +150,7 @@ body {
 .dark .utah-design-system.utds-header img {
   filter: brightness(0) invert(1);
 }
-/* Action items (release, user badge): the DS paints them a white pill with gray ink. */
+/* Action items (the review user badge): the DS paints them a white pill with gray ink. */
 .dark .utds-header .utds-header-action-item__icon-button {
   background-color: transparent;
   color: hsl(var(--foreground));

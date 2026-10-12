@@ -48,7 +48,3 @@ const GITHUB_MARK = "M8 0c4.42 0 8 3.58 8 8a8.013 8.013 0 0 1-5.45 7.59c-.4.08-.
 export function GitHubIcon({ size = 16 }: { size?: number }) {
   return <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d={GITHUB_MARK} /></svg>;
 }
-
-// The same mark as markup, for the Utah header's action items, which take HTML rather than React.
-export const githubIconHtml = (size = 16) =>
-  `<svg width="${size}" height="${size}" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="${GITHUB_MARK}"/></svg>`;

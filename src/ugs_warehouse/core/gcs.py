@@ -184,21 +184,6 @@ def get_bytes(object_path: str, *, bucket: str | None = None) -> bytes:
     return _gunzip(raw)
 
 
-def download_to_file(object_path: str, local_path: str, *, bucket: str | None = None) -> int:
-    """Stream `gs://{bucket or BUCKET}/{object_path}` to `local_path` in chunks, so a multi-GB plate
-    never sits in memory. Returns the byte count; a short read raises."""
-    result = obs.get(_store(bucket), object_path)
-    n = 0
-    with open(local_path, "wb") as f:
-        for chunk in result.stream(min_chunk_size=8 * 1024 * 1024):
-            f.write(chunk)
-            n += len(chunk)
-    if n != result.meta["size"]:
-        raise OSError(f"gs://{bucket or config.BUCKET}/{object_path}: read {n} of "
-                      f"{result.meta['size']} bytes")
-    return n
-
-
 def copy_from_uri(src_uri: str, dest_path: str, *, content_type: str,
                   cache_control: str | None = None) -> FileMeta:
     """Copy an object from another bucket (`gs://<bucket>/<key>`) into

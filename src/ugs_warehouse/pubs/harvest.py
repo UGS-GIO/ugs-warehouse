@@ -39,9 +39,6 @@ FOOTPRINTS = ("https://services.arcgis.com/ZzrwjTRez6FJiOq4/ArcGIS/rest/services
 DATAPHP = "https://geology.utah.gov/apps/pubs_landing/data.php"
 # Optional pre-built manifest (inventory.py); else fall back to data.php per series.
 MANIFEST = os.environ.get("GEOLMAP_MANIFEST", "")
-# One placed source raster per map, at {SOURCE_RASTERS}/{series_id}.tif in the warehouse bucket. When a
-# map has one, it is the plate; the publication's zip then supplies only the units.
-SOURCE_RASTERS = os.environ.get("GEOLMAP_SOURCE_RASTERS", "geolmap/sources/30x60")
 SKIP_EXISTING = os.environ.get("SKIP_EXISTING", "1") != "0"
 THUMBS = os.environ.get("THUMBS", "1") != "0"
 # deflate = lossless master: the plate is the archival source of truth (and re-tiled downstream
@@ -192,7 +189,9 @@ def _report_derive_skipped(used_shp: str | None) -> None:
             continue                                  # this is what we used
         if kind == "shapefile" and name == used_shp:
             continue
-        if kind == "pdf":
+        if tier == "source" and kind in ("pdf", "geotiff"):
+            reason = "superseded by source raster"
+        elif kind == "pdf":
             g = e.get("georeferenced")
             # a georeferenced PDF only reaches skipped when its render failed (a successful one
             # becomes used.plate and later candidates are never probed)
@@ -463,6 +462,8 @@ def ensure_rgb(tif):
     from rasterio.enums import ColorInterp
     with rasterio.open(tif) as ds:
         n, ci = ds.count, ds.colorinterp
+    if ColorInterp.palette in ci:
+        raise ValueError(f"{tif}: palette plate reached ensure_rgb; expand it before the warp")
     if ci[:3] == (ColorInterp.red, ColorInterp.green, ColorInterp.blue):
         return tif
     if ColorInterp.gray in ci:
@@ -521,9 +522,8 @@ def _lineart_to_byte(path, work) -> str:
 
 
 def _palette_to_rgba(path, work) -> str:
-    """Expand a color table to RGBA so the warp resamples colors. Resampling the index band blends
-    index numbers, and the blended index points at an unrelated table entry. A VRT, so the expansion
-    costs no RAM-backed /tmp."""
+    """Expand a color table to RGBA (as a VRT, so no /tmp) so the warp blends colors, not index
+    numbers that point at unrelated table entries."""
     out = os.path.join(work, "plate.rgba.vrt")
     run(["gdal_translate", "-q", "-of", "VRT", "-expand", "rgba", str(path), out])
     return out
@@ -634,7 +634,7 @@ def prepare_plates(zip_paths, work, units_only=False):
             if _shp:
                 stem = re.sub(r"\.shp$", "", _shp, flags=re.I)
                 want += [n for n in names if re.sub(r"\.[^.]+$", "", n) == stem]
-            if _gtif:
+            if _gtif and not units_only:
                 gstem = re.sub(r"\.[^.]+$", "", _gtif)
                 want += [n for n in names if n.startswith(gstem + ".")
                          and n.lower().endswith((".tfwx", ".tfw", ".wld", ".aux.xml", ".prj"))]
@@ -644,7 +644,6 @@ def prepare_plates(zip_paths, work, units_only=False):
     shp_path = os.path.join(work, shp) if shp else None
     _report("used", units_shp=shp)
     if units_only:
-        _report_derive_skipped(shp)
         return None, shp_path
     rendered = _render_geospatial_pdf(pdf_candidates, work)
     if rendered:
@@ -694,7 +693,7 @@ def prepare_plates(zip_paths, work, units_only=False):
 
 def source_raster(series_id) -> str | None:
     """The map's source raster object in the warehouse bucket, or None when it has none."""
-    obj = f"{SOURCE_RASTERS.rstrip('/')}/{series_id}.tif"
+    obj = identity.Pub(series_id).source_raster_object
     return obj if gcs.exists(obj) else None
 
 
@@ -702,7 +701,7 @@ def _source_plate(obj, work):
     """Download the map's source raster: already placed in its own CRS, so it warps as is."""
     local = os.path.join(work, "plate.source.tif")
     hlog(f"downloading source raster {obj}", step="download")
-    gcs.download_to_file(obj, local)
+    gcs.download(obj, local)
     _report(tier="source", color_source_sat=_source_saturation(local))
     _report("used", plate={"name": obj, "dpi": None})
     return local
@@ -879,6 +878,11 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
         plate, shp = prepare_plates(zip_paths, work, units_only=bool(source))
         if source:
             plate = _source_plate(source, work)
+            if not _gdalinfo(plate).get("coordinateSystem", {}).get("wkt"):
+                hlog(f"FAIL source raster {source} has no CRS", step="plate",
+                     level="ERROR", category="attention", err=True)
+                return "fail:source_no_crs"
+            _report_derive_skipped(shp)
         if not plate:
             hlog("FAIL no plate (had a bundle but no usable raster)", step="plate",
                  level="ERROR", category="attention", err=True)
@@ -1108,7 +1112,8 @@ def main() -> int:
         else:
             tiers[r.get("tier") or "none"] += 1
     hlog(f"report: {tiers['geo-pdf']} geo-pdf (z17), {tiers['geotiff']} geotiff (z16), "
-         f"{tiers['source']} source raster, {tiers['none']} no-source, {skipped} skipped across {len(_run_report)} pub(s) → {report_path}",
+         f"{tiers['source']} source raster, {tiers['none']} no-source, {skipped} skipped "
+         f"across {len(_run_report)} pub(s) → {report_path}",
          step="report")
 
     hlog(f"run complete: {tally['ok']} ok, {tally['expected']} expected (skip / PDF-only), "

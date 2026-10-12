@@ -916,7 +916,7 @@ def test_palette_plate_keeps_its_colors_through_the_warp(monkeypatch, tmp_path):
 
 # --- source rasters ------------------------------------------------------------------------------
 
-SOURCES = "geolmap/sources/30x60"
+SOURCES = identity.SOURCES_PREFIX
 
 
 def test_source_raster_finds_the_map_by_series_id():
@@ -984,6 +984,38 @@ def test_a_source_raster_is_warped_and_published(monkeypatch, tmp_path):
     with rasterio.open(published) as ds:
         assert ds.crs.to_epsg() == 3857
         assert ds.read(1).max() == 200
+
+
+def test_a_source_raster_without_a_crs_fails_loud(monkeypatch, tmp_path):
+    """A hand-placed raster missing its CRS stops the map rather than warping it to the wrong place."""
+    import numpy as np
+    import obstore as obs
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+    src = str(tmp_path / "nocrs.tif")
+    with rasterio.open(src, "w", driver="GTiff", height=8, width=8, count=3, dtype="uint8",
+                       transform=from_origin(499544, 4136889, 2, 2)) as ds:
+        ds.write(np.zeros((3, 8, 8), "uint8"))
+    obj = f"{SOURCES}/OFR-443DM.tif"
+    obs.put(harvest.gcs._store(), obj, open(src, "rb").read())
+    harvest._report_begin("OFR-443DM")
+    monkeypatch.setattr(harvest.gcs, "upload_write_once",
+                        lambda *a, **k: pytest.fail("a raster with no CRS must not publish"))
+
+    assert _harvest_attempt(identity.Pub(series_id="OFR-443DM"), [], source=obj) == "fail:source_no_crs"
+
+
+def test_the_report_says_a_source_raster_superseded_the_zip_plates(monkeypatch):
+    from ugs_warehouse.pubs import harvest
+    harvest._report_begin("M-294DM")
+    harvest._report_add("found", {"name": "M-294DM_RushValley30x60_Geotiff.tif", "kind": "geotiff"})
+    harvest._report_add("found", {"name": "M-294DM_Plate1.pdf", "kind": "pdf"})
+    harvest._report(tier="source")
+    harvest._report("used", plate={"name": f"{SOURCES}/M-294DM.tif", "dpi": None})
+    harvest._report_derive_skipped(None)
+    assert {e["reason"] for e in harvest._pub_report["skipped"]} == {"superseded by source raster"}
 
 
 def test_main_counts_a_source_raster_in_the_tier_roll_up(monkeypatch, tmp_path, capsys):

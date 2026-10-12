@@ -177,10 +177,8 @@ def _vsigs(sid: str) -> str:
 
 
 def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
-    """`sids` with reissues first (see `_is_reissue`), then ascending by `pub_year`. `gdalbuildvrt`
-    gives the LAST source priority on overlap, so the newest original map draws on top, which matters
-    for `--editions all` (every edition stacked) and the pub_year-tie case. An unparseable or missing
-    year sorts to 0 (bottom); ties (including two unparseable years) break on sid for a stable order."""
+    """`sids` with reissues first (see `_is_reissue`), then by `pub_year`, missing years lowest and ties
+    by sid. `gdalbuildvrt` draws the LAST source on top, so the newest original map wins an overlap."""
     def _yr(s: str) -> int:
         y = (by_sid.get(s, {}).get("pub_year") or "").strip()
         return int(y) if len(y) == 4 and y.isdigit() else 0

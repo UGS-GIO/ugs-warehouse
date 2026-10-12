@@ -971,7 +971,7 @@ def test_deprecated_edition_emits_a_latest_version_link():
 
 def test_pub_collection_id_is_safe_in_a_path():
     """The id is a directory name and the tail of every link to the collection, so a space in it
-    made the collection's own self link, its item links and the ISO href unresolvable."""
+    made the collection's own self link, and its item links unresolvable."""
     assert pubs_sink.item_id_for("Geologic map of Utah") == "Geologic-map-of-Utah"
     assert pubs_sink.item_id_for("557.92 UT1CO") == "557.92-UT1CO"
     # Already safe ids are untouched, trailing punctuation included: `~` and `-` are unreserved.

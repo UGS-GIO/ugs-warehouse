@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "postbuild": "node scripts/check-precache.mjs",
+    "postbuild": "node scripts/check-precache.mjs && node scripts/check-overrides.mjs",
     "preview": "vite preview",
     "lint": "eslint .",
     "test": "vitest run",
@@ -91,6 +91,10 @@
   "overrides": {
     "@loaders.gl/compression": {
       "fflate": "0.7.5"
+    },
+    "texture-compressor": {
+      "image-size": "2.0.3",
+      "argparse": "2.0.1"
     }
   }
 }

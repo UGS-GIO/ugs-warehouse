@@ -144,12 +144,16 @@ def test_an_undated_publication_has_a_valid_flagged_interval():
     """STAC has no "unknown" date: a pub with no year gets the source's interval and a flag."""
     from ugs_warehouse.pubs import sink_stac as pubs_sink
 
-    item = _drop_private(pubs_sink.build_item(
+    coll, items = pubs_sink.build_publication(
         {"series_id": "MD-134-6", "series": "MD", "pub_year": "",
-         "pub_name": "List of Beaver County Properties"}, [], override={}))
-    props = item["properties"]
+         "pub_name": "List of Beaver County Properties"}, [], override={}, has_units=True)
+    start, end = coll["extent"]["temporal"]["interval"][0]
+    assert start == pubs_sink.EARLIEST_RECORD and end > start
+    assert coll["ugs:date_unknown"] is True
+    _validate(_drop_private(coll))
+    props = items[0]["properties"]
     assert props["datetime"] is None
     assert props["start_datetime"] == pubs_sink.EARLIEST_RECORD
     assert props["end_datetime"] > props["start_datetime"]
     assert props["ugs:date_unknown"] is True
-    _validate(item)
+    _validate(_drop_private(items[0]))

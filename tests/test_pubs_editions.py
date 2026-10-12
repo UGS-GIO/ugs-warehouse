@@ -129,7 +129,7 @@ def test_quad_by_sid_sources_quad_from_footprints_not_feed():
     assert g["GQ-852"]["successor_href"] is not None
 
 
-def test_build_catalog_wires_edition_into_build_item():
+def test_build_catalog_wires_edition_into_build_publication():
     from ugs_warehouse.pubs.ingest import build_catalog
 
     with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
@@ -145,9 +145,10 @@ def test_build_catalog_wires_edition_into_build_item():
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[
              ("M-1", "", "geomaps_24k", ""), ("M-2", "", "geomaps_24k", "7_5_Quads")]), \
-         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.pubs.sink_stac.build_publication", return_value=({}, [])) as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.stac.attach_collection_iso"), \
+         patch("ugs_warehouse.core.stac.write_collection"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):

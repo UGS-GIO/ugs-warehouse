@@ -69,7 +69,7 @@ def _contents_by_sid() -> dict[str, list[dict]]:
 
 def _overrides_by_sid() -> dict[str, dict]:
     """{SID: override doc} from the hand-authored metadata overrides (overrides/{ID}.json). Preloaded
-    once (operators backfill only a handful) so build_item doesn't do a GCS read per pub."""
+    once (operators backfill only a handful) so build_publication doesn't do a GCS read per pub."""
     out: dict[str, dict] = {}
     for path in gcs.list_paths(config.OVERRIDES_PREFIX):
         if not path.endswith(".json"):
@@ -108,7 +108,7 @@ def _mirrored_files() -> set[str]:
     """Object paths of the publication source files we hold a copy of (written by pubs/mirror.py).
 
     One listing, not a HEAD per asset: the object path IS the legacy URL's path (#120), so plain
-    set membership is everything `build_item` needs to decide which assets serve from our CDN.
+    set membership is everything `build_publication` needs to decide which assets serve from our CDN.
     """
     return set(gcs.list_paths(identity.PUB_FILES_PREFIX))
 
@@ -132,7 +132,7 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
     "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2}}}} from
     the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
     — the AUTHORITATIVE record of which extracted layers are spatial vs non-spatial GeMS companion
-    tables, so build_item doesn't have to guess a layer's kind from its name. `columns` holds each
+    tables, so build_publication doesn't have to guess a layer's kind from its name. `columns` holds each
     layer's recorded schema and `layers` its row count, bbox and CRS; manifests written before they
     were recorded have none (empty maps / None values)."""
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
@@ -249,21 +249,24 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         up = sid.upper()
         footprint, cog_fields = heads.get(up, (None, None))
         geom, bbox, fp_source = footprint or (None, None, None)
-        manifest = vector_manifests.get(up, {"spatial": [], "tables": []})
-        item = sink_stac.build_item(
+        manifest = vector_manifests.get(up, {"spatial": [], "tables": [], "layers": {}})
+        coll, items = sink_stac.build_publication(
             p, att.get(up, []), geom=geom, bbox=bbox, fp_source=fp_source,
             has_cog=up in cogs, cog_fields=cog_fields, has_units=up in units, has_thumb=up in thumbs,
             has_cover=up in covers, has_3d=up in threed_ids, classes_3d=threed_classes.get(up),
             vector_layers=manifest["spatial"],
             companion_tables=[{"label": t, "columns": manifest.get("columns", {}).get(t)}
                               for t in manifest["tables"]],
+            layers=manifest.get("layers", {}),
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
             edition=edition_graph.get(sid),
             mosaic_tier=tier_by_sid.get(up),
         )
-        stac.attach_renders(item)  # ugs-styles GL style -> render extension (graceful if none)
-        stac.attach_iso(item)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
-        stac.write_item(item)
+        for it in items:
+            stac.attach_renders(it)  # ugs-styles GL style -> render extension (graceful if none)
+            stac.write_item(it)
+        stac.attach_collection_iso(coll)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
+        stac.write_collection(coll, children=len(items))
         return True
 
     stac.styles.warm()  # prime the styles manifest once before the pool (64 threads share it)

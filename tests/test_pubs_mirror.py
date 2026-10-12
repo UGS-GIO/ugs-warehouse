@@ -64,15 +64,15 @@ def test_plan_skips_pubs_with_no_downloadable_url():
 
 
 def _item(mirrored):
-    return sink_stac.build_item(
-        # full_citation set so build_item takes it as the description instead of reaching into the
-        # bucket for the previously-published one (preserve-on-empty).
+    return sink_stac.build_publication(
+        # full_citation set so it is the description instead of reaching into the bucket for the
+        # previously-published one (preserve-on-empty).
         {"series_id": "OFR-593", "pub_name": "Test", "pub_year": "2015", "full_citation": "Test 2015",
          "pub_url": "open_file_reports/OFR-593/OFR-593.pdf"},
         [{"series_id": "OFR-593", "extra_data": "GeoTIFF zip",
           "pub_url": "geotifs/100k/RushValley.zip"}],
         mirrored=mirrored,
-    )
+    )[0]
 
 
 def test_mirrored_asset_serves_from_the_cdn_and_keeps_the_publisher_copy():

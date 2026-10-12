@@ -7,7 +7,7 @@ from ugs_warehouse.pubs import sink_stac
 @pytest.fixture(autouse=True)
 def _no_gcs(monkeypatch):
     """The description fallback reads the prior published value from GCS; unit tests stay offline."""
-    monkeypatch.setattr(stac, "prior_property", lambda *a, **k: None)
+    monkeypatch.setattr(stac, "prior_collection_field", lambda *a, **k: None)
 
 
 FOOT = {"type": "Polygon", "coordinates": [[[-112.5, 40.5], [-112.0, 40.5], [-112.0, 41.0],

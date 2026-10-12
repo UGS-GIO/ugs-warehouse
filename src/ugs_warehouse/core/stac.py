@@ -288,6 +288,15 @@ def prior_property(collection_path: str, item_id: str, prop: str):
         return None
 
 
+def prior_collection_field(collection_path: str, field: str):
+    """A field of the published collection.json at `collection_path`, or None when there is none
+    yet. Lets a reingest keep a value the source no longer carries (preserve-on-empty)."""
+    try:
+        return json.loads(gcs.get_bytes(collection_object_path(collection_path)).decode()).get(field)
+    except FileNotFoundError:
+        return None
+
+
 def prior_file_fields(collection_path: str, item_id: str) -> dict[str, dict]:
     """`{asset_key: {file:size, file:checksum}}` from the currently-published item, or `{}`.
 

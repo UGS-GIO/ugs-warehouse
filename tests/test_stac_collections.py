@@ -110,3 +110,11 @@ def test_attach_collection_iso_warns_when_the_extent_is_open(monkeypatch, capsys
                          "temporal": {"interval": [[None, None]]}})
     stac.attach_collection_iso(coll)
     assert "no temporal extent" in capsys.readouterr().err
+
+
+def test_prior_collection_field_reads_the_published_collection(monkeypatch):
+    path = stac.collection_object_path("ugs-publications/OFR/OFR-1")
+    monkeypatch.setattr(stac.gcs, "get_bytes",
+                        lambda p: json.dumps({"description": "Old citation."}).encode() if p == path else (_ for _ in ()).throw(FileNotFoundError(p)))
+    assert stac.prior_collection_field("ugs-publications/OFR/OFR-1", "description") == "Old citation."
+    assert stac.prior_collection_field("ugs-publications/OFR/OFR-2", "description") is None

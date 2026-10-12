@@ -10,19 +10,26 @@ from ugs_warehouse.pubs import sink_stac as pubs_sink
 from ugs_warehouse.pubs.sink_stac import collection_group
 
 
-def test_pub_items_author_an_iso_topic_category():
+def _publication(p, **kw):
+    """A publication's (collection, items), offline."""
+    with patch("ugs_warehouse.core.stac.prior_collection_field", return_value=None):
+        return pubs_sink.build_publication(p, [], **kw)
+
+
+def test_pub_collections_author_an_iso_topic_category():
     """Pubs share core/iso.py with the vector path, which omits topicCategory when uncurated (#53).
 
     Pubs have no schema_registry row, so without an authored value every publication's ISO record
     would silently lose a mandatory element. A UGS publication is our own product — asserting the
     category is a statement about our own work, not a guess about someone else's data.
     """
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS"}, [])
+    coll, _ = _publication({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS"})
+    assert coll["ugs:topic_category"] == "geoscientificInformation"
 
-    assert item["properties"]["ugs:topic_category"] == "geoscientificInformation"
-    assert "<gmd:topicCategory>" in iso.stac_to_iso19139(item)
+    views = []
+    with patch("ugs_warehouse.core.stac._put_iso", side_effect=lambda view, path: views.append(view) or {}):
+        stac.attach_collection_iso(coll)
+    assert "<gmd:topicCategory>" in iso.stac_to_iso19139(views[0])
 
 
 def test_collection_group_routes_md_external_and_ugs():
@@ -456,9 +463,10 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
-         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.pubs.sink_stac.build_publication", return_value=({}, [])) as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.stac.attach_collection_iso"), \
+         patch("ugs_warehouse.core.stac.write_collection"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as mock_refresh:
@@ -498,9 +506,10 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows",
                side_effect=RuntimeError("footprints missing")), \
-         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.pubs.sink_stac.build_publication", return_value=({}, [])) as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.stac.attach_collection_iso"), \
+         patch("ugs_warehouse.core.stac.write_collection"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
@@ -625,20 +634,16 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
     assert bad_path in capsys.readouterr().err  # but named on stderr, not silently dropped
 
 
-def test_build_catalog_wires_vector_layers_and_companion_tables():
-    """ALL-5913 task 3: build_catalog must discover each pub's extracted vector layers + companion
-    tables (per pubs/vectors.py's manifest) and pass them into build_item — otherwise the assets
-    task 2 wired up in build_item never actually get attached to a real item."""
+def test_build_catalog_writes_a_collection_and_items_per_publication():
     from unittest.mock import patch
 
     from ugs_warehouse.pubs.ingest import build_catalog
 
-    dmu_cols = [{"name": "MapUnit", "type": "string"}]
-    manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults"],
-                          "tables": ["geo__DescriptionOfMapUnits"],
-                          "columns": {"geo__DescriptionOfMapUnits": dmu_cols}}}
-
-    with patch("ugs_warehouse.pubs.source.read_pubs") as mock_read, \
+    manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults"], "tables": ["geo__DescriptionOfMapUnits"],
+                          "columns": {"geo__DescriptionOfMapUnits": [{"name": "MapUnit", "type": "string"}]},
+                          "layers": {}}}
+    written_items, written_colls = [], []
+    with patch("ugs_warehouse.pubs.source.read_pubs", return_value=[{"series_id": "DS-8"}, {"series_id": "OFR-12"}]), \
          patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
          patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._contents_by_sid", return_value={}), \
@@ -650,28 +655,19 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
-         patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
+         patch("ugs_warehouse.core.stac.prior_collection_field", return_value=None), \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
+         patch("ugs_warehouse.core.stac.attach_collection_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
-         patch("ugs_warehouse.core.stac.write_item"), \
+         patch("ugs_warehouse.core.stac.write_item", side_effect=written_items.append), \
+         patch("ugs_warehouse.core.stac.write_collection",
+               side_effect=lambda c, children: written_colls.append((c, children))), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
+        assert build_catalog(skip_refresh=True) == 2
 
-         mock_read.return_value = [
-             {"series_id": "DS-8"},
-             {"series_id": "OFR-12"},
-         ]
-
-         count = build_catalog(skip_refresh=True)
-
-         assert count == 2
-         by_sid = {c.args[0]["series_id"]: c.kwargs for c in mock_build.call_args_list}
-         assert by_sid["DS-8"]["vector_layers"] == ["geo__ContactsAndFaults"]
-         assert by_sid["DS-8"]["companion_tables"] == [
-             {"label": "geo__DescriptionOfMapUnits", "columns": dmu_cols}]
-         # a series absent from the manifest map still gets empty lists, never None/KeyError.
-         assert by_sid["OFR-12"]["vector_layers"] == []
-         assert by_sid["OFR-12"]["companion_tables"] == []
+    colls = {c["id"]: n for c, n in written_colls}
+    assert colls == {"DS-8": 2, "OFR-12": 0}  # OFR-12 has no data: a collection with no items
+    assert {it["id"] for it in written_items} == {"DS-8_geo__ContactsAndFaults", "DS-8_geo__DescriptionOfMapUnits"}
 
 
 def test_list_series(capsys):
@@ -716,154 +712,150 @@ def test_pub_keywords_are_a_list_and_reach_the_iso_record():
     that string made core/iso.py iterate it per character: every pub's ISO record carried a
     <gmd:keyword> for each letter (the same fault #64 fixed on the vector path)."""
     raw = "Geology; Summit County; Maps\nGeology; Tooele, Utah; Maps"
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS",
-                                     "keywords": raw}, [])
+    coll, _ = _publication({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS", "keywords": raw})
 
     # Deduped, and a comma inside a heading stays inside it.
-    assert item["properties"]["keywords"] == ["Geology", "Summit County", "Maps", "Tooele, Utah"]
-    record = iso.stac_to_iso19139(item)
+    assert coll["keywords"] == ["Geology", "Summit County", "Maps", "Tooele, Utah"]
+    views = []
+    with patch("ugs_warehouse.core.stac._put_iso", side_effect=lambda view, path: views.append(view) or {}):
+        stac.attach_collection_iso(coll)
+    record = iso.stac_to_iso19139(views[0])
     assert "<gmd:keyword><gco:CharacterString>Summit County</gco:CharacterString></gmd:keyword>" in record
     assert "<gco:CharacterString>G</gco:CharacterString>" not in record
 
 
-def test_pub_item_omits_the_fields_the_source_left_empty():
-    """STAC requires a non-empty description, and an empty string says nothing an absent key does
-    not. A pub with no citation and no subjects must carry neither field."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS",
-                                     "keywords": "  ; \n", "full_citation": ""}, [])
+def test_pub_collection_omits_the_fields_the_source_left_empty():
+    """An empty string says nothing an absent key does not. A pub with no subjects must carry no
+    keywords, and one with no citation falls back to its title for the required description."""
+    coll, _ = _publication({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS",
+                            "keywords": "  ; \n", "full_citation": ""})
 
-    props = item["properties"]
-    for absent in ("description", "keywords", "ugs:scale", "ugs:author"):
-        assert absent not in props, absent
-    assert props["ugs:series"] == "DS"   # a value the source did give still lands
+    for absent in ("keywords", "ugs:scale", "ugs:author"):
+        assert absent not in coll, absent
+    assert coll["description"] == "Test Pub"
+    assert coll["ugs:series"] == "DS"   # a value the source did give still lands
 
 
-def test_pub_item_emits_edition_version_and_supersession_links():
+def test_pub_collection_emits_edition_version_and_supersession_links():
     edition = {
         "version": "2005", "deprecated": True,
         "predecessor_href": None,
         "successor_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
-                          "ugs-publications/M/M-233/M-233.json",
+                          "ugs-publications/M/M-233/collection.json",
     }
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item(
-            {"series_id": "M-159", "pub_name": "Old Ed", "series": "M", "pub_year": "1980"},
-            [], edition=edition,
-        )
-    assert item["properties"]["version"] == "2005"
-    assert item["properties"]["deprecated"] is True
-    assert stac.VERSION_EXT in item["stac_extensions"]
-    succ = [lnk for lnk in item["links"] if lnk["rel"] == "successor-version"]
-    assert succ and succ[0]["href"].endswith("/M-233/M-233.json")
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "predecessor-version"]
+    coll, _ = _publication({"series_id": "M-159", "pub_name": "Old Ed", "series": "M", "pub_year": "1980"},
+                           edition=edition)
+    assert coll["version"] == "2005"
+    assert coll["deprecated"] is True
+    assert stac.VERSION_EXT in coll["stac_extensions"]
+    succ = [lnk for lnk in coll["links"] if lnk["rel"] == "successor-version"]
+    assert succ and succ[0]["href"].endswith("/M-233/collection.json")
+    assert succ[0]["type"] == "application/json"
+    assert not [lnk for lnk in coll["links"] if lnk["rel"] == "predecessor-version"]
 
 
 def _build(p, **kw):
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        return pubs_sink.build_item(p, [], **kw)
+    return _publication(p, **kw)
+
+
+def _plate_links(items):
+    return next(it for it in items if it["id"].endswith("_plate"))["links"]
 
 
 def test_cog_map_links_to_its_portal_layer_mosaic():
     # The tier is the mosaic's identity, not pub metadata: a COG map carries no `ugs:scale_tier`,
-    # only its raw `ugs:scale`, and reaches its tier via a `rel:related` link to the mosaic.
-    item = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"},
-                  has_cog=True, mosaic_tier="24k")
-    assert "ugs:scale_tier" not in item["properties"]
-    assert item["properties"]["ugs:scale"] == "1:24,000"   # raw scale stays as per-item metadata
-    rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    # only its raw `ugs:scale`, and reaches its tier via a `rel:related` link from its plate Item.
+    coll, items = _build({"series_id": "GQ-968", "series": "GQ", "pub_scale": "1:24,000"},
+                         has_cog=True, mosaic_tier="24k")
+    assert "ugs:scale_tier" not in coll
+    assert coll["ugs:scale"] == "1:24,000"   # raw scale stays as per-publication metadata
+    rel = [lnk for lnk in _plate_links(items) if lnk["rel"] == "related"]
     assert len(rel) == 1
     assert rel[0]["href"].endswith("/ugs-geologic-maps/geologic-maps-24k/geologic-maps-24k.json")
 
     # A 1:62,500 30' x 60' map is in the intermediate layer, whatever its scale says.
-    item = _build({"series_id": "M-254DM", "series": "M", "pub_scale": "1:62,500"},
-                  has_cog=True, mosaic_tier="100k")
-    rel = [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    _, items = _build({"series_id": "M-254DM", "series": "M", "pub_scale": "1:62,500"},
+                      has_cog=True, mosaic_tier="100k")
+    rel = [lnk for lnk in _plate_links(items) if lnk["rel"] == "related"]
     assert len(rel) == 1 and rel[0]["href"].endswith("/geologic-maps-100k/geologic-maps-100k.json")
     assert "intermediate-scale" in rel[0]["title"]
 
     # COG map in no tiered layer (irregular, or no footprint): no mosaic, so no member link.
-    item = _build({"series_id": "M-1", "series": "M", "pub_scale": "1:50,000"},
-                  has_cog=True, mosaic_tier=None)
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    _, items = _build({"series_id": "M-1", "series": "M", "pub_scale": "1:50,000"},
+                      has_cog=True, mosaic_tier=None)
+    assert not [lnk for lnk in _plate_links(items) if lnk["rel"] == "related"]
 
-    # non-COG pub: not stitched into any mosaic, so no member link.
-    item = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"},
-                  has_cog=False, mosaic_tier="500k")
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
+    # non-COG pub: no plate Item, so nothing to stitch into a mosaic.
+    _, items = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"},
+                      has_cog=False, mosaic_tier="500k")
+    assert not items
 
 
 def test_deprecated_edition_drops_the_mosaic_related_link():
     """A deprecated edition (superseded per the quad edition graph, e.g. GQ-852 superseded by
     M-296DM) must NOT carry a `related` link into the mosaic — the `--editions current` default
     drops superseded editions before stitching, so the link would otherwise claim membership in a
-    mosaic whose own `derived_from` omits it (catalog self-contradiction, ALL-5954 final review)."""
-    item = _build({"series_id": "GQ-852", "series": "GQ", "pub_scale": "1:24,000"},
-                  has_cog=True, mosaic_tier="24k", edition={"deprecated": True, "version": "1971"})
-    assert not [lnk for lnk in item["links"]
-               if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+    mosaic whose own `derived_from` omits it (catalog self-contradiction)."""
+    def mosaic_links(**kw):
+        _, items = _build(**kw)
+        return [lnk for lnk in _plate_links(items)
+                if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
+
+    assert not mosaic_links(p={"series_id": "GQ-852", "series": "GQ", "pub_scale": "1:24,000"},
+                            has_cog=True, mosaic_tier="24k",
+                            edition={"deprecated": True, "version": "1971"})
 
     # no edition info at all -> not known to be superseded -> still current -> keeps the link.
-    item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
-                  has_cog=True, mosaic_tier="24k", edition=None)
-    rel = [lnk for lnk in item["links"]
-          if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
-    assert len(rel) == 1
+    assert len(mosaic_links(p={"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
+                            has_cog=True, mosaic_tier="24k", edition=None)) == 1
 
     # explicitly current (not deprecated) -> keeps the link too.
-    item = _build({"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
-                  has_cog=True, mosaic_tier="24k", edition={"deprecated": False, "version": "2022"})
-    rel = [lnk for lnk in item["links"]
-          if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
-    assert len(rel) == 1
+    assert len(mosaic_links(p={"series_id": "M-296DM", "series": "M", "pub_scale": "1:24,000"},
+                            has_cog=True, mosaic_tier="24k",
+                            edition={"deprecated": False, "version": "2022"})) == 1
 
 
 def test_deprecated_edition_emits_a_latest_version_link():
-    """ALL-5954 Clinton review, FIX 3: a deprecated item must link forward to the CURRENT edition
-    (not just its immediate successor) via the Versioning Indicators `latest-version` rel — so a
-    reader landing on an old edition can jump straight to the newest one."""
+    """A deprecated publication must link forward to the CURRENT edition (not just its immediate
+    successor) via the Versioning Indicators `latest-version` rel — so a reader landing on an old
+    edition can jump straight to the newest one."""
     edition = {
         "version": "1971", "deprecated": True,
         "predecessor_href": None,
         "successor_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
-                          "ugs-publications/OFR/OFR-677/OFR-677.json",
+                          "ugs-publications/OFR/OFR-677/collection.json",
         "latest_href": "https://maps-assets.geology.utah.gov/warehouse/stac/"
-                       "ugs-publications/M/M-296DM/M-296DM.json",
+                       "ugs-publications/M/M-296DM/collection.json",
     }
-    item = _build({"series_id": "GQ-852", "pub_name": "Old Ed", "series": "GQ", "pub_year": "1971"},
-                  edition=edition)
-    latest = [lnk for lnk in item["links"] if lnk["rel"] == "latest-version"]
+    coll, _ = _build({"series_id": "GQ-852", "pub_name": "Old Ed", "series": "GQ", "pub_year": "1971"},
+                     edition=edition)
+    latest = [lnk for lnk in coll["links"] if lnk["rel"] == "latest-version"]
     assert len(latest) == 1
-    assert latest[0]["href"].endswith("/M-296DM/M-296DM.json")
+    assert latest[0]["href"].endswith("/M-296DM/collection.json")
+    assert latest[0]["type"] == "application/json"
 
     # the current (latest) edition itself carries no latest-version link (no self-link).
-    item = _build({"series_id": "M-296DM", "pub_name": "New Ed", "series": "M", "pub_year": "2022"},
-                  edition={"version": "2022", "deprecated": False, "predecessor_href": None,
-                          "successor_href": None, "latest_href": None})
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "latest-version"]
+    coll, _ = _build({"series_id": "M-296DM", "pub_name": "New Ed", "series": "M", "pub_year": "2022"},
+                     edition={"version": "2022", "deprecated": False, "predecessor_href": None,
+                              "successor_href": None, "latest_href": None})
+    assert not [lnk for lnk in coll["links"] if lnk["rel"] == "latest-version"]
 
 
-def test_pub_item_id_is_safe_in_a_path():
-    """The id is a directory name and the tail of every link to the item, so a space in it made
-    the item's own self link, its collection's item link and the ISO href unresolvable."""
+def test_pub_collection_id_is_safe_in_a_path():
+    """The id is a directory name and the tail of every link to the collection, so a space in it
+    made the collection's own self link, its item links and the ISO href unresolvable."""
     assert pubs_sink.item_id_for("Geologic map of Utah") == "Geologic-map-of-Utah"
     assert pubs_sink.item_id_for("557.92 UT1CO") == "557.92-UT1CO"
     # Already safe ids are untouched, trailing punctuation included: `~` and `-` are unreserved.
     assert pubs_sink.item_id_for("OF-70-234~2") == "OF-70-234~2"
     assert pubs_sink.item_id_for("PI-") == "PI-"
 
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "Geologic map of Utah", "series": "GEOLOGIC"}, [])
+    coll, _ = _publication({"series_id": "Geologic map of Utah", "series": "GEOLOGIC"})
 
-    assert item["id"] == "Geologic-map-of-Utah"
-    assert item["properties"]["ugs:series_id"] == "Geologic map of Utah"  # the source string survives
-    assert all(" " not in lk["href"] for lk in item["links"])
+    assert coll["id"] == "Geologic-map-of-Utah"
+    assert coll["ugs:series_id"] == "Geologic map of Utah"  # the source string survives
+    assert coll["_collection_path"].endswith("/Geologic-map-of-Utah")
+    assert all(" " not in lk["href"] for lk in coll["links"])
 
 
 def test_pub_href_drops_undefined_and_upgrades_ugspub_to_https():
@@ -904,78 +896,35 @@ def test_cog_assets_keep_the_cloud_optimized_media_type():
     """`.tif` maps to image/tiff for the publisher's scans. A COG we produced sets its type on the
     asset directly, so the mapping must not reach it — the profile parameter is what a client reads
     to know it can range-request the file."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item({"series_id": "M-100", "series": "M"}, [], has_cog=True)
+    _, items = _publication({"series_id": "M-100", "series": "M"}, has_cog=True)
 
-    assert item["assets"]["cog"]["type"] == pubs_sink.COG_MIME
-    assert "cloud-optimized" in item["assets"]["cog"]["type"]
-
-
-def test_pub_item_exposes_all_vector_layers_and_companion_tables():
-    """pubs/vectors.py extracts every GDB layer and GeMS companion table to Parquet on GCS —
-    ALL-5913 task 2 wants each one surfaced as its own STAC asset, not just the single hardcoded
-    `units` layer, so a client can discover and fetch any extracted layer/table by name."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item(
-            {"series_id": "M-100", "series": "M"}, [],
-            vector_layers=["gems__ContactsAndFaults", "gems__MapUnitPolys"],
-            companion_tables=[{"label": "gems__DescriptionOfMapUnits",
-                               "columns": [{"name": "MapUnit"}, {"name": "Age"}]}],
-        )
-    a = item["assets"]
-    assert a["gems__ContactsAndFaults"]["href"].endswith("geolmap/vectors/M-100/gems__ContactsAndFaults.parquet")
-    assert a["gems__ContactsAndFaults"]["type"] == pubs_sink.PARQUET_MIME
-    assert a["gems__ContactsAndFaults"]["roles"] == ["data"]
-    assert "gems__MapUnitPolys" in a  # the 2nd vector_layers entry produced an asset too
-    assert a["gems__DescriptionOfMapUnits"]["href"].endswith(
-        "geolmap/vectors/M-100/gems__DescriptionOfMapUnits.parquet")
-    assert a["gems__DescriptionOfMapUnits"]["type"] == pubs_sink.PARQUET_MIME
-    assert a["gems__DescriptionOfMapUnits"]["roles"] == ["data"]
-    assert a["gems__DescriptionOfMapUnits"]["table:columns"] == [{"name": "MapUnit"}, {"name": "Age"}]
-    assert pubs_sink.stac.TABLE_EXT in item["stac_extensions"]
+    plate = next(it for it in items if it["id"].endswith("_plate"))
+    assert plate["assets"]["cog"]["type"] == pubs_sink.COG_MIME
+    assert "cloud-optimized" in plate["assets"]["cog"]["type"]
 
 
-def test_vector_layer_label_colliding_with_a_reserved_key_keeps_both_assets(capsys):
-    """ALL-5913 final-review must-fix: a bare shapefile can produce a label equal to a reserved
-    asset key — `units.shp` -> `units` would otherwise silently overwrite the canonical `units`
-    GeoParquet asset (`assets[label] = ...` clobbers in place, no trace). Both must survive under
-    distinct keys, and the collision must be visible on stderr rather than a link just vanishing.
-    """
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item(
-            {"series_id": "M-100", "series": "M"}, [],
-            has_units=True, vector_layers=["units"],
-        )
-    a = item["assets"]
-    # the canonical units GeoParquet asset is untouched
-    assert a["units"]["href"].endswith("geolmap/units/M-100/M-100.units.parquet")
-    assert a["units"]["title"] == "Geologic unit polygons (GeoParquet)"
-    # the extracted vector layer survives under a distinct key instead of being dropped
-    assert a["vector_units"]["href"].endswith("geolmap/vectors/M-100/units.parquet")
-    assert a["vector_units"]["type"] == pubs_sink.PARQUET_MIME
-    err = capsys.readouterr().err
-    assert "units" in err  # the collision was named on stderr, not silent
-
-
-def test_duplicate_vector_layer_labels_keep_both_assets(capsys):
-    """Two shapefiles sharing a basename (different sub-folders of the same GIS bundle) produce
-    the same extracted label twice. The second must not clobber the first — both assets survive
-    under distinct keys, even though (a vectors.py-side concern, out of scope here) they currently
-    point at the same object path."""
-    with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
-         patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        item = pubs_sink.build_item(
-            {"series_id": "M-100", "series": "M"}, [],
-            vector_layers=["roads", "roads"],
-        )
-    a = item["assets"]
-    assert a["roads"]["href"].endswith("geolmap/vectors/M-100/roads.parquet")
-    assert a["vector_roads"]["href"].endswith("geolmap/vectors/M-100/roads.parquet")
-    err = capsys.readouterr().err
-    assert "roads" in err
+def test_pub_exposes_all_vector_layers_and_companion_tables_as_items():
+    """pubs/vectors.py extracts every GDB layer and GeMS companion table to Parquet on GCS; each
+    one is its own Item with a `data` asset, so a client can discover and fetch any of them."""
+    _, items = _publication(
+        {"series_id": "M-100", "series": "M"},
+        vector_layers=["gems__ContactsAndFaults", "gems__MapUnitPolys"],
+        companion_tables=[{"label": "gems__DescriptionOfMapUnits",
+                           "columns": [{"name": "MapUnit"}, {"name": "Age"}]}],
+    )
+    by_id = {it["id"]: it for it in items}
+    faults = by_id["M-100_gems__ContactsAndFaults"]["assets"]["data"]
+    assert faults["href"].endswith("geolmap/vectors/M-100/gems__ContactsAndFaults.parquet")
+    assert faults["type"] == pubs_sink.PARQUET_MIME
+    assert faults["roles"] == ["data"]
+    assert "M-100_gems__MapUnitPolys" in by_id  # the 2nd vector_layers entry produced an item too
+    dmu_item = by_id["M-100_gems__DescriptionOfMapUnits"]
+    dmu = dmu_item["assets"]["data"]
+    assert dmu["href"].endswith("geolmap/vectors/M-100/gems__DescriptionOfMapUnits.parquet")
+    assert dmu["type"] == pubs_sink.PARQUET_MIME
+    assert dmu["roles"] == ["data"]
+    assert dmu["table:columns"] == [{"name": "MapUnit"}, {"name": "Age"}]
+    assert pubs_sink.stac.TABLE_EXT in dmu_item["stac_extensions"]
 
 
 def test_raster_collection_borrows_its_newest_scene_thumbnail(monkeypatch):

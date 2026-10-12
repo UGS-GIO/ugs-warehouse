@@ -12,6 +12,7 @@ dependencies = [
                                  # cross-bucket copies (obstore's copy() is single-store only).
   "fsspec>=2024.6",      # obstore fsspec adapter -> DuckLake GCS IO (no httpfs/HMAC)
   "fastapi>=0.115",
+  "pydantic>=2",         # imported directly (comments.py, maintain.py), not only through fastapi
   "uvicorn[standard]>=0.32",
   "asyncpg>=0.29",       # review-comments CRUD (serve.py) → review.comments in mapping-db (review_writer)
   "google-auth>=2.40",   # verifies IAP JWTs (iap.py) and Firebase ID tokens (comments.py)

@@ -10,6 +10,7 @@ Cloud-native warehouse for UGS. The vector producer forks at dataELT's published
 
 ```bash
 pip install -e ".[dev]"          # editable install + pytest/ruff
+uv lock                          # after any pyproject.toml dep change; images + CI install from uv.lock
 
 ruff check src service scripts    # lint (line-length 100)
 python -m pytest tests/ -q        # hermetic: in-memory GCS + fake manifests/DB, no network
@@ -39,6 +40,8 @@ uvicorn service.main:app --host 0.0.0.0 --port 8080
 - **PMTiles** come from the `tippecanoe` binary in the Docker image (DuckDB writes GeoJSONSeq to a temp file).
 
 ## Environment variables
+
+The main ones. Every variable, by component: [docs/DEPLOY.md](docs/DEPLOY.md#environment-variables).
 
 | Var | Used by | Notes |
 |---|---|---|

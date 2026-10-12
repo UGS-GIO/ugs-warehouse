@@ -298,13 +298,14 @@ POLY_NAME, LINE_NAME, MESH_NAME, CLASSES_NAME = "3d_polygons.parquet", "3d_lines
 
 def _localize(uri: str, dest: str) -> str:
     """Bring a gs:// or https:// file local; pass a local path through."""
-    import subprocess
-    import urllib.request
     if uri.startswith("gs://"):
-        subprocess.run(["gcloud", "storage", "cp", uri, dest], check=True)
+        from ..core import gcs
+        bucket, _, path = uri.removeprefix("gs://").partition("/")
+        gcs.download(path, dest, bucket=bucket)
         return dest
-    if uri.startswith("http://") or uri.startswith("https://"):
-        urllib.request.urlretrieve(uri, dest)  # noqa: S310 — fetching our own pub assets
+    if uri.startswith(("http://", "https://")):
+        from .harvest import download
+        download(uri, dest)
         return dest
     return uri
 

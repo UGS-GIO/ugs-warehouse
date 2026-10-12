@@ -14,12 +14,16 @@ from __future__ import annotations
 import gzip
 import hashlib
 import sys
+import time
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from typing import NamedTuple
 
 import obstore as obs
 from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcloud_storage
+from obstore.exceptions import AlreadyExistsError, PreconditionError
 from obstore.store import GCSStore
 
 from . import config
@@ -244,6 +248,14 @@ def exists(object_path: str) -> bool:
         return _gcs_client().bucket(config.BUCKET).blob(object_path).exists()
 
 
+def download(object_path: str, dest: str, *, bucket: str | None = None) -> None:
+    """Stream an object to a local file without holding it in memory."""
+    res = obs.get(_store(bucket), object_path)  # a missing object raises before dest is touched
+    with open(dest, "wb") as f:
+        for chunk in res.stream(min_chunk_size=_HASH_CHUNK):
+            f.write(chunk)
+
+
 def get_tail(object_path: str, length: int) -> bytes:
     """The last `length` bytes of an object, such as a Parquet footer, without the rest of it."""
     size = obs.head(_store(), object_path)["size"]
@@ -269,6 +281,60 @@ def delete(object_path: str) -> None:
         obs.delete(_store(), object_path)
     except Exception:  # noqa: BLE001 — already gone / race → nothing to clean
         pass
+
+
+class LeaseTimeout(RuntimeError):
+    """Another holder kept the lease past the wait."""
+
+
+def _version(meta) -> dict:
+    """The parts of an object's put/get metadata a versioned put matches on."""
+    return {k: meta[k] for k in ("e_tag", "version") if meta.get(k)}
+
+
+@contextmanager
+def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) -> Iterator[None]:
+    """Hold an exclusive lease: an object created only if absent, holding its expiry time.
+
+    Waits up to `wait_s` for a live holder. A lease past its expiry belongs to a job that died, so
+    it is taken over with a versioned put (only one taker wins). Release also uses a versioned put,
+    marking the lease expired, so it never clobbers a lease another run has taken over."""
+    deadline = time.monotonic() + wait_s
+    while True:
+        body = str(time.time() + ttl_s).encode()
+        try:
+            ours = _version(obs.put(_store(), object_path, body, mode="create"))
+            break
+        except AlreadyExistsError:
+            pass
+        try:
+            held = obs.get(_store(), object_path)
+            raw = bytes(held.bytes())
+        except FileNotFoundError:
+            continue  # released between our put and get
+        try:
+            expires = float(raw)
+        except ValueError:
+            raise ValueError(f"lease {object_path} holds {raw[:40]!r}, not an expiry time; "
+                             "delete it to unblock") from None
+        if time.time() > expires:
+            try:
+                ours = _version(obs.put(_store(), object_path, body, mode=_version(held.meta)))
+                break
+            except PreconditionError:
+                continue  # another waiter took it first
+        if time.monotonic() >= deadline:
+            raise LeaseTimeout(f"lease {object_path} still held after {wait_s:.0f}s")
+        time.sleep(poll_s)
+    try:
+        yield
+    finally:
+        try:
+            obs.put(_store(), object_path, b"0", mode=ours)
+        except PreconditionError:
+            pass  # taken over since
+        except Exception as e:  # noqa: BLE001 — keep the caller's exception; the lease expires anyway
+            print(f"[gcs] lease release failed for {object_path}: {e}", file=sys.stderr)
 
 
 def list_etags(prefix: str) -> dict[str, str]:

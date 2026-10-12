@@ -91,3 +91,29 @@ def test_sidecar_does_not_match_a_different_stem(monkeypatch):
 def test_sidecar_does_not_match_a_prefix(monkeypatch):
     monkeypatch.setattr(harvest.os, "listdir", lambda _d: ["plate_v2.tfw"])
     assert harvest._sidecar("/bundle/plate", (".tfw",)) is None
+
+
+_UTM12 = ('PROJCS[&quot;NAD_1983_UTM_Zone_12N&quot;,GEOGCS[&quot;GCS_North_American_1983&quot;,'
+          'DATUM[&quot;D_North_American_1983&quot;,SPHEROID[&quot;GRS_1980&quot;,6378137.0,298.257222101]],'
+          'PRIMEM[&quot;Greenwich&quot;,0.0],UNIT[&quot;Degree&quot;,0.0174532925199433]],'
+          'PROJECTION[&quot;Transverse_Mercator&quot;],PARAMETER[&quot;False_Easting&quot;,500000.0],'
+          'PARAMETER[&quot;False_Northing&quot;,0.0],PARAMETER[&quot;Central_Meridian&quot;,-111.0],'
+          'PARAMETER[&quot;Scale_Factor&quot;,0.9996],PARAMETER[&quot;Latitude_Of_Origin&quot;,0.0],'
+          'UNIT[&quot;Meter&quot;,1.0],AUTHORITY[&quot;EPSG&quot;,26912]]')
+
+
+def test_aux_srs_reads_the_last_wkt(tmp_path):
+    pytest.importorskip("rasterio")
+    aux = tmp_path / "map.tif.aux.xml"
+    aux.write_text(f"<PAMDataset><SRS><WKT>GEOGCS[&quot;WGS 84&quot;,DATUM[&quot;WGS_1984&quot;,"
+                   f"SPHEROID[&quot;WGS 84&quot;,6378137,298.257223563]],PRIMEM[&quot;Greenwich&quot;,0],"
+                   f"UNIT[&quot;degree&quot;,0.0174532925199433]]</WKT></SRS>"
+                   f"<Metadata><AdjustXform><WKT>{_UTM12}</WKT></AdjustXform></Metadata></PAMDataset>")
+    assert harvest._aux_srs(str(aux)) == "EPSG:26912"
+
+
+def test_aux_srs_none_without_a_usable_wkt(tmp_path):
+    pytest.importorskip("rasterio")
+    aux = tmp_path / "map.tif.aux.xml"
+    aux.write_text("<PAMDataset><WKT>not a crs</WKT><WKT>")
+    assert harvest._aux_srs(str(aux)) is None

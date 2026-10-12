@@ -18,12 +18,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=tippecanoe /usr/local/bin/tippecanoe /usr/local/bin/tile-join /usr/local/bin/
 
 WORKDIR /app
-# Deps layer — cached until pyproject.toml changes (NOT on every code edit). Install deps against
-# an empty package skeleton, then drop it; the real source comes in the next layer.
-COPY pyproject.toml ./
-RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
-    && pip install --upgrade pip && pip install . \
-    && rm -rf src
+# Deps layer from uv.lock, cached until the lock changes (NOT on every code edit).
+COPY --from=ghcr.io/astral-sh/uv:0.12.12@sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-emit-project -q -o /tmp/requirements.txt \
+    && pip install --upgrade pip && pip install -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 # Pre-bake the DuckDB spatial extension into the image so the runtime LOADs it locally — no fetch
 # from the extension servers on each cold start (removes an external single-point-of-failure + saves

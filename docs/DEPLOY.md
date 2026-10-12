@@ -309,3 +309,122 @@ gcloud scheduler jobs create http warehouse-nightly \
   no HMAC). DuckLake writes via obstore-fsspec — same auth. No gcsfuse, no GCS extension.
 - **Service (Pub/Sub push)** — deployed by `cloudbuild.yaml` (`deploy-service`) and wired
   by the `wire-pubsub` step. See **§4** for the two IAM grants still needed (GCP perms).
+
+## Environment variables
+
+Every variable the Python code reads, by component. Defaults are what the code uses when the
+variable is unset. Prefix variables move where an artifact is written; change them only for a
+separate deploy such as review.
+
+### Shared (`core/config.py`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `WAREHOUSE_BUCKET` | `ut-dnr-ugs-maps-prod-public` | Bucket every artifact is written to |
+| `WAREHOUSE_SOURCE_BUCKET` | `WAREHOUSE_BUCKET` | Bucket a producer reads existing COGs and footprints from when it writes elsewhere |
+| `WAREHOUSE_PUBLIC_BASE_URL` | `https://maps-assets.geology.utah.gov` | Base for public asset hrefs |
+| `WAREHOUSE_PUBLIC_CATALOG_URL` | prod `catalog.json` on the CDN | Prod catalog the review catalog links to |
+| `WAREHOUSE_STAC_PREFIX` | `warehouse/stac` | STAC root; a `review/` prefix marks the review catalog |
+| `WAREHOUSE_{ARCHIVE,PMTILES,THUMBS,FEATURES,OVERRIDES}_PREFIX` | `warehouse/{geoparquet,pmtiles,thumbs,featureserv,overrides}` | Per-artifact object prefixes |
+| `WAREHOUSE_CATALOG_ID`, `WAREHOUSE_CATALOG_TITLE` | `ugs-warehouse`, `Utah Geological Survey data warehouse` | Root catalog id and title |
+| `WAREHOUSE_EXTERNAL_CATALOGS` | USWB catalog | JSON list of `[url, title]` linked under the root |
+| `WAREHOUSE_LICENSE`, `WAREHOUSE_LICENSE_URL` | `CC-BY-4.0` and its URL | License stamped on collections |
+| `WAREHOUSE_STAGED_SOURCE_BUCKETS` | `stagedrasters` | Comma list of buckets a raster promote may copy from |
+| `PGF_BASE_URL` | the features service `run.app` URL | OGC API Features base advertised in the catalog |
+| `STYLES_CDN_BASE`, `STYLES_INDEX_URL`, `STYLES_INDEX_OBJECT` | `{PUBLIC_BASE_URL}/styles`, `{STYLES_CDN_BASE}/index.json`, `styles/index.json` | ugs-styles manifest location |
+
+### Database
+
+| Var | Default | Purpose |
+|---|---|---|
+| `POSTGRES_DSN` | `host=127.0.0.1 port=5433 dbname=seamlessgeolmap` | Source DB (libpq DSN) |
+| `DUCKLAKE_CATALOG_DSN` | `POSTGRES_DSN` | DuckLake catalog DB |
+| `PGPASSWORD` | none | Read by libpq when the DSN has no password |
+| `CLOUDSQL_INSTANCE`, `DB_NAME`, `DB_USER`, `DB_PASS` | none, `seamlessgeolmap`, `schema_owner` / `review_writer` | `scripts/cloudrun_entrypoint.sh` builds the DSNs from these; `comments.py` connects with them |
+| `RUN_MODULE` | `ugs_warehouse.vector.ingest` | Module the entrypoint runs |
+
+### Vector ingest and push handler
+
+| Var | Default | Purpose |
+|---|---|---|
+| `WAREHOUSE_TABLE_SUFFIX` | `_current` | Table suffix discovery looks for (`_review` in review) |
+| `DUCKDB_MAX_MEMORY` | `128MB` | DuckDB memory cap for the source read and transform |
+| `DUCKDB_SORT_CHUNK_ROWS` | `50000` | Starting rows per transform pass; halved on OOM |
+| `INGEST_CHUNK_TARGET_BYTES` | `16777216` | Tables smaller than this many bytes are read in one scan |
+| `INGEST_PAGES_PER_CHUNK` | `2000` | Postgres heap pages per read chunk; `0` disables chunking |
+| `DUCKLAKE_DATA_PATH` | `gs://{WAREHOUSE_BUCKET}/warehouse/ducklake/` | DuckLake data files |
+| `DUCKLAKE_METADATA_SCHEMA` | `ducklake_catalog` | Postgres schema for DuckLake metadata |
+| `OVERRIDE_DATA_PATH` | `False` | `True` adds `OVERRIDE_DATA_PATH TRUE` to the ATTACH |
+| `TIPPECANOE_BIN`, `TIPPECANOE_OPTS` | `tippecanoe`, none | Tile builder binary and extra flags |
+| `INGEST_JOB`, `INGEST_JOB_REGION`, `INGEST_JOB_PROJECT` | `ugs-warehouse-ingest`, `us-central1`, none (required) | Job the push handler starts |
+| `INGEST_INLINE` | `0` | `1` ingests inside the handler (local dev, tests) |
+| `RETIRE_REQUESTED_BY` | none | Operator identity the ops console passes to a retire run |
+
+### DuckLake maintenance (`vector/maintain.py`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `DUCKLAKE_KEEP_DAYS` | `7` | Snapshot retention |
+| `DUCKLAKE_TARGET_FILE_SIZE` | `256MB` | Compaction target file size |
+| `DUCKLAKE_MERGE_BUDGET_SECONDS` | `4800` | Time budget for the compaction loop |
+| `DUCKLAKE_JOB_TIMEOUT_SECONDS`, `DUCKLAKE_CLEANUP_RESERVE_SECONDS` | `7200`, `1200` | Task timeout, and the part held back for cleanup |
+| `DUCKLAKE_ORPHAN_GRACE_DAYS` | `7` | Age before an unreferenced file counts as an orphan |
+
+### Publications (`pubs/`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `PUBS_DB_URL` | none (required) | Publications DB, MySQL URL or Postgres DSN |
+| `PUBS_TABLE`, `PUBS_ATT_TABLE` | Postgres: `pubs.ugspubsdraft2`, `pubs.attached_data`; MySQL: `pubsdb`, `pubsattacheddata` | Feed tables |
+| `GEOLMAP_{COG,FOOTPRINTS,MOSAIC,UNITS,3D,VECTORS}_PREFIX` | `geolmap/{cogs,footprints,mosaics,units,3d,vectors}` | Pub artifact prefixes |
+| `PUB_{FILES,THUMB,CONTENTS,SEARCH,FULLTEXT,EMB}_PREFIX` | `pubs/{files,thumbs,contents,search,fulltext,embeddings}` | Pub sidecar prefixes |
+| `PUB_GRAPH_PREFIX`, `PUB_FTS_OBJECT`, `PUB_VSS_OBJECT` | `graph`, `pubs/search/pubs-fts.duckdb`, `pubs/search/pubs-vss.duckdb` | Graph and search outputs |
+| `COG_COMPRESS`, `COG_QUALITY`, `COG_DPI`, `COG_ZOOM_STRATEGY` | `deflate`, `90`, `600`, `auto` | COG build settings |
+| `COLOR_SAT_FLOOR` | `8` | Color spread below which a raster counts as grayscale |
+| `MAX_ZIP_SIZE_MB`, `SKIP_EXISTING`, `THUMBS` | `0` (no cap), `1`, `1` | Harvest limits and switches |
+| `GEOLMAP_MANIFEST`, `HARVEST_REPORT`, `HARVEST_REPORT_GCS` | none, `harvest-report.json`, none | Harvest input manifest and run report |
+| `PUB_THUMB_PX`, `PUB_THUMB_MAX_PDF_MB` | `400`, `1000` | Cover thumbnail size and PDF download cap |
+| `MIRROR_WORKERS`, `MIRROR_MAX_MB` | `4`, `0` (no cap) | Source-file mirror concurrency and size cap |
+| `MOSAIC_MINZOOM`, `MOSAIC_WEBP_QUALITY`, `MOSAIC_WORK_DIR` | `4`, `90`, system temp | Raster mosaic build |
+| `PUB_GRAPH_SIMILAR_K` | `5` | Neighbours per pub in the graph |
+| `EMBED_MODEL`, `EMBED_CHUNK_CHARS`, `FASTEMBED_CACHE` | `BAAI/bge-small-en-v1.5`, `1200`, none | Embedding job |
+| `POSTGREST_URL` | the seamless-units PostgREST URL | Units source when no DSN is set (`units_pmtiles.py`) |
+
+### Raster
+
+| Var | Default | Purpose |
+|---|---|---|
+| `WAREHOUSE_RASTER_COG_PREFIX` | `cog` | Promoted COG prefix |
+
+### Review serving (`serve.py`, `comments.py`, `iap.py`, `review_catalog.py`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `REVIEW_API_ONLY` | unset | Serve only `/api/*`, not the review bucket (the public twin service) |
+| `REVIEW_STATIC_ONLY` | unset | Serve only the bucket, not the API (preview hosts) |
+| `REVIEW_VIEWER_PREFIX`, `REVIEW_APP_PREFIX` | `review/viewer`, `review/app` | SPA bundles in the review bucket |
+| `REVIEW_CORS_ORIGINS`, `REVIEW_CORS_ORIGIN_REGEX` | none | Allowed browser origins for the API |
+| `REVIEW_DB_DSN` | none | Comments DB URI; else the Cloud SQL socket vars above |
+| `REVIEW_EDITOR_EMAILS`, `REVIEW_EDITOR_DOMAINS` | none | Bearer-token writers allowed to comment; empty means IAP users only |
+| `FIREBASE_PROJECT_ID` | `ut-dnr-ugs-maps-prod` | Project that issues the review app's ID tokens |
+| `IAP_AUDIENCE` | derived from `K_SERVICE` | Expected IAP JWT audience |
+| `REVIEW_SIGNED_URL_TTL_MIN` | `60` | Signed asset URL lifetime |
+| `REVIEW_CATALOG_MAX_DOCS` | `1000` | Cap on the catalog crawl |
+
+### Topic thumbnails (`vector/thumbs.py`)
+
+| Var | Default | Purpose |
+|---|---|---|
+| `TOPIC_THUMB_W`, `TOPIC_THUMB_H`, `TOPIC_THUMB_TIMEOUT_MS` | `480`, `320`, `30000` | Render size and timeout |
+
+### Logging
+
+| Var | Default | Purpose |
+|---|---|---|
+| `LOG_LEVEL` | `INFO` | Root log level for the services and jobs that call `core.logs.setup()` |
+
+### Set by Cloud Run
+
+`PORT`, `K_SERVICE`, `CLOUD_RUN_JOB`, `CLOUD_RUN_TASK_INDEX`, `CLOUD_RUN_TASK_COUNT`. Harvest and 3D split
+work across tasks with the last two; `core/logs.py` writes JSON log lines when `K_SERVICE` or
+`CLOUD_RUN_JOB` is set.

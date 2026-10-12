@@ -75,10 +75,11 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
                     {p.label}
                   </Menu.Item>
                 ))}
-                <Menu.Separator className="my-1 h-px bg-border" />
+                <Menu.Separator className="my-1 h-px bg-border md:hidden" />
               </div>
             )}
-            <Menu.Item className={ITEM} nativeButton={false}
+            {/* Phones only: desktop has the header band and footer. */}
+            <Menu.Item className={`${ITEM} md:hidden`} nativeButton={false}
               render={<a href={REPO_URL} target="_blank" rel="noreferrer" />}>
               <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d={GITHUB_MARK} /></svg>
               v{__APP_VERSION__}

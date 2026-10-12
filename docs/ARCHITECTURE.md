@@ -30,7 +30,7 @@ flowchart LR
   subgraph S["Serving"]
     direction TB
     VW["STAC viewer<br/>browse · map · zarr datacubes · export"]
-    FS["OGC Features · tiles<br/>duckdb_featureserv · XYZ · Esri VTS"]
+    FS["OGC Features · tiles<br/>pygeoapi · XYZ · Esri VTS"]
   end
 
   CDN --> VW
@@ -67,6 +67,8 @@ bronze → silver → gold — and publishes gold as Postgres serving tables.
 
 Every time dataELT promotes a `_current` table it publishes a `{schema, topic}` message; the
 warehouse reacts. No polling, no schedule. A topic whose schema isn't a known mart is acked + skipped.
+One topic ingests at a time: a run holds a lease object (`_locks/ingest/{topic}`), and a second
+publish for that topic waits for it.
 
 ### ③ Warehouse transform + four sinks 🟩
 
@@ -95,7 +97,7 @@ footprints, routed into three groups (`ugs-publications`, `ugs-mining-district-f
 
 Each group is a Catalog of series Catalogs (`<group>/<SERIES>/catalog.json`), and each publication
 is a Collection under its series (`<group>/<SERIES>/<SID>/collection.json`). The Collection holds
-the documents (PDF, cover, ISO record, original zips) as assets and the DOI as `cite-as` +
+the documents (PDF, cover, original zips) as assets and the DOI as `cite-as` +
 `sci:doi`; the plate COG, units, extracted layers and tables, and the 3D fence are its Items at
 `<SID>/<ITEM_ID>/<ITEM_ID>.json`. A publication with one data file keeps it on the Collection and
 has no Items. The pubs ingest writes the Collections and Items; `refresh_catalog` writes the series
@@ -142,7 +144,7 @@ which preserves object paths.
 
 - Static surfaces (no server): GeoParquet, PMTiles, COG, Zarr, STAC JSON — read directly from the CDN.
 - STAC viewer: catalog browse + map + COG preview + zarr datacube layers + client-side export.
-- OGC API Features for ArcGIS Pro / QGIS: `duckdb_featureserv` over the GeoParquet, scale-to-zero.
+- OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.
 - `ugs-warehouse-tiles`: XYZ tiles, ready-made MapLibre styles, and an Esri VectorTileServer facade
   so AGOL and Pro can add a layer at all.
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.
@@ -167,4 +169,3 @@ The vector pipeline is end-to-end in production. The honest gaps:
 - 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).
 - 🟧 **Legacy pubs** — 1,163 catalog items, mostly legacy mining district scans, have no record in
   the publications app. The prune keeps them until they are imported or retired (#491).
-- 🟧 **FGDC metadata** variant + raster extension (ISO 19139 done for vector + pubs).

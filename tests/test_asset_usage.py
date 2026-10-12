@@ -31,7 +31,6 @@ def _capture(monkeypatch, *, review: bool = False, thumb: bool = False) -> dict:
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
-    monkeypatch.setattr(sink_stac.stac, "attach_iso", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
     if review:
         monkeypatch.setattr(sink_stac.config, "IS_REVIEW_CATALOG", True)
@@ -75,18 +74,6 @@ def test_ogc_features_link_names_the_query_purpose(monkeypatch):
 
 
 # ---------------------------------------------------------------- attached assets (core/stac)
-
-def test_iso_metadata_asset_has_the_iso_role_and_a_description(monkeypatch):
-    monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **k: None)
-    monkeypatch.setattr(stac.iso, "stac_to_iso19139", lambda item: "<x/>")
-    item = {"id": "hazards_qfaults", "collection": "hazards",
-            "_collection_path": "ugs-serving-topics/hazards",
-            "properties": {"ugs:topic_category": "geoscientificInformation"}, "assets": {}}
-    stac.attach_iso(item)
-    md = item["assets"]["metadata"]
-    assert "iso-19115" in md["roles"]   # STAC + Portolan standard role for an ISO metadata file
-    assert md["description"]
-
 
 def test_style_asset_gets_a_description(monkeypatch):
     style_asset = {"href": "https://x/s.json", "type": "application/json",
@@ -132,7 +119,6 @@ def _store(monkeypatch) -> dict:
     monkeypatch.setattr(stac.gcs, "list_paths", lambda pre: [k for k in store if k.startswith(pre)])
     monkeypatch.setattr(stac.gcs, "exists", lambda p: p in store)
     monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
-    monkeypatch.setattr(stac, "attach_iso", lambda item: "")
     monkeypatch.setattr(stac, "attach_renders", lambda item: None)
     monkeypatch.setattr(stac.styles, "warm", lambda: None)
     return store

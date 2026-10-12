@@ -28,7 +28,7 @@ export function Downloads() {
         {jobs.map((j) => (
           <li key={j.id} className="flex items-center gap-2 px-3 py-2">
             <div className="min-w-0 flex-1">
-              <span className="block truncate">{j.label}</span>
+              <span className="block wrap-anywhere">{j.label}</span>
               <div className={`text-sm ${j.state === "failed" ? "text-destructive" : "text-muted-foreground"}`}>
                 {j.state === "failed" ? j.error
                   : j.state === "running" ? `Saving ${jobProgress(j)}`

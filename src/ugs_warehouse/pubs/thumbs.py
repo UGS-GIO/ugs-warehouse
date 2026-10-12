@@ -33,7 +33,15 @@ def cover_object(sid: str) -> str:
     return identity.pub_cover_object(sid)
 
 
-def thumb_one(p: dict, force: bool = False) -> str:
+def existing_outputs() -> set[str]:
+    """Every cover, contents and full-text object, from one listing per prefix, so the skip check
+    for each pub is a set lookup instead of three HEAD requests."""
+    return {path for prefix in (identity.PUB_THUMB_PREFIX, identity.PUB_CONTENTS_PREFIX,
+                                identity.PUB_FULLTEXT_PREFIX)
+            for path in gcs.list_paths(f"{prefix}/")}
+
+
+def thumb_one(p: dict, force: bool = False, existing: set[str] | None = None) -> str:
     sid = (p.get("series_id") or "").strip()
     if not sid:
         return "skip"
@@ -47,13 +55,14 @@ def thumb_one(p: dict, force: bool = False) -> str:
     contents_obj = identity.pub_contents_object(sid)
     fulltext_obj = identity.pub_fulltext_object(sid)
     is_snt = sink_stac.series_code(sid) == "SNT"
-    need_cover = force or not gcs.exists(cover_obj)
+    exists = existing.__contains__ if existing is not None else gcs.exists
+    need_cover = force or not exists(cover_obj)
     # Survey Notes get an "In this issue" sidecar parsed from the PDF. A hand-authored sidecar (saved
     # from the ops console as source=manual) is never clobbered — not even with --force; skip-existing
     # protects an auto-parsed one too, so re-runs only fill gaps.
-    need_contents = is_snt and (force or not gcs.exists(contents_obj)) and not _manual_contents(contents_obj)
+    need_contents = is_snt and (force or not exists(contents_obj)) and not _manual_contents(contents_obj)
     # Whole-document text for the all-pub full-text index — every pub, not just Survey Notes.
-    need_fulltext = force or not gcs.exists(fulltext_obj)
+    need_fulltext = force or not exists(fulltext_obj)
     if not need_cover and not need_contents and not need_fulltext:
         hlog("cover + contents + text already present", step="resolve", level="NOTICE", category="expected")
         return "skip:exists"
@@ -200,8 +209,9 @@ def main() -> int:
 
     tally = {"ok": 0, "expected": 0, "attention": 0}
     rc = 0
+    existing = None if args.force else existing_outputs()
     for p in work:
-        res = thumb_one(p, force=args.force)
+        res = thumb_one(p, force=args.force, existing=existing)
         tally[outcome_category(res)] += 1
         if res.startswith("fail"):
             rc |= 1

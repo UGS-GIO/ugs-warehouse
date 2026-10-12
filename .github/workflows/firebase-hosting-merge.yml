@@ -1,9 +1,5 @@
-# Publish the viewer to the live Firebase Hosting site on every push to main that touches it.
-#
-# Deploy lives here rather than in cloudbuild.yaml for the reason in
-# firebase-hosting-pull-request.yml: Cloud Build has no Firebase credentials, and granting its SA
-# project-level roles/firebasehosting.admin is the only way it could get them. Cloud Build still
-# owns everything else — images, Cloud Run, the review viewer bundle.
+# Publish the viewer to the live Firebase Hosting site on every push to main that touches it. main
+# only takes merges from develop (or an admin hotfix), so each push is a release.
 name: Viewer deploy
 
 on:
@@ -19,29 +15,9 @@ permissions:
 
 jobs:
   deploy:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: npm
-          cache-dependency-path: viewer/package-lock.json
-
-      - name: Build
-        working-directory: viewer
-        env:
-          VITE_FEATURES_BASE: ${{ vars.VITE_FEATURES_BASE }}
-          VITE_TILES_BASE: ${{ vars.VITE_TILES_BASE }}
-        run: |
-          npm ci
-          npm run build
-
-      - uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD }}
-          projectId: ut-dnr-ugs-maps-prod
-          channelId: live
-          firebaseToolsVersion: "13.29.1"
+    uses: ./.github/workflows/viewer-deploy.yml
+    with:
+      site: data-geology-utah-gov
+      features_base: ${{ vars.VITE_FEATURES_BASE }}
+      tiles_base: ${{ vars.VITE_TILES_BASE }}
+    secrets: inherit

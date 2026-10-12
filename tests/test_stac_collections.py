@@ -110,26 +110,6 @@ def test_write_json_compresses_by_default(monkeypatch):
     assert flags["x/catalog.json"] is True
 
 
-def test_attach_collection_iso_writes_a_sidecar_and_a_metadata_asset(monkeypatch):
-    store = _mem(monkeypatch)
-    coll = _coll()
-    path = stac.attach_collection_iso(coll)
-    assert path.endswith("/ugs-publications/OFR/OFR-1/OFR-1.iso.xml")
-    xml = store[path].decode()
-    assert "A map" in xml and "-112.0" in xml
-    assert coll["assets"]["metadata"]["roles"] == ["metadata", "iso-19115"]
-    assert coll["assets"]["metadata"]["href"] == stac.config.public_url(path)
-    assert "faults" in xml
-
-
-def test_attach_collection_iso_warns_when_the_extent_is_open(monkeypatch, capsys):
-    _mem(monkeypatch)
-    coll = _coll(extent={"spatial": {"bbox": [[-112.0, 40.0, -111.0, 41.0]]},
-                         "temporal": {"interval": [[None, None]]}})
-    stac.attach_collection_iso(coll)
-    assert "no temporal extent" in capsys.readouterr().err
-
-
 def test_prior_collection_field_reads_the_published_collection(monkeypatch):
     path = stac.collection_object_path("ugs-publications/OFR/OFR-1")
     monkeypatch.setattr(stac.gcs, "get_bytes",

@@ -173,7 +173,7 @@ def _prune_stale_items(coll_path: str, keep: set[str]) -> None:
 
     A publication that gained or lost data files (a plate moving to the Collection, a layer
     dropped) would otherwise keep serving its old Items. Files directly in the publication
-    directory (collection.json, README.md, AGENTS.md, the ISO sidecar) are never touched."""
+    directory (collection.json, README.md, AGENTS.md) are never touched."""
     root = f"{config.STAC_PREFIX}/{coll_path}/"
     stale: dict[str, list[str]] = {}
     for path in gcs.list_paths(root):
@@ -226,6 +226,19 @@ def _cog_headers(cog_ids: set[str]) -> dict[str, tuple[tuple | None, dict]]:
     return out
 
 
+FILE_META_PREFIXES = (identity.COG_PREFIX, identity.UNITS_PREFIX, identity.THREED_PREFIX,
+                      identity.PUB_THUMB_PREFIX, identity.PUB_FILES_PREFIX, vectors.VECTORS_PREFIX)
+
+
+def _file_meta_index() -> dict[str, gcs.FileMeta]:
+    """{object_path: FileMeta} for every prefix a pub asset can point into: one listing each."""
+    index: dict[str, gcs.FileMeta] = {}
+    with ThreadPoolExecutor(max_workers=len(FILE_META_PREFIXES)) as ex:
+        for part in ex.map(lambda p: gcs.list_file_meta(p.rstrip("/") + "/"), FILE_META_PREFIXES):
+            index.update(part)
+    return index
+
+
 def build_catalog(limit: int | None = None, series: str | None = None, skip_refresh: bool = False) -> int:
     print(f"[pubs] metadata source: {source.source_name()}")
     pubs = source.read_pubs()
@@ -265,6 +278,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     heads = _cog_headers(cogs)  # footprints + COG asset fields from OUR COGs (no external service)
     mirrored = _mirrored_files()  # source files served from our CDN instead of the publisher's host
     vector_manifests, manifest_failures = _vector_manifests_by_sid()  # spatial/table split extracted by pubs/vectors.py
+    file_meta = _file_meta_index()  # file:size/checksum for the assets in our bucket
     n_foot = sum(1 for f, _ in heads.values() if f)
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
           f"{len(units)} unit sets, {n_foot} footprints, {len(threed_ids)} 3D, "
@@ -304,8 +318,9 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         )
         for it in items:
             stac.attach_renders(it)  # ugs-styles GL style -> render extension (graceful if none)
+            stac.stamp_file_meta(it, file_meta)
             stac.write_item(it)
-        stac.attach_collection_iso(coll)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
+        stac.stamp_file_meta(coll, file_meta)
         stac.write_collection(coll, children=len(items))
         _prune_stale_items(coll["_collection_path"], {it["id"] for it in items})
         return True

@@ -437,6 +437,43 @@ def test_a_batch_run_lists_unsupported_pubs_without_re_downloading_them(monkeypa
     assert "SS-161 (Ferron.mpk)" in capsys.readouterr().out
 
 
+def test_a_zip_with_nothing_to_extract_is_recorded_but_writes_no_manifest(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    _stub_bundle(monkeypatch, tmp_path, ([], []))
+
+    assert vectors.extract_one("M-115", force=True) == "skip"
+    # Ingest publishes from the manifest, so the finished-empty attempt lives on the attempt record.
+    assert set(store) == {f"{vectors.VECTORS_PREFIX}/M-115/_attempt.json"}
+    assert json.loads(store[f"{vectors.VECTORS_PREFIX}/M-115/_attempt.json"])["result"] == "skip"
+
+
+def test_a_batch_run_lists_pubs_with_nothing_to_extract_without_re_downloading_them(
+        monkeypatch, capsys):
+    import sys
+
+    from ugs_warehouse.pubs import harvest, source
+
+    pfx = vectors.VECTORS_PREFIX
+    monkeypatch.setattr(source, "read_pubs", lambda: [{"series_id": "M-1DM"}, {"series_id": "M-2DM"}])
+    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, f"https://x/{sid}.zip"))
+    monkeypatch.setattr(vectors.gcs, "list_paths", lambda prefix: [f"{pfx}/M-1DM/_attempt.json"])
+    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: b'{"result": "skip"}')
+    monkeypatch.setattr(vectors.gcs, "put_bytes", lambda b, p, **kw: None)
+    downloads: list[str] = []
+    monkeypatch.setattr(harvest, "download", lambda url, dst: downloads.append(url) or 1 / 0)
+    monkeypatch.setattr(sys, "argv", ["vectors", "--all"])
+
+    vectors.main()
+
+    assert downloads == ["https://x/M-2DM.zip"]
+    assert "not retried (--force to retry): M-1DM" in capsys.readouterr().out
+
+    downloads.clear()
+    monkeypatch.setattr(sys, "argv", ["vectors", "--all", "--force"])
+    vectors.main()
+    assert sorted(downloads) == ["https://x/M-1DM.zip", "https://x/M-2DM.zip"]
+
+
 def test_a_batch_run_visits_only_new_pubs_with_a_gis_zip(monkeypatch):
     """--all lists the extracted series once and skips them, and never looks up a pub that has no
     GIS zip in its attachments, so a weekly run with nothing new downloads nothing."""

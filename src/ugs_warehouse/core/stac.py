@@ -27,7 +27,7 @@ import json
 import re
 import sys
 
-from . import catalog_docs, config, gcs, iso, item_mirror, styles
+from . import catalog_docs, config, feature_service, gcs, item_mirror, styles
 from .bbox import to_2d_bbox
 
 PGF_BASE_URL = config.PGF_BASE_URL
@@ -75,14 +75,14 @@ USAGE_PMTILES = "Vector tiles — web-map display"
 USAGE_DUCKLAKE = "DuckLake table — versioned SQL analysis (review catalog only)"
 USAGE_THUMBNAIL = "Styled preview image"
 USAGE_STYLE = "MapLibre GL style — how to draw this layer"
-USAGE_METADATA = "ISO 19139 metadata (ISO 19115 content model)"
 
 
 def has_feature_service(collection_path: str) -> bool:
     """True when the collection at `collection_path` is served live by OGC API Features
-    (duckdb_featureserv) — the flat collections and the serving-topic schemas. Single source for the
-    collection's `rel:service` link (`_collection_doc`) and the AGENTS.md query-endpoint note
-    (`catalog_docs.agents`), so the link and the prose that describes it can't disagree."""
+    (featureserv/) — the flat collections and the serving-topic schemas. Single source for the
+    collection's `rel:service` link (`_collection_doc`), the AGENTS.md query-endpoint note
+    (`catalog_docs.agents`) and the service's layer list (`feature_service`), so they can't
+    disagree."""
     return "/" not in collection_path or collection_path.startswith(f"{SERVING_TOPICS_CATALOG}/")
 
 
@@ -120,6 +120,13 @@ def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
     return link
 
 
+def topic_thumbnail_asset(stem: str) -> dict:
+    """A serving topic's styled-preview asset. The thumbs job and the vector ingest both stamp it,
+    so both build it here."""
+    return {"href": config.public_url(config.topic_thumbnail_path(stem)), "type": config.WEBP_MIME,
+            "roles": ["thumbnail"], "title": "Styled preview", "description": USAGE_THUMBNAIL}
+
+
 # ---------------------------------------------------------------- items
 
 def file_fields(meta: gcs.FileMeta | None) -> dict:
@@ -131,6 +138,32 @@ def file_fields(meta: gcs.FileMeta | None) -> dict:
     if meta is None:
         return {}
     return {"file:size": meta.size, **({"file:checksum": meta.checksum} if meta.checksum else {})}
+
+
+def object_path_of(href: str) -> str | None:
+    """The bucket object path behind a CDN href, or None for an off-warehouse href."""
+    base = config.PUBLIC_BASE_URL.rstrip("/") + "/"
+    return href.removeprefix(base).split("?", 1)[0] if href.startswith(base) else None
+
+
+def stamp_file_meta(item: dict, index: dict[str, gcs.FileMeta] | None = None) -> int:
+    """Add `file:size`/`file:checksum` to our-bucket assets that lack a checksum (mutates item).
+
+    `index` comes from `gcs.list_file_meta`; without one, each asset is looked up on its own.
+    """
+    missing = {k: p for k, a in (item.get("assets") or {}).items()
+               if "file:checksum" not in a and (p := object_path_of(a.get("href", "")))}
+    if index is None:
+        index = {p: m for p in set(missing.values()) if (m := gcs.get_file_meta(p)) is not None}
+    n = 0
+    for key, path in missing.items():
+        asset, fields = item["assets"][key], file_fields(index.get(path))
+        if fields and ("file:checksum" in fields or "file:size" not in asset):
+            asset.update(fields)
+            n += 1
+    if n and FILE_EXT not in (exts := item.setdefault("stac_extensions", [])):
+        exts.append(FILE_EXT)
+    return n
 
 
 def build_item(*, item_id: str, collection: str, geometry: dict | None,
@@ -326,38 +359,6 @@ def prior_file_fields(collection_path: str, item_id: str) -> dict[str, dict]:
     return out
 
 
-def attach_iso(item: dict) -> str:
-    """Write an ISO 19139 sidecar next to the item + add a `metadata` asset (mutates item).
-
-    For gov clearinghouses (data.gov / state portals) that harvest ISO, not STAC. Call
-    before `write_item` so the written item references the sidecar; generated from the item
-    as-is so the metadata asset is not yet present (no self-reference).
-    """
-    # An uncurated topic emits an ISO record with no <gmd:topicCategory> — mandatory for datasets,
-    # so the record is knowingly invalid rather than confidently wrong (#53). Say which ones, or the
-    # gap is invisible until a harvester rejects it.
-    if not item.get("properties", {}).get("ugs:topic_category"):
-        print(f"[{item['id']}] ISO: no iso_topic_category curated — omitting <gmd:topicCategory> "
-              "(record will not validate; curate raw.schema_registry to fix)", file=sys.stderr)
-    path = f"{config.STAC_PREFIX}/{_layout_path(item)}/{item['id']}/{item['id']}.iso.xml"
-    item.setdefault("assets", {})["metadata"] = _put_iso(item, path)
-    return path
-
-
-def _put_iso(view: dict, path: str) -> dict:
-    """Upload the ISO 19139 sidecar generated from an item-shaped `view`; return its `metadata` asset."""
-    gcs.put_bytes(iso.stac_to_iso19139(view).encode(), path,
-                  content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
-    return {
-        "href": config.public_url(path), "type": "application/xml",
-        # `iso-19115` is the STAC + Portolan standard role for an ISO metadata file; our sidecar is
-        # ISO 19139, the XML encoding of the 19115 content model, so it earns that role alongside the
-        # generic `metadata`.
-        "roles": ["metadata", "iso-19115"], "title": "ISO 19139 metadata",
-        "description": USAGE_METADATA,
-    }
-
-
 def write_collection(coll: dict, *, children: int) -> str:
     """Write a leaf collection.json plus the README.md/AGENTS.md Portolan requires beside it.
     `children` is its item count, for the prose."""
@@ -369,31 +370,6 @@ def write_collection(coll: dict, *, children: int) -> str:
     _write_markdown(path, title=doc["title"], description=doc["description"], kind="collection",
                     children=children, extent=doc["extent"])
     return obj
-
-
-def attach_collection_iso(coll: dict) -> str:
-    """ISO 19139 sidecar for a collection, written beside its collection.json, plus a `metadata`
-    asset (mutates `coll`). Call before `write_collection`, so the written collection references
-    the sidecar. The ISO writer reads item-shaped input, so it is given the collection's fields
-    as properties and its spatial extent as a bbox."""
-    bbox = coll["extent"]["spatial"]["bbox"][0]
-    start, end = coll["extent"]["temporal"]["interval"][0]
-    when = start or end
-    if not when:
-        # iso.py would otherwise stamp a 2000-01-01 placeholder date on the record.
-        print(f"[{coll['id']}] ISO: collection has no temporal extent, record date will be a placeholder",
-              file=sys.stderr)
-    view = {"id": coll["id"], "bbox": bbox, "geometry": bbox_polygon(bbox),
-            "properties": {**{k: v for k, v in coll.items() if k.startswith("ugs:") or k == "keywords"},
-                           "title": coll["title"], "description": coll["description"],
-                           "datetime": when},
-            "assets": coll.get("assets", {})}
-    if not view["properties"].get("ugs:topic_category"):
-        print(f"[{coll['id']}] ISO: no ugs:topic_category, omitting <gmd:topicCategory> "
-              "(record will not validate; set the publication's topic category to fix)", file=sys.stderr)
-    path = f"{config.STAC_PREFIX}/{coll['_collection_path']}/{coll['id']}.iso.xml"
-    coll.setdefault("assets", {})["metadata"] = _put_iso(view, path)
-    return path
 
 
 def attach_renders(item: dict) -> None:
@@ -653,6 +629,12 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
 _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
                     "ugs:topic", "ugs:scale", "ugs:author", "ugs:county", "ugs:dbt_schema",
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
+# The asset fields an index entry keeps. Public: the topic-thumbnail job compares against them.
+INDEX_ASSET_KEYS = ("href", "type", "roles", "title")
+# The vector ingest's content fingerprint property (vector/fingerprint.py); it changes exactly when a
+# topic's data or tiling does. Read by the ingest's skip check, the thumbnail job's content hash, and
+# tiles/app.py (as a literal, from its own image) to version tile URLs, so a rename must change all.
+CONTENT_HASH_PROP = "ugs:content_hash"
 
 
 def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None) -> dict:
@@ -674,7 +656,7 @@ def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None)
     if props.get("ugs:renders"):  # bound GL style → lets the map view style from the index alone
         entry["properties"]["ugs:renders"] = props["ugs:renders"]
     assets = {
-        k: {kk: a[kk] for kk in ("href", "type", "roles", "title") if a.get(kk) is not None}
+        k: {kk: a[kk] for kk in INDEX_ASSET_KEYS if a.get(kk) is not None}
         for k, a in (item.get("assets") or {}).items()
     }
     if assets:
@@ -778,12 +760,11 @@ SERIES_DESC = {
 # Serving-topic groups carry NO authored title or description. The group is the dbt mart schema,
 # so its only honest label is the schema name itself (prettified, the same dumb transform items
 # get). A curated name for `emp` or `gengis` would be invention — when upstream publishes one
-# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Same rule as
-# the ISO topicCategory: absent means absent, never defaulted. Pub series differ — SERIES_DESC is
-# verbatim UGS copy from geology.utah.gov/map-pub, inherited rather than written.
+# (raw.schema_registry), inherit it here; until then the catalog says what it knows. Pub series
+# differ — SERIES_DESC is verbatim UGS copy from geology.utah.gov/map-pub, inherited, not written.
 
 # Nesting catalogs that ALSO publish a rollup items.json spanning every child collection. Keeps
-# one-URL consumers (featureserv gen_db, the tiles service, the ops console) working across a split
+# one-URL consumers (the tiles service, the ops console) working across a split
 # without walking N sub-collections. Deliberately NOT pubs: thousands of items in one document.
 ROLLUP_INDEX_CATALOGS = {SERVING_TOPICS_CATALOG}
 
@@ -934,6 +915,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     leaf: dict[str, dict] = {}
     rollup: dict[str, list[dict]] = {}   # nesting catalog -> its children's items (see ROLLUP_INDEX_CATALOGS)
     everything: list[dict] = []          # every item's index entry, for the root items.json
+    served: list[dict] = []              # the items the OGC API Features service serves
     with ThreadPoolExecutor(max_workers=64) as executor:
         for path, item_ids in groups.items():
             def _fetch_one(iid: str) -> dict | None:
@@ -950,6 +932,8 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
                     return None
 
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
+            if has_feature_service(path):
+                served.extend(items)
             nested = "/" in path
             top, cid = path.split("/")[0], path.split("/")[-1]
             if _is_pub_collection_path(path):
@@ -1032,6 +1016,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
                 f"{config.STAC_PREFIX}/items.json")
     _write_markdown("", title=config.CATALOG_TITLE, description=ROOT_DESCRIPTION,
                     kind="catalog", children=len(root_children))
+    feature_service.write(served)
 
     written_pubs = [p for p in pub_colls if p not in skipped]
     n = sum(len(v) for v in groups.values()) + sum(len(pub_entries.get(p, [])) for p in written_pubs)

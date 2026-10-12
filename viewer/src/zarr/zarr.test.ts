@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 
-import { assetKind, cubeVariables, nonSpatialDimensions, timeDimensionOf } from "@/stac";
+import { assetKind, collectionHrefOf, cubeRenderRescale, cubeSteps, cubeVariables, nonSpatialDimensions, resolveSelection, stepKey, timeDimensionOf } from "@/stac";
 import { decodeFillValue, fillValueOf } from "./store";
 import { effectiveNoData, maskNaN, NODATA_SENTINEL } from "./tile";
+import { cubeParam, parseCubeParam, pickedRescale } from "./cube-picks";
+import { stepFor } from "./steps";
 import { describeZarrError } from "./use-zarr-layers";
 
 // Shaped like the UBM items the warehouse federates.
@@ -81,6 +83,183 @@ describe("nonSpatialDimensions", () => {
   it("returns nothing for a purely 2D cube", () => {
     const item = { properties: { "cube:dimensions": { x: { type: "spatial" }, y: { type: "spatial" } } } };
     expect(nonSpatialDimensions(item)).toEqual([]);
+  });
+});
+
+describe("cubeSteps", () => {
+  const cube = (dim: string, d: Record<string, unknown>) => ({ properties: { "cube:dimensions": { [dim]: d } } });
+
+  it("enumerates a monthly series from its extent, as year + month", () => {
+    const steps = cubeSteps(cube("time", { type: "temporal", extent: ["2005-01-01T00:00:00Z", "2025-12-01T00:00:00Z"], step: "P1M" }), "time");
+    expect(steps).toHaveLength(252);   // DAYMET_DISALEXI's time axis
+    expect(steps[0]).toEqual({ label: "Jan 2005", year: 2005, month: 1 });
+    expect(steps.at(-1)).toEqual({ label: "Dec 2025", year: 2025, month: 12 });
+  });
+
+  it("reads the climatology month dim as months only", () => {
+    const steps = cubeSteps(cube("month", { type: "other", extent: [1, 12], unit: "month" }), "month");
+    expect(steps.map((s) => s.label)).toEqual(["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]);
+    expect(steps[0].year).toBeUndefined();
+  });
+
+  it("prefers listed values over the extent", () => {
+    const steps = cubeSteps(cube("time", { type: "temporal", values: ["2020-06-01", "2021-06-01"], extent: ["2020-01-01", "2021-12-01"], step: "P1M" }), "time");
+    expect(steps.map((s) => s.label)).toEqual(["Jun 2020", "Jun 2021"]);
+  });
+
+  it("resolves a daily series to year + month + day", () => {
+    const steps = cubeSteps(cube("time", { type: "temporal", extent: ["2020-02-27", "2020-03-01"], step: "P1D" }), "time");
+    expect(steps.map((s) => s.label)).toEqual(["Feb 27, 2020", "Feb 28, 2020", "Feb 29, 2020", "Mar 1, 2020"]);
+    expect(steps[3]).toMatchObject({ year: 2020, month: 3, day: 1 });
+  });
+
+  it("resolves a yearly series to year only", () => {
+    const steps = cubeSteps(cube("time", { type: "temporal", extent: ["2000-01-01", "2002-01-01"], step: "P1Y" }), "time");
+    expect(steps).toEqual([{ label: "2000", year: 2000 }, { label: "2001", year: 2001 }, { label: "2002", year: 2002 }]);
+  });
+
+  it("stops at a step past the range a Date can hold", () => {
+    const steps = cubeSteps(cube("time", { type: "temporal", extent: ["2000-01-01", "9999-12-31"], step: "P1000000Y" }), "time");
+    expect(steps).toEqual([{ label: "2000", year: 2000 }]);
+  });
+
+  it("infers the resolution of listed dates", () => {
+    const yearly = cubeSteps(cube("time", { values: ["2001-01-01", "2002-01-01"] }), "time");
+    expect(yearly[0]).toEqual({ label: "2001", year: 2001 });
+    const daily = cubeSteps(cube("time", { values: ["2001-01-01", "2001-01-02"] }), "time");
+    expect(daily[1].day).toBe(2);
+  });
+
+  it("rejects a zero step rather than repeating one date", () => {
+    expect(cubeSteps(cube("time", { type: "temporal", extent: ["2020-01-01", "2020-12-01"], step: "P0M" }), "time")).toEqual([]);
+  });
+
+  it("can't enumerate a sub-daily step without values", () => {
+    expect(cubeSteps(cube("time", { type: "temporal", extent: ["2020-01-01", "2020-01-02"], step: "PT1H" }), "time")).toEqual([]);
+  });
+});
+
+describe("stepFor", () => {
+  // 2010 has Jan–Dec; 2011 only Jan–Mar (a series that ends early).
+  const steps = cubeSteps({ properties: { "cube:dimensions": { time: {
+    type: "temporal", extent: ["2010-01-01", "2011-03-01"], step: "P1M" } } } }, "time");
+  const at = (label: string) => steps.findIndex((s) => s.label === label);
+
+  it("keeps the month when the new year has it", () => {
+    expect(steps[stepFor(steps, steps[at("Feb 2010")], "year", 2011)].label).toBe("Feb 2011");
+  });
+
+  it("falls back to the nearest month the new year has", () => {
+    expect(steps[stepFor(steps, steps[at("Oct 2010")], "year", 2011)].label).toBe("Mar 2011");
+  });
+
+  it("changes the month within the current year", () => {
+    expect(steps[stepFor(steps, steps[at("Feb 2011")], "month", 1)].label).toBe("Jan 2011");
+  });
+});
+
+describe("resolveSelection", () => {
+  const monthly = [{ label: "Jan 2005", year: 2005, month: 1 }, { label: "Feb 2005", year: 2005, month: 2 }];
+  const months = [{ label: "Jan", month: 1 }, { label: "Feb", month: 2 }];
+
+  it("defaults a dated series to its latest step and a month dim to January", () => {
+    expect(resolveSelection({ time: monthly, month: months })).toEqual({ time: 1, month: 0 });
+  });
+
+  it("finds a pick by its key", () => {
+    expect(resolveSelection({ time: monthly, month: months }, { time: "2005-01", month: "2" })).toEqual({ time: 0, month: 1 });
+  });
+
+  // A step the store doesn't hold (STAC ran ahead of the data, or a stale link) falls back.
+  it("falls back from a key it can't find", () => {
+    expect(resolveSelection({ time: monthly }, { time: "2030-01" })).toEqual({ time: 1 });
+  });
+
+  it("pins a dim STAC can't enumerate to its first index", () => {
+    expect(resolveSelection({ band: [] })).toEqual({ band: 0 });
+  });
+});
+
+describe("stepKey", () => {
+  it("keys a dated step by its date, at the series' resolution", () => {
+    expect(stepKey({ label: "2010", year: 2010 }, 5)).toBe("2010");
+    expect(stepKey({ label: "Jul 2010", year: 2010, month: 7 }, 5)).toBe("2010-07");
+    expect(stepKey({ label: "Jul 3, 2010", year: 2010, month: 7, day: 3 }, 5)).toBe("2010-07-03");
+  });
+
+  it("keys a month dim by month and anything else by index", () => {
+    expect(stepKey({ label: "Jul", month: 7 }, 6)).toBe("7");
+    expect(stepKey({ label: "band 2" }, 1)).toBe("1");
+  });
+});
+
+describe("cube param", () => {
+  it("round-trips several cubes", () => {
+    const all = { DAYMET_DISALEXI: { var: "AET", time: "2010-07" }, CLIM: { month: "7" } };
+    expect(cubeParam(all)).toBe("DAYMET_DISALEXI~var=AET~time=2010-07,CLIM~month=7");
+    expect(parseCubeParam(cubeParam(all))).toEqual(all);
+  });
+
+  it("drops a cube with no picks and ignores junk", () => {
+    expect(cubeParam({ A: {} })).toBeUndefined();
+    expect(parseCubeParam("A~bad~time=2010,~x=1")).toEqual({ A: { time: "2010" } });
+    expect(parseCubeParam(undefined)).toEqual({});
+  });
+});
+
+describe("pickedRescale", () => {
+  it("reads either end, leaving the other to the sampled stretch", () => {
+    expect(pickedRescale({ min: "0", max: "120.5" })).toEqual([0, 120.5]);
+    expect(pickedRescale({ max: "80" })).toEqual([undefined, 80]);
+    expect(pickedRescale({ min: "abc" })).toEqual([undefined, undefined]);
+  });
+});
+
+describe("cubeRenderRescale", () => {
+  const item = (props: Record<string, unknown>) => ({ properties: props });
+
+  it("reads the standard render extension, preferring the render named for the variable", () => {
+    const it = item({ renders: {
+      default: { assets: ["data"], rescale: [[0, 100]] },
+      soil: { assets: ["data"], variable: "Soil_Water_End_Of_Previous_Timestep", rescale: [[0, 400]] },
+    } });
+    expect(cubeRenderRescale(it, "AET")).toEqual([0, 100]);
+    expect(cubeRenderRescale(it, "Soil_Water_End_Of_Previous_Timestep")).toEqual([0, 400]);
+  });
+
+  it("falls back to ugs:renders, then to nothing", () => {
+    expect(cubeRenderRescale(item({ "ugs:renders": { default: { rescale: [[5, 50]] } } }), "AET")).toEqual([5, 50]);
+    expect(cubeRenderRescale(item({}), "AET")).toBeUndefined();
+  });
+
+  it("takes ugs-styles' flat [min, max] as well as the nested per-band form", () => {
+    expect(cubeRenderRescale(item({ "ugs:renders": { default: { rescale: [0, 100] } } }), "AET")).toEqual([0, 100]);
+    const coll = { type: "Collection", renders: { default: { rescale: [0, 100] } } };
+    expect(cubeRenderRescale(coll, "AET")).toEqual([0, 100]);
+  });
+
+  it("ignores a malformed or empty range", () => {
+    expect(cubeRenderRescale(item({ renders: { default: { rescale: [[10, 10]] } } }), "AET")).toBeUndefined();
+    expect(cubeRenderRescale(item({ renders: { default: { rescale: [] } } }), "AET")).toBeUndefined();
+  });
+});
+
+describe("collectionHrefOf", () => {
+  const item = { links: [{ rel: "parent", href: "../p.json" }, { rel: "collection", href: "../collection.json" }] };
+
+  it("resolves the collection link against the item's URL", () => {
+    expect(collectionHrefOf(item, "https://cdn/stac/ubm/DAYMET/DAYMET.json")).toBe("https://cdn/stac/ubm/collection.json");
+  });
+
+  it("falls back to an absolute self link, and gives up with nothing absolute to resolve against", () => {
+    expect(collectionHrefOf({ links: [...item.links, { rel: "self", href: "https://cdn/a/b/i.json" }] }, "DAYMET"))
+      .toBe("https://cdn/a/collection.json");
+    expect(collectionHrefOf(item, "DAYMET")).toBeUndefined();
+  });
+
+  it("reads a collection's renders the same way as an item's", () => {
+    const coll = { type: "Collection", renders: { default: { assets: ["data"], rescale: [[0, 100]] } } };
+    expect(cubeRenderRescale(coll, "AET")).toEqual([0, 100]);
   });
 });
 

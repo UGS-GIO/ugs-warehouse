@@ -45,7 +45,7 @@ def test_legacy_layout_files_inside_expected_pubs_and_series(monkeypatch):
         f"{PFX}/ugs-publications/OFR/catalog.json",
     ])
     legacy = P.legacy_layout_paths(expected={"ugs-publications/OFR/OFR-1"}, groups=("ugs-publications",))
-    # The pub ISO sidecar belongs to the Collection, so it is never legacy.
+    # Only the old Item and series files are legacy; other files in the pub dir are left alone.
     assert sorted(legacy) == sorted([f"{PFX}/ugs-publications/OFR/OFR-1/OFR-1.json",
                                      f"{PFX}/ugs-publications/OFR/collection.json",
                                      f"{PFX}/ugs-publications/OFR/items.json"])

@@ -116,8 +116,7 @@ def legacy_layout_paths(expected: set[str] | None = None, groups: tuple[str, ...
 
     Only series with a `catalog.json`, which the refresh writes once every pub in the series has
     migrated, are touched: a pending series is still indexed from its old files. Within one, a
-    pub's old Item `<SID>.json` is listed only beside its new `collection.json`. The pub ISO
-    sidecar is the new Collection's own record, so it stays.
+    pub's old Item `<SID>.json` is listed only beside its new `collection.json`.
     """
     if expected is None:
         expected = expected_pub_dirs()

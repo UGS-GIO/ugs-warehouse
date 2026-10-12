@@ -1,12 +1,6 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, redirect } from "@tanstack/react-router";
 
-import { useViewCtx } from "@/app";
-import { Developers } from "@/shell/developers-view";
-import { CATALOG_URL } from "@/stac";
-
-function DevelopersPage() {
-  const { rootChildren } = useViewCtx();
-  return <Developers catalogUrl={CATALOG_URL} groups={rootChildren} />;
-}
-
-export const Route = createFileRoute("/developers")({ component: DevelopersPage });
+// The developer reference is the end of the Guide now; old /developers links land on it.
+export const Route = createFileRoute("/developers")({
+  beforeLoad: () => { throw redirect({ to: "/guide", hash: "for-developers", replace: true }); },
+});

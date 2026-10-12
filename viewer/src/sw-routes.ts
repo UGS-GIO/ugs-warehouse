@@ -25,6 +25,11 @@ export const isCatalogJson = ({ url, request }: RouteMatch): boolean =>
  */
 export const isShell = (url: string): boolean => !url.includes("/") || /^assets\/index-[^/]+\.(js|css)$/.test(url);
 
+/** A layer's style (ugs-styles), so a layer saved for offline draws in its own colors, not the fallback. */
+export const isLayerStyle = ({ url }: RouteMatch): boolean =>
+  url.hostname === "maps-assets.geology.utah.gov" && url.pathname.startsWith("/styles/styles/")
+  && url.pathname.endsWith(".json");
+
 /** A built chunk or asset: content-hashed, so a cached copy never goes stale. */
 export const isAppAsset = ({ url }: RouteMatch, origin: string): boolean =>
   url.origin === origin && url.pathname.includes("/assets/") && !url.pathname.endsWith(".wasm");

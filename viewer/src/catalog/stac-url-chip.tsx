@@ -1,4 +1,5 @@
 import { useRef, useState } from "react";
+import { CheckIcon, CopyIcon } from "@/shell/icons";
 
 // Absolute — a copied "/stac/…" from a relative ?catalog= override is useless elsewhere.
 export async function copyCatalogUrl(url: string): Promise<boolean> {
@@ -49,36 +50,5 @@ export function StacUrlChip({ url, className = "" }: { url: string; className?: 
         {state === "copied" ? <CheckIcon /> : <CopyIcon />}
       </button>
     </span>
-  );
-}
-
-const ICON = "h-3.5 w-3.5 shrink-0 stroke-current";
-
-export function CopyIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={ICON} aria-hidden>
-      <rect x="9" y="9" width="12" height="12" rx="2" />
-      <path d="M5 15V5a2 2 0 0 1 2-2h10" />
-    </svg>
-  );
-}
-
-export function CheckIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" className={ICON} aria-hidden>
-      <path d="m4 13 5 5L20 6" />
-    </svg>
-  );
-}
-
-// Save-for-offline. An SVG rather than a glyph: "⭳" is missing from common phone fonts and
-// rendered as a crossed box.
-export function DownloadIcon() {
-  return (
-    <svg viewBox="0 0 24 24" fill="none" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={ICON} aria-hidden>
-      <path d="M12 3v12" />
-      <path d="m7 10 5 5 5-5" />
-      <path d="M5 21h14" />
-    </svg>
   );
 }

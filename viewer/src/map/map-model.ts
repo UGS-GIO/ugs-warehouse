@@ -23,9 +23,11 @@ export function mapKindOf(f: MapKindFlags): MapKind {
   return "none";
 }
 
-// The footprint flag for mapKindOf: an item is footprint-drawable if it has geometry or a real bbox.
+// The footprint flag for mapKindOf: an item is footprint-drawable if it has geometry or a real bbox,
+// and not the statewide placeholder extent (`ugs:footprint_source: "utah-bbox"`).
 export function hasFootprint(item: StacDoc | undefined): boolean {
-  return Boolean(item && (item.geometry || (Array.isArray(item.bbox) && item.bbox.length >= 4)));
+  const placeholder = (item?.properties as Record<string, unknown> | undefined)?.["ugs:footprint_source"] === "utah-bbox";
+  return Boolean(item && !placeholder && (item.geometry || (Array.isArray(item.bbox) && item.bbox.length >= 4)));
 }
 
 // A [w,s,e,n] lon/lat bbox, or undefined if the item's bbox is missing/malformed. Handles the STAC

@@ -76,6 +76,11 @@ describe("hasFootprint", () => {
     expect(hasFootprint({ bbox: [-114, 37, -109, 42] } as StacDoc)).toBe(true);
   });
 
+  it("is false for the statewide placeholder extent", () => {
+    expect(hasFootprint({ bbox: [-114, 37, -109, 42], properties: { "ugs:footprint_source": "utah-bbox" } } as StacDoc))
+      .toBe(false);
+  });
+
   it("is false for aspatial items / too-short bbox / undefined", () => {
     expect(hasFootprint(undefined)).toBe(false);
     expect(hasFootprint({} as StacDoc)).toBe(false);

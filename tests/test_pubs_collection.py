@@ -131,6 +131,13 @@ def test_a_collection_on_the_utah_placeholder_says_so():
     assert coll["ugs:footprint_source"] == "cog"
 
 
+@pytest.mark.parametrize("tables", [["geo__DMU"], [{"label": "geo__DMU"}]])
+def test_is_single_file_takes_a_table_as_a_label_or_a_dict(tables):
+    kw = dict(has_cog=True, has_units=False, has_3d=False, vector_layers=[])
+    assert sink_stac.is_single_file(**kw, companion_tables=tables) is False
+    assert sink_stac.is_single_file(**kw, companion_tables=[]) is True
+
+
 def test_gems_validation_layers_are_not_published(capsys):
     coll, items = _build(vector_layers=["geo__Faults", "geo__T_1_LineErrors", "t_12_pointerrors"],
                          companion_tables=[{"label": "geo__T_3_PolyErrors"}])

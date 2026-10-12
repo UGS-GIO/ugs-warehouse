@@ -687,6 +687,20 @@ def test_single_file_sids_reads_the_source_bucket_in_a_review_bake(monkeypatch):
     assert seen and set(seen) == {"public-bucket"}
 
 
+def test_single_file_sids_reads_a_manifest_with_companion_tables(monkeypatch):
+    """A manifest's `tables` is a list of bare labels; a pub whose only extras are tables is not
+    single-file, and one whose only table is GeMS validation output still is."""
+    from ugs_warehouse.pubs import ingest
+
+    monkeypatch.setattr(ingest, "_unit_ids", lambda bucket=None: set())
+    monkeypatch.setattr(ingest, "_ids_with_suffix", lambda *a, **k: set())
+    monkeypatch.setattr(ingest, "_vector_manifests_by_sid", lambda bucket=None: ({
+        "GQ-1": {"spatial": [], "tables": ["geo__DMU"]},
+        "GQ-2": {"spatial": [], "tables": ["geo__T_1_PolyErrors"]},
+    }, {}))
+    assert gm._single_file_sids(["GQ-1", "GQ-2", "GQ-3"]) == {"GQ-2", "GQ-3"}
+
+
 def test_single_file_decision_matches_between_ingest_and_the_mosaic(monkeypatch):
     from ugs_warehouse.pubs import ingest, sink_stac, vectors
 

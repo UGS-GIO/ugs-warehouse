@@ -242,12 +242,15 @@ def is_validation_layer(label: str) -> bool:
 
 
 def is_single_file(*, has_cog: bool, has_units: bool, has_3d: bool,
-                   vector_layers: list[str] | None, companion_tables: list[dict] | None) -> bool:
+                   vector_layers: list[str] | None,
+                   companion_tables: list[dict] | list[str] | None) -> bool:
     """True when a publication has exactly one data Item. Portolan keeps a single-file collection's
     data at collection level, so such a publication is a Collection with assets and no Items.
-    Validation-error layers are not published, so they do not count."""
+    Validation-error layers are not published, so they do not count. A companion table is a
+    `{"label": ...}` dict (build_publication) or the bare label (a manifest's `tables` list)."""
     layers = [lb for lb in vector_layers or [] if not is_validation_layer(lb)]
-    tables = [t for t in companion_tables or [] if not is_validation_layer(t["label"])]
+    tables = [t for t in companion_tables or []
+              if not is_validation_layer(t if isinstance(t, str) else t["label"])]
     return (int(has_cog) + int(has_units) + int(has_3d) + len(layers) + len(tables)) == 1
 
 

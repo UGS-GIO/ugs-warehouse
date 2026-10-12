@@ -733,11 +733,6 @@ def test_cog_map_links_to_its_portal_layer_mosaic():
                   has_cog=True, mosaic_tier=None)
     assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
 
-    # A map kept out of the mosaics (scale.NOT_IN_MOSAIC) links to none, whatever its tier.
-    item = _build({"series_id": "OFR-675DM", "series": "OFR", "pub_scale": "1:62,500"},
-                  has_cog=True, mosaic_tier="100k")
-    assert not [lnk for lnk in item["links"] if lnk["rel"] == "related"]
-
     # non-COG pub: not stitched into any mosaic, so no member link.
     item = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"},
                   has_cog=False, mosaic_tier="500k")

@@ -19,7 +19,7 @@ import urllib.parse
 
 from ..core import config, stac
 from . import counties, identity, topic
-from .scale import MOSAIC_TIER_LABEL, NOT_IN_MOSAIC
+from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
 from .vectors import VECTORS_PREFIX
 
@@ -364,7 +364,7 @@ def build_item(p: dict, attachments: list[dict], *,
     # A COG map is stitched into its portal layer's seamless raster mosaic (geolmap_mosaics.py); the
     # caller passes that tier (`scale.mosaic_tier_of` over the map's footprints), or None for a map
     # in no tiered layer. The pub carries only its raw `ugs:scale` and reaches its tier through this link.
-    if has_cog and mosaic_tier and not ed.get("deprecated") and sid.upper() not in NOT_IN_MOSAIC:
+    if has_cog and mosaic_tier and not ed.get("deprecated"):
         link_tier = mosaic_tier
         extra_links.append({
             "rel": "related",

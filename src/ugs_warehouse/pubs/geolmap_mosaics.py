@@ -60,7 +60,6 @@ from ..core import config, gcs, stac
 from . import editions, identity, scale, source
 from .scale import MOSAIC_TIER_LABEL as TIER_LABEL
 from .scale import MOSAIC_TIERS as TIERS
-from .scale import NOT_IN_MOSAIC
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
@@ -139,14 +138,10 @@ def _group_by_tier(edition_mode: str = "current",
     groups: dict[str, list[str]] = {t: [] for t in TIERS}
     untiered: dict[str, list[str]] = {}
     n_deprecated = 0
-    n_not_in_mosaic = 0
     n_outside_quads = 0
     for sid in sorted(_cog_sids()):
         if edition_mode == "current" and sid in deprecated_upper:
             n_deprecated += 1
-            continue
-        if edition_mode == "current" and sid in NOT_IN_MOSAIC:
-            n_not_in_mosaic += 1
             continue
         if requested_quads is not None:
             quad_name = qmap.get(sid)
@@ -167,7 +162,7 @@ def _group_by_tier(edition_mode: str = "current",
     counts = ", ".join(f"{t}={len(groups[t])}" for t in TIERS)
     detail = f"untiered: {sum(len(v) for v in untiered.values())}"
     if edition_mode == "current":
-        detail += f", deprecated editions dropped: {n_deprecated}, not in mosaic: {n_not_in_mosaic}"
+        detail += f", deprecated editions dropped: {n_deprecated}"
     if requested_quads is not None:
         detail += f", outside --quads: {n_outside_quads}"
     print(f"[mosaics] COGs grouped by portal layer: {counts}  ({detail})")
@@ -182,14 +177,20 @@ def _vsigs(sid: str) -> str:
 
 
 def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
-    """`sids` ordered ascending by `pub_year` (newest last). `gdalbuildvrt` gives the LAST source
-    priority on overlap, so this makes the newest edition draw on top for free — matters for
-    `--editions all` (every edition stacked) and the pub_year-tie case. An unparseable/missing year
-    sorts to 0 (bottom); ties (including two unparseable years) break on sid for a stable order."""
+    """`sids` with reissues first (see `_is_reissue`), then ascending by `pub_year`. `gdalbuildvrt`
+    gives the LAST source priority on overlap, so the newest original map draws on top, which matters
+    for `--editions all` (every edition stacked) and the pub_year-tie case. An unparseable or missing
+    year sorts to 0 (bottom); ties (including two unparseable years) break on sid for a stable order."""
     def _yr(s: str) -> int:
         y = (by_sid.get(s, {}).get("pub_year") or "").strip()
         return int(y) if len(y) == 4 and y.isdigit() else 0
-    return sorted(sids, key=lambda s: (_yr(s), s))
+    return sorted(sids, key=lambda s: (not _is_reissue(by_sid.get(s, {})), _yr(s), s))
+
+
+def _is_reissue(pub: dict) -> bool:
+    """A GIS reproduction of an older map. Its pub_year is the reissue's, not the mapping's, so it
+    draws beneath every original map and shows only where no other map covers the ground."""
+    return "gis reproduction" in (pub.get("pub_name") or "").casefold()
 
 
 _WEBMERC_Z0_MPP = 156543.03392804097  # web-mercator m/px at zoom 0 (256 px tiles)

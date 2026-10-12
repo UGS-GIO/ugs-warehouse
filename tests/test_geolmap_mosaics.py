@@ -99,22 +99,6 @@ def test_group_by_tier_all_keeps_every_edition_and_skips_the_graph():
     mock_graph.assert_not_called()
 
 
-def test_group_by_tier_current_leaves_out_not_in_mosaic_maps(monkeypatch, capsys):
-    """A NOT_IN_MOSAIC map is dropped from the current-edition mosaic even when no edition supersedes
-    it, and kept by --editions all."""
-    monkeypatch.setattr(gm, "NOT_IN_MOSAIC", {"OFR-677"})
-    with patch.object(gm, "_cog_sids", return_value=set(_PARK_CITY_QMAP)), \
-         patch.object(gm.source, "read_pubs", return_value=_PARK_CITY_PUBS), \
-         patch.object(gm.editions, "quad_by_series", return_value=_PARK_CITY_QMAP), \
-         patch.object(gm.editions, "edition_graph", return_value={}):
-        current, _ = gm._group_by_tier(edition_mode="current")
-        assert "not in mosaic: 1" in capsys.readouterr().out
-        every, _ = gm._group_by_tier(edition_mode="all")
-
-    assert set(current["24k"]) == {"GQ-852", "M-296DM"}
-    assert set(every["24k"]) == {"GQ-852", "OFR-677", "M-296DM"}
-
-
 def test_group_by_tier_follows_the_portal_layer_not_the_scale(monkeypatch, capsys):
     """Tiers are the portal's layers (footprint geomaps_service): a 1:62,500 30' x 60' map is
     intermediate, a 1 x 2 degree sheet is 250k, the state map is 500k. Irregular maps, maps with no
@@ -276,6 +260,19 @@ def test_vrt_order_puts_unparseable_years_at_the_bottom_and_breaks_ties_by_sid()
         "M-4": {"pub_year": "2022"},   # ties with M-1 -> broken by sid
     }
     assert gm._vrt_order(["M-1", "M-2", "M-3", "M-4"], by_sid) == ["M-2", "M-3", "M-1", "M-4"]
+
+
+def test_vrt_order_draws_reissues_of_older_maps_beneath_the_originals():
+    by_sid = {
+        "OFR-675DM": {"pub_year": "2017",
+                      "pub_name": "White Canyon area (GIS reproduction of plate 1 of USGS Bulletin 1125 [1964])"},
+        "MP-08-3DM": {"pub_year": "2008", "pub_name": "Geologic map of the White Canyon area"},
+        "OFR-713DR": {"pub_year": "2019", "pub_name": "Cedar Mesa area (GIS Reproduction of USGS Map in B-1186 [1965])"},
+        "M-1": {"pub_year": "2017", "pub_name": "Reproduction rates of Pennsylvanian brachiopods"},
+        "M-2": {"pub_year": "2017"},   # no title: an original
+    }
+    order = gm._vrt_order(["OFR-675DM", "MP-08-3DM", "OFR-713DR", "M-1", "M-2"], by_sid)
+    assert order == ["OFR-675DM", "OFR-713DR", "MP-08-3DM", "M-1", "M-2"]
 
 
 def _tree(root, tiles):

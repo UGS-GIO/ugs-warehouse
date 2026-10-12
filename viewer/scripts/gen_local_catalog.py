@@ -224,9 +224,11 @@ def _index_entry(item: dict, *, rollup: bool = False) -> dict:
     a `rel:self` to the full item, and web-map links. Keep the two in step — a local catalog
     that carries more than production is a bug the laptop can't reproduce."""
     props = item.get("properties") or {}
+    no_footprint = ("geometry" in item and item["geometry"] is None) \
+        or props.get("ugs:footprint_source") == "utah-bbox"
     entry: dict = {
         "id": item["id"],
-        "bbox": item.get("bbox"),
+        **({} if no_footprint else {"bbox": item.get("bbox")}),
         "properties": {k: props[k] for k in _INDEX_PROP_KEYS
                        if props.get(k) not in (None, "", [])},
     }

@@ -655,6 +655,17 @@ _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub
                     "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
 
 
+# `ugs:footprint_source` value the pubs producer writes when a document has no footprint and its
+# extent is the statewide placeholder (pubs.sink_stac.FOOTPRINT_FALLBACK).
+PLACEHOLDER_FOOTPRINT = "utah-bbox"
+
+
+def _no_footprint(doc: dict, props: dict) -> bool:
+    """True for a document whose geometry is null or whose extent is the Utah placeholder."""
+    return ("geometry" in doc and doc["geometry"] is None) \
+        or props.get("ugs:footprint_source") == PLACEHOLDER_FOOTPRINT
+
+
 def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None) -> dict:
     """A compact, list-renderable subset of a STAC item (mini-doc): id, bbox, a few
     properties, asset summaries, a `rel:self` pointer to the full item, and any web-map
@@ -667,7 +678,9 @@ def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None)
     props = item.get("properties") or {}
     entry: dict = {
         "id": item["id"],
-        "bbox": item.get("bbox"),
+        # No bbox for an item without a footprint: a table (null geometry), or one placed on the
+        # statewide placeholder. A list view would otherwise draw and badge Utah.
+        **({} if _no_footprint(item, props) else {"bbox": item.get("bbox")}),
         "properties": {k: props[k] for k in _INDEX_PROP_KEYS
                        if props.get(k) not in (None, "", [])},
     }
@@ -724,7 +737,9 @@ def _collection_index_entry(coll: dict, *, prefix: str, item_count: int | None =
     props["ugs:item_count"] = (item_count if item_count is not None
                                else sum(1 for lnk in coll.get("links") or [] if lnk.get("rel") == "item"))
     bboxes = ((coll.get("extent") or {}).get("spatial") or {}).get("bbox") or [None]
-    entry: dict = {"id": coll["id"], "bbox": bboxes[0], "properties": props}
+    # A Collection on the Utah placeholder extent has no footprint, so its entry carries no bbox.
+    placeholder = coll.get("ugs:footprint_source") == PLACEHOLDER_FOOTPRINT
+    entry: dict = {"id": coll["id"], **({} if placeholder else {"bbox": bboxes[0]}), "properties": props}
     assets = _asset_summaries(coll)
     if assets:
         entry["assets"] = assets

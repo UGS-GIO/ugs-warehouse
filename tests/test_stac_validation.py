@@ -172,3 +172,20 @@ def test_a_publication_whose_series_id_has_a_space_validates():
     _validate(_drop_private(coll))
     for it in items:
         _validate(_drop_private(it))
+
+
+def test_a_publication_with_a_table_and_no_footprint_validates():
+    """A companion table has null geometry and no bbox; a Collection on the Utah placeholder keeps
+    its required extent and flags it with `ugs:footprint_source`."""
+    from ugs_warehouse.pubs import sink_stac as pubs_sink
+
+    coll, items = pubs_sink.build_publication(
+        {"series_id": "OFR-1", "pub_year": "2020", "pub_name": "A map"}, [], override={},
+        has_units=True, layers={"geo__DMU": {"rows": 2}},
+        companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}])
+    assert coll["ugs:footprint_source"] == pubs_sink.FOOTPRINT_FALLBACK
+    _validate(_drop_private(coll))
+    table = next(it for it in items if it["id"].endswith("geo__DMU"))
+    assert table["geometry"] is None and "bbox" not in table
+    for it in items:
+        _validate(_drop_private(it))

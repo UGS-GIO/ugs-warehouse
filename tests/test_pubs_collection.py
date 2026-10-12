@@ -52,7 +52,11 @@ def test_items_live_under_the_publication_collection():
         assert rels["collection"] == "../collection.json" and rels["root"] == "../../../../catalog.json"
         assert rels["cite-as"] == "https://doi.org/10.34191/OFR-784DM"
         assert it["properties"]["sci:doi"] == "10.34191/OFR-784DM" and stac.SCI_EXT in it["stac_extensions"]
-        assert it["geometry"] and it["bbox"]
+        # A table has no geometry, so no bbox; everything else is placed.
+        if it["id"].endswith("geo__DMU"):
+            assert it["geometry"] is None and "bbox" not in it
+        else:
+            assert it["geometry"] and it["bbox"]
     assert coll["sci:doi"] == "10.34191/OFR-784DM" and coll["sci:citation"]
     assert stac.SCI_EXT in coll["stac_extensions"]
 
@@ -82,31 +86,63 @@ def test_plate_carries_the_cog_and_the_mosaic_link():
     assert any(lk["rel"] == "related" and "geologic-maps-24k" in lk["href"] for lk in plate["links"])
 
 
-def test_layer_uses_its_own_bbox_and_table_uses_the_footprint():
+def test_layer_uses_its_own_bbox_and_table_has_no_geometry():
     _, items = _build()
     by_id = {it["id"]: it for it in items}
     assert by_id["OFR-784DM_geo__Faults"]["bbox"] == [-112.4, 40.6, -112.1, 40.9]
     assert by_id["OFR-784DM_geo__Faults"]["properties"]["table:row_count"] == 12
     assert by_id["OFR-784DM_geo__DMU"]["properties"]["table:row_count"] == 41
     table = by_id["OFR-784DM_geo__DMU"]
-    assert table["bbox"] == [-112.5, 40.5, -112.0, 41.0]
+    assert table["geometry"] is None and "bbox" not in table
+    assert "ugs:footprint_source" not in table["properties"]
     assert table["assets"]["data"]["table:columns"] == [{"name": "MapUnit", "type": "string"}]
     assert stac.TABLE_EXT in table["stac_extensions"]
 
 
 def test_items_label_where_their_footprint_came_from():
     _, items = _build()
-    src = {it["id"]: it["properties"]["ugs:footprint_source"] for it in items}
+    src = {it["id"]: it["properties"].get("ugs:footprint_source") for it in items}
     assert src == {"OFR-784DM_plate": "cog", "OFR-784DM_geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
-                   "OFR-784DM_geo__DMU": "cog"}
+                   "OFR-784DM_geo__DMU": None}
 
 
 def test_items_without_a_footprint_carry_the_fallback_label():
     _, items = _build(geom=None, bbox=None, fp_source=None)
-    src = {it["id"]: it["properties"]["ugs:footprint_source"] for it in items}
+    src = {it["id"]: it["properties"].get("ugs:footprint_source") for it in items}
     assert src == {"OFR-784DM_plate": sink_stac.FOOTPRINT_FALLBACK,
                    "OFR-784DM_geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
-                   "OFR-784DM_geo__DMU": sink_stac.FOOTPRINT_FALLBACK}
+                   "OFR-784DM_geo__DMU": None}
+
+
+def test_a_collection_on_the_utah_placeholder_says_so():
+    coll, _ = sink_stac.build_publication(
+        {**P, "series_id": "C-139", "pub_name": "Utah mining 2024"}, [], has_cover=True)
+    assert coll["extent"]["spatial"]["bbox"] == [stac.UTAH_BBOX]
+    assert coll["ugs:footprint_source"] == sink_stac.FOOTPRINT_FALLBACK
+    # Placeholder-placed items and tables add no extent, so it stays the placeholder.
+    coll, _ = _build(geom=None, bbox=None, fp_source=None,
+                     layers={"geo__Faults": {"rows": 1, "bbox": None}, "geo__DMU": {"rows": 1}})
+    assert coll["ugs:footprint_source"] == sink_stac.FOOTPRINT_FALLBACK
+    # A real layer bbox is a real extent.
+    coll, _ = _build(geom=None, bbox=None, fp_source=None)
+    assert coll.get("ugs:footprint_source") != sink_stac.FOOTPRINT_FALLBACK
+    assert coll["extent"]["spatial"]["bbox"] == [[-112.4, 40.6, -112.1, 40.9]]
+    coll, _ = _build()
+    assert coll["ugs:footprint_source"] == "cog"
+
+
+def test_gems_validation_layers_are_not_published(capsys):
+    coll, items = _build(vector_layers=["geo__Faults", "geo__T_1_LineErrors", "t_12_pointerrors"],
+                         companion_tables=[{"label": "geo__T_3_PolyErrors"}])
+    ids = {it["id"] for it in items}
+    assert ids == {"OFR-784DM_plate", "OFR-784DM_geo__Faults"}
+    err = capsys.readouterr().err
+    for label in ("geo__T_1_LineErrors", "t_12_pointerrors", "geo__T_3_PolyErrors"):
+        assert f"skipped '{label}' (GeMS validation output" in err
+    assert not sink_stac.is_validation_layer("geo__TopologyErrorsNotes")
+    assert not sink_stac.is_validation_layer("T_1_Errorsx")
+    assert sink_stac.is_single_file(has_cog=True, has_units=False, has_3d=False,
+                                    vector_layers=["geo__T_1_LineErrors"], companion_tables=[])
 
 
 def test_a_report_with_no_data_is_a_collection_with_no_items():

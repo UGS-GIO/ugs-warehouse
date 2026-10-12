@@ -273,6 +273,21 @@ def test_a_publication_with_many_items_is_one_root_entry_with_its_facets_and_pdf
                    "type": "application/json"}]}
 
 
+def test_index_entries_carry_no_bbox_without_a_footprint():
+    placed = {"id": "a", "geometry": {"type": "Point", "coordinates": [0, 0]}, "bbox": [0, 0, 0, 0],
+              "properties": {"ugs:footprint_source": "cog"}}
+    assert stac._index_entry(placed)["bbox"] == [0, 0, 0, 0]
+    table = {"id": "t", "geometry": None, "properties": {}}
+    assert "bbox" not in stac._index_entry(table)
+    on_utah = {**placed, "bbox": stac.UTAH_BBOX, "properties": {"ugs:footprint_source": "utah-bbox"}}
+    assert "bbox" not in stac._index_entry(on_utah)
+    coll = {"id": "C-139", "links": [], "ugs:footprint_source": "utah-bbox",
+            "extent": {"spatial": {"bbox": [stac.UTAH_BBOX]}, "temporal": {"interval": [[None, None]]}}}
+    assert "bbox" not in stac._collection_index_entry(coll, prefix="C-139/")
+    coll_real = {**coll, "ugs:footprint_source": "cog"}
+    assert stac._collection_index_entry(coll_real, prefix="C-139/")["bbox"] == stac.UTAH_BBOX
+
+
 def test_an_undated_publication_entry_carries_the_marker_not_a_datetime():
     coll = {"id": "OFR-0", "title": "Old", "ugs:date_unknown": True, "links": [],
             "extent": {"spatial": {"bbox": [stac.UTAH_BBOX]},

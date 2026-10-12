@@ -45,7 +45,7 @@ MEDIA = {".pdf": "application/pdf", ".zip": "application/zip",
 COG_MIME = config.COG_MIME
 # `ugs:footprint_source` values beyond the footprints parquet's own ("cog", "view"): the Utah
 # bounding box standing in for a missing footprint, and a layer's bbox from its manifest.
-FOOTPRINT_FALLBACK = "utah-bbox"
+FOOTPRINT_FALLBACK = stac.PLACEHOLDER_FOOTPRINT
 LAYER_BBOX_SOURCE = "layer"
 PARQUET_MIME = config.PARQUET_MIME
 # Everything outside RFC 3986's unreserved set needs escaping in a path segment. See `item_id_for`.
@@ -230,12 +230,25 @@ def layer_titles(labels: list[str]) -> dict[str, tuple[str, str | None]]:
     return out
 
 
+# GeMS validation output (`T_1_LineErrors`, `T_2_PointErrors`): the validation tool's report on
+# the map, not map data, so it is never published.
+_GEMS_ERRORS = re.compile(r"^T_\d+_.*Errors$", re.IGNORECASE)
+
+
+def is_validation_layer(label: str) -> bool:
+    """True for a GeMS validation-error layer, judged on the label after any `<dir>__` prefix."""
+    prefix, sep, rest = label.partition("__")
+    return bool(_GEMS_ERRORS.match(rest if sep and prefix and rest else label))
+
+
 def is_single_file(*, has_cog: bool, has_units: bool, has_3d: bool,
                    vector_layers: list[str] | None, companion_tables: list[dict] | None) -> bool:
     """True when a publication has exactly one data Item. Portolan keeps a single-file collection's
-    data at collection level, so such a publication is a Collection with assets and no Items."""
-    return (int(has_cog) + int(has_units) + int(has_3d)
-            + len(vector_layers or []) + len(companion_tables or [])) == 1
+    data at collection level, so such a publication is a Collection with assets and no Items.
+    Validation-error layers are not published, so they do not count."""
+    layers = [lb for lb in vector_layers or [] if not is_validation_layer(lb)]
+    tables = [t for t in companion_tables or [] if not is_validation_layer(t["label"])]
+    return (int(has_cog) + int(has_units) + int(has_3d) + len(layers) + len(tables)) == 1
 
 
 def plate_object(p: dict, *, single_file: bool) -> str:
@@ -287,6 +300,12 @@ def build_publication(p: dict, attachments: list[dict], *,
     sid = (p.get("series_id") or "").strip()
     pub_id = item_id_for(sid)
     coll_path = pub_collection_path(p)
+    for label in [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]:
+        if is_validation_layer(label):
+            print(f"[pubs] {pub_id}: skipped {label!r} (GeMS validation output, not map data)",
+                  file=sys.stderr)
+    vector_layers = [lb for lb in vector_layers or [] if not is_validation_layer(lb)]
+    companion_tables = [t for t in companion_tables or [] if not is_validation_layer(t["label"])]
     yr = (p.get("pub_year") or "").strip()
     dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
     now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT00:00:00Z")
@@ -313,8 +332,8 @@ def build_publication(p: dict, attachments: list[dict], *,
             return {"proj:code": meta["proj_code"]}
         return {"proj:wkt2": meta["proj_wkt2"]} if meta.get("proj_wkt2") else {}
 
-    def item(item_id: str, title: str, assets: dict, *, geometry: dict, item_bbox: list[float],
-             footprint_source: str | None = None,
+    def item(item_id: str, title: str, assets: dict, *, geometry: dict | None,
+             item_bbox: list[float] | None, footprint_source: str | None = None,
              extra: dict | None = None, links: list[dict] | None = None,
              extensions: list[str] | None = None) -> dict:
         props = {"title": title, "ugs:series_id": sid, **undated, **sci, **(extra or {}),
@@ -403,7 +422,7 @@ def build_publication(p: dict, attachments: list[dict], *,
         if t.get("columns"):
             asset["table:columns"] = t["columns"]
         items.append(item(layer_id(label), ltitle, {"data": asset},
-                          geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source,
+                          geometry=None, item_bbox=None,
                           extra={**({"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}),
                                  **({"description": ldesc} if ldesc else {})},
                           extensions=[stac.TABLE_EXT] if t.get("columns") else None))
@@ -429,7 +448,9 @@ def build_publication(p: dict, attachments: list[dict], *,
                             vector_layers=vector_layers, companion_tables=companion_tables)
     if single != (len(items) == 1):
         raise ValueError(f"{pub_id}: single-file rule and built items disagree ({len(items)} items)")
-    item_bboxes = [to_2d_bbox(it["bbox"]) for it in items if it.get("bbox")]
+    # Only real extents widen the Collection's: an Item placed on the Utah placeholder adds nothing.
+    item_bboxes = [to_2d_bbox(it["bbox"]) for it in items if it.get("bbox")
+                   and it["properties"].get("ugs:footprint_source") != FOOTPRINT_FALLBACK]
     data_assets: dict = {}
     data_exts: list[str] = []
     mosaic_links: list[dict] = []
@@ -509,7 +530,9 @@ def build_publication(p: dict, attachments: list[dict], *,
         **({"deprecated": True} if ed.get("deprecated") else {}),
         "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
         "ugs:topic_category": "geoscientificInformation",
-        **({"ugs:footprint_source": fp_source} if fp_source else {}),
+        # No footprint and no Item with a real bbox: the extent is the Utah placeholder, and says so.
+        **({"ugs:footprint_source": FOOTPRINT_FALLBACK} if not boxes
+           else {"ugs:footprint_source": fp_source} if fp_source else {}),
         **({"keywords": kw} if (kw := keywords_of(p.get("keywords"))) else {}),
         **({"ugs:county": cty} if (cty := counties.county_of_pub(p)) else {}),
         **({"ugs:volume": vol} if (vol := issue_volume(sid)) is not None else {}),

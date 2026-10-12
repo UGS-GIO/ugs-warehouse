@@ -86,28 +86,59 @@ def cog_coverage() -> dict:
     return _cached("cog_coverage", _cog_coverage)
 
 
+def _publication_series_coverage(root: dict, coll: str, series: set[str]) -> tuple[int, list[str]]:
+    """Coverage of collection-layout series from the root items.json: each publication Item
+    (tagged `ugs:in_publication`) counts, a COG being its cog asset; a single-file publication
+    keeps its plate on the Collection entry, which counts the same way under the SID."""
+    total, cog_ids = 0, []
+    for e in root.get("items", []):
+        self = next((lk.get("href", "") for lk in e.get("links", []) if lk.get("rel") == "self"), "")
+        parts = self.removeprefix("./").split("/")
+        if len(parts) < 4 or parts[0] != coll or parts[1] not in series:
+            continue
+        tagged = bool((e.get("properties") or {}).get("ugs:in_publication"))
+        if not tagged and not (parts[-1] == "collection.json" and _has_cog(e)):
+            continue
+        total += 1
+        if _has_cog(e):
+            cog_ids.append(e["id"])
+    return total, cog_ids
+
+
 def _cog_coverage() -> dict:
     base = settings.STAC_BASE
     out = {"collections": [], "total_items": 0, "total_cogs": 0}
+    root: dict | None = None
     for coll in PUB_COLLECTIONS:
         cat = _get(f"{base}/{coll}/catalog.json")
         if not cat:
             out["collections"].append({"id": coll, "items": 0, "cogs": 0, "cog_ids": [], "error": True})
             continue
-        series = [lnk["href"].split("/")[-2] for lnk in cat.get("links", []) if lnk.get("rel") == "child"]
+        kids = [lnk["href"] for lnk in cat.get("links", []) if lnk.get("rel") == "child"]
+        # A series in the collection layout is a catalog whose items.json lists publications, not
+        # plates; its coverage comes from the root index instead.
+        old = [h.split("/")[-2] for h in kids if not h.endswith("/catalog.json")]
+        migrated = {h.split("/")[-2] for h in kids if h.endswith("/catalog.json")}
 
         def scan(s):
             idx = _get(f"{base}/{coll}/{s}/items.json") or {}
             items = idx.get("items", [])
             return len(items), [it["id"] for it in items if _has_cog(it)]
 
-        total, cog_ids = 0, []
+        total, cog_ids, error = 0, [], False
         with cf.ThreadPoolExecutor(max_workers=16) as ex:
-            for n, ids in ex.map(scan, series):
+            for n, ids in ex.map(scan, old):
                 total += n
                 cog_ids += ids
+        if migrated:
+            root = root if root is not None else (_get(f"{base}/items.json") or {})
+            error = not root.get("items")
+            n, ids = _publication_series_coverage(root, coll, migrated)
+            total += n
+            cog_ids += ids
         cog_ids.sort()
-        out["collections"].append({"id": coll, "items": total, "cogs": len(cog_ids), "cog_ids": cog_ids})
+        row = {"id": coll, "items": total, "cogs": len(cog_ids), "cog_ids": cog_ids}
+        out["collections"].append({**row, "error": True} if error else row)
         out["total_items"] += total
         out["total_cogs"] += len(cog_ids)
     return out

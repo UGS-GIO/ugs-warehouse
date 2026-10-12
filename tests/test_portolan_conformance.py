@@ -25,6 +25,9 @@ rashid = pytest.importorskip("rashid", reason="rashid is an optional dev depende
 # Rules the publication tree must satisfy on top of GUARDED: single-file collections hold their data
 # at collection level, the landing page is not a `via` source link, and every collection has a thumbnail.
 PUBLICATION_GUARDED = {"PTL-COL-001", "PTL-PRO-004", "PTL-VIZ-001"}
+# A TIFF-only pub has no PDF to make a cover from and no COG, so no preview image exists for it. That is a
+# data gap, not a catalog bug, and rashid raises PTL-VIZ-001 on it; every other publication must pass.
+NO_PREVIEW_EXCEPTIONS = {"ugs-mining-district-files/MD/MD-1002/collection.json"}
 PUBLICATION_ROOTS = ("ugs-publications/", "ugs-mining-district-files/", "ugs-external/")
 
 # Rules this repo has fixed and must not break again. Each maps to work already merged.
@@ -115,7 +118,7 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
     # A mining district file whose only file is the publisher's plain TIFF scan.
     _write_pub(
         {"series_id": "MD-1002", "series": "MD", "pub_year": "1956", "pub_publisher": "",
-         "pub_name": "Geophysical Sonic Log", "pub_url": "uranium_data/MD01002.tif"}, [], has_cover=True, override={})
+         "pub_name": "Geophysical Sonic Log", "pub_url": "uranium_data/MD01002.tif"}, [], override={})
 
     # An edition pair: a current map and its deprecated predecessor, both with a COG (exercises the
     # version/deprecated properties, predecessor/successor/latest links, and the currency-gated
@@ -182,7 +185,7 @@ def test_publication_collections_conform_to_the_single_file_provenance_and_thumb
     report = rashid.validate(root, data=False, schema=True)
     broken = [f for f in report.findings
               if f.rule_id in PUBLICATION_GUARDED and f.severity.name == "ERROR"
-              and str(f.path).startswith(PUBLICATION_ROOTS)]
+              and str(f.path).startswith(PUBLICATION_ROOTS) and not (f.rule_id == "PTL-VIZ-001" and str(f.path) in NO_PREVIEW_EXCEPTIONS)]
 
     assert not broken, "\n".join(f"{f.rule_id} {f.path}: {f.message}" for f in broken)
 

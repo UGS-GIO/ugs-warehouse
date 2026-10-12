@@ -625,19 +625,19 @@ def test_a_review_bake_reads_public_cogs_and_links_members_to_the_public_catalog
 
     monkeypatch.setattr(gm.gcs, "list_paths", fake_list)
     assert gm._cog_sids() == {"M-1"} and seen["bucket"] == "ut-dnr-ugs-maps-prod-public"
-    href = gm._public_item_href("ugs-publications/GQ/GQ-968", "GQ-968_plate")
+    href = gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate"))
     assert href == ("https://maps-assets.geology.utah.gov/warehouse/stac/"
                     "ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")
 
 
-def test_public_item_href_matches_the_public_item_path_in_a_public_bake():
-    assert gm._public_item_href("ugs-publications/GQ/GQ-968", "GQ-968_plate") == gm.config.public_url(
+def test_public_href_matches_the_public_item_path_in_a_public_bake():
+    assert gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate")) == gm.config.public_url(
         gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate"))
 
 
-def test_public_item_href_with_an_empty_stac_prefix(monkeypatch):
+def test_public_href_with_an_empty_stac_prefix(monkeypatch):
     monkeypatch.setattr(gm.config, "STAC_PREFIX", "")
-    assert gm._public_item_href("ugs-publications/GQ/GQ-968", "GQ-968_plate").endswith(
+    assert gm._public_href(gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate")).endswith(
         "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")
 
 
@@ -654,3 +654,51 @@ def test_mosaic_links_a_single_file_member_to_its_collection_and_others_to_the_p
     assert any(h.endswith("/GQ/GQ-968/collection.json") for h in hrefs)
     assert any(h.endswith("/GQ/GQ-852/GQ-852_plate/GQ-852_plate.json") for h in hrefs)
     assert not any(h.endswith("GQ-968_plate.json") for h in hrefs)
+
+
+def _fake_bucket_listing(monkeypatch, per_bucket: dict[str, list[str]], seen: list):
+    def list_paths(prefix, *, bucket=None):
+        seen.append(bucket)
+        return [p for p in per_bucket.get(bucket or gm.config.BUCKET, []) if p.startswith(prefix)]
+
+    monkeypatch.setattr("ugs_warehouse.core.gcs.list_paths", list_paths)
+    monkeypatch.setattr("ugs_warehouse.core.gcs.get_bytes",
+                        lambda path, *, bucket=None: json.dumps({"spatial": [], "tables": []}).encode())
+
+
+def test_single_file_sids_reads_the_source_bucket_in_a_review_bake(monkeypatch):
+    monkeypatch.setattr(gm.config, "BUCKET", "review-bucket")
+    monkeypatch.setattr(gm.config, "SOURCE_BUCKET", "public-bucket")
+    seen: list = []
+    units = f"{identity.UNITS_PREFIX.rstrip('/')}/GQ-1/GQ-1.units.parquet"
+    _fake_bucket_listing(monkeypatch, {"public-bucket": [units], "review-bucket": []}, seen)
+    assert gm._single_file_sids(["GQ-1", "GQ-2"]) == {"GQ-2"}  # GQ-1 has units in the PUBLIC bucket
+    assert seen and set(seen) == {"public-bucket"}
+
+
+def test_single_file_decision_matches_between_ingest_and_the_mosaic(monkeypatch):
+    from ugs_warehouse.pubs import ingest, sink_stac, vectors
+
+    monkeypatch.setattr(gm.config, "SOURCE_BUCKET", gm.config.BUCKET)
+    pfx = identity.UNITS_PREFIX.rstrip("/")
+    from ugs_warehouse.pubs import threed
+    listing = [f"{pfx}/GQ-1/GQ-1.units.parquet",
+               f"{vectors.VECTORS_PREFIX}/GQ-3/_manifest.json",
+               f"{identity.THREED_PREFIX}/GQ-4_{threed.POLY_NAME}"]
+    _fake_bucket_listing(monkeypatch, {gm.config.BUCKET: listing}, [])
+    monkeypatch.setattr("ugs_warehouse.core.gcs.get_bytes",
+                        lambda path, *, bucket=None: json.dumps(
+                            {"spatial": ["a"], "tables": []}).encode())
+    sids = ["GQ-1", "GQ-2", "GQ-3", "GQ-4"]
+    units, threed_ids = ingest._unit_ids(), ingest._ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")
+    manifests = ingest._vector_manifests_by_sid()
+    via_ingest = {s for s in sids if sink_stac.is_single_file(
+        has_cog=True, has_units=s in units, has_3d=s in threed_ids,
+        vector_layers=manifests.get(s, {}).get("spatial"),
+        companion_tables=manifests.get(s, {}).get("tables"))}
+    assert via_ingest == gm._single_file_sids(sids) == {"GQ-2"}
+
+
+def test_build_tier_refuses_to_write_a_stac_item_without_the_single_file_set():
+    with pytest.raises(ValueError, match="single_file_sids"):
+        gm.build_tier("24k", [], {}, write_stac_item=True)

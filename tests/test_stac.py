@@ -463,7 +463,9 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
-         patch("ugs_warehouse.pubs.sink_stac.build_publication", return_value=({}, [])) as mock_build, \
+         patch("ugs_warehouse.pubs.sink_stac.build_publication",
+               return_value=({"_collection_path": "ugs-publications/DS/DS-1"}, [])) as mock_build, \
+         patch("ugs_warehouse.pubs.ingest._prune_stale_items"), \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_collection_iso"), \
          patch("ugs_warehouse.core.stac.write_collection"), \
@@ -506,7 +508,9 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows",
                side_effect=RuntimeError("footprints missing")), \
-         patch("ugs_warehouse.pubs.sink_stac.build_publication", return_value=({}, [])) as mock_build, \
+         patch("ugs_warehouse.pubs.sink_stac.build_publication",
+               return_value=({"_collection_path": "ugs-publications/DS/DS-1"}, [])) as mock_build, \
+         patch("ugs_warehouse.pubs.ingest._prune_stale_items"), \
          patch("ugs_warehouse.core.stac.attach_renders"), \
          patch("ugs_warehouse.core.stac.attach_collection_iso"), \
          patch("ugs_warehouse.core.stac.write_collection"), \

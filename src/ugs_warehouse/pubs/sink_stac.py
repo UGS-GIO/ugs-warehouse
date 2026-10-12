@@ -401,17 +401,28 @@ def build_publication(p: dict, attachments: list[dict], *,
         key = re.sub(r"[^a-z0-9]+", "_", (a.get("extra_data") or "file").strip().lower()).strip("_") or "file"
         assets.setdefault(key, _source_asset(h, mirrored, type=mtype,
                                              title=(a.get("extra_data") or "").strip(), roles=_file_roles(mtype)))
-    clash = sorted(set(assets) & set(data_assets))
-    if clash:
-        raise ValueError(f"{pub_id}: collection-level data assets collide with document assets {clash}")
-    assets.update(data_assets)
+    for key, asset in data_assets.items():
+        new = key
+        n = 1
+        while new in assets or new in ("thumbnail", "overview"):
+            n += 1
+            new = f"{key}_{n}"
+        if new != key:
+            print(f"[pubs] {pub_id}: data asset {key!r} renamed to {new!r} (collides with a document asset)",
+                  file=sys.stderr)
+        assets[new] = asset
+    plate_preview = ({"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
+                      "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
+                     if has_cog and has_thumb else None)
     if has_cover:
         assets["thumbnail"] = {"href": config.public_url(identity.pub_cover_object(sid)),
                                "type": config.WEBP_MIME, "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
-    elif has_cog and has_thumb:
+        if single and plate_preview:
+            # The cover owns `thumbnail`; the plate's preview stays reachable as the overview.
+            assets["overview"] = {**plate_preview, "title": "Map preview", "roles": ["overview"]}
+    elif plate_preview:
         # No cover: the plate's own thumbnail stands in so the Collection still has a preview.
-        assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
-                               "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
+        assets["thumbnail"] = plate_preview
 
     ext_bbox = bbox or ([min(b[0] for b in item_bboxes), min(b[1] for b in item_bboxes),
                          max(b[2] for b in item_bboxes), max(b[3] for b in item_bboxes)]

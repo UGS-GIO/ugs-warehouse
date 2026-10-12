@@ -212,3 +212,19 @@ def test_without_a_cover_the_collection_thumbnail_is_the_cog_thumbnail():
     assert "thumbnail" not in coll["assets"]
     coll, _ = _build(has_cover=True, has_thumb=True)
     assert coll["assets"]["thumbnail"]["title"].startswith("Cover")
+
+
+def test_a_lone_plate_keeps_its_preview_as_overview_when_the_cover_takes_thumbnail():
+    coll, _ = _plate_only(has_cover=True, has_thumb=True)
+    assert coll["assets"]["thumbnail"]["title"].startswith("Cover")
+    assert coll["assets"]["overview"]["roles"] == ["overview"]
+    assert coll["assets"]["overview"]["href"].endswith(".thumb.webp")
+
+
+def test_a_data_asset_that_collides_with_a_document_asset_is_renamed(capsys):
+    att = [{"pub_url": "https://ugspub.nr.utah.gov/publications/ofr/x.xlsx", "extra_data": "data"}]
+    coll, _ = sink_stac.build_publication(
+        P, att, vector_layers=["geo__Faults"], layers={"geo__Faults": {"rows": 1}})
+    assert coll["assets"]["data"]["roles"] == ["data"] and "data_2" in coll["assets"]
+    assert coll["assets"]["data_2"]["href"].endswith("geo__Faults.parquet")
+    assert "renamed to 'data_2'" in capsys.readouterr().err

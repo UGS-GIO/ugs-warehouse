@@ -352,6 +352,8 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
     never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
     uploads the scratch pmtiles for direct inspection but writes NO STAC item — see `build()`.
     `single_file_sids` (see `_single_file_sids`) is required when a STAC item is written."""
+    if write_stac_item and single_file_sids is None:
+        raise ValueError("build_tier needs single_file_sids to link members when writing a STAC item")
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
@@ -423,8 +425,6 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
         if write_stac_item:
-            if single_file_sids is None:
-                raise ValueError("build_tier needs single_file_sids to link members when writing a STAC item")
             _write_item(tier, sids, obj, by_sid, bounds=bounds, single_file_sids=single_file_sids)
         else:
             print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
@@ -441,10 +441,6 @@ def _public_href(object_path: str) -> str:
     return f"{config.PUBLIC_CATALOG_URL.rsplit('/', 1)[0]}/{rel}"
 
 
-def _public_item_href(collection_path: str, item_id: str) -> str:
-    return _public_href(stac.item_object_path(collection_path, item_id))
-
-
 def _single_file_sids(sids: list[str]) -> set[str]:
     """The members (UPPER ids, all with a COG) whose plate is their publication's only data file.
 
@@ -453,9 +449,10 @@ def _single_file_sids(sids: list[str]) -> set[str]:
     # function-level: ingest pulls in the whole pub pipeline
     from . import ingest, sink_stac, threed
 
-    units = ingest._unit_ids()
-    threed_ids = ingest._ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")
-    manifests = ingest._vector_manifests_by_sid()
+    bucket = config.SOURCE_BUCKET  # the published inputs, even when this bake writes to a review bucket
+    units = ingest._unit_ids(bucket)
+    threed_ids = ingest._ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}", bucket)
+    manifests = ingest._vector_manifests_by_sid(bucket)
     out: set[str] = set()
     for sid in sids:
         m = manifests.get(sid, {})

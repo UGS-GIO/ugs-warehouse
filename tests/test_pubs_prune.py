@@ -206,3 +206,20 @@ def test_the_scan_never_leaves_the_publication_prefixes():
     groups = [f"{PFX}/{g}/" for g in P.PUB_GROUPS]
     assert seen == groups + groups
     assert not any("serving-topics" in p or "ugs-rasters" in p for p in seen)
+
+
+def test_stale_item_dirs_are_removed_and_the_collection_files_kept(monkeypatch, capsys):
+    from ugs_warehouse.pubs import ingest
+
+    base = f"{PFX}/ugs-publications/OFR/OFR-1"
+    listing = [f"{base}/collection.json", f"{base}/README.md", f"{base}/AGENTS.md", f"{base}/OFR-1.iso.xml",
+               f"{base}/OFR-1_plate/OFR-1_plate.json", f"{base}/OFR-1_x/OFR-1_x.json"]
+    deleted: list[str] = []
+    monkeypatch.setattr(ingest.gcs, "list_paths", lambda root: [p for p in listing if p.startswith(root)])
+    monkeypatch.setattr(ingest.gcs, "delete", deleted.append)
+    ingest._prune_stale_items("ugs-publications/OFR/OFR-1", {"OFR-1_x"})
+    assert deleted == [f"{base}/OFR-1_plate/OFR-1_plate.json"]
+    assert "removed stale item ugs-publications/OFR/OFR-1/OFR-1_plate" in capsys.readouterr().err
+    deleted.clear()
+    ingest._prune_stale_items("ugs-publications/OFR/OFR-1", set())  # now single-file: no item dirs at all
+    assert sorted(deleted) == [f"{base}/OFR-1_plate/OFR-1_plate.json", f"{base}/OFR-1_x/OFR-1_x.json"]

@@ -20,6 +20,11 @@ from ..core import config, gcs, stac
 from . import editions, identity, sink_stac, source, threed, topic, vectors
 
 
+def _list(prefix: str, bucket: str | None) -> list[str]:
+    """Object paths under `prefix`; `bucket=None` is the warehouse bucket."""
+    return gcs.list_paths(prefix) if bucket is None else gcs.list_paths(prefix, bucket=bucket)
+
+
 def _names(prefix: str) -> list[str]:
     return [path.rsplit("/", 1)[-1] for path in gcs.list_paths(prefix)]
 
@@ -28,8 +33,8 @@ def _ids(names: list[str], suffix: str) -> set[str]:
     return {name[: -len(suffix)].upper() for name in names if name.endswith(suffix)}
 
 
-def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
-    return _ids(_names(prefix), suffix)
+def _ids_with_suffix(prefix: str, suffix: str, bucket: str | None = None) -> set[str]:
+    return _ids([path.rsplit("/", 1)[-1] for path in _list(prefix, bucket)], suffix)
 
 
 def _image_ids() -> tuple[set[str], set[str]]:
@@ -113,13 +118,13 @@ def _mirrored_files() -> set[str]:
     return set(gcs.list_paths(identity.PUB_FILES_PREFIX))
 
 
-def _unit_ids() -> set[str]:
+def _unit_ids(bucket: str | None = None) -> set[str]:
     """Series ids that have a per-map units sidecar (geolmap/units/<series_id>/…). Only directory
     segments count — files sitting at the prefix root (the statewide units.pmtiles / units.parquet)
     are NOT series ids and must be skipped, or they'd register as bogus units."""
     pfx = identity.UNITS_PREFIX.rstrip("/") + "/"
     out: set[str] = set()
-    for path in gcs.list_paths(identity.UNITS_PREFIX):
+    for path in _list(identity.UNITS_PREFIX, bucket):
         rest = path[len(pfx):] if path.startswith(pfx) else path
         head, sep, _ = rest.partition("/")
         if sep and head:           # has a sub-path → it's a per-series directory, not a root file
@@ -127,7 +132,7 @@ def _unit_ids() -> set[str]:
     return out
 
 
-def _vector_manifests_by_sid() -> dict[str, dict]:
+def _vector_manifests_by_sid(bucket: str | None = None) -> dict[str, dict]:
     """{SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
     "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2}}}} from
     the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
@@ -137,13 +142,14 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
     were recorded have none (empty maps / None values)."""
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
     out: dict[str, dict] = {}
-    for path in gcs.list_paths(vectors.VECTORS_PREFIX):
+    for path in _list(vectors.VECTORS_PREFIX, bucket):
         if not path.endswith("/_manifest.json"):
             continue
         rest = path[len(pfx):] if path.startswith(pfx) else path
         sid = rest.split("/", 1)[0].upper()
         try:
-            doc = json.loads(gcs.get_bytes(path).decode())
+            raw = gcs.get_bytes(path) if bucket is None else gcs.get_bytes(path, bucket=bucket)
+            doc = json.loads(raw.decode())
             layer_docs = [lay for lay in doc.get("layers") or [] if lay.get("label")]
             out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or [],
                         "columns": {lay["label"]: lay["columns"] for lay in layer_docs if lay.get("columns")},
@@ -156,6 +162,24 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
             print(f"[pubs] corrupt vector manifest, skipping: {path} ({e})", file=sys.stderr)
             continue
     return out
+
+
+def _prune_stale_items(coll_path: str, keep: set[str]) -> None:
+    """Delete item directories under a publication that its current build no longer produces.
+
+    A publication that gained or lost data files (a plate moving to the Collection, a layer
+    dropped) would otherwise keep serving its old Items. Files directly in the publication
+    directory (collection.json, README.md, AGENTS.md, the ISO sidecar) are never touched."""
+    root = f"{config.STAC_PREFIX}/{coll_path}/"
+    stale: dict[str, list[str]] = {}
+    for path in gcs.list_paths(root):
+        head, sep, _ = path[len(root):].partition("/")
+        if sep and head not in keep:
+            stale.setdefault(head, []).append(path)
+    for head, paths in sorted(stale.items()):
+        for path in paths:
+            gcs.delete(path)
+        print(f"[pubs] removed stale item {coll_path}/{head} ({len(paths)} objects)", file=sys.stderr)
 
 
 def _cog_headers(cog_ids: set[str]) -> dict[str, tuple[tuple | None, dict]]:
@@ -277,6 +301,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             stac.write_item(it)
         stac.attach_collection_iso(coll)  # ISO 19139 sidecar + `metadata` asset (gov clearinghouses)
         stac.write_collection(coll, children=len(items))
+        _prune_stale_items(coll["_collection_path"], {it["id"] for it in items})
         return True
 
     stac.styles.warm()  # prime the styles manifest once before the pool (64 threads share it)

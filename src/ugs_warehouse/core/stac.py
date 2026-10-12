@@ -588,7 +588,10 @@ def _collection_assets(path: str, items: list[dict], mirror: object | None = Non
 def _is_mappable(item: dict) -> bool:
     """True if the item has something to draw on a map — a COG asset or a pmtiles/cog web-map link.
     Drives the per-collection `ugs:mappable_count` so a viewer can flag groups with no map data
-    without fetching their items."""
+    without fetching their items. An item or collection with no footprint (null geometry, or the
+    Utah placeholder) has nowhere to draw, so it is not mappable."""
+    if _no_footprint(item, item.get("properties") or item):
+        return False
     for a in (item.get("assets") or {}).values():
         t, h, roles = a.get("type") or "", a.get("href") or "", a.get("roles") or []
         if "cloud-optimized" in t or "cloud-optimized" in roles or h.endswith(".cog.tif"):

@@ -273,6 +273,25 @@ def test_a_publication_with_many_items_is_one_root_entry_with_its_facets_and_pdf
                    "type": "application/json"}]}
 
 
+def test_nothing_without_a_footprint_counts_as_mappable(monkeypatch):
+    cog = {"cog": {"href": "https://x/p.cog.tif", "type": config.COG_MIME, "roles": ["data", "cloud-optimized"]}}
+    placed = {"geometry": {"type": "Point", "coordinates": [0, 0]}, "assets": cog,
+              "properties": {"ugs:footprint_source": "cog"}}
+    assert stac._is_mappable(placed)
+    assert not stac._is_mappable({**placed, "properties": {"ugs:footprint_source": "utah-bbox"}})
+    assert not stac._is_mappable({**placed, "geometry": None})
+    assert not stac._is_mappable({"type": "Collection", "assets": cog, "ugs:footprint_source": "utah-bbox"})
+    # Through refresh: a single-file plate on the placeholder is not counted.
+    store = _memstore(monkeypatch)
+    _pub(store, "ugs-publications", "M", "M-1", [], assets=cog, fields={"ugs:footprint_source": "utah-bbox"})
+    _pub(store, "ugs-publications", "M", "M-2", [], assets=cog)
+    stac.refresh_catalog()
+    series = json.loads(store[f"{config.STAC_PREFIX}/ugs-publications/M/catalog.json"])
+    kids = {lk["href"]: lk for lk in series["links"] if lk["rel"] == "child"}
+    assert kids["./M-1/collection.json"]["ugs:mappable_count"] == 0
+    assert kids["./M-2/collection.json"]["ugs:mappable_count"] == 1
+
+
 def test_index_entries_carry_no_bbox_without_a_footprint():
     placed = {"id": "a", "geometry": {"type": "Point", "coordinates": [0, 0]}, "bbox": [0, 0, 0, 0],
               "properties": {"ugs:footprint_source": "cog"}}

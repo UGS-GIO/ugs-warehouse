@@ -1,9 +1,11 @@
-"""Build the `ugs-publications` STAC collection from pub metadata + harvested artifacts.
+"""Write each publication as a STAC Collection with its Items, from pub metadata + harvested artifacts.
 
-Every pub -> a STAC item (download links always; COG / units / thumbnail / footprint geometry
-where present). Harvested-artifact presence is derived by listing GCS once (not a HEAD per
-pub). Then `core.stac.refresh_catalog()` rebuilds the root + collections — so the pubs land
-in the SAME catalog as the vector serving topics.
+Every pub -> a Collection at `<group>/<SERIES>/<SID>/collection.json` holding its documents, with
+its plate COG, units, extracted layers/tables and 3D fence as Items under it (a lone data file
+stays on the Collection). Harvested-artifact presence is derived by listing GCS once (not a HEAD
+per pub). Then `core.stac.refresh_catalog(strict=True)` writes the series and group catalogs and
+the root, so the pubs land in the SAME catalog as the vector serving topics; a series switches to
+the collection layout once every publication in it has been written.
 
     python -m ugs_warehouse.pubs.ingest            # all pubs
     python -m ugs_warehouse.pubs.ingest --limit 50 # first N (smoke)
@@ -246,6 +248,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         print(f"[pubs] filtered to series {series_upper}: {len(pubs)} publications")
     if limit:
         pubs = pubs[:limit]
+    _refuse_shared_collection_paths(pubs)
     att: dict[str, list[dict]] = {}
     for a in source.read_attachments():
         att.setdefault((a.get("series_id") or "").strip().upper(), []).append(a)
@@ -311,16 +314,37 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
 
     _build_search_corpus()
 
+    # Printed before the refresh, so a refresh failure cannot hide the per-publication causes.
+    for sid, msg in errors:
+        print(f"[pubs] FAILED {sid}: {msg}", file=sys.stderr)
+    refresh_error: Exception | None = None
     if not skip_refresh:
-        stac.refresh_catalog()
-        print(f"[pubs] wrote {n} items -> {config.public_url(config.STAC_PREFIX + '/catalog.json')}")
+        try:
+            stac.refresh_catalog(strict=True)
+        except Exception as e:  # noqa: BLE001 (raised below together with the failed publications)
+            refresh_error = e
+        print(f"[pubs] wrote {n} publications -> {config.public_url(config.STAC_PREFIX + '/catalog.json')}")
     else:
-        print(f"[pubs] wrote {n} items (catalog refresh skipped)")
-    if errors:
-        for sid, msg in errors:
-            print(f"[pubs] FAILED {sid}: {msg}", file=sys.stderr)
-        raise RuntimeError(f"{len(errors)} publication(s) failed: {sorted(sid for sid, _ in errors)}")
+        print(f"[pubs] wrote {n} publications (catalog refresh skipped)")
+    if errors or refresh_error:
+        failed = [f"{len(errors)} publication(s) failed: {sorted(sid for sid, _ in errors)}"] if errors else []
+        refresh = [f"catalog refresh: {type(refresh_error).__name__}: {refresh_error}"] if refresh_error else []
+        raise RuntimeError("; ".join(failed + refresh)) from refresh_error
     return n
+
+
+def _refuse_shared_collection_paths(pubs: list[dict]) -> None:
+    """Raise when two publications map to one collection directory (`A B` and `A-B` both become
+    `A-B`), since their parallel writes would overwrite each other."""
+    by_path: dict[str, list[str]] = {}
+    for p in pubs:
+        sid = (p.get("series_id") or "").strip()
+        if sid:
+            by_path.setdefault(sink_stac.pub_collection_path(p), []).append(sid)
+    shared = {path: sids for path, sids in sorted(by_path.items()) if len(sids) > 1}
+    if shared:
+        raise RuntimeError(f"{len(shared)} publication collection path(s) claimed by more than one "
+                           f"publication: {'; '.join(f'{path} <- {sids}' for path, sids in shared.items())}")
 
 
 def _build_search_corpus() -> None:

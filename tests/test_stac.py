@@ -719,6 +719,52 @@ def test_build_catalog_keeps_writing_after_one_publication_fails(capsys):
     assert "FAILED DS-8" in err and "boom" in err
 
 
+def test_build_catalog_prints_failed_pubs_before_the_refresh_reports_their_orphans(capsys):
+    """DS-8's items land but its collection write fails, so the strict refresh reports an orphan;
+    the FAILED line with the cause still prints, and the one error names both."""
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    from ugs_warehouse.core import stac as core_stac
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    real_refresh, real_write_item, real_write_coll = (
+        core_stac.refresh_catalog, core_stac.write_item, core_stac.write_collection)
+
+    def write_coll(c, children):
+        if c["id"] == "DS-8":
+            raise OSError("collection write refused")
+        return real_write_coll(c, children=children)
+
+    manifests = {"DS-8": {"spatial": ["geo__Faults"], "tables": [], "layers": {}}}
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, manifests, [{"series_id": "DS-8"}, {"series_id": "OFR-12"}], [], [])
+        stack.enter_context(patch("ugs_warehouse.core.stac.write_item", real_write_item))
+        stack.enter_context(patch("ugs_warehouse.core.stac.write_collection", side_effect=write_coll))
+        stack.enter_context(patch("ugs_warehouse.core.stac.refresh_catalog", real_refresh))
+        with pytest.raises(RuntimeError) as exc:
+            build_catalog()
+
+    err = capsys.readouterr().err
+    assert "FAILED DS-8: OSError: collection write refused" in err
+    assert "DS-8" in str(exc.value)
+    assert "publication items with no collection.json: ugs-publications/DS/DS-8" in str(exc.value)
+
+
+def test_build_catalog_refuses_publications_that_share_a_collection_path():
+    from contextlib import ExitStack
+
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    written_items, written_colls = [], []
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, {}, [{"series_id": "A B"}, {"series_id": "A-B"}, {"series_id": "C-1"}],
+                               written_items, written_colls)
+        with pytest.raises(RuntimeError, match=r"ugs-publications/A/A-B.*'A B'.*'A-B'"):
+            build_catalog(skip_refresh=True)
+    assert written_items == [] and written_colls == []
+
+
 def test_list_series(capsys):
     from unittest.mock import patch
 

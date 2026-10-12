@@ -16,6 +16,7 @@ import sys
 import urllib.parse
 
 from ..core import config, stac
+from ..core.bbox import to_2d_bbox
 from . import counties, identity, topic
 from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
@@ -261,7 +262,8 @@ def build_publication(p: dict, attachments: list[dict], *,
     ed = edition or {}
     ov = override or {}
     quoted_sid = urllib.parse.quote(sid, safe="")
-    has_doi = has_ugs_doi(p.get("pub_publisher"))
+    # The scientific extension's DOI pattern forbids whitespace, so a spaced id carries no DOI.
+    has_doi = has_ugs_doi(p.get("pub_publisher")) and not re.search(r"\s", sid)
     doi = [{"rel": "cite-as", "href": f"https://doi.org/10.34191/{quoted_sid}"}] if has_doi else []
     citation = (p.get("full_citation") or "").strip()
     sci = ({"sci:doi": f"10.34191/{sid}", **({"sci:citation": citation} if citation else {})}
@@ -372,7 +374,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                             vector_layers=vector_layers, companion_tables=companion_tables)
     if single != (len(items) == 1):
         raise ValueError(f"{pub_id}: single-file rule and built items disagree ({len(items)} items)")
-    item_bboxes = [it["bbox"] for it in items if it.get("bbox")]
+    item_bboxes = [to_2d_bbox(it["bbox"]) for it in items if it.get("bbox")]
     data_assets: dict = {}
     data_exts: list[str] = []
     mosaic_links: list[dict] = []
@@ -424,9 +426,9 @@ def build_publication(p: dict, attachments: list[dict], *,
         # No cover: the plate's own thumbnail stands in so the Collection still has a preview.
         assets["thumbnail"] = plate_preview
 
-    ext_bbox = bbox or ([min(b[0] for b in item_bboxes), min(b[1] for b in item_bboxes),
-                         max(b[2] for b in item_bboxes), max(b[3] for b in item_bboxes)]
-                        if item_bboxes else stac.UTAH_BBOX)
+    boxes = [*([to_2d_bbox(bbox)] if bbox else []), *item_bboxes]
+    ext_bbox = ([min(b[0] for b in boxes), min(b[1] for b in boxes),
+                 max(b[2] for b in boxes), max(b[3] for b in boxes)] if boxes else stac.UTAH_BBOX)
     extent = {"spatial": {"bbox": [ext_bbox]},
               "temporal": {"interval": [[dt, dt] if dt else [EARLIEST_RECORD, now]]}}
     links = [{"rel": "alternate", "href": f"{LANDING}{quoted_sid}", "type": "text/html",

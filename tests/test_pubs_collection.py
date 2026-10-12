@@ -228,3 +228,22 @@ def test_a_data_asset_that_collides_with_a_document_asset_is_renamed(capsys):
     assert coll["assets"]["data"]["roles"] == ["data"] and "data_2" in coll["assets"]
     assert coll["assets"]["data_2"]["href"].endswith("geo__Faults.parquet")
     assert "renamed to 'data_2'" in capsys.readouterr().err
+
+
+def test_a_series_id_with_whitespace_gets_no_doi():
+    coll, items = sink_stac.build_publication(
+        {**P, "series_id": "557.92 UT1CO"}, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0],
+        has_cog=True, has_units=True)
+    assert len(items) == 2
+    for doc in [coll, *(it["properties"] for it in items)]:
+        assert "sci:doi" not in doc and "sci:citation" not in doc
+    for doc in [coll, *items]:
+        assert "cite-as" not in {lk["rel"] for lk in doc["links"]}
+        assert stac.SCI_EXT not in doc.get("stac_extensions", [])
+
+
+def test_the_collection_extent_covers_the_footprint_and_every_item():
+    coll, _ = _build(layers={"geo__Faults": {"rows": 12, "bbox": [-113.0, 40.6, -112.1, 41.5],
+                                             "geometry_types": ["LineString"]},
+                             "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}})
+    assert coll["extent"]["spatial"]["bbox"] == [[-113.0, 40.5, -112.0, 41.5]]

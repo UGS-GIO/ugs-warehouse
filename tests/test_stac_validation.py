@@ -158,3 +158,17 @@ def test_an_undated_publication_has_a_valid_flagged_interval():
     assert props["end_datetime"] > props["start_datetime"]
     assert props["ugs:date_unknown"] is True
     _validate(_drop_private(items[0]))
+
+
+def test_a_publication_whose_series_id_has_a_space_validates():
+    """The scientific extension's DOI pattern forbids whitespace, so such an id carries no sci:doi."""
+    from ugs_warehouse.pubs import sink_stac as pubs_sink
+
+    coll, items = pubs_sink.build_publication(
+        {"series_id": "557.92 UT1CO", "pub_year": "1990", "pub_name": "Utah coal",
+         "full_citation": "Someone, 1990, Utah coal."}, [], override={}, has_units=True,
+        vector_layers=["a"])
+    assert items
+    _validate(_drop_private(coll))
+    for it in items:
+        _validate(_drop_private(it))

@@ -1,8 +1,8 @@
 // API & data endpoints for an item: PMTiles, XYZ, GL style, ArcGIS VectorTileServer.
 import { useEffect, useRef, useState } from "react";
 
-import { serviceUrlOf } from "./catalog";
-import { cogAsset, ducklakeAsset, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
+import { featureEndpoints } from "./catalog";
+import { cogAsset, ducklakeAsset, esriVectorTileUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
   tilesStyleUrl, xyzTilesUrl, zarrAsset } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
@@ -27,12 +27,6 @@ function CopyBtn({ text }: { text: string }) {
 
 export function EndpointsPanel({ item }: { item: StacDoc }) {
   const id = String(item.id ?? "");
-  const pq = parquetAsset(item);
-  // What the catalog says beats what we can guess: the item's own `rel=service` link, else the
-  // id template — and only for items with a GeoParquet, which is exactly what featureserv binds.
-  // Raster and publication items have neither, so they get no row instead of a link to a
-  // collection that never existed (#85: featureserv is keyed by item id, not collection id).
-  const coll = serviceUrlOf(item, FEATURES_BASE) ?? (pq ? featuresCollectionUrl(id) : undefined);
   const pm = pmtilesLink(item);
   const cog = cogAsset(item);
   const ducklake = ducklakeAsset(item);
@@ -45,10 +39,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
   // `noOpen`: copyable but not openable — a store prefix returns NoSuchKey in a browser.
   const rows: { label: string; desc: string; url: string; pick?: React.ReactNode; unavailable?: string; noOpen?: boolean }[] = [];
-  if (coll) {
-    rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
-    rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
-  }
+  rows.push(...featureEndpoints(item, FEATURES_BASE));
   // A raster item's data IS the COG — without this row it had no endpoints at all once the
   // bogus Features links stopped being constructed for it.
   if (cog) rows.push({ label: "COG", desc: "Cloud-Optimized GeoTIFF — QGIS, ArcGIS, GDAL, rasterio (range reads)", url: cog.href });

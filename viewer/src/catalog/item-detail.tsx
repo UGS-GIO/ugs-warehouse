@@ -15,7 +15,7 @@ import { DiffPanel } from "@/review/diff-panel";
 import { Preview } from "./asset-viewer";
 import { EndpointsPanel } from "./endpoints-panel";
 import { DownloadsPanel } from "./downloads-panel";
-import { bylineParts, categorize, curatedDerived, kindLabel, type MetaRow, recordCountLabel } from "./item-view";
+import { bylineParts, categorize, curatedDerived, kindLabel, type MetaRow, recordCountLabel, showsSchema } from "./item-view";
 import { T } from "@/shell/page";
 import { PropertyTable } from "./property-table";
 import { SchemaTable } from "./schema-table";
@@ -388,7 +388,7 @@ export function ItemDetail({ collectionId, item, raw, error, partOf, crumbs, onB
             <Preview item={item} />
             <IssueContents item={item} />
             <PublicationParts item={item} collectionId={collectionId} />
-            <Section title="Data schema"><SchemaTable columns={tableColumns(item)} /></Section>
+            {showsSchema(item) && <Section title="Data schema"><SchemaTable columns={tableColumns(item)} /></Section>}
             <RelatedPanel item={item} />
             {IS_REVIEW && <CatalogReview item={item} />}
           </div>

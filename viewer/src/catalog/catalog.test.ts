@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { catalogTrail, itemBackTarget, layerCollectionIds, layerRowsOf, rootGroupOf, serviceUrlOf } from "./catalog";
+import { catalogTrail, featureEndpoints, itemBackTarget, layerCollectionIds, layerRowsOf, rootGroupOf, serviceUrlOf } from "./catalog";
 import type { StacDoc } from "@/stac";
 
 describe("layerCollectionIds", () => {
@@ -116,6 +116,42 @@ describe("catalogTrail", () => {
       { label: "Catalog", to: {} }, { label: "Publications" },
     ]);
     expect(catalogTrail({ subCats: [] })).toEqual([{ label: "Catalog", to: undefined }]);
+  });
+});
+
+describe("catalogTrail titles in a publication", () => {
+  const pubs = { id: "ugs-publications", title: "Publications" };
+  const m = { id: "ugs-publications/M", title: "Map", parentId: "ugs-publications" };
+  it("labels a publication page by series and publication title", () => {
+    expect(catalogTrail({ collectionId: m.id, itemUrl: "M-246DM", subCats: [pubs], leaf: m,
+      itemTitle: "Landslide maps of Utah" }).map((c) => c.label))
+      .toEqual(["Catalog", "Publications", "Map", "Landslide maps of Utah"]);
+  });
+  it("labels a layer page by publication and layer title", () => {
+    expect(catalogTrail({ collectionId: `${m.id}/M-246DM`, itemUrl: "M-246DM_UtahLandslideMaps__DebrisFlowPaths",
+      subCats: [pubs], leaf: m, pub: { sid: "M-246DM", title: "Landslide maps of Utah" },
+      itemTitle: "Debris Flow Paths" }).map((c) => c.label))
+      .toEqual(["Catalog", "Publications", "Map", "Landslide maps of Utah", "Debris Flow Paths"]);
+  });
+  it("falls back to the item id until the title loads", () => {
+    expect(catalogTrail({ collectionId: m.id, itemUrl: "M-246DM", subCats: [pubs], leaf: m, itemTitle: "" })
+      .at(-1)?.label).toBe("M-246DM");
+  });
+});
+
+describe("featureEndpoints", () => {
+  const service = "https://features.example/collections/hazards_qfaults";
+  it("offers the features service only for an item with its own rel=service link", () => {
+    expect(featureEndpoints({ links: [{ rel: "service", href: service }] }).map((r) => r.url))
+      .toEqual([service, `${service}/items?limit=50`]);
+  });
+  it("builds no URL for a publication layer, which has a GeoParquet but no service link", () => {
+    expect(featureEndpoints({ links: [{ rel: "collection", href: "../collection.json" }] })).toEqual([]);
+    expect(featureEndpoints(undefined)).toEqual([]);
+  });
+  it("points the link at an overriding base host", () => {
+    expect(featureEndpoints({ links: [{ rel: "service", href: service }] }, "http://localhost:9000")[0].url)
+      .toBe("http://localhost:9000/collections/hazards_qfaults");
   });
 });
 

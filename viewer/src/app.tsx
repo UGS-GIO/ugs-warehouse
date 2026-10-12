@@ -505,13 +505,18 @@ function useViewState() {
   // Breadcrumb trail: Catalog [ / Publications] [ / DS] [ / publication] [ / item]. Each crumb but
   // the last is clickable. An Item inside a publication walks through its series and publication.
   const pubSid = pubSeries && collectionId ? pubSidIn(pubSeries.id, collectionId) : undefined;
+  // A publication page or an Item inside one: crumbs read as titles, not ids or paths.
+  const inPublication = Boolean(itemUrl && (pubSeries || (leafColl && isCatalogHref(leafColl.href))));
   const crumbs = catalogTrail({
     collectionId, itemUrl, subCat, subCats, leaf: leafColl ?? pubSeries,
     pub: pubSid ? { sid: pubSid, title: partOf?.title } : undefined,
+    itemTitle: inPublication ? String(item.data?.properties?.title ?? "") : undefined,
   }).map(({ label, to }) => ({
     label,
     onClick: to ? () => go({ view, c: to.c, i: to.i, s: to.keepSeries ? seriesSel : undefined }) : undefined,
   }));
+  // The item page shows this trail in a publication; elsewhere it keeps `collection / id`.
+  const itemCrumbs = inPublication ? crumbs : undefined;
 
   // Active map layers: the toggled set, else fall back to the detail item (so a plain
   // ?c=&i= link still shows its layer). Resolved against fetched item data (for PMTiles).
@@ -554,7 +559,7 @@ function useViewState() {
     searchIsLayer, pickPlace, pickSearchItem,
     openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, partOf, collectionId, collectionUrl, layerIds, seriesSel,
-    rootChildren, cardsWithCovers, allItems, itemsLoading, leafIndexMissing, leafColl, crumbs,
+    rootChildren, cardsWithCovers, allItems, itemsLoading, leafIndexMissing, leafColl, crumbs, itemCrumbs,
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
     layerCollIds, setSeries,
     revealInfo, activeLayers, footprints, layerRows, idsForMap, toggleLayer, toggleLayers, styleCache,

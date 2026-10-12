@@ -21,19 +21,20 @@ export type Crumb = { label: string; to?: { c?: string; i?: string; keepSeries?:
 type TrailNode = { id: string; title?: string; parentId?: string };
 
 // Catalog [ / sub-catalog ] [ / series ] [ / publication ] [ / item ]. `leaf` is the open collection,
-// or the series of the publication `pub` an open Item sits in.
+// or the series of the publication `pub` an open Item sits in. `itemTitle` labels the last crumb
+// in place of the item id.
 export const catalogTrail = (o: {
   collectionId?: string; itemUrl?: string; subCat?: TrailNode; subCats: TrailNode[]; leaf?: TrailNode;
-  pub?: { sid: string; title?: string };
+  pub?: { sid: string; title?: string }; itemTitle?: string;
 }): Crumb[] => {
-  const { collectionId, itemUrl, subCat, subCats, leaf, pub } = o;
+  const { collectionId, itemUrl, subCat, subCats, leaf, pub, itemTitle } = o;
   const crumbs: Crumb[] = [{ label: "Catalog", to: collectionId || itemUrl ? {} : undefined }];
   if (subCat) crumbs.push({ label: subCat.title ?? subCat.id });
   const parent = leaf?.parentId ? subCats.find((s) => s.id === leaf.parentId) : undefined;
   if (parent) crumbs.push({ label: parent.title ?? parent.id, to: { c: parent.id } });
   if (leaf) crumbs.push({ label: leaf.title ?? leaf.id, to: itemUrl ? { c: leaf.id, keepSeries: true } : undefined });
   if (leaf && pub) crumbs.push({ label: pub.title ?? pub.sid, to: { c: leaf.id, i: pub.sid } });
-  if (itemUrl) crumbs.push({ label: itemUrl });
+  if (itemUrl) crumbs.push({ label: itemTitle || itemUrl });
   return crumbs;
 };
 
@@ -78,6 +79,20 @@ export const serviceUrlOf = (
   const href = (item?.links ?? []).find((l) => l.rel === "service")?.href;
   if (!href) return undefined;
   return base ? href.replace(/^https?:\/\/[^/]+/, base) : href;
+};
+
+/** The OGC API Features rows for an item: only when it carries its own `rel=service` link. That
+ * link is the producer saying featureserv serves it (serving-topic layers); a publication layer
+ * has a GeoParquet too but is not served, so no URL is built from its id. */
+export const featureEndpoints = (
+  item: { links?: { rel: string; href: string }[] } | undefined,
+  base = "",
+): { label: string; desc: string; url: string }[] => {
+  const coll = serviceUrlOf(item, base);
+  return coll ? [
+    { label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll },
+    { label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` },
+  ] : [];
 };
 
 // Both lists are named, so an unknown root shows as "other" rather than defaulting to a publication.

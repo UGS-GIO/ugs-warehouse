@@ -7,7 +7,7 @@
 import type { ItemRef } from "./browse";
 import { validBbox } from "@/map/map-model";
 import {
-  type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset,
+  type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns,
   type TableColumn, zarrAsset,
 } from "@/stac";
 
@@ -156,10 +156,20 @@ export const categoryLabel = (key: string): string =>
 const FORMAT_LABEL: Partial<Record<ReturnType<typeof assetKind>, string>> = {
   cog: "COG", zarr: "Datacube", threeD: "3D", pdf: "PDF", image: "Image", parquet: "GeoParquet", text: "Text",
 };
+// A thumbnail or a metadata record (the ISO 19139 sidecar) describes the dataset; it isn't one of
+// its formats, so format chips and the Format facet skip it.
+export const isFormatAsset = (a: Asset): boolean =>
+  !a.roles?.includes("thumbnail") && !a.roles?.includes("metadata");
+
+// The assets a result card lists as format chips. Thumbnails/images are already the card image and
+// metadata records are not formats, so they're dropped.
+export const formatBadgeAssets = (it: ItemRef): [string, Asset][] =>
+  Object.entries(it.data?.assets ?? {}).filter(([, a]) => isFormatAsset(a) && !a.type?.startsWith("image/"));
+
 export const formatsOf = (it: ItemRef): string[] => {
   const out = new Set<string>();
   for (const a of Object.values(it.data?.assets ?? {})) {
-    if ((a as Asset).roles?.includes("thumbnail")) continue; // a thumbnail isn't the dataset's format
+    if (!isFormatAsset(a as Asset)) continue;
     const label = FORMAT_LABEL[assetKind(a as Asset)];
     if (label) out.add(label);
   }
@@ -244,6 +254,10 @@ export const curatedDerived = (props: Record<string, unknown>): { curated: MetaR
     derived: rowsFrom(props, pub ? PUB_DERIVED_DEFS : DERIVED_DEFS),
   };
 };
+
+// Whether the item page shows a "Data schema" section. A publication Collection is a document,
+// not a table, so it shows one only when its lone data file (a single-file publication) has one.
+export const showsSchema = (d: StacDoc): boolean => d.type !== "Collection" || Boolean(tableColumns(d));
 
 // Re-export the column-schema type so item-detail's schema table can import one thing from here.
 export type { TableColumn };

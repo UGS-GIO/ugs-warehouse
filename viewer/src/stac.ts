@@ -240,15 +240,13 @@ export const thumbnailAsset = (d: StacDoc | undefined): Asset | undefined => {
 };
 
 // OGC API Features endpoint base (the duckdb_featureserv service). Set at build time via
-// VITE_FEATURES_BASE, or per-session via ?features=<url>. Empty → the link is hidden (no dead
-// link). A serving-topic's STAC item id == its featureserv collection id.
+// VITE_FEATURES_BASE, or per-session via ?features=<url>; it replaces the host of an item's own
+// `rel=service` link. Empty keeps the published host.
 export const FEATURES_BASE = (
   new URLSearchParams(LOC.search).get("features")
   || ((import.meta as { env?: Record<string, string> }).env?.VITE_FEATURES_BASE)
   || ""
 ).replace(/\/+$/, "");
-export const featuresCollectionUrl = (id: string): string | undefined =>
-  FEATURES_BASE ? `${FEATURES_BASE}/collections/${id}` : undefined;
 
 // XYZ vector tiles + Esri VectorTileServer (the `tiles/` service). Same shape as FEATURES_BASE:
 // baked at build time, overridable per session, and empty hides the links rather than printing

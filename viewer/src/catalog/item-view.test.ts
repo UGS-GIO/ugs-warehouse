@@ -3,7 +3,7 @@ import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatsOf, hasGeometry, itemKind, kindLabel, recordCountLabel, rowCount, scale,
-  series, title, typeOf, year,
+  series, showsSchema, title, typeOf, year,
 } from "./item-view";
 import { collectionAsItem, type StacDoc } from "@/stac";
 
@@ -123,6 +123,24 @@ describe("formatsOf", () => {
   });
   it("is empty for a bare item", () => {
     expect(formatsOf(item("c", "1"))).toEqual([]);
+  });
+  it("skips a metadata record, the way it skips a thumbnail", () => {
+    const it = item("c", "1", {}, { assets: {
+      pub: { href: "x.pdf", type: "application/pdf" },
+      metadata: { href: "x.xml", type: "application/xml", roles: ["metadata"], title: "ISO 19139 metadata" },
+    } });
+    expect(formatsOf(it)).toEqual(["PDF"]);
+  });
+});
+
+describe("showsSchema", () => {
+  it("hides the schema section for a publication Collection without a schema", () => {
+    expect(showsSchema({ type: "Collection", assets: { publication: { href: "x.pdf" } } })).toBe(false);
+    expect(showsSchema({ type: "Collection", assets: { data: { href: "x.parquet",
+      "table:columns": [{ name: "a" }] } } })).toBe(true);
+  });
+  it("keeps it for an Item, which says when no schema is published", () => {
+    expect(showsSchema({ type: "Feature", assets: {} })).toBe(true);
   });
 });
 

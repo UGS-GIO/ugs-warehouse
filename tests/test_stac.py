@@ -463,6 +463,54 @@ def test_refresh_catalog_nests_serving_topics_by_schema(monkeypatch):
         assert posixpath.normpath(posixpath.join(p, href)) in store, href
 
 
+def _pub_coll_doc(sid, **over):
+    doc = {"type": "Collection", "id": sid, "title": sid, "links": [],
+           "extent": {"spatial": {"bbox": [[-112.0, 40.0, -111.0, 41.0]]},
+                      "temporal": {"interval": [["2020-01-01T00:00:00Z", None]]}}}
+    doc.update(over)
+    return doc
+
+
+def _pub_refresh_store(monkeypatch, docs):
+    import json
+
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    for sid, doc in docs.items():
+        store[f"{config.STAC_PREFIX}/ugs-publications/DS/{sid}/collection.json"] = json.dumps(doc).encode()
+    return store
+
+
+@pytest.mark.parametrize("sid,bad,defect", [
+    ("DS-2", {"id": None}, "no id"),
+    ("DS-3", {"extent": {"spatial": {"bbox": [[-112.0, 40.0, -111.0, 41.0]]},
+                         "temporal": {"interval": [[]]}}}, "empty extent.temporal.interval"),
+])
+def test_refresh_reports_a_malformed_pub_collection_and_carries_on(monkeypatch, sid, bad, defect):
+    import json
+
+    store = _pub_refresh_store(monkeypatch, {"DS-1": _pub_coll_doc("DS-1"),
+                                             sid: _pub_coll_doc(sid, **bad)})
+    problems = stac.refresh_catalog()
+
+    assert len(problems) == 1
+    assert f"malformed collection.json: ugs-publications/DS/{sid}: {defect}" in problems[0]
+    p = config.STAC_PREFIX
+    series = json.loads(store[f"{p}/ugs-publications/DS/items.json"])
+    assert [e["id"] for e in series["items"]] == ["DS-1"]
+    root = json.loads(store[f"{p}/items.json"])
+    assert [e["id"] for e in root["items"]] == ["DS-1"]
+
+
+def test_strict_refresh_raises_after_writing_when_a_pub_collection_is_malformed(monkeypatch):
+    store = _pub_refresh_store(monkeypatch, {"DS-1": _pub_coll_doc("DS-1"),
+                                             "DS-2": _pub_coll_doc("DS-2", id="")})
+    with pytest.raises(RuntimeError, match="malformed collection.json: ugs-publications/DS/DS-2"):
+        stac.refresh_catalog(strict=True)
+    assert f"{config.STAC_PREFIX}/catalog.json" in store
+    assert f"{config.STAC_PREFIX}/ugs-publications/DS/items.json" in store
+
+
 def test_build_catalog_series_filter():
     from unittest.mock import patch
 

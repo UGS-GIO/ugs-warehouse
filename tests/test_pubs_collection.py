@@ -273,6 +273,10 @@ def test_the_collection_extent_covers_the_footprint_and_every_item():
     ("GIS_DEM_overlay2", "GIS DEM Overlay2", None),
     ("USGSFaults_2020", "USGSFaults 2020", None),
     ("a__", "A", None),
+    ("", "", None),
+    ("2020_faults", "2020 Faults", None),
+    ("a__b__c", "B C", "From a"),
+    ("__X", "X", None),
 ])
 def test_layer_title_reads_as_words(label, title, description):
     assert sink_stac.layer_title(label) == (title, description)

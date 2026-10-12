@@ -885,19 +885,43 @@ def _pub_series_layout(groups: dict[str, list[str]],
     return migrated, pending
 
 
+def _index_defect(doc: object) -> str | None:
+    """Why a publication collection.json cannot be indexed, or None: it needs an `id`, a first
+    `extent.spatial.bbox` entry, and (when it has one) a non-empty first temporal interval."""
+    if not isinstance(doc, dict):
+        return f"not a JSON object ({type(doc).__name__})"
+    if not doc.get("id"):
+        return "no id"
+    extent = doc.get("extent")
+    extent = extent if isinstance(extent, dict) else {}
+    spatial = extent.get("spatial")
+    bboxes = spatial.get("bbox") if isinstance(spatial, dict) else None
+    if not (isinstance(bboxes, list) and bboxes and isinstance(bboxes[0], list) and bboxes[0]):
+        return "no extent.spatial.bbox[0]"
+    temporal = extent.get("temporal")
+    if isinstance(temporal, dict) and "interval" in temporal:
+        interval = temporal["interval"]
+        if not (isinstance(interval, list) and interval and isinstance(interval[0], list)
+                and interval[0]):
+            return "empty extent.temporal.interval"
+    return None
+
+
 def _write_pub_series(pub_colls: dict[str, int], has_mappable_item: set[str]
                       ) -> tuple[dict[str, list[dict]], dict[str, str], dict[str, dict]]:
     """Write `<group>/<SERIES>/catalog.json` and an `items.json` of its publication entries over
     each migrated series' publication collections, with README/AGENTS beside each. Returns
     `({group: [series child entries]}, {path: problem}, {path: collection doc})`; a publication
-    whose collection.json is unreadable is left out of its series."""
+    whose collection.json is unreadable or malformed for the index is left out of its series."""
     from concurrent.futures import ThreadPoolExecutor
 
     def _meta(path: str) -> tuple[str, dict | str]:
         try:
-            return path, json.loads(gcs.get_bytes(collection_object_path(path)).decode())
+            doc = json.loads(gcs.get_bytes(collection_object_path(path)).decode())
         except Exception as e:  # noqa: BLE001 (reported as a problem; the refresh carries on)
             return path, f"unreadable collection.json: {path}: {type(e).__name__}: {e}"
+        defect = _index_defect(doc)
+        return path, doc if defect is None else f"malformed collection.json: {path}: {defect}"
 
     with ThreadPoolExecutor(max_workers=64) as ex:
         docs = dict(ex.map(_meta, sorted(pub_colls)))
@@ -939,7 +963,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     wrote and indexes their items. A series still pending stays in the old layout, one
     collection.json over `<SID>/<SID>.json` items, and the new-layout objects in it are ignored.
 
-    Returns the problems found (publication items with no collection.json, unreadable publication
+    Returns the problems found (publication items with no collection.json, unreadable or malformed publication
     collection.json), each also printed. The root files are always written; `strict` then raises
     if there were problems.
 

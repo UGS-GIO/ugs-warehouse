@@ -136,7 +136,7 @@ def _ingest_thumbnail(monkeypatch, stem: str, schema: str = "wetlands") -> dict 
     monkeypatch.setattr(sink_stac, "_table_columns", lambda con, view: [])
     monkeypatch.setattr(sink_stac.stac, "build_item",
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
-    for name in ("attach_renders", "attach_classification", "attach_iso"):
+    for name in ("attach_renders", "attach_classification"):
         monkeypatch.setattr(sink_stac.stac, name, lambda item: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda item: "")
     sink_stac.write(Topic(schema=schema, layer=f"{stem}_current"), None, "v",
@@ -152,7 +152,8 @@ def test_a_thumbnail_is_a_webp(store, monkeypatch):
     upload = gcs.upload
 
     def recording(local_path, p, **kw):
-        types[p] = kw["content_type"]
+        if p.startswith(config.THUMBS_PREFIX):
+            types[p] = kw["content_type"]
         return upload(local_path, p, **kw)
 
     monkeypatch.setattr(gcs, "upload", recording)

@@ -189,7 +189,9 @@ def _report_derive_skipped(used_shp: str | None) -> None:
             continue                                  # this is what we used
         if kind == "shapefile" and name == used_shp:
             continue
-        if kind == "pdf":
+        if tier == "source" and kind in ("pdf", "geotiff"):
+            reason = "superseded by source raster"
+        elif kind == "pdf":
             g = e.get("georeferenced")
             # a georeferenced PDF only reaches skipped when its render failed (a successful one
             # becomes used.plate and later candidates are never probed)
@@ -454,16 +456,14 @@ def corrected_georef(gtif, work, zip_path=None, inner_gtif=None):
 
 
 def ensure_rgb(tif):
-    """WEBP + gdalbuildvrt need Red/Green/Blue(/Alpha) color interpretation. Expand palette plates;
-    relabel or replicate grayscale plates so they mosaic cleanly."""
+    """WEBP + gdalbuildvrt need Red/Green/Blue(/Alpha) color interpretation. Relabel or replicate
+    grayscale plates so they mosaic cleanly. Palette plates were expanded before the warp."""
     import rasterio
     from rasterio.enums import ColorInterp
     with rasterio.open(tif) as ds:
         n, ci = ds.count, ds.colorinterp
     if ColorInterp.palette in ci:
-        out = tif + ".rgb.tif"
-        run(["gdal_translate", "-expand", "rgba", "-co", "COMPRESS=DEFLATE", tif, out])
-        return out
+        raise ValueError(f"{tif}: palette plate reached ensure_rgb; expand it before the warp")
     if ci[:3] == (ColorInterp.red, ColorInterp.green, ColorInterp.blue):
         return tif
     if ColorInterp.gray in ci:
@@ -490,15 +490,16 @@ def _gdalinfo(path, *flags) -> dict:
 @functools.lru_cache(maxsize=32)
 def _plate_kind(path) -> str:
     """How a plate raster reaches 8 bits, judged from GDAL's exact per-band min/max (nodata excluded):
-    "byte" (already 8-bit), "color" (3+ integer bands whose values fit 0-255, e.g. a UInt16 plate; the
-    warp casts it), "lineart" (a 1-band 0/1 line scan, 0 = paper and 1 = ink), or "grid" (anything else:
-    a data grid such as a DEM or salinity surface, real 16-bit imagery, or a non-8-bit palette).
+    "byte" (already 8-bit), "palette" (8-bit color-table indices; expanded to RGBA before the warp),
+    "color" (3+ integer bands whose values fit 0-255, e.g. a UInt16 plate; the warp casts it),
+    "lineart" (a 1-band 0/1 line scan, 0 = paper and 1 = ink), or "grid" (anything else: a data grid
+    such as a DEM or salinity surface, real 16-bit imagery, or a non-8-bit palette).
     Cached: plate selection and the attempt probe the same path."""
     bands = _gdalinfo(path, "-mm").get("bands") or []
     if not bands:                         # a container (e.g. subdatasets) with no raster bands
         return "grid"
     if all(b["type"] == "Byte" for b in bands):
-        return "byte"
+        return "palette" if bands[0].get("colorInterpretation") == "Palette" else "byte"
     if (not bands[0]["type"].startswith(("UInt", "Int"))
             or any(b.get("colorInterpretation") == "Palette" for b in bands)
             or any("computedMin" not in b for b in bands[:3])):   # all nodata: nothing to judge
@@ -517,6 +518,14 @@ def _lineart_to_byte(path, work) -> str:
     run(["gdal_translate", "-ot", "Byte", "-scale_1", "0", "1", "255", "0", "-b", "1", "-b", "mask",
          "-colorinterp", "gray,alpha", "-a_nodata", "none", "-co", "TILED=YES",
          "-co", "COMPRESS=DEFLATE", "-co", "BIGTIFF=IF_SAFER", str(path), out])
+    return out
+
+
+def _palette_to_rgba(path, work) -> str:
+    """Expand a color table to RGBA (as a VRT, so no /tmp) so the warp blends colors, not index
+    numbers that point at unrelated table entries."""
+    out = os.path.join(work, "plate.rgba.vrt")
+    run(["gdal_translate", "-q", "-of", "VRT", "-expand", "rgba", str(path), out])
     return out
 
 
@@ -582,7 +591,7 @@ def _pick_color_gtif(tif_candidates):
     return best
 
 
-def prepare_plates(zip_paths, work):
+def prepare_plates(zip_paths, work, units_only=False):
     """Extract plates from multiple zips. If COG_DPI>0 and a GEOSPATIAL PDF is present (detected by
     content — GDAL reads a CRS — not by filename), rasterize it at COG_DPI via GDAL using the PDF's
     OWN georeferencing, and return that as the plate. Else use the published GeoTIFF. Returns
@@ -593,7 +602,9 @@ def prepare_plates(zip_paths, work):
     DPI vector cartography (→ z17), and its internal georef places the map frame correctly even
     though the page includes the collar — the later cutline warp (in _harvest_attempt) trims the
     collar to the map footprint. (The old pdftoppm + `-a_ullr`-from-the-GeoTIFF path only worked for
-    a map-frame-only PDF and would misregister a full plate.)"""
+    a map-frame-only PDF and would misregister a full plate.)
+
+    `units_only` extracts just the units shapefile, for a map whose plate is its source raster."""
     gtif = shp = None
     target_zip = inner_gtif = None
     pdf_candidates = []  # (zip_path, inner_name)
@@ -623,7 +634,7 @@ def prepare_plates(zip_paths, work):
             if _shp:
                 stem = re.sub(r"\.shp$", "", _shp, flags=re.I)
                 want += [n for n in names if re.sub(r"\.[^.]+$", "", n) == stem]
-            if _gtif:
+            if _gtif and not units_only:
                 gstem = re.sub(r"\.[^.]+$", "", _gtif)
                 want += [n for n in names if n.startswith(gstem + ".")
                          and n.lower().endswith((".tfwx", ".tfw", ".wld", ".aux.xml", ".prj"))]
@@ -632,6 +643,8 @@ def prepare_plates(zip_paths, work):
 
     shp_path = os.path.join(work, shp) if shp else None
     _report("used", units_shp=shp)
+    if units_only:
+        return None, shp_path
     rendered = _render_geospatial_pdf(pdf_candidates, work)
     if rendered:
         _report(tier="geo-pdf")                       # _render recorded used["plate"] (name + dpi)
@@ -676,6 +689,22 @@ def prepare_plates(zip_paths, work):
     _report("used", plate={"name": inner_gtif, "dpi": None})
     _report_derive_skipped(shp)
     return gtif_path, shp_path
+
+
+def source_raster(series_id) -> str | None:
+    """The map's source raster object in the warehouse bucket, or None when it has none."""
+    obj = identity.Pub(series_id).source_raster_object
+    return obj if gcs.exists(obj) else None
+
+
+def _source_plate(obj, work):
+    """Download the map's source raster: already placed in its own CRS, so it warps as is."""
+    local = os.path.join(work, "plate.source.tif")
+    hlog(f"downloading source raster {obj}", step="download")
+    gcs.download(obj, local)
+    _report(tier="source", color_source_sat=_source_saturation(local))
+    _report("used", plate={"name": obj, "dpi": None})
+    return local
 
 
 def _pdf_has_crs(path):
@@ -771,34 +800,38 @@ def harvest_one(series_id: str, dry_run: bool = False, force: bool = False) -> s
              step="resolve", level="ERROR", category="attention")
         return "fail:write-once"
     gt_url, gis_url = zip_urls(series_id)
+    source = source_raster(series_id)
 
     if dry_run:
-        hlog(f"dry-run URLs: gt={gt_url}, gis={gis_url}", step="resolve")
+        hlog(f"dry-run URLs: gt={gt_url}, gis={gis_url}, source={source}", step="resolve")
         return "ok"
 
     # high-DPI needs the GIS bundle (carries the geospatial PDF); else the lighter GeoTiff-Zip
     zurls = []
-    if COG_DPI > 0 and gis_url and gt_url:
+    if source:
+        zurls = [gis_url] if gis_url else []   # the plate is the source raster; the GIS zip has the units
+    elif COG_DPI > 0 and gis_url and gt_url:
         zurls = [gt_url, gis_url]
     else:
         zurl = (gis_url or gt_url) if COG_DPI > 0 else (gt_url or gis_url)
         if zurl:
             zurls = [zurl]
-    if not zurls:
+    if not zurls and not source:
         # EXPECTED, not a failure: the publication has no spatial bundle to convert (PDF-only). Do
         # not return "fail:*" — that would fail the Cloud Run task and trigger a pointless retry.
         hlog("no spatial data (PDF-only) — nothing to harvest", step="resolve",
              level="NOTICE", category="expected")
         return "skip:nodata"
 
-    status = _harvest_attempt(pub, zurls)
+    status = _harvest_attempt(pub, zurls, source=source)
     # FALLBACK: the GIS bundle's base raster sometimes has no usable SRS -> the cutline warp dies.
     # The separate GeoTIFF-Zip is the clean georeferenced plate; retry with it alone. But only when
     # nothing has been published yet: if the first attempt's write-once upload already landed the
     # COG before failing in a LATER step (units/thumbnail), retrying would re-hit upload_write_once
     # on the now-existing object -> WriteOnceViolation, wasting a full reprocess and masking the
     # real first-failure reason behind a bogus write-once failure for a pub that actually succeeded.
-    if status.startswith("fail") and gt_url and zurls != [gt_url] and not gcs.exists(pub.cog_object):
+    if (status.startswith("fail") and gt_url and zurls != [gt_url] and not source
+            and not gcs.exists(pub.cog_object)):
         hlog("GIS source failed → retry GeoTIFF source only", step="source", level="WARNING")
         if _harvest_attempt(pub, [gt_url]) == "ok":
             return "ok"
@@ -818,8 +851,9 @@ def _write_previews(pub: identity.Pub, cog: str, work: str) -> None:
     _report("produced", thumbnail=pub.thumb_object, sheet=pub.sheet_object)
 
 
-def _harvest_attempt(pub: identity.Pub, zurls) -> str:
-    """One harvest attempt over a set of source zip URL(s). Returns 'ok' | 'fail:…'."""
+def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
+    """One harvest attempt over a set of source zip URL(s), with the plate taken from the map's
+    source raster object when `source` is set. Returns 'ok' | 'fail:…'."""
     from rio_cogeo.cogeo import cog_translate, cog_validate
     from rio_cogeo.profiles import cog_profiles
 
@@ -841,7 +875,14 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             download(encode_url(zurl), zp, max_bytes=max_b)
             zip_paths.append(zp)
 
-        plate, shp = prepare_plates(zip_paths, work)
+        plate, shp = prepare_plates(zip_paths, work, units_only=bool(source))
+        if source:
+            plate = _source_plate(source, work)
+            if not _gdalinfo(plate).get("coordinateSystem", {}).get("wkt"):
+                hlog(f"FAIL source raster {source} has no CRS", step="plate",
+                     level="ERROR", category="attention", err=True)
+                return "fail:source_no_crs"
+            _report_derive_skipped(shp)
         if not plate:
             hlog("FAIL no plate (had a bundle but no usable raster)", step="plate",
                  level="ERROR", category="attention", err=True)
@@ -850,12 +891,15 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         # Every COG is 8-bit: WEBP needs it, the mosaic VRT keeps only sources matching the first one's
         # type, and browsers draw 16-bit plates almost black.
         kind = _plate_kind(plate)
+        source_plate = plate
         if kind == "grid":
             hlog("FAIL plate is not 8-bit map imagery (a data grid, or real 16-bit color)", step="plate",
                  level="ERROR", category="attention", err=True)
             return "fail:not_8bit"
         if kind == "lineart":
             plate = _lineart_to_byte(plate, work)
+        elif kind == "palette":
+            plate = _palette_to_rgba(plate, work)
         # -dstalpha carries the transparency; no nodata tag, or white paper could turn clear. INIT_DEST
         # is explicit because, with no nodata, GDAL 3.11 exits 1 on its default and leaves a partial file.
         cast_args = ["-ot", "Byte", "-dstnodata", "None", "-wo", "INIT_DEST=0"] if kind == "color" else []
@@ -873,6 +917,14 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
         run(["gdalwarp", *cutline_args, *cast_args,
              "-t_srs", "EPSG:3857", "-r", "lanczos", "-dstalpha", "-overwrite",
              "-co", "BIGTIFF=YES", "-co", "COMPRESS=DEFLATE", plate, clipped])
+        # /tmp is RAM on Cloud Run: free the plate and the zips (the warp read them last) before the
+        # COG write needs room, which matters for a multi-GB source raster.
+        for p in {source_plate, plate}:
+            if p and os.path.exists(p) and not p.endswith(".vrt"):
+                os.remove(p)
+        for zp in zip_paths:
+            if os.path.exists(zp):
+                os.remove(zp)
         cog = os.path.join(work, f"{series_id}.cog.tif")
         prof = dict(cog_profiles.get(COG_COMPRESS))
         prof["bigtiff"] = "IF_SAFER"
@@ -909,25 +961,13 @@ def _harvest_attempt(pub: identity.Pub, zurls) -> str:
             if COG_COMPRESS == "webp" and (not os.path.exists(cog) or os.path.getsize(cog) < 100_000):
                 _to_lzw("empty/undersized")
 
-        # Free up tmpfs RAM by deleting the intermediate clipped/rgb and plate images
+        # Free up tmpfs RAM by deleting the intermediate clipped/rgb images
         for f in (clipped, rgb_clipped):
             if f and os.path.exists(f) and f != cog:
                 try:
                     os.remove(f)
                 except Exception:
                     pass
-        if plate and os.path.exists(plate) and plate != cog and not plate.endswith(".vrt"):
-            try:
-                os.remove(plate)
-            except Exception:
-                pass
-
-        # Free up tmpfs RAM by deleting the downloaded ZIPs
-        for zp in zip_paths:
-            try:
-                os.remove(zp)
-            except Exception:
-                pass
 
         ok, _, _ = cog_validate(cog)
         if not ok:
@@ -1064,7 +1104,7 @@ def main() -> int:
             hlog(f"harvest report → {report_gcs}", step="report")
     except Exception as e:
         hlog(f"could not write harvest report: {e}", step="report", level="WARNING")
-    tiers = {"geo-pdf": 0, "geotiff": 0, "none": 0}
+    tiers = {"geo-pdf": 0, "geotiff": 0, "source": 0, "none": 0}
     skipped = 0
     for r in _run_report:
         if (r.get("status") or "").startswith("skip"):
@@ -1072,7 +1112,8 @@ def main() -> int:
         else:
             tiers[r.get("tier") or "none"] += 1
     hlog(f"report: {tiers['geo-pdf']} geo-pdf (z17), {tiers['geotiff']} geotiff (z16), "
-         f"{tiers['none']} no-source, {skipped} skipped across {len(_run_report)} pub(s) → {report_path}",
+         f"{tiers['source']} source raster, {tiers['none']} no-source, {skipped} skipped "
+         f"across {len(_run_report)} pub(s) → {report_path}",
          step="report")
 
     hlog(f"run complete: {tally['ok']} ok, {tally['expected']} expected (skip / PDF-only), "

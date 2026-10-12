@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.5.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.4.0...v1.5.0) (2026-10-12)
+
+
+### Features
+
+* **harvest:** take a map's plate from its source raster and expand palettes before the warp [ALL-6149] ([#555](https://github.com/UGS-GIO/ugs-warehouse/issues/555)) ([a313f16](https://github.com/UGS-GIO/ugs-warehouse/commit/a313f16cfb9e06f4043a419a144bd5fc193e6a3f))
+
 ## [1.4.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.3.0...v1.4.0) (2026-10-11)
 
 

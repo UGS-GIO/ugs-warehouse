@@ -158,13 +158,28 @@ export const viaLink = (d: StacDoc | undefined): Link | undefined =>
 export const citeLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "cite-as");
 
+// A document whose only extent is the statewide placeholder the producer writes when it has no
+// footprint (`ugs:footprint_source: "utah-bbox"`). Its geometry/bbox say nothing about where it is.
+export const isPlaceholderFootprint = (d: StacDoc | undefined): boolean =>
+  (d?.properties as Record<string, unknown> | undefined)?.["ugs:footprint_source"] === "utah-bbox";
+
+// Whether a document has a real footprint to badge, draw or fly to: a geometry or a valid
+// [w,s,e,n] bbox, and not the placeholder.
+export const hasFootprint = (d: StacDoc | undefined): boolean => {
+  if (!d || isPlaceholderFootprint(d)) return false;
+  const b = d.bbox;
+  const validBox = Array.isArray(b) && b.length >= 4 && b.slice(0, 4).every(Number.isFinite);
+  return Boolean(d.geometry || validBox);
+};
+
 // The collection an item belongs to (rel=collection, else rel=parent), as written (usually relative).
 export const collectionLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "collection") ?? (d?.links ?? []).find((l) => l.rel === "parent");
 
 // A publication Collection read as the item shape the detail page takes: its top-level metadata
-// becomes `properties`, its first extent box the `bbox`, and its extent start the `datetime` unless
-// it is flagged `ugs:date_unknown`. Type, assets and links stay; any other doc passes through.
+// becomes `properties`, its first extent box the `bbox` (unless that is the placeholder), and its
+// extent start the `datetime` unless it is flagged `ugs:date_unknown`. Type, assets and links stay;
+// any other doc passes through.
 const COLLECTION_SHAPE = new Set([
   "type", "stac_version", "stac_extensions", "id", "links", "assets", "extent", "summaries",
   "item_assets", "properties", "bbox", "geometry",
@@ -178,7 +193,9 @@ export const collectionAsItem = (d: StacDoc): StacDoc => {
     Object.fromEntries(Object.entries(raw).filter(([k]) => !COLLECTION_SHAPE.has(k)));
   const start = extent?.temporal?.interval?.[0]?.[0];
   if (start && !props["ugs:date_unknown"]) props.datetime = start;
-  return { ...d, bbox: extent?.spatial?.bbox?.[0], properties: props };
+  // The placeholder extent is not a footprint, so it does not become the item's bbox.
+  const bbox = props["ugs:footprint_source"] === "utah-bbox" ? undefined : extent?.spatial?.bbox?.[0];
+  return { ...d, bbox, properties: props };
 };
 
 // A Collection's Items (its layers and tables), from the titled rel=item links: no fetch per item.
@@ -394,18 +411,35 @@ export const defaultStyleUrl = (d: StacDoc | undefined): string | undefined => {
   return (renders.default ?? Object.values(renders)[0])?.style_url;
 };
 
+// A non-2xx response, keeping its status so a caller can tell "not there" from "failed".
+export class HttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+export const isNotFound = (e: unknown): boolean => e instanceof HttpError && e.status === 404;
+
+// Whether the selected `?i=` names nothing: its doc 404'd, or nothing resolved it to an href once
+// every source that could (`resolving`) has finished.
+export const itemMissing = (o: { itemUrl?: string; itemHref?: string; error?: unknown; resolving: boolean }): boolean =>
+  Boolean(o.itemUrl) && (isNotFound(o.error) || (!o.itemHref && !o.resolving));
+
 async function fetchJson(url: string): Promise<StacDoc> {
   const r = await fetch(url);
-  if (!r.ok) throw new Error(`${r.status} ${r.statusText} — ${url}`);
+  if (!r.ok) throw new HttpError(r.status, `${r.status} ${r.statusText} — ${url}`);
   return r.json();
 }
 
-/** Fetch + cache any STAC doc by URL. `enabled` gates on a selected url. */
+/** Fetch + cache any STAC doc by URL. `enabled` gates on a selected url. A 404 is final, so it is
+ *  not retried. */
 export function useStac(url?: string) {
   return useQuery({
     queryKey: qk.stac(url),
     queryFn: () => fetchJson(url as string),
     enabled: Boolean(url),
+    retry: (count, e) => !isNotFound(e) && count < 1,
   });
 }
 

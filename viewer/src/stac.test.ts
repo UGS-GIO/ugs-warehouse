@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, catalogItemHref, citeLink, collectionAsItem, collectionLink, collectionParts, entryCollKeyOf, idOf, indexItemRefs, isCatalogHref, isCollectionHref, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, catalogItemHref, citeLink, collectionAsItem, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -369,6 +369,40 @@ describe("collectionAsItem", () => {
   it("passes an Item through untouched", () => {
     const item: StacDoc = { type: "Feature", id: "x", properties: { title: "X" } };
     expect(collectionAsItem(item)).toBe(item);
+  });
+});
+
+describe("placeholder footprints", () => {
+  const utah = [-114.05, 37, -109.04, 42];
+  it("is no footprint when flagged utah-bbox, or when there is no geometry or bbox", () => {
+    expect(hasFootprint({ bbox: utah, properties: { "ugs:footprint_source": "utah-bbox" } })).toBe(false);
+    expect(isPlaceholderFootprint({ properties: { "ugs:footprint_source": "utah-bbox" } })).toBe(true);
+    expect(hasFootprint({ geometry: null, properties: {} })).toBe(false);
+    expect(hasFootprint({ bbox: [-112, 40, -111, 41], properties: { "ugs:footprint_source": "cog" } })).toBe(true);
+    expect(hasFootprint(undefined)).toBe(false);
+  });
+  it("keeps a placeholder Collection extent out of the normalised bbox", () => {
+    const d = collectionAsItem({ ...pubCollection, "ugs:footprint_source": "utah-bbox",
+      extent: { spatial: { bbox: [utah] }, temporal: { interval: [[null, null]] } } } as StacDoc);
+    expect(d.bbox).toBeUndefined();
+    expect(hasFootprint(d)).toBe(false);
+  });
+});
+
+describe("itemMissing", () => {
+  it("is missing when the doc 404s", () => {
+    expect(itemMissing({ itemUrl: "MD-1002", itemHref: "https://x/MD-1002/collection.json",
+      error: new HttpError(404, "404 Not Found"), resolving: false })).toBe(true);
+  });
+  it("is missing once everything that could resolve the id has loaded without a match", () => {
+    expect(itemMissing({ itemUrl: "MD-1002", resolving: false })).toBe(true);
+    expect(itemMissing({ itemUrl: "MD-1002", resolving: true })).toBe(false);
+  });
+  it("is not missing for a doc that exists, another failure, or no selection", () => {
+    expect(itemMissing({ itemUrl: "MD-10", itemHref: "https://x/a.json", resolving: false })).toBe(false);
+    expect(itemMissing({ itemUrl: "MD-10", itemHref: "https://x/a.json",
+      error: new HttpError(500, "500"), resolving: false })).toBe(false);
+    expect(itemMissing({ resolving: false })).toBe(false);
   });
 });
 

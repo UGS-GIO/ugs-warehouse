@@ -673,6 +673,7 @@ export function Browse() {
     return (
       <div className={C.wrap}>
         <ItemDetail collectionId={c.collectionId} item={c.item.data} raw={c.item.raw} error={c.item.error}
+          missing={c.itemNotFound ? c.itemUrl : undefined}
           partOf={c.partOf} crumbs={c.itemCrumbs} layout="page"
           onBack={() => c.go({ view: "catalog", ...itemBackTarget(c) })}
           onMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl,

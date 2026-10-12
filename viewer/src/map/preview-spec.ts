@@ -1,7 +1,7 @@
 // What the persistent map should draw, and the helpers both halves of it need. Split out so the
 // provider can live in the entry chunk while maplibre stays behind a lazy import.
 import { validBbox } from "./map-model";
-import { rendersOf, type StacDoc } from "@/stac";
+import { hasFootprint, rendersOf, type StacDoc } from "@/stac";
 
 export type PreviewSpec =
   | { kind: "vector"; item: StacDoc; pmHref: string; sourceLayer: string }
@@ -19,8 +19,10 @@ export const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
   return { type: "Polygon", coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] };
 };
 
-/** For an item with no previewable file: draw its geometry, else its bbox outline, else nothing. */
+/** For an item with no previewable file: draw its geometry, else its bbox outline, else nothing.
+ *  The statewide placeholder extent is not a footprint, so it draws nothing. */
 export function footprintSpecOf(item: StacDoc): PreviewSpec {
+  if (!hasFootprint(item)) return null;
   const b = validBbox(item.bbox);
   const geometry = (item.geometry as GeoJSON.Geometry | null | undefined) ?? (b ? bboxPolygon(b) : null);
   return geometry ? { kind: "footprint", item, geometry } : null;

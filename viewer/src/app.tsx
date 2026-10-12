@@ -17,7 +17,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, pubHrefFor, pubSidIn, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
@@ -409,6 +409,11 @@ function useViewState() {
   // the add-to-map gate read it like any item. `raw` is the doc as published, for the JSON panel.
   const itemData = useMemo(() => itemQuery.data && collectionAsItem(itemQuery.data), [itemQuery.data]);
   const item = { data: itemData, raw: itemQuery.data, error: itemQuery.error, isLoading: itemQuery.isLoading };
+  // `?i=` names nothing in this catalog: its doc 404s, or everything that could resolve it (the
+  // tree, the open collection's index, a rollup) has loaded without a match.
+  const resolving = catalog.isLoading || subDocs.isLoading || itemsLoading
+    || rollupIdx.some((r) => r.isLoading);
+  const itemNotFound = itemMissing({ itemUrl, itemHref, error: itemQuery.error, resolving });
 
   // "Part of <publication>" on an Item whose collection is a publication (listed under a series leaf).
   const partOfHref = item.data && itemHref ? collectionLink(item.data)?.href : undefined;
@@ -558,7 +563,7 @@ function useViewState() {
     catalogDocs, mapItems, discoverItems, mapLoadKey, mapItemsLoading,
     searchIsLayer, pickPlace, pickSearchItem,
     openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
-    itemUrl, item, partOf, collectionId, collectionUrl, layerIds, seriesSel,
+    itemUrl, item, itemNotFound, partOf, collectionId, collectionUrl, layerIds, seriesSel,
     rootChildren, cardsWithCovers, allItems, itemsLoading, leafIndexMissing, leafColl, crumbs, itemCrumbs,
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
     layerCollIds, setSeries,

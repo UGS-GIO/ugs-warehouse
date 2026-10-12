@@ -15,13 +15,13 @@ import { DiffPanel } from "@/review/diff-panel";
 import { Preview } from "./asset-viewer";
 import { EndpointsPanel } from "./endpoints-panel";
 import { DownloadsPanel } from "./downloads-panel";
-import { bylineParts, categorize, curatedDerived, kindLabel, type MetaRow, recordCountLabel, showsSchema } from "./item-view";
+import { bylineParts, categorize, collectionLabel, curatedDerived, kindLabel, type MetaRow, recordCountLabel, showsSchema } from "./item-view";
 import { T } from "@/shell/page";
 import { PropertyTable } from "./property-table";
 import { SchemaTable } from "./schema-table";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
-import { type Asset, catalogItemHref, citeLink, collectionParts, contentsOf, IS_REVIEW, ownForeignKeys,
+import { type Asset, catalogItemHref, citeLink, collectionParts, contentsOf, hasFootprint, IS_REVIEW, ownForeignKeys,
   relatedAssets, relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
@@ -286,15 +286,26 @@ function ReviewBadge({ itemId }: { itemId: string }) {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
 }
 
-export function ItemDetail({ collectionId, item, raw, error, partOf, crumbs, onBack, onMap, onExplore, layout = "drawer" }: {
+export function ItemDetail({ collectionId, item, raw, error, missing, partOf, crumbs, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
   raw?: StacDoc;                   // the doc as published, for the JSON panel (item may be normalised)
   error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
+  missing?: string;                // an id this catalog does not have: say so instead of loading
   partOf?: PartOf;                 // the publication an Item belongs to
   crumbs?: { label: string; onClick?: () => void }[];  // a full trail, replacing `collection / id`
   onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
   layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
+  if (missing) {
+    return (
+      <div role="status" className="space-y-2 text-sm">
+        <p className="text-foreground">Not found: <code>{missing}</code> is not in this catalog.</p>
+        <button type="button" onClick={onBack} className="text-primary hover:underline">
+          ‹ Back to {collectionId ? collectionLabel(collectionId) : "the catalog"}
+        </button>
+      </div>
+    );
+  }
   if (!item) {
     return error
       ? <Unavailable what="this item" error={error}
@@ -302,7 +313,7 @@ export function ItemDetail({ collectionId, item, raw, error, partOf, crumbs, onB
       : <em className={C.muted}>Loading…</em>;
   }
   const p = item.properties ?? {};
-  const hasGeom = Boolean(item.geometry || item.bbox);
+  const hasGeom = hasFootprint(item);
   const via = viaLink(item);
   const cite = citeLink(item);
 

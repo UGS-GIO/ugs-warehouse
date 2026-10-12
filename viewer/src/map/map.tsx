@@ -12,7 +12,7 @@ import { basemapProtocol } from "@/offline/basemap-protocol";
 import * as offlineStore from "@/offline/store";
 import { MapControl } from "./map-control";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
-import { type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
+import { hasFootprint, type StacDoc, useCogBoxes, useStyleLayersFor } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapMenu } from "./basemap-menu";
 import lightThumb from "@/assets/basemaps/light.webp";
@@ -234,7 +234,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
   const activeBoxes = layers.map(effBox).filter((b): b is [number, number, number, number] => Array.isArray(b));
   // `|N` so the effect re-fires when an async COG extent arrives (activeBoxes grows) and re-fits.
   const fitKey = (layers.map((l) => l.id).join(",") || (item?.bbox?.join(",") ?? "")) + `|${activeBoxes.length}`;
-  const fitBox = unionBbox(activeBoxes) ?? to2d(item?.bbox);
+  const fitBox = unionBbox(activeBoxes) ?? (hasFootprint(item) ? to2d(item?.bbox) : undefined);
   useEffect(() => {
     if (!fitKey || !fitBox || !mapRef.current || fitKey === lastFit.current) return;
     lastFit.current = fitKey;
@@ -453,7 +453,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
         </Source>
       )}
 
-      {item?.geometry && (
+      {item?.geometry && hasFootprint(item) && (
         <Source id="footprint" type="geojson" data={{ type: "Feature", properties: {}, geometry: item.geometry }}>
           <Layer id="fp-line" type="line" paint={{ "line-color": "#888", "line-width": 1, "line-dasharray": [2, 2] }} />
         </Source>

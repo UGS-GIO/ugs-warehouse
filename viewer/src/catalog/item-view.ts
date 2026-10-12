@@ -7,7 +7,7 @@
 import type { ItemRef } from "./browse";
 import { validBbox } from "@/map/map-model";
 import {
-  type Asset, assetKind, cogAsset, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns,
+  type Asset, assetKind, cogAsset, isPlaceholderFootprint, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns,
   type TableColumn, zarrAsset,
 } from "@/stac";
 
@@ -68,9 +68,19 @@ export const fmtDate = (iso: string): string => {
   return iso;                                             // genuine full date
 };
 
-// "Has geometry" = a valid lon/lat bbox or an explicit geometry — i.e. it can draw on the map.
+// "Has geometry" = a valid lon/lat bbox or an explicit geometry — i.e. it can draw on the map. The
+// statewide placeholder extent (`ugs:footprint_source: "utah-bbox"`) is not a footprint.
 export const hasGeometry = (it: ItemRef): boolean =>
-  Boolean(validBbox(it.data?.bbox) || it.data?.geometry);
+  !isPlaceholderFootprint(it.data) && Boolean(validBbox(it.data?.bbox) || it.data?.geometry);
+
+// Whether the item's data has geometry to export as a spatial format. A null geometry, or a
+// published column schema with no geometry column, means a plain table.
+const GEOM_COLUMN_NAMES = new Set(["geom", "geometry", "wkb_geometry"]);
+export const isSpatialData = (d: StacDoc | undefined): boolean => {
+  if (!d || d.geometry === null) return false;
+  const cols = tableColumns(d);
+  return !cols || cols.some((c) => c.type?.toLowerCase() === "geometry" || GEOM_COLUMN_NAMES.has(c.name));
+};
 
 // The doc id bridging a MiniSearch hit (built by search-index.toSearchDoc) back to its item.
 export const docIdOf = (it: ItemRef): string => `${it.collId}/${itemIdOf(it)}`;

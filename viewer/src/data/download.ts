@@ -215,6 +215,13 @@ export function geomColumn(names: string[]): string {
   return GEOM_NAMES.find((g) => names.includes(g)) ?? GEOM;
 }
 
+// The SELECT a CSV export copies: the geometry column replaced by its WKT where the table has one,
+// else the rows as they are (a plain table).
+export function csvSelectSql(table: string, geomCol: string | undefined, wkt: string, drop: string[] = []): string {
+  const ex = drop.length ? ` EXCLUDE (${drop.map(ident).join(", ")})` : "";
+  return geomCol ? `SELECT *${ex} REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${table}` : `SELECT *${ex} FROM ${table}`;
+}
+
 let seq = 0;
 
 // Identifier / literal quoting for SQL built from column names + a user search term.
@@ -652,8 +659,9 @@ export async function exportItem(
       // this the transform reads longitude as latitude and returns inf.
       const wkt = srs === 4326 ? `ST_AsText(${geom})`
         : `ST_AsText(ST_Transform(${geom}, 'EPSG:4326', 'EPSG:${srs}', always_xy := true))`;
-      const drop = cols0.includes(COVERING_COL) ? ` EXCLUDE (${ident(COVERING_COL)})` : "";
-      await conn.query(`COPY (SELECT *${drop} REPLACE (${wkt} AS ${ident(geomCol)}) FROM ${t}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
+      const spatial = descRows.some((r) => String(r.column_name) === geomCol);
+      const drop = cols0.includes(COVERING_COL) ? [COVERING_COL] : [];
+      await conn.query(`COPY (${csvSelectSql(t, spatial ? geomCol : undefined, wkt, drop)}) TO '${csvOut}' (HEADER, DELIMITER ',');`);
       deliver([await db.copyFileToBuffer(csvOut)], `${stem}.csv`, "text/csv");
       return;
     }

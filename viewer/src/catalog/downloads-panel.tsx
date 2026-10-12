@@ -4,12 +4,13 @@ import { useMutation } from "@tanstack/react-query";
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 
 import { currentExports, holdsOneGeomType, subscribeExport } from "@/data/download";
-import { type ExportFormat, FORMATS } from "@/data/export-formats";
+import { type ExportFormat, exportFormatsFor } from "@/data/export-formats";
 import { type Asset, assetKind, isParquetAsset, parquetAsset, type StacDoc } from "@/stac";
 import { C } from "@/ui/ui";
 import { UiSelect } from "@/ui/select";
 
 import { exportFindings, type Finding, findingsHeading } from "./export-findings";
+import { isSpatialData } from "./item-view";
 import { to2d } from "@/lib/bbox";
 
 const SERVICE_KEYS = new Set(["pmtiles", "style", "xyz", "ducklake", "tiles"]);
@@ -22,14 +23,6 @@ const EPSG_ITEMS = [
   { value: "other", label: "Other (any EPSG)…" },
 ];
 
-const HINTS: Record<ExportFormat, string> = {
-  shp: "ArcMap · universal",
-  gpkg: "QGIS · ArcGIS Pro",
-  gdb: "ArcGIS Pro",
-  fgb: "streaming · web",
-  geojson: "web · always WGS 84",
-  csv: "spreadsheet · WKT geometry",
-};
 
 /** `…/thing.parquet?x=1` → `parquet` */
 const extOf = (href: string) => href.split(/[?#]/)[0].match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase();
@@ -115,6 +108,9 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
 
   const files = fileAssets(item);
   if (!files.length) return null;
+  // A plain table has no geometry to write, so it gets CSV only and no projection or clip.
+  const spatial = isSpatialData(item);
+  const formats = exportFormatsFor(spatial);
   const data = files.filter(([, a]) => isParquetAsset(a));
   const sidecars = files.filter(([, a]) => !isParquetAsset(a));
 
@@ -133,7 +129,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
       <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Downloads</h3>
       <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
         {data.map(assetTile)}
-        {parquet && FORMATS.map((f) => (
+        {parquet && formats.map((f) => (
           <button key={f.id} aria-disabled={run.isPending} aria-busy={busy === f.id}
             onClick={(e) => {
               if (run.isPending) return;      // aria-disabled keeps it focusable, so guard the click
@@ -143,7 +139,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
             aria-label={`Download ${f.label}`} className={TILE}>
             <span className="font-medium">
               {f.label}
-              <span className={SUB}>{HINTS[f.id]}</span>
+              <span className={SUB}>{f.hint}</span>
             </span>
             <span aria-hidden className="shrink-0 text-primary">{busy === f.id ? "…" : "↓"}</span>
           </button>
@@ -171,7 +167,7 @@ export function DownloadsPanel({ item }: { item: StacDoc }) {
         </button>
       ))}
 
-      {parquet && (
+      {parquet && spatial && (
         <details className="mt-2 border-t border-border pt-2">
           <summary className="cursor-pointer text-sm text-muted-foreground">Projection &amp; area</summary>
           <div className="mt-2 flex flex-wrap items-center gap-1.5 text-sm text-muted-foreground">

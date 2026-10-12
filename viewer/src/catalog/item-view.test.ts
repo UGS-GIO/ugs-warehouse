@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
-  dateOf, fmtDate, formatsOf, hasGeometry, itemKind, kindLabel, recordCountLabel, rowCount, scale,
+  dateOf, fmtDate, formatsOf, hasGeometry, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
   series, showsSchema, title, typeOf, year,
 } from "./item-view";
 import { collectionAsItem, type StacDoc } from "@/stac";
@@ -130,6 +130,26 @@ describe("formatsOf", () => {
       metadata: { href: "x.xml", type: "application/xml", roles: ["metadata"], title: "ISO 19139 metadata" },
     } });
     expect(formatsOf(it)).toEqual(["PDF"]);
+  });
+});
+
+describe("footprints and spatial data", () => {
+  it("does not count the statewide placeholder as a footprint", () => {
+    const onUtah = item("ugs-publications/C", "C-139", { "ugs:footprint_source": "utah-bbox" },
+      { bbox: [-114.05, 37, -109.04, 42] });
+    expect(hasGeometry(onUtah)).toBe(false);
+    expect(hasGeometry(item("c", "1", { "ugs:footprint_source": "cog" }, { bbox: [-112, 40, -111, 41] })))
+      .toBe(true);
+  });
+  it("treats null geometry, or a schema with no geometry column, as a plain table", () => {
+    const cols = (c: { name: string; type?: string }[]) => ({ data: { href: "x.parquet", "table:columns": c } });
+    expect(isSpatialData({ geometry: null })).toBe(false);
+    expect(isSpatialData({ geometry: { type: "Point", coordinates: [0, 0] },
+      assets: cols([{ name: "MapUnit", type: "string" }]) })).toBe(false);
+    expect(isSpatialData({ assets: cols([{ name: "MapUnit" }, { name: "geometry", type: "geometry" }]) })).toBe(true);
+    expect(isSpatialData({ assets: cols([{ name: "geom", type: "blob" }]) })).toBe(true);
+    // No schema published: assume spatial, as before.
+    expect(isSpatialData({ geometry: { type: "Point", coordinates: [0, 0] }, assets: {} })).toBe(true);
   });
 });
 

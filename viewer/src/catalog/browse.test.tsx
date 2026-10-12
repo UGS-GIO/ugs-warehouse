@@ -3,6 +3,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { CollectionItems, CollectionsGrid, type CollectionSummary } from "./browse";
+import { ItemDetail } from "./item-detail";
 
 const card = (id: string, title: string): CollectionSummary =>
   ({ id, title, href: `https://cdn.example/stac/${id}/collection.json`, count: 1 });
@@ -49,6 +50,18 @@ describe("the catalog landing", () => {
   it("gives every collection its own STAC url to hand out", () => {
     atRoot([card("ugs-publications", "Publications")]);
     expect(screen.getByText("STAC ↗").getAttribute("href")).toBe("https://cdn.example/stac/ugs-publications/collection.json");
+  });
+});
+
+describe("an item that is not in the catalog", () => {
+  it("says so, with a way back to its collection, instead of loading forever", () => {
+    const onBack = vi.fn();
+    render(<ItemDetail collectionId="ugs-mining-district-files/MD" missing="MD-1002" layout="page"
+      onBack={onBack} onMap={noop} />);
+    expect(screen.getByRole("status").textContent).toContain("Not found: MD-1002 is not in this catalog.");
+    screen.getByRole("button", { name: /Back to MD/ }).click();
+    expect(onBack).toHaveBeenCalledOnce();
+    expect(screen.queryByText("Loading…")).toBeNull();
   });
 });
 

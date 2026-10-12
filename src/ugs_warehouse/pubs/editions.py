@@ -46,18 +46,13 @@ from .scale import mosaic_tier_of, tier_of
 
 
 def _item_href(p: dict) -> str:
-    """Public STAC item URL for an edition member. Resolved through its REAL top-level collection
-    group (`sink_stac.collection_group`) — a quad map isn't always in `ugs-publications`: MD-series
-    pubs route to `ugs-mining-district-files` and foreign-publisher pubs (BYU/AAPG/USU/UU, …) route
-    to `ugs-external`, independent of edition grouping (which only looks at quad+tier). Hardcoding
-    `ugs-publications` here would build a dead 404 href for those — this mirrors how
-    `sink_stac.build_publication` builds its own collection_path (group + series_code), so the two
-    can never disagree."""
-    from .sink_stac import collection_group, item_id_for, series_code  # lazy: raster-dep-free
+    """Public URL of an edition member's publication Collection. The path comes from
+    `sink_stac.pub_collection_path`, the same function `build_publication` uses, so the link follows
+    the member's real group (MD-series and foreign-publisher pubs are not in `ugs-publications`)
+    and cannot disagree with where the Collection is written."""
+    from .sink_stac import pub_collection_path  # lazy: raster-dep-free
 
-    sid = (p.get("series_id") or "").strip()
-    collection_path = f"{collection_group(p)}/{series_code(sid)}"
-    return config.public_url(stac.item_object_path(collection_path, item_id_for(sid)))
+    return config.public_url(stac.collection_object_path(pub_collection_path(p)))
 
 
 def _year_key(raw: str | None) -> str | None:

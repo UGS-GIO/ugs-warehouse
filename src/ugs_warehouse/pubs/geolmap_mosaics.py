@@ -445,8 +445,8 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
 
     The mosaic is derived by stitching the member COGs, so each member gets a STAC
     `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
-    input data in the creation of this Entity") — to its real published item, routed through
-    `sink_stac.collection_group` rather than hardcoded to `ugs-publications` (a member can be
+    input data in the creation of this Entity") — to its plate Item, routed through
+    `sink_stac.pub_collection_path` rather than hardcoded to `ugs-publications` (a member can be
     foreign-published `ugs-external` or a Mining District File `ugs-mining-district-files`, and
     hardcoding would 404). A COG with no matching pub record has no item to link to and is skipped,
     but still counts toward `ugs:map_count` (it's physically stitched into the raster). The reverse
@@ -464,10 +464,9 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
             print(f"[mosaics] {tier}: COG {sid} has no pub record — stitched into the raster but not linked (orphan)", file=sys.stderr)
             continue                      # COG present but no pub record -> no STAC item exists to link
         real_sid = (p.get("series_id") or "").strip()
-        coll = f"{sink_stac.collection_group(p)}/{sink_stac.series_code(real_sid)}"
         derived_from.append({
             "rel": "derived_from",
-            "href": _public_item_href(coll, sink_stac.item_id_for(real_sid)),
+            "href": _public_item_href(sink_stac.pub_collection_path(p), sink_stac.plate_item_id(real_sid)),
             "type": "application/geo+json",
             "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
 

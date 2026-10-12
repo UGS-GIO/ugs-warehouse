@@ -29,8 +29,9 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     derived = [lnk for lnk in item["links"] if lnk["rel"] == "derived_from"]
     hrefs = [lnk["href"] for lnk in derived]
     assert len(derived) == 2  # ORPHAN-9 skipped
-    assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/GQ-968.json") for h in hrefs)
-    assert any(h.endswith(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1.json") for h in hrefs)
+    assert all(h.endswith("_plate.json") for h in hrefs)
+    assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json") for h in hrefs)
+    assert any(h.endswith(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1_plate/BYU-1_plate.json") for h in hrefs)
     assert "ORPHAN-9" in capsys.readouterr().err  # orphan COG must warn to stderr (fail loud)
 
 
@@ -624,17 +625,17 @@ def test_a_review_bake_reads_public_cogs_and_links_members_to_the_public_catalog
 
     monkeypatch.setattr(gm.gcs, "list_paths", fake_list)
     assert gm._cog_sids() == {"M-1"} and seen["bucket"] == "ut-dnr-ugs-maps-prod-public"
-    href = gm._public_item_href("ugs-publications/GQ", "GQ-968")
+    href = gm._public_item_href("ugs-publications/GQ/GQ-968", "GQ-968_plate")
     assert href == ("https://maps-assets.geology.utah.gov/warehouse/stac/"
-                    "ugs-publications/GQ/GQ-968/GQ-968.json")
+                    "ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")
 
 
 def test_public_item_href_matches_the_public_item_path_in_a_public_bake():
-    assert gm._public_item_href("ugs-publications/GQ", "GQ-968") == gm.config.public_url(
-        gm.stac.item_object_path("ugs-publications/GQ", "GQ-968"))
+    assert gm._public_item_href("ugs-publications/GQ/GQ-968", "GQ-968_plate") == gm.config.public_url(
+        gm.stac.item_object_path("ugs-publications/GQ/GQ-968", "GQ-968_plate"))
 
 
 def test_public_item_href_with_an_empty_stac_prefix(monkeypatch):
     monkeypatch.setattr(gm.config, "STAC_PREFIX", "")
-    assert gm._public_item_href("ugs-publications/GQ", "GQ-968").endswith(
-        "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968.json")
+    assert gm._public_item_href("ugs-publications/GQ/GQ-968", "GQ-968_plate").endswith(
+        "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")

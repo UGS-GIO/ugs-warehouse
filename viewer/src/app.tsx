@@ -10,7 +10,7 @@ import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetPar
 import { flyTo, queueFocus, setPin } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
 import { MapSearch } from "./shell/map-search";
-import { LegalFooter } from "./shell/legal-footer";
+import { GITHUB_MARK, LegalFooter, REPO_URL } from "./shell/legal-footer";
 import { SavingNotice } from "./offline/saving-notice";
 import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
@@ -112,16 +112,25 @@ const tab = (on: boolean) =>
 // already gated access; the username shows, the full email is the tooltip. Clicking signs out via
 // IAP's clear-login-cookie flow.
 function userActionItem(email: string): ActionItem {
-  const icon = document.createElement("span");
-  icon.textContent = "👤";
-  icon.title = `Signed in as ${email}`;
   return {
     title: email.split("@")[0],
     showTitle: true,
-    icon,
+    icon: `<span title="Signed in as ${email.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`)}">👤</span>`,
     className: "ugs-user-badge",
     // click → IAP sign-out (clears the login cookie, forces re-auth).
     actionFunction: () => { window.location.href = "/?gcp-iap-mode=CLEAR_LOGIN_COOKIE"; },
+  };
+}
+
+// The release this build is, as a Utah-header action item linking to the repo. The icon is an HTML
+// string, not an element: the header renders each item twice (desktop bar and mobile menu), and one
+// element would be moved into the second, leaving the desktop button empty.
+function releaseActionItem(): ActionItem {
+  return {
+    title: `v${__APP_VERSION__}`,
+    showTitle: true,
+    icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="${GITHUB_MARK}"/></svg>`,
+    actionFunction: () => { window.open(REPO_URL, "_blank", "noreferrer"); },
   };
 }
 
@@ -218,7 +227,7 @@ function useViewState() {
         if (!email && import.meta.env.DEV) email = "dev.user@utah.gov";
       }
       if (cancelled) return;
-      setUtahHeaderSettings(email ? { ...base, actionItems: [userActionItem(email)] } : base);
+      setUtahHeaderSettings({ ...base, actionItems: [releaseActionItem(), ...(email ? [userActionItem(email)] : [])] });
       loadHeader();
     })();
     return () => { cancelled = true; };

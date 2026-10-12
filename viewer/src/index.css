@@ -150,6 +150,19 @@ body {
 .dark .utah-design-system.utds-header img {
   filter: brightness(0) invert(1);
 }
+/* Action items (release, user badge): the DS paints them a white pill with gray ink. */
+.dark .utds-header .utds-header-action-item__icon-button {
+  background-color: transparent;
+  color: hsl(var(--foreground));
+}
+.dark .utds-header .utds-header-action-item__icon-button.icon-button:hover {
+  background-color: hsl(var(--accent));
+  color: hsl(var(--foreground));
+}
+.dark .utds-header .utds-header-action-item__icon-button.icon-button svg,
+.dark .utds-header .utds-header-action-item__icon-button.icon-button:hover svg {
+  fill: currentColor;
+}
 
 /* Hover and focus on the header lockup must never paint a plate behind the emblem — on the dark
    band it reads as a white sticker. Kill every background/shadow the DS or the UA can put on the

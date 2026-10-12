@@ -70,10 +70,11 @@ def renamed(orphan_dirs: set[str], files: set[str]) -> set[str]:
     return out
 
 
-def _pub_dir(group: str, rest: str) -> str | None:
-    """The `<group>/<SERIES>/<SID>` a listed object belongs to, or None for a series-level file."""
-    parts = rest.split("/")
-    return f"{group}/{parts[0]}/{parts[1]}" if len(parts) >= 3 else None
+def _layout_dir(path: str) -> str | None:
+    """`<group>/<SERIES>/<SID>` of a full object path, or None for a series- or group-level file."""
+    prefix = f"{config.STAC_PREFIX}/"
+    parts = path[len(prefix):].split("/") if path.startswith(prefix) else []
+    return "/".join(parts[:3]) if len(parts) >= 4 else None
 
 
 def orphan_pub_paths(expected: set[str] | None = None, groups: tuple[str, ...] = PUB_GROUPS) -> list[str]:
@@ -82,34 +83,45 @@ def orphan_pub_paths(expected: set[str] | None = None, groups: tuple[str, ...] =
         expected = expected_pub_dirs()
     orphans: list[str] = []
     for group in groups:
-        root = f"{config.STAC_PREFIX}/{group}/"
-        for path in gcs.list_paths(root):
-            d = _pub_dir(group, path[len(root):])
+        for path in gcs.list_paths(f"{config.STAC_PREFIX}/{group}/"):
+            d = _layout_dir(path)
             if d and d not in expected:
                 orphans.append(path)
     return orphans
 
 
-_LEGACY_SERIES_FILES = {"collection.json", "items.json", "items.parquet"}
+_LEGACY_SERIES_FILES = ("collection.json", "items.json", "items.parquet")
+
+
+def _legacy_scan(expected: set[str], groups: tuple[str, ...]) -> tuple[list[str], int]:
+    """Old-layout files the new layout has replaced, and how many series were seen.
+
+    A pub's old Item `<SID>.json` is listed only beside its new `collection.json`, and a series'
+    old collection/items files only beside its new `catalog.json`, so nothing is removed before
+    its replacement exists. The pub ISO sidecar is the new Collection's own record, so it stays.
+    """
+    out: list[str] = []
+    series: set[tuple[str, str]] = set()
+    for group in groups:
+        root = f"{config.STAC_PREFIX}/{group}/"
+        listing = set(gcs.list_paths(root))
+        for path in sorted(listing):
+            parts = path[len(root):].split("/")
+            if len(parts) >= 2:
+                series.add((group, parts[0]))
+            if len(parts) == 2 and parts[1] in _LEGACY_SERIES_FILES and f"{root}{parts[0]}/catalog.json" in listing:
+                out.append(path)
+            elif (len(parts) == 3 and f"{group}/{parts[0]}/{parts[1]}" in expected
+                  and parts[2] == f"{parts[1]}.json" and f"{root}{parts[0]}/{parts[1]}/collection.json" in listing):
+                out.append(path)
+    return out, len(series)
 
 
 def legacy_layout_paths(expected: set[str] | None = None, groups: tuple[str, ...] = PUB_GROUPS) -> list[str]:
-    """Files of the old layout that the new one leaves behind: a publication's old Item
-    (`<SID>.json`) and ISO sidecar inside its new Collection dir, and each series' old
-    collection.json/items.json/items.parquet beside its new catalog.json."""
+    """Old-layout files (pub Item `<SID>.json`, series collection/items files) whose replacement exists."""
     if expected is None:
         expected = expected_pub_dirs()
-    out: list[str] = []
-    for group in groups:
-        root = f"{config.STAC_PREFIX}/{group}/"
-        for path in gcs.list_paths(root):
-            parts = path[len(root):].split("/")
-            if len(parts) == 2 and parts[1] in _LEGACY_SERIES_FILES:
-                out.append(path)
-            elif (len(parts) == 3 and f"{group}/{parts[0]}/{parts[1]}" in expected
-                  and parts[2] in (f"{parts[1]}.json", f"{parts[1]}.iso.xml")):
-                out.append(path)
-    return out
+    return _legacy_scan(expected, groups)[0]
 
 
 def main() -> int:
@@ -126,19 +138,17 @@ def main() -> int:
 
     print("[prune-pubs] scanning published objects in GCS...")
     orphans = orphan_pub_paths(expected=expected)
-    rc = _prune_orphans(args, pubs, expected, orphans) if orphans else 0
-    if rc:
-        return rc
-    if not orphans:
+    if orphans:
+        rc = _prune_orphans(args, pubs, expected, orphans)
+        if rc:
+            return rc
+    else:
         print("[prune-pubs] nothing stale under publication collections")
 
     if args.legacy:
-        legacy = legacy_layout_paths(expected=expected)
-        print(f"[prune-pubs] {len(legacy)} file(s) from the old layout")
-        for path in legacy:
-            print(f"  {'delete' if args.apply else 'would delete'} {path}")
-            if args.apply:
-                gcs.delete(path)
+        rc = _prune_legacy(args, expected)
+        if rc:
+            return rc
 
     if not args.apply:
         print("[prune-pubs] dry-run — re-run with --apply")
@@ -150,28 +160,42 @@ def main() -> int:
 def _prune_orphans(args: argparse.Namespace, pubs: list[dict], expected: set[str], orphans: list[str]) -> int:
     """Report orphan publication dirs and, with --apply, delete the renamed ones. Returns an exit code."""
     prefix = f"{config.STAC_PREFIX}/"
-    orphan_dirs = {prefix + d for p in orphans if (d := _pub_dir_of(p, prefix))}
+    orphan_dirs = {prefix + d for p in orphans if (d := _layout_dir(p))}
     stale = renamed(orphan_dirs, source_files(pubs, source.read_attachments()))
     kept = sorted(orphan_dirs - stale)
     print(f"[prune-pubs] {len(orphan_dirs)} orphan publication(s): {len(stale)} renamed (files still in "
           f"the source), {len(kept)} kept (files not in the source)")
     for d in kept[:20]:
         print(f"  keep {d}")
-    if args.apply and len(stale) > MAX_ORPHAN_SHARE * max(len(expected), 1):
-        print(f"[prune-pubs] REFUSE: {len(stale)} publications is more than {MAX_ORPHAN_SHARE:.0%} "
-              f"of {len(expected)}; check the source before deleting", file=sys.stderr)
-        return 1
-    for path in (p for p in orphans if prefix + (_pub_dir_of(p, prefix) or "") in stale):
+    if len(stale) > MAX_ORPHAN_SHARE * max(len(expected), 1):
+        print(f"[prune-pubs] {'REFUSE' if args.apply else 'would REFUSE'}: {len(stale)} publications is "
+              f"more than {MAX_ORPHAN_SHARE:.0%} of {len(expected)}; check the source before deleting",
+              file=sys.stderr)
+        if args.apply:
+            return 1
+    for path in (p for p in orphans if prefix + (_layout_dir(p) or "") in stale):
         print(f"  {'delete' if args.apply else 'would delete'} {path}")
         if args.apply:
             gcs.delete(path)
     return 0
 
 
-def _pub_dir_of(path: str, prefix: str) -> str | None:
-    """`<group>/<SERIES>/<SID>` of a full object path under `prefix`."""
-    parts = path[len(prefix):].split("/")
-    return "/".join(parts[:3]) if len(parts) >= 4 else None
+def _prune_legacy(args: argparse.Namespace, expected: set[str]) -> int:
+    """Report old-layout files and, with --apply, delete them. Returns an exit code."""
+    legacy, n_series = _legacy_scan(expected, PUB_GROUPS)
+    bound = len(expected) + 3 * n_series
+    print(f"[prune-pubs] {len(legacy)} file(s) from the old layout")
+    if len(legacy) > bound:
+        print(f"[prune-pubs] {'REFUSE' if args.apply else 'would REFUSE'}: {len(legacy)} old-layout files "
+              f"exceeds the {bound} expected for {len(expected)} publications and {n_series} series; "
+              f"check the listing before deleting", file=sys.stderr)
+        if args.apply:
+            return 1
+    for path in legacy:
+        print(f"  {'delete' if args.apply else 'would delete'} {path}")
+        if args.apply:
+            gcs.delete(path)
+    return 0
 
 
 if __name__ == "__main__":

@@ -147,10 +147,7 @@ def test_the_builders_produce_a_catalog_that_passes_the_rules_we_have_fixed(monk
     root = _catalog_on_disk(monkeypatch, tmp_path)
 
     report = rashid.validate(root, data=False, schema=True)
-    # Link rules are excluded until refresh_catalog builds series catalogs over the publication
-    # collections; the series-catalog work removes this exclusion.
-    asserted = GUARDED - {"PTL-LNK-002", "PTL-LNK-006"}
-    broken = [f for f in report.findings if f.rule_id in asserted]
+    broken = [f for f in report.findings if f.rule_id in GUARDED]
 
     assert not broken, "\n".join(
         f"{f.rule_id} {f.severity.value if hasattr(f.severity, 'value') else f.severity} "

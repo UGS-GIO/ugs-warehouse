@@ -799,6 +799,56 @@ def _group_title(catalog: str, items: list[dict]) -> str | None:
     return None
 
 
+def _pub_collection_paths(paths: list[str]) -> dict[str, int]:
+    """{`<group>/<SERIES>/<SID>`: 0} for every publication collection.json under a pub catalog,
+    including collections with no items. The value becomes the item count during refresh."""
+    out: dict[str, int] = {}
+    for path in paths:
+        parts = path[len(config.STAC_PREFIX):].lstrip("/").split("/")
+        if len(parts) == 4 and parts[0] in PUB_SERIES_CATALOGS and parts[3] == "collection.json":
+            out["/".join(parts[:3])] = 0
+    return out
+
+
+def _write_pub_tree(pub_colls: dict[str, int]) -> list[dict]:
+    """Write `<group>/<SERIES>/catalog.json` over each series' publication collections and
+    `<group>/catalog.json` over its series, with README/AGENTS beside each. Returns the root child
+    entries for the groups present. An unreadable collection.json raises."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    def _meta(path: str) -> tuple[str, str, str | None]:
+        doc = json.loads(gcs.get_bytes(collection_object_path(path)).decode())
+        return path, doc.get("title") or prettify(path.rsplit("/", 1)[1]), doc.get("ugs:pub_type")
+
+    with ThreadPoolExecutor(max_workers=64) as ex:
+        meta = {p: (t, pt) for p, t, pt in ex.map(_meta, sorted(pub_colls))}
+    series: dict[str, list[str]] = {}
+    for path in pub_colls:
+        series.setdefault(path.rsplit("/", 1)[0], []).append(path)
+    by_group: dict[str, list[dict]] = {}
+    for spath, pubs in sorted(series.items()):
+        group, code = spath.split("/")
+        kids = [{"id": p.rsplit("/", 1)[1], "title": meta[p][0], "count": pub_colls[p]} for p in pubs]
+        stitle = next((meta[p][1] for p in pubs if meta[p][1]), None) or prettify(code)
+        desc = SERIES_DESC.get(code) or f"UGS warehouse - {stitle}."
+        _write_json(_subcatalog_doc(code, kids, title=stitle, description=desc, depth=2,
+                                    child_file="collection.json"),
+                    f"{config.STAC_PREFIX}/{spath}/catalog.json")
+        _write_markdown(spath, title=stitle, description=desc, kind="catalog", children=len(kids))
+        by_group.setdefault(group, []).append({"id": code, "title": stitle,
+                                               "count": sum(k["count"] for k in kids)})
+    out = []
+    for group, kids in sorted(by_group.items()):
+        gtitle = prettify(group.replace("ugs-", ""))
+        _write_json(_subcatalog_doc(group, kids, title=gtitle, child_file="catalog.json"),
+                    f"{config.STAC_PREFIX}/{group}/catalog.json")
+        _write_markdown(group, title=gtitle, description=f"UGS warehouse - {gtitle}, by data series.",
+                        kind="catalog", children=len(kids))
+        out.append({"href": f"./{group}/catalog.json", "title": gtitle,
+                    "count": sum(k["count"] for k in kids)})
+    return out
+
+
 def refresh_catalog() -> None:
     """Rebuild the root catalog + every collection.json by listing items in GCS.
 
@@ -807,7 +857,9 @@ def refresh_catalog() -> None:
     """
     from concurrent.futures import ThreadPoolExecutor
 
-    groups = _group_items(gcs.list_paths(config.STAC_PREFIX))
+    paths = gcs.list_paths(config.STAC_PREFIX)
+    groups = _group_items(paths)
+    pub_colls = _pub_collection_paths(paths)
 
     # 1. Write each leaf collection.json + items.json (flat or nested). collection id = the
     #    path's last segment (a series code when nested); title from the items' pub type.
@@ -833,6 +885,13 @@ def refresh_catalog() -> None:
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
             nested = "/" in path
             top, cid = path.split("/")[0], path.split("/")[-1]
+            if top in PUB_SERIES_CATALOGS and path.count("/") == 2:
+                if path not in pub_colls:
+                    raise RuntimeError(f"[catalog] items under {path} but no collection.json")
+                # Publication collections are written by the pubs ingest; refresh only indexes them.
+                everything.extend(_index_entry(it, prefix=f"{path}/") for it in items)
+                pub_colls[path] = len(item_ids)
+                continue
             # Title/description are inherited, never authored here: see _group_title. A group with
             # nothing to inherit stays None and _collection_doc falls back to prettify(id).
             title = _group_title(top, items) if nested else None
@@ -866,10 +925,12 @@ def refresh_catalog() -> None:
     # 2. Build the hierarchy. A top-level segment with nested children (and no direct items)
     #    becomes a sub-catalog (e.g. ugs-publications → DS, OFR, … series collections);
     #    everything else is a flat collection directly under root. Child links carry counts.
+    root_children = _write_pub_tree(pub_colls)
     tops: dict[str, list[str]] = {}
     for path in groups:
+        if path.split("/")[0] in PUB_SERIES_CATALOGS and path.count("/") == 2:
+            continue
         tops.setdefault(path.split("/")[0], []).append(path)
-    root_children = []
     for top, paths in tops.items():
         if top not in groups:  # sub-catalog (nested, no direct items)
             kids = [leaf[p] for p in sorted(paths)]

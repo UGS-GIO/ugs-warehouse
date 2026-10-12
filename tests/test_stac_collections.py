@@ -118,3 +118,64 @@ def test_prior_collection_field_reads_the_published_collection(monkeypatch):
                         lambda p: json.dumps({"description": "Old citation."}).encode() if p == path else (_ for _ in ()).throw(FileNotFoundError(p)))
     assert stac.prior_collection_field("ugs-publications/OFR/OFR-1", "description") == "Old citation."
     assert stac.prior_collection_field("ugs-publications/OFR/OFR-2", "description") is None
+
+
+def _memstore(monkeypatch):
+    store = {}
+
+    def get(p):
+        if p not in store:
+            raise FileNotFoundError(p)
+        return store[p]
+
+    monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **kw: store.__setitem__(p, b))
+    monkeypatch.setattr(stac.gcs, "get_bytes", get)
+    monkeypatch.setattr(stac.gcs, "list_paths", lambda prefix: [p for p in store if p.startswith(prefix)])
+    monkeypatch.setattr(stac.item_mirror, "write", lambda path, items: None)
+    return store
+
+
+def _pub(store, group, series, sid, item_ids):
+    coll = stac.build_collection(
+        collection_id=sid, collection_path=f"{group}/{series}/{sid}", title=f"Pub {sid}",
+        description=f"Pub {sid}.", extent={"spatial": {"bbox": [stac.UTAH_BBOX]},
+                                           "temporal": {"interval": [[None, None]]}},
+        assets={"publication": {"href": f"https://x/{sid}.pdf", "type": "application/pdf", "roles": ["data"]}},
+        item_titles={i: i for i in item_ids}, fields={"ugs:pub_type": "Open File Report"})
+    stac.write_collection(coll, children=len(item_ids))
+    for i in item_ids:
+        it = stac.build_item(item_id=i, collection=sid, collection_path=f"{group}/{series}/{sid}",
+                             geometry=stac.bbox_polygon(stac.UTAH_BBOX), bbox=stac.UTAH_BBOX,
+                             datetime_iso="2020-01-01T00:00:00Z", properties={"title": i}, assets={})
+        stac.write_item(it)
+
+
+def test_refresh_writes_series_catalogs_over_publication_collections(monkeypatch):
+    store = _memstore(monkeypatch)
+    _pub(store, "ugs-publications", "OFR", "OFR-1", ["OFR-1_plate"])
+    _pub(store, "ugs-publications", "OFR", "OFR-2", [])            # report: no items
+    _pub(store, "ugs-publications", "B", "B-1", [])
+    _pub(store, "ugs-external", "B", "B-9", [])                     # same series code, other group
+    before = store[stac.collection_object_path("ugs-publications/OFR/OFR-1")]
+
+    stac.refresh_catalog()
+
+    p = config.STAC_PREFIX
+    series = json.loads(store[f"{p}/ugs-publications/OFR/catalog.json"])
+    assert series["type"] == "Catalog"
+    assert {lk["href"] for lk in series["links"] if lk["rel"] == "child"} == {
+        "./OFR-1/collection.json", "./OFR-2/collection.json"}
+    assert next(lk for lk in series["links"] if lk["href"] == "./OFR-1/collection.json")["ugs:item_count"] == 1
+    top = json.loads(store[f"{p}/ugs-publications/catalog.json"])
+    assert {lk["href"] for lk in top["links"] if lk["rel"] == "child"} == {"./OFR/catalog.json", "./B/catalog.json"}
+    assert {lk["href"] for lk in json.loads(store[f"{p}/ugs-external/catalog.json"])["links"]
+            if lk["rel"] == "child"} == {"./B/catalog.json"}
+    # The pub collection is ingest's; refresh never rewrites it.
+    assert store[stac.collection_object_path("ugs-publications/OFR/OFR-1")] == before
+    assert f"{p}/ugs-publications/OFR/collection.json" not in store
+    assert f"{p}/ugs-publications/OFR/OFR-1/items.json" not in store
+    for node in ("ugs-publications", "ugs-publications/OFR", "ugs-external/B"):
+        assert f"{p}/{node}/README.md" in store and f"{p}/{node}/AGENTS.md" in store
+    root = json.loads(store[f"{p}/catalog.json"])
+    assert {"./ugs-publications/catalog.json", "./ugs-external/catalog.json"} <= {
+        lk["href"] for lk in root["links"] if lk["rel"] == "child"}

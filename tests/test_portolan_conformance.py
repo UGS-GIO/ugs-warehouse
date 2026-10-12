@@ -130,6 +130,22 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
         edition={"version": "1971", "deprecated": True, "predecessor_href": None,
                  "successor_href": _current_href, "latest_href": _current_href}, override={})
 
+    # A report with no data: a Collection holding only its documents, with no Items.
+    _write_pub(
+        {"series_id": "C-139", "series": "C", "pub_year": "1990", "pub_publisher": "UGS",
+         "pub_name": "A circular with no extracted data"}, [], has_cover=True, override={})
+
+    # A publication with an extracted vector layer and a companion table: both become Items.
+    _write_pub(
+        {"series_id": "OFR-784DM", "series": "OFR", "pub_year": "2026", "pub_publisher": "UGS",
+         "pub_name": "Interim geologic map of Mills Junction", "pub_scale": "1:24,000"},
+        [], has_cover=True, vector_layers=["geo__Faults"],
+        companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}],
+        layers={"geo__Faults": {"rows": 12, "bbox": [-112.4, 40.6, -112.1, 40.9],
+                                "geometry_types": ["LineString"], "proj_code": "EPSG:26912"},
+                "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}},
+        override={})
+
     stac.refresh_catalog()
 
     root = tmp_path / "catalog"
@@ -168,6 +184,16 @@ def test_the_catalog_the_fence_builds_is_the_shape_we_publish(monkeypatch, tmp_p
     # Nested catalogs above leaf collections, which is the layout both producers write.
     assert (root / "ugs-serving-topics" / "hazards" / "collection.json").exists()
     assert (root / "ugs-publications" / "OFR" / "OFR-593" / "collection.json").exists()
+    assert (root / "ugs-publications" / "OFR" / "catalog.json").exists()
+    # A data-less report is a Collection with no item directories.
+    report_dir = root / "ugs-publications" / "C" / "C-139"
+    assert (report_dir / "collection.json").exists()
+    assert [p.name for p in report_dir.iterdir() if p.is_dir()] == []
+    # A publication with a layer and a companion table carries them as Items.
+    mills = root / "ugs-publications" / "OFR" / "OFR-784DM"
+    item_dirs = sorted(p.name for p in mills.iterdir() if p.is_dir())
+    assert any(n.endswith("geo__Faults") for n in item_dirs), item_dirs
+    assert any(n.endswith("geo__DMU") for n in item_dirs), item_dirs
     items = json.loads((root / "ugs-serving-topics" / "hazards" / "collection.json").read_text())
     assert [lk for lk in items["links"] if lk["rel"] == "item"]
 

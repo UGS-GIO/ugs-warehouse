@@ -6,5 +6,6 @@ declare module "@utahdts/utah-design-system-header/css";
 
 // Build stamp injected by vite.config.ts `define` (git hash + HEAD commit date).
 declare const __BUILD_HASH__: string;
+declare const __APP_VERSION__: string;
 declare const __BUILD_DATE__: string;
 declare const __BUILD_SHA__: string;

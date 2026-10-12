@@ -129,8 +129,9 @@ gcloud pubsub subscriptions add-iam-policy-binding "${RASTER_SUB}" --project="${
 # executions that run as ${RUNTIME_SA}.
 echo "→ pipeline orchestrator: execute rights on the sub-jobs only (least privilege)"
 # ugs-warehouse-ingest is here because the push handler starts it per topic instead of ingesting
-# in-request (service/main.py).
-for SUBJOB in ugs-pubs-thumbs ugs-pubs-threed ugs-pubs-vectors ugs-pubs-prune ugs-pubs-ingest ugs-pubs-fts ugs-pubs-embed ugs-geolmap-mosaics ugs-pubs-graph ugs-warehouse-ingest; do
+# in-request (service/main.py); ugs-topics-thumbs because the ingest and restyle jobs start it after
+# publishing (core/jobs.py).
+for SUBJOB in ugs-pubs-thumbs ugs-pubs-threed ugs-pubs-vectors ugs-pubs-prune ugs-pubs-ingest ugs-pubs-fts ugs-pubs-embed ugs-geolmap-mosaics ugs-pubs-graph ugs-warehouse-ingest ugs-topics-thumbs; do
   gcloud run jobs add-iam-policy-binding "${SUBJOB}" --region="${REGION}" --project="${PROJECT}" \
     --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
 done
@@ -149,10 +150,31 @@ done
 gcloud projects add-iam-policy-binding "${PROJECT}" --member="serviceAccount:${ADMIN_SA}" \
   --role=roles/run.viewer --condition=None --quiet >/dev/null
 
-# Daily DuckLake maintenance — Cloud Scheduler triggers the maintenance Cloud Run job so the
-# append-only catalog stays bounded/fast without anyone remembering the ops-console button. The
-# scheduler calls the Cloud Run Admin API :run endpoint with an OAuth token minted for RUNTIME_SA
-# (which already actAs itself + holds run.developer below), so the execution runs as RUNTIME_SA.
+# Scheduled jobs — Cloud Scheduler starts a Cloud Run job so it runs without anyone remembering
+# the ops-console button. The scheduler calls the Cloud Run Admin API :run endpoint with an OAuth
+# token minted for RUNTIME_SA (which already actAs itself + gets run.developer on the job here), so
+# the execution runs as RUNTIME_SA.
+ensure_schedule() {
+  local job="$1" sched="$2" schedule="$3" tz="$4"
+  local run_uri="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${job}:run"
+
+  echo "→ run.developer: ${RUNTIME_SA} on ${job} (scheduler runs it as this SA)"
+  gcloud run jobs add-iam-policy-binding "${job}" --region="${REGION}" --project="${PROJECT}" \
+    --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
+
+  echo "→ scheduler ${sched} → ${job} (${schedule} ${tz})"
+  if gcloud scheduler jobs describe "${sched}" --location="${REGION}" --project="${PROJECT}" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "${sched}" --location="${REGION}" --project="${PROJECT}" \
+      --schedule="${schedule}" --time-zone="${tz}" \
+      --uri="${run_uri}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
+  else
+    gcloud scheduler jobs create http "${sched}" --location="${REGION}" --project="${PROJECT}" \
+      --schedule="${schedule}" --time-zone="${tz}" \
+      --uri="${run_uri}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
+  fi
+}
+
+# Daily DuckLake maintenance keeps the append-only catalog bounded/fast.
 #
 # Daily, not weekly (2026-08-31): each run compacts under a budget and stops early, so cadence is
 # what keeps the small-file backlog bounded. Weekly never caught up (111,635 files, ~$2.2k/mo in
@@ -161,22 +183,17 @@ MAINTAIN_JOB="${MAINTAIN_JOB:-ugs-warehouse-ducklake-maintain}"
 SCHED_JOB="${SCHED_JOB:-ugs-warehouse-ducklake-maintain-weekly}"
 MAINTAIN_SCHEDULE="${MAINTAIN_SCHEDULE:-0 3 * * *}"      # daily 03:00 (off-hours)
 MAINTAIN_TZ="${MAINTAIN_TZ:-America/Denver}"
-RUN_URI="https://${REGION}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${PROJECT}/jobs/${MAINTAIN_JOB}:run"
+ensure_schedule "${MAINTAIN_JOB}" "${SCHED_JOB}" "${MAINTAIN_SCHEDULE}" "${MAINTAIN_TZ}"
 
-echo "→ run.developer: ${RUNTIME_SA} on ${MAINTAIN_JOB} (scheduler runs it as this SA)"
-gcloud run jobs add-iam-policy-binding "${MAINTAIN_JOB}" --region="${REGION}" --project="${PROJECT}" \
-  --member="serviceAccount:${RUNTIME_SA}" --role=roles/run.developer --quiet >/dev/null
-
-echo "→ scheduler ${SCHED_JOB} → ${MAINTAIN_JOB} (${MAINTAIN_SCHEDULE} ${MAINTAIN_TZ})"
-if gcloud scheduler jobs describe "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" >/dev/null 2>&1; then
-  gcloud scheduler jobs update http "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" \
-    --schedule="${MAINTAIN_SCHEDULE}" --time-zone="${MAINTAIN_TZ}" \
-    --uri="${RUN_URI}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
-else
-  gcloud scheduler jobs create http "${SCHED_JOB}" --location="${REGION}" --project="${PROJECT}" \
-    --schedule="${MAINTAIN_SCHEDULE}" --time-zone="${MAINTAIN_TZ}" \
-    --uri="${RUN_URI}" --http-method=POST --oauth-service-account-email="${RUNTIME_SA}" --quiet
-fi
+# Nightly topic thumbnails: catches any preview the runs started by ingest and restyle missed (a
+# start that failed, or a run that failed). A night with nothing new costs almost nothing
+# (content-hash skip). Not named TOPIC_THUMBS_JOB: that is the full job path the ingest and
+# restyle jobs read (core/jobs.py).
+TOPICTHUMB_JOB="${TOPICTHUMB_JOB:-ugs-topics-thumbs}"
+TOPICTHUMB_SCHED_JOB="${TOPICTHUMB_SCHED_JOB:-ugs-topics-thumbs-nightly}"
+TOPICTHUMB_SCHEDULE="${TOPICTHUMB_SCHEDULE:-0 4 * * *}"   # daily 04:00 (off-hours)
+TOPICTHUMB_TZ="${TOPICTHUMB_TZ:-America/Denver}"
+ensure_schedule "${TOPICTHUMB_JOB}" "${TOPICTHUMB_SCHED_JOB}" "${TOPICTHUMB_SCHEDULE}" "${TOPICTHUMB_TZ}"
 
 # --- reliability audit -----------------------------------------------------------------------
 # A push subscription with no dead-letter policy retries forever. That is not a hypothetical: in
@@ -232,20 +249,48 @@ ALERT_NAME="Warehouse job execution failed"
 ALERT_API="https://monitoring.googleapis.com/v3/projects/${PROJECT}/alertPolicies"
 ALERT_TOKEN=$(gcloud auth print-access-token)
 # Quotes are pre-escaped: this is interpolated INTO a JSON string below.
-WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\", \"ugs-warehouse-retire\")'
+WATCHED_JOBS='one_of(\"ugs-warehouse-ingest\", \"ugs-warehouse-ducklake-maintain\", \"geolmap-harvest\", \"ugs-warehouse-retire\", \"ugs-topics-thumbs\")'
 
 CHANNELS=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" \
   "https://monitoring.googleapis.com/v3/projects/${PROJECT}/notificationChannels" \
   | jq -c '[.notificationChannels[]? | select(.type=="email") | .name]')
 
-# ensure_alert NAME POLICY_JSON: create the policy unless one with that display name exists.
+# ensure_alert NAME POLICY_JSON: create the policy, or converge an existing one's conditions to it
+# (create-only, a job added to WATCHED_JOBS never reached the live policy). Conditions are matched
+# by displayName and keep their `name`, so their IDs and incidents survive.
 ensure_alert() {
   echo "→ alert policy: $1"
-  local policies
-  policies=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200")
-  if jq -e --arg n "$1" '[.alertPolicies[]? | select(.displayName == $n)] | length > 0' \
-       <<<"${policies}" >/dev/null; then
-    echo "  ✓ exists"
+  local policies policy conds
+  # A malformed WATCHED_JOBS escape breaks the JSON, and every jq below would print nothing.
+  if ! jq -e '.conditions | length > 0' <<<"$2" >/dev/null; then
+    echo "  ✗ policy JSON is invalid (check WATCHED_JOBS escaping)" >&2
+    return 1
+  fi
+  # A failed or partial list is no evidence the policy is missing; creating would duplicate it.
+  if ! policies=$(curl -sf -H "Authorization: Bearer ${ALERT_TOKEN}" "${ALERT_API}?pageSize=200") \
+     || [ -n "$(jq -r '.nextPageToken // empty' <<<"${policies}")" ]; then
+    echo "  ✗ could not list every alert policy (monitoring.alertPolicyViewer?)" >&2
+    return 1
+  fi
+  policy=$(jq -c --arg n "$1" 'first(.alertPolicies[]? | select(.displayName == $n)) // empty' \
+             <<<"${policies}")
+  if [ -n "${policy}" ]; then
+    conds=$(jq -c --argjson want "$2" '[.conditions[]? as $c | ($want.conditions[]
+              | select(.displayName == $c.displayName) | . + {name: $c.name}) // $c]
+              + [$want.conditions[] | select(.displayName as $d | all($c0[]; .displayName != $d))]' \
+              --argjson c0 "$(jq -c '.conditions // []' <<<"${policy}")" <<<"${policy}")
+    if [ "$(jq -c '[.conditions[]?.conditionThreshold.filter, .conditions[]?.conditionMatchedLog.filter]' \
+             <<<"${policy}")" = "$(jq -c '[.[].conditionThreshold.filter, .[].conditionMatchedLog.filter]' \
+             <<<"${conds}")" ]; then
+      echo "  ✓ exists"
+    elif jq -c '{conditions: .}' <<<"${conds}" | curl -sf -X PATCH -H "Authorization: Bearer ${ALERT_TOKEN}" \
+           -H "Content-Type: application/json" -d @- \
+           "https://monitoring.googleapis.com/v3/$(jq -r '.name' <<<"${policy}")?updateMask=conditions" >/dev/null; then
+      echo "  ✓ updated conditions"
+    else
+      echo "  ✗ could not update (monitoring.alertPolicyEditor?)" >&2
+      return 1
+    fi
   elif curl -sf -X POST -H "Authorization: Bearer ${ALERT_TOKEN}" -H "Content-Type: application/json" \
          -d "$2" "${ALERT_API}" >/dev/null; then
     echo "  ✓ created"

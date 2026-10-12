@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.5.0...v1.6.0) (2026-10-12)
+
+
+### Features
+
+* **viewer:** link the repo from the footer and menu, labeled with the release version ([#562](https://github.com/UGS-GIO/ugs-warehouse/issues/562)) ([9559227](https://github.com/UGS-GIO/ugs-warehouse/commit/9559227dbf919a77969d46394b1aa4971d640ab0))
+
+
+### Bug Fixes
+
+* **thumbs:** make topic thumbnails on publish and restyle, with a nightly backstop [ALL-6020] ([#364](https://github.com/UGS-GIO/ugs-warehouse/issues/364)) ([c4b6df0](https://github.com/UGS-GIO/ugs-warehouse/commit/c4b6df0b3ddcea590a1a9bcc0f38c55a1ce16c13))
+
 ## [1.5.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.4.0...v1.5.0) (2026-10-12)
 
 

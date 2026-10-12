@@ -48,6 +48,7 @@ PROJ_EXT = "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
 TABLE_EXT = "https://stac-extensions.github.io/table/v1.2.0/schema.json"
 # classification: machine-readable categories (value/name/color) for categorical layers.
 CLASSIFICATION_EXT = "https://stac-extensions.github.io/classification/v2.0.0/schema.json"
+SCI_EXT = "https://stac-extensions.github.io/scientific/v1.0.0/schema.json"
 # alternate-assets: a second location for the SAME bytes (`alternate`), used where we mirror a file
 # and keep the publisher's own copy addressable alongside our CDN href.
 ALTERNATE_ASSETS_EXT = "https://stac-extensions.github.io/alternate-assets/v1.2.0/schema.json"
@@ -195,6 +196,52 @@ def item_object_path(collection_path: str, item_id: str) -> str:
     """GCS path for an item. `collection_path` is the collection's layout path — a single
     segment for flat collections, or `ugs-publications/<SERIES>` for nested series."""
     return f"{config.STAC_PREFIX}/{collection_path}/{item_id}/{item_id}.json"
+
+
+def collection_object_path(collection_path: str) -> str:
+    """GCS path of the collection.json at `collection_path` (e.g. a publication's
+    `ugs-publications/OFR/OFR-1`)."""
+    return f"{config.STAC_PREFIX}/{collection_path}/collection.json"
+
+
+def build_collection(*, collection_id: str, collection_path: str, title: str, description: str,
+                     extent: dict, assets: dict, item_titles: dict[str, str],
+                     extra_links: list[dict] | None = None, fields: dict | None = None,
+                     stac_extensions: list[str] | None = None) -> dict:
+    """A leaf Collection at `{collection_path}/collection.json` whose items sit at
+    `./{id}/{id}.json`. Pure: the caller supplies the extent, assets and item titles. `fields` are
+    extra top-level members (`ugs:*`, `keywords`, `version`/`deprecated`). An empty `item_titles`
+    is a single-file collection: its data are the collection-level assets."""
+    depth = collection_path.count("/") + 1
+    fields = dict(fields or {})
+    exts = [PORTOLAN_SCHEMA, *(stac_extensions or [])]
+    if ("version" in fields or "deprecated" in fields) and VERSION_EXT not in exts:
+        exts.append(VERSION_EXT)
+    doc = {
+        "type": "Collection",
+        "stac_version": STAC_VERSION,
+        "stac_extensions": exts,
+        "id": collection_id,
+        "title": title,
+        "description": description,
+        "license": config.DATA_LICENSE,
+        "providers": config.PROVIDERS,
+        "extent": extent,
+        **fields,
+        **({"assets": assets} if assets else {}),
+        "links": [
+            {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
+            {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
+            {"rel": "self", "href": "./collection.json", "type": "application/json"},
+            {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
+            *catalog_docs.markdown_links(),
+            *(extra_links or []),
+            *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json",
+               "title": item_titles[i] or i} for i in sorted(item_titles)],
+        ],
+    }
+    doc["_collection_path"] = collection_path
+    return doc
 
 
 def override_object(item_id: str) -> str:
@@ -501,12 +548,15 @@ def _child_link(href: str, title: str | None, count: int | None, mappable: int |
 
 
 def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None = None,
-                    description: str | None = None, items_index: bool = False) -> dict:
-    """A nesting Catalog (e.g. `ugs-publications`) whose children are per-series collections,
-    each at `./<series>/collection.json`. `children` = [{id, title, count}, …].
+                    description: str | None = None, items_index: bool = False,
+                    depth: int = 1, child_file: str = "collection.json") -> dict:
+    """A nesting Catalog `depth` path segments below the root whose children each sit at
+    `./<child id>/<child_file>`: per-series collections under a top catalog, series catalogs under
+    a publications catalog, or publication collections under a series catalog.
+    `children` = [{id, title, count, mappable?}, …].
 
-    `items_index` adds a `rel:items` link to a rollup index spanning every child collection —
-    see ROLLUP_INDEX_CATALOGS."""
+    `items_index` adds a rollup index link spanning every child collection — see
+    ROLLUP_INDEX_CATALOGS."""
     total = sum(c.get("count") or 0 for c in children)
     total_mappable = sum(c.get("mappable") or 0 for c in children)
     return {
@@ -520,13 +570,13 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
         "ugs:item_count": total,
         "ugs:mappable_count": total_mappable,
         "links": [
-            {"rel": "root", "href": "../catalog.json", "type": "application/json"},
+            {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
             {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
             {"rel": "self", "href": "./catalog.json", "type": "application/json"},
             *catalog_docs.markdown_links(),
             *([{"rel": INDEX_REL, "href": "./items.json", "type": "application/json",
                 "title": "Items index (all child collections)"}] if items_index else []),
-            *[_child_link(f"./{c['id']}/collection.json", c.get("title"), c.get("count"), c.get("mappable"))
+            *[_child_link(f"./{c['id']}/{child_file}", c.get("title"), c.get("count"), c.get("mappable"))
               for c in sorted(children, key=lambda c: c["id"])],
         ],
     }

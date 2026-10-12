@@ -9,10 +9,17 @@ const installed = new Set(
   Object.keys(read("package-lock.json").packages).map((k) => k.replace(/^.*node_modules\//, "")),
 );
 
-const stale = Object.keys(overrides).filter((name) => !installed.has(name));
+// Every package an override names, nested ones included; "." means the parent itself, and a key
+// may carry a version range ("foo@^1").
+const names = (o) => Object.entries(o).flatMap(([k, v]) => [
+  ...(k === "." ? [] : [k.replace(/(.)@.*$/, "$1")]),
+  ...(v && typeof v === "object" ? names(v) : []),
+]);
+const all = [...new Set(names(overrides))];
+const stale = all.filter((name) => !installed.has(name));
 if (stale.length) {
   console.error(`✗ overrides check: no longer in the dependency tree, delete from package.json:`);
   for (const name of stale) console.error(`  - ${name}`);
   process.exit(1);
 }
-console.log(`✓ overrides check: ${Object.keys(overrides).length} overrides still apply`);
+console.log(`✓ overrides check: ${all.length} overridden packages still in the tree`);

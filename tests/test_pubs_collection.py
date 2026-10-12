@@ -8,6 +8,7 @@ from ugs_warehouse.pubs import sink_stac
 def _no_gcs(monkeypatch):
     """The description fallback reads the prior published value from GCS; unit tests stay offline."""
     monkeypatch.setattr(stac, "prior_collection_field", lambda *a, **k: None)
+    monkeypatch.setattr(stac, "prior_property", lambda *a, **k: None)
 
 
 FOOT = {"type": "Polygon", "coordinates": [[[-112.5, 40.5], [-112.0, 40.5], [-112.0, 41.0],
@@ -143,5 +144,12 @@ def test_a_layer_missing_from_the_manifest_warns_on_stderr(capsys):
 
 
 def test_duplicate_item_ids_raise():
-    with pytest.raises(ValueError, match="OFR-784DM_plate"):
-        _build(vector_layers=["plate"])
+    with pytest.raises(ValueError, match="OFR-784DM_geo__Faults"):
+        _build(vector_layers=["geo__Faults", "geo__Faults"])
+
+
+def test_a_layer_named_like_a_reserved_item_is_renamed(capsys):
+    _, items = _build(vector_layers=["plate"], has_units=True)
+    ids = [it["id"] for it in items]
+    assert "OFR-784DM_plate" in ids and "OFR-784DM_layer_plate" in ids
+    assert "renamed to 'OFR-784DM_layer_plate'" in capsys.readouterr().err

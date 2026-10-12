@@ -242,7 +242,17 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
           f"{len(units)} unit sets, {n_foot} footprints, {len(threed_ids)} 3D, "
           f"{len(mirrored)} mirrored source files, {len(vector_manifests)} vector manifests")
 
+    errors: list[tuple[str, str]] = []
+
     def process_pub(p: dict) -> bool:
+        """Write one publication; a failure is collected so the other publications still land."""
+        try:
+            return _write_pub(p)
+        except Exception as e:  # noqa: BLE001 — collected and raised after the pool
+            errors.append(((p.get("series_id") or "").strip(), f"{type(e).__name__}: {e}"))
+            return False
+
+    def _write_pub(p: dict) -> bool:
         sid = (p.get("series_id") or "").strip()
         if not sid:
             return False
@@ -282,6 +292,10 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         print(f"[pubs] wrote {n} items -> {config.public_url(config.STAC_PREFIX + '/catalog.json')}")
     else:
         print(f"[pubs] wrote {n} items (catalog refresh skipped)")
+    if errors:
+        for sid, msg in errors:
+            print(f"[pubs] FAILED {sid}: {msg}", file=sys.stderr)
+        raise RuntimeError(f"{len(errors)} publication(s) failed: {sorted(sid for sid, _ in errors)}")
     return n
 
 

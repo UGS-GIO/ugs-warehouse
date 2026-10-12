@@ -634,40 +634,85 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
     assert bad_path in capsys.readouterr().err  # but named on stderr, not silently dropped
 
 
-def test_build_catalog_writes_a_collection_and_items_per_publication():
+def _build_catalog_patches(stack, manifests, pubs, written_items, written_colls):
     from unittest.mock import patch
+
+    for target, kw in [
+        ("ugs_warehouse.pubs.source.read_pubs", {"return_value": pubs}),
+        ("ugs_warehouse.pubs.source.read_attachments", {"return_value": []}),
+        ("ugs_warehouse.pubs.ingest._ids_with_suffix", {"return_value": set()}),
+        ("ugs_warehouse.pubs.ingest._contents_by_sid", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._threed_classes_by_sid", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._overrides_by_sid", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._build_search_corpus", {}),
+        ("ugs_warehouse.pubs.ingest._unit_ids", {"return_value": {"DS-8"}}),
+        ("ugs_warehouse.pubs.ingest._mirrored_files", {"return_value": set()}),
+        ("ugs_warehouse.pubs.ingest._cog_headers", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", {"return_value": manifests}),
+        ("ugs_warehouse.pubs.editions.footprint_rows", {"return_value": []}),
+        ("ugs_warehouse.core.stac.prior_collection_field", {"return_value": None}),
+        ("ugs_warehouse.core.stac.prior_property", {"return_value": None}),
+        ("ugs_warehouse.core.stac.attach_renders", {}),
+        ("ugs_warehouse.core.stac.attach_collection_iso", {}),
+        ("ugs_warehouse.core.styles.warm", {}),
+        ("ugs_warehouse.core.stac.write_item", {"side_effect": written_items.append}),
+        ("ugs_warehouse.core.stac.write_collection",
+         {"side_effect": lambda c, children: written_colls.append((c, children))}),
+        ("ugs_warehouse.core.stac.refresh_catalog", {}),
+    ]:
+        stack.enter_context(patch(target, **kw))
+
+
+def test_build_catalog_writes_a_collection_and_items_per_publication():
+    from contextlib import ExitStack
 
     from ugs_warehouse.pubs.ingest import build_catalog
 
-    manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults"], "tables": ["geo__DescriptionOfMapUnits"],
-                          "columns": {"geo__DescriptionOfMapUnits": [{"name": "MapUnit", "type": "string"}]},
-                          "layers": {}}}
+    cols = [{"name": "MapUnit", "type": "string"}]
+    manifests = {"DS-8": {"spatial": ["geo__ContactsAndFaults", "units"], "tables": ["geo__DescriptionOfMapUnits"],
+                          "columns": {"geo__DescriptionOfMapUnits": cols},
+                          "layers": {"geo__ContactsAndFaults": {"rows": 5, "bbox": [-112.0, 40.0, -111.0, 41.0],
+                                                                "proj_code": "EPSG:26912"}}}}
     written_items, written_colls = [], []
-    with patch("ugs_warehouse.pubs.source.read_pubs", return_value=[{"series_id": "DS-8"}, {"series_id": "OFR-12"}]), \
-         patch("ugs_warehouse.pubs.source.read_attachments", return_value=[]), \
-         patch("ugs_warehouse.pubs.ingest._ids_with_suffix", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._contents_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._threed_classes_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._overrides_by_sid", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._build_search_corpus"), \
-         patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
-         patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=manifests), \
-         patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
-         patch("ugs_warehouse.core.stac.prior_collection_field", return_value=None), \
-         patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_collection_iso"), \
-         patch("ugs_warehouse.core.styles.warm"), \
-         patch("ugs_warehouse.core.stac.write_item", side_effect=written_items.append), \
-         patch("ugs_warehouse.core.stac.write_collection",
-               side_effect=lambda c, children: written_colls.append((c, children))), \
-         patch("ugs_warehouse.core.stac.refresh_catalog"):
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, manifests, [{"series_id": "DS-8"}, {"series_id": "OFR-12"}],
+                               written_items, written_colls)
         assert build_catalog(skip_refresh=True) == 2
 
     colls = {c["id"]: n for c, n in written_colls}
-    assert colls == {"DS-8": 2, "OFR-12": 0}  # OFR-12 has no data: a collection with no items
-    assert {it["id"] for it in written_items} == {"DS-8_geo__ContactsAndFaults", "DS-8_geo__DescriptionOfMapUnits"}
+    assert colls == {"DS-8": 4, "OFR-12": 0}  # OFR-12 has no data: a collection with no items
+    by_id = {it["id"]: it for it in written_items}
+    assert set(by_id) == {"DS-8_geo__ContactsAndFaults", "DS-8_geo__DescriptionOfMapUnits",
+                          "DS-8_units", "DS-8_layer_units"}  # the `units` layer moved off the units item
+    assert by_id["DS-8_geo__ContactsAndFaults"]["properties"]["proj:code"] == "EPSG:26912"
+    assert by_id["DS-8_geo__DescriptionOfMapUnits"]["assets"]["data"]["table:columns"] == cols
+
+
+def test_build_catalog_keeps_writing_after_one_publication_fails(capsys):
+    from contextlib import ExitStack
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import sink_stac
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    real = sink_stac.build_publication
+
+    def flaky(p, *a, **kw):
+        if p["series_id"] == "DS-8":
+            raise ValueError("boom")
+        return real(p, *a, **kw)
+
+    written_items, written_colls = [], []
+    with ExitStack() as stack:
+        _build_catalog_patches(stack, {}, [{"series_id": "DS-8"}, {"series_id": "OFR-12"}],
+                               written_items, written_colls)
+        stack.enter_context(patch("ugs_warehouse.pubs.sink_stac.build_publication", side_effect=flaky))
+        with pytest.raises(RuntimeError, match="DS-8"):
+            build_catalog(skip_refresh=True)
+
+    assert [c["id"] for c, _ in written_colls] == ["OFR-12"]  # the healthy pub still landed
+    err = capsys.readouterr().err
+    assert "FAILED DS-8" in err and "boom" in err
 
 
 def test_list_series(capsys):

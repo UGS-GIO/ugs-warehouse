@@ -1,5 +1,5 @@
 """Quad-based edition graph: grouping, ordering, the conservative exclusion rules, and the
-ingest wiring that hands each pub's edition to `sink_stac.build_item`."""
+ingest wiring that hands each pub's edition to `sink_stac.build_publication`."""
 from unittest.mock import patch
 
 import pytest

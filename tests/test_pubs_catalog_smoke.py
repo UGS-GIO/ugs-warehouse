@@ -71,7 +71,7 @@ def test_fully_loaded_publication_is_spec_valid():
 
 def test_mosaic_is_valid_and_derived_from_hrefs_match_member_item_locations():
     """The 404-class proof at the authoring layer: for each member — including a foreign-published
-    one that routes to ugs-external — the mosaic's `derived_from` href equals EXACTLY where that
+    one that routes to ugs-external — the mosaic's `derived_from` href is under where that
     member's own item is authored to live. Match here => the link resolves once both are published."""
     bbox, geom = _UTAH
     ugs = {"series_id": "GQ-968", "series": "GQ", "pub_name": "Geologic map of Foo",
@@ -95,5 +95,5 @@ def test_mosaic_is_valid_and_derived_from_hrefs_match_member_item_locations():
     derived = {lnk["href"] for lnk in mosaic["links"] if lnk["rel"] == "derived_from"}
     # Each link stays under its member's own group and series, so a foreign-published member does
     # not route to ugs-publications.
-    assert any(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/" in h for h in derived)
-    assert any(f"/{identity.EXTERNAL_COLLECTION}/BYU/" in h for h in derived)
+    assert any(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/" in h for h in derived)
+    assert any(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/" in h for h in derived)

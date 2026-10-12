@@ -280,6 +280,18 @@ def build_publication(p: dict, attachments: list[dict], *,
             print(f"[pubs] {pub_id}: no manifest entry for layer {label!r}; "
                   "its item has no CRS or row count", file=sys.stderr)
 
+    reserved = {plate_item_id(sid), f"{pub_id}_units", f"{pub_id}_fence"}
+
+    def layer_id(label: str) -> str:
+        """The layer's item id, moved off the ids the plate, units and fence items own."""
+        lid = layer_item_id(sid, label)
+        if lid not in reserved:
+            return lid
+        new = f"{pub_id}_layer_{label}"
+        print(f"[pubs] {pub_id}: layer {label!r} renamed to {new!r} (collides with a reserved item)",
+              file=sys.stderr)
+        return new
+
     items: list[dict] = []
     if has_cog:
         plate_assets = {"cog": {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
@@ -306,7 +318,7 @@ def build_publication(p: dict, attachments: list[dict], *,
         meta = layer_meta.get(label, {})
         lb = meta.get("bbox")
         rows = {"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}
-        items.append(item(layer_item_id(sid, label), stac.prettify(label), {"data": {
+        items.append(item(layer_id(label), stac.prettify(label), {"data": {
             "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
             "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}},
             geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
@@ -317,7 +329,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                  "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}
         if t.get("columns"):
             asset["table:columns"] = t["columns"]
-        items.append(item(layer_item_id(sid, label), stac.prettify(label), {"data": asset},
+        items.append(item(layer_id(label), stac.prettify(label), {"data": asset},
                           geometry=aoi, item_bbox=aoi_bbox,
                           extra={"table:row_count": meta["rows"]} if meta.get("rows") is not None else None,
                           extensions=[stac.TABLE_EXT] if t.get("columns") else None))
@@ -368,8 +380,11 @@ def build_publication(p: dict, attachments: list[dict], *,
                      ("latest-version", "latest_href")):
         if ed.get(key):
             links.append({"rel": rel, "href": ed[key], "type": "application/json"})
+    # The old-path read keeps descriptions published as a single item before the collection layout.
+    group, code = collection_group(p), series_code(sid)
     desc = ov.get("description") or (p.get("full_citation") or "").strip() \
-        or (stac.prior_collection_field(coll_path, "description") or "")
+        or (stac.prior_collection_field(coll_path, "description") or "") \
+        or (stac.prior_property(f"{group}/{code}", pub_id, "description") or "")
     title = ov.get("title") or (p.get("pub_name") or "").strip() or stac.prettify(sid)
     fields = {
         "ugs:series_id": sid,

@@ -105,7 +105,12 @@ gcloud run jobs executions list --job=geolmap-harvest --region=$REGION --project
 ```
 
 Per-series instead of `--all`: override args at execute time —
-`... execute geolmap-harvest --args=M-283 ...`
+`... execute geolmap-harvest --args=-m,ugs_warehouse.pubs.harvest,M-283 ...` (`--args` replaces the job's whole argument list, so it repeats the module)
+
+Source rasters: a map with a raster at `gs://ut-dnr-ugs-maps-prod-public/geolmap/sources/30x60/<series id>.tif`
+takes its plate from that file, and its GIS zip supplies only the units. The folder is the one place
+a map's source raster lives; `index.csv` beside the rasters records where each came from. Each
+raster must already carry its CRS. `GEOLMAP_SOURCES_PREFIX` overrides the object prefix.
 
 ## 4. Pub/Sub event-driven ingest (dataELT #418)
 
@@ -377,6 +382,7 @@ separate deploy such as review.
 | `PUBS_DB_URL` | none (required) | Publications DB, MySQL URL or Postgres DSN |
 | `PUBS_TABLE`, `PUBS_ATT_TABLE` | Postgres: `pubs.ugspubsdraft2`, `pubs.attached_data`; MySQL: `pubsdb`, `pubsattacheddata` | Feed tables |
 | `GEOLMAP_{COG,FOOTPRINTS,MOSAIC,UNITS,3D,VECTORS}_PREFIX` | `geolmap/{cogs,footprints,mosaics,units,3d,vectors}` | Pub artifact prefixes |
+| `GEOLMAP_SOURCES_PREFIX` | `geolmap/sources/30x60` | Placed 30x60 source rasters the harvest warps when present |
 | `PUB_{FILES,THUMB,CONTENTS,SEARCH,FULLTEXT,EMB}_PREFIX` | `pubs/{files,thumbs,contents,search,fulltext,embeddings}` | Pub sidecar prefixes |
 | `PUB_GRAPH_PREFIX`, `PUB_FTS_OBJECT`, `PUB_VSS_OBJECT` | `graph`, `pubs/search/pubs-fts.duckdb`, `pubs/search/pubs-vss.duckdb` | Graph and search outputs |
 | `COG_COMPRESS`, `COG_QUALITY`, `COG_DPI`, `COG_ZOOM_STRATEGY` | `deflate`, `90`, `600`, `auto` | COG build settings |

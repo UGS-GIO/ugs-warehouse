@@ -262,6 +262,19 @@ def test_vrt_order_puts_unparseable_years_at_the_bottom_and_breaks_ties_by_sid()
     assert gm._vrt_order(["M-1", "M-2", "M-3", "M-4"], by_sid) == ["M-2", "M-3", "M-1", "M-4"]
 
 
+def test_vrt_order_draws_reissues_of_older_maps_beneath_the_originals():
+    by_sid = {
+        "OFR-675DM": {"pub_year": "2017",
+                      "pub_name": "White Canyon area (GIS reproduction of plate 1 of USGS Bulletin 1125 [1964])"},
+        "MP-08-3DM": {"pub_year": "2008", "pub_name": "Geologic map of the White Canyon area"},
+        "OFR-713DR": {"pub_year": "2019", "pub_name": "Cedar Mesa area (GIS Reproduction of USGS Map in B-1186 [1965])"},
+        "M-1": {"pub_year": "2017", "pub_name": "Reproduction rates of Pennsylvanian brachiopods"},
+        "M-2": {"pub_year": "2017"},   # no title: an original
+    }
+    order = gm._vrt_order(["OFR-675DM", "MP-08-3DM", "OFR-713DR", "M-1", "M-2"], by_sid)
+    assert order == ["OFR-675DM", "OFR-713DR", "MP-08-3DM", "M-1", "M-2"]
+
+
 def _tree(root, tiles):
     for (z, x, y), blob in tiles.items():
         d = root / str(z) / str(x)

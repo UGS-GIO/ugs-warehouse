@@ -128,11 +128,13 @@ def _unit_ids() -> set[str]:
 
 
 def _vector_manifests_by_sid() -> dict[str, dict]:
-    """{SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]}}} from
+    """{SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
+    "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2}}}} from
     the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
     — the AUTHORITATIVE record of which extracted layers are spatial vs non-spatial GeMS companion
     tables, so build_item doesn't have to guess a layer's kind from its name. `columns` holds each
-    layer's recorded schema; manifests written before it was recorded have none."""
+    layer's recorded schema and `layers` its row count, bbox and CRS; manifests written before they
+    were recorded have none (empty maps / None values)."""
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
     out: dict[str, dict] = {}
     for path in gcs.list_paths(vectors.VECTORS_PREFIX):
@@ -142,9 +144,14 @@ def _vector_manifests_by_sid() -> dict[str, dict]:
         sid = rest.split("/", 1)[0].upper()
         try:
             doc = json.loads(gcs.get_bytes(path).decode())
+            layer_docs = [lay for lay in doc.get("layers") or [] if lay.get("label")]
             out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or [],
-                        "columns": {lay["label"]: lay["columns"] for lay in doc.get("layers") or []
-                                    if lay.get("label") and lay.get("columns")}}
+                        "columns": {lay["label"]: lay["columns"] for lay in layer_docs if lay.get("columns")},
+                        "layers": {lay["label"]: {"rows": lay.get("rows"), "bbox": lay.get("bbox"),
+                                                  "geometry_types": lay.get("geometry_types") or [],
+                                                  "proj_code": lay.get("proj_code"),
+                                                  "proj_wkt2": lay.get("proj_wkt2")}
+                                   for lay in layer_docs}}
         except Exception as e:  # noqa: BLE001 — a bad manifest just costs that pub its vector assets
             print(f"[pubs] corrupt vector manifest, skipping: {path} ({e})", file=sys.stderr)
             continue

@@ -548,7 +548,7 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
         out = _vector_manifests_by_sid()
 
     # keyed by uppercased series_id, matching the other discovery maps
-    assert out["M-100"] == {**manifest, "columns": {}}
+    assert out["M-100"] == {**manifest, "columns": {}, "layers": {}}
     assert "DS-2" not in out
 
 
@@ -571,6 +571,27 @@ def test_vector_manifests_by_sid_carries_each_tables_recorded_columns():
         out = _vector_manifests_by_sid()
 
     assert out["M-100"]["columns"] == {"geo__DescriptionOfMapUnits": cols}
+
+
+def test_vector_manifests_by_sid_carries_each_layers_rows_and_bbox():
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+
+    manifest = {"spatial": ["geo__Faults"], "tables": [],
+                "layers": [{"label": "geo__Faults", "spatial": True, "rows": 12,
+                            "columns": [{"name": "geometry", "type": "geometry"}],
+                            "geometry_types": ["LineString"], "bbox": [-112.0, 40.0, -111.0, 41.0],
+                            "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]"}]}
+    path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
+        out = _vector_manifests_by_sid()
+
+    assert out["M-100"]["layers"] == {"geo__Faults": {
+        "rows": 12, "bbox": [-112.0, 40.0, -111.0, 41.0], "geometry_types": ["LineString"],
+        "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]"}}
 
 
 def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
@@ -599,7 +620,7 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
         out = _vector_manifests_by_sid()  # must return, not raise
 
-    assert out["M-100"] == {**good, "columns": {}}  # unaffected by the sibling's bad manifest
+    assert out["M-100"] == {**good, "columns": {}, "layers": {}}  # unaffected by the sibling's bad manifest
     assert "DS-9" not in out  # skipped, not crashed on
     assert bad_path in capsys.readouterr().err  # but named on stderr, not silently dropped
 

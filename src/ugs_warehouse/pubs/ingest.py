@@ -276,7 +276,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         """Write one publication; a failure is collected so the other publications still land."""
         try:
             return _write_pub(p)
-        except Exception as e:  # noqa: BLE001, collected and raised after the pool
+        except Exception as e:  # noqa: BLE001 (collected and raised after the pool)
             errors.append(((p.get("series_id") or "").strip(), f"{type(e).__name__}: {e}"))
             return False
 

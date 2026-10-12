@@ -51,6 +51,11 @@ SERVICE_TIER = {"geomaps_24k": "24k", "geomaps_100k": "100k", "geomaps_1x2": "25
 STATEWIDE_SERVNAME = "500k_Statewide"   # the state map carries no geomaps_service
 MOSAIC_TIER_LABEL = {"24k": "1:24,000", "100k": "intermediate-scale (30' x 60')",
                      "250k": "1:250,000 (1 x 2 degree)", "500k": "1:500,000"}
+# Left out of the current-edition mosaics though no quad edition supersedes them: each reissues older
+# mapping under a newer pub_year, so it would draw over the newer map it overlaps. Item pages keep them.
+NOT_IN_MOSAIC = {
+    "OFR-675DM",  # 1964 USGS White Canyon mapping, reissued 2017; MP-08-3DM (2008) is the current map
+}
 
 
 def mosaic_tiers(services: frozenset[str], serv_names: frozenset[str]) -> set[str]:

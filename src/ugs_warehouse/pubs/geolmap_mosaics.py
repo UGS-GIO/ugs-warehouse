@@ -60,6 +60,7 @@ from ..core import config, gcs, stac
 from . import editions, identity, scale, source
 from .scale import MOSAIC_TIER_LABEL as TIER_LABEL
 from .scale import MOSAIC_TIERS as TIERS
+from .scale import NOT_IN_MOSAIC
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
@@ -138,10 +139,14 @@ def _group_by_tier(edition_mode: str = "current",
     groups: dict[str, list[str]] = {t: [] for t in TIERS}
     untiered: dict[str, list[str]] = {}
     n_deprecated = 0
+    n_not_in_mosaic = 0
     n_outside_quads = 0
     for sid in sorted(_cog_sids()):
         if edition_mode == "current" and sid in deprecated_upper:
             n_deprecated += 1
+            continue
+        if edition_mode == "current" and sid in NOT_IN_MOSAIC:
+            n_not_in_mosaic += 1
             continue
         if requested_quads is not None:
             quad_name = qmap.get(sid)
@@ -162,7 +167,7 @@ def _group_by_tier(edition_mode: str = "current",
     counts = ", ".join(f"{t}={len(groups[t])}" for t in TIERS)
     detail = f"untiered: {sum(len(v) for v in untiered.values())}"
     if edition_mode == "current":
-        detail += f", deprecated editions dropped: {n_deprecated}"
+        detail += f", deprecated editions dropped: {n_deprecated}, not in mosaic: {n_not_in_mosaic}"
     if requested_quads is not None:
         detail += f", outside --quads: {n_outside_quads}"
     print(f"[mosaics] COGs grouped by portal layer: {counts}  ({detail})")

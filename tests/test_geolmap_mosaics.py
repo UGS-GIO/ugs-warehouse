@@ -99,6 +99,22 @@ def test_group_by_tier_all_keeps_every_edition_and_skips_the_graph():
     mock_graph.assert_not_called()
 
 
+def test_group_by_tier_current_leaves_out_not_in_mosaic_maps(monkeypatch, capsys):
+    """A NOT_IN_MOSAIC map is dropped from the current-edition mosaic even when no edition supersedes
+    it, and kept by --editions all."""
+    monkeypatch.setattr(gm, "NOT_IN_MOSAIC", {"OFR-677"})
+    with patch.object(gm, "_cog_sids", return_value=set(_PARK_CITY_QMAP)), \
+         patch.object(gm.source, "read_pubs", return_value=_PARK_CITY_PUBS), \
+         patch.object(gm.editions, "quad_by_series", return_value=_PARK_CITY_QMAP), \
+         patch.object(gm.editions, "edition_graph", return_value={}):
+        current, _ = gm._group_by_tier(edition_mode="current")
+        assert "not in mosaic: 1" in capsys.readouterr().out
+        every, _ = gm._group_by_tier(edition_mode="all")
+
+    assert set(current["24k"]) == {"GQ-852", "M-296DM"}
+    assert set(every["24k"]) == {"GQ-852", "OFR-677", "M-296DM"}
+
+
 def test_group_by_tier_follows_the_portal_layer_not_the_scale(monkeypatch, capsys):
     """Tiers are the portal's layers (footprint geomaps_service): a 1:62,500 30' x 60' map is
     intermediate, a 1 x 2 degree sheet is 250k, the state map is 500k. Irregular maps, maps with no

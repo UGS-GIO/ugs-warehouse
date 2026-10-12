@@ -1,6 +1,5 @@
 import pytest
 
-# tests/test_pubs_collection.py
 from ugs_warehouse.core import stac
 from ugs_warehouse.pubs import sink_stac
 
@@ -58,12 +57,13 @@ def test_items_live_under_the_publication_collection():
 
 
 def test_each_item_states_its_own_data_crs_and_never_borrows_4326():
-    _, items = _build()
+    _, items = _build(cog_fields={"proj:code": "EPSG:3857"})
     by_id = {it["id"]: it for it in items}
     assert by_id["OFR-784DM_geo__Faults"]["properties"]["proj:code"] == "EPSG:26912"
     assert "proj:code" not in by_id["OFR-784DM_geo__DMU"]["properties"]      # a table has no CRS
     assert "proj:code" not in by_id["OFR-784DM_plate"]["properties"]         # the COG asset carries 3857
-    assert by_id["OFR-784DM_plate"]["assets"]["cog"].get("proj:code", "EPSG:3857") == "EPSG:3857"
+    assert by_id["OFR-784DM_plate"]["assets"]["cog"]["proj:code"] == "EPSG:3857"
+    assert stac.PROJ_EXT in by_id["OFR-784DM_plate"]["stac_extensions"]
 
 
 def test_a_layer_whose_crs_has_no_epsg_code_carries_wkt2():
@@ -134,3 +134,14 @@ def test_a_deprecated_edition_keeps_version_links_and_drops_the_mosaic_link():
     assert any(lk["rel"] == "successor-version" for lk in coll["links"])
     plate = next(it for it in items if it["id"].endswith("_plate"))
     assert not [lk for lk in plate["links"] if lk["rel"] == "related"]
+
+
+def test_a_layer_missing_from_the_manifest_warns_on_stderr(capsys):
+    _build(layers={"geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}})
+    err = capsys.readouterr().err
+    assert "no manifest entry for layer 'geo__Faults'" in err
+
+
+def test_duplicate_item_ids_raise():
+    with pytest.raises(ValueError, match="OFR-784DM_plate"):
+        _build(vector_layers=["plate"])

@@ -241,12 +241,7 @@ def build_item(p: dict, attachments: list[dict], *,
     # same bytes, two locations. Provenance survives, and a client that wants the publisher's copy
     # (or hits our CDN cold) still has it. Unmirrored files are unchanged: a plain legacy href.
     def source_asset(h: str, **rest) -> dict:
-        obj = identity.pub_file_object(h)
-        if not (obj and mirrored and obj in mirrored):
-            return {"href": h, **rest}
-        return {"href": identity.pub_file_url(obj), **rest, "alternate:name": "Warehouse CDN",
-                "alternate": {"publisher": {"href": h, "alternate:name": "UGS publications site",
-                                            "title": "Publisher copy (ugspub.nr.utah.gov)"}}}
+        return _source_asset(h, mirrored, **rest)
 
     # A publisher's plain TIFF is the upstream original, not our raster data: Portolan's `source`
     # role, which is exempt from the COG requirement. Our own raster is the `cog` asset below.
@@ -536,6 +531,11 @@ def build_publication(p: dict, attachments: list[dict], *,
             geometry=geometry, bbox=item_bbox, datetime_iso=dt, properties=props,
             assets=assets, extra_links=[*doi, *(links or [])], stac_extensions=exts or None)
 
+    for label in [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]:
+        if label not in layer_meta:
+            print(f"[pubs] {pub_id}: no manifest entry for layer {label!r}; "
+                  "its item has no CRS or row count", file=sys.stderr)
+
     items: list[dict] = []
     if has_cog:
         plate_assets = {"cog": {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
@@ -588,6 +588,11 @@ def build_publication(p: dict, attachments: list[dict], *,
             geometry=aoi, item_bbox=aoi_bbox,
             extra={"classification:classes": classes_3d} if classes_3d else None,
             extensions=[stac.CLASSIFICATION_EXT] if classes_3d else None))
+
+    seen: set[str] = set()
+    dupes = sorted({it["id"] for it in items if it["id"] in seen or seen.add(it["id"])})
+    if dupes:
+        raise ValueError(f"{pub_id}: duplicate item ids {dupes}")
 
     assets: dict = {}
     main_pdf = href(p.get("pub_url"))

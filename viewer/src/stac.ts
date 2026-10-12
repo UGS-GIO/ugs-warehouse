@@ -1,7 +1,7 @@
 // STAC data layer — TanStack Query over the static catalog (catalog.json -> collections
 // -> items) on the CDN. No fetch useEffects; components call these hooks. JSON items stay
 // the source of truth (the warehouse writes them via core/stac).
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { type QueryClient, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 
 // Import guard: the pure item view-model (item-view.ts) reuses this module's asset helpers and is
@@ -46,6 +46,22 @@ export const collKeyOf = (href?: string): string | undefined => {
 };
 export const idOf = (href: string) => href.split("/").slice(-2)[0]; // item id = its folder name
 
+const docName = (href: string) => href.split(/[?#]/)[0].split("/").pop() ?? "";
+export const isCatalogHref = (href: string) => docName(href) === "catalog.json";
+export const isCollectionHref = (href: string) => docName(href) === "collection.json";
+
+// The collection an index entry is listed under. An item's is collKeyOf; a publication Collection
+// (`<series>/<SID>/collection.json`) is listed under its series, one folder up, with idOf = SID.
+export const entryCollKeyOf = (href?: string): string | undefined => {
+  const key = collKeyOf(href);
+  if (!href || !key || !isCollectionHref(href)) return key;
+  return key.includes("/") ? key.replace(/\/[^/]+$/, "") : undefined;
+};
+
+// An item's .json beside a collection.json: `<collection>/<id>/<id>.json`.
+export const itemHrefIn = (collHref: string, id: string) =>
+  collHref.replace(/collection\.json(\?.*)?$/, `${encodeURIComponent(id)}/${encodeURIComponent(id)}.json`);
+
 // In-app catalog route (?c=<collection key>&i=<item id>) for a STAC item .json href, reusing
 // collKeyOf so the `c` key matches how the catalog tree keys its collections. A foreign href (not
 // under our catalog root) has no in-app route, so it is returned unchanged as a direct link.
@@ -53,13 +69,14 @@ export const catalogItemHref = (stacHref: string): string => {
   const base = CATALOG_URL.replace(/[^/]*$/, "");
   let abs: string;
   try { abs = new URL(stacHref, base).href; } catch { return stacHref; }  // resolve a relative catalog link
-  const c = abs.startsWith(base) ? collKeyOf(abs) : undefined;            // foreign / off-catalog → passthrough
+  const c = abs.startsWith(base) ? entryCollKeyOf(abs) : undefined;       // foreign / off-catalog → passthrough
   return c ? `?c=${encodeURIComponent(c)}&i=${encodeURIComponent(idOf(abs))}` : stacHref;
 };
 
 export type Link = {
   rel: string;
   href: string;
+  type?: string;
   title?: string;
   "pmtiles:layers"?: string[];
   "ugs:item_count"?: number;
@@ -101,11 +118,42 @@ export const itemLinks = (d: StacDoc | undefined, base: string): Link[] =>
 export const pmtilesLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "pmtiles");
 
-// Landing page for the publication (rel=via) + the cite-as DOI, where present.
+// Landing page for the publication (rel=via, or an HTML rel=alternate) + the cite-as DOI, where present.
 export const viaLink = (d: StacDoc | undefined): Link | undefined =>
-  (d?.links ?? []).find((l) => l.rel === "via");
+  (d?.links ?? []).find((l) => l.rel === "via")
+  ?? (d?.links ?? []).find((l) => l.rel === "alternate" && l.type === "text/html");
 export const citeLink = (d: StacDoc | undefined): Link | undefined =>
   (d?.links ?? []).find((l) => l.rel === "cite-as");
+
+// The collection an item belongs to (rel=collection, else rel=parent), as written (usually relative).
+export const collectionLink = (d: StacDoc | undefined): Link | undefined =>
+  (d?.links ?? []).find((l) => l.rel === "collection") ?? (d?.links ?? []).find((l) => l.rel === "parent");
+
+// A publication Collection read as the item shape the detail page takes: its top-level metadata
+// becomes `properties`, its first extent box the `bbox`, and its extent start the `datetime` unless
+// it is flagged `ugs:date_unknown`. Type, assets and links stay; any other doc passes through.
+const COLLECTION_SHAPE = new Set([
+  "type", "stac_version", "stac_extensions", "id", "links", "assets", "extent", "summaries",
+  "item_assets", "properties", "bbox", "geometry",
+]);
+export const collectionAsItem = (d: StacDoc): StacDoc => {
+  if (d.type !== "Collection") return d;
+  const raw = d as Record<string, unknown>;
+  const extent = raw.extent as
+    { spatial?: { bbox?: number[][] }; temporal?: { interval?: (string | null)[][] } } | undefined;
+  const props: Record<string, unknown> =
+    Object.fromEntries(Object.entries(raw).filter(([k]) => !COLLECTION_SHAPE.has(k)));
+  const start = extent?.temporal?.interval?.[0]?.[0];
+  if (start && !props["ugs:date_unknown"]) props.datetime = start;
+  return { ...d, bbox: extent?.spatial?.bbox?.[0], properties: props };
+};
+
+// A Collection's Items (its layers and tables), from the titled rel=item links: no fetch per item.
+export const collectionParts = (d: StacDoc | undefined): { id: string; title: string }[] =>
+  d?.type !== "Collection" ? [] : (d.links ?? []).filter((l) => l.rel === "item").map((l) => {
+    const id = idOf(l.href.split(/[?#]/)[0]);
+    return { id, title: l.title ?? id };
+  });
 
 // Registry-driven relationships (the warehouse emits these from raw.schema_registry):
 //  • related links — the FK graph (item ↔ related serving-topic item)
@@ -447,7 +495,8 @@ export function useCogBoxes(hrefs: (string | undefined)[]): Record<string, [numb
 // Each entry is a mini StacDoc (id, bbox, a props subset, asset + web-map-link summaries)
 // — enough to render the list table, facets, and map overlays without N item.json fetches.
 // The full item.json stays the source of truth and loads on open (useStac).
-export type ItemsIndex = { type?: string; collection?: string | null; count?: number; items: StacDoc[] };
+// `url` is where useIndexes read the index from, for resolving the entries' relative self links.
+export type ItemsIndex = { type?: string; collection?: string | null; count?: number; items: StacDoc[]; url?: string };
 
 /** The catalog's root items.json: every item of this catalog in one request. */
 export const ROOT_INDEX_URL = CATALOG_URL.replace(/catalog\.json(\?.*)?$/, "items.json");
@@ -461,12 +510,29 @@ export function useRootIndex(enabled: boolean) {
   });
 }
 
-export const rootIndexItems = (idx: ItemsIndex) => idx.items.flatMap((d) => {
+const selfHref = (d: StacDoc, base: string): string | undefined => {
   const self = d.links?.find((l) => l.rel === "self")?.href;
-  if (!self) return [];
-  const href = new URL(self, ROOT_INDEX_URL).href;
-  return [{ collId: collKeyOf(href) ?? "", href, data: d }];
+  return self ? new URL(self, base).href : undefined;
+};
+
+export const rootIndexItems = (idx: ItemsIndex) => idx.items.flatMap((d) => {
+  const href = selfHref(d, ROOT_INDEX_URL);
+  return href ? [{ collId: entryCollKeyOf(href) ?? "", href, data: d }] : [];
 });
+
+// A loaded index's entries as item refs under collection `id`. A catalog's index (a publication
+// series) points at each entry by its self link; a collection's items sit beside it.
+export const indexItemRefs = (r: { id: string; href: string; index?: ItemsIndex }) => {
+  const idx = r.index;
+  if (!idx) return [];
+  if (!isCatalogHref(r.href)) {
+    return idx.items.map((d) => ({ collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d }));
+  }
+  return idx.items.flatMap((d) => {
+    const href = idx.url ? selfHref(d, idx.url) : undefined;
+    return href ? [{ collId: r.id, href, data: d }] : [];
+  });
+};
 
 // An index with no item list is an error, so the caller falls back to per-item links.
 const validIndex = (doc: ItemsIndex, url: string): ItemsIndex => {
@@ -474,10 +540,18 @@ const validIndex = (doc: ItemsIndex, url: string): ItemsIndex => {
   return doc;
 };
 
-// items.json sits next to collection.json (…/<collection>/items.json). A nesting sub-catalog may
-// publish one too (ugs-serving-topics), rolling up every child collection into one fetch.
-const indexUrlFor = (collectionHref: string) =>
-  collectionHref.replace(/(collection|catalog)\.json(\?.*)?$/, "items.json");
+// Link rel the warehouse gives a catalog that publishes an items.json.
+const INDEX_REL = "ugs-items-index";
+
+// items.json sits next to collection.json (…/<collection>/items.json). A catalog names its own with
+// an `ugs-items-index` link (a publication series, or a sub-catalog's rollup); one without it has none.
+async function indexUrlFor(href: string, qc: QueryClient): Promise<string> {
+  if (!isCatalogHref(href)) return href.replace(/collection\.json(\?.*)?$/, "items.json");
+  const cat = await qc.ensureQueryData({ queryKey: qk.stac(href), queryFn: () => fetchJson(href) });
+  const link = cat.links?.find((l) => l.rel === INDEX_REL);
+  if (!link) throw new Error(`no ${INDEX_REL} link in ${href}`);
+  return new URL(link.href, href).href;
+}
 
 /** Whether a collection is in this catalog (same origin). */
 export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL): boolean => {
@@ -492,13 +566,15 @@ export const hasItemsIndex = (collectionHref: string, catalogUrl = CATALOG_URL):
  *  the parsed index when present, or an error (e.g. 404 on a pre-index catalog) so the
  *  caller can fall back to per-item fetches. `retry: false` — a 404 is a fast, final miss. */
 export function useIndexes(collections: { id: string; href: string }[]) {
+  const qc = useQueryClient();
   const results = useQueries({
     queries: collections.map((c) => ({
       queryKey: qk.index(c.href),
       // A federated catalog may publish a STAC ItemCollection (`features`).
       queryFn: async () => {
-        const doc = await fetchJson(indexUrlFor(c.href)) as ItemsIndex & { features?: StacDoc[] };
-        return validIndex(doc?.features ? { ...doc, items: doc.features } : doc, c.href);
+        const url = await indexUrlFor(c.href, qc);
+        const doc = await fetchJson(url) as ItemsIndex & { features?: StacDoc[] };
+        return { ...validIndex(doc?.features ? { ...doc, items: doc.features } : doc, c.href), url };
       },
       retry: false,
     })),

@@ -2,6 +2,7 @@
 // 2/3 · 1/3 grid); `drawer` = the single-column stack that fits the 560px Discover result drawer. Both
 // reuse the same capability panels (Preview, Downloads, Endpoints, Related, Review, schema, STAC JSON).
 import { type ReactNode, useRef, useState } from "react";
+import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
@@ -20,8 +21,8 @@ import { PropertyTable } from "./property-table";
 import { SchemaTable } from "./schema-table";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
-import { type Asset, catalogItemHref, citeLink, contentsOf, IS_REVIEW, ownForeignKeys, relatedAssets,
-  relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+import { type Asset, catalogItemHref, citeLink, collectionParts, contentsOf, IS_REVIEW, ownForeignKeys,
+  relatedAssets, relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
 import { Unavailable } from "@/offline/offline-notice";
@@ -154,6 +155,46 @@ function IssueContents({ item }: { item: StacDoc }) {
   );
 }
 
+// A same-view link to another catalog entry (keeps the view and its other search keys).
+function EntryLink({ c, i, className, children }: { c: string; i: string; className?: string; children: ReactNode }) {
+  return (
+    <Link to="." search={(prev) => ({ ...prev, c, i, terrain: undefined })} className={className}>
+      {children}
+    </Link>
+  );
+}
+
+// A publication's layers and tables, one row per Item, titled from its rel=item links. Each opens
+// at `?c=<series>/<SID>&i=<item>`. A report-only publication has none, so nothing renders.
+function PublicationParts({ item, collectionId }: { item: StacDoc; collectionId: string }) {
+  const parts = collectionParts(item);
+  if (!parts.length || !collectionId || !item.id) return null;
+  const c = `${collectionId}/${item.id}`;
+  return (
+    <section className="mt-4 rounded-md border border-border bg-card p-3">
+      <h3 className="text-sm font-semibold">Layers and tables</h3>
+      <ul className="mt-1.5 divide-y divide-border text-sm">
+        {parts.map((p) => (
+          <li key={p.id} className="py-1">
+            <EntryLink c={c} i={p.id} className="text-primary no-underline hover:underline">{p.title} ›</EntryLink>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
+export type PartOf = { title: string; c: string; i: string };
+
+function PartOfLine({ partOf }: { partOf?: PartOf }) {
+  if (!partOf) return null;
+  return (
+    <p className="mt-1 text-sm text-muted-foreground">
+      Part of <EntryLink c={partOf.c} i={partOf.i} className="text-primary hover:underline">{partOf.title}</EntryLink>
+    </p>
+  );
+}
+
 // Review deploy only: reviews baked into the catalog detail — a diff vs the live version, an
 // item-level comment thread, and a per-column comment button (flag a wrong name/unit/type).
 function CatalogReview({ item }: { item: StacDoc }) {
@@ -244,9 +285,10 @@ function ReviewBadge({ itemId }: { itemId: string }) {
   return <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-xs font-medium ${statusClass(status)}`}>{statusLabel(status)}</span>;
 }
 
-export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore, layout = "drawer" }: {
+export function ItemDetail({ collectionId, item, error, partOf, onBack, onMap, onExplore, layout = "drawer" }: {
   collectionId: string; item?: StacDoc; onBack: () => void; onMap: () => void;
   error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
+  partOf?: PartOf;                 // the publication an Item belongs to
   onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
   layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
@@ -320,6 +362,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
             {IS_REVIEW && item.id && <ReviewBadge itemId={String(item.id)} />}
           </div>
           <h1 className="mt-2 font-display text-2xl font-semibold tracking-tight text-foreground sm:text-3xl">{String(p.title ?? item.id ?? "")}</h1>
+          <PartOfLine partOf={partOf} />
           {byline.length > 0 && <p className="mt-1.5 text-sm text-muted-foreground">{byline.join(" · ")}</p>}
           {typeof p.description === "string" && <p className="mt-3 max-w-3xl text-muted-foreground">{p.description}</p>}
         </header>
@@ -331,6 +374,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
             {actions}
             <Preview item={item} />
             <IssueContents item={item} />
+            <PublicationParts item={item} collectionId={collectionId} />
             <Section title="Data schema"><SchemaTable columns={tableColumns(item)} /></Section>
             <RelatedPanel item={item} />
             {IS_REVIEW && <CatalogReview item={item} />}
@@ -364,6 +408,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
         {crumb}
         {/* Title leads; the id already shows in the crumb above, so it isn't repeated under it. */}
         <h1 className={T.pageTitle}>{String(p.title ?? item.id ?? "")}</h1>
+        <PartOfLine partOf={partOf} />
       </div>
       <Preview item={item} />
       {/* Below the map/table, not above it: the description is context for what you are looking at,
@@ -373,6 +418,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
       )}
       <div className="mt-1.5">{actions}</div>
       <IssueContents item={item} />
+      <PublicationParts item={item} collectionId={collectionId} />
       <DownloadsPanel key={String(item.id)} item={item} />
       <EndpointsPanel item={item} />
       <RelatedPanel item={item} />

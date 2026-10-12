@@ -5,6 +5,7 @@ import {
   dateOf, fmtDate, formatsOf, hasGeometry, itemKind, kindLabel, recordCountLabel, rowCount, scale,
   series, title, typeOf, year,
 } from "./item-view";
+import { collectionAsItem, type StacDoc } from "@/stac";
 
 // Minimal item factory — the fields the view-model reads (collId, id, bbox, properties, assets).
 const item = (
@@ -132,6 +133,37 @@ describe("bylineParts", () => {
       "ugs:scale": "1:24,000", datetime: "2020-01-01T00:00:00Z",
     }))).toEqual(["Geologic Map GQ-1560", "Doe, J.", "Scale 1:24,000", "2020"]);
     expect(bylineParts(item("c", "1"))).toEqual([]);
+  });
+});
+
+// The publication page renders a publication Collection through the same getters, once
+// collectionAsItem has lifted its top-level metadata into properties.
+describe("a publication Collection on the item page", () => {
+  const coll = collectionAsItem({
+    type: "Collection", id: "OFR-9", title: "Geologic map of somewhere", description: "Citation.",
+    "ugs:series_id": "OFR-9", "ugs:pub_type": "Open-File Report", "ugs:author": "Doe, J.",
+    extent: { spatial: { bbox: [[-112, 40, -111, 41]] }, temporal: { interval: [["2020-06-01T00:00:00Z", null]] } },
+    assets: { publication: { href: "https://x/ofr-9.pdf", type: "application/pdf" } },
+  } as StacDoc);
+  const it_: ItemRef = { collId: "ugs-publications/OFR", href: "", data: coll };
+
+  it("reads title, byline, kind, format and published date", () => {
+    expect(title(it_)).toBe("Geologic map of somewhere");
+    expect(seriesLabel(it_)).toBe("OFR-9");
+    expect(bylineParts(it_)).toEqual(["Open-File Report OFR-9", "Doe, J.", "Jun 2020"]);
+    expect(kindLabel(it_)).toBe("Publication");
+    expect(categorize(it_).key).toBe("publications");
+    expect(formatsOf(it_)).toEqual(["PDF"]);
+    expect(hasGeometry(it_)).toBe(true);
+    const { curated } = curatedDerived(coll.properties ?? {});
+    expect(curated.find((r) => r.label === "Published")?.value).toBe("Jun 2020");
+  });
+
+  it("shows no date for an undated publication", () => {
+    const undated = collectionAsItem({ ...coll, type: "Collection", properties: undefined,
+      title: "Undated", "ugs:series_id": "OFR-10", "ugs:date_unknown": true,
+      extent: { temporal: { interval: [["1850-01-01T00:00:00Z", "2026-01-01T00:00:00Z"]] } } } as StacDoc);
+    expect(dateOf({ collId: "ugs-publications/OFR", href: "", data: undated })).toBe("");
   });
 });
 

@@ -335,6 +335,42 @@ def attach_iso(item: dict) -> str:
     return path
 
 
+def write_collection(coll: dict, *, children: int) -> str:
+    """Write a leaf collection.json plus the README.md/AGENTS.md Portolan requires beside it.
+    `children` is its item count, for the prose."""
+    path = coll["_collection_path"]
+    doc = {k: v for k, v in coll.items() if k != "_collection_path"}
+    obj = collection_object_path(path)
+    _write_json(doc, obj)
+    _write_markdown(path, title=doc["title"], description=doc["description"], kind="collection",
+                    children=children, extent=doc["extent"])
+    return obj
+
+
+def attach_collection_iso(coll: dict) -> str:
+    """ISO 19139 sidecar for a collection, written beside its collection.json, plus a `metadata`
+    asset (mutates `coll`). The ISO writer reads item-shaped input, so it is given the
+    collection's fields as properties and its spatial extent as a bbox."""
+    bbox = coll["extent"]["spatial"]["bbox"][0]
+    start = coll["extent"]["temporal"]["interval"][0][0]
+    view = {"id": coll["id"], "bbox": bbox, "geometry": bbox_polygon(bbox),
+            "properties": {**{k: v for k, v in coll.items() if k.startswith("ugs:") or k == "keywords"},
+                           "title": coll["title"], "description": coll["description"],
+                           "datetime": start},
+            "assets": coll.get("assets", {})}
+    if not view["properties"].get("ugs:topic_category"):
+        print(f"[{coll['id']}] ISO: no ugs:topic_category, omitting <gmd:topicCategory>", file=sys.stderr)
+    path = f"{config.STAC_PREFIX}/{coll['_collection_path']}/{coll['id']}.iso.xml"
+    gcs.put_bytes(iso.stac_to_iso19139(view).encode(), path,
+                  content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
+    coll.setdefault("assets", {})["metadata"] = {
+        "href": config.public_url(path), "type": "application/xml",
+        "roles": ["metadata", "iso-19115"], "title": "ISO 19139 metadata",
+        "description": USAGE_METADATA,
+    }
+    return path
+
+
 def attach_renders(item: dict) -> None:
     """Attach a `ugs:renders` block (+ a vector `style` asset) by looking the item id up in the
     ugs-styles manifest. No-op when nothing matches (mutates item in place).

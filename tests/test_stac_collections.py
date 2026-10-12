@@ -1,3 +1,5 @@
+import json
+
 from ugs_warehouse.core import config, stac
 
 
@@ -62,3 +64,39 @@ def test_subcatalog_doc_can_point_at_child_catalogs():
     doc = stac._subcatalog_doc("ugs-publications", [{"id": "OFR", "title": "Open File Report", "count": 9}],
                                child_file="catalog.json")
     assert ("child", "./OFR/catalog.json") in {(lk["rel"], lk["href"]) for lk in doc["links"]}
+
+
+def _mem(monkeypatch):
+    store = {}
+    monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **kw: store.__setitem__(p, b))
+    return store
+
+
+def _coll(**over):
+    base = dict(collection_id="OFR-1", collection_path="ugs-publications/OFR/OFR-1", title="A map",
+                description="A map of somewhere.",
+                extent={"spatial": {"bbox": [[-112.0, 40.0, -111.0, 41.0]]},
+                        "temporal": {"interval": [["2020-01-01T00:00:00Z", "2020-01-01T00:00:00Z"]]}},
+                assets={}, item_titles={"OFR-1_plate": "Map plate"},
+                fields={"ugs:topic_category": "geoscientificInformation", "keywords": ["faults"]})
+    return stac.build_collection(**{**base, **over})
+
+
+def test_write_collection_writes_json_and_markdown_without_the_private_key(monkeypatch):
+    store = _mem(monkeypatch)
+    path = stac.write_collection(_coll(), children=1)
+    assert path == stac.collection_object_path("ugs-publications/OFR/OFR-1")
+    doc = json.loads(store[path])
+    assert "_collection_path" not in doc and doc["id"] == "OFR-1"
+    base = path.rsplit("/", 1)[0]
+    assert f"{base}/README.md" in store and f"{base}/AGENTS.md" in store
+
+
+def test_attach_collection_iso_writes_a_sidecar_and_a_metadata_asset(monkeypatch):
+    store = _mem(monkeypatch)
+    coll = _coll()
+    path = stac.attach_collection_iso(coll)
+    assert path.endswith("/ugs-publications/OFR/OFR-1/OFR-1.iso.xml")
+    xml = store[path].decode()
+    assert "A map" in xml and "-112.0" in xml
+    assert coll["assets"]["metadata"]["roles"] == ["metadata", "iso-19115"]

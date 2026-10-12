@@ -14,6 +14,7 @@ import os
 import re
 import sys
 import urllib.parse
+from collections import Counter
 
 from ..core import config, stac
 from ..core.bbox import to_2d_bbox
@@ -214,6 +215,21 @@ def layer_title(label: str) -> tuple[str, str | None]:
     return title, f"From {prefix}" if prefix else None
 
 
+def layer_titles(labels: list[str]) -> dict[str, tuple[str, str | None]]:
+    """`layer_title` for every layer and table label of one publication. Where two labels read as
+    the same title, each that has a `<dir>__` prefix carries the dir in its title, e.g.
+    "Contacts And Faults (gems)", so the publication's list tells them apart."""
+    base = {label: layer_title(label) for label in labels}
+    seen = Counter(title.casefold() for title, _ in base.values())
+    out = {}
+    for label, (title, desc) in base.items():
+        prefix, sep, rest = label.partition("__")
+        if seen[title.casefold()] > 1 and sep and prefix and rest:
+            title = f"{title} ({prefix})"
+        out[label] = (title, desc)
+    return out
+
+
 def is_single_file(*, has_cog: bool, has_units: bool, has_3d: bool,
                    vector_layers: list[str] | None, companion_tables: list[dict] | None) -> bool:
     """True when a publication has exactly one data Item. Portolan keeps a single-file collection's
@@ -363,11 +379,12 @@ def build_publication(p: dict, attachments: list[dict], *,
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
             "type": PARQUET_MIME, "title": "Geologic unit polygons (GeoParquet)", "roles": ["data"]}},
             geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source, extra={"proj:code": "EPSG:4326"}))
+    titles = layer_titles([*(vector_layers or []), *(t["label"] for t in companion_tables or [])])
     for label in vector_layers or []:
         meta = layer_meta.get(label, {})
         lb = meta.get("bbox")
         rows = {"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}
-        ltitle, ldesc = layer_title(label)
+        ltitle, ldesc = titles[label]
         items.append(item(layer_id(label), ltitle, {"data": {
             "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
             "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}},
@@ -376,7 +393,7 @@ def build_publication(p: dict, attachments: list[dict], *,
             extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {})}))
     for t in companion_tables or []:
         label, meta = t["label"], layer_meta.get(t["label"], {})
-        ltitle, ldesc = layer_title(label)
+        ltitle, ldesc = titles[label]
         asset = {"href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
                  "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
         if t.get("columns"):

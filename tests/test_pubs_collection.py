@@ -295,3 +295,24 @@ def test_layer_and_table_items_carry_readable_titles_and_the_source_dir():
     assert layer["assets"]["data"]["title"] == "Debris Flow Paths"
     table = next(i for k, i in by_id.items() if k.endswith("geounits"))
     assert table["properties"]["title"] == "Geounits" and "description" not in table["properties"]
+
+
+def test_layer_titles_name_the_source_dir_when_two_layers_read_alike():
+    assert sink_stac.layer_titles(["gems__ContactsAndFaults", "x__ContactsAndFaults",
+                                   "contacts_and_faults", "gems__MapUnitPolys"]) == {
+        "gems__ContactsAndFaults": ("Contacts And Faults (gems)", "From gems"),
+        "x__ContactsAndFaults": ("Contacts And Faults (x)", "From x"),
+        "contacts_and_faults": ("Contacts And Faults", None),
+        "gems__MapUnitPolys": ("Map Unit Polys", "From gems"),
+    }
+
+
+def test_same_named_layers_in_one_publication_get_distinct_titles():
+    labels = ["gems__ContactsAndFaults", "x__ContactsAndFaults"]
+    coll, items = sink_stac.build_publication(
+        P, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0], vector_layers=labels[:1],
+        companion_tables=[{"label": labels[1]}],
+        layers={lb: {"rows": 1, "bbox": None} for lb in labels})
+    titles = {it["id"]: it["properties"]["title"] for it in items}
+    assert sorted(titles.values()) == ["Contacts And Faults (gems)", "Contacts And Faults (x)"]
+    assert sorted(lk["title"] for lk in coll["links"] if lk["rel"] == "item") == sorted(titles.values())

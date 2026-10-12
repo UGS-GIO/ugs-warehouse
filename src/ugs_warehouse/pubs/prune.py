@@ -33,6 +33,20 @@ PUB_GROUPS = (
 )
 
 
+def delete_verified(paths: list[str]) -> None:
+    """Delete objects, then re-list their directories and raise if any is still there.
+
+    `gcs.delete` swallows every error, so a failed delete would otherwise look like a success."""
+    if not paths:
+        return
+    for path in paths:
+        gcs.delete(path)
+    present = {q for d in {p.rsplit("/", 1)[0] + "/" for p in paths} for q in gcs.list_paths(d)}
+    left = sorted(set(paths) & present)
+    if left:
+        raise RuntimeError(f"{len(left)} object(s) still present after delete: {left}")
+
+
 def expected_pub_dirs(pubs: list[dict] | None = None) -> set[str]:
     """Layout paths (`<group>/<SERIES>/<SID>`) of every publication the current source produces."""
     if pubs is None:
@@ -173,10 +187,11 @@ def _prune_orphans(args: argparse.Namespace, pubs: list[dict], expected: set[str
               file=sys.stderr)
         if args.apply:
             return 1
-    for path in (p for p in orphans if prefix + (_layout_dir(p) or "") in stale):
+    doomed = [p for p in orphans if prefix + (_layout_dir(p) or "") in stale]
+    for path in doomed:
         print(f"  {'delete' if args.apply else 'would delete'} {path}")
-        if args.apply:
-            gcs.delete(path)
+    if args.apply:
+        delete_verified(doomed)
     return 0
 
 
@@ -193,8 +208,8 @@ def _prune_legacy(args: argparse.Namespace, expected: set[str]) -> int:
             return 1
     for path in legacy:
         print(f"  {'delete' if args.apply else 'would delete'} {path}")
-        if args.apply:
-            gcs.delete(path)
+    if args.apply:
+        delete_verified(legacy)
     return 0
 
 

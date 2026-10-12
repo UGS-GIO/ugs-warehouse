@@ -76,13 +76,27 @@ def test_renamed_reads_collection_json_then_the_old_item(monkeypatch):
     assert P.renamed({"g/S/d1", "g/S/d2", "g/S/d3"}, {"a.pdf", "b.pdf"}) == {"g/S/d1", "g/S/d2"}
 
 
+def _live_store(monkeypatch, module, paths: list[str], *, works: bool = True) -> list[str]:
+    """A fake bucket: `delete` records the path and (when `works`) drops it from what is listed."""
+    live = set(paths)
+    deleted: list[str] = []
+
+    def delete(path):
+        deleted.append(path)
+        if works:
+            live.discard(path)
+
+    monkeypatch.setattr(module.gcs, "delete", delete)
+    monkeypatch.setattr(module.gcs, "list_paths", lambda root: sorted(p for p in live if p.startswith(root)))
+    return deleted
+
+
 def _catalog(monkeypatch, orphans: dict[str, str], pubs: list[dict]):
     """Orphan pub dirs -> their publication file; the source lists `pubs`. Returns the deleted list."""
     paths = [p for d in orphans for p in (f"{d}/collection.json", f"{d}/{d.rsplit('/', 1)[1]}_plate/x.json")]
     docs = {f"{d}/collection.json": json.dumps({"assets": {"publication": {"href": f}}}).encode()
             for d, f in orphans.items()}
-    deleted: list[str] = []
-    monkeypatch.setattr(P.gcs, "delete", deleted.append)
+    deleted = _live_store(monkeypatch, P, paths)
     monkeypatch.setattr(P.gcs, "get_bytes", lambda path: docs[path])
     monkeypatch.setattr(P.source, "read_pubs", lambda: pubs)
     monkeypatch.setattr(P.source, "read_attachments", lambda: [])
@@ -131,8 +145,7 @@ def test_apply_refuses_when_too_many_renames(monkeypatch):
 
 def test_legacy_flag_lists_in_dry_run_and_deletes_with_apply(monkeypatch, capsys):
     legacy = [f"{ROOT}/OFR-1/OFR-1.json", f"{ROOT}/collection.json"]
-    deleted: list[str] = []
-    monkeypatch.setattr(P.gcs, "delete", deleted.append)
+    deleted = _live_store(monkeypatch, P, legacy)
     monkeypatch.setattr(P.source, "read_pubs", lambda: SOURCE)
     monkeypatch.setattr(P, "orphan_pub_paths", lambda expected=None: [])
     monkeypatch.setattr(P, "_legacy_scan", lambda expected, groups: (list(legacy), 2))
@@ -214,12 +227,42 @@ def test_stale_item_dirs_are_removed_and_the_collection_files_kept(monkeypatch, 
     base = f"{PFX}/ugs-publications/OFR/OFR-1"
     listing = [f"{base}/collection.json", f"{base}/README.md", f"{base}/AGENTS.md", f"{base}/OFR-1.iso.xml",
                f"{base}/OFR-1_plate/OFR-1_plate.json", f"{base}/OFR-1_x/OFR-1_x.json"]
-    deleted: list[str] = []
-    monkeypatch.setattr(ingest.gcs, "list_paths", lambda root: [p for p in listing if p.startswith(root)])
-    monkeypatch.setattr(ingest.gcs, "delete", deleted.append)
+    deleted = _live_store(monkeypatch, ingest, listing)
     ingest._prune_stale_items("ugs-publications/OFR/OFR-1", {"OFR-1_x"})
     assert deleted == [f"{base}/OFR-1_plate/OFR-1_plate.json"]
     assert "removed stale item ugs-publications/OFR/OFR-1/OFR-1_plate" in capsys.readouterr().err
     deleted.clear()
     ingest._prune_stale_items("ugs-publications/OFR/OFR-1", set())  # now single-file: no item dirs at all
-    assert sorted(deleted) == [f"{base}/OFR-1_plate/OFR-1_plate.json", f"{base}/OFR-1_x/OFR-1_x.json"]
+    assert deleted == [f"{base}/OFR-1_x/OFR-1_x.json"]  # the plate is already gone from the store
+
+
+def test_a_delete_that_silently_fails_raises_and_reports_no_removal(monkeypatch, capsys):
+    from ugs_warehouse.pubs import ingest
+
+    base = f"{PFX}/ugs-publications/OFR/OFR-1"
+    listing = [f"{base}/collection.json", f"{base}/OFR-1_plate/OFR-1_plate.json"]
+    _live_store(monkeypatch, ingest, listing, works=False)
+    with pytest.raises(RuntimeError, match="OFR-1_plate.json"):
+        ingest._prune_stale_items("ugs-publications/OFR/OFR-1", set())
+    assert "removed stale item" not in capsys.readouterr().err
+
+
+def test_prune_apply_raises_when_a_delete_does_not_take(monkeypatch):
+    orphans = {f"{ROOT}/OFR-1A": FILE1}
+    paths = [p for d in orphans for p in (f"{d}/collection.json", f"{d}/OFR-1A_plate/x.json")]
+    _catalog(monkeypatch, orphans, SOURCE)
+    _live_store(monkeypatch, P, paths, works=False)
+    monkeypatch.setattr(sys, "argv", ["prune", "--apply"])
+    with pytest.raises(RuntimeError, match="still present"):
+        P.main()
+
+
+def test_legacy_apply_raises_when_a_delete_does_not_take(monkeypatch):
+    legacy = [f"{ROOT}/OFR-1/OFR-1.json"]
+    _live_store(monkeypatch, P, legacy, works=False)
+    monkeypatch.setattr(P.source, "read_pubs", lambda: SOURCE)
+    monkeypatch.setattr(P, "orphan_pub_paths", lambda expected=None: [])
+    monkeypatch.setattr(P, "_legacy_scan", lambda expected, groups: (list(legacy), 2))
+    monkeypatch.setattr(sys, "argv", ["prune", "--legacy", "--apply"])
+    with pytest.raises(RuntimeError, match="still present"):
+        P.main()

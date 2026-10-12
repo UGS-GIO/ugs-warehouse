@@ -322,9 +322,15 @@ def attach_iso(item: dict) -> str:
         print(f"[{item['id']}] ISO: no iso_topic_category curated — omitting <gmd:topicCategory> "
               "(record will not validate; curate raw.schema_registry to fix)", file=sys.stderr)
     path = f"{config.STAC_PREFIX}/{_layout_path(item)}/{item['id']}/{item['id']}.iso.xml"
-    gcs.put_bytes(iso.stac_to_iso19139(item).encode(), path,
+    item.setdefault("assets", {})["metadata"] = _put_iso(item, path)
+    return path
+
+
+def _put_iso(view: dict, path: str) -> dict:
+    """Upload the ISO 19139 sidecar generated from an item-shaped `view`; return its `metadata` asset."""
+    gcs.put_bytes(iso.stac_to_iso19139(view).encode(), path,
                   content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
-    item.setdefault("assets", {})["metadata"] = {
+    return {
         "href": config.public_url(path), "type": "application/xml",
         # `iso-19115` is the STAC + Portolan standard role for an ISO metadata file; our sidecar is
         # ISO 19139, the XML encoding of the 19115 content model, so it earns that role alongside the
@@ -332,7 +338,6 @@ def attach_iso(item: dict) -> str:
         "roles": ["metadata", "iso-19115"], "title": "ISO 19139 metadata",
         "description": USAGE_METADATA,
     }
-    return path
 
 
 def write_collection(coll: dict, *, children: int) -> str:
@@ -349,25 +354,26 @@ def write_collection(coll: dict, *, children: int) -> str:
 
 def attach_collection_iso(coll: dict) -> str:
     """ISO 19139 sidecar for a collection, written beside its collection.json, plus a `metadata`
-    asset (mutates `coll`). The ISO writer reads item-shaped input, so it is given the
-    collection's fields as properties and its spatial extent as a bbox."""
+    asset (mutates `coll`). Call before `write_collection`, so the written collection references
+    the sidecar. The ISO writer reads item-shaped input, so it is given the collection's fields
+    as properties and its spatial extent as a bbox."""
     bbox = coll["extent"]["spatial"]["bbox"][0]
-    start = coll["extent"]["temporal"]["interval"][0][0]
+    start, end = coll["extent"]["temporal"]["interval"][0]
+    when = start or end
+    if not when:
+        # iso.py would otherwise stamp a 2000-01-01 placeholder date on the record.
+        print(f"[{coll['id']}] ISO: collection has no temporal extent, record date will be a placeholder",
+              file=sys.stderr)
     view = {"id": coll["id"], "bbox": bbox, "geometry": bbox_polygon(bbox),
             "properties": {**{k: v for k, v in coll.items() if k.startswith("ugs:") or k == "keywords"},
                            "title": coll["title"], "description": coll["description"],
-                           "datetime": start},
+                           "datetime": when},
             "assets": coll.get("assets", {})}
     if not view["properties"].get("ugs:topic_category"):
-        print(f"[{coll['id']}] ISO: no ugs:topic_category, omitting <gmd:topicCategory>", file=sys.stderr)
+        print(f"[{coll['id']}] ISO: no ugs:topic_category, omitting <gmd:topicCategory> "
+              "(record will not validate; set the publication's topic category to fix)", file=sys.stderr)
     path = f"{config.STAC_PREFIX}/{coll['_collection_path']}/{coll['id']}.iso.xml"
-    gcs.put_bytes(iso.stac_to_iso19139(view).encode(), path,
-                  content_type="application/xml", cache_control=gcs.CACHE_MUTABLE)
-    coll.setdefault("assets", {})["metadata"] = {
-        "href": config.public_url(path), "type": "application/xml",
-        "roles": ["metadata", "iso-19115"], "title": "ISO 19139 metadata",
-        "description": USAGE_METADATA,
-    }
+    coll.setdefault("assets", {})["metadata"] = _put_iso(view, path)
     return path
 
 

@@ -19,7 +19,6 @@ layer never looks like a pub that simply has none.
 from __future__ import annotations
 
 import argparse
-import glob
 import json
 import math
 import os
@@ -27,6 +26,7 @@ import re
 import shutil
 import sys
 import tempfile
+import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
@@ -45,33 +45,137 @@ def _error(exc: Exception) -> str:
     return f"{type(exc).__name__}: {exc}"
 
 
-def _sources(work: str) -> tuple[list[tuple[str, str | None, str, bool]], list[dict]]:
+# GIS containers this image's GDAL cannot read. Finding one means the bundle holds data that is not
+# extracted, which is reported rather than passed over as an empty bundle.
+_UNSUPPORTED = {".mdb": "personal geodatabase (.mdb)", ".mpk": "map package (.mpk)",
+                ".lpk": "layer package (.lpk)"}
+
+
+def _walk(work: str) -> list[tuple[str, str]]:
+    """(path, lowercase extension) for every file and directory under `work`, sorted. Extensions
+    are compared lowercased because bundles mix `.shp` / `.SHP` and the job runs on Linux."""
+    out = []
+    for root, dirs, files in os.walk(work):
+        out += [(os.path.join(root, n), os.path.splitext(n)[1].lower()) for n in dirs + files]
+    return sorted(out)
+
+
+# The job's disk is memory (tmpfs) inside its 8 GiB, so a bundle that would unzip past this is
+# reported instead of extracted.
+MAX_UNZIPPED_BYTES = int(float(os.environ.get("VECTORS_MAX_UNZIPPED_GB", "4")) * 2**30)
+
+
+def _extract_zip(path: str, dest: str, remaining: int) -> int:
+    """Extract `path` into `dest`, delete the zip, and return the bytes it unzipped to. Raises
+    without extracting when that would exceed `remaining`."""
+    with zipfile.ZipFile(path) as z:
+        size = sum(i.file_size for i in z.infolist())
+        if size > remaining:
+            raise ValueError(f"unzips to {size / 2**30:.1f} GiB, over the "
+                             f"{MAX_UNZIPPED_BYTES / 2**30:g} GiB limit for the job's in-memory disk")
+        z.extractall(dest)
+    os.remove(path)
+    return size
+
+
+def _nested_dest(path: str) -> str:
+    """A folder for an inner zip's contents that does not exist yet, so nothing merges into an
+    existing folder. `X.gdb.zip` holding bare geodatabase files extracts to `X.gdb` so it reads as
+    a geodatabase; one holding an `X.gdb/` folder goes to `X.gdb.zip_unzipped/X.gdb`."""
+    stem = os.path.splitext(path)[0]
+    if stem.lower().endswith(".gdb") and not os.path.exists(stem):
+        with zipfile.ZipFile(path) as z:
+            if not any("/" in n.rstrip("/") for n in z.namelist()):
+                return stem
+    dest, n = f"{path}_unzipped", 2
+    while os.path.exists(dest):
+        dest, n = f"{path}_unzipped{n}", n + 1
+    return dest
+
+
+def _unzip_nested(work: str, remaining: int, depth: int = 2) -> tuple[list[dict], list[str]]:
+    """Extract zips shipped inside the bundle into a new folder beside each one, so a zip of zips
+    is searched like any other bundle. Returns (an error per inner zip that cannot be extracted or
+    is nested deeper than `depth`, the folders extracted into)."""
+    errors: list[dict] = []
+    dirs: list[str] = []
+    for _ in range(depth):
+        inner = [p for p, ext in _walk(work) if ext == ".zip" and os.path.isfile(p)]
+        if not inner:
+            break
+        for path in inner:
+            dest = None
+            try:
+                dest = _nested_dest(path)
+                remaining -= _extract_zip(path, dest, remaining)
+                dirs.append(dest)
+            except Exception as e:
+                errors.append({"source": os.path.basename(path), "error": _error(e)})
+                if dest:
+                    shutil.rmtree(dest, ignore_errors=True)  # no half-extracted layers
+                os.remove(path)
+    for path, ext in _walk(work):
+        if ext == ".zip" and os.path.isfile(path):
+            errors.append({"source": os.path.basename(path),
+                           "error": f"zip nested more than {depth} deep, not extracted"})
+    return errors, dirs
+
+
+def _sources(work: str, nested_dirs: list[str] | tuple = ()
+             ) -> tuple[list[tuple[str, str | None, str, bool]], list[dict]]:
     """Find all vector AND non-spatial table sources in the extracted bundle directory.
 
     Returns (sources, errors). Each source is a tuple of: (file_path, layer_name_or_None,
     layer_label, is_spatial). Non-spatial GeMS companion tables (DescriptionOfMapUnits,
     CorrelationOfMapUnits, ...) are included too, tagged is_spatial=False, so callers can branch
     by type instead of guessing from the label. A .shp always carries geometry, so shapefile
-    entries are always spatial. A geodatabase whose layers cannot be listed is an error, not an
-    empty bundle.
+    entries are always spatial. A geodatabase whose layers cannot be listed, or a container format
+    GDAL cannot read here, is an error, not an empty bundle. Labels are unique, since two
+    shapefiles with the same name in different folders would otherwise overwrite one upload. The
+    outer bundle is labelled before the contents of inner zips (`nested_dirs`), so adding an
+    inner zip never renames a layer that is already published; a repeated name takes its folder
+    path inside the bundle as a prefix, or a numeric suffix at the bundle root.
     """
     import pyogrio
 
     out: list[tuple[str, str | None, str, bool]] = []
     errors: list[dict] = []
-    for shp in glob.glob(os.path.join(work, "**", "*.shp"), recursive=True):
-        out.append((shp, None, _safe(os.path.basename(shp)[:-4]), True))
+    used: set[str] = set()
 
-    for gdb in glob.glob(os.path.join(work, "**", "*.gdb"), recursive=True):
-        if "template" in os.path.basename(gdb).lower():
-            continue
-        gstem = _safe(os.path.basename(gdb)[:-4])
-        try:
-            for name, geomtype in pyogrio.list_layers(gdb):
-                out.append((gdb, name, f"{gstem}__{_safe(name)}", bool(geomtype)))
-        except Exception as e:
-            errors.append({"source": os.path.basename(gdb), "error": _error(e)})
-            print(f"  geodatabase {os.path.basename(gdb)} unreadable: {e}", file=sys.stderr)
+    def unique(label: str, path: str) -> str:
+        if label in used:
+            rel = os.path.relpath(os.path.dirname(path), work)
+            if rel != ".":
+                label = f"{_safe(rel.replace(os.sep, '__'))}__{label}"
+        base, n = label, 2
+        while label in used:
+            label, n = f"{base}_{n}", n + 1
+        used.add(label)
+        return label
+
+    def nested(path: str) -> bool:
+        return any(path == d or path.startswith(d + os.sep) for d in nested_dirs)
+
+    entries = sorted(_walk(work), key=lambda e: (nested(e[0]), e[0]))
+    for path, ext in entries:
+        if ext == ".shp" and os.path.isfile(path):
+            out.append((path, None, unique(_safe(os.path.basename(path)[:-4]), path), True))
+
+    for path, ext in entries:
+        name = os.path.basename(path)
+        if ext == ".gdb" and os.path.isdir(path):
+            if "template" in name.lower():
+                continue
+            gstem = _safe(name[:-4])
+            try:
+                for layer, geomtype in pyogrio.list_layers(path):
+                    out.append((path, layer, unique(f"{gstem}__{_safe(layer)}", path), bool(geomtype)))
+            except Exception as e:
+                errors.append({"source": name, "error": _error(e)})
+                print(f"  geodatabase {name} unreadable: {e}", file=sys.stderr)
+        elif ext in _UNSUPPORTED:
+            errors.append({"source": name, "error": f"unsupported format: {_UNSUPPORTED[ext]}, not extracted"})
+            print(f"  {name}: unsupported format, not extracted", file=sys.stderr)
     return out, errors
 
 
@@ -155,6 +259,23 @@ def _spatial_meta(gdf, geo: dict | None, label: str, warnings: list[dict]) -> di
     return meta
 
 
+def _write_manifest(series_id: str, manifest: dict) -> None:
+    gcs.put_bytes(json.dumps(manifest).encode(), f"{VECTORS_PREFIX}/{series_id}/_manifest.json",
+                  content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+
+
+def _record_attempt(series_id: str, record: dict) -> None:
+    """Write `_attempt.json`: when this pub was last tried and how it ended. It orders batch runs
+    and records failures without touching `_manifest.json`, which ingest publishes from. A
+    record that cannot be written is reported, not fatal."""
+    record = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **record}
+    try:
+        gcs.put_bytes(json.dumps(record).encode(), f"{VECTORS_PREFIX}/{series_id}/_attempt.json",
+                      content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+    except Exception as e:
+        print(f"{series_id}: could not record the attempt: {_error(e)}", file=sys.stderr)
+
+
 def _extract_and_upload(
     work: str, series_id: str, srcs: list[tuple[str, str | None, str, bool]],
     source_errors: list[dict] | None = None,
@@ -170,7 +291,8 @@ def _extract_and_upload(
     listed under "empty" and not uploaded. A layer that cannot be read or uploaded, or a spatial
     layer with no CRS, is listed under "errors" and the rest still extract. A CRS-less layer is
     never written: GeoParquet reads a missing CRS as longitude/latitude, so the file would
-    mislabel its coordinates. The manifest is written only when at least one layer was uploaded.
+    mislabel its coordinates. The manifest is written only when at least one layer was
+    uploaded, so a failed attempt never replaces a manifest that ingest is publishing from.
     """
     import geopandas as gpd
     import pyogrio
@@ -203,6 +325,7 @@ def _extract_and_upload(
                 entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
             gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
             gcs.upload(dst, gcs_path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+            os.remove(dst)  # the job's disk is memory; keep only the layer being written
             manifest["spatial" if is_spatial else "tables"].append(label)
             manifest["layers"].append(entry)
         except Exception as e:
@@ -210,9 +333,7 @@ def _extract_and_upload(
             print(f"  layer {label} failed: {e}", file=sys.stderr)
 
     if manifest["spatial"] or manifest["tables"]:
-        gcs.put_bytes(json.dumps(manifest).encode(),
-                       f"{VECTORS_PREFIX}/{series_id}/_manifest.json",
-                       content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+        _write_manifest(series_id, manifest)
 
     return manifest
 
@@ -232,6 +353,25 @@ def _clean_manifest(path: str) -> bool:
     return "layers" in doc and not doc.get("errors")
 
 
+def _series_with(*names: str) -> set[str]:
+    """Series ids that have any of the given per-series files, from one listing."""
+    pfx = VECTORS_PREFIX.rstrip("/") + "/"
+    return {p.removeprefix(pfx).split("/", 1)[0] for p in gcs.list_paths(pfx)
+            if p.endswith(tuple(f"/{n}" for n in names))}
+
+
+def _last_attempt(series_id: str) -> dict:
+    """The pub's `_attempt.json`. One that cannot be read is reported and treated as no record,
+    so the pub is retried."""
+    path = f"{VECTORS_PREFIX}/{series_id}/_attempt.json"
+    try:
+        doc = json.loads(gcs.get_bytes(path).decode())
+    except Exception as e:
+        print(f"  unreadable attempt record {path}, retrying: {_error(e)}", file=sys.stderr)
+        return {}
+    return doc if isinstance(doc, dict) else {}
+
+
 def extracted_series() -> set[str]:
     """Series ids extracted cleanly: a readable `_manifest.json` that lists no errors, from one
     listing of the vectors prefix. A series with errors, or with layers but no manifest, is left
@@ -248,7 +388,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
     """Extract and upload all vector layers and non-spatial companion tables for a given
     series_id.
 
-    Returns: 'ok', 'skip', or 'fail:*'.
+    Returns: 'ok', 'skip', 'unsupported' (only unreadable containers such as .mdb), or 'fail:*'.
     """
     pub = identity.Pub.parse(series_id)
     series_id = pub.series_id
@@ -278,16 +418,20 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         print(f"[dry-run] {series_id}: would download {gis_url} and extract vector layers")
         return "ok"
 
+    # Recorded before the download, so a run killed mid-pub (out of memory, job timeout) still
+    # counts this pub as tried and orders it after the pubs never tried.
+    _record_attempt(series_id, {"result": "started"})
     work = tempfile.mkdtemp(prefix=f"v_{series_id.replace('/', '_')}_")
     try:
         zp = os.path.join(work, "gis.zip")
         harvest.download(harvest.encode_url(gis_url), zp)
-        with zipfile.ZipFile(zp) as z:
-            z.extractall(work)
-
-        srcs, source_errors = _sources(work)
+        remaining = MAX_UNZIPPED_BYTES - _extract_zip(zp, work, MAX_UNZIPPED_BYTES)
+        nested_errors, nested_dirs = _unzip_nested(work, remaining)
+        srcs, source_errors = _sources(work, nested_dirs)
+        source_errors = nested_errors + source_errors
         if not srcs and not source_errors:
             print(f"{series_id}: SKIP (no shapefiles, GDB layers, or tables found)")
+            _record_attempt(series_id, {"result": "skip"})
             return "skip"
 
         manifest = _extract_and_upload(work, series_id, srcs, source_errors)
@@ -295,18 +439,28 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         errors = manifest["errors"]
         if errors:
             unreadable = ", ".join(e.get("label") or e["source"] for e in errors)
-            print(f"{series_id}: FAIL ({n_spatial} vector layers + {n_tables} companion tables "
-                  f"uploaded, {len(errors)} unreadable: {unreadable})", file=sys.stderr)
-            return "fail:layers"
+            # Only unreadable containers (.mdb, .mpk): a known gap, re-reported by later runs
+            # without re-downloading, rather than a failure.
+            res = ("unsupported" if all(e["error"].startswith("unsupported format") for e in errors)
+                   else "fail:layers")
+            print(f"{series_id}: {'UNSUPPORTED' if res == 'unsupported' else 'FAIL'} "
+                  f"({n_spatial} vector layers + {n_tables} companion tables uploaded, "
+                  f"{len(errors)} unreadable: {unreadable})", file=sys.stderr)
+            _record_attempt(series_id, {"result": res, "errors": errors})
+            return res
         if n_spatial + n_tables == 0:
             print(f"{series_id}: SKIP (every layer is empty)")
+            _record_attempt(series_id, {"result": "skip"})
             return "skip"
 
         print(f"{series_id}: OK ({n_spatial} vector layers + {n_tables} companion tables "
               f"uploaded to {VECTORS_PREFIX}/{series_id}/)")
+        _record_attempt(series_id, {"result": "ok"})
         return "ok"
     except Exception as e:
         print(f"{series_id}: FAIL {e}", file=sys.stderr)
+        _record_attempt(series_id, {"result": f"fail:{type(e).__name__}",
+                                    "errors": [{"source": "gis zip", "error": _error(e)}]})
         return f"fail:{type(e).__name__}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -331,8 +485,26 @@ def main() -> int:
         # extracted with one listing, so a weekly run costs about nothing when nothing is new.
         sids = [s for s in all_sids if harvest._get_attached_zips(s)[1]]
         existing = None if args.force else extracted_series()
-        print(f"Found {len(all_sids)} publications, {len(sids)} with a GIS zip, "
+        unsupported: list[str] = []
+        if existing is not None:
+            tried = _series_with("_attempt.json", "_manifest.json")
+            attempted = _series_with("_attempt.json")
+            # A pub whose last attempt failed only on unreadable containers is listed, not
+            # re-downloaded; --force retries it (for example after the image gains a driver).
+            for s in [s for s in sids if s in attempted and s not in existing]:
+                last = _last_attempt(s)
+                if last.get("result") == "unsupported":
+                    kinds = ", ".join(sorted({e["source"] for e in last.get("errors", [])}))
+                    unsupported.append(f"{s} ({kinds})")
+                    sids.remove(s)
+            # Pubs never tried go first, retries of earlier failures and upgrades last, so a pub
+            # that fails slowly every run cannot spend the job's timeout before new pubs are reached.
+            sids = sorted(sids, key=lambda s: s in tried)
+        print(f"Found {len(all_sids)} publications, {len(sids) + len(unsupported)} with a GIS zip, "
               f"{len(set(sids) & (existing or set()))} already extracted")
+        if unsupported:
+            print(f"{len(unsupported)} contain formats this image cannot read (any readable "
+                  f"layers were extracted), not retried (--force to retry): {', '.join(unsupported)}")
     else:
         sids = args.series_id
 

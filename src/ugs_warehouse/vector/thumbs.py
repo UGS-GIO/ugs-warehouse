@@ -44,6 +44,8 @@ STAMP_ATTEMPTS = 5
 THUMB_W = int(os.environ.get("TOPIC_THUMB_W", "480"))
 THUMB_H = int(os.environ.get("TOPIC_THUMB_H", "320"))
 THUMB_QUALITY = int(os.environ.get("TOPIC_THUMB_QUALITY", "80"))  # WebP, 0-100
+if THUMB_W <= 0 or THUMB_H <= 0:
+    raise ValueError(f"TOPIC_THUMB_W/H must be positive, got {THUMB_W}x{THUMB_H}")
 if not 0 <= THUMB_QUALITY <= 100:
     raise ValueError(f"TOPIC_THUMB_QUALITY must be 0-100, got {THUMB_QUALITY}")
 

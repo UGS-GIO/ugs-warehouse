@@ -12,7 +12,7 @@ const installed = new Set(
 // Every package an override names, nested ones included; "." means the parent itself, and a key
 // may carry a version range ("foo@^1").
 const names = (o) => Object.entries(o).flatMap(([k, v]) => [
-  ...(k === "." ? [] : [k.replace(/(.)@.*$/, "$1")]),
+  ...(k === "." ? [] : [k.replace(/(?<=.)@.*$/, "")]),
   ...(v && typeof v === "object" ? names(v) : []),
 ]);
 const all = [...new Set(names(overrides))];

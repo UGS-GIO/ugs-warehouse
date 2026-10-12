@@ -441,3 +441,211 @@ def build_item(p: dict, attachments: list[dict], *,
         stac_extensions=extensions or None,
         proj_epsg=4326 if bbox else None,  # footprints/units are 4326
     )
+
+
+def pub_collection_path(p: dict) -> str:
+    """Layout path of a publication's Collection: `<group>/<SERIES>/<SID>`."""
+    sid = (p.get("series_id") or "").strip()
+    return f"{collection_group(p)}/{series_code(sid)}/{item_id_for(sid)}"
+
+
+def plate_item_id(sid: str) -> str:
+    return f"{item_id_for(sid)}_plate"
+
+
+def layer_item_id(sid: str, label: str) -> str:
+    return f"{item_id_for(sid)}_{label}"
+
+
+def _source_asset(h: str, mirrored: set[str] | None, **rest) -> dict:
+    """A source file served from our CDN when mirrored, with the publisher's URL as an alternate."""
+    obj = identity.pub_file_object(h)
+    if not (obj and mirrored and obj in mirrored):
+        return {"href": h, **rest}
+    return {"href": identity.pub_file_url(obj), **rest, "alternate:name": "Warehouse CDN",
+            "alternate": {"publisher": {"href": h, "alternate:name": "UGS publications site",
+                                        "title": "Publisher copy (ugspub.nr.utah.gov)"}}}
+
+
+def _file_roles(mtype: str) -> list[str]:
+    """Original zips and publisher TIFFs are upstream originals (Portolan `source` role); other
+    attachments are data."""
+    return ["source"] if mtype in ("image/tiff", "application/zip") else ["data"]
+
+
+def build_publication(p: dict, attachments: list[dict], *,
+                      geom: dict | None = None, bbox: list[float] | None = None,
+                      fp_source: str | None = None,
+                      has_cog: bool = False, cog_fields: dict | None = None,
+                      has_units: bool = False,
+                      has_thumb: bool = False, has_cover: bool = False,
+                      has_3d: bool = False, classes_3d: list[dict] | None = None,
+                      vector_layers: list[str] | None = None,
+                      companion_tables: list[dict] | None = None,
+                      layers: dict | None = None,
+                      override: dict | None = None,
+                      contents: list[dict] | None = None,
+                      mirrored: set[str] | None = None,
+                      edition: dict | None = None,
+                      mosaic_tier: str | None = None) -> tuple[dict, list[dict]]:
+    """A publication as one STAC Collection plus its Items.
+
+    The Collection carries the documents (PDF, cover, original zips) and the publication's
+    metadata; the plate COG, the units GeoParquet, each extracted layer and table, and the 3D
+    fence are Items in it. A publication with none of those is a Collection with no Items."""
+    sid = (p.get("series_id") or "").strip()
+    pub_id = item_id_for(sid)
+    coll_path = pub_collection_path(p)
+    yr = (p.get("pub_year") or "").strip()
+    dt = f"{yr}-01-01T00:00:00Z" if yr.isdigit() else None
+    now = datetime.datetime.now(datetime.UTC).strftime("%Y-%m-%dT00:00:00Z")
+    undated = {} if dt else {"start_datetime": EARLIEST_RECORD, "end_datetime": now,
+                             "ugs:date_unknown": True}
+    ed = edition or {}
+    ov = override or {}
+    quoted_sid = urllib.parse.quote(sid, safe="")
+    has_doi = has_ugs_doi(p.get("pub_publisher"))
+    doi = [{"rel": "cite-as", "href": f"https://doi.org/10.34191/{quoted_sid}"}] if has_doi else []
+    citation = (p.get("full_citation") or "").strip()
+    sci = ({"sci:doi": f"10.34191/{sid}", **({"sci:citation": citation} if citation else {})}
+           if has_doi else {})
+    layer_meta = layers or {}
+    aoi = geom or stac.bbox_polygon(stac.UTAH_BBOX)
+    aoi_bbox = bbox or stac.UTAH_BBOX
+
+    def crs_of(meta: dict) -> dict:
+        """The layer's own CRS from its manifest: the EPSG code when GDAL matched one with
+        confidence, else its WKT2. Nothing when neither was recorded."""
+        if meta.get("proj_code"):
+            return {"proj:code": meta["proj_code"]}
+        return {"proj:wkt2": meta["proj_wkt2"]} if meta.get("proj_wkt2") else {}
+
+    def item(item_id: str, title: str, assets: dict, *, geometry: dict, item_bbox: list[float],
+             extra: dict | None = None, links: list[dict] | None = None,
+             extensions: list[str] | None = None) -> dict:
+        props = {"title": title, "ugs:series_id": sid, **undated, **sci, **(extra or {})}
+        exts = list(extensions or [])
+        if sci:
+            exts.append(stac.SCI_EXT)
+        if any(k.startswith("proj:") for k in props) and stac.PROJ_EXT not in exts:
+            exts.append(stac.PROJ_EXT)
+        if "table:row_count" in props and stac.TABLE_EXT not in exts:
+            exts.append(stac.TABLE_EXT)
+        return stac.build_item(
+            item_id=item_id, collection=pub_id, collection_path=coll_path,
+            geometry=geometry, bbox=item_bbox, datetime_iso=dt, properties=props,
+            assets=assets, extra_links=[*doi, *(links or [])], stac_extensions=exts or None)
+
+    items: list[dict] = []
+    if has_cog:
+        plate_assets = {"cog": {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
+                                "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
+                                "roles": ["data", "cloud-optimized"], **(cog_fields or {})}}
+        if has_thumb:
+            plate_assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
+                                         "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
+        mosaic = ([{"rel": "related",
+                    "href": config.public_url(stac.item_object_path("ugs-geologic-maps", f"geologic-maps-{mosaic_tier}")),
+                    "type": "application/geo+json",
+                    "title": f"Utah geologic maps — {MOSAIC_TIER_LABEL.get(mosaic_tier, mosaic_tier)} seamless mosaic"}]
+                  if mosaic_tier and not ed.get("deprecated") else [])
+        items.append(item(plate_item_id(sid), "Map plate", plate_assets, geometry=aoi, item_bbox=aoi_bbox,
+                          links=mosaic,
+                          extensions=[stac.PROJ_EXT] if any(k.startswith("proj:") for k in plate_assets["cog"]) else None))
+    if has_units:
+        # The units GeoParquet is written in EPSG:4326.
+        items.append(item(f"{pub_id}_units", "Geologic unit polygons", {"data": {
+            "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
+            "type": PARQUET_MIME, "title": "Geologic unit polygons (GeoParquet)", "roles": ["data"]}},
+            geometry=aoi, item_bbox=aoi_bbox, extra={"proj:code": "EPSG:4326"}))
+    for label in vector_layers or []:
+        meta = layer_meta.get(label, {})
+        lb = meta.get("bbox")
+        rows = {"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}
+        items.append(item(layer_item_id(sid, label), stac.prettify(label), {"data": {
+            "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
+            "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}},
+            geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
+            extra={**crs_of(meta), **rows}))
+    for t in companion_tables or []:
+        label, meta = t["label"], layer_meta.get(t["label"], {})
+        asset = {"href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
+                 "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}
+        if t.get("columns"):
+            asset["table:columns"] = t["columns"]
+        items.append(item(layer_item_id(sid, label), stac.prettify(label), {"data": asset},
+                          geometry=aoi, item_bbox=aoi_bbox,
+                          extra={"table:row_count": meta["rows"]} if meta.get("rows") is not None else None,
+                          extensions=[stac.TABLE_EXT] if t.get("columns") else None))
+    if has_3d:
+        items.append(item(f"{pub_id}_fence", "3D fence diagram", {
+            "fence_polygons": {"href": config.public_url(threed_object(sid, POLY_NAME)), "type": PARQUET_MIME,
+                               "roles": ["data", "3d-vector"], "title": "3D fence polygons (GeoParquet)"},
+            "fence_lines": {"href": config.public_url(threed_object(sid, LINE_NAME)), "type": PARQUET_MIME,
+                            "roles": ["data", "3d-vector"], "title": "3D fence contacts & faults (GeoParquet)"},
+            "fence_mesh": {"href": config.public_url(threed_object(sid, MESH_NAME)), "type": "model/gltf-binary",
+                           "roles": ["data", "visual"], "title": "3D fence mesh (glTF)"}},
+            geometry=aoi, item_bbox=aoi_bbox,
+            extra={"classification:classes": classes_3d} if classes_3d else None,
+            extensions=[stac.CLASSIFICATION_EXT] if classes_3d else None))
+
+    assets: dict = {}
+    main_pdf = href(p.get("pub_url"))
+    if main_pdf:
+        mtype = media_type(main_pdf)
+        assets["publication"] = _source_asset(main_pdf, mirrored, type=mtype, title="Publication",
+                                              roles=_file_roles(mtype))
+    for a in attachments:
+        h = href(a.get("pub_url"))
+        if not h:
+            continue
+        mtype = media_type(h)
+        key = re.sub(r"[^a-z0-9]+", "_", (a.get("extra_data") or "file").strip().lower()).strip("_") or "file"
+        assets.setdefault(key, _source_asset(h, mirrored, type=mtype,
+                                             title=(a.get("extra_data") or "").strip(), roles=_file_roles(mtype)))
+    if has_cover:
+        assets["thumbnail"] = {"href": config.public_url(identity.pub_cover_object(sid)),
+                               "type": config.WEBP_MIME, "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
+
+    item_bboxes = [it["bbox"] for it in items if it.get("bbox")]
+    ext_bbox = bbox or ([min(b[0] for b in item_bboxes), min(b[1] for b in item_bboxes),
+                         max(b[2] for b in item_bboxes), max(b[3] for b in item_bboxes)]
+                        if item_bboxes else stac.UTAH_BBOX)
+    extent = {"spatial": {"bbox": [ext_bbox]},
+              "temporal": {"interval": [[dt, dt] if dt else [EARLIEST_RECORD, now]]}}
+    links = [{"rel": "via", "href": f"{LANDING}{quoted_sid}", "type": "text/html",
+              "title": "UGS publication landing page"}, *doi]
+    for rel, key in (("predecessor-version", "predecessor_href"), ("successor-version", "successor_href"),
+                     ("latest-version", "latest_href")):
+        if ed.get(key):
+            links.append({"rel": rel, "href": ed[key], "type": "application/json"})
+    group, code = collection_group(p), series_code(sid)
+    desc = ov.get("description") or (p.get("full_citation") or "").strip() \
+        or (stac.prior_property(f"{group}/{code}", pub_id, "description") or "")
+    title = ov.get("title") or (p.get("pub_name") or "").strip() or stac.prettify(sid)
+    fields = {
+        "ugs:series_id": sid,
+        **({"ugs:date_unknown": True} if not dt else {}),
+        "ugs:pub_type": pub_type_of(p),
+        **({"ugs:series": s} if (s := (p.get("series") or "").strip()) else {}),
+        **({"ugs:scale": sc} if (sc := (p.get("pub_scale") or "").strip()) else {}),
+        **({"ugs:author": au} if (au := (p.get("pub_author") or "").strip()) else {}),
+        **({"version": v} if (v := ed.get("version")) else {}),
+        **({"deprecated": True} if ed.get("deprecated") else {}),
+        "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
+        "ugs:topic_category": "geoscientificInformation",
+        **({"ugs:footprint_source": fp_source} if fp_source else {}),
+        **({"keywords": kw} if (kw := keywords_of(p.get("keywords"))) else {}),
+        **({"ugs:county": cty} if (cty := counties.county_of_pub(p)) else {}),
+        **({"ugs:volume": vol} if (vol := issue_volume(sid)) is not None else {}),
+        **({"ugs:contents": contents} if contents else {}),
+        **sci,
+    }
+    coll_exts = [*([stac.SCI_EXT] if sci else []),
+                 *([stac.ALTERNATE_ASSETS_EXT] if any("alternate" in a for a in assets.values()) else [])]
+    coll = stac.build_collection(
+        collection_id=pub_id, collection_path=coll_path, title=title,
+        description=desc or title, extent=extent, assets=assets,
+        item_titles={it["id"]: it["properties"]["title"] for it in items},
+        extra_links=links, fields=fields, stac_extensions=coll_exts or None)
+    return coll, items

@@ -4,25 +4,19 @@ from unittest.mock import patch
 
 import pytest
 
-from ugs_warehouse.core import config, iso, stac
+from ugs_warehouse.core import config, stac
 from ugs_warehouse.pubs import identity
 from ugs_warehouse.pubs import sink_stac as pubs_sink
 from ugs_warehouse.pubs.sink_stac import collection_group
 
 
-def test_pub_items_author_an_iso_topic_category():
-    """Pubs share core/iso.py with the vector path, which omits topicCategory when uncurated (#53).
-
-    Pubs have no schema_registry row, so without an authored value every publication's ISO record
-    would silently lose a mandatory element. A UGS publication is our own product — asserting the
-    category is a statement about our own work, not a guess about someone else's data.
-    """
+def test_pub_items_author_a_topic_category():
+    """A UGS publication is our own product, so asserting its category is not a guess."""
     with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
          patch("ugs_warehouse.core.stac.manual_override", return_value={}):
         item = pubs_sink.build_item({"series_id": "DS-8", "pub_name": "Test Pub", "series": "DS"}, [])
 
     assert item["properties"]["ugs:topic_category"] == "geoscientificInformation"
-    assert "<gmd:topicCategory>" in iso.stac_to_iso19139(item)
 
 
 def test_collection_group_routes_md_external_and_ugs():
@@ -458,7 +452,6 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog") as mock_refresh:
@@ -500,7 +493,6 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
                side_effect=RuntimeError("footprints missing")), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
@@ -631,7 +623,6 @@ def test_build_catalog_wires_vector_layers_and_companion_tables():
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_item") as mock_build, \
          patch("ugs_warehouse.core.stac.attach_renders"), \
-         patch("ugs_warehouse.core.stac.attach_iso"), \
          patch("ugs_warehouse.core.styles.warm"), \
          patch("ugs_warehouse.core.stac.write_item"), \
          patch("ugs_warehouse.core.stac.refresh_catalog"):
@@ -690,10 +681,8 @@ def test_collection_doc_titles_its_item_links():
     assert items["./landslides/landslides.json"]["title"] == "landslides"
 
 
-def test_pub_keywords_are_a_list_and_reach_the_iso_record():
-    """`keywords` is a list in STAC. The source hands over one `;`-separated blob, and publishing
-    that string made core/iso.py iterate it per character: every pub's ISO record carried a
-    <gmd:keyword> for each letter (the same fault #64 fixed on the vector path)."""
+def test_pub_keywords_are_a_list():
+    """`keywords` is a list in STAC. The source hands over one `;`-separated blob."""
     raw = "Geology; Summit County; Maps\nGeology; Tooele, Utah; Maps"
     with patch("ugs_warehouse.core.stac.prior_property", return_value=""), \
          patch("ugs_warehouse.core.stac.manual_override", return_value={}):
@@ -702,9 +691,6 @@ def test_pub_keywords_are_a_list_and_reach_the_iso_record():
 
     # Deduped, and a comma inside a heading stays inside it.
     assert item["properties"]["keywords"] == ["Geology", "Summit County", "Maps", "Tooele, Utah"]
-    record = iso.stac_to_iso19139(item)
-    assert "<gmd:keyword><gco:CharacterString>Summit County</gco:CharacterString></gmd:keyword>" in record
-    assert "<gco:CharacterString>G</gco:CharacterString>" not in record
 
 
 def test_pub_item_omits_the_fields_the_source_left_empty():
@@ -1146,3 +1132,40 @@ def test_the_readme_carries_what_the_rule_asks_for(monkeypatch):
     # Derived from the assets the items actually carry, so the advice cannot describe a format
     # this collection does not publish.
     assert "PMTiles" in md and "GeoParquet" not in md
+
+
+def test_refresh_catalog_writes_the_feature_service_layer_list(monkeypatch):
+    """The Features service reads one layer list from the refresh: each served item's GeoParquet as a
+    gs:// path. A pub item outside the served collections is left out."""
+    from ugs_warehouse.core import feature_service
+    from ugs_warehouse.vector import sink_stac as vec_sink
+
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
+    parquet = {"data": {"href": config.public_url(config.archive_path("hazards_qfaults")),
+                        "type": config.PARQUET_MIME, "roles": ["data"]}}
+    stac.write_item(stac.build_item(
+        item_id="hazards_qfaults", collection="hazards", collection_path=vec_sink.collection_path("hazards"),
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3], datetime_iso="2026-01-01T00:00:00Z",
+        properties={"title": "Quaternary faults", "keywords": ["faults"]}, assets=parquet))
+    stac.write_item(stac.build_item(
+        item_id="M-1", collection="M", collection_path="ugs-publications/M",
+        geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3], datetime_iso="2026-01-01T00:00:00Z",
+        properties={}, assets=parquet))
+
+    stac.refresh_catalog()
+
+    layers = json.loads(store[feature_service.OBJECT])["collections"]
+    assert layers == [{
+        "id": "hazards_qfaults", "title": "Quaternary faults", "description": "Quaternary faults",
+        "keywords": ["faults"], "bbox": [0, 1, 2, 3],
+        "source": f"gs://{config.BUCKET}/{config.archive_path('hazards_qfaults')}",
+        "id_field": "feature_id"}]
+
+
+def test_feature_service_skips_an_item_without_our_geoparquet():
+    from ugs_warehouse.core import feature_service
+
+    elsewhere = {"data": {"href": "https://example.com/x.parquet", "type": config.PARQUET_MIME}}
+    assert feature_service.collection({"id": "a", "assets": elsewhere}) is None
+    assert feature_service.collection({"id": "b", "assets": {}}) is None

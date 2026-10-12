@@ -112,7 +112,7 @@ export function OfflineManager() {
             {areaRows.map((a) => (
               <li key={a.url} className="flex items-center gap-2 px-3 py-2">
                 <div className="min-w-0 flex-1">
-                  <span className="block truncate">{a.label}</span>
+                  <span className="block wrap-anywhere">{a.label}</span>
                   <div className="text-sm text-muted-foreground">
                     {opfs.formatBytes(a.bytes)} · {a.kind === "tiles" ? "layer, by area" : /\.parquet$/i.test(a.url) ? "table, by area" : "map, by area"}
                     {a.stale && <span className="ml-2 font-medium text-primary">Newer version available</span>}
@@ -186,8 +186,8 @@ function Group({ title, rows, busy, onDelete, onUpdate, onOpen, onDeleteAll }: {
           <li key={r.url} className="flex items-center gap-2 px-3 py-2">
             <div className="min-w-0 flex-1">
               {onOpen && r.itemHref
-                ? <button type="button" className="truncate text-left hover:underline" onClick={() => onOpen(r)}>{r.label}</button>
-                : <span className="truncate">{r.label}</span>}
+                ? <button type="button" className="block wrap-anywhere text-left hover:underline" onClick={() => onOpen(r)}>{r.label}</button>
+                : <span className="block wrap-anywhere">{r.label}</span>}
               <div className="text-sm text-muted-foreground">
                 {opfs.formatBytes(r.bytes)} · saved {new Date(r.savedAt).toLocaleDateString()}
                 {r.stale && <span className="ml-2 font-medium text-primary">Newer version available</span>}

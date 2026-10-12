@@ -69,9 +69,10 @@ function ReviewComment({ item, props }: { item: StacDoc; props: Record<string, u
   );
 }
 
-export function FeatureCard({ item, props, onOpenRelated, onClear }: {
+export function FeatureCard({ item, props, onOpenRelated, onClear, onZoom }: {
   item: StacDoc; props: Record<string, unknown>;
   onOpenRelated?: (relatedKey: string, value: string) => void; onClear?: () => void;
+  onZoom?: () => void;   // zoomed out, one lit line is too small to see, so offer to fly to it
 }) {
   const joins = relatedJoins(item);
   const summary = summaryFieldsOf(item);
@@ -83,7 +84,15 @@ export function FeatureCard({ item, props, onOpenRelated, onClear }: {
         <span className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Selected feature</span>
         <button type="button" onClick={onClear} aria-label="Clear selection" className="text-muted-foreground hover:text-foreground">✕</button>
       </div>
-      <div className="text-sm font-semibold">{title}</div>
+      <div className="flex items-start justify-between gap-2">
+        <div className="text-sm font-semibold">{title}</div>
+        {onZoom && (
+          <button type="button" onClick={onZoom}
+            className="shrink-0 rounded border border-border px-2 py-0.5 text-xs text-foreground hover:border-primary pointer-coarse:min-h-11">
+            Zoom to
+          </button>
+        )}
+      </div>
       <div className="mt-1 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs">
         {idFields.map((k) => (
           <div key={k} className="contents"><div className="text-muted-foreground">{k}</div><div className="break-words min-w-0">{String(props[k])}</div></div>

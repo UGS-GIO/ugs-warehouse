@@ -1,11 +1,16 @@
-// API & data endpoints for an item: PMTiles, XYZ, GL style, ArcGIS VectorTileServer.
+// How to use an item from other software, in STAC's terms: its assets (the files on the CDN) and its
+// links (live services: OGC API Features, XYZ, the GL style, ArcGIS vector tiles).
 import { useEffect, useRef, useState } from "react";
 
 import { serviceUrlOf } from "./catalog";
-import { cogAsset, ducklakeAsset, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
-  tilesStyleUrl, xyzTilesUrl, zarrAsset } from "@/stac";
+import { Panel } from "./panel";
+import { assetKind, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
+  tilesStyleUrl, xyzTilesUrl } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
+
+/** `…/thing.parquet?x=1` → `parquet` */
+const extOf = (href: string) => href.split(/[?#]/)[0].match(/\.([a-z0-9]{1,8})$/i)?.[1].toLowerCase();
 
 function CopyBtn({ text }: { text: string }) {
   const [done, setDone] = useState(false);
@@ -25,6 +30,41 @@ function CopyBtn({ text }: { text: string }) {
   );
 }
 
+/**
+ * Every file the item publishes, each under its own STAC title: the GeoParquet, the PMTiles, the
+ * style, the metadata, a COG. The thumbnail is left out (it is the card picture), and so are
+ * related tables, which the Related section offers. A Zarr store is a prefix, so it is copied, not
+ * opened.
+ */
+export const listedAssets = (item: StacDoc) => Object.entries(item.assets ?? {})
+  .filter(([, a]) => !a.roles?.includes("thumbnail") && !a.roles?.includes("related"));
+
+export function AssetsPanel({ item }: { item: StacDoc }) {
+  const assets = listedAssets(item);
+  if (!assets.length) return null;
+  return (
+    <Panel title="Assets">
+      <div className="divide-y divide-border overflow-hidden rounded-md border border-border bg-card">
+        {assets.map(([key, a]) => {
+          const zarr = assetKind(a) === "zarr";
+          return (
+            <div key={key} className="flex items-center justify-between gap-2 px-3 py-2 text-sm">
+              <span className="min-w-0 truncate font-medium text-foreground" title={a.href}>
+                {a.title ?? key}
+                <span className="ml-2 text-xs font-normal text-muted-foreground">{zarr ? "zarr" : extOf(a.href)}</span>
+              </span>
+              <span className="flex shrink-0 items-center gap-2">
+                <CopyBtn text={a.href} />
+                {!zarr && <a href={a.href} target="_blank" rel="noopener" className="text-primary no-underline" aria-label={`Download ${a.title ?? key}`}>↓</a>}
+              </span>
+            </div>
+          );
+        })}
+      </div>
+    </Panel>
+  );
+}
+
 export function EndpointsPanel({ item }: { item: StacDoc }) {
   const id = String(item.id ?? "");
   const pq = parquetAsset(item);
@@ -34,42 +74,23 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   // collection that never existed (#85: featureserv is keyed by item id, not collection id).
   const coll = serviceUrlOf(item, FEATURES_BASE) ?? (pq ? featuresCollectionUrl(id) : undefined);
   const pm = pmtilesLink(item);
-  const cog = cogAsset(item);
-  const ducklake = ducklakeAsset(item);
-  const zarrStore = zarrAsset(item);
   const esriRenders = Object.keys(rendersOf(item)).sort();
   // Follow the map's "Symbolize by" picker, so the URL you copy is the symbology on screen.
   const { render: shown } = usePreviewMap();
   const [pickedRender, setPickedRender] = useState<string>();
   // Explicit choice wins; otherwise track the map so the two never disagree silently.
   const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
-  // `noOpen`: copyable but not openable — a store prefix returns NoSuchKey in a browser.
-  const rows: { label: string; desc: string; url: string; pick?: React.ReactNode; unavailable?: string; noOpen?: boolean }[] = [];
+  type Row = { label: string; desc: string; url: string; pick?: React.ReactNode; unavailable?: string };
+  const rows: Row[] = [];
   if (coll) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
   }
-  // A raster item's data IS the COG — without this row it had no endpoints at all once the
-  // bogus Features links stopped being constructed for it.
-  if (cog) rows.push({ label: "COG", desc: "Cloud-Optimized GeoTIFF — QGIS, ArcGIS, GDAL, rasterio (range reads)", url: cog.href });
-  // A datacube's data IS the store, and it is read, never fetched: the href is a prefix, so it
-  // belongs here rather than in Downloads, where it rendered as a link that could only 404.
-  if (zarrStore) {
-    rows.push({
-      label: "Zarr (Icechunk)",
-      desc: "Datacube store — open with xarray / icechunk",
-      url: zarrStore.href,
-      noOpen: true,
-    });
-  }
-  // PMTiles is the generic answer, not one option among equals: MapLibre, Leaflet, OpenLayers and
-  // recent QGIS read it straight off the CDN with range requests — no service in the path.
-  if (pm) rows.push({ label: "PMTiles", desc: "Vector tiles — MapLibre, Leaflet, OpenLayers, QGIS. Read direct from the CDN", url: pm.href });
   // The tiles service exists for clients that cannot read PMTiles directly. Only offered when the
   // item actually has PMTiles, since that archive is what it serves.
   if (pm) {
     const xyz = xyzTilesUrl(id);
-    if (xyz) rows.push({ label: "XYZ tiles (fallback)", desc: "For clients that cannot read PMTiles. Prefer PMTiles above", url: xyz });
+    if (xyz) rows.push({ label: "XYZ tiles (fallback)", desc: "For clients that cannot read PMTiles. Prefer the PMTiles asset", url: xyz });
     const style = tilesStyleUrl(id, chosen);
     if (style) rows.push({ label: "Vector tile style", desc: "Complete GL style — MapLibre, Mapbox GL, ArcGIS JS SDK", url: style });
     // Esri needs a style, so a render-less topic gets the greyed row rather than a dead link.
@@ -97,30 +118,26 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
       });
     }
   }
-  if (ducklake) rows.push({ label: "DuckLake", desc: "Lakehouse table", url: ducklake.href });
   if (!rows.length) return null;
-  return (
-    <div className="mt-3 rounded-lg border border-border bg-muted p-3">
-      <h3 className="mb-1.5 text-sm font-semibold text-muted-foreground">Services</h3>
-      <div className="flex flex-col gap-1.5">
-        {rows.map((r) => (
-          <div key={r.label} className={`flex flex-wrap items-center gap-2 text-sm ${r.unavailable ? "opacity-55" : ""}`}>
-            <span className={`w-36 shrink-0 font-semibold ${r.unavailable ? "text-muted-foreground" : "text-foreground"}`} title={r.desc}>{r.label}</span>
-            {r.pick}
-            {r.unavailable ? (
-              <span className="min-w-0 flex-1 text-sm text-muted-foreground italic">{r.unavailable}</span>
-            ) : (
-              <>
-                <code className="min-w-0 flex-1 truncate rounded bg-card px-1.5 py-0.5 text-sm text-muted-foreground" title={r.url}>{r.url}</code>
-                <CopyBtn text={r.url} />
-                {!r.noOpen && (
-                  <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
-                )}
-              </>
-            )}
-          </div>
-        ))}
-      </div>
+  const row = (r: Row) => (
+    <div key={r.label} className={`flex flex-wrap items-center gap-2 text-sm ${r.unavailable ? "opacity-55" : ""}`}>
+      <span className={`w-36 shrink-0 font-semibold ${r.unavailable ? "text-muted-foreground" : "text-foreground"}`} title={r.desc}>{r.label}</span>
+      {r.pick}
+      {r.unavailable ? (
+        <span className="min-w-0 flex-1 text-sm text-muted-foreground italic">{r.unavailable}</span>
+      ) : (
+        <>
+          {/* The narrow column cut every URL to "https://ugs-…", so it shows on hover only. */}
+          <span className="min-w-0 flex-1" title={r.url} />
+          <CopyBtn text={r.url} />
+          <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
+        </>
+      )}
     </div>
+  );
+  return (
+    <Panel title="Links">
+      <div className="flex flex-col gap-1.5">{rows.map(row)}</div>
+    </Panel>
   );
 }

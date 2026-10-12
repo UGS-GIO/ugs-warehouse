@@ -1,7 +1,6 @@
 """The review services' IAP identity: audience derivation, key caching, and what counts as a token."""
 import base64
 import json
-import math
 
 import pytest
 
@@ -47,67 +46,9 @@ def test_no_audience_off_cloud_run(monkeypatch):
 
 
 def test_no_identity_without_an_audience(monkeypatch, fake_iap):
-    monkeypatch.setattr(iap, "_iap_certs", lambda refresh=False: fake_iap.certs)
+    fake_iap.install(monkeypatch, iap)
     monkeypatch.setattr(iap, "_audience", lambda: None)
     assert iap.verified_email({iap.JWT_HEADER: fake_iap.token("a@utah.gov")}) == ""
-
-
-class _CertsResp:
-    def __init__(self, certs=None, fail=False):
-        self._certs, self._fail = certs, fail
-
-    def raise_for_status(self):
-        if self._fail:
-            raise iap.requests.HTTPError("503")
-
-    def json(self):
-        return self._certs
-
-
-@pytest.fixture
-def fresh_certs(monkeypatch):
-    monkeypatch.setattr(iap, "_certs", {})
-    monkeypatch.setattr(iap, "_certs_at", -math.inf)
-    monkeypatch.setattr(iap, "_attempt_at", -math.inf)
-
-
-def test_keys_survive_a_failed_refresh_and_back_off(monkeypatch, fresh_certs):
-    clock = [1000.0]
-    calls = []
-    responses = [_CertsResp({"k1": "pem"}), _CertsResp(fail=True)]
-
-    def fake_get(url, timeout=None):
-        calls.append(url)
-        return responses[min(len(calls), len(responses)) - 1]
-
-    monkeypatch.setattr(iap.time, "monotonic", lambda: clock[0])
-    monkeypatch.setattr(iap.requests, "get", fake_get)
-
-    assert iap._iap_certs() == {"k1": "pem"}
-    clock[0] += iap._CERTS_TTL_S + 1                 # keys expire; gstatic is down
-    assert iap._iap_certs() == {"k1": "pem"}         # the keys we hold still verify
-    assert iap._iap_certs() == {"k1": "pem"}         # ...without refetching on every request
-    assert len(calls) == 2
-    assert iap._iap_certs(refresh=True) == {"k1": "pem"}  # a bad token's retry can't refetch either
-    assert len(calls) == 2
-    clock[0] += iap._REFRESH_MIN_S + 1
-    iap._iap_certs()
-    assert len(calls) == 3
-
-
-def test_first_key_fetch_failure_is_not_hidden_and_not_retried_per_request(monkeypatch, fresh_certs):
-    calls = []
-
-    def fake_get(url, timeout=None):
-        calls.append(url)
-        return _CertsResp(fail=True)
-
-    monkeypatch.setattr(iap.requests, "get", fake_get)
-    with pytest.raises(iap.requests.HTTPError):
-        iap._iap_certs()
-    with pytest.raises(RuntimeError):
-        iap._iap_certs(refresh=True)
-    assert len(calls) == 1
 
 
 def test_only_es256_tokens_are_considered(monkeypatch, fake_iap):
@@ -135,43 +76,8 @@ def test_whoami_shows_only_a_verified_identity(monkeypatch, fake_iap):
     assert e.value.status_code == 404
 
 
-def test_a_bad_token_for_a_known_key_does_not_refetch_keys(monkeypatch, fake_iap, other_iap):
-    refreshes = []
-
-    def certs(refresh=False):
-        refreshes.append(refresh)
-        return fake_iap.certs
-
-    monkeypatch.setattr(iap, "_iap_certs", certs)
-    monkeypatch.setattr(iap, "_audience", lambda: fake_iap.audience)
-    # Same key id, different key: a forged signature, not a rotated key.
-    assert iap.verified_email({iap.JWT_HEADER: other_iap.token("a@utah.gov")}) == ""
-    assert iap.verified_email({iap.JWT_HEADER: fake_iap.token("a@utah.gov", ttl=-120)}) == ""
-    assert refreshes and True not in refreshes
-
-
-def test_a_rotated_key_is_fetched_once_and_then_verifies(monkeypatch, fake_iap):
-    refreshes = []
-
-    def certs(refresh=False):
-        refreshes.append(refresh)
-        return fake_iap.certs if refresh else {"retired-kid": "pem"}
-
-    monkeypatch.setattr(iap, "_iap_certs", certs)
-    monkeypatch.setattr(iap, "_audience", lambda: fake_iap.audience)
-    assert iap.verified_email({iap.JWT_HEADER: fake_iap.token("a@utah.gov")}) == "a@utah.gov"
-    assert refreshes == [False, True]
-
-
-def test_fresh_keys_skip_the_lock(monkeypatch):
-    class _NoLock:
-        def __enter__(self):
-            raise AssertionError("took the lock for fresh keys")
-
-        def __exit__(self, *exc):
-            return False
-
-    monkeypatch.setattr(iap, "_certs", {"k1": "pem"})
-    monkeypatch.setattr(iap, "_certs_at", iap.time.monotonic())
-    monkeypatch.setattr(iap, "_lock", _NoLock())
-    assert iap._iap_certs() == {"k1": "pem"}
+def test_keys_go_through_an_http_cache():
+    # Without the cache, every request would refetch the keys.
+    from cachecontrol.adapter import CacheControlAdapter
+    assert isinstance(iap.cached_request.func.session.get_adapter(iap._CERTS_URL), CacheControlAdapter)
+    assert iap.cached_request.keywords == {"timeout": 5}

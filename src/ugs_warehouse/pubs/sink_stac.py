@@ -417,10 +417,8 @@ def build_item(p: dict, attachments: list[dict], *,
             **({"version": v} if (v := ed.get("version")) else {}),
             **({"deprecated": True} if ed.get("deprecated") else {}),
             "ugs:topic": topic.classify(p.get("pub_name"), p.get("keywords")),
-            # ISO topic category. AUTHORED, not defaulted: a UGS publication is our own product, so
-            # asserting the category is a statement about our own work — unlike a serving topic,
-            # where an uncurated value would be a guess about someone else's data and is omitted
-            # instead (#53). Pubs have no schema_registry row, so this is the only place to say it.
+            # AUTHORED, not defaulted: a UGS publication is our own product. A serving topic's
+            # category would be a guess about someone else's data, so it is omitted there.
             "ugs:topic_category": "geoscientificInformation",
             "ugs:footprint_source": fp_source,
             **({"keywords": kw} if (kw := keywords_of(p.get("keywords"))) else {}),

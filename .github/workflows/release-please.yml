@@ -1,11 +1,12 @@
-# Keeps a standing release PR up to date from conventional commits on main. Merging it tags the
-# version and publishes the GitHub release. Tags only: the release commit touches CHANGELOG.md and
-# version.txt, which the deploy trigger ignores.
+# Keeps a standing release PR on develop up to date from conventional commits. Merging it bumps the
+# version and writes CHANGELOG.md. The push to main that ships it (cloudbuild.yaml and
+# firebase-hosting-merge.yml deploy production) tags it and publishes the GitHub release, so a
+# release marks what prod runs.
 name: release-please
 
 on:
   push:
-    branches: [main]
+    branches: [develop, main]
 
 permissions:
   contents: write
@@ -21,3 +22,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          target-branch: develop
+          skip-github-release: ${{ github.ref_name == 'develop' }}
+          skip-github-pull-request: ${{ github.ref_name == 'main' }}

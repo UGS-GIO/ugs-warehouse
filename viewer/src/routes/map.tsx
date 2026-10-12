@@ -17,6 +17,7 @@ import { isSupported } from "@/offline/opfs";
 import { WhatsHerePicker } from "@/offline/whats-here-picker";
 import type { Target } from "@/offline/whats-here";
 import { useZarrProblems } from "@/zarr/use-zarr-layers";
+import { LayerCubeControls } from "@/zarr/layer-cube-controls";
 
 // The Info dock shows one of three things, strictly nested: a related table is only reachable from a
 // selected feature. No floating feature popup anywhere — stakeholder requirement.
@@ -40,6 +41,11 @@ function MapView() {
   // A datacube that can't open says so in its row instead of sitting "on" and blank.
   const zarrProblems = useZarrProblems(c.activeLayers.flatMap((l) => (l.zarr
     ? [{ id: l.id, href: l.zarr.href, variable: l.zarr.variable }] : [])));
+  // A datacube's row picks its variable and steps into the URL, which toLayer reads back.
+  const cubeControlsOf = (id: string) => {
+    const z = c.activeLayers.find((l) => l.id === id)?.zarr;
+    return z ? <LayerCubeControls id={id} zarr={z} /> : undefined;
+  };
 
   // A clicked layer's related tables, named from the compact index (its asset summaries carry the
   // related entries). The FK join columns are stripped from the index by design, so RelatedTable
@@ -86,6 +92,7 @@ function MapView() {
         onToggleMany={c.toggleLayers}
         onReorder={c.setLayerOrder}
         problemOf={(id) => zarrProblems[id]}
+        controlsOf={cubeControlsOf}
         onOpen={c.openItem}
         // PMTiles, the raster mosaics and COGs are all single files read by range, and the
         // service worker answers all three out of OPFS, so all three can be stored whole.

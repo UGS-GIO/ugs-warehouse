@@ -22,9 +22,6 @@ CSRF_TRUSTED_ORIGINS = env.list("CSRF_TRUSTED_ORIGINS", default=[])
 
 # In DEBUG with DEV_IAP_EMAIL set, that email is treated as the logged-in user.
 DEV_IAP_EMAIL = env("DEV_IAP_EMAIL", default="")
-# The aud IAP stamps on its JWT. Unset on Cloud Run it is derived from the metadata server
-# (/projects/NUMBER/locations/REGION/services/K_SERVICE); set it only to override that.
-IAP_AUDIENCE = env("IAP_AUDIENCE", default="")
 
 # GCP — the project/region the warehouse Cloud Run jobs live in, and the STAC catalog base.
 GCP_PROJECT = env("GCP_PROJECT", default="ut-dnr-ugs-backend-tools")

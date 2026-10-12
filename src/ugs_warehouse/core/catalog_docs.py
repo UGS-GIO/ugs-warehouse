@@ -93,7 +93,7 @@ def agents(*, title: str, kind: str, path: str, children: int,
            items: list[dict] | None = None, service: bool = False) -> str:
     """What a program needs to use this node without fetching everything first.
 
-    `service` is True for the nodes duckdb_featureserv serves live (flat collections and the
+    `service` is True for the nodes the Features service serves live (flat collections and the
     serving-topic schemas, per `core.stac.has_feature_service`). Those DO have a query endpoint —
     OGC API Features — so the note names it and steers bulk/whole-layer work to the GeoParquet asset
     instead, rather than the old blanket claim that no query endpoint exists (#280).
@@ -148,6 +148,6 @@ def agents(*, title: str, kind: str, path: str, children: int,
                "its own `proj:code`, which overrides the item's.\n"
                "- Fields prefixed `ugs:` are ours and are not part of any STAC extension. Standard "
                "clients ignore them safely.\n"
-               "- Assets carry `file:size` where the warehouse wrote the bytes, and `file:checksum` "
-               "where it could compute one; an absent value means it could not, not that it is zero.\n")
+               "- Assets the warehouse hosts carry `file:size` and `file:checksum`; one without a "
+               "checksum has not been hashed yet. Files linked on other hosts carry neither.\n")
     return "".join(out)

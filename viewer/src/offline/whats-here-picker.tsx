@@ -51,7 +51,7 @@ export function WhatsHerePicker({ target, canSave, onClose }: {
   const candidates = useMemo(() => {
     const seen = new Map<string, ItemRef>();
     for (const r of [...ctx.mapItems, ...ctx.allItems]) if (!seen.has(r.href)) seen.set(r.href, r);
-    return [...seen.values()].map(toLayer).filter((l): l is ActiveLayer => l !== null);
+    return [...seen.values()].map((r) => toLayer(r)).filter((l): l is ActiveLayer => l !== null);
   }, [ctx.mapItems, ctx.allItems]);
   const here = useMemo(() => whatsHere(candidates, target), [candidates, target]);
   const bbox = saveBbox(target);

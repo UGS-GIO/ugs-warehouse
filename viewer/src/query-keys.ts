@@ -33,6 +33,7 @@ export const qk = {
   cogProtocol: ["cog-protocol"] as const,
   colormapSprite: ["colormap-sprite"] as const,
   zarrSource: (href: string, variable: string) => ["zarr-source", href, variable] as const,
+  zarrStretch: (href: string, variable: string) => ["zarr-stretch", href, variable] as const,
 
   // Tabular data (duckdb-wasm over parquet)
   parquetTypes: (href: string) => ["parquet-types", href] as const,
@@ -46,7 +47,7 @@ export const qk = {
   threeDColors: (itemId: unknown) => ["3d-colors", itemId] as const,
 
   // Search
-  articleCorpus: (url: string) => ["article-corpus", url] as const,
+  articleSearch: (url: string, q: string) => ["article-search", url, q] as const,
   pubFts: (q: string) => ["pub-fts", q] as const,
 
   // Review deploy

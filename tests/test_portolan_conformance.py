@@ -57,7 +57,6 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(stac.gcs, "list_paths", lambda pre: [k for k in store if k.startswith(pre)])
     monkeypatch.setattr(stac.gcs, "exists", lambda p: p in store)
     monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])  # federated roots are not ours to validate
-    monkeypatch.setattr(stac, "attach_iso", lambda item: "")   # the sidecar is XML, not a STAC object
     monkeypatch.setattr(stac, "attach_renders", lambda item: None)
     monkeypatch.setattr(stac.styles, "warm", lambda: None)
 

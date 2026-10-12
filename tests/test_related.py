@@ -220,7 +220,6 @@ def test_sink_stac_links_the_topics_features_collection(monkeypatch):
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
-    monkeypatch.setattr(sink_stac.stac, "attach_iso", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
 
     sink_stac.write(Topic(schema="hazards", layer="hazards_qfaults_current"), None, "v")
@@ -245,7 +244,6 @@ def test_sink_stac_wires_related(monkeypatch):
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
-    monkeypatch.setattr(sink_stac.stac, "attach_iso", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
 
     related_info = {
@@ -287,7 +285,6 @@ def test_sink_stac_ducklake_review_only(monkeypatch):
                         lambda **k: captured.update(k) or {"assets": k["assets"]})
     monkeypatch.setattr(sink_stac.stac, "attach_renders", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "attach_classification", lambda i: None)
-    monkeypatch.setattr(sink_stac.stac, "attach_iso", lambda i: None)
     monkeypatch.setattr(sink_stac.stac, "write_item", lambda i: "stac/path.json")
     monkeypatch.setattr(sink_stac.config, "IS_REVIEW_CATALOG", True)
 

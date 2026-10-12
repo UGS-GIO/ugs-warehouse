@@ -1,4 +1,4 @@
-// Title band for the content pages (Architecture, Guide, the catalog landing), laid out like the
+// Title band for the content pages (Guide, the catalog landing), laid out like the
 // soil-water app's docs hero: eyebrow, title, lead, over a UGS photo with a vertical scrim.
 //
 // The scrim is what keeps the text readable: the type colour is fixed and the photo isn't, so a

@@ -1,4 +1,5 @@
 import { execSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
@@ -17,6 +18,11 @@ const sh = (cmd: string, fallback: string) => {
   }
 };
 const BUILD_HASH = sh("git describe --tags --always --dirty", "dev");
+const BUILD_SHA = sh("git rev-parse HEAD", "");
+// The release-please version, so the header names the release whatever git describe says.
+const APP_VERSION: string = JSON.parse(
+  readFileSync(new URL("../.release-please-manifest.json", import.meta.url), "utf8"),
+)["."];
 // HEAD commit date; if git is absent (tarball build), use the build date.
 const BUILD_DATE = sh("git log -1 --format=%cd --date=short", new Date().toISOString().slice(0, 10));
 
@@ -74,6 +80,8 @@ export default defineConfig({
   define: {
     __BUILD_HASH__: JSON.stringify(BUILD_HASH),
     __BUILD_DATE__: JSON.stringify(BUILD_DATE),
+    __BUILD_SHA__: JSON.stringify(BUILD_SHA),
+    __APP_VERSION__: JSON.stringify(APP_VERSION),
   },
   // Allow importing the canonical docs/*.md (one level above viewer/) for markdown-rendered pages.
   server: { fs: { allow: [".."] } },

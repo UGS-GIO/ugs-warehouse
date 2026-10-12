@@ -1103,7 +1103,7 @@ def test_every_node_gets_a_readme_and_agents_file(monkeypatch):
     store = _mem_gcs(monkeypatch)
     monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])
     stac.write_item(stac.build_item(
-        item_id="DS-8", collection="DS", collection_path="ugs-publications/DS",
+        item_id="DS-8", collection="DS", collection_path="ugs-rasters/DS",
         geometry=stac.bbox_polygon([0, 1, 2, 3]), bbox=[0, 1, 2, 3],
         datetime_iso="2026-01-01T00:00:00Z", properties={"title": "A publication"},
         assets={"data": {"href": "https://x/a.parquet", "type": config.PARQUET_MIME,
@@ -1111,11 +1111,11 @@ def test_every_node_gets_a_readme_and_agents_file(monkeypatch):
     stac.refresh_catalog()
     p = config.STAC_PREFIX
 
-    for node in ("", "/ugs-publications", "/ugs-publications/DS"):
+    for node in ("", "/ugs-rasters", "/ugs-rasters/DS"):
         assert f"{p}{node}/README.md" in store, node
         assert f"{p}{node}/AGENTS.md" in store, node
 
-    coll = json.loads(store[f"{p}/ugs-publications/DS/collection.json"])
+    coll = json.loads(store[f"{p}/ugs-rasters/DS/collection.json"])
     rels = {lk["rel"]: lk for lk in coll["links"]}
     assert rels["describedby"]["href"] == "./README.md"
     assert rels["describedby"]["type"] == "text/markdown"

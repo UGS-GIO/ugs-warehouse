@@ -179,3 +179,74 @@ def test_refresh_writes_series_catalogs_over_publication_collections(monkeypatch
     root = json.loads(store[f"{p}/catalog.json"])
     assert {"./ugs-publications/catalog.json", "./ugs-external/catalog.json"} <= {
         lk["href"] for lk in root["links"] if lk["rel"] == "child"}
+    index = json.loads(store[f"{p}/items.json"])
+    assert [e["links"][0]["href"] for e in index["items"]] == [
+        "./ugs-publications/OFR/OFR-1/OFR-1_plate/OFR-1_plate.json"]
+
+
+def _old_layout_item(group, series, sid):
+    return stac.build_item(item_id=sid, collection=series, collection_path=f"{group}/{series}",
+                           geometry=stac.bbox_polygon(stac.UTAH_BBOX), bbox=stac.UTAH_BBOX,
+                           datetime_iso="2020-01-01T00:00:00Z", properties={"title": sid}, assets={})
+
+
+def test_refresh_indexes_publication_items_and_counts_mappable(monkeypatch):
+    store = _memstore(monkeypatch)
+    _pub(store, "ugs-publications", "OFR", "OFR-1", ["OFR-1_plate"])
+    cog = {"cog": {"href": "https://x/p.tif", "type": "image/tiff; application=geotiff; profile=cloud-optimized",
+                   "roles": ["data"]}}
+    stac.write_item(stac.build_item(
+        item_id="OFR-1_cog", collection="OFR-1", collection_path="ugs-publications/OFR/OFR-1",
+        geometry=stac.bbox_polygon(stac.UTAH_BBOX), bbox=stac.UTAH_BBOX,
+        datetime_iso="2020-01-01T00:00:00Z", properties={"title": "cog"}, assets=cog))
+
+    stac.refresh_catalog()
+
+    p = config.STAC_PREFIX
+    index = json.loads(store[f"{p}/items.json"])
+    hrefs = {e["links"][0]["href"] for e in index["items"]}
+    assert len(hrefs) == 2 and all(h.startswith("./ugs-publications/OFR/OFR-1/") for h in hrefs)
+    series = json.loads(store[f"{p}/ugs-publications/OFR/catalog.json"])
+    assert series["ugs:mappable_count"] == 1
+    root = json.loads(store[f"{p}/catalog.json"])
+    link = next(lk for lk in root["links"] if lk.get("href") == "./ugs-publications/catalog.json")
+    assert link["ugs:mappable_count"] == 1
+
+
+def test_refresh_ignores_old_layout_publication_groups(monkeypatch, capsys):
+    store = _memstore(monkeypatch)
+    _pub(store, "ugs-publications", "OFR", "OFR-1", ["OFR-1_plate"])
+    stac.write_item(_old_layout_item("ugs-publications", "OFR", "OFR-9"))
+
+    stac.refresh_catalog()
+
+    p = config.STAC_PREFIX
+    root = json.loads(store[f"{p}/catalog.json"])
+    assert [lk["href"] for lk in root["links"] if lk.get("href") == "./ugs-publications/catalog.json"] == [
+        "./ugs-publications/catalog.json"]
+    top = json.loads(store[f"{p}/ugs-publications/catalog.json"])
+    assert [lk["href"] for lk in top["links"] if lk["rel"] == "child"] == ["./OFR/catalog.json"]
+    assert f"{p}/ugs-publications/OFR/collection.json" not in store
+    assert f"{p}/ugs-publications/OFR/items.json" not in store
+    assert not any(e["id"] == "OFR-9" for e in json.loads(store[f"{p}/items.json"])["items"])
+    assert "old-layout publication series awaiting prune --legacy: ugs-publications/OFR" in capsys.readouterr().err
+
+
+def test_refresh_finishes_then_reports_publication_items_without_a_collection(monkeypatch):
+    import pytest
+
+    store = _memstore(monkeypatch)
+    _pub(store, "ugs-publications", "OFR", "OFR-1", ["OFR-1_plate"])
+    stac.write_item(stac.build_item(
+        item_id="X-1_plate", collection="X-1", collection_path="ugs-publications/OFR/X-1",
+        geometry=stac.bbox_polygon(stac.UTAH_BBOX), bbox=stac.UTAH_BBOX,
+        datetime_iso="2020-01-01T00:00:00Z", properties={"title": "x"}, assets={}))
+
+    with pytest.raises(RuntimeError, match="ugs-publications/OFR/X-1"):
+        stac.refresh_catalog()
+
+    p = config.STAC_PREFIX
+    assert f"{p}/catalog.json" in store and f"{p}/items.json" in store
+    series = json.loads(store[f"{p}/ugs-publications/OFR/catalog.json"])
+    assert [lk["href"] for lk in series["links"] if lk["rel"] == "child"] == ["./OFR-1/collection.json"]
+    assert not any(e["id"] == "X-1_plate" for e in json.loads(store[f"{p}/items.json"])["items"])

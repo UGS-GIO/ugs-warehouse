@@ -666,6 +666,17 @@ def _fake_bucket_listing(monkeypatch, per_bucket: dict[str, list[str]], seen: li
                         lambda path, *, bucket=None: json.dumps({"spatial": [], "tables": []}).encode())
 
 
+def test_single_file_sids_raises_when_a_manifest_is_unreadable(monkeypatch):
+    from ugs_warehouse.pubs import ingest
+
+    monkeypatch.setattr(ingest, "_unit_ids", lambda bucket=None: set())
+    monkeypatch.setattr(ingest, "_ids_with_suffix", lambda *a, **k: set())
+    monkeypatch.setattr(ingest, "_vector_manifests_by_sid",
+                        lambda bucket=None: ({}, {"GQ-1": "unreadable"}))
+    with pytest.raises(RuntimeError, match="GQ-1"):
+        gm._single_file_sids(["GQ-1", "GQ-2"])
+
+
 def test_single_file_sids_reads_the_source_bucket_in_a_review_bake(monkeypatch):
     monkeypatch.setattr(gm.config, "BUCKET", "review-bucket")
     monkeypatch.setattr(gm.config, "SOURCE_BUCKET", "public-bucket")
@@ -691,7 +702,7 @@ def test_single_file_decision_matches_between_ingest_and_the_mosaic(monkeypatch)
                             {"spatial": ["a"], "tables": []}).encode())
     sids = ["GQ-1", "GQ-2", "GQ-3", "GQ-4"]
     units, threed_ids = ingest._unit_ids(), ingest._ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")
-    manifests = ingest._vector_manifests_by_sid()
+    manifests, _ = ingest._vector_manifests_by_sid()
     via_ingest = {s for s in sids if sink_stac.is_single_file(
         has_cog=True, has_units=s in units, has_3d=s in threed_ids,
         vector_layers=manifests.get(s, {}).get("spatial"),

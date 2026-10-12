@@ -134,16 +134,18 @@ def _unit_ids(bucket: str | None = None) -> set[str]:
     return out
 
 
-def _vector_manifests_by_sid(bucket: str | None = None) -> dict[str, dict]:
-    """{SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
+def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict], dict[str, str]]:
+    """({SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
     "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2}}}} from
     the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
     — the AUTHORITATIVE record of which extracted layers are spatial vs non-spatial GeMS companion
     tables, so build_publication doesn't have to guess a layer's kind from its name. `columns` holds each
     layer's recorded schema and `layers` its row count, bbox and CRS; manifests written before they
-    were recorded have none (empty maps / None values)."""
+    were recorded have none (empty maps / None values)}, {SID: cause} for each manifest that exists
+    but could not be read or parsed). A series with no manifest appears in neither map."""
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
     out: dict[str, dict] = {}
+    failed: dict[str, str] = {}
     for path in _list(vectors.VECTORS_PREFIX, bucket):
         if not path.endswith("/_manifest.json"):
             continue
@@ -160,10 +162,10 @@ def _vector_manifests_by_sid(bucket: str | None = None) -> dict[str, dict]:
                                                   "proj_code": lay.get("proj_code"),
                                                   "proj_wkt2": lay.get("proj_wkt2")}
                                    for lay in layer_docs}}
-        except Exception as e:  # noqa: BLE001 — a bad manifest just costs that pub its vector assets
-            print(f"[pubs] corrupt vector manifest, skipping: {path} ({e})", file=sys.stderr)
-            continue
-    return out
+        except Exception as e:  # noqa: BLE001 (recorded per series; the caller fails that pub)
+            failed[sid] = f"unreadable vector manifest {path}: {type(e).__name__}: {e}"
+            print(f"[pubs] {failed[sid]}", file=sys.stderr)
+    return out, failed
 
 
 def _prune_stale_items(coll_path: str, keep: set[str]) -> None:
@@ -262,7 +264,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     units = _unit_ids()
     heads = _cog_headers(cogs)  # footprints + COG asset fields from OUR COGs (no external service)
     mirrored = _mirrored_files()  # source files served from our CDN instead of the publisher's host
-    vector_manifests = _vector_manifests_by_sid()  # spatial/table split extracted by pubs/vectors.py
+    vector_manifests, manifest_failures = _vector_manifests_by_sid()  # spatial/table split extracted by pubs/vectors.py
     n_foot = sum(1 for f, _ in heads.values() if f)
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
           f"{len(units)} unit sets, {n_foot} footprints, {len(threed_ids)} 3D, "
@@ -274,7 +276,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         """Write one publication; a failure is collected so the other publications still land."""
         try:
             return _write_pub(p)
-        except Exception as e:  # noqa: BLE001 — collected and raised after the pool
+        except Exception as e:  # noqa: BLE001, collected and raised after the pool
             errors.append(((p.get("series_id") or "").strip(), f"{type(e).__name__}: {e}"))
             return False
 
@@ -283,6 +285,8 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         if not sid:
             return False
         up = sid.upper()
+        if up in manifest_failures:  # writing now would prune the layer and table items it lists
+            raise RuntimeError(manifest_failures[up])
         footprint, cog_fields = heads.get(up, (None, None))
         geom, bbox, fp_source = footprint or (None, None, None)
         manifest = vector_manifests.get(up, {"spatial": [], "tables": [], "layers": {}})

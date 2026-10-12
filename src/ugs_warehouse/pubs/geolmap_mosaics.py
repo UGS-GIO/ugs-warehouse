@@ -350,7 +350,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
     empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object,
     never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
-    uploads the scratch pmtiles for direct inspection but writes NO STAC item — see `build()`.
+    uploads the scratch pmtiles for direct inspection but writes NO STAC item, see `build()`.
     `single_file_sids` (see `_single_file_sids`) is required when a STAC item is written."""
     if write_stac_item and single_file_sids is None:
         raise ValueError("build_tier needs single_file_sids to link members when writing a STAC item")
@@ -452,7 +452,10 @@ def _single_file_sids(sids: list[str]) -> set[str]:
     bucket = config.SOURCE_BUCKET  # the published inputs, even when this bake writes to a review bucket
     units = ingest._unit_ids(bucket)
     threed_ids = ingest._ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}", bucket)
-    manifests = ingest._vector_manifests_by_sid(bucket)
+    manifests, failed = ingest._vector_manifests_by_sid(bucket)
+    unreadable = {s: failed[s] for s in sids if s in failed}
+    if unreadable:
+        raise RuntimeError(f"cannot tell which publications are single-file: {unreadable}")
     out: set[str] = set()
     for sid in sids:
         m = manifests.get(sid, {})
@@ -471,7 +474,7 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
 
     The mosaic is derived by stitching the member COGs, so each member gets a STAC
     `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
-    input data in the creation of this Entity") — to its plate Item (or to its Collection when
+    input data in the creation of this Entity"), to its plate Item (or to its Collection when
     the plate is the publication's only data file, `single_file_sids`), routed through
     `sink_stac.pub_collection_path` rather than hardcoded to `ugs-publications` (a member can be
     foreign-published `ugs-external` or a Mining District File `ugs-mining-district-files`, and

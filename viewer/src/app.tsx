@@ -580,7 +580,7 @@ export function AppLayout() {
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
     <PreviewMapProvider>
     <div className={lockedView
-      ? "grid h-full grid-cols-1 grid-rows-[auto_1fr_auto] overflow-hidden bg-background text-sm text-foreground"
+      ? "grid h-full grid-cols-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden bg-background text-sm text-foreground"
       : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
@@ -617,7 +617,8 @@ export function AppLayout() {
         </div>
       </header>
 
-      {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
+      {/* Always mounted, empty when there is no error, so the locked grid keeps its rows. */}
+      <div>{catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}</div>
 
       <Suspense fallback={<div className="flex items-center justify-center p-16 text-sm text-muted-foreground">Loading…</div>}>
       <ViewContext.Provider value={state}>

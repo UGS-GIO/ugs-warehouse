@@ -37,7 +37,7 @@ def _build_pub(p: dict, **kw) -> tuple[dict, list[dict]]:
 
 def test_fully_loaded_publication_is_spec_valid():
     """One map pub exercising every path at once: COG + units + all vector layers + a companion
-    table (Table ext) + an edition (Versioning ext) + footprint (Projection ext) — the collection
+    table (Table ext) + an edition (Versioning ext) + footprint (Projection ext), the collection
     and items a fully-populated real map would emit. If any extension is mis-declared, validation
     fails here."""
     bbox, geom = _UTAH
@@ -71,7 +71,7 @@ def test_fully_loaded_publication_is_spec_valid():
 
 def test_mosaic_is_valid_and_derived_from_hrefs_match_member_item_locations():
     """The 404-class proof at the authoring layer: for each member — including a foreign-published
-    one that routes to ugs-external — the mosaic's `derived_from` href equals the href of that
+    one that routes to ugs-external, the mosaic's `derived_from` href equals the href of that
     member's own plate document: its Collection when the plate is its only data file, else the
     `_plate` Item. Match here => the link resolves once both are published."""
     bbox, geom = _UTAH

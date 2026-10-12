@@ -2,7 +2,7 @@
 
 Links each map's `series_id` to its predecessor/successor by (quad, tier) so an older map gets
 `deprecated` + a `successor-version` link, and its replacement gets a `predecessor-version` link
-back — the STAC Versioning Indicators fields `core.stac.build_item` / `sink_stac.build_publication`
+back, the STAC Versioning Indicators fields `core.stac.build_item` / `sink_stac.build_publication`
 already stamp when handed an `edition` dict (Task 2).
 
 Authoritative quad<->series source (SME-confirmed — supersedes the original AGOL-confirmation
@@ -29,7 +29,7 @@ Conservative by design (never mislabel a published record):
     entry's position ambiguous -> excluded from the graph and warned for human review, while any
     cleanly-ordered siblings in the same group still link normally.
 An entry absent from the returned graph carries no edition information at all: `ingest.py` looks
-it up with `graph.get(series_id)`, gets `None`, and passes `edition=None` — `sink_stac.build_publication`
+it up with `graph.get(series_id)`, gets `None`, and passes `edition=None`, `sink_stac.build_publication`
 then stamps no `version`/`deprecated`/predecessor/successor/latest for it.
 
 Import-cheap on purpose: this module (and `geolmap_mosaics`, and `sink_stac`, imported lazily

@@ -18,7 +18,7 @@ series not yet fully reingested stays in the old layout: one `<group>/<SERIES>/c
 over `<SID>/<SID>.json` items.
 
 `refresh_catalog()` lists GCS and rebuilds the root + every catalog and non-publication
-collection.json from what's actually there (idempotent, concurrency-tolerant) — no manual regen,
+collection.json from what's actually there (idempotent, concurrency-tolerant), no manual regen,
 no shared-file races.
 """
 from __future__ import annotations
@@ -286,7 +286,7 @@ def manual_override(item_id: str) -> dict:
 
 def prior_property(collection_path: str, item_id: str, prop: str):
     """Value of `prop` in the currently-published item.json, or None if the item doesn't exist yet.
-    Lets a reingest PRESERVE a field (e.g. description) when the incoming metadata omits it —
+    Lets a reingest PRESERVE a field (e.g. description) when the incoming metadata omits it:
     last-non-empty wins, so a resubmit with no description keeps the old one instead of blanking it.
     Any other read error raises: falling back on a transient failure would publish, and then
     preserve, the wrong value."""
@@ -619,7 +619,7 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
     a series catalog. `children` = [{id, title, count, mappable?, file?}, …]; `file` defaults to
     `collection.json`.
 
-    `items_index` adds a rollup index link spanning every child collection — see
+    `items_index` adds a rollup index link spanning every child collection, see
     ROLLUP_INDEX_CATALOGS."""
     total = sum(c.get("count") or 0 for c in children)
     total_mappable = sum(c.get("mappable") or 0 for c in children)
@@ -1033,9 +1033,10 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     _write_markdown("", title=config.CATALOG_TITLE, description=ROOT_DESCRIPTION,
                     kind="catalog", children=len(root_children))
 
-    n = sum(len(v) for v in groups.values())
+    written_pubs = [p for p in pub_colls if p not in skipped]
+    n = sum(len(v) for v in groups.values()) + sum(len(pub_entries.get(p, [])) for p in written_pubs)
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "
-          f"({len(groups)} collections, {n} items)")
+          f"({len(groups) + len(written_pubs)} collections, {n} items)")
     for problem in problems:
         print(f"[catalog] {problem}", file=sys.stderr)
     if strict and problems:

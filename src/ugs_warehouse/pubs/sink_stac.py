@@ -42,6 +42,10 @@ MEDIA = {".pdf": "application/pdf", ".zip": "application/zip",
          ".kmz": "application/vnd.google-earth.kmz",
          ".kml": "application/vnd.google-earth.kml+xml"}
 COG_MIME = config.COG_MIME
+# `ugs:footprint_source` values beyond the footprints parquet's own ("cog", "view"): the Utah
+# bounding box standing in for a missing footprint, and a layer's bbox from its manifest.
+FOOTPRINT_FALLBACK = "utah-bbox"
+LAYER_BBOX_SOURCE = "layer"
 PARQUET_MIME = config.PARQUET_MIME
 # Everything outside RFC 3986's unreserved set needs escaping in a path segment. See `item_id_for`.
 _UNSAFE_IN_PATH = re.compile(r"[^A-Za-z0-9._~-]+")
@@ -271,6 +275,7 @@ def build_publication(p: dict, attachments: list[dict], *,
     layer_meta = layers or {}
     aoi = geom or stac.bbox_polygon(stac.UTAH_BBOX)
     aoi_bbox = bbox or stac.UTAH_BBOX
+    aoi_source = fp_source if geom else FOOTPRINT_FALLBACK
 
     def crs_of(meta: dict) -> dict:
         """The layer's own CRS from its manifest: the EPSG code when GDAL matched one with
@@ -280,9 +285,11 @@ def build_publication(p: dict, attachments: list[dict], *,
         return {"proj:wkt2": meta["proj_wkt2"]} if meta.get("proj_wkt2") else {}
 
     def item(item_id: str, title: str, assets: dict, *, geometry: dict, item_bbox: list[float],
+             footprint_source: str | None = None,
              extra: dict | None = None, links: list[dict] | None = None,
              extensions: list[str] | None = None) -> dict:
-        props = {"title": title, "ugs:series_id": sid, **undated, **sci, **(extra or {})}
+        props = {"title": title, "ugs:series_id": sid, **undated, **sci, **(extra or {}),
+                 **({"ugs:footprint_source": footprint_source} if footprint_source else {})}
         exts = list(extensions or [])
         if sci:
             exts.append(stac.SCI_EXT)
@@ -335,14 +342,14 @@ def build_publication(p: dict, attachments: list[dict], *,
             plate_assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
                                          "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
         items.append(item(plate_item_id(sid), "Map plate", plate_assets, geometry=aoi, item_bbox=aoi_bbox,
-                          links=mosaic,
+                          footprint_source=aoi_source, links=mosaic,
                           extensions=[stac.PROJ_EXT] if any(k.startswith("proj:") for k in plate_assets["cog"]) else None))
     if has_units:
         # The units GeoParquet is written in EPSG:4326.
         items.append(item(f"{pub_id}_units", "Geologic unit polygons", {"data": {
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
             "type": PARQUET_MIME, "title": "Geologic unit polygons (GeoParquet)", "roles": ["data"]}},
-            geometry=aoi, item_bbox=aoi_bbox, extra={"proj:code": "EPSG:4326"}))
+            geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source, extra={"proj:code": "EPSG:4326"}))
     for label in vector_layers or []:
         meta = layer_meta.get(label, {})
         lb = meta.get("bbox")
@@ -351,6 +358,7 @@ def build_publication(p: dict, attachments: list[dict], *,
             "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
             "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}},
             geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
+            footprint_source=LAYER_BBOX_SOURCE if lb else aoi_source,
             extra={**crs_of(meta), **rows}))
     for t in companion_tables or []:
         label, meta = t["label"], layer_meta.get(t["label"], {})
@@ -359,7 +367,7 @@ def build_publication(p: dict, attachments: list[dict], *,
         if t.get("columns"):
             asset["table:columns"] = t["columns"]
         items.append(item(layer_id(label), stac.prettify(label), {"data": asset},
-                          geometry=aoi, item_bbox=aoi_bbox,
+                          geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source,
                           extra={"table:row_count": meta["rows"]} if meta.get("rows") is not None else None,
                           extensions=[stac.TABLE_EXT] if t.get("columns") else None))
     if has_3d:
@@ -370,7 +378,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                             "roles": ["data", "3d-vector"], "title": "3D fence contacts & faults (GeoParquet)"},
             "fence_mesh": {"href": config.public_url(threed_object(sid, MESH_NAME)), "type": "model/gltf-binary",
                            "roles": ["data", "visual"], "title": "3D fence mesh (glTF)"}},
-            geometry=aoi, item_bbox=aoi_bbox,
+            geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source,
             extra={"classification:classes": classes_3d} if classes_3d else None,
             extensions=[stac.CLASSIFICATION_EXT] if classes_3d else None))
 
@@ -447,7 +455,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                      ("latest-version", "latest_href")):
         if ed.get(key):
             links.append({"rel": rel, "href": ed[key], "type": "application/json"})
-    # The old-path read keeps descriptions published as a single item before the collection layout.
+    # Falls back to the old-layout item's description.
     group, code = collection_group(p), series_code(sid)
     desc = ov.get("description") or (p.get("full_citation") or "").strip() \
         or (stac.prior_collection_field(coll_path, "description") or "") \

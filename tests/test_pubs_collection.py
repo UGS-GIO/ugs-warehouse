@@ -94,6 +94,21 @@ def test_layer_uses_its_own_bbox_and_table_uses_the_footprint():
     assert stac.TABLE_EXT in table["stac_extensions"]
 
 
+def test_items_label_where_their_footprint_came_from():
+    _, items = _build()
+    src = {it["id"]: it["properties"]["ugs:footprint_source"] for it in items}
+    assert src == {"OFR-784DM_plate": "cog", "OFR-784DM_geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
+                   "OFR-784DM_geo__DMU": "cog"}
+
+
+def test_items_without_a_footprint_carry_the_fallback_label():
+    _, items = _build(geom=None, bbox=None, fp_source=None)
+    src = {it["id"]: it["properties"]["ugs:footprint_source"] for it in items}
+    assert src == {"OFR-784DM_plate": sink_stac.FOOTPRINT_FALLBACK,
+                   "OFR-784DM_geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
+                   "OFR-784DM_geo__DMU": sink_stac.FOOTPRINT_FALLBACK}
+
+
 def test_a_report_with_no_data_is_a_collection_with_no_items():
     coll, items = sink_stac.build_publication(
         {**P, "series_id": "C-139", "pub_name": "Utah mining 2024"}, [], has_cover=True)

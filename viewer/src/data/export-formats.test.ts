@@ -8,6 +8,6 @@ describe("exportFormatsFor", () => {
     expect(exportFormatsFor(true).find((f) => f.id === "csv")?.label).toBe("CSV (WKT)");
   });
   it("offers a plain table CSV alone, with no WKT", () => {
-    expect(exportFormatsFor(false)).toEqual([{ id: "csv", label: "CSV", hint: "spreadsheet" }]);
+    expect(exportFormatsFor(false)).toEqual([{ id: "csv", label: "CSV", hint: ".csv" }]);
   });
 });

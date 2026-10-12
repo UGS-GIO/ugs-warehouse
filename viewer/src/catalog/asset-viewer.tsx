@@ -1,4 +1,5 @@
 // Per-asset preview: picks a viewer by asset kind (map, datacube, 3D, PDF, table, image, text).
+import { SchemaTable } from "./schema-table";
 import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { lazy, Suspense, useMemo, useRef, useState } from "react";
@@ -30,7 +31,9 @@ export function AssetChips({ assets }: { assets: Record<string, Asset> }) {
   );
 }
 
-function FieldsPanel({ item }: { item: StacDoc }) {
+// The one field list: under the map on a layer, on the page for a table with no map. Collapsed, so a
+// long schema does not push the data below it off the page.
+export function FieldsPanel({ item }: { item: StacDoc }) {
   const cols = tableColumns(item);
   if (!cols) return null;
   return (
@@ -40,14 +43,7 @@ function FieldsPanel({ item }: { item: StacDoc }) {
         <span aria-hidden className="hidden group-open:inline">▾</span>
         Fields <span className="font-normal">· {cols.length}</span>
       </summary>
-      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 rounded-md border border-border bg-card px-3 py-2.5">
-        {cols.map((c) => (
-          <span key={c.name} className="inline-flex items-baseline gap-1.5">
-            <span className="font-mono text-foreground">{c.name}</span>
-            {c.type && <span className="text-xs text-muted-foreground">{c.type}</span>}
-          </span>
-        ))}
-      </div>
+      <div className="mt-2"><SchemaTable columns={cols} /></div>
     </details>
   );
 }
@@ -61,12 +57,15 @@ function RasterMosaicPreview({ item }: { item: StacDoc }) {
 // Directly under the preview map, above the fields/table, so a click's result is in view without
 // scrolling past a long data table.
 function SelectedFeatureCard({ item }: { item: StacDoc }) {
-  const { selectedFeature, clearSelection, openRelated } = usePreviewMap();
+  const { selectedFeature, clearSelection, openRelated, setFocus } = usePreviewMap();
   const ref = useRef<HTMLDivElement>(null);
   // `selectFeature` builds a new object per click, so clicking the same feature twice re-scrolls.
   useScrollOnNew(selectedFeature, ref);
   if (!selectedFeature) return null;
-  return <div ref={ref}><FeatureCard item={item} props={selectedFeature.props} onOpenRelated={openRelated} onClear={clearSelection} /></div>;
+  const { props, fid, bbox } = selectedFeature;
+  // A new key each time, so a second Zoom to flies again after the user has panned away.
+  const zoom = bbox && (() => setFocus({ bbox, featureId: fid ?? undefined, props, key: Date.now() }));
+  return <div ref={ref}><FeatureCard item={item} props={props} onOpenRelated={openRelated} onClear={clearSelection} onZoom={zoom} /></div>;
 }
 
 // Vector asset preview: the item's PMTiles on the shared persistent map + full dataset explorer,

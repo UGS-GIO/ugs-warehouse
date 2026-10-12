@@ -47,6 +47,11 @@ machine identity is the declared `itemId`.
 | `pmtiles` (vector) | `vector` | `style_url` → GL fragment; paint on `source-layer` | MapLibre (client) |
 | `cog` single-band (e.g. gravity) | `raster` | `colormap_name` / `rescale` / `nodata` | titiler (future) |
 | `cog` RGB geologic plate (pubs) | — | nothing — the plate **is** the cartography | served as-is |
+| Zarr datacube collection (federated, e.g. UBM) | `raster` | bound by `collectionId`, not `itemId`: its own catalog attaches it as the collection's `renders` | the viewer (`rescale` = default stretch) |
+
+Collection-bound entries are skipped by the warehouse join (`core.styles._parse`): it mints no such
+items, so they would only read as orphans. The viewer reads a datacube's stretch from the item's
+`renders` / `ugs:renders`, then its collection's, and samples one only when neither has it.
 
 **Why `ugs:renders`, not the STAC render extension?** That extension is raster/titiler-oriented (it
 has no field for a vector GL `style_url`), and its v2.0.0 schema *requires* a `rel:"render"` image

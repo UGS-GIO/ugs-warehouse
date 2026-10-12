@@ -486,22 +486,31 @@ def main() -> int:
         sids = [s for s in all_sids if harvest._get_attached_zips(s)[1]]
         existing = None if args.force else extracted_series()
         unsupported: list[str] = []
+        nothing: list[str] = []
         if existing is not None:
             tried = _series_with("_attempt.json", "_manifest.json")
             attempted = _series_with("_attempt.json")
-            # A pub whose last attempt failed only on unreadable containers is listed, not
-            # re-downloaded; --force retries it (for example after the image gains a driver).
+            # A pub whose last attempt failed only on unreadable containers, or finished cleanly
+            # with nothing to extract, is listed, not re-downloaded; --force retries it (for
+            # example after the image gains a driver).
             for s in [s for s in sids if s in attempted and s not in existing]:
                 last = _last_attempt(s)
                 if last.get("result") == "unsupported":
                     kinds = ", ".join(sorted({e["source"] for e in last.get("errors", [])}))
                     unsupported.append(f"{s} ({kinds})")
                     sids.remove(s)
+                elif last.get("result") == "skip":
+                    nothing.append(s)
+                    sids.remove(s)
             # Pubs never tried go first, retries of earlier failures and upgrades last, so a pub
             # that fails slowly every run cannot spend the job's timeout before new pubs are reached.
             sids = sorted(sids, key=lambda s: s in tried)
-        print(f"Found {len(all_sids)} publications, {len(sids) + len(unsupported)} with a GIS zip, "
+        print(f"Found {len(all_sids)} publications, "
+              f"{len(sids) + len(unsupported) + len(nothing)} with a GIS zip, "
               f"{len(set(sids) & (existing or set()))} already extracted")
+        if nothing:
+            print(f"{len(nothing)} had no layers to extract last time, not retried (--force to "
+                  f"retry): {', '.join(nothing)}")
         if unsupported:
             print(f"{len(unsupported)} contain formats this image cannot read (any readable "
                   f"layers were extracted), not retried (--force to retry): {', '.join(unsupported)}")

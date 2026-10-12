@@ -16,11 +16,11 @@ and `--topic schema.layer_current` ingests one explicitly.
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
-import traceback
 from types import ModuleType
 
-from ..core import gcs, stac
+from ..core import gcs, jobs, logs, stac
 from . import (
     fingerprint,
     related,
@@ -31,6 +31,12 @@ from . import (
     topics,
 )
 from .topics import Topic
+
+log = logging.getLogger("ugs-warehouse.ingest")
+
+# The ingest job's --task-timeout is 3600s, so a lease older than that belongs to a dead run.
+LOCK_TTL_S = 3600
+LOCK_WAIT_S = 2700
 
 
 def _backend() -> ModuleType:
@@ -47,7 +53,7 @@ def _related(topic: Topic) -> dict:
     try:
         return related.resolve(topic)
     except Exception as e:  # noqa: BLE001 — relationships never block the parent ingest
-        print(f"[{topic.fqn}] relationships FAILED: {e}", file=sys.stderr)
+        log.warning("[%s] relationships FAILED: %s", topic.fqn, e, extra={"topic": topic.fqn})
         return {}
 
 
@@ -66,9 +72,9 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     non_null = con.execute(f"SELECT count(*) FROM {view} WHERE geom IS NOT NULL").fetchone()[0]
     if non_null == 0:
         cols = [r[0] for r in con.execute(f"DESCRIBE {view}").fetchall()]
-        print(f"[{topic.fqn}] SKIP: 0/{count} rows have geometry "
-              f"(non-spatial table, or geom not readable by this backend)", file=sys.stderr)
-        print(f"  columns : {cols}", file=sys.stderr)
+        log.warning("[%s] SKIP: 0/%s rows have geometry "
+                    "(non-spatial table, or geom not readable by this backend); columns: %s",
+                    topic.fqn, count, cols, extra={"topic": topic.fqn})
         return 1
 
     if dry_run:
@@ -89,8 +95,9 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     fp = fingerprint.compute(con, view)
     unchanged = skip_unchanged and fingerprint.is_unchanged(topic, fp)
     if unchanged:
-        print(f"[{topic.fqn}] UNCHANGED: content + tiling identical to the published item — "
-              f"skipping the data sinks (no tile rebuild), rewriting STAC + ISO")
+        log.info("[%s] UNCHANGED: content + tiling identical to the published item — "
+                 "skipping the data sinks (no tile rebuild), rewriting STAC + ISO",
+                 topic.fqn, extra={"topic": topic.fqn})
 
     meta = backend.read_metadata(topic)
     related_info = _related(topic)
@@ -129,18 +136,17 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     for name, fn in [*data_sinks, ("stac", _stac)]:
         try:
             fn()
-        except Exception as e:  # per-sink isolation: log + continue, never silent fail
-            print(f"[{topic.fqn}] sink {name} FAILED: {e}", file=sys.stderr)
-            traceback.print_exc()
+        except Exception:  # per-sink isolation: log + continue, never silent fail
+            log.exception("[%s] sink %s FAILED", topic.fqn, name,
+                          extra={"topic": topic.fqn, "sink": name})
             rc = 1
             data_failed = data_failed or name != "stac"
 
     if not skip_refresh:
         try:
             stac.refresh_catalog()
-        except Exception as e:
-            print(f"[{topic.fqn}] stac catalog refresh FAILED: {e}", file=sys.stderr)
-            traceback.print_exc()
+        except Exception:
+            log.exception("[%s] stac catalog refresh FAILED", topic.fqn, extra={"topic": topic.fqn})
             rc = 1
     return rc
 
@@ -150,7 +156,8 @@ def _ingest(topic: Topic, dry_run: bool = False, skip_refresh: bool = False,
     backend = _backend()
     # One DuckDB connection streams Postgres scan → transform → materialize (no pyarrow, no
     # Python-held rows; DuckDB spills under its memory cap). The sinks read the materialized table.
-    print(f"[{topic.fqn}] reading from Postgres (streaming, single DuckDB)")
+    log.info("[%s] reading from Postgres (streaming, single DuckDB)", topic.fqn,
+             extra={"topic": topic.fqn})
     con, view = backend.stream_transformed(topic)
     # The sinks read `view` through `con`, so the close waits until they're done. Without it the
     # Cloud Run handler leaks a connection — ATTACHed Postgres + materialized table — per push.
@@ -167,16 +174,21 @@ def ingest_topic(topic: Topic, dry_run: bool = False, skip_refresh: bool = False
     `skip_unchanged` defaults on — an unchanged topic (fingerprint matches the published item) is
     skipped without rebuilding tiles. Pass `skip_unchanged=False` (CLI `--force`) to always rebuild."""
     try:
-        return _ingest(topic, dry_run=dry_run, skip_refresh=skip_refresh,
-                       skip_unchanged=skip_unchanged)
+        if dry_run:
+            return _ingest(topic, dry_run=True, skip_refresh=skip_refresh,
+                           skip_unchanged=skip_unchanged)
+        # Two publishes for one topic would both rewrite its artifacts. The second waits, then
+        # runs; the fingerprint skip makes it cheap when nothing changed.
+        with gcs.lease(f"_locks/ingest/{topic.fqn}", ttl_s=LOCK_TTL_S, wait_s=LOCK_WAIT_S):
+            return _ingest(topic, skip_refresh=skip_refresh, skip_unchanged=skip_unchanged)
     except Exception as e:
         # Check if it's the "FATAL: no GEOMETRY column found" case (from source.py or transform.py)
         # We can handle non-spatial gracefully by just returning 0 (success, nothing to ingest)
         if "no GEOMETRY column found" in str(e):
-            print(f"[{topic.fqn}] SKIP: non-spatial table (no GEOMETRY column)", file=sys.stderr)
+            log.warning("[%s] SKIP: non-spatial table (no GEOMETRY column)", topic.fqn,
+                        extra={"topic": topic.fqn})
             return 0
-        print(f"[{topic.fqn}] FATAL: {e}", file=sys.stderr)
-        traceback.print_exc()
+        log.exception("[%s] FATAL", topic.fqn, extra={"topic": topic.fqn})
         return 1
 
 
@@ -223,12 +235,13 @@ def main() -> int:
              "still rebuilds everything since no published item carries a fingerprint yet",
     )
     args = ap.parse_args()
+    logs.setup()
     skip_unchanged = not args.force
 
     if args.all:
         backend = _backend()
         discovered = backend.discover()
-        print(f"discovered {len(discovered)} topics in {topics.MART_SCHEMAS}")
+        log.info("discovered %s topics in %s", len(discovered), topics.MART_SCHEMAS)
         rc = 0
 
         # Skip individual refreshes when running all topics to avoid redundant catalog listings/writes.
@@ -237,7 +250,7 @@ def main() -> int:
 
         if args.parallel:
             from concurrent.futures import ThreadPoolExecutor
-            print(f"running ingestion in parallel with {args.workers} workers...")
+            log.info("running ingestion in parallel with %s workers...", args.workers)
             with ThreadPoolExecutor(max_workers=args.workers) as executor:
                 def run_one(t: Topic) -> int:
                     return ingest_topic(t, dry_run=args.dry_run, skip_refresh=skip_indiv,
@@ -251,17 +264,24 @@ def main() -> int:
 
         if not args.skip_refresh:
             try:
-                print("running final STAC catalog refresh...")
+                log.info("running final STAC catalog refresh...")
                 stac.refresh_catalog()
-            except Exception as e:
-                print(f"final stac catalog refresh FAILED: {e}", file=sys.stderr)
-                traceback.print_exc()
+            except Exception:
+                log.exception("final stac catalog refresh FAILED")
                 rc = 1
+        if not args.dry_run:
+            jobs.start_topic_thumbs()
         return rc
 
     topic = Topic.parse(args.topic)
-    return ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh,
-                        skip_unchanged=skip_unchanged)
+    rc = ingest_topic(topic, dry_run=args.dry_run, skip_refresh=args.skip_refresh,
+                      skip_unchanged=skip_unchanged)
+    # Previews in minutes rather than at the nightly thumbnail run, which stays the backstop. Started
+    # even after a failed sink, since the layer may still have been republished; the thumbnail job
+    # works out whether anything it draws changed.
+    if not args.dry_run:
+        jobs.start_topic_thumbs([topic.stem])
+    return rc
 
 
 if __name__ == "__main__":

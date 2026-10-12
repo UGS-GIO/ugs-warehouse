@@ -3,8 +3,9 @@
 // so these tests guard the parts we CAN check deterministically).
 // Type-only import — value imports from stac would pull in its module-level `location` read, which
 // isn't available in the (node) test env. The tests here stay framework/DOM-free.
-import type { StacDoc } from "@/stac";
+import type { CubeStep, StacDoc } from "@/stac";
 import { to2d } from "@/lib/bbox";
+import type { MapLayerMouseEvent } from "react-map-gl/maplibre";
 
 // Which map surface an item needs. A single consolidated map renders the right sources per kind, so
 // switching between items of different kinds swaps sources instead of remounting a whole component
@@ -130,7 +131,15 @@ export type ActiveLayer = {
   rasterPmHref?: string;
   // Zarr datacube — one object, because the store is useless without the variable and the dims to
   // pin. Resolved from STAC once, so the layer list and the map agree on what is drawn.
-  zarr?: { href: string; variable: string; pinDims: string[] };
+  // `variable`/`selection` = what is drawn (the URL's pick, else the defaults); `variables` and
+  // `stepDims` = what the layer row's pickers offer.
+  zarr?: {
+    href: string; variable: string; variables: string[];
+    stepDims: Record<string, CubeStep[]>; selection: Record<string, number>;
+    rescale?: [number | undefined, number | undefined];   // the user's Min/Max, if set
+    stacRescale?: [number, number];   // the item's STAC render stretch for this variable, if any
+    collectionHref?: string;          // where the collection's render stretch is looked up otherwise
+  };
 };
 
 // Geometry gates for the unstyled fallback render — without them its circle layer puts a dot on
@@ -215,4 +224,13 @@ export function orderedSublayerIds(
       ? Array.from({ length: n }, (_, li) => `pm-${s}-${li}`)
       : [`pm-${s}-fill`, `pm-${s}-line`, `pm-${s}-circle`];
   });
+}
+
+// A fingertip is wider than a 1 px fault line, so a tap with nothing right under it looks in a box
+// around the point. The feature under the point still wins.
+export function pickFeature(e: MapLayerMouseEvent, layers: string[]) {
+  if (e.features?.length || !layers.length) return e.features?.[0];
+  const r = matchMedia("(pointer: coarse)").matches ? 12 : 3;
+  const { x, y } = e.point;
+  return e.target.queryRenderedFeatures([[x - r, y - r], [x + r, y + r]], { layers })[0];
 }

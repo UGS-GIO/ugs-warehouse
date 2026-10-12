@@ -8,6 +8,10 @@
 // Core → BUTTS, SLABS, …), shown under the group label. Each value carries its own colour — which
 // for a per-group palette is simply the group's. `label` is the display string when the raw value
 // is a shouty managed code ('CORE CHIPS' → 'Core Chips'); the raw value is the fallback.
+import { useState } from "react";
+
+import { humanize } from "@/ui/ui";
+
 type Entry = {
   label: string; color: string;
   values?: readonly { value: string; color: string; label?: string }[];
@@ -119,35 +123,53 @@ export function legendFromStyle(
 // `entries`/`title` override an explicit legend (icon renders carry no derivable paint — e.g.
 // wells by-boxtype pie wedges). Otherwise derive from the style layers. `name` (the dataset title)
 // labels the single swatch of a uniform-symbology style.
-export function Legend({ layers, entries, title, name }: {
+// The swatch takes the geometry's shape, so a line layer's key reads as a line.
+type Shape = "fill" | "line" | "circle";
+const shapeOf = (layers?: Array<Record<string, unknown>>): Shape => {
+  const type = layers?.find((l) => ["fill", "line", "circle"].includes(String(l.type)))?.type;
+  return (type as Shape | undefined) ?? "fill";
+};
+function Swatch({ color, shape, small = false }: { color: string; shape: Shape; small?: boolean }) {
+  const size = small ? "h-2.5 w-2.5" : "h-3.5 w-3.5";
+  if (shape === "line") return <span aria-hidden className="inline-block h-[3px] w-4 shrink-0 rounded-full" style={{ background: color }} />;
+  return <span aria-hidden className={`inline-block ${size} shrink-0 border border-black/10 ${shape === "circle" ? "rounded-full" : "rounded-sm"}`} style={{ background: color }} />;
+}
+const SHOWN = 12;   // entries before "Show all", so a long legend does not bury the page below it
+
+export function Legend({ layers, entries, title, name, attached = false }: {
   layers?: Array<Record<string, unknown>>; entries?: Entry[]; title?: string; name?: string;
+  attached?: boolean;   // the map's footer, inside the map's card: a top rule, no box of its own
 }) {
+  const [all, setAll] = useState(false);
   const derived = layers ? legendFromStyle(layers) : null;
   const base = entries ?? derived?.entries;
   if (!base?.length) return null;
   // Uniform derived legend: one swatch, label it with the dataset name (the derived label is "").
   const uniform = !entries && derived?.uniform;
   const items = uniform ? [{ label: name ?? "All features", color: base[0].color }] : base;
-  const heading = title ?? derived?.field ?? "Legend";
+  const field = title ?? derived?.field;
+  const heading = field ? humanize(field) : "Legend";
+  const shape = shapeOf(layers);
+  const shown = all ? items : items.slice(0, SHOWN);
   // Grouped legend (entries carry `values`): stack each group's colour + label, with the
   // specific values it rolls up spelled out beneath. Otherwise the flat inline-wrap layout.
   const grouped = items.some((e) => e.values && e.values.length > 0);
   return (
-    <div className="mt-2 rounded-md border border-border bg-card p-2.5 text-xs">
-      <div className="mb-1.5 font-semibold text-muted-foreground">{heading}</div>
+    <div className={`${attached ? "border-t" : "mt-2 rounded-md border"} border-border bg-card px-3 py-2.5 text-sm`}>
+      <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{heading}</div>
       {grouped ? (
         <div className="grid gap-x-6 gap-y-2 [grid-template-columns:repeat(auto-fill,minmax(min(260px,100%),1fr))]">
-          {items.map((e, i) => (
+          {shown.map((e, i) => (
             <div key={i} className="flex flex-col gap-0.5 break-inside-avoid">
-              <span className="inline-flex items-center gap-1.5 font-medium text-foreground">
-                <span className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border" style={{ background: e.color }} />
+              <span className="inline-flex items-center gap-2 font-medium text-foreground">
+                <Swatch color={e.color} shape={shape} />
                 {e.label}
               </span>
               {e.values && e.values.length > 0 && (
                 <div className="flex flex-wrap gap-x-3 gap-y-1 pl-5.5 text-muted-foreground">
                   {e.values.map((v) => (
-                    <span key={v.value} className="inline-flex items-center gap-1">
-                      <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-sm border border-border" style={{ background: v.color }} />
+                    <span key={v.value} className="inline-flex items-center gap-1 text-xs">
+                      <Swatch color={v.color} shape={shape} small />
                       {v.label ?? v.value}
                     </span>
                   ))}
@@ -157,14 +179,19 @@ export function Legend({ layers, entries, title, name }: {
           ))}
         </div>
       ) : (
-        <div className="flex flex-wrap gap-x-4 gap-y-1.5">
-          {items.map((e, i) => (
-            <span key={i} className="inline-flex items-center gap-1.5 text-foreground">
-              <span className="inline-block h-3 w-3 shrink-0 rounded-sm border border-border" style={{ background: e.color }} />
-              {e.label}
+        <div className="grid gap-x-6 gap-y-1.5 [grid-template-columns:repeat(auto-fill,minmax(min(200px,100%),1fr))]">
+          {shown.map((e, i) => (
+            <span key={i} className="inline-flex min-w-0 items-center gap-2 text-foreground">
+              <Swatch color={e.color} shape={shape} />
+              <span className="truncate" title={e.label}>{e.label}</span>
             </span>
           ))}
         </div>
+      )}
+      {items.length > SHOWN && (
+        <button type="button" onClick={() => setAll(!all)} className="mt-2 text-xs font-medium text-primary hover:underline">
+          {all ? "Show fewer" : `Show all ${items.length}`}
+        </button>
       )}
     </div>
   );

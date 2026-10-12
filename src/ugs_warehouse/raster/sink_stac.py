@@ -64,4 +64,5 @@ def write(raster: Raster, *, bbox: list[float], geometry: dict | None = None,
         has_webmercator=has_webmercator, file_meta=file_meta,
     )
     stac.attach_renders(item)  # ugs-styles colormap/rescale -> render extension (graceful if none)
+    stac.stamp_file_meta(item)  # the copied COG's checksum, once a backfill has stored one
     return stac.write_item(item)

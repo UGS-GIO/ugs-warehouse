@@ -11,13 +11,14 @@ export const FORMAT_LABEL: Record<ExportFormat, string> = {
   csv: "CSV (WKT)",
 };
 
+// What each export is, by file, without naming an application.
 const FORMAT_HINT: Record<ExportFormat, string> = {
-  shp: "ArcMap · universal",
-  gpkg: "QGIS · ArcGIS Pro",
-  gdb: "ArcGIS Pro",
-  fgb: "streaming · web",
-  geojson: "web · always WGS 84",
-  csv: "spreadsheet · WKT geometry",
+  shp: ".shp in a zip",
+  gpkg: ".gpkg",
+  gdb: ".gdb in a zip",
+  fgb: ".fgb",
+  geojson: ".geojson · always WGS 84",
+  csv: ".csv · geometry as WKT",
 };
 
 const ORDER: ExportFormat[] = ["shp", "gpkg", "gdb", "fgb", "geojson", "csv"];
@@ -29,4 +30,4 @@ export const FORMATS = ORDER.map((id) => ({ id, label: FORMAT_LABEL[id] }));
 export const exportFormatsFor = (spatial: boolean): { id: ExportFormat; label: string; hint: string }[] =>
   spatial
     ? FORMATS.map((f) => ({ ...f, hint: FORMAT_HINT[f.id] }))
-    : [{ id: "csv", label: "CSV", hint: "spreadsheet" }];
+    : [{ id: "csv", label: "CSV", hint: ".csv" }];

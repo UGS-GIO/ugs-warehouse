@@ -1,0 +1,22 @@
+# Required check on PRs to main: main only takes develop. An admin hotfix bypasses the ruleset that
+# requires this check, and is then merged back into develop.
+name: main source
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  from-develop:
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR comes from develop
+        env:
+          HEAD: ${{ github.head_ref }}
+        run: |
+          if [ "$HEAD" != develop ]; then
+            echo "::error::PRs to main must come from develop (this one is from $HEAD). Target develop instead."
+            exit 1
+          fi

@@ -120,7 +120,7 @@ export const kindLabel = (it: ItemRef): string => KIND_LABELS[itemKind(it)];
 
 // ---- one "home" category (first match) — ported from ugs-data-catalog/src/lib/categorize.ts over
 // the warehouse STAC shape: serving topics by `ugs:dbt_schema`, the top collections by collId root,
-// publications by root/pub_type/series. Each category names the discovery facet a landing tile lands on.
+// publications by root/pub_type/series. Each category names the discovery facet its tile opens.
 export type CategoryResult = { key: string; label: string };
 type Category = CategoryResult & {
   match: (it: ItemRef) => boolean;
@@ -265,9 +265,15 @@ export const curatedDerived = (props: Record<string, unknown>): { curated: MetaR
   };
 };
 
-// Whether the item page shows a "Data schema" section. A publication Collection is a document,
-// not a table, so it shows one only when its lone data file (a single-file publication) has one.
-export const showsSchema = (d: StacDoc): boolean => d.type !== "Collection" || Boolean(tableColumns(d));
+// The curated record a reader wants on a layer's page: where the data comes from, how it may be used,
+// and who to ask.
+const ABOUT_DEFS: MetaDef[] = [
+  { key: "ugs:lineage", label: "Source" },
+  { key: "ugs:use_constraints", label: "Use constraints" },
+  { key: "ugs:point_of_contact", label: "Contact" },
+  { key: "ugs:topic_category", label: "Topic" },
+];
+export const aboutRows = (props: Record<string, unknown>): MetaRow[] => rowsFrom(props, ABOUT_DEFS);
 
 // Re-export the column-schema type so item-detail's schema table can import one thing from here.
 export type { TableColumn };

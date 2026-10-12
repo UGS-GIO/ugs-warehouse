@@ -1,6 +1,7 @@
 // The maplibre half of the preview map, loaded on demand — the catalog, search and doc views never
 // draw one. Mounted once by PreviewMapProvider and NEVER torn down: its DOM is portaled into
 // whichever slot is active, so navigating items swaps sources on one live WebGL context.
+import turfBbox from "@turf/bbox";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { sameFeature } from "@/lib/same-feature";
@@ -14,7 +15,7 @@ import { ensureCogProtocol } from "./cog";
 import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { boundsOf, type FocusSel, GEOM_FILTER, validBbox } from "./map-model";
+import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
 import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
@@ -61,7 +62,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
   focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
-  onFeatureSelect?: (props: Record<string, unknown>, fid: number | null) => void;
+  onFeatureSelect?: (props: Record<string, unknown>, fid: number | null, bbox?: FocusSel["bbox"]) => void;
   onClearSelection?: () => void;
 }) {
   const mapRef = useRef<MapRef>(null);
@@ -140,12 +141,14 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     if (b) map.fitBounds(b, { padding: 16, duration: 0 });
   }, [fitKey, mapLoaded, spec, showDem]);
 
-  // Fly to a picked feature (table row click). Keyed on focus.key so re-picking the same row re-flies.
+  // Fly to a picked feature (table row click, or Zoom to on the feature card). Keyed on focus.key so re-picking the same row re-flies.
   const fb = focus?.bbox;
   const focusKey = focus?.key;
   useEffect(() => {
     if (!fb || !mapRef.current) return;
     mapRef.current.fitBounds([[fb[0], fb[1]], [fb[2], fb[3]]], { padding: 60, maxZoom: 14, duration: 800 });
+    // On a phone the map can be above the screen by now; bring it back so the fly is seen.
+    mapRef.current.getContainer().scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [focusKey]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   // Move the stable container into the active slot (or the hidden holder when none), then resize —
@@ -217,12 +220,13 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
 
   const onMapClick = (e: MapLayerMouseEvent) => {
     if (!isVector) return;
-    const f = e.features?.[0];
+    const f = pickFeature(e, layerIds);
     if (!f) { highlightFeature(null); onClearSelection?.(); return; }
     const props = (f.properties ?? {}) as Record<string, unknown>;
     const fid = f.id != null ? Number(f.id) : null;
     highlightFeature(fid);  // exact outline via the tile's feature-state, no parquet read
-    onFeatureSelect?.(props, fid);
+    // The tile's copy of the geometry, so a long line is cut at the tile edge; near enough to zoom to.
+    onFeatureSelect?.(props, fid, turfBbox(f.geometry) as FocusSel["bbox"]);
     if (fid != null) onFeatureClick(fid, props);
   };
 
@@ -235,9 +239,13 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
             items={renderKeys.map((k) => ({ value: k, label: String(renders[k].title ?? k) }))} />
         </div>
       )}
-      <div className="mt-2 h-96 w-full overflow-hidden rounded-md border border-border bg-muted">
+      {/* One card: the map, sized by its width, with its legend as the footer when it has one. */}
+      <div className="mt-2 overflow-hidden rounded-md border border-border">
+      <div className="aspect-[4/3] max-h-[75svh] w-full bg-muted sm:aspect-[16/10] lg:max-h-[55svh]">
         <MapGL
           ref={mapRef}
+          // The page scrolls past the map; zooming takes Ctrl/⌘ + scroll, or two fingers on a phone.
+          cooperativeGestures
           mapLib={maplibregl}
           onLoad={() => setMapLoaded(true)}
           initialViewState={{ longitude: -111.7, latitude: 39.3, zoom: 6 }}
@@ -333,11 +341,12 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
       </div>
 
       {isVector && item && (
-        <Legend layers={styleLayers ?? undefined}
+        <Legend key={itemId} layers={styleLayers ?? undefined}
           entries={liveLegend?.entries ?? active?.legend ?? classificationEntries(item)}
-          title={liveLegend?.field ?? (active?.legend ? "box type" : undefined)}
-          name={String(item.properties?.title ?? item.id)} />
+          title={liveLegend?.field}
+          name={String(item.properties?.title ?? item.id)} attached />
       )}
+      </div>
     </>
   );
 

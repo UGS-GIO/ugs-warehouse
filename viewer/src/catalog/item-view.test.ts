@@ -3,7 +3,7 @@ import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatsOf, hasGeometry, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
-  series, showsSchema, title, typeOf, year,
+  series, title, typeOf, year,
 } from "./item-view";
 import { collectionAsItem, type StacDoc } from "@/stac";
 
@@ -153,16 +153,6 @@ describe("footprints and spatial data", () => {
   });
 });
 
-describe("showsSchema", () => {
-  it("hides the schema section for a publication Collection without a schema", () => {
-    expect(showsSchema({ type: "Collection", assets: { publication: { href: "x.pdf" } } })).toBe(false);
-    expect(showsSchema({ type: "Collection", assets: { data: { href: "x.parquet",
-      "table:columns": [{ name: "a" }] } } })).toBe(true);
-  });
-  it("keeps it for an Item, which says when no schema is published", () => {
-    expect(showsSchema({ type: "Feature", assets: {} })).toBe(true);
-  });
-});
 
 describe("bylineParts", () => {
   it("joins imprint · author · scale · date, only present parts", () => {

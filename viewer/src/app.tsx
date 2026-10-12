@@ -17,8 +17,10 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, collectionHrefOf, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
+import { type CubePicks, parseCubeParam, pickedRescale, VAR } from "./zarr/cube-picks";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
 import { useDataSaver } from "./lib/data-saver";
@@ -30,20 +32,20 @@ export { idOf } from "./stac";
 
 
 // `s` = selected data-series codes (DS, OFR, GQ…) — shareable series filter for a collection.
-export type View = "landing" | "catalog" | "map" | "discover" | "arch" | "guide" | "developers" | "preview" | "review" | "offline";
+export type View = "catalog" | "map" | "discover" | "guide" | "developers" | "preview" | "review" | "offline" | "settings";
 // `satisfies` keeps each value a literal, so `navigate({ to })` typechecks against the generated
 // route tree — a computed `/${view}` string would not, which is what the old cast papered over.
 const VIEW_PATH = {
-  landing: "/", catalog: "/catalog", map: "/map", discover: "/discover", arch: "/arch",
+  catalog: "/catalog", map: "/map", discover: "/",
   guide: "/guide", developers: "/developers", preview: "/preview",
-  review: "/review", offline: "/offline",
+  review: "/review", offline: "/offline", settings: "/settings",
 } satisfies Record<View, string>;
-const isView = (v: string): v is View => v !== "landing" && v in VIEW_PATH;
+const isView = (v: string): v is View => v in VIEW_PATH;
 export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string[]; sheet?: string };
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
 // null when the item carries none of them — it isn't a layer.
-export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
+export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveLayer | null {
   if (!ref?.data) return null;
   const id = idOf(ref.href);
   const title = String(ref.data.properties?.title ?? id);
@@ -64,11 +66,18 @@ export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };
   const zarr = zarrAsset(ref.data);
   // No drawable variable → not a layer, rather than a row that can never render.
-  const variable = zarr && Object.keys(cubeVariables(ref.data))[0];
-  if (zarr && variable) {
+  const variables = Object.keys(cubeVariables(ref.data));
+  if (zarr && variables.length) {
+    const stepDims = cubeStepDims(ref.data);
+    const variable = cube[VAR] && variables.includes(cube[VAR]) ? cube[VAR] : variables[0];
     return {
       id, title, bbox: ref.data.bbox,
-      zarr: { href: zarr.href, variable, pinDims: nonSpatialDimensions(ref.data) },
+      zarr: {
+        href: zarr.href, variable, variables, stepDims,
+        selection: resolveSelection(stepDims, cube), rescale: pickedRescale(cube),
+        stacRescale: cubeRenderRescale(ref.data, variable),
+        collectionHref: collectionHrefOf(ref.data, ref.href),
+      },
     };
   }
   return null;
@@ -89,10 +98,9 @@ const PRIMARY_VIEWS: { id: View; label: string }[] = [
 ];
 // Secondary views — always in the NavMenu overflow (desktop + mobile) so the tab row never overflows.
 const OVERFLOW_VIEWS: { id: View; label: string }[] = [
-  { id: "arch", label: "Architecture" },
   { id: "guide", label: "Guide" },
-  { id: "developers", label: "Developers" },
   { id: "offline", label: "Offline data" },
+  { id: "settings", label: "Settings" },
   ...(IS_REVIEW ? [{ id: "review" as const, label: "Review" }] : []),
 ];
 
@@ -103,15 +111,13 @@ const tab = (on: boolean) =>
 
 // The IAP user as a Utah-header action item (top-right of the official banner). Display-only — IAP
 // already gated access; the username shows, the full email is the tooltip. Clicking signs out via
-// IAP's clear-login-cookie flow.
+// IAP's clear-login-cookie flow. The icon is an HTML string, not an element: the header renders each
+// item twice (desktop bar and mobile menu), and one element would be moved into the second.
 function userActionItem(email: string): ActionItem {
-  const icon = document.createElement("span");
-  icon.textContent = "👤";
-  icon.title = `Signed in as ${email}`;
   return {
     title: email.split("@")[0],
     showTitle: true,
-    icon,
+    icon: `<span title="Signed in as ${email.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}">👤</span>`,
     className: "ugs-user-badge",
     // click → IAP sign-out (clears the login cookie, forces re-auth).
     actionFunction: () => { window.location.href = "/?gcp-iap-mode=CLEAR_LOGIN_COOKIE"; },
@@ -120,8 +126,11 @@ function userActionItem(email: string): ActionItem {
 
 // Thin top progress bar — visible while any TanStack Query fetch is in flight OR a view switch is
 // pending (useTransition). A global "working" signal so a slow load never reads as a frozen app.
+const SEARCH_BOX_QUERIES = new Set(["place-suggest", "header-search-index"]);
+
 function FetchBar({ pending }: { pending?: boolean }) {
-  const busy = useIsFetching() > 0 || pending;
+  // The search box has its own spinner.
+  const busy = useIsFetching({ predicate: (q) => !SEARCH_BOX_QUERIES.has(String(q.queryKey[0])) }) > 0 || pending;
   return (
     <div className="pointer-events-none fixed inset-x-0 top-0 z-50 h-0.5 overflow-hidden">
       {busy && <div className="fetch-bar h-full w-full bg-primary" />}
@@ -134,16 +143,13 @@ function useViewState() {
   // (catalog, m, ftsdb, …) ride in the same search untouched (see router.tsx validateSearch).
   const sp = useSearch({ from: "__root__" });
   const navigate = useNavigate();
-  // Param-less URL → the Landing front door, EXCEPT a legacy deep link that carries a catalog item
-  // (?c=&i= with no view=) still opens the catalog detail it always did — so old links keep working.
-  // The view is the PATH, not a ?view= param — see routes.tsx for why.
-  // A bare "/" with a selection still means the catalog, so old ?c=/?i= links keep working.
+  // The view is the PATH, not a ?view= param — see routes.tsx for why. "/" is Discover.
   const pathname = useRouterState({ select: (st) => st.location.pathname });
   const seg = pathname.replace(/^\/+|\/+$/g, "").split("/")[0];
-  const view: View = isView(seg) ? seg : sp.i || sp.c ? "catalog" : "landing";
+  const view: View = isView(seg) ? seg : "discover";
   const collectionUrl = sp.c;
   const itemUrl = sp.i;
-  const layerIds = parseLayerParam(sp.l);
+  const urlLayerIds = parseLayerParam(sp.l);
   const seriesSel = sp.s ? sp.s.split(",").filter(Boolean) : undefined;
 
   // Navigate by setting the nav search params; override/spike params are preserved. push for user nav
@@ -176,7 +182,7 @@ function useViewState() {
       },
     });
   };
-  // Tabs: catalog + map share the selection (c/i/l/s); the content views (search/arch/guide) reset
+  // Tabs: catalog + map share the selection (c/i/l/s); the content views (search/guide) reset
   // it, so the URL stays clean and returning to the catalog doesn't dump you back on an old item.
   // In a transition so switching to a heavy view keeps the current one interactive + flags `pending`.
   const [pending, startTransition] = useTransition();
@@ -224,7 +230,7 @@ function useViewState() {
   const catalog = useStac(CATALOG_URL);
 
   // ---- catalog tree (one level of nesting: root → sub-catalog → series collections) ----
-  // Counts + titles ride on the child links (warehouse emits ugs:item_count), so the landing
+  // Counts + titles ride on the child links (warehouse emits ugs:item_count), so the catalog page
   // and the series chooser render from a single fetch each — no per-collection fan-out. A
   // child whose href ends in catalog.json is a nesting sub-catalog (ugs-publications); the
   // rest are leaf collections. (A pre-nesting flat catalog has only leaf collections — this
@@ -330,10 +336,9 @@ function useViewState() {
   // says so rather than showing empty.
   const leafIndexMissing = Boolean(leafColl && isCatalogHref(leafColl.href) && idx[0]?.missing);
 
-  // The Map, Discover AND Landing views load every leaf collection's index (all items → the map +
-  // facets + the landing tiles/recent strip). Landing reuses this exact cached set — no extra fetch.
-  // Offline data needs it too, to name what is saved; it is the same cached set.
-  const mapColls = view === "map" || view === "discover" || view === "landing" || view === "offline"
+  // The Map and Discover views load every leaf collection's index (all items → the map, the facets
+  // and the category index). Offline data needs it too, to name what is saved; it is the same set.
+  const mapColls = view === "map" || view === "discover" || view === "offline"
     ? leafColls : [];
   // The root index covers this catalog; only federated collections load their own index.
   const root = useRootIndex(mapColls.length > 0);
@@ -356,9 +361,21 @@ function useViewState() {
   // they arrive only that way, and always after the indexes.
   const mapLoadKey = `root:${root.data?.count ?? 0}|` + mapIdx.map((r) => `${r.id}:${r.index?.items?.length ?? 0}`).join("|")
     + `|fb:${mapFbDocs.docs.filter((d) => d?.data).length}`;
-  // Still-streaming signal for the Landing tiles/recent strip, so counts aren't shown mid-crawl.
+  // Still streaming, so Discover's category index doesn't show counts that are still climbing.
   const mapItemsLoading = mapColls.length > 0
     && (root.isLoading || mapIdx.some((r) => r.isLoading) || mapFbDocs.isLoading);
+  // Opened with no layers chosen, the Map shows the ones saved for offline, so a layer saved from
+  // its page is on when you come back without a connection. Choosing layers (or none) takes over.
+  const offline = useOffline();
+  const savedUrls = new Set(offline.files.map((f) => f.url));
+  const savedLayerIds = view === "map" && !urlLayerIds && savedUrls.size
+    ? mapItems.flatMap((r) => {
+        const l = toLayer(r);
+        const href = l?.pmHref ?? l?.rasterPmHref ?? l?.cogHref;
+        return l && href && savedUrls.has(href) ? [l.id] : [];
+      })
+    : [];
+  const layerIds = urlLayerIds ?? (savedLayerIds.length ? savedLayerIds : undefined);
   // Layer collections first — the serving topics are what the map is for; pub plates come after.
   const collTitle = (id: string) => leafColls.find((c) => c.id === id)?.title ?? id;
   const layerRows: LayerRow[] = useMemo(() => layerRowsOf(mapItems, {
@@ -369,7 +386,7 @@ function useViewState() {
   }),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [mapLoadKey]);
-  // Discover and the landing list one entry per publication, not its layers and tables.
+  // Discover lists one entry per publication, not its layers and tables.
   const discoverItems = discoverable(mapItems);
 
   // i in the URL may be a short id (?i=GQ-1560) or a full STAC URL (older links). Resolve to
@@ -450,14 +467,10 @@ function useViewState() {
   // Open an item straight from a catalog cover strip (no collection open first): derive the leaf
   // collection key from the item href so it resolves + the URL stays tidy.
   const openCover = (href: string) => go({ view, c: entryCollKeyOf(href), i: idOf(href) });
-  // Landing → Discover: open an item's drawer, or start Discover on a query / a category tile (each
-  // clears any stale Discover keys so the handoff is a clean, shareable /discover?…).
-  const openInDiscover = (href: string) => go({ view: "discover", c: entryCollKeyOf(href), i: idOf(href) });
   // The full item page. Below lg this replaces the Discover drawer.
   const openItemPage = (href: string) => go({ view: "catalog", c: entryCollKeyOf(href), i: idOf(href) });
-  // Landing hands off to Discover: the search box, the category rows, "Browse all". `to` is
-  // REQUIRED — a view is a path now, so navigating with search alone stayed on "/" and appended a
-  // ?view= nobody reads, which is what made the landing buttons look dead.
+  // The header search hands a query to Discover, clearing stale Discover keys. `to` is REQUIRED: a
+  // view is a path, so navigating with search alone would stay put.
   const openDiscoverSearch = (opts: { q?: string; category?: string }) =>
     navigate({
       to: VIEW_PATH.discover,
@@ -540,7 +553,9 @@ function useViewState() {
   const byId = new Map([...mapItems, ...allItems].map((r) => [idOf(r.href), r]));
   if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
   const idsForMap = layerIds ?? (itemUrl ? [idOf(itemUrl)] : []);
-  const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
+  const cubePicks = parseCubeParam(sp.cube);
+  const activeLayers = idsForMap.map((id) => toLayer(byId.get(id), cubePicks[id]))
+    .filter((l): l is ActiveLayer => l !== null);
 
   // Coverage overlay data: every loaded item that has a bbox → a footprint rectangle. Lets the map
   // show WHAT IS MAPPED WHERE across the open collection, including items with no COG/PMTiles asset
@@ -556,14 +571,14 @@ function useViewState() {
   // scroll-box stuck in the middle of an item page.)
   const mapView = view === "map";
   // The Map, Discover and Preview views LOCK the viewport (a full-height split/shell whose inner panes
-  // scroll) — unlike the document views (landing/catalog/search/developers/…), which scroll the page
+  // scroll) — unlike the document views (catalog/guide/developers/…), which scroll the page
   // under a sticky header.
   const lockedView = mapView || view === "discover" || view === "preview";
   // Same cached queries the map itself reads (TanStack dedupes by key) — the legend needs the bound
   // style layers, and the drawer renders outside the map component.
   const styleCache = useStyleLayersFor(activeLayers.map((l) => ({ id: l.id, styleUrl: l.styleUrl })));
   // "Is this item a resolvable map layer?" — the gate the Add-to-map button self-checks. `layerRows`
-  // only covers the map/discover/landing set (mapColls), so on the item page (catalog view, where
+  // only covers the map/discover set (mapColls), so on the item page (catalog view, where
   // mapColls is empty) it's empty. Also treat the OPEN item as a layer when its own loaded doc draws
   // as one — otherwise the item-detail Add-to-map button is permanently hidden there.
   const isLayerId = (id: string) =>
@@ -572,7 +587,7 @@ function useViewState() {
     go, view, setView, catalog, lockedView, pending, mapView,
     catalogDocs, mapItems, discoverItems, mapLoadKey, mapItemsLoading,
     searchIsLayer, pickPlace, pickSearchItem,
-    openItem, openInDiscover, openItemPage, openDiscoverSearch, openCollection, openCover,
+    openItem, openItemPage, openDiscoverSearch, openCollection, openCover,
     itemUrl, item, itemNotFound, partOf, collectionId, collectionUrl, layerIds, seriesSel,
     rootChildren, cardsWithCovers, allItems, itemsLoading, leafIndexMissing, leafColl, crumbs, itemCrumbs,
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
@@ -608,11 +623,11 @@ export function AppLayout() {
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
     <PreviewMapProvider>
     <div className={lockedView
-      ? "grid h-full grid-cols-1 grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
+      ? "grid h-full grid-cols-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden bg-background text-sm text-foreground"
       : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
-        <Link to="/" title="Home — catalog root"
+        <Link to="/" title="Home"
           className="flex items-center gap-2 whitespace-nowrap hover:opacity-80">
           {/* The emblem shows only where index.css hides the state band (phones, short screens). Where
               the band shows it already carries the beehive, and a second copy read as a duplicate. */}
@@ -623,7 +638,7 @@ export function AppLayout() {
           </span>
           <strong className="font-display text-xl tracking-tight">UGS Warehouse</strong>
         </Link>
-        {/* Beside the name, not in a hero — the URL applies to every view, not just the landing. */}
+        {/* Beside the name, not in a hero — the URL applies to every view. */}
         <StacUrlChip url={CATALOG_URL} />
         <div className="ml-auto flex items-center gap-1">
           {/* The same views twice, but only one is ever rendered: tabs where they fit, hamburger
@@ -645,7 +660,8 @@ export function AppLayout() {
         </div>
       </header>
 
-      {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
+      {/* Always mounted, empty when there is no error, so the locked grid keeps its rows. */}
+      <div>{catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}</div>
 
       <Suspense fallback={<div className="flex items-center justify-center p-16 text-sm text-muted-foreground">Loading…</div>}>
       <ViewContext.Provider value={state}>
@@ -653,7 +669,8 @@ export function AppLayout() {
         <SavingNotice />
       </ViewContext.Provider>
       </Suspense>
-      {!lockedView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
+      {/* Every view, full-height ones included: it carries the state's required links. */}
+      <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />
     </div>
     </PreviewMapProvider>
   );

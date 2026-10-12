@@ -35,6 +35,7 @@ import os
 import time
 
 import duckdb
+from pydantic import ByteSize, TypeAdapter, ValidationError
 
 from . import ducklake
 
@@ -62,7 +63,7 @@ CLEANUP_RESERVE_SECONDS = int(os.environ.get("DUCKLAKE_CLEANUP_RESERVE_SECONDS",
 ORPHAN_GRACE_DAYS = int(os.environ.get("DUCKLAKE_ORPHAN_GRACE_DAYS", "7"))
 
 
-_UNITS = {"": 1, "B": 1, "KB": 10**3, "MB": 10**6, "GB": 10**9}
+_BYTES = TypeAdapter(ByteSize)
 
 
 def _as_bytes(size: str | None) -> int | None:
@@ -73,16 +74,9 @@ def _as_bytes(size: str | None) -> int | None:
     """
     if size is None:
         return None
-    text = str(size).strip().upper()
-    for suffix, mult in sorted(_UNITS.items(), key=lambda kv: -len(kv[0])):
-        if suffix and text.endswith(suffix):
-            text = text[: -len(suffix)].strip()
-            break
-    else:
-        mult = 1
     try:
-        return int(float(text) * mult)
-    except ValueError:
+        return int(_BYTES.validate_python(size))
+    except ValidationError:
         return None
 
 

@@ -1,19 +1,23 @@
-"""Prune orphaned publication STAC items (case twins, renamed IDs) after a reingest.
+"""Prune orphaned publication directories (case twins, renamed IDs) and old-layout files.
 
-Compare published item objects under publication collections against the IDs produced
-by current source data. Orphans are deleted so refresh_catalog does not retain stale
-items.
+Compare the published `<group>/<SERIES>/<SID>/` directories against the publications the current
+source produces. Orphans are deleted so refresh_catalog does not retain stale publications.
 
 An orphan is deleted only when one of its files is still in the source under another id: a case
 twin or a renamed id. An orphan whose files the source no longer lists is a document missing from
 the source, not a stale copy, so it is reported and kept. The guard on top refuses to delete more
 than MAX_ORPHAN_SHARE of the source, so an empty or partial source cannot wipe the catalog.
 
+`--legacy` also removes the files the old layout left (a pub's `<SID>/<SID>.json`, a series'
+collection.json/items.json/items.parquet), each only once its replacement exists, so a series
+still in the old layout keeps its files.
+
 Dry-run by default. The pubs pipeline runs it with --apply before the pubs ingest, whose catalog
 refresh then drops the deleted items.
 
     python -m ugs_warehouse.pubs.prune            # list what would go
     python -m ugs_warehouse.pubs.prune --apply    # delete
+    python -m ugs_warehouse.pubs.prune --legacy --apply
 """
 from __future__ import annotations
 
@@ -107,35 +111,30 @@ def orphan_pub_paths(expected: set[str] | None = None, groups: tuple[str, ...] =
 _LEGACY_SERIES_FILES = ("collection.json", "items.json", "items.parquet")
 
 
-def _legacy_scan(expected: set[str], groups: tuple[str, ...]) -> tuple[list[str], int]:
-    """Old-layout files the new layout has replaced, and how many series were seen.
+def legacy_layout_paths(expected: set[str] | None = None, groups: tuple[str, ...] = PUB_GROUPS) -> list[str]:
+    """Old-layout files the new layout has replaced, in series the refresh has switched over.
 
-    A pub's old Item `<SID>.json` is listed only beside its new `collection.json`, and a series'
-    old collection/items files only beside its new `catalog.json`, so nothing is removed before
-    its replacement exists. The pub ISO sidecar is the new Collection's own record, so it stays.
+    Only series with a `catalog.json`, which the refresh writes once every pub in the series has
+    migrated, are touched: a pending series is still indexed from its old files. Within one, a
+    pub's old Item `<SID>.json` is listed only beside its new `collection.json`. The pub ISO
+    sidecar is the new Collection's own record, so it stays.
     """
+    if expected is None:
+        expected = expected_pub_dirs()
     out: list[str] = []
-    series: set[tuple[str, str]] = set()
     for group in groups:
         root = f"{config.STAC_PREFIX}/{group}/"
         listing = set(gcs.list_paths(root))
         for path in sorted(listing):
             parts = path[len(root):].split("/")
-            if len(parts) >= 2:
-                series.add((group, parts[0]))
-            if len(parts) == 2 and parts[1] in _LEGACY_SERIES_FILES and f"{root}{parts[0]}/catalog.json" in listing:
+            if f"{root}{parts[0]}/catalog.json" not in listing:
+                continue
+            if len(parts) == 2 and parts[1] in _LEGACY_SERIES_FILES:
                 out.append(path)
             elif (len(parts) == 3 and f"{group}/{parts[0]}/{parts[1]}" in expected
                   and parts[2] == f"{parts[1]}.json" and f"{root}{parts[0]}/{parts[1]}/collection.json" in listing):
                 out.append(path)
-    return out, len(series)
-
-
-def legacy_layout_paths(expected: set[str] | None = None, groups: tuple[str, ...] = PUB_GROUPS) -> list[str]:
-    """Old-layout files (pub Item `<SID>.json`, series collection/items files) whose replacement exists."""
-    if expected is None:
-        expected = expected_pub_dirs()
-    return _legacy_scan(expected, groups)[0]
+    return out
 
 
 def main() -> int:
@@ -160,9 +159,7 @@ def main() -> int:
         print("[prune-pubs] nothing stale under publication collections")
 
     if args.legacy:
-        rc = _prune_legacy(args, expected)
-        if rc:
-            return rc
+        _prune_legacy(args, expected)
 
     if not args.apply:
         print("[prune-pubs] dry-run — re-run with --apply")
@@ -195,22 +192,14 @@ def _prune_orphans(args: argparse.Namespace, pubs: list[dict], expected: set[str
     return 0
 
 
-def _prune_legacy(args: argparse.Namespace, expected: set[str]) -> int:
-    """Report old-layout files and, with --apply, delete them. Returns an exit code."""
-    legacy, n_series = _legacy_scan(expected, PUB_GROUPS)
-    bound = len(expected) + 3 * n_series
+def _prune_legacy(args: argparse.Namespace, expected: set[str]) -> None:
+    """Report old-layout files and, with --apply, delete them."""
+    legacy = legacy_layout_paths(expected)
     print(f"[prune-pubs] {len(legacy)} file(s) from the old layout")
-    if len(legacy) > bound:
-        print(f"[prune-pubs] {'REFUSE' if args.apply else 'would REFUSE'}: {len(legacy)} old-layout files "
-              f"exceeds the {bound} expected for {len(expected)} publications and {n_series} series; "
-              f"check the listing before deleting", file=sys.stderr)
-        if args.apply:
-            return 1
     for path in legacy:
         print(f"  {'delete' if args.apply else 'would delete'} {path}")
     if args.apply:
         delete_verified(legacy)
-    return 0
 
 
 if __name__ == "__main__":

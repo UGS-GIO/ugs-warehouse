@@ -63,6 +63,16 @@ def test_legacy_keeps_series_files_with_no_new_catalog(monkeypatch):
     assert P.legacy_layout_paths(expected=set(), groups=("ugs-publications",)) == []
 
 
+def test_legacy_keeps_a_migrated_pubs_old_item_while_its_series_is_pending(monkeypatch):
+    """The refresh still indexes a pending series from its old items, so they all stay."""
+    _listing(monkeypatch, [f"{PFX}/ugs-publications/OFR/OFR-1/OFR-1.json",
+                           f"{PFX}/ugs-publications/OFR/OFR-1/collection.json",
+                           f"{PFX}/ugs-publications/OFR/OFR-2/OFR-2.json",
+                           f"{PFX}/ugs-publications/OFR/collection.json"])
+    assert P.legacy_layout_paths(expected={"ugs-publications/OFR/OFR-1", "ugs-publications/OFR/OFR-2"},
+                                 groups=("ugs-publications",)) == []
+
+
 def test_renamed_reads_collection_json_then_the_old_item(monkeypatch):
     docs = {"g/S/d1/collection.json": {"assets": {"publication": {"href": "a.pdf"}}},
             "g/S/d2/d2.json": {"assets": {"publication": {"href": "b.pdf"}}}}
@@ -148,7 +158,7 @@ def test_legacy_flag_lists_in_dry_run_and_deletes_with_apply(monkeypatch, capsys
     deleted = _live_store(monkeypatch, P, legacy)
     monkeypatch.setattr(P.source, "read_pubs", lambda: SOURCE)
     monkeypatch.setattr(P, "orphan_pub_paths", lambda expected=None: [])
-    monkeypatch.setattr(P, "_legacy_scan", lambda expected, groups: (list(legacy), 2))
+    monkeypatch.setattr(P, "legacy_layout_paths", lambda expected=None, groups=None: list(legacy))
 
     monkeypatch.setattr(sys, "argv", ["prune", "--legacy"])
     assert P.main() == 0
@@ -162,28 +172,11 @@ def test_legacy_flag_lists_in_dry_run_and_deletes_with_apply(monkeypatch, capsys
     assert deleted == legacy
 
 
-def test_legacy_apply_refuses_past_the_bound(monkeypatch, capsys):
-    legacy = [f"{ROOT}/x{n}.json" for n in range(100 + 3 * 1 + 1)]
-    deleted: list[str] = []
-    monkeypatch.setattr(P.gcs, "delete", deleted.append)
-    monkeypatch.setattr(P.source, "read_pubs", lambda: SOURCE)
-    monkeypatch.setattr(P, "orphan_pub_paths", lambda expected=None: [])
-    monkeypatch.setattr(P, "_legacy_scan", lambda expected, groups: (list(legacy), 1))
-
-    monkeypatch.setattr(sys, "argv", ["prune", "--legacy"])
-    assert P.main() == 0
-    assert "would REFUSE" in capsys.readouterr().err
-
-    monkeypatch.setattr(sys, "argv", ["prune", "--legacy", "--apply"])
-    assert P.main() == 1
-    assert deleted == []
-
-
 def test_orphan_refusal_stops_before_the_legacy_block(monkeypatch):
     orphans = {f"{ROOT}/OFR-{n}X": f"https://ugspub.nr.utah.gov/publications/ofr/ofr-{n}.pdf"
                for n in range(50)}
     deleted = _catalog(monkeypatch, orphans, SOURCE)
-    monkeypatch.setattr(P, "_legacy_scan", lambda expected, groups: pytest.fail("legacy ran"))
+    monkeypatch.setattr(P, "legacy_layout_paths", lambda expected=None, groups=None: pytest.fail("legacy ran"))
     monkeypatch.setattr(sys, "argv", ["prune", "--legacy", "--apply"])
     assert P.main() == 1
     assert deleted == []
@@ -262,7 +255,7 @@ def test_legacy_apply_raises_when_a_delete_does_not_take(monkeypatch):
     _live_store(monkeypatch, P, legacy, works=False)
     monkeypatch.setattr(P.source, "read_pubs", lambda: SOURCE)
     monkeypatch.setattr(P, "orphan_pub_paths", lambda expected=None: [])
-    monkeypatch.setattr(P, "_legacy_scan", lambda expected, groups: (list(legacy), 2))
+    monkeypatch.setattr(P, "legacy_layout_paths", lambda expected=None, groups=None: list(legacy))
     monkeypatch.setattr(sys, "argv", ["prune", "--legacy", "--apply"])
     with pytest.raises(RuntimeError, match="still present"):
         P.main()

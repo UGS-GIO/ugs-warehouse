@@ -8,12 +8,18 @@ with collections:
     {STAC_PREFIX}/{collection}/{id}/{id}.json        item
 
 A collection may nest one level — a sub-catalog whose children are collections
-(`ugs-publications/<SERIES>`, `ugs-serving-topics/<SCHEMA>`). Nesting sub-catalogs listed in
-`ROLLUP_INDEX_CATALOGS` also publish an items.json spanning every child, so one-fetch consumers
-keep a single URL for "all of X".
+(`ugs-serving-topics/<SCHEMA>`). Nesting sub-catalogs listed in `ROLLUP_INDEX_CATALOGS` also
+publish an items.json spanning every child, so one-fetch consumers keep a single URL for "all of X".
 
-`refresh_catalog()` lists GCS and rebuilds the root + every collection.json from what's
-actually there (idempotent, concurrency-tolerant) — no manual regen, no shared-file races.
+Publications nest two levels: `<group>/catalog.json` -> series `<group>/<SERIES>/catalog.json`
+-> publication `<group>/<SERIES>/<SID>/collection.json` -> items `<SID>/<ITEM_ID>/<ITEM_ID>.json`.
+The pubs ingest writes the publication collections (`build_collection` + `write_collection`). A
+series not yet fully reingested stays in the old layout: one `<group>/<SERIES>/collection.json`
+over `<SID>/<SID>.json` items.
+
+`refresh_catalog()` lists GCS and rebuilds the root + every catalog and non-publication
+collection.json from what's actually there (idempotent, concurrency-tolerant) — no manual regen,
+no shared-file races.
 """
 from __future__ import annotations
 
@@ -137,7 +143,7 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
     """A STAC Item placed in the collection-nested layout.
 
     Lives at `{collection_path}/{id}/{id}.json` (default `collection_path` = `collection`,
-    the flat one-level layout; pubs pass a nested `ugs-publications/<SERIES>` path). The
+    the flat one-level layout; pubs pass their publication's `<group>/<SERIES>/<SID>` path). The
     root link climbs out to `{STAC_PREFIX}/catalog.json` — its depth follows the path.
     `extra_links` (web-map-links, via, cite-as, …) are appended; `proj_epsg` adds the
     projection extension + `proj:code` (the data's CRS).
@@ -194,7 +200,8 @@ def _layout_path(item: dict) -> str:
 
 def item_object_path(collection_path: str, item_id: str) -> str:
     """GCS path for an item. `collection_path` is the collection's layout path — a single
-    segment for flat collections, or `ugs-publications/<SERIES>` for nested series."""
+    segment for flat collections, `ugs-serving-topics/<SCHEMA>` for a nested one, or
+    `<group>/<SERIES>/<SID>` for a publication."""
     return f"{config.STAC_PREFIX}/{collection_path}/{item_id}/{item_id}.json"
 
 
@@ -278,14 +285,16 @@ def manual_override(item_id: str) -> dict:
 
 
 def prior_property(collection_path: str, item_id: str, prop: str):
-    """Value of `prop` in the currently-published item.json, or None if the item doesn't exist yet or
-    can't be read. Lets a reingest PRESERVE a field (e.g. description) when the incoming metadata omits
-    it — last-non-empty wins, so a resubmit with no description keeps the old one instead of blanking it."""
+    """Value of `prop` in the currently-published item.json, or None if the item doesn't exist yet.
+    Lets a reingest PRESERVE a field (e.g. description) when the incoming metadata omits it —
+    last-non-empty wins, so a resubmit with no description keeps the old one instead of blanking it.
+    Any other read error raises: falling back on a transient failure would publish, and then
+    preserve, the wrong value."""
     try:
         item = json.loads(gcs.get_bytes(item_object_path(collection_path, item_id)))
-        return (item.get("properties") or {}).get(prop)
-    except Exception:  # noqa: BLE001 — first ingest / missing / unreadable → no prior value
+    except FileNotFoundError:
         return None
+    return (item.get("properties") or {}).get(prop)
 
 
 def prior_collection_field(collection_path: str, field: str):
@@ -453,7 +462,8 @@ def _group_items(paths: list[str]) -> dict[str, list[str]]:
     Item layout is `<collection_path>/<id>/<id>.json`, where `collection_path` is one
     segment for flat collections (`ugs-serving-topics`), two for nested series
     (`ugs-serving-topics/<topic>`), or three for a publication (`ugs-publications/<SERIES>/<SID>`;
-    the two-segment publication form is the old layout). catalog.json / collection.json / items.json are skipped.
+    the two-segment publication form is an old-layout series). catalog.json / collection.json /
+    items.json are skipped.
     """
     out: dict[str, list[str]] = {}
     for path in paths:
@@ -552,7 +562,7 @@ def _collection_assets(path: str, items: list[dict], mirror: object | None = Non
 
     Portolan requires a thumbnail on a geospatial collection (PTL-VIZ-001), and a collection whose
     items are all one kind of thing can borrow an item's: the scenes of a raster dataset, or the
-    publications of one series. Not a serving-topic collection: that is a dbt schema holding
+    publications of one old-layout series. Not a serving-topic collection: that is a dbt schema holding
     unrelated layers, so one layer's preview would misrepresent the other eleven. That is the grain
     question (#257), not something a thumbnail should paper over.
 
@@ -601,11 +611,12 @@ def _child_link(href: str, title: str | None, count: int | None, mappable: int |
 
 def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None = None,
                     description: str | None = None, items_index: bool = False,
-                    depth: int = 1, child_file: str = "collection.json") -> dict:
+                    depth: int = 1) -> dict:
     """A nesting Catalog `depth` path segments below the root whose children each sit at
-    `./<child id>/<child_file>`: per-series collections under a top catalog, series catalogs under
-    a publications catalog, or publication collections under a series catalog.
-    `children` = [{id, title, count, mappable?}, …].
+    `./<child id>/<file>`: per-series collections under a top catalog, series catalogs or
+    old-layout series collections under a publications catalog, or publication collections under
+    a series catalog. `children` = [{id, title, count, mappable?, file?}, …]; `file` defaults to
+    `collection.json`.
 
     `items_index` adds a rollup index link spanning every child collection — see
     ROLLUP_INDEX_CATALOGS."""
@@ -628,7 +639,8 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
             *catalog_docs.markdown_links(),
             *([{"rel": INDEX_REL, "href": "./items.json", "type": "application/json",
                 "title": "Items index (all child collections)"}] if items_index else []),
-            *[_child_link(f"./{c['id']}/{child_file}", c.get("title"), c.get("count"), c.get("mappable"))
+            *[_child_link(f"./{c['id']}/{c.get('file', 'collection.json')}", c.get("title"),
+                          c.get("count"), c.get("mappable"))
               for c in sorted(children, key=lambda c: c["id"])],
         ],
     }
@@ -749,7 +761,7 @@ def _write_json(doc: dict, object_path: str) -> None:
 
 
 # Publication-series descriptions, verbatim from geology.utah.gov/map-pub. Set as the series
-# collection's STAC `description` (any client renders it; the viewer already shows it).
+# catalog's (or old-layout series collection's) STAC `description`.
 SERIES_DESC = {
     "B": "Bulletins are topically and/or geographically comprehensive — mostly original work or a comprehensive synthesis of existing data.",
     "C": "Circulars address timely subjects, have a limited shelf life, and are geared toward a wide, non-specialized audience.",
@@ -788,7 +800,7 @@ COLLECTION_TITLE_PROP = "ugs:collection_title"
 
 def _group_title(catalog: str, items: list[dict]) -> str | None:
     """Title for a nested collection, inherited from its items — an explicit
-    `ugs:collection_title` first, then the pub type for a publication series, else None
+    `ugs:collection_title` first, then the pub type for an old-layout publication series, else None
     (`_collection_doc` prettifies the id)."""
     for it in items:
         title = (it.get("properties") or {}).get(COLLECTION_TITLE_PROP)
@@ -798,6 +810,11 @@ def _group_title(catalog: str, items: list[dict]) -> str | None:
         return next((it.get("properties", {}).get("ugs:pub_type") for it in items
                      if it.get("properties", {}).get("ugs:pub_type")), None)
     return None
+
+
+def _is_pub_collection_path(path: str) -> bool:
+    """True for a `<group>/<SERIES>/<SID>` path under a publication catalog."""
+    return path.split("/")[0] in PUB_SERIES_CATALOGS and path.count("/") == 2
 
 
 def _pub_collection_paths(paths: list[str]) -> dict[str, int]:
@@ -811,54 +828,77 @@ def _pub_collection_paths(paths: list[str]) -> dict[str, int]:
     return out
 
 
-def _write_pub_tree(pub_colls: dict[str, int], mappable: dict[str, int]) -> list[dict]:
-    """Write `<group>/<SERIES>/catalog.json` over each series' publication collections and
-    `<group>/catalog.json` over its series, with README/AGENTS beside each. Returns the root child
-    entries for the groups present. An unreadable collection.json raises."""
+def _pub_series_layout(groups: dict[str, list[str]],
+                       pub_colls: dict[str, int]) -> tuple[set[str], dict[str, list[str]]]:
+    """Split publication series (`<group>/<SERIES>`) into those indexed in the collection layout
+    and those still pending, `{series: [SIDs with an old-layout item and no collection.json]}`.
+
+    A series switches as a whole, once every old-layout `<SID>/<SID>.json` in it has a
+    collection.json beside it, so a partial reingest never hides a published publication."""
+    series = {g for g in groups if g.split("/")[0] in PUB_SERIES_CATALOGS and g.count("/") == 1}
+    series |= {p.rsplit("/", 1)[0] for p in [*groups, *pub_colls] if _is_pub_collection_path(p)}
+    migrated: set[str] = set()
+    pending: dict[str, list[str]] = {}
+    for s in series:
+        missing = sorted(sid for sid in groups.get(s, []) if f"{s}/{sid}" not in pub_colls)
+        if missing:
+            pending[s] = missing
+        else:
+            migrated.add(s)
+    return migrated, pending
+
+
+def _write_pub_series(pub_colls: dict[str, int],
+                      has_mappable_item: set[str]) -> tuple[dict[str, list[dict]], dict[str, str]]:
+    """Write `<group>/<SERIES>/catalog.json` over each migrated series' publication collections,
+    with README/AGENTS beside each. Returns `({group: [series child entries]}, {path: problem})`;
+    a publication whose collection.json is unreadable is left out of its series."""
     from concurrent.futures import ThreadPoolExecutor
 
-    def _meta(path: str) -> tuple[str, str, str | None]:
-        doc = json.loads(gcs.get_bytes(collection_object_path(path)).decode())
-        return path, doc.get("title") or prettify(path.rsplit("/", 1)[1]), doc.get("ugs:pub_type")
+    def _meta(path: str) -> tuple[str, dict | str]:
+        try:
+            return path, json.loads(gcs.get_bytes(collection_object_path(path)).decode())
+        except Exception as e:  # noqa: BLE001 (reported as a problem; the refresh carries on)
+            return path, f"unreadable collection.json: {path}: {type(e).__name__}: {e}"
 
     with ThreadPoolExecutor(max_workers=64) as ex:
-        meta = {p: (t, pt) for p, t, pt in ex.map(_meta, sorted(pub_colls))}
+        docs = dict(ex.map(_meta, sorted(pub_colls)))
+    skipped = {p: d for p, d in docs.items() if isinstance(d, str)}
     series: dict[str, list[str]] = {}
-    for path in pub_colls:
-        series.setdefault(path.rsplit("/", 1)[0], []).append(path)
+    for path, doc in docs.items():
+        if isinstance(doc, dict):
+            series.setdefault(path.rsplit("/", 1)[0], []).append(path)
     by_group: dict[str, list[dict]] = {}
     for spath, pubs in sorted(series.items()):
         group, code = spath.split("/")
-        kids = [{"id": p.rsplit("/", 1)[1], "title": meta[p][0], "count": pub_colls[p],
-                 "mappable": mappable.get(p, 0)} for p in pubs]
-        stitle = next((meta[p][1] for p in pubs if meta[p][1]), None) or prettify(code)
+        # A publication is mappable when one of its items is, or when its lone plate sits on the
+        # collection itself.
+        kids = [{"id": p.rsplit("/", 1)[1], "title": docs[p].get("title") or prettify(p.rsplit("/", 1)[1]),
+                 "count": pub_colls[p], "mappable": int(p in has_mappable_item or _is_mappable(docs[p]))}
+                for p in pubs]
+        stitle = next((docs[p].get("ugs:pub_type") for p in pubs if docs[p].get("ugs:pub_type")),
+                      None) or prettify(code)
         desc = SERIES_DESC.get(code) or f"UGS warehouse - {stitle}."
-        _write_json(_subcatalog_doc(code, kids, title=stitle, description=desc, depth=2,
-                                    child_file="collection.json"),
+        _write_json(_subcatalog_doc(code, kids, title=stitle, description=desc, depth=2),
                     f"{config.STAC_PREFIX}/{spath}/catalog.json")
         _write_markdown(spath, title=stitle, description=desc, kind="catalog", children=len(kids))
-        by_group.setdefault(group, []).append({"id": code, "title": stitle,
+        by_group.setdefault(group, []).append({"id": code, "title": stitle, "file": "catalog.json",
                                                "count": sum(k["count"] for k in kids),
                                                "mappable": sum(k["mappable"] for k in kids)})
-    out = []
-    for group, kids in sorted(by_group.items()):
-        gtitle = prettify(group.replace("ugs-", ""))
-        _write_json(_subcatalog_doc(group, kids, title=gtitle, child_file="catalog.json"),
-                    f"{config.STAC_PREFIX}/{group}/catalog.json")
-        _write_markdown(group, title=gtitle, description=f"UGS warehouse - {gtitle}, by data series.",
-                        kind="catalog", children=len(kids))
-        out.append({"href": f"./{group}/catalog.json", "title": gtitle,
-                    "count": sum(k["count"] for k in kids),
-                    "mappable": sum(k["mappable"] for k in kids)})
-    return out
+    return by_group, skipped
 
 
-def refresh_catalog() -> None:
+def refresh_catalog(*, strict: bool = False) -> list[str]:
     """Rebuild the root catalog + every non-publication collection.json by listing items in GCS.
 
-    Publication collections are written by the pubs ingest; refresh builds the group and series
-    catalogs over them and indexes their items. Old-layout publication groups are skipped and
-    publication item groups with no collection.json are reported in a RuntimeError at the end.
+    A publication series whose every publication has a collection.json is indexed in the
+    collection layout: refresh writes its series catalog over the collections the pubs ingest
+    wrote and indexes their items. A series still pending stays in the old layout, one
+    collection.json over `<SID>/<SID>.json` items, and the new-layout objects in it are ignored.
+
+    Returns the problems found (publication items with no collection.json, unreadable publication
+    collection.json), each also printed. The root files are always written; `strict` then raises
+    if there were problems.
 
     Derive-from-truth + idempotent: safe to run after each ingest or on demand. Under
     concurrent ingests the last writer wins (brief staleness, self-heals next run).
@@ -868,18 +908,24 @@ def refresh_catalog() -> None:
     paths = gcs.list_paths(config.STAC_PREFIX)
     groups = _group_items(paths)
     pub_colls = _pub_collection_paths(paths)
-    pub_mappable: dict[str, int] = {}
-    # Publication groups are 3 segments (`<group>/<SERIES>/<SID>`). Anything else under a pub
-    # catalog is the old layout, left for the prune; a 3-segment group without a collection.json
-    # is an orphan, reported after the refresh finishes.
-    legacy = sorted(g for g in groups if g.split("/")[0] in PUB_SERIES_CATALOGS and g.count("/") != 2)
-    orphans = sorted(g for g in groups if g.split("/")[0] in PUB_SERIES_CATALOGS
-                     and g.count("/") == 2 and g not in pub_colls)
-    for g in legacy + orphans:
-        del groups[g]
-    if legacy:
-        print(f"[catalog] {len(legacy)} old-layout publication series awaiting prune --legacy: "
-              f"{', '.join(legacy)}", file=sys.stderr)
+    migrated, pending = _pub_series_layout(groups, pub_colls)
+    for spath, sids in sorted(pending.items()):
+        print(f"[catalog] {spath}: {len(sids)} publication(s) not yet in the collection layout, "
+              f"series stays in the old layout: {', '.join(sids[:5])}{' ...' if len(sids) > 5 else ''}",
+              file=sys.stderr)
+    awaiting = sorted(s for s in migrated if s in groups)
+    if awaiting:
+        print(f"[catalog] {len(awaiting)} migrated publication series still hold old-layout items "
+              f"awaiting prune --legacy: {', '.join(awaiting)}", file=sys.stderr)
+    orphans = sorted(g for g in groups if _is_pub_collection_path(g) and g not in pub_colls)
+    problems = [f"publication items with no collection.json: {g}" for g in orphans]
+    for g in list(groups):
+        if g in migrated or (_is_pub_collection_path(g)
+                             and (g in orphans or g.rsplit("/", 1)[0] not in migrated)):
+            del groups[g]
+    pub_colls = {p: 0 for p in pub_colls if p.rsplit("/", 1)[0] in migrated}
+    pub_entries: dict[str, list[dict]] = {}
+    pub_mappable: set[str] = set()
 
     # 1. Write each leaf collection.json + items.json (flat or nested). collection id = the
     #    path's last segment (a series code when nested); title from the items' pub type.
@@ -905,11 +951,12 @@ def refresh_catalog() -> None:
             items = [it for it in executor.map(_fetch_one, sorted(item_ids)) if it is not None]
             nested = "/" in path
             top, cid = path.split("/")[0], path.split("/")[-1]
-            if top in PUB_SERIES_CATALOGS:
+            if _is_pub_collection_path(path):
                 # Publication collections are written by the pubs ingest; refresh only indexes them.
-                everything.extend(_index_entry(it, prefix=f"{path}/") for it in items)
+                pub_entries[path] = [_index_entry(it, prefix=f"{path}/") for it in items]
                 pub_colls[path] = len(item_ids)
-                pub_mappable[path] = sum(1 for it in items if _is_mappable(it))
+                if any(_is_mappable(it) for it in items):
+                    pub_mappable.add(path)
                 continue
             # Title/description are inherited, never authored here: see _group_title. A group with
             # nothing to inherit stays None and _collection_doc falls back to prettify(id).
@@ -942,17 +989,22 @@ def refresh_catalog() -> None:
                           "mappable": mappable}
 
     # 2. Build the hierarchy. A top-level segment with nested children (and no direct items)
-    #    becomes a sub-catalog (e.g. ugs-serving-topics → one collection per topic);
-    #    everything else is a flat collection directly under root. Child links carry counts.
-    root_children = _write_pub_tree(pub_colls, pub_mappable)
+    #    becomes a sub-catalog (e.g. ugs-serving-topics → one collection per topic, a publication
+    #    group → its series); everything else is a flat collection directly under root. Child
+    #    links carry counts.
+    pub_series, skipped = _write_pub_series(pub_colls, pub_mappable)
+    problems += skipped.values()
+    everything.extend(e for path, entries in pub_entries.items() if path not in skipped for e in entries)
     tops: dict[str, list[str]] = {}
     for path in groups:
-        if path.split("/")[0] in PUB_SERIES_CATALOGS:
-            continue
-        tops.setdefault(path.split("/")[0], []).append(path)
+        if not _is_pub_collection_path(path):
+            tops.setdefault(path.split("/")[0], []).append(path)
+    for group in pub_series:
+        tops.setdefault(group, [])
+    root_children = []
     for top, paths in tops.items():
         if top not in groups:  # sub-catalog (nested, no direct items)
-            kids = [leaf[p] for p in sorted(paths)]
+            kids = [leaf[p] for p in sorted(paths)] + pub_series.get(top, [])
             ptitle = prettify(top.replace("ugs-", ""))
             rolled = rollup.get(top)
             if rolled is not None:  # one index spanning every child collection
@@ -983,6 +1035,9 @@ def refresh_catalog() -> None:
     n = sum(len(v) for v in groups.values())
     print(f"[catalog] {config.public_url(config.STAC_PREFIX + '/catalog.json')} "
           f"({len(groups)} collections, {n} items)")
-    if orphans:
-        raise RuntimeError(f"[catalog] publication items with no collection.json "
-                           f"(refresh otherwise completed): {', '.join(orphans)}")
+    for problem in problems:
+        print(f"[catalog] {problem}", file=sys.stderr)
+    if strict and problems:
+        raise RuntimeError(f"[catalog] {len(problems)} problem(s) after the refresh completed: "
+                           f"{'; '.join(problems)}")
+    return problems

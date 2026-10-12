@@ -69,7 +69,12 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
     """Write a representative catalog through the real builders and return its root."""
     store: dict[str, bytes] = {}
     monkeypatch.setattr(stac.gcs, "put_bytes", lambda b, p, **k: store.__setitem__(p, b))
-    monkeypatch.setattr(stac.gcs, "get_bytes", lambda p: store[p])
+    def get(p):
+        if p not in store:
+            raise FileNotFoundError(p)
+        return store[p]
+
+    monkeypatch.setattr(stac.gcs, "get_bytes", get)
     monkeypatch.setattr(stac.gcs, "list_paths", lambda pre: [k for k in store if k.startswith(pre)])
     monkeypatch.setattr(stac.gcs, "exists", lambda p: p in store)
     monkeypatch.setattr(stac.config, "EXTERNAL_CATALOGS", [])  # federated roots are not ours to validate

@@ -5,7 +5,7 @@
 // title carries the delete and the glyph carries the state.
 import { useOffline } from "./store";
 import { useOfflineLayer } from "./use-offline";
-import { DownloadIcon } from "@/catalog/stac-url-chip";
+import { DownloadIcon } from "@/shell/icons";
 import { formatBytes, isSupported } from "./opfs";
 
 // On a touch screen the control grows to a 44 px target; a mouse keeps the dense row.

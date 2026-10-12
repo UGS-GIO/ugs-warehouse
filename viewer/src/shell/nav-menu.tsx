@@ -7,8 +7,9 @@
 import { Menu } from "@base-ui/react/menu";
 import { useState } from "react";
 
-import { CheckIcon, CopyIcon, copyCatalogUrl } from "@/catalog/stac-url-chip";
-import { BUILD_URL, GITHUB_MARK, LEGAL_LINKS, REPO_URL } from "./legal-footer";
+import { copyCatalogUrl } from "@/catalog/stac-url-chip";
+import { CheckIcon, CopyIcon, GitHubIcon } from "@/shell/icons";
+import { BUILD_URL, LEGAL_LINKS, REPO_URL } from "./legal-footer";
 
 export type NavPage = { id: string; label: string; onSelect: () => void };
 
@@ -81,7 +82,7 @@ export function NavMenu({ pages, overflow = [], current, catalogUrl }: {
             {/* Phones only: desktop has the header band and footer. */}
             <Menu.Item className={`${ITEM} md:hidden`} nativeButton={false}
               render={<a href={REPO_URL} target="_blank" rel="noreferrer" />}>
-              <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden><path d={GITHUB_MARK} /></svg>
+              <GitHubIcon />
               v{__APP_VERSION__}
             </Menu.Item>
             <Menu.Separator className="my-1 h-px bg-border md:hidden" />

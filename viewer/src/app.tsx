@@ -10,7 +10,8 @@ import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetPar
 import { flyTo, queueFocus, setPin } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
 import { MapSearch } from "./shell/map-search";
-import { GITHUB_MARK, LegalFooter, REPO_URL } from "./shell/legal-footer";
+import { LegalFooter, REPO_URL } from "./shell/legal-footer";
+import { githubIconHtml } from "./shell/icons";
 import { SavingNotice } from "./offline/saving-notice";
 import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
@@ -129,7 +130,7 @@ function releaseActionItem(): ActionItem {
   return {
     title: `v${__APP_VERSION__}`,
     showTitle: true,
-    icon: `<svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="${GITHUB_MARK}"/></svg>`,
+    icon: githubIconHtml(),
     actionFunction: () => { window.open(REPO_URL, "_blank", "noreferrer"); },
   };
 }

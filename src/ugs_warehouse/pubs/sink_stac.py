@@ -201,6 +201,19 @@ def layer_item_id(sid: str, label: str) -> str:
     return f"{item_id_for(sid)}_{label}"
 
 
+def layer_title(label: str) -> tuple[str, str | None]:
+    """`(title, description)` for an extracted layer or table label. A `<dir>__` prefix (the
+    extractor's uniqueness prefix) moves to the description; CamelCase and underscores split into
+    words; all-caps and mixed-case tokens and digits stay as written, and all-lower words are
+    capitalised."""
+    prefix, sep, rest = label.partition("__")
+    if not (sep and prefix and rest):
+        prefix, rest = "", label
+    words = [w for part in rest.split("_") for w in re.split(r"(?<=[a-z])(?=[A-Z])", part) if w]
+    title = " ".join(w.capitalize() if w.islower() else w for w in words) or label
+    return title, f"From {prefix}" if prefix else None
+
+
 def is_single_file(*, has_cog: bool, has_units: bool, has_3d: bool,
                    vector_layers: list[str] | None, companion_tables: list[dict] | None) -> bool:
     """True when a publication has exactly one data Item. Portolan keeps a single-file collection's
@@ -354,21 +367,24 @@ def build_publication(p: dict, attachments: list[dict], *,
         meta = layer_meta.get(label, {})
         lb = meta.get("bbox")
         rows = {"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}
-        items.append(item(layer_id(label), stac.prettify(label), {"data": {
+        ltitle, ldesc = layer_title(label)
+        items.append(item(layer_id(label), ltitle, {"data": {
             "href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
-            "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}},
+            "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}},
             geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
             footprint_source=LAYER_BBOX_SOURCE if lb else aoi_source,
-            extra={**crs_of(meta), **rows}))
+            extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {})}))
     for t in companion_tables or []:
         label, meta = t["label"], layer_meta.get(t["label"], {})
+        ltitle, ldesc = layer_title(label)
         asset = {"href": config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet"),
-                 "type": PARQUET_MIME, "title": stac.prettify(label), "roles": ["data"]}
+                 "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
         if t.get("columns"):
             asset["table:columns"] = t["columns"]
-        items.append(item(layer_id(label), stac.prettify(label), {"data": asset},
+        items.append(item(layer_id(label), ltitle, {"data": asset},
                           geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source,
-                          extra={"table:row_count": meta["rows"]} if meta.get("rows") is not None else None,
+                          extra={**({"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}),
+                                 **({"description": ldesc} if ldesc else {})},
                           extensions=[stac.TABLE_EXT] if t.get("columns") else None))
     if has_3d:
         items.append(item(f"{pub_id}_fence", "3D fence diagram", {

@@ -262,3 +262,32 @@ def test_the_collection_extent_covers_the_footprint_and_every_item():
                                              "geometry_types": ["LineString"]},
                              "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}})
     assert coll["extent"]["spatial"]["bbox"] == [[-113.0, 40.5, -112.0, 41.5]]
+
+
+@pytest.mark.parametrize("label,title,description", [
+    ("UtahLandslideMaps__DebrisFlowPaths", "Debris Flow Paths", "From UtahLandslideMaps"),
+    ("geounits", "Geounits", None),
+    ("SJsymbs50000", "SJsymbs50000", None),
+    ("gems__ContactsAndFaults", "Contacts And Faults", "From gems"),
+    ("contacts_and_faults", "Contacts And Faults", None),
+    ("GIS_DEM_overlay2", "GIS DEM Overlay2", None),
+    ("USGSFaults_2020", "USGSFaults 2020", None),
+    ("a__", "A", None),
+])
+def test_layer_title_reads_as_words(label, title, description):
+    assert sink_stac.layer_title(label) == (title, description)
+
+
+def test_layer_and_table_items_carry_readable_titles_and_the_source_dir():
+    _, items = sink_stac.build_publication(
+        P, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0],
+        vector_layers=["Maps__DebrisFlowPaths"],
+        companion_tables=[{"label": "geounits", "columns": [{"name": "a"}]}],
+        layers={"Maps__DebrisFlowPaths": {"rows": 1, "bbox": None}, "geounits": {"rows": 1}})
+    by_id = {it["id"]: it for it in items}
+    layer = next(i for k, i in by_id.items() if k.endswith("Maps__DebrisFlowPaths"))
+    assert layer["properties"]["title"] == "Debris Flow Paths"
+    assert layer["properties"]["description"] == "From Maps"
+    assert layer["assets"]["data"]["title"] == "Debris Flow Paths"
+    table = next(i for k, i in by_id.items() if k.endswith("geounits"))
+    assert table["properties"]["title"] == "Geounits" and "description" not in table["properties"]

@@ -177,8 +177,8 @@ def test_each_serving_topic_layer_is_also_its_own_collection(monkeypatch, tmp_pa
     layer = json.loads((root / "ugs-serving-topics" / "hazards" / "hazards_qfaults" / "collection.json").read_text())
     rollup = json.loads((root / "ugs-serving-topics" / "items.json").read_text())
 
-    assert {"rel": "child", "href": "./hazards_qfaults/collection.json"}.items() <= next(
-        lk for lk in schema["links"] if lk["rel"] == "child").items()
+    assert any(lk["rel"] == "child" and lk["href"] == "./hazards_qfaults/collection.json"
+               for lk in schema["links"])
     assert layer["id"] == "hazards_qfaults" and layer["type"] == "Collection"
     assert {"data", "pmtiles"} <= set(layer["assets"])
     assert not [lk for lk in layer["links"] if lk["rel"] == "item"]

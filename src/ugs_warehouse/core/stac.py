@@ -364,7 +364,8 @@ def write_collection(coll: dict, *, children: int) -> str:
     path = coll["_collection_path"]
     doc = {k: v for k, v in coll.items() if k != "_collection_path"}
     obj = collection_object_path(path)
-    _write_json(doc, obj)
+    # plain, like items: obstore can't read a gzipped GCS object (no Content-Length)
+    _write_json(doc, obj, compress=False)
     _write_markdown(path, title=doc["title"], description=doc["description"], kind="collection",
                     children=children, extent=doc["extent"])
     return obj
@@ -752,12 +753,12 @@ def _write_markdown(path: str, *, title: str, description: str, kind: str, child
                       content_type=catalog_docs.MARKDOWN_MIME, cache_control=gcs.CACHE_CATALOG)
 
 
-def _write_json(doc: dict, object_path: str) -> None:
+def _write_json(doc: dict, object_path: str, *, compress: bool = True) -> None:
     # catalog.json / collection.json / items.json — short edge cache + SWR (see gcs.CACHE_CATALOG),
     # stored gzipped: the biggest of these (a 4,212-item index) is 6.3 MB plain, 250 KB compressed.
     gcs.put_bytes(json.dumps(doc, indent=2).encode(), object_path,
                   content_type="application/json", cache_control=gcs.CACHE_CATALOG,
-                  compress=True)
+                  compress=compress)
 
 
 # Publication-series descriptions, verbatim from geology.utah.gov/map-pub. Set as the series

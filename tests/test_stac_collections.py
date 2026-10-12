@@ -94,6 +94,22 @@ def test_write_collection_writes_json_and_markdown_without_the_private_key(monke
     assert f"{base}/README.md" in store and f"{base}/AGENTS.md" in store
 
 
+def test_write_collection_stores_json_uncompressed(monkeypatch):
+    flags = {}
+    monkeypatch.setattr(stac.gcs, "put_bytes",
+                        lambda b, p, **kw: flags.__setitem__(p, kw.get("compress")))
+    path = stac.write_collection(_coll(), children=1)
+    assert flags[path] is False
+
+
+def test_write_json_compresses_by_default(monkeypatch):
+    flags = {}
+    monkeypatch.setattr(stac.gcs, "put_bytes",
+                        lambda b, p, **kw: flags.__setitem__(p, kw.get("compress")))
+    stac._write_json({"type": "Catalog"}, "x/catalog.json")
+    assert flags["x/catalog.json"] is True
+
+
 def test_attach_collection_iso_writes_a_sidecar_and_a_metadata_asset(monkeypatch):
     store = _mem(monkeypatch)
     coll = _coll()

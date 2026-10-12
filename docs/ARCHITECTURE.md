@@ -90,8 +90,23 @@ rebinds renders without a reingest.
 ### ⑤ Publications 🟧
 
 Publications are a second producer into the same STAC catalog: scanned geologic maps become COGs +
-footprints, routed into three collections (`ugs-publications`, `ugs-mining-district-files`,
+footprints, routed into three groups (`ugs-publications`, `ugs-mining-district-files`,
 `ugs-external`).
+
+Each group is a Catalog of series Catalogs (`<group>/<SERIES>/catalog.json`), and each publication
+is a Collection under its series (`<group>/<SERIES>/<SID>/collection.json`). The Collection holds
+the documents (PDF, cover, ISO record, original zips) as assets and the DOI as `cite-as` +
+`sci:doi`; the plate COG, units, extracted layers and tables, and the 3D fence are its Items at
+`<SID>/<ITEM_ID>/<ITEM_ID>.json`. A publication with one data file keeps it on the Collection and
+has no Items. The pubs ingest writes the Collections and Items; `refresh_catalog` writes the series
+and group catalogs over them.
+
+A series switches to this layout as a whole, once every publication in it has a `collection.json`.
+Until then the refresh indexes it as before, one series `collection.json` over `<SID>/<SID>.json`
+items, ignores its new-layout objects, and prints the publications still pending. Publications the
+feed does not list (mostly mining district files) hold their series in the old layout. After a
+series switches, `pubs.prune --legacy --apply` deletes its old files, only where the replacement
+exists.
 
 Metadata comes from the publications app's live feed (`publications.pubs_feed_v1`); `PUBS_DB_URL`
 is required. The ops console's **Full refresh** runs the jobs in order: cover thumbnails, 3D,

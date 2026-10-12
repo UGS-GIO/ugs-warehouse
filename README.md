@@ -10,11 +10,16 @@ bucket, served read-only through the maps-assets CDN and a static STAC viewer.
   thumbnails, STAC item. See `docs/ARCHITECTURE.md`.
 
 One STAC catalog spans both, laid out with collections (`ugs-serving-topics`, `ugs-publications`,
-`ugs-rasters`). `ugs-serving-topics` and `ugs-publications` nest one level — per dbt mart schema
-(`ugs-serving-topics/hazards`) and per publication series (`ugs-publications/DS`) — and serving
-topics also publish a rollup `ugs-serving-topics/items.json` spanning every schema. The root
-`items.json` indexes every item in the catalog in one file, and each collection carries an
-`items.parquet` (stac-geoparquet) mirror of its items. An optional
+`ugs-rasters`). `ugs-serving-topics` nests one level, per dbt mart schema
+(`ugs-serving-topics/hazards`), and publishes a rollup `ugs-serving-topics/items.json` spanning
+every schema. The publication groups (`ugs-publications`, `ugs-mining-district-files`,
+`ugs-external`) are catalogs of series catalogs (`ugs-publications/OFR/catalog.json`), and each
+publication is a Collection under its series (`ugs-publications/OFR/OFR-1/collection.json`) with
+its documents as assets and its plate, layers and tables as Items. A series moves to that layout
+once every publication in it has been reingested; until then it stays one series collection over
+per-publication items. The root `items.json` indexes every item in the catalog in one file, and
+each collection the refresh builds carries an `items.parquet` (stac-geoparquet) mirror of its
+items. An optional
 Django **ops console** (`admin/`) drives + observes the Cloud Run jobs.
 
 ## Architecture

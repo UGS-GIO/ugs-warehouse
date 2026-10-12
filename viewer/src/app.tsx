@@ -17,7 +17,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
@@ -408,12 +408,22 @@ function useViewState() {
   // A publication Collection reaches every view in the item shape, so the detail page, the map and
   // the add-to-map gate read it like any item. `raw` is the doc as published, for the JSON panel.
   const itemData = useMemo(() => itemQuery.data && collectionAsItem(itemQuery.data), [itemQuery.data]);
-  const item = { data: itemData, raw: itemQuery.data, error: itemQuery.error, isLoading: itemQuery.isLoading };
-  // `?i=` names nothing in this catalog: its doc 404s, or everything that could resolve it (the
-  // tree, the open collection's index, a rollup) has loaded without a match.
-  const resolving = catalog.isLoading || subDocs.isLoading || itemsLoading
-    || rollupIdx.some((r) => r.isLoading);
-  const itemNotFound = itemMissing({ itemUrl, itemHref, error: itemQuery.error, resolving });
+  // Every query on the way from `?c=&i=` to an href: the tree, the open collection's index and its
+  // collection.json/item-link fallback, and a rollup. The index may be absent (the fallback covers
+  // it); the rest failing means the item cannot be looked up, which is not "not found".
+  const resolution = resolutionStatus([
+    catalog, subDocs, fbCollDocs, { isLoading: fbDocs.isLoading },
+    ...idx.map((r) => ({ isLoading: r.isLoading })),
+    ...rollupIdx.map((r) => ({ isLoading: r.isLoading, error: r.error, optional: true })),
+  ]);
+  const item = {
+    data: itemData, raw: itemQuery.data, isLoading: itemQuery.isLoading,
+    // Unresolved because a lookup failed: that failure is the item's error (offline, 5xx).
+    error: itemQuery.error ?? (itemHref ? undefined : resolution.error),
+  };
+  // `?i=` names nothing in this catalog: its doc 404s, or every lookup finished cleanly without a match.
+  const itemNotFound = itemMissing({ itemUrl, itemHref, error: itemQuery.error,
+                                     resolving: resolution.resolving, failed: resolution.error != null });
 
   // "Part of <publication>" on an Item whose collection is a publication (listed under a series leaf).
   const partOfHref = item.data && itemHref ? collectionLink(item.data)?.href : undefined;

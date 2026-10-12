@@ -421,10 +421,25 @@ export class HttpError extends Error {
 }
 export const isNotFound = (e: unknown): boolean => e instanceof HttpError && e.status === 404;
 
+// A catalog that publishes no `ugs-items-index` link: like a 404 index, an expected absence.
+export class NoIndexError extends Error {}
+export const isMissingIndex = (e: unknown): boolean => isNotFound(e) || e instanceof NoIndexError;
+
+// Rolls up the queries that turn `?c=&i=` into an href: whether any is still loading, and the first
+// real failure. An `optional` query (an items index) that 404s or has no index link is an expected
+// absence, not a failure.
+export const resolutionStatus = (qs: { isLoading: boolean; error?: unknown; optional?: boolean }[]) => {
+  const failed = qs.find((q) => q.error != null && !(q.optional && isMissingIndex(q.error)));
+  return { resolving: qs.some((q) => q.isLoading), error: failed?.error };
+};
+
 // Whether the selected `?i=` names nothing: its doc 404'd, or nothing resolved it to an href once
-// every source that could (`resolving`) has finished.
-export const itemMissing = (o: { itemUrl?: string; itemHref?: string; error?: unknown; resolving: boolean }): boolean =>
-  Boolean(o.itemUrl) && (isNotFound(o.error) || (!o.itemHref && !o.resolving));
+// every source that could has finished (`resolving`) without any of them failing (`failed`). A
+// failed source means the answer is unknown, not "not found".
+export const itemMissing = (o: {
+  itemUrl?: string; itemHref?: string; error?: unknown; resolving: boolean; failed?: boolean;
+}): boolean =>
+  Boolean(o.itemUrl) && (isNotFound(o.error) || (!o.itemHref && !o.resolving && !o.failed));
 
 async function fetchJson(url: string): Promise<StacDoc> {
   const r = await fetch(url);
@@ -455,6 +470,7 @@ export function useDocs(urls: string[]) {
   return {
     docs: results.map((r, i) => ({ url: urls[i], data: r.data })),
     isLoading: results.some((r) => r.isLoading),
+    error: results.find((r) => r.error)?.error ?? undefined,
     loaded: results.filter((r) => r.data).length,
   };
 }
@@ -631,7 +647,7 @@ async function indexUrlFor(href: string, qc: QueryClient): Promise<string> {
   if (!isCatalogHref(href)) return href.replace(/collection\.json(\?.*)?$/, "items.json");
   const cat = await qc.ensureQueryData({ queryKey: qk.stac(href), queryFn: () => fetchJson(href) });
   const link = cat.links?.find((l) => l.rel === INDEX_REL);
-  if (!link) throw new Error(`no ${INDEX_REL} link in ${href}`);
+  if (!link) throw new NoIndexError(`no ${INDEX_REL} link in ${href}`);
   return new URL(link.href, href).href;
 }
 
@@ -667,6 +683,7 @@ export function useIndexes(collections: { id: string; href: string }[]) {
     index: results[i].data as ItemsIndex | undefined,
     isLoading: results[i].isLoading,
     missing: Boolean(results[i].error),
+    error: results[i].error ?? undefined,
   }));
 }
 

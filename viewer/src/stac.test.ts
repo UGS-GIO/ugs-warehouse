@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, catalogItemHref, citeLink, collectionAsItem, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, catalogItemHref, citeLink, collectionAsItem, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
@@ -397,6 +397,27 @@ describe("itemMissing", () => {
   it("is missing once everything that could resolve the id has loaded without a match", () => {
     expect(itemMissing({ itemUrl: "MD-1002", resolving: false })).toBe(true);
     expect(itemMissing({ itemUrl: "MD-1002", resolving: true })).toBe(false);
+  });
+  it("is not missing while the collection.json fallback is still fetching", () => {
+    // The leaf's items.json 404'd (optional), so its item links are loading from collection.json.
+    const r = resolutionStatus([
+      { isLoading: false }, { isLoading: false },
+      { isLoading: true },                                               // fallback collection.json
+      { isLoading: false, error: new HttpError(404, "404"), optional: true },
+    ]);
+    expect(r).toEqual({ resolving: true, error: undefined });
+    expect(itemMissing({ itemUrl: "B-1", resolving: r.resolving, failed: r.error != null })).toBe(false);
+  });
+  it("is unknown, not missing, when a lookup fails", () => {
+    const offline = new TypeError("Failed to fetch");
+    const r = resolutionStatus([{ isLoading: false, error: offline }, { isLoading: false }]);
+    expect(r.error).toBe(offline);
+    expect(itemMissing({ itemUrl: "B-1", resolving: false, failed: true })).toBe(false);
+    // An absent index (404, or a catalog with no index link) is expected, not a failure.
+    expect(resolutionStatus([{ isLoading: false, error: new NoIndexError("no link"), optional: true }]).error)
+      .toBeUndefined();
+    expect(resolutionStatus([{ isLoading: false, error: new HttpError(503, "503"), optional: true }]).error)
+      .toBeInstanceOf(HttpError);
   });
   it("is not missing for a doc that exists, another failure, or no selection", () => {
     expect(itemMissing({ itemUrl: "MD-10", itemHref: "https://x/a.json", resolving: false })).toBe(false);

@@ -63,6 +63,13 @@ describe("an item that is not in the catalog", () => {
     expect(onBack).toHaveBeenCalledOnce();
     expect(screen.queryByText("Loading…")).toBeNull();
   });
+
+  it("shows a failed lookup as could-not-load, not as not found", () => {
+    render(<ItemDetail collectionId="ugs-publications/B" error={new Error("503 Service Unavailable")}
+      layout="page" onBack={noop} onMap={noop} />);
+    expect(screen.getByText("Could not load this item.")).toBeDefined();
+    expect(screen.queryByText(/Not found/)).toBeNull();
+  });
 });
 
 describe("a series list", () => {

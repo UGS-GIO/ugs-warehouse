@@ -184,8 +184,8 @@ def test_each_serving_topic_layer_is_also_its_own_collection(monkeypatch, tmp_pa
     assert not [lk for lk in layer["links"] if lk["rel"] == "item"]
     assert (root / "ugs-serving-topics" / "hazards" / "hazards_qfaults" / "AGENTS.md").exists()
     entry = next(e for e in rollup["items"] if e["id"] == "hazards_qfaults")
-    assert {"rel": stac.LAYER_COLLECTION_REL,
-            "href": "./hazards/hazards_qfaults/collection.json"}.items() <= entry["links"][-1].items()
+    link = next(lk for lk in entry["links"] if lk["rel"] == stac.LAYER_COLLECTION_REL)
+    assert link["href"] == "./hazards/hazards_qfaults/collection.json"
 
 
 def _bad_catalog(tmp_path: Path) -> Path:

@@ -74,6 +74,7 @@ def readme(*, title: str, description: str, kind: str, children: int,
     """The human entry point. `kind` is "catalog", "collection" or "layer" (a collection holding one
     dataset as its own assets); `children` counts what it holds."""
     noun = "collections" if kind == "catalog" else "items"
+    doc_type = "catalog" if kind == "catalog" else "collection"
     lic = license_id or config.DATA_LICENSE
     out = [f"# {title}\n\n", f"{description}\n\n"]
     if kind != "layer":  # a layer is one dataset: its files are assets, it holds nothing
@@ -86,7 +87,7 @@ def readme(*, title: str, description: str, kind: str, children: int,
     if formats:
         out.append("\n## Reading the data\n\n")
         out.extend(f"- **{name}** — {how}\n" for name, how in formats)
-    out.append(f"\nThe machine-readable description of this {'catalog' if kind == 'catalog' else 'collection'} is `{'catalog' if kind == 'catalog' else 'collection'}.json` "
+    out.append(f"\nThe machine-readable description of this {doc_type} is `{doc_type}.json` "
                f"beside this file. `{AGENTS_NAME}` covers access patterns for programs.\n")
     return "".join(out)
 

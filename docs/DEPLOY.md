@@ -105,7 +105,7 @@ gcloud run jobs executions list --job=geolmap-harvest --region=$REGION --project
 ```
 
 Per-series instead of `--all`: override args at execute time —
-`... execute geolmap-harvest --args=M-283 ...`
+`... execute geolmap-harvest --args=-m,ugs_warehouse.pubs.harvest,M-283 ...` (`--args` replaces the job's whole argument list, so it repeats the module)
 
 Source rasters: a map with a raster at `gs://ut-dnr-ugs-maps-prod-public/geolmap/sources/30x60/<series id>.tif`
 takes its plate from that file, and its GIS zip supplies only the units. The folder is the one place

@@ -73,10 +73,11 @@ gcloud storage buckets add-iam-policy-binding gs://ut-dnr-ugs-maps-prod-public \
 
 Feature PRs merge to `develop`, which deploys the develop environment (`cloudbuild-dev.yaml`: `-dev`
 read-side services, no jobs, no data writes) and the dev viewer site. release-please keeps a release
-PR open on `develop`; merging it bumps the version and tags it. A PR from `develop` to `main`, merged
-with a merge commit, ships the release: the push to `main` runs `cloudbuild.yaml` and the live viewer
-deploy. A ruleset on `main` requires the `main source` check, so only `develop` merges there; an admin
-can bypass it for a hotfix, which then merges back into `develop`.
+PR open on `develop`; merging it bumps the version. A PR from `develop` to `main`, merged with a
+merge commit, ships the release: the push to `main` runs `cloudbuild.yaml` and the live viewer deploy,
+and release-please tags it and publishes the GitHub release. A ruleset on `main` requires the
+`main source` check, so only `develop` merges there; an admin can bypass it for a hotfix, which then
+merges back into `develop`.
 
 The trigger runs this; by hand:
 

@@ -345,11 +345,13 @@ def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
 
 
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
-                *, suffix: str = "", write_stac_item: bool = True) -> bool:
+                *, suffix: str = "", write_stac_item: bool = True,
+                single_file_sids: set[str] | None = None) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
     empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object,
     never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
-    uploads the scratch pmtiles for direct inspection but writes NO STAC item — see `build()`."""
+    uploads the scratch pmtiles for direct inspection but writes NO STAC item — see `build()`.
+    `single_file_sids` (see `_single_file_sids`) is required when a STAC item is written."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
@@ -421,7 +423,9 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
         if write_stac_item:
-            _write_item(tier, sids, obj, by_sid, bounds=bounds)
+            if single_file_sids is None:
+                raise ValueError("build_tier needs single_file_sids to link members when writing a STAC item")
+            _write_item(tier, sids, obj, by_sid, bounds=bounds, single_file_sids=single_file_sids)
         else:
             print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
                   f"inspect tiles directly at {config.public_url(obj)}")
@@ -429,23 +433,49 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         return True
 
 
-def _public_item_href(collection_path: str, item_id: str) -> str:
-    """A member map's item in the PUBLIC catalog. Pub items live only there, so a mosaic baked into
-    the review catalog still links its members to the public CDN rather than to review paths that
-    don't exist."""
-    rel = stac.item_object_path(collection_path, item_id).removeprefix(config.STAC_PREFIX).lstrip("/")
+def _public_href(object_path: str) -> str:
+    """A STAC document's href in the PUBLIC catalog. Pub documents live only there, so a mosaic baked
+    into the review catalog still links its members to the public CDN rather than to review paths
+    that don't exist."""
+    rel = object_path.removeprefix(config.STAC_PREFIX).lstrip("/")
     return f"{config.PUBLIC_CATALOG_URL.rsplit('/', 1)[0]}/{rel}"
 
 
+def _public_item_href(collection_path: str, item_id: str) -> str:
+    return _public_href(stac.item_object_path(collection_path, item_id))
+
+
+def _single_file_sids(sids: list[str]) -> set[str]:
+    """The members (UPPER ids, all with a COG) whose plate is their publication's only data file.
+
+    Uses the same inputs `ingest` hands `build_publication`, so the mosaic links to the Collection
+    exactly when that publication was written without a plate Item."""
+    # function-level: ingest pulls in the whole pub pipeline
+    from . import ingest, sink_stac, threed
+
+    units = ingest._unit_ids()
+    threed_ids = ingest._ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")
+    manifests = ingest._vector_manifests_by_sid()
+    out: set[str] = set()
+    for sid in sids:
+        m = manifests.get(sid, {})
+        if sink_stac.is_single_file(
+                has_cog=True, has_units=sid in units, has_3d=sid in threed_ids,
+                vector_layers=m.get("spatial"), companion_tables=m.get("tables")):
+            out.add(sid)
+    return out
+
+
 def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,
-                bounds: list[float]) -> None:
+                bounds: list[float], single_file_sids: set[str]) -> None:
     """STAC item for one mosaic tier, footprinted by the mosaic's real [W, S, E, N] `bounds`. The
     raster PMTiles is a `visual` pmtiles ASSET (a vector layer would be a web-map LINK instead) —
     that's how the viewer tells a raster mosaic from vector tiles.
 
     The mosaic is derived by stitching the member COGs, so each member gets a STAC
     `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
-    input data in the creation of this Entity") — to its plate Item, routed through
+    input data in the creation of this Entity") — to its plate Item (or to its Collection when
+    the plate is the publication's only data file, `single_file_sids`), routed through
     `sink_stac.pub_collection_path` rather than hardcoded to `ugs-publications` (a member can be
     foreign-published `ugs-external` or a Mining District File `ugs-mining-district-files`, and
     hardcoding would 404). A COG with no matching pub record has no item to link to and is skipped,
@@ -466,8 +496,8 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
         real_sid = (p.get("series_id") or "").strip()
         derived_from.append({
             "rel": "derived_from",
-            "href": _public_item_href(sink_stac.pub_collection_path(p), sink_stac.plate_item_id(real_sid)),
-            "type": "application/geo+json",
+            "href": _public_href(sink_stac.plate_object(p, single_file=sid in single_file_sids)),
+            "type": "application/json" if sid in single_file_sids else "application/geo+json",
             "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
 
     item = stac.build_item(
@@ -502,12 +532,14 @@ def build(scales: list[str], maxz: int | None = None,
         print(f"[mosaics] SCOPED build (--quads={quads!r}, --editions={edition_mode}) -> "
               f"writing '*{suffix}' items only, real tiers untouched")
     built = 0
+    single_file = _single_file_sids([s for tier in scales for s in groups.get(tier, [])]) \
+        if write_stac_item else None
     for tier in scales:
         # Statewide (full) builds cap at the tier's TIER_MAXZOOM to keep the tile count sane; a scoped
         # --quads build renders at native zoom (full detail on a few maps). An explicit --maxzoom wins.
         tier_maxz = maxz if maxz is not None else (None if quads else TIER_MAXZOOM.get(tier))
         if build_tier(tier, groups.get(tier, []), by_sid, maxz=tier_maxz,
-                      suffix=suffix, write_stac_item=write_stac_item):
+                      suffix=suffix, write_stac_item=write_stac_item, single_file_sids=single_file):
             built += 1
     if built and not quads:
         print("[mosaics] refreshing STAC catalog")

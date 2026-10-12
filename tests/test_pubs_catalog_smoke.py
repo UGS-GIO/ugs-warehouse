@@ -72,14 +72,16 @@ def test_fully_loaded_publication_is_spec_valid():
 def test_mosaic_is_valid_and_derived_from_hrefs_match_member_item_locations():
     """The 404-class proof at the authoring layer: for each member — including a foreign-published
     one that routes to ugs-external — the mosaic's `derived_from` href equals the href of that
-    member's own plate Item. Match here => the link resolves once both are published."""
+    member's own plate document: its Collection when the plate is its only data file, else the
+    `_plate` Item. Match here => the link resolves once both are published."""
     bbox, geom = _UTAH
     ugs = {"series_id": "GQ-968", "series": "GQ", "pub_name": "Geologic map of Foo",
            "pub_publisher": "USGS", "pub_scale": "1:24,000"}
     ext = {"series_id": "BYU-1", "series": "BYU", "pub_name": "A thesis map",
            "pub_publisher": "BYU", "pub_scale": "1:24,000"}
-    ugs_coll, _ = _build_pub(ugs, has_cog=True, geom=geom, bbox=bbox)
-    ext_coll, _ = _build_pub(ext, has_cog=True, geom=geom, bbox=bbox)
+    ugs_coll, ugs_items = _build_pub(ugs, has_cog=True, geom=geom, bbox=bbox)
+    ext_coll, ext_items = _build_pub(ext, has_cog=True, has_units=True, geom=geom, bbox=bbox)
+    assert not ugs_items and {i["id"] for i in ext_items} == {"BYU-1_plate", "BYU-1_units"}
     # The two members live in different top-level groups:
     assert ugs_coll["_collection_path"].startswith(identity.PUBLICATIONS_COLLECTION)
     assert ext_coll["_collection_path"].startswith(identity.EXTERNAL_COLLECTION)
@@ -87,16 +89,17 @@ def test_mosaic_is_valid_and_derived_from_hrefs_match_member_item_locations():
     captured: dict = {}
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         gm._write_item("24k", ["GQ-968", "BYU-1"], gm.mosaic_object("24k"),
-                       {"GQ-968": ugs, "BYU-1": ext}, bounds=[-114.0, 37.0, -109.0, 42.0])
+                       {"GQ-968": ugs, "BYU-1": ext}, bounds=[-114.0, 37.0, -109.0, 42.0], single_file_sids={"GQ-968"})
     mosaic = captured["item"]
 
     _validate(mosaic)  # derived_from is a plain link; the mosaic must still be spec-valid
     assert mosaic["properties"]["ugs:topic"] == "geologic"
     derived = {lnk["href"] for lnk in mosaic["links"] if lnk["rel"] == "derived_from"}
-    # Each link is exactly its member's plate Item href, so a foreign-published member routes to
+    # Each link is exactly where its member's plate lives, so a foreign-published member routes to
     # ugs-external rather than ugs-publications.
-    expected = {gm._public_item_href(sink_stac.pub_collection_path(p), sink_stac.plate_item_id(sid))
-                for sid, p in (("GQ-968", ugs), ("BYU-1", ext))}
+    expected = {gm._public_href(sink_stac.plate_object(p, single_file=not items))
+                for p, items in ((ugs, ugs_items), (ext, ext_items))}
     assert derived == expected
     assert any(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1_plate/BYU-1_plate.json" in h
                for h in derived)
+    assert any(h.endswith(f"/{identity.PUBLICATIONS_COLLECTION}/GQ/GQ-968/collection.json") for h in derived)

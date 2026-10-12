@@ -153,3 +153,62 @@ def test_a_layer_named_like_a_reserved_item_is_renamed(capsys):
     ids = [it["id"] for it in items]
     assert "OFR-784DM_plate" in ids and "OFR-784DM_layer_plate" in ids
     assert "renamed to 'OFR-784DM_layer_plate'" in capsys.readouterr().err
+
+
+def _plate_only(**kw):
+    return _build(vector_layers=[], companion_tables=[], layers={}, **kw)
+
+
+def test_a_plate_only_publication_has_no_items_and_the_cog_on_the_collection():
+    coll, items = _plate_only(cog_fields={"proj:code": "EPSG:3857"})
+    assert items == []
+    assert not [lk for lk in coll["links"] if lk["rel"] == "item"]
+    cog = coll["assets"]["cog"]
+    assert cog["roles"] == ["data", "cloud-optimized"] and cog["proj:code"] == "EPSG:3857"
+    assert stac.PROJ_EXT in coll["stac_extensions"]
+    assert any(lk["rel"] == "related" and "geologic-maps-24k" in lk["href"] for lk in coll["links"])
+    assert coll["extent"]["spatial"]["bbox"] == [[-112.5, 40.5, -112.0, 41.0]]
+
+
+def test_a_publication_with_plate_and_one_layer_keeps_both_items():
+    coll, items = _build(companion_tables=[])
+    assert {it["id"] for it in items} == {"OFR-784DM_plate", "OFR-784DM_geo__Faults"}
+    assert "cog" not in coll["assets"]
+
+
+def test_a_lone_table_moves_to_the_collection_with_its_columns():
+    coll, items = _build(has_cog=False, vector_layers=[])
+    assert items == []
+    assert coll["assets"]["data"]["table:columns"] and coll["assets"]["data"]["table:row_count"] == 41
+    assert stac.TABLE_EXT in coll["stac_extensions"]
+
+
+def test_is_single_file_counts_every_kind_of_data_item():
+    none = dict(has_cog=False, has_units=False, has_3d=False, vector_layers=[], companion_tables=[])
+    assert not sink_stac.is_single_file(**none)
+    assert sink_stac.is_single_file(**{**none, "has_cog": True})
+    assert sink_stac.is_single_file(**{**none, "vector_layers": ["a"]})
+    assert not sink_stac.is_single_file(**{**none, "has_cog": True, "has_units": True})
+
+
+def test_plate_object_points_at_the_collection_only_for_single_file():
+    assert sink_stac.plate_object(P, single_file=True).endswith("/OFR/OFR-784DM/collection.json")
+    assert sink_stac.plate_object(P, single_file=False).endswith(
+        "/OFR/OFR-784DM/OFR-784DM_plate/OFR-784DM_plate.json")
+
+
+def test_the_landing_page_is_an_alternate_html_link_not_a_via():
+    coll, _ = _build()
+    assert not [lk for lk in coll["links"] if lk["rel"] == "via"]
+    alt = next(lk for lk in coll["links"] if lk["rel"] == "alternate")
+    assert alt["type"] == "text/html" and alt["href"].endswith("?pub=OFR-784DM")
+
+
+def test_without_a_cover_the_collection_thumbnail_is_the_cog_thumbnail():
+    coll, _ = _build(has_cover=False, has_thumb=True)
+    assert coll["assets"]["thumbnail"]["roles"] == ["thumbnail"]
+    assert coll["assets"]["thumbnail"]["title"] == "Thumbnail"
+    coll, _ = _build(has_cover=False, has_thumb=False)
+    assert "thumbnail" not in coll["assets"]
+    coll, _ = _build(has_cover=True, has_thumb=True)
+    assert coll["assets"]["thumbnail"]["title"].startswith("Cover")

@@ -251,7 +251,7 @@ def test_the_ingest_points_only_at_webps_and_names_pubs_still_on_png(bucket, cap
 
 def test_a_pub_points_at_its_webp_thumbnail_and_cover(bucket):
     coll, items = sink_stac.build_publication({"series_id": "M-1", "pub_name": "Geologic map"}, [],
-                                              has_cog=True, has_thumb=True, has_cover=True)
+                                              has_cog=True, has_thumb=True, has_cover=True, has_units=True)
     thumb, cover = items[0]["assets"]["thumbnail"], coll["assets"]["thumbnail"]
     assert (thumb["href"], thumb["type"]) == (config.public_url(f"{COGS}/M-1.thumb.webp"), "image/webp")
     assert (cover["href"], cover["type"]) == (config.public_url(f"{COVERS}/M-1.webp"), "image/webp")

@@ -22,6 +22,11 @@ from ugs_warehouse.vector import sink_stac as vec_sink
 
 rashid = pytest.importorskip("rashid", reason="rashid is an optional dev dependency")
 
+# Rules the publication tree must satisfy on top of GUARDED: single-file collections hold their data
+# at collection level, the landing page is not a `via` source link, and every collection has a thumbnail.
+PUBLICATION_GUARDED = {"PTL-COL-001", "PTL-PRO-004", "PTL-VIZ-001"}
+PUBLICATION_ROOTS = ("ugs-publications/", "ugs-mining-district-files/", "ugs-external/")
+
 # Rules this repo has fixed and must not break again. Each maps to work already merged.
 GUARDED = {
     "PTL-GEN-000",  # a readable root catalog.json
@@ -110,7 +115,7 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
     # A mining district file whose only file is the publisher's plain TIFF scan.
     _write_pub(
         {"series_id": "MD-1002", "series": "MD", "pub_year": "1956", "pub_publisher": "",
-         "pub_name": "Geophysical Sonic Log", "pub_url": "uranium_data/MD01002.tif"}, [], override={})
+         "pub_name": "Geophysical Sonic Log", "pub_url": "uranium_data/MD01002.tif"}, [], has_cover=True, override={})
 
     # An edition pair: a current map and its deprecated predecessor, both with a COG (exercises the
     # version/deprecated properties, predecessor/successor/latest links, and the currency-gated
@@ -120,13 +125,13 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
     _write_pub(
         {"series_id": "M-296DM", "series": "M", "pub_year": "2022", "pub_publisher": "UGS",
          "pub_name": "Geologic map of the Park City East quadrangle", "pub_scale": "1:24,000"},
-        [], has_cog=True,
+        [], has_cog=True, has_thumb=True,
         edition={"version": "2022", "deprecated": False, "predecessor_href": None,
                  "successor_href": None, "latest_href": None}, override={})
     _write_pub(
         {"series_id": "GQ-852", "series": "GQ", "pub_year": "1971", "pub_publisher": "USGS",
          "pub_name": "Geologic map of the Park City East quadrangle", "pub_scale": "1:24,000"},
-        [], has_cog=True,
+        [], has_cog=True, has_thumb=True,
         edition={"version": "1971", "deprecated": True, "predecessor_href": None,
                  "successor_href": _current_href, "latest_href": _current_href}, override={})
 
@@ -170,10 +175,23 @@ def test_the_builders_produce_a_catalog_that_passes_the_rules_we_have_fixed(monk
         f"{f.path}: {f.message}" for f in broken)
 
 
+def test_publication_collections_conform_to_the_single_file_provenance_and_thumbnail_rules(monkeypatch, tmp_path):
+    # Errors only: a pub with no cover and no COG thumbnail is a data gap rashid reports as a warning.
+    root = _catalog_on_disk(monkeypatch, tmp_path)
+
+    report = rashid.validate(root, data=False, schema=True)
+    broken = [f for f in report.findings
+              if f.rule_id in PUBLICATION_GUARDED and f.severity.name == "ERROR"
+              and str(f.path).startswith(PUBLICATION_ROOTS)]
+
+    assert not broken, "\n".join(f"{f.rule_id} {f.path}: {f.message}" for f in broken)
+
+
 def test_the_fence_names_rules_rashid_still_has(monkeypatch, tmp_path):
     """A rule renamed or dropped upstream would silently stop being enforced."""
     known = set(rashid.CHECKS)
-    assert GUARDED <= known, f"no longer in rashid: {sorted(GUARDED - known)}"
+    wanted = GUARDED | PUBLICATION_GUARDED
+    assert wanted <= known, f"no longer in rashid: {sorted(wanted - known)}"
 
 
 def test_the_catalog_the_fence_builds_is_the_shape_we_publish(monkeypatch, tmp_path):

@@ -19,7 +19,7 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         # ORPHAN-9 has a COG but no pub record -> must be skipped (no item to link to)
         gm._write_item("24k", ["GQ-968", "BYU-1", "ORPHAN-9"], gm.mosaic_object("24k"), by_sid,
-                       bounds=[-112.0, 39.0, -111.5, 39.4])
+                       bounds=[-112.0, 39.0, -111.5, 39.4], single_file_sids=set())
     item = captured["item"]
     assert item["bbox"] == [-112.0, 39.0, -111.5, 39.4]   # the mosaic's real footprint, not all of Utah
     assert item["geometry"]["coordinates"][0][0] == [-112.0, 39.0]
@@ -639,3 +639,18 @@ def test_public_item_href_with_an_empty_stac_prefix(monkeypatch):
     monkeypatch.setattr(gm.config, "STAC_PREFIX", "")
     assert gm._public_item_href("ugs-publications/GQ/GQ-968", "GQ-968_plate").endswith(
         "/warehouse/stac/ugs-publications/GQ/GQ-968/GQ-968_plate/GQ-968_plate.json")
+
+
+def test_mosaic_links_a_single_file_member_to_its_collection_and_others_to_the_plate_item():
+    by_sid = {
+        "GQ-968": {"series_id": "GQ-968", "pub_publisher": "USGS", "pub_name": "Geologic map of Foo"},
+        "GQ-852": {"series_id": "GQ-852", "pub_publisher": "USGS", "pub_name": "Geologic map of Bar"},
+    }
+    captured = {}
+    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
+        gm._write_item("24k", ["GQ-968", "GQ-852"], gm.mosaic_object("24k"), by_sid,
+                       bounds=[-112.0, 39.0, -111.5, 39.4], single_file_sids={"GQ-968"})
+    hrefs = [lk["href"] for lk in captured["item"]["links"] if lk["rel"] == "derived_from"]
+    assert any(h.endswith("/GQ/GQ-968/collection.json") for h in hrefs)
+    assert any(h.endswith("/GQ/GQ-852/GQ-852_plate/GQ-852_plate.json") for h in hrefs)
+    assert not any(h.endswith("GQ-968_plate.json") for h in hrefs)

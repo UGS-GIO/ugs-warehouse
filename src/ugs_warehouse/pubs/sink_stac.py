@@ -196,6 +196,23 @@ def layer_item_id(sid: str, label: str) -> str:
     return f"{item_id_for(sid)}_{label}"
 
 
+def is_single_file(*, has_cog: bool, has_units: bool, has_3d: bool,
+                   vector_layers: list[str] | None, companion_tables: list[dict] | None) -> bool:
+    """True when a publication has exactly one data Item. Portolan keeps a single-file collection's
+    data at collection level, so such a publication is a Collection with assets and no Items."""
+    return (int(has_cog) + int(has_units) + int(has_3d)
+            + len(vector_layers or []) + len(companion_tables or [])) == 1
+
+
+def plate_object(p: dict, *, single_file: bool) -> str:
+    """Object path of the document that holds a publication's plate: its Collection when the plate
+    is its only data file, else the `_plate` Item."""
+    coll_path = pub_collection_path(p)
+    if single_file:
+        return stac.collection_object_path(coll_path)
+    return stac.item_object_path(coll_path, plate_item_id((p.get("series_id") or "").strip()))
+
+
 def _source_asset(h: str, mirrored: set[str] | None, **rest) -> dict:
     """A source file served from our CDN when mirrored, with the publisher's URL as an alternate."""
     obj = identity.pub_file_object(h)
@@ -231,7 +248,8 @@ def build_publication(p: dict, attachments: list[dict], *,
 
     The Collection carries the documents (PDF, cover, original zips) and the publication's
     metadata; the plate COG, the units GeoParquet, each extracted layer and table, and the 3D
-    fence are Items in it. A publication with none of those is a Collection with no Items."""
+    fence are Items in it. A publication with none of those, or with exactly one, is a Collection
+    with no Items; a lone data file becomes a collection-level asset."""
     sid = (p.get("series_id") or "").strip()
     pub_id = item_id_for(sid)
     coll_path = pub_collection_path(p)
@@ -292,6 +310,11 @@ def build_publication(p: dict, attachments: list[dict], *,
               file=sys.stderr)
         return new
 
+    mosaic = ([{"rel": "related",
+                "href": config.public_url(stac.item_object_path("ugs-geologic-maps", f"geologic-maps-{mosaic_tier}")),
+                "type": "application/geo+json",
+                "title": f"Utah geologic maps — {MOSAIC_TIER_LABEL.get(mosaic_tier, mosaic_tier)} seamless mosaic"}]
+              if has_cog and mosaic_tier and not ed.get("deprecated") else [])
     items: list[dict] = []
     if has_cog:
         plate_assets = {"cog": {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
@@ -300,11 +323,6 @@ def build_publication(p: dict, attachments: list[dict], *,
         if has_thumb:
             plate_assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
                                          "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
-        mosaic = ([{"rel": "related",
-                    "href": config.public_url(stac.item_object_path("ugs-geologic-maps", f"geologic-maps-{mosaic_tier}")),
-                    "type": "application/geo+json",
-                    "title": f"Utah geologic maps — {MOSAIC_TIER_LABEL.get(mosaic_tier, mosaic_tier)} seamless mosaic"}]
-                  if mosaic_tier and not ed.get("deprecated") else [])
         items.append(item(plate_item_id(sid), "Map plate", plate_assets, geometry=aoi, item_bbox=aoi_bbox,
                           links=mosaic,
                           extensions=[stac.PROJ_EXT] if any(k.startswith("proj:") for k in plate_assets["cog"]) else None))
@@ -350,6 +368,25 @@ def build_publication(p: dict, attachments: list[dict], *,
     if dupes:
         raise ValueError(f"{pub_id}: duplicate item ids {dupes}")
 
+    single = is_single_file(has_cog=has_cog, has_units=has_units, has_3d=has_3d,
+                            vector_layers=vector_layers, companion_tables=companion_tables)
+    if single != (len(items) == 1):
+        raise ValueError(f"{pub_id}: single-file rule and built items disagree ({len(items)} items)")
+    item_bboxes = [it["bbox"] for it in items if it.get("bbox")]
+    data_assets: dict = {}
+    data_exts: list[str] = []
+    mosaic_links: list[dict] = []
+    if single:
+        # The lone Item's data moves to the Collection; its item-level CRS, row count and class
+        # fields are only valid on an asset there, so they ride each asset.
+        only = items.pop()
+        carried = {k: v for k, v in only["properties"].items()
+                   if k.startswith(("proj:", "table:", "classification:"))}
+        data_assets = {k: {**a, **{ck: cv for ck, cv in carried.items() if ck not in a}}
+                       for k, a in only["assets"].items() if k != "thumbnail"}
+        data_exts = [e for e in only.get("stac_extensions", []) if e != stac.SCI_EXT]
+        mosaic_links = mosaic
+
     assets: dict = {}
     main_pdf = href(p.get("pub_url"))
     if main_pdf:
@@ -364,18 +401,25 @@ def build_publication(p: dict, attachments: list[dict], *,
         key = re.sub(r"[^a-z0-9]+", "_", (a.get("extra_data") or "file").strip().lower()).strip("_") or "file"
         assets.setdefault(key, _source_asset(h, mirrored, type=mtype,
                                              title=(a.get("extra_data") or "").strip(), roles=_file_roles(mtype)))
+    clash = sorted(set(assets) & set(data_assets))
+    if clash:
+        raise ValueError(f"{pub_id}: collection-level data assets collide with document assets {clash}")
+    assets.update(data_assets)
     if has_cover:
         assets["thumbnail"] = {"href": config.public_url(identity.pub_cover_object(sid)),
                                "type": config.WEBP_MIME, "title": "Cover (PDF first page)", "roles": ["thumbnail"]}
+    elif has_cog and has_thumb:
+        # No cover: the plate's own thumbnail stands in so the Collection still has a preview.
+        assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
+                               "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
 
-    item_bboxes = [it["bbox"] for it in items if it.get("bbox")]
     ext_bbox = bbox or ([min(b[0] for b in item_bboxes), min(b[1] for b in item_bboxes),
                          max(b[2] for b in item_bboxes), max(b[3] for b in item_bboxes)]
                         if item_bboxes else stac.UTAH_BBOX)
     extent = {"spatial": {"bbox": [ext_bbox]},
               "temporal": {"interval": [[dt, dt] if dt else [EARLIEST_RECORD, now]]}}
-    links = [{"rel": "via", "href": f"{LANDING}{quoted_sid}", "type": "text/html",
-              "title": "UGS publication landing page"}, *doi]
+    links = [{"rel": "alternate", "href": f"{LANDING}{quoted_sid}", "type": "text/html",
+              "title": "UGS publication landing page"}, *doi, *mosaic_links]
     for rel, key in (("predecessor-version", "predecessor_href"), ("successor-version", "successor_href"),
                      ("latest-version", "latest_href")):
         if ed.get(key):
@@ -404,8 +448,10 @@ def build_publication(p: dict, attachments: list[dict], *,
         **({"ugs:contents": contents} if contents else {}),
         **sci,
     }
-    coll_exts = [*([stac.SCI_EXT] if sci else []),
-                 *([stac.ALTERNATE_ASSETS_EXT] if any("alternate" in a for a in assets.values()) else [])]
+    coll_exts = list(dict.fromkeys([
+        *([stac.SCI_EXT] if sci else []),
+        *([stac.ALTERNATE_ASSETS_EXT] if any("alternate" in a for a in assets.values()) else []),
+        *data_exts]))
     coll = stac.build_collection(
         collection_id=pub_id, collection_path=coll_path, title=title,
         description=desc or title, extent=extent, assets=assets,

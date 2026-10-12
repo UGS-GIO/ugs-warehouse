@@ -803,8 +803,10 @@ def _build(p, **kw):
     return _publication(p, **kw)
 
 
-def _plate_links(items):
-    return next(it for it in items if it["id"].endswith("_plate"))["links"]
+def _plate_links(coll, items):
+    """The plate's links: on its Item, or on the Collection when the plate is the only data file."""
+    plate = next((it for it in items if it["id"].endswith("_plate")), None)
+    return (plate or coll)["links"]
 
 
 def test_cog_map_links_to_its_portal_layer_mosaic():
@@ -814,21 +816,21 @@ def test_cog_map_links_to_its_portal_layer_mosaic():
                          has_cog=True, mosaic_tier="24k")
     assert "ugs:scale_tier" not in coll
     assert coll["ugs:scale"] == "1:24,000"   # raw scale stays as per-publication metadata
-    rel = [lnk for lnk in _plate_links(items) if lnk["rel"] == "related"]
+    rel = [lnk for lnk in _plate_links(coll, items) if lnk["rel"] == "related"]
     assert len(rel) == 1
     assert rel[0]["href"].endswith("/ugs-geologic-maps/geologic-maps-24k/geologic-maps-24k.json")
 
     # A 1:62,500 30' x 60' map is in the intermediate layer, whatever its scale says.
-    _, items = _build({"series_id": "M-254DM", "series": "M", "pub_scale": "1:62,500"},
-                      has_cog=True, mosaic_tier="100k")
-    rel = [lnk for lnk in _plate_links(items) if lnk["rel"] == "related"]
+    coll, items = _build({"series_id": "M-254DM", "series": "M", "pub_scale": "1:62,500"},
+                         has_cog=True, mosaic_tier="100k")
+    rel = [lnk for lnk in _plate_links(coll, items) if lnk["rel"] == "related"]
     assert len(rel) == 1 and rel[0]["href"].endswith("/geologic-maps-100k/geologic-maps-100k.json")
     assert "intermediate-scale" in rel[0]["title"]
 
     # COG map in no tiered layer (irregular, or no footprint): no mosaic, so no member link.
-    _, items = _build({"series_id": "M-1", "series": "M", "pub_scale": "1:50,000"},
-                      has_cog=True, mosaic_tier=None)
-    assert not [lnk for lnk in _plate_links(items) if lnk["rel"] == "related"]
+    coll, items = _build({"series_id": "M-1", "series": "M", "pub_scale": "1:50,000"},
+                         has_cog=True, mosaic_tier=None)
+    assert not [lnk for lnk in _plate_links(coll, items) if lnk["rel"] == "related"]
 
     # non-COG pub: no plate Item, so nothing to stitch into a mosaic.
     _, items = _build({"series_id": "OFR-5", "series": "OFR", "pub_scale": "1:500,000"},
@@ -842,8 +844,8 @@ def test_deprecated_edition_drops_the_mosaic_related_link():
     drops superseded editions before stitching, so the link would otherwise claim membership in a
     mosaic whose own `derived_from` omits it (catalog self-contradiction)."""
     def mosaic_links(**kw):
-        _, items = _build(**kw)
-        return [lnk for lnk in _plate_links(items)
+        coll, items = _build(**kw)
+        return [lnk for lnk in _plate_links(coll, items)
                 if lnk["rel"] == "related" and "geologic-maps-" in lnk["href"]]
 
     assert not mosaic_links(p={"series_id": "GQ-852", "series": "GQ", "pub_scale": "1:24,000"},
@@ -941,7 +943,7 @@ def test_cog_assets_keep_the_cloud_optimized_media_type():
     """`.tif` maps to image/tiff for the publisher's scans. A COG we produced sets its type on the
     asset directly, so the mapping must not reach it — the profile parameter is what a client reads
     to know it can range-request the file."""
-    _, items = _publication({"series_id": "M-100", "series": "M"}, has_cog=True)
+    _, items = _publication({"series_id": "M-100", "series": "M"}, has_cog=True, has_units=True)
 
     plate = next(it for it in items if it["id"].endswith("_plate"))
     assert plate["assets"]["cog"]["type"] == pubs_sink.COG_MIME

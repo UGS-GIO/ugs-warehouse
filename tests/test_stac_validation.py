@@ -146,7 +146,8 @@ def test_an_undated_publication_has_a_valid_flagged_interval():
 
     coll, items = pubs_sink.build_publication(
         {"series_id": "MD-134-6", "series": "MD", "pub_year": "",
-         "pub_name": "List of Beaver County Properties"}, [], override={}, has_units=True)
+         "pub_name": "List of Beaver County Properties"}, [], override={}, has_units=True,
+        vector_layers=["a"])
     start, end = coll["extent"]["temporal"]["interval"][0]
     assert start == pubs_sink.EARLIEST_RECORD and end > start
     assert coll["ugs:date_unknown"] is True

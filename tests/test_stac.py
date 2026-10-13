@@ -790,10 +790,10 @@ def test_build_catalog_writes_a_collection_and_items_per_publication():
     colls = {c["id"]: n for c, n in written_colls}
     assert colls == {"DS-8": 4, "OFR-12": 0}  # OFR-12 has no data: a collection with no items
     by_id = {it["id"]: it for it in written_items}
-    assert set(by_id) == {"DS-8_geo__ContactsAndFaults", "DS-8_geo__DescriptionOfMapUnits",
-                          "DS-8_units", "DS-8_layer_units"}  # the `units` layer moved off the units item
-    assert by_id["DS-8_geo__ContactsAndFaults"]["properties"]["proj:code"] == "EPSG:26912"
-    assert by_id["DS-8_geo__DescriptionOfMapUnits"]["assets"]["data"]["table:columns"] == cols
+    assert set(by_id) == {"DS-8__geo__ContactsAndFaults", "DS-8__geo__DescriptionOfMapUnits",
+                          "DS-8_units", "DS-8__units"}  # a `units` layer never meets the units item
+    assert by_id["DS-8__geo__ContactsAndFaults"]["properties"]["proj:code"] == "EPSG:26912"
+    assert by_id["DS-8__geo__DescriptionOfMapUnits"]["assets"]["data"]["table:columns"] == cols
 
 
 def test_build_catalog_stamps_file_meta_on_the_collection_and_its_items():
@@ -817,7 +817,7 @@ def test_build_catalog_stamps_file_meta_on_the_collection_and_its_items():
     (coll, _), = written_colls
     assert coll["assets"]["thumbnail"]["file:checksum"] == "1220c0"
     assert stac.FILE_EXT in coll["stac_extensions"]
-    data = next(it for it in written_items if it["id"] == "DS-8_geo__Faults")["assets"]["data"]
+    data = next(it for it in written_items if it["id"] == "DS-8__geo__Faults")["assets"]["data"]
     assert (data["file:size"], data["file:checksum"]) == (6, "1220ff")
 
 
@@ -828,8 +828,8 @@ def test_a_publication_with_an_unreadable_manifest_fails_and_keeps_its_items(mon
     from ugs_warehouse.pubs import ingest
 
     base = f"{config.STAC_PREFIX}/ugs-publications/DS/DS-8"
-    live = {f"{base}/collection.json", f"{base}/DS-8_geo__Faults/DS-8_geo__Faults.json",
-            f"{base}/DS-8_geo__Units/DS-8_geo__Units.json"}
+    live = {f"{base}/collection.json", f"{base}/DS-8__geo__Faults/DS-8__geo__Faults.json",
+            f"{base}/DS-8__geo__Units/DS-8__geo__Units.json"}
     deleted: list[str] = []
     monkeypatch.setattr(ingest.gcs, "delete", lambda p: (deleted.append(p), live.discard(p)))
     monkeypatch.setattr(ingest.gcs, "list_paths", lambda root: sorted(p for p in live if p.startswith(root)))
@@ -1156,12 +1156,12 @@ def test_pub_exposes_all_vector_layers_and_companion_tables_as_items():
                            "columns": [{"name": "MapUnit"}, {"name": "Age"}]}],
     )
     by_id = {it["id"]: it for it in items}
-    faults = by_id["M-100_gems__ContactsAndFaults"]["assets"]["data"]
+    faults = by_id["M-100__gems__ContactsAndFaults"]["assets"]["data"]
     assert faults["href"].endswith("geolmap/vectors/M-100/gems__ContactsAndFaults.parquet")
     assert faults["type"] == pubs_sink.PARQUET_MIME
     assert faults["roles"] == ["data"]
-    assert "M-100_gems__MapUnitPolys" in by_id  # the 2nd vector_layers entry produced an item too
-    dmu_item = by_id["M-100_gems__DescriptionOfMapUnits"]
+    assert "M-100__gems__MapUnitPolys" in by_id  # the 2nd vector_layers entry produced an item too
+    dmu_item = by_id["M-100__gems__DescriptionOfMapUnits"]
     dmu = dmu_item["assets"]["data"]
     assert dmu["href"].endswith("geolmap/vectors/M-100/gems__DescriptionOfMapUnits.parquet")
     assert dmu["type"] == pubs_sink.PARQUET_MIME

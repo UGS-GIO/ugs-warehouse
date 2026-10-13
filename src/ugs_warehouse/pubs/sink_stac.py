@@ -183,7 +183,9 @@ def pub_collection_path(p: dict) -> str:
 
 
 def layer_item_id(sid: str, label: str) -> str:
-    return f"{item_id_for(sid)}_{label}"
+    """`<pub id>__<label>`. The double underscore keeps a layer's id off another publication's id
+    (pub ids can hold `_`) and off the plate, units and fence Items (`<pub id>_plate`, ...)."""
+    return f"{item_id_for(sid)}__{label}"
 
 
 def layer_title(label: str) -> tuple[str, str | None]:
@@ -340,17 +342,12 @@ def build_publication(p: dict, attachments: list[dict], *,
             print(f"[pubs] {pub_id}: no manifest entry for layer {label!r}; "
                   "its item has no CRS or row count", file=sys.stderr)
 
-    reserved = {r.casefold() for r in (plate_item_id(sid), f"{pub_id}_units", f"{pub_id}_fence")}
     taken: dict[str, str] = {}
 
     def layer_id(label: str) -> str:
-        """The layer's item id, moved off the ids the plate, units and fence items own and made
-        unique ignoring case (item directories merge on case-insensitive filesystems)."""
+        """The layer's item id, made unique ignoring case (item directories merge on
+        case-insensitive filesystems)."""
         lid = layer_item_id(sid, label)
-        if lid.casefold() in reserved:
-            lid = f"{pub_id}_layer_{label}"
-            print(f"[pubs] {pub_id}: layer {label!r} renamed to {lid!r} (collides with a reserved item)",
-                  file=sys.stderr)
         new, n = lid, 1
         while taken.get(new.casefold(), new) != new:
             n += 1

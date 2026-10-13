@@ -39,7 +39,7 @@ def test_documents_sit_on_the_collection_and_data_are_items():
     assert set(coll["assets"]) == {"publication", "gis_data_zip", "thumbnail"}
     assert coll["assets"]["gis_data_zip"]["roles"] == ["source"]
     ids = {it["id"] for it in items}
-    assert ids == {"OFR-784DM_plate", "OFR-784DM_geo__Faults", "OFR-784DM_geo__DMU"}
+    assert ids == {"OFR-784DM_plate", "OFR-784DM__geo__Faults", "OFR-784DM__geo__DMU"}
     assert {lk["href"] for lk in coll["links"] if lk["rel"] == "item"} == {f"./{i}/{i}.json" for i in ids}
 
 
@@ -64,8 +64,8 @@ def test_items_live_under_the_publication_collection():
 def test_each_item_states_its_own_data_crs_and_never_borrows_4326():
     _, items = _build(cog_fields={"proj:code": "EPSG:3857"})
     by_id = {it["id"]: it for it in items}
-    assert by_id["OFR-784DM_geo__Faults"]["properties"]["proj:code"] == "EPSG:26912"
-    assert "proj:code" not in by_id["OFR-784DM_geo__DMU"]["properties"]      # a table has no CRS
+    assert by_id["OFR-784DM__geo__Faults"]["properties"]["proj:code"] == "EPSG:26912"
+    assert "proj:code" not in by_id["OFR-784DM__geo__DMU"]["properties"]      # a table has no CRS
     assert "proj:code" not in by_id["OFR-784DM_plate"]["properties"]         # the COG asset carries 3857
     assert by_id["OFR-784DM_plate"]["assets"]["cog"]["proj:code"] == "EPSG:3857"
     assert stac.PROJ_EXT in by_id["OFR-784DM_plate"]["stac_extensions"]
@@ -89,10 +89,10 @@ def test_plate_carries_the_cog_and_the_mosaic_link():
 def test_layer_uses_its_own_bbox_and_table_has_no_geometry():
     _, items = _build()
     by_id = {it["id"]: it for it in items}
-    assert by_id["OFR-784DM_geo__Faults"]["bbox"] == [-112.4, 40.6, -112.1, 40.9]
-    assert by_id["OFR-784DM_geo__Faults"]["properties"]["table:row_count"] == 12
-    assert by_id["OFR-784DM_geo__DMU"]["properties"]["table:row_count"] == 41
-    table = by_id["OFR-784DM_geo__DMU"]
+    assert by_id["OFR-784DM__geo__Faults"]["bbox"] == [-112.4, 40.6, -112.1, 40.9]
+    assert by_id["OFR-784DM__geo__Faults"]["properties"]["table:row_count"] == 12
+    assert by_id["OFR-784DM__geo__DMU"]["properties"]["table:row_count"] == 41
+    table = by_id["OFR-784DM__geo__DMU"]
     assert table["geometry"] is None and "bbox" not in table
     assert "ugs:footprint_source" not in table["properties"]
     assert table["assets"]["data"]["table:columns"] == [{"name": "MapUnit", "type": "string"}]
@@ -102,16 +102,16 @@ def test_layer_uses_its_own_bbox_and_table_has_no_geometry():
 def test_items_label_where_their_footprint_came_from():
     _, items = _build()
     src = {it["id"]: it["properties"].get("ugs:footprint_source") for it in items}
-    assert src == {"OFR-784DM_plate": "cog", "OFR-784DM_geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
-                   "OFR-784DM_geo__DMU": None}
+    assert src == {"OFR-784DM_plate": "cog", "OFR-784DM__geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
+                   "OFR-784DM__geo__DMU": None}
 
 
 def test_items_without_a_footprint_carry_the_fallback_label():
     _, items = _build(geom=None, bbox=None, fp_source=None)
     src = {it["id"]: it["properties"].get("ugs:footprint_source") for it in items}
     assert src == {"OFR-784DM_plate": sink_stac.FOOTPRINT_FALLBACK,
-                   "OFR-784DM_geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
-                   "OFR-784DM_geo__DMU": None}
+                   "OFR-784DM__geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
+                   "OFR-784DM__geo__DMU": None}
 
 
 def test_a_collection_on_the_utah_placeholder_says_so():
@@ -142,7 +142,7 @@ def test_gems_validation_layers_are_not_published(capsys):
     coll, items = _build(vector_layers=["geo__Faults", "geo__T_1_LineErrors", "t_12_pointerrors"],
                          companion_tables=[{"label": "geo__T_3_PolyErrors"}])
     ids = {it["id"] for it in items}
-    assert ids == {"OFR-784DM_plate", "OFR-784DM_geo__Faults"}
+    assert ids == {"OFR-784DM_plate", "OFR-784DM__geo__Faults"}
     err = capsys.readouterr().err
     for label in ("geo__T_1_LineErrors", "t_12_pointerrors", "geo__T_3_PolyErrors"):
         assert f"skipped '{label}' (GeMS validation output" in err
@@ -202,15 +202,22 @@ def test_a_layer_missing_from_the_manifest_warns_on_stderr(capsys):
 
 
 def test_duplicate_item_ids_raise():
-    with pytest.raises(ValueError, match="OFR-784DM_geo__Faults"):
+    with pytest.raises(ValueError, match="OFR-784DM__geo__Faults"):
         _build(vector_layers=["geo__Faults", "geo__Faults"])
 
 
-def test_a_layer_named_like_a_reserved_item_is_renamed(capsys):
-    _, items = _build(vector_layers=["plate"], has_units=True)
-    ids = [it["id"] for it in items]
-    assert "OFR-784DM_plate" in ids and "OFR-784DM_layer_plate" in ids
-    assert "renamed to 'OFR-784DM_layer_plate'" in capsys.readouterr().err
+def test_a_layer_named_like_a_reserved_item_keeps_a_distinct_id(capsys):
+    _, items = _build(vector_layers=["plate", "units"], has_units=True)
+    ids = {it["id"] for it in items}
+    assert {"OFR-784DM_plate", "OFR-784DM_units", "OFR-784DM__plate", "OFR-784DM__units"} <= ids
+    assert "renamed" not in capsys.readouterr().err
+
+
+def test_layer_ids_cannot_collide_with_another_publications_id():
+    # A pub id can hold `_` (BYU_GS-V24_CO-OPCREEK); `__` separates the label.
+    assert sink_stac.layer_item_id("BYU_GS-V24", "CO-OPCREEK") == "BYU_GS-V24__CO-OPCREEK"
+    assert sink_stac.layer_item_id("BYU_GS-V24", "CO-OPCREEK") != sink_stac.item_id_for(
+        "BYU_GS-V24_CO-OPCREEK")
 
 
 def _plate_only(**kw):
@@ -230,7 +237,7 @@ def test_a_plate_only_publication_has_no_items_and_the_cog_on_the_collection():
 
 def test_a_publication_with_plate_and_one_layer_keeps_both_items():
     coll, items = _build(companion_tables=[])
-    assert {it["id"] for it in items} == {"OFR-784DM_plate", "OFR-784DM_geo__Faults"}
+    assert {it["id"] for it in items} == {"OFR-784DM_plate", "OFR-784DM__geo__Faults"}
     assert "cog" not in coll["assets"]
 
 
@@ -405,7 +412,7 @@ def test_a_tiled_layer_item_carries_the_same_pmtiles_shape_as_a_serving_topic(mo
     _, items = _build(layers=TILED)
     # After the pub build: this stubs core.stac's builder, which both producers share.
     topic_asset, topic_link, topic_exts = _serving_topic_pmtiles(monkeypatch)
-    faults = next(it for it in items if it["id"] == "OFR-784DM_geo__Faults")
+    faults = next(it for it in items if it["id"] == "OFR-784DM__geo__Faults")
     (link,) = [lk for lk in faults["links"] if lk["rel"] == "pmtiles"]
     asset = faults["assets"]["pmtiles"]
 
@@ -422,13 +429,13 @@ def test_a_tiled_layer_item_carries_the_same_pmtiles_shape_as_a_serving_topic(mo
     assert stac.WEB_MAP_LINKS_EXT in topic_exts and stac.WEB_MAP_LINKS_EXT in faults["stac_extensions"]
     # The GeoParquet stays the data asset; a table is never tiled.
     assert faults["assets"]["data"]["href"].endswith("/geo__Faults.parquet")
-    dmu = next(it for it in items if it["id"] == "OFR-784DM_geo__DMU")
+    dmu = next(it for it in items if it["id"] == "OFR-784DM__geo__DMU")
     assert "pmtiles" not in dmu["assets"] and not any(lk["rel"] == "pmtiles" for lk in dmu["links"])
 
 
 def test_a_layer_without_pmtiles_carries_no_tiles():
     _, items = _build()
-    faults = next(it for it in items if it["id"] == "OFR-784DM_geo__Faults")
+    faults = next(it for it in items if it["id"] == "OFR-784DM__geo__Faults")
     assert "pmtiles" not in faults["assets"]
     assert not any(lk["rel"] == "pmtiles" for lk in faults["links"])
     assert stac.WEB_MAP_LINKS_EXT not in faults["stac_extensions"]
@@ -436,7 +443,7 @@ def test_a_layer_without_pmtiles_carries_no_tiles():
 
 def test_a_tiled_layers_index_entry_carries_its_web_map_link():
     coll, items = _build(layers=TILED)
-    faults = next(it for it in items if it["id"] == "OFR-784DM_geo__Faults")
+    faults = next(it for it in items if it["id"] == "OFR-784DM__geo__Faults")
     entry = stac._pub_item_index_entry(faults, coll, prefix="ugs-publications/OFR/OFR-784DM/")
     (link,) = [lk for lk in entry["links"] if lk["rel"] == "pmtiles"]
     assert link == {"rel": "pmtiles", "type": "application/vnd.pmtiles", "pmtiles:layers": ["geo__Faults"],
@@ -480,7 +487,7 @@ def _related(**kw):
                         "geo__Glossary": {"rows": 9}},
                 relationships=[MUP_TO_DMU])
     coll, items = _build(**{**args, **kw})
-    return coll, {it["id"].removeprefix("OFR-784DM_"): it for it in items}
+    return coll, {it["id"].removeprefix("OFR-784DM_").removeprefix("_"): it for it in items}
 
 
 def test_a_layer_carries_its_related_table_in_the_serving_topic_shape():
@@ -492,7 +499,7 @@ def test_a_layer_carries_its_related_table_in_the_serving_topic_shape():
         "roles": ["data", "related"], "title": "DMU",
         # Flipped, as vector/related.py `_inverted_rel` does: the table's column -> the layer's.
         "ugs:foreign_keys": [{"fields": ["MapUnit"],
-                              "reference": {"resource": "OFR-784DM_geo__MapUnitPolys",
+                              "reference": {"resource": "OFR-784DM__geo__MapUnitPolys",
                                             "href": f"{VEC}/geo__MapUnitPolys.parquet",
                                             "fields": ["MapUnit"]},
                               "ugs:detected_by": "inferred", "ugs:confidence": 100}],
@@ -500,13 +507,13 @@ def test_a_layer_carries_its_related_table_in_the_serving_topic_shape():
     # The layer's own outgoing key sits on its data asset, as on a serving topic.
     assert mup["assets"]["data"]["ugs:foreign_keys"] == [{
         "fields": ["MapUnit"],
-        "reference": {"resource": "OFR-784DM_geo__DMU", "href": f"{VEC}/geo__DMU.parquet",
+        "reference": {"resource": "OFR-784DM__geo__DMU", "href": f"{VEC}/geo__DMU.parquet",
                       "fields": ["MapUnit"]},
         "ugs:detected_by": "inferred", "ugs:confidence": 100}]
     assert stac.TABLE_EXT in mup["stac_extensions"]
     # The table links back to the layer that references it.
     back = [lk for lk in items["geo__DMU"]["links"] if lk["rel"] == "related"]
-    assert back == [{"rel": "related", "href": f"{ITEMS}/OFR-784DM_geo__MapUnitPolys/OFR-784DM_geo__MapUnitPolys.json",
+    assert back == [{"rel": "related", "href": f"{ITEMS}/OFR-784DM__geo__MapUnitPolys/OFR-784DM__geo__MapUnitPolys.json",
                      "type": "application/geo+json", "title": "Map Unit Polys"}]
     assert not [lk for lk in mup["links"] if lk["rel"] == "related"]
 
@@ -528,8 +535,8 @@ def test_a_spatial_destination_is_a_related_link_both_ways():
     def related(item_id):
         return [lk["href"].rsplit("/", 1)[-1] for lk in items[item_id]["links"] if lk["rel"] == "related"]
 
-    assert related("geo__Faults") == ["OFR-784DM_geo__MapUnitPolys.json"]
-    assert related("geo__MapUnitPolys") == ["OFR-784DM_geo__Faults.json"]
+    assert related("geo__Faults") == ["OFR-784DM__geo__MapUnitPolys.json"]
+    assert related("geo__MapUnitPolys") == ["OFR-784DM__geo__Faults.json"]
     assert not any("related" in a["roles"] for a in items["geo__Faults"]["assets"].values())
     (fk,) = items["geo__Faults"]["assets"]["data"]["ugs:foreign_keys"]
     assert fk["ugs:detected_by"] == "declared" and "ugs:confidence" not in fk
@@ -591,19 +598,20 @@ def test_items_and_their_collection_links_carry_kind_and_source_dataset():
         "geo__DMU": ("table", "OFR784DM Mills Junction"),
         "geo__Glossary": ("supporting", "Geo")}
     links = {lk["href"]: lk for lk in coll["links"] if lk["rel"] == "item"}
-    dmu = links["./OFR-784DM_geo__DMU/OFR-784DM_geo__DMU.json"]
+    dmu = links["./OFR-784DM__geo__DMU/OFR-784DM__geo__DMU.json"]
     assert dmu["ugs:layer_kind"] == "table" and dmu["ugs:source_dataset"] == "OFR784DM Mills Junction"
     assert dmu["ugs:source_key"] == "OFR784DM_MillsJunction"  # grouping key; the title is for display
     assert "ugs:layer_kind" not in links["./OFR-784DM_plate/OFR-784DM_plate.json"]
 
 
 def test_ids_of_renamed_layers_are_what_relationships_point_at(capsys):
-    rel = {**MUP_TO_DMU, "origin": "plate"}
-    _, items = _related(vector_layers=["plate"], relationships=[rel])
-    (fk,) = items["layer_plate"]["assets"]["geo__DMU"]["ugs:foreign_keys"]
-    assert fk["reference"]["resource"] == "OFR-784DM_layer_plate"
+    # `faults` and `Faults` are distinct labels whose ids would merge on a case-insensitive disk.
+    rel = {**MUP_TO_DMU, "origin": "faults"}
+    _, items = _related(vector_layers=["Faults", "faults"], relationships=[rel])
+    (fk,) = items["faults_2"]["assets"]["geo__DMU"]["ugs:foreign_keys"]
+    assert fk["reference"]["resource"] == "OFR-784DM__faults_2"
     (back,) = [lk for lk in items["geo__DMU"]["links"] if lk["rel"] == "related"]
-    assert back["href"].endswith("/OFR-784DM_layer_plate/OFR-784DM_layer_plate.json")
+    assert back["href"].endswith("/OFR-784DM__faults_2/OFR-784DM__faults_2.json")
 
 
 def test_kind_comes_from_the_relationships_published_not_the_manifest(capsys):
@@ -631,7 +639,7 @@ def _ofr784dm_publication():
 
 def test_a_table_most_map_layers_point_at_is_a_reference(capsys):
     _, items = _ofr784dm_publication()
-    roles = {(it["id"].removeprefix("OFR-784DM_"), key): a["roles"]
+    roles = {(it["id"].removeprefix("OFR-784DM__"), key): a["roles"]
              for it in items for key, a in it["assets"].items() if "related" in a["roles"]}
     # Seven of the eleven published map layers cite DataSources; three use the DMU.
     assert {k: r for k, r in roles.items() if k[1] == "DataSources"} == {
@@ -640,6 +648,6 @@ def test_a_table_most_map_layers_point_at_is_a_reference(capsys):
                     "ContactsAndFaults", "GeologicPoints", "MapUnitOverlays", "Glossary")}
     assert {r == ["data", "related"] for k, r in roles.items() if k[1] != "DataSources"} == {True}
     assert {k[1] for k in roles} == {"DataSources", "DescriptionOfMapUnits", "GeoMaterialDict"}
-    kinds = {it["id"].removeprefix("OFR-784DM_"): it["properties"].get("ugs:layer_kind") for it in items}
+    kinds = {it["id"].removeprefix("OFR-784DM__"): it["properties"].get("ugs:layer_kind") for it in items}
     assert (kinds["DataSources"], kinds["Glossary"], kinds["MiscellaneousMapInformation"]) == (
         "table", "table", "supporting")

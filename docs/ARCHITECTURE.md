@@ -102,7 +102,9 @@ Each group is a Catalog of series Catalogs (`<group>/<SERIES>/catalog.json`), an
 is a Collection under its series (`<group>/<SERIES>/<SID>/collection.json`). The Collection holds
 the documents (PDF, cover, original zips) as assets and the DOI as `cite-as` +
 `sci:doi`; the plate COG, units, extracted layers and tables, and the 3D fence are its Items at
-`<SID>/<ITEM_ID>/<ITEM_ID>.json`. A publication with one data file keeps it on the Collection and
+`<SID>/<ITEM_ID>/<ITEM_ID>.json`: `<SID>_plate`, `<SID>_units`, `<SID>_fence`, and `<SID>__<label>`
+for each layer and table (the double underscore keeps a layer id off another publication's id,
+since publication ids can hold `_`). A publication with one data file keeps it on the Collection and
 has no Items. The pubs ingest writes the Collections and Items; `refresh_catalog` writes the series
 and group catalogs over them.
 

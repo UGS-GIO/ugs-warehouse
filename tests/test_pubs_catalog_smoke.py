@@ -58,10 +58,10 @@ def test_fully_loaded_publication_is_spec_valid():
         _validate(doc)
     by_id = {it["id"]: it for it in items}
     assert stac.VERSION_EXT in coll["stac_extensions"]
-    dmu = by_id["GQ-968_gems__DescriptionOfMapUnits"]
+    dmu = by_id["GQ-968__gems__DescriptionOfMapUnits"]
     assert stac.TABLE_EXT in dmu["stac_extensions"]
     assert dmu["assets"]["data"]["table:columns"]
-    assert "GQ-968_gems__ContactsAndFaults" in by_id
+    assert "GQ-968__gems__ContactsAndFaults" in by_id
     plate = by_id["GQ-968_plate"]
     assert stac.PROJ_EXT in plate["stac_extensions"]
     assert any(lnk["rel"] == "related"

@@ -232,6 +232,18 @@ def test_stale_item_dirs_are_removed_and_the_collection_files_kept(monkeypatch, 
     assert deleted == [f"{base}/OFR-1_x/OFR-1_x.json"]  # the plate is already gone from the store
 
 
+def test_a_reingest_removes_layer_items_left_under_the_old_single_underscore_ids(monkeypatch, capsys):
+    from ugs_warehouse.pubs import ingest
+
+    base = f"{PFX}/ugs-publications/OFR/OFR-1"
+    listing = [f"{base}/collection.json", f"{base}/OFR-1_plate/OFR-1_plate.json",
+               f"{base}/OFR-1_geo__Faults/OFR-1_geo__Faults.json",
+               f"{base}/OFR-1__geo__Faults/OFR-1__geo__Faults.json"]
+    deleted = _live_store(monkeypatch, ingest, listing)
+    ingest._prune_stale_items("ugs-publications/OFR/OFR-1", {"OFR-1_plate", "OFR-1__geo__Faults"})
+    assert deleted == [f"{base}/OFR-1_geo__Faults/OFR-1_geo__Faults.json"]
+
+
 def test_a_delete_that_fails_raises_and_reports_no_removal(monkeypatch, capsys):
     from ugs_warehouse.pubs import ingest
 

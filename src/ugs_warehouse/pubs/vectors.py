@@ -372,7 +372,7 @@ def _extract_and_upload(
 
             columns, geo = _schema(dst)
             entry = {"label": label, "spatial": is_spatial, "rows": rows, "columns": columns,
-                     "source": _dataset_name(work, series_id, path, layer)}
+                     "source": _dataset_name(work, series_id, path, layer, label)}
             if is_spatial:
                 entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
             gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
@@ -385,8 +385,7 @@ def _extract_and_upload(
             print(f"  layer {label} failed: {e}", file=sys.stderr)
             continue
         _profile_into(profiles, entry, gdf if is_spatial else df,
-                      layer or os.path.basename(path)[:-4],
-                      path if layer is not None else os.path.dirname(path), manifest)
+                      layer or os.path.basename(path)[:-4], manifest)
         if is_spatial:
             _tile_into(entry, gdf, series_id, work, manifest)
 
@@ -398,11 +397,13 @@ def _extract_and_upload(
     return manifest
 
 
-def _dataset_name(work: str, series_id: str, path: str, layer: str | None) -> str:
-    """The source dataset a layer came from: its geodatabase's stem, or its shapefile's folder
-    inside the bundle (the series id for the bundle's root)."""
+def _dataset_name(work: str, series_id: str, path: str, layer: str | None, label: str) -> str:
+    """The source dataset a layer came from, which is also its inference scope: for a geodatabase
+    layer its label's prefix (the stem, after the folder when the name collided), so the backfill
+    reads the same scope from the label; for a shapefile its folder inside the bundle (the series
+    id for the bundle's root), which a collided label also carries as its prefix."""
     if layer is not None:
-        return _safe(os.path.basename(path)[:-4])
+        return relations.source_of_label(label, series_id)
     folder, root = os.path.dirname(os.path.abspath(path)), os.path.abspath(work)
     if folder == root:
         return series_id
@@ -410,15 +411,21 @@ def _dataset_name(work: str, series_id: str, path: str, layer: str | None) -> st
     return _safe(rel.replace(os.sep, "__"))
 
 
-def _profile_into(profiles: list, entry: dict, frame, name: str, group: str, manifest: dict) -> None:
-    """Keep what relationship inference needs of one layer read in memory. A layer that cannot be
-    profiled is left out of inference with a warning, and keeps its upload."""
-    try:
-        profiles.append(relations.Layer(entry["label"], name, group, relations.profile_frame(frame)))
-    except Exception as e:
-        manifest["warnings"].append({"label": entry["label"], "code": relations.PROFILE_FAILED,
-                                     "warning": f"left out of relationship inference: {_error(e)}"})
-        print(f"  layer {entry['label']}: not profiled for relationships: {e}", file=sys.stderr)
+def _profile_into(profiles: list, entry: dict, frame, name: str, manifest: dict) -> None:
+    """Keep what relationship inference needs of one layer read in memory, scoped by its `source`.
+    A spatial layer is never an inferred target, so it keeps no key sets."""
+    columns, failed = relations.profile_frame(frame, keys=not entry["spatial"])
+    profiles.append(relations.Layer(entry["label"], name, entry["source"], columns, entry["spatial"]))
+    _warn_unprofiled(manifest, entry["label"], failed)
+
+
+def _warn_unprofiled(manifest: dict, label: str, failed: list[str]) -> None:
+    """One warning for a layer's columns that could not be profiled; its other columns still are."""
+    if failed:
+        manifest.setdefault("warnings", []).append({
+            "label": label, "code": relations.PROFILE_FAILED,
+            "warning": f"columns left out of relationship inference: {'; '.join(failed)}"})
+        print(f"  layer {label}: columns not profiled for relationships: {failed}", file=sys.stderr)
 
 
 def _declared_relationships(srcs: list[tuple[str, str | None, str, bool]], uploaded: set[str],
@@ -724,8 +731,12 @@ def _relations_series(series_id: str) -> tuple[dict, list[str]]:
     """Compute a series' relationships, layer kinds and sources from its GeoParquet on GCS, reading
     only the string and integer columns, and record them in its manifest. Declared relationships
     the manifest already holds are kept, since the geodatabase is not at hand to read them again;
-    a manifest that never recorded relationships gets a RELATIONSHIPS_NOT_READ warning. Nothing is
-    written when any layer cannot be read, since joins inferred without it could be wrong."""
+    a manifest that never recorded relationships gets a RELATIONSHIPS_NOT_READ warning. A layer's
+    scope is its recorded `source`, else its label's prefix (`relations.source_of_label`). When the
+    labels show the bundle has several folders (`relations.collided`), a shapefile with no prefix
+    and no recorded source could sit in any of them: it is left out of inference with a
+    SCOPE_UNKNOWN warning. Nothing is written when any layer cannot be read, since joins inferred
+    without it could be wrong."""
     import pyarrow.parquet as pq
 
     path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
@@ -734,21 +745,42 @@ def _relations_series(series_id: str) -> tuple[dict, list[str]]:
     if not isinstance(manifest, dict) or not isinstance(manifest.get("layers"), list):
         raise ValueError(f"{path} records no per-layer metadata; re-extract with --force")
     before = json.dumps(manifest)
+    manifest["warnings"] = [w for w in manifest.get("warnings") or [] if w.get("code") not in (
+        relations.PROFILE_FAILED, relations.SCOPE_UNKNOWN)]
+    if "relationships" not in manifest:
+        manifest["warnings"].append({
+            "code": relations.RELATIONSHIPS_NOT_READ,
+            "warning": "declared relationships not read: computed from the extracted GeoParquet, "
+                       "without the geodatabase; re-extract with --force to read them"})
+    known = {e["label"] for e in manifest["layers"]} | set(manifest.get("empty") or []) \
+        | {e["label"] for e in manifest.get("errors") or [] if e.get("label")}
+    several_folders = relations.collided(known)
+    unscoped = [e["label"] for e in manifest["layers"]
+                if several_folders and "source" not in e and "__" not in e["label"]]
+    if unscoped:
+        manifest["warnings"].append({
+            "code": relations.SCOPE_UNKNOWN,
+            "warning": f"left out of relationship inference, folder unknown: {', '.join(unscoped)}; "
+                       "re-extract with --force to record it"})
     profiles: list[relations.Layer] = []
     errors: list[str] = []
     with tempfile.TemporaryDirectory(prefix=f"v_{series_id.replace('/', '_')}_") as work:
         for entry in manifest["layers"]:
             label = entry["label"]
+            if label in unscoped:  # no source recorded, so a later backfill still knows it
+                continue
             entry.setdefault("source", relations.source_of_label(label, series_id))
             local = os.path.join(work, f"{label}.parquet")
             try:
                 gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
                 columns, _ = _schema(local)
                 keyed = [c["name"] for c in columns if c["type"] in ("string", "integer")]
-                table = pq.read_table(local, columns=keyed)
+                spatial = bool(entry.get("spatial"))
+                profiled, failed = relations.profile_table(pq.read_table(local, columns=keyed),
+                                                           keys=not spatial)
                 profiles.append(relations.Layer(label, relations.layer_name(label), entry["source"],
-                                                relations.profile_table(table)))
-                del table
+                                                profiled, spatial))
+                _warn_unprofiled(manifest, label, failed)
             except Exception as e:
                 errors.append(f"{series_id}/{label}: {_error(e)}")
                 print(f"  {series_id}/{label}: not read for relationships: {e}", file=sys.stderr)
@@ -757,11 +789,6 @@ def _relations_series(series_id: str) -> tuple[dict, list[str]]:
                     os.remove(local)
     if errors:
         return {"relationships": 0, "manifests updated": 0}, errors
-    if "relationships" not in manifest:
-        manifest.setdefault("warnings", []).append({
-            "code": relations.RELATIONSHIPS_NOT_READ,
-            "warning": "declared relationships not read: computed from the extracted GeoParquet, "
-                       "without the geodatabase; re-extract with --force to read them"})
     declared = [r for r in manifest.get("relationships") or [] if r.get("detected_by") == "declared"]
     _set_relationships(manifest, relations.merge(declared, relations.infer(profiles)))
     changed = json.dumps(manifest) != before

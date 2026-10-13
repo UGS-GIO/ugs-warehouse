@@ -218,7 +218,7 @@ def test_manifest_records_each_layers_rows_columns_crs_and_wgs84_bbox(monkeypatc
     assert table == {
         "label": "geo__DescriptionOfMapUnits", "spatial": False, "rows": 2,
         "columns": [{"name": "MapUnit", "type": "string"}, {"name": "Age", "type": "integer"}],
-        "source": "bundle", "kind": "supporting",
+        "source": "geo", "kind": "supporting",
     }
 
 
@@ -1099,8 +1099,8 @@ def _gems_frames(monkeypatch):
     """A GeMS-shaped bundle: map unit polygons, their description table and an unrelated glossary."""
     polys = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf", "Qal"], "Notes": [None, None, None],
                               "geometry": [Point(424000, 4512000)] * 3}, crs="EPSG:26912")
-    tables = {"DescriptionOfMapUnits": pd.DataFrame({"MapUnit": ["Qal", "Qaf", None],
-                                                     "Name": ["Alluvium", "Fan", "Heading"]}),
+    tables = {"DescriptionOfMapUnits": pd.DataFrame({"MapUnit": ["Qal", "Qaf", "Qc", None],
+                                                     "Name": ["Alluvium", "Fan", "Colluvium", "Heading"]}),
               "Glossary": pd.DataFrame({"Term": ["certain", "questionable"]})}
     monkeypatch.setattr("geopandas.read_file", lambda path, layer=None, engine=None: polys)
     monkeypatch.setattr("pyogrio.read_dataframe",
@@ -1163,28 +1163,40 @@ def test_declared_relationships_replace_inferred_ones_and_unpublishable_ones_war
     assert warning["code"] == vectors.relations.RELATIONSHIP_SKIPPED and "stations_rel" in warning["warning"]
 
 
-def test_a_layer_that_cannot_be_profiled_keeps_its_upload_and_warns(monkeypatch, tmp_path):
+def test_a_column_that_cannot_be_profiled_warns_once_and_the_rest_still_join(monkeypatch, tmp_path):
     store = _mem_gcs(monkeypatch)
     srcs = _gems_frames(monkeypatch)
+    real = vectors.relations.profile_column
 
-    def boom(frame):
-        raise TypeError("unhashable")
+    def flaky(arr, keys=True):
+        if "Alluvium" in arr.to_pylist() or "certain" in arr.to_pylist():
+            raise TypeError("unhashable")
+        return real(arr, keys)
 
-    monkeypatch.setattr(vectors.relations, "profile_frame", boom)
+    monkeypatch.setattr(vectors.relations, "profile_column", flaky)
     manifest = vectors._extract_and_upload(str(tmp_path), "OFR-784DM", srcs)
 
     assert len(manifest["layers"]) == 3 and manifest["errors"] == []
     assert f"{vectors.VECTORS_PREFIX}/OFR-784DM/{srcs[0][2]}.parquet" in store
-    assert {w["code"] for w in manifest["warnings"]} == {vectors.relations.PROFILE_FAILED}
-    assert manifest["relationships"] == []
+    assert [(w["code"], w["label"].split("__")[1]) for w in manifest["warnings"]] == [
+        (vectors.relations.PROFILE_FAILED, "DescriptionOfMapUnits"),
+        (vectors.relations.PROFILE_FAILED, "Glossary")]
+    assert "Name: TypeError: unhashable" in manifest["warnings"][0]["warning"]
+    assert [r["destination_cols"] for r in manifest["relationships"]] == [["MapUnit"]]
 
 
 def test_a_shapefiles_source_is_its_folder_in_the_bundle(tmp_path):
     work = str(tmp_path)
-    assert vectors._dataset_name(work, "M-246DM", os.path.join(work, "faults.shp"), None) == "M-246DM"
-    assert vectors._dataset_name(work, "M-246DM", os.path.join(work, "Landslides", "a.shp"), None) \
-        == "Landslides"
-    assert vectors._dataset_name(work, "M-246DM", os.path.join(work, "x", "Geo.gdb"), "Faults") == "Geo"
+    def name(path, layer, label):
+        return vectors._dataset_name(work, "M-246DM", os.path.join(work, *path), layer, label)
+
+    assert name(["faults.shp"], None, "faults") == "M-246DM"
+    assert name(["Landslides", "a.shp"], None, "a") == "Landslides"
+    assert name(["Landslides", "a.shp"], None, "Landslides__a") == "Landslides"  # collided: same scope
+    # A geodatabase's scope is its label's prefix, which names the folder when its name collided,
+    # so the backfill reads the same scope from the label alone.
+    assert name(["x", "Geo.gdb"], "Faults", "Geo__Faults") == "Geo"
+    assert name(["x", "Geo.gdb"], "Faults", "x__Geo__Faults") == "x__Geo"
 
 
 def _relations_store(monkeypatch, tmp_path, sid: str, frames: dict, **manifest_extra):
@@ -1210,7 +1222,8 @@ def _gems_parquet():
     return {"geo__MapUnitPolys": gpd.GeoDataFrame(
                 {"MapUnit": ["Qal", "Qaf", "Qal"], "Shape_Area": [1.0, 2.0, 3.0],
                  "geometry": [Point(424000, 4512000)] * 3}, crs="EPSG:26912"),
-            "geo__DescriptionOfMapUnits": pd.DataFrame({"MapUnit": ["Qal", "Qaf"], "Age": [1.5, 2.5]}),
+            "geo__DescriptionOfMapUnits": pd.DataFrame({"MapUnit": ["Qal", "Qaf", "Qc"],
+                                                        "Age": [1.5, 2.5, 3.5]}),
             "geo__Glossary": pd.DataFrame({"Term": ["certain", "questionable"]})}
 
 
@@ -1253,6 +1266,57 @@ def test_relations_backfill_keeps_declared_relationships_and_is_idempotent(monke
                         lambda *a, **k: pytest.fail("an unchanged manifest was rewritten"))
     assert vectors.backfill_relations(["M-401"]) == 0
     assert store[f"{vectors.VECTORS_PREFIX}/M-401/_manifest.json"] == before
+
+
+def test_extraction_and_backfill_scope_collided_geodatabases_the_same_way(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    srcs = _gems_frames(monkeypatch)
+    # A second copy of the geodatabase in a subfolder: its labels take the folder as a prefix.
+    stem = GDB[:-4]
+    srcs += [(f"sub/{GDB}", layer, f"sub__{label}", spatial) for _, layer, label, spatial in srcs]
+    manifest = vectors._extract_and_upload(str(tmp_path), "OFR-784DM", srcs)
+
+    for entry in manifest["layers"]:
+        assert entry["source"] == vectors.relations.source_of_label(entry["label"], "OFR-784DM")
+    # Each copy joins within itself only.
+    assert sorted((r["origin"], r["destination"]) for r in manifest["relationships"]) == [
+        (f"{stem}__MapUnitPolys", f"{stem}__DescriptionOfMapUnits"),
+        (f"sub__{stem}__MapUnitPolys", f"sub__{stem}__DescriptionOfMapUnits")]
+
+
+def test_relations_backfill_leaves_shapefiles_of_unknown_folder_out(monkeypatch, tmp_path):
+    polys = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf"], "geometry": [Point(424000, 4512000)] * 2},
+                             crs="EPSG:26912")
+    units = pd.DataFrame({"MapUnit": ["Qal", "Qaf", "Qc"]})
+    # `sub__faults` shows `faults` was taken, so the bundle has several folders and the bare labels'
+    # folders are unknown: `faults` and `units` may not sit together.
+    store = _relations_store(monkeypatch, tmp_path, "M-403",
+                             {"faults": polys, "sub__faults": polys, "units": units})
+    del store[f"{vectors.VECTORS_PREFIX}/M-403/faults.parquet"]  # never read
+    del store[f"{vectors.VECTORS_PREFIX}/M-403/units.parquet"]
+
+    assert vectors.backfill_relations(["M-403"]) == 0
+    doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-403/_manifest.json"])
+    assert doc["relationships"] == []
+    scope = [w for w in doc["warnings"] if w["code"] == vectors.relations.SCOPE_UNKNOWN]
+    assert len(scope) == 1 and "faults, units" in scope[0]["warning"] and "--force" in scope[0]["warning"]
+    assert {e["label"]: e.get("source") for e in doc["layers"]} == {
+        "faults": None, "sub__faults": "sub", "units": None}
+
+    before = store[f"{vectors.VECTORS_PREFIX}/M-403/_manifest.json"]
+    assert vectors.backfill_relations(["M-403"]) == 0  # the same warning, not a second one
+    assert store[f"{vectors.VECTORS_PREFIX}/M-403/_manifest.json"] == before
+
+
+def test_relations_backfill_scopes_bare_shapefiles_together_when_there_is_one_folder(monkeypatch, tmp_path):
+    polys = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf"], "geometry": [Point(424000, 4512000)] * 2},
+                             crs="EPSG:26912")
+    store = _relations_store(monkeypatch, tmp_path, "M-404",
+                             {"faults": polys, "units": pd.DataFrame({"MapUnit": ["Qal", "Qaf", "Qc"]})})
+    assert vectors.backfill_relations(["M-404"]) == 0
+    doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-404/_manifest.json"])
+    assert [(r["origin"], r["destination"]) for r in doc["relationships"]] == [("faults", "units")]
+    assert {e["source"] for e in doc["layers"]} == {"M-404"}
 
 
 def test_relations_backfill_writes_nothing_when_a_layer_cannot_be_read(monkeypatch, tmp_path, capsys):

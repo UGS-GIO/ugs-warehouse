@@ -4,7 +4,8 @@ Declared relationship classes come from a geodatabase through `ogrinfo -json`. O
 within one source dataset (a geodatabase, or a folder of shapefiles) from column names and values:
 the name rule is ugs-ingest's FK proposer (`scoreNameMatch`), and the value score is the share of
 the source column's distinct values found in the target key. Inferred joins are published without
-review, so the acceptance bar is higher than the proposer's.
+review, so the acceptance bar is higher than the proposer's, and they target only non-spatial
+tables: a spatial layer is a destination only when the geodatabase declares it.
 
 A relationship runs from its origin, the table holding the foreign key (MapUnitPolys), to its
 destination, the keyed table (DescriptionOfMapUnits).
@@ -20,7 +21,14 @@ from dataclasses import dataclass
 NAME_GATE = 25
 ACCEPT_TOTAL = 80
 ACCEPT_OVERLAP = 90.0
+# A second, lower bar for a source with only a generic `*ID` name: every sampled value, at least
+# MIN_SHARED of them, found in a target key named `*_ID` / `*ID` (LocationSourceID -> DataSources_ID).
+LOW_NAME_GATE = 10
+MIN_SHARED = 3
 SAMPLE_SIZE = 5000
+# A target key needs this many distinct values: with fewer, a flag (Y/N) or a code (1..2) on a small
+# layer is unique by accident.
+MIN_KEYS = 3
 # A key column with more distinct values than this is not kept in memory, so it is never a target.
 KEY_CAP = 100_000
 OGRINFO_TIMEOUT_S = 300
@@ -28,26 +36,32 @@ OGRINFO_TIMEOUT_S = 300
 RELATIONSHIPS_NOT_READ = "relationships_not_read"
 RELATIONSHIP_SKIPPED = "relationship_skipped"
 PROFILE_FAILED = "relationships_not_inferred"
+SCOPE_UNKNOWN = "relationships_scope_unknown"
 
 _FK_SUFFIX = re.compile(r"^(.+?)(_id|_oid|_pk|_fk|id|oid)$", re.IGNORECASE)
-_NOT_KEYS = re.compile(r"^(objectid|fid|shape_.*)$", re.IGNORECASE)
+_ID_KEY = re.compile(r"id$", re.IGNORECASE)
+# Row numbers and generic ids that every layer has: never a key or a foreign key.
+_NOT_KEYS = re.compile(r"^(objectid|objectid_\d+|fid|fid_.*|id|shape_.*)$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
 class Column:
     """What inference keeps of one column: hashes of up to SAMPLE_SIZE distinct values, every value's
-    hash when the column can be a target key, and whether its non-null values are unique."""
+    hash when the column can be a target key, whether its non-null values are unique, and whether
+    it is an integer sequence 0..N or 1..N (row numbering, not a code)."""
     sample: frozenset[int]
     keys: frozenset[int] | None
     unique: bool
+    dense: bool = False
 
 
 @dataclass(frozen=True)
 class Layer:
     label: str
     name: str    # the layer's own name, the table name the name rule reads
-    group: str   # inference scope: one geodatabase or one shapefile folder
+    group: str   # inference scope: one source dataset
     columns: dict[str, Column]
+    spatial: bool  # an inferred join never targets a spatial layer
 
 
 def _is_key_type(t) -> bool:
@@ -56,10 +70,10 @@ def _is_key_type(t) -> bool:
     return pa.types.is_string(t) or pa.types.is_large_string(t) or pa.types.is_integer(t)
 
 
-def profile_column(arr) -> Column | None:
-    """The column's sample and key sets, or None when it is not strings or integers or has no
-    value. Values compare as text, so integer 7 matches string "7". A key needs at least two
-    distinct values: a column holding one value is unique only trivially."""
+def profile_column(arr, keys: bool = True) -> Column | None:
+    """The column's sample and, when `keys` and it can be a target, its key set; None when it is
+    not strings or integers or has no value. Values compare as text, so integer 7 matches string
+    "7". A key is unique, with MIN_KEYS to KEY_CAP distinct values."""
     import pyarrow as pa
     import pyarrow.compute as pc
 
@@ -75,40 +89,46 @@ def profile_column(arr) -> Column | None:
     uniq = pc.unique(arr)
     unique = len(uniq) == len(arr)
     sample = frozenset(hash(str(v)) for v in uniq.slice(0, SAMPLE_SIZE).to_pylist())
-    keys = (frozenset(hash(str(v)) for v in uniq.to_pylist())
-            if unique and 2 <= len(uniq) <= KEY_CAP else None)
-    return Column(sample, keys, unique)
+    is_key = keys and unique and MIN_KEYS <= len(uniq) <= KEY_CAP
+    dense = False
+    if is_key and pa.types.is_integer(arr.type):
+        lo, hi = pc.min_max(arr).values()
+        dense = (lo.as_py(), hi.as_py()) in ((0, len(uniq) - 1), (1, len(uniq)))
+    return Column(sample, frozenset(hash(str(v)) for v in uniq.to_pylist()) if is_key else None,
+                  unique, dense)
 
 
-def profile_frame(df) -> dict[str, Column]:
-    """Profiles of a (Geo)DataFrame's string and integer columns, skipping geometry, OBJECTID, FID
-    and Shape_* columns."""
+def _profile(names, column, keys: bool) -> tuple[dict[str, Column], list[str]]:
+    out: dict[str, Column] = {}
+    failed: list[str] = []
+    for name in names:
+        try:
+            col = profile_column(column(name), keys)
+        except Exception as e:
+            failed.append(f"{name}: {type(e).__name__}: {e}")
+            continue
+        if col:
+            out[str(name)] = col
+    return out, failed
+
+
+def profile_frame(df, keys: bool = True) -> tuple[dict[str, Column], list[str]]:
+    """(profiles of a (Geo)DataFrame's string and integer columns, an error per column that could
+    not be profiled). Geometry, OBJECTID, FID, Id and Shape_* columns are skipped. Integer columns
+    with nulls arrive from GDAL as float64, so they are never candidates."""
     import pandas as pd
     import pyarrow as pa
 
     geom = getattr(df, "_geometry_column_name", None)
-    out: dict[str, Column] = {}
-    for name in df.columns:
-        s = df[name]
-        if name == geom or _NOT_KEYS.match(str(name)) or not (
-                pd.api.types.is_integer_dtype(s.dtype) or pd.api.types.is_string_dtype(s.dtype)):
-            continue
-        col = profile_column(pa.array(s, from_pandas=True))
-        if col:
-            out[str(name)] = col
-    return out
+    names = [n for n in df.columns if n != geom and not _NOT_KEYS.match(str(n)) and (
+        pd.api.types.is_integer_dtype(df[n].dtype) or pd.api.types.is_string_dtype(df[n].dtype))]
+    return _profile(names, lambda n: pa.array(df[n], from_pandas=True), keys)
 
 
-def profile_table(table) -> dict[str, Column]:
-    """Profiles of a pyarrow Table's string and integer columns (OBJECTID, FID, Shape_* skipped)."""
-    out: dict[str, Column] = {}
-    for name in table.column_names:
-        if _NOT_KEYS.match(name):
-            continue
-        col = profile_column(table.column(name))
-        if col:
-            out[name] = col
-    return out
+def profile_table(table, keys: bool = True) -> tuple[dict[str, Column], list[str]]:
+    """`profile_frame` for a pyarrow Table."""
+    names = [n for n in table.column_names if not _NOT_KEYS.match(n)]
+    return _profile(names, table.column, keys)
 
 
 def _forms(stem: str) -> set[str]:
@@ -141,33 +161,48 @@ def name_score(source_col: str, target_col: str, target_table: str) -> int:
 
 def _affinity(col: str, table: str) -> bool:
     """True when the key column's stem appears in its table's name (MapUnit in
-    DescriptionOfMapUnits): the tie-break between equally scored keys of one table."""
+    DescriptionOfMapUnits)."""
     m = _FK_SUFFIX.match(col.lower())
     return any(len(f) >= 3 and f in table.lower() for f in _forms(m.group(1) if m else col.lower()))
 
 
+def _accepted(name: int, overlap: float, shared: int, target_col: str) -> bool:
+    """The main bar (NAME_GATE, ACCEPT_OVERLAP, ACCEPT_TOTAL), or the low-name bar."""
+    if name >= NAME_GATE and overlap >= ACCEPT_OVERLAP and name + overlap * 0.6 >= ACCEPT_TOTAL:
+        return True
+    return (name >= LOW_NAME_GATE and overlap == 100 and shared >= MIN_SHARED
+            and bool(_ID_KEY.search(target_col)))
+
+
 def infer(layers: list[Layer]) -> list[dict]:
-    """Relationships inferred between layers of the same group. A pair is accepted when its name
-    score passes NAME_GATE, its overlap reaches ACCEPT_OVERLAP and name + overlap x 0.6 reaches
-    ACCEPT_TOTAL. One relationship is kept per origin/destination pair, the best scored, and of a
-    pair found in both directions the one whose destination holds more keys."""
+    """Relationships inferred from a layer to a non-spatial table of the same group (`_accepted`).
+    A target key that numbers its rows (0..N or 1..N) counts only when its name is its table's
+    (`_affinity`). One relationship is kept per origin/destination pair, the best scored: total,
+    then overlap, then `_affinity`. Of a pair found in both directions, the one whose destination
+    holds more keys is kept."""
     best: dict[tuple[str, str], tuple[tuple, dict]] = {}
     for t in layers:
+        if t.spatial:
+            continue
         for tcol, tc in t.columns.items():
             if tc.keys is None:
+                continue
+            affinity = _affinity(tcol, t.name)
+            if tc.dense and not affinity:
                 continue
             for s in layers:
                 if s.group != t.group or s.label == t.label:
                     continue
                 for scol, sc in s.columns.items():
                     name = name_score(scol, tcol, t.name)
-                    if name < NAME_GATE:
+                    if name < LOW_NAME_GATE:
                         continue
-                    overlap = 100 * len(sc.sample & tc.keys) / len(sc.sample)
+                    shared = len(sc.sample & tc.keys)
+                    overlap = 100 * shared / len(sc.sample)
+                    if not _accepted(name, overlap, shared, tcol):
+                        continue
                     total = name + overlap * 0.6
-                    if overlap < ACCEPT_OVERLAP or total < ACCEPT_TOTAL:
-                        continue
-                    rank = (total, overlap, _affinity(tcol, t.name), len(tc.keys), scol, tcol)
+                    rank = (total, overlap, affinity, len(tc.keys), scol, tcol)
                     rel = {"origin": s.label, "origin_cols": [scol],
                            "destination": t.label, "destination_cols": [tcol],
                            "cardinality": "one_to_one" if sc.unique else "many_to_one",
@@ -219,6 +254,9 @@ def orient_declared(rel: dict, labels: dict[str, str]) -> tuple[dict | None, str
     """A declared relationship in the manifest's origin -> destination shape, or (None, why it is
     not published). `labels` maps the geodatabase's table names to extracted labels."""
     card = rel.get("cardinality")
+    tables = (rel.get("left_table_name") or "", rel.get("right_table_name") or "")
+    if rel.get("related_table_type") == "media" or any(t.upper().endswith("__ATTACH") for t in tables):
+        return None, "is an attachment relationship, not a data join"
     if card not in _DECLARED or rel.get("mapping_table_name"):
         return None, f"is {card} or uses a mapping table, which is not published as a join"
     fk_side, key_side, cardinality = _DECLARED[card]
@@ -259,10 +297,24 @@ def layer_kind(spatial: bool, label: str, relationships: list[dict]) -> str:
 
 
 def source_of_label(label: str, root: str) -> str:
-    """The source dataset a label names: the prefix before its last `__` (a geodatabase's stem),
-    else `root`, the bundle itself. Used where the extracted file's path is no longer known."""
+    """The source dataset a label names: the prefix before its last `__` (a geodatabase's stem,
+    after the folder it sits in when its name collided; or a collided shapefile's folder), else
+    `root`, the bundle itself."""
     prefix, sep, _ = label.rpartition("__")
     return prefix if sep and prefix else root
+
+
+def collided(labels: set[str]) -> bool:
+    """True when a label carries a folder prefix because its name was taken (`sub__faults` beside
+    `faults`): the bundle has several folders, so an un-prefixed shapefile's folder is unknown. A
+    geodatabase layer named like a shapefile reads the same way, which errs toward unknown."""
+    for label in labels:
+        start = label.find("__")
+        while start > 0:
+            if label[start + 2:] in labels:
+                return True
+            start = label.find("__", start + 2)
+    return False
 
 
 def layer_name(label: str) -> str:

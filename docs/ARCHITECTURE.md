@@ -148,17 +148,24 @@ the module path has to be given again.
 
 The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
 classes a geodatabase declares are read with `ogrinfo -json`; a geodatabase whose relationships
-cannot be read gets a `relationships_not_read` warning and inference still runs. Most GeMS
-databases declare none, so joins are also inferred within one source dataset (a geodatabase, or a
-folder of shapefiles) with ugs-ingest's FK scoring: a column-name score (`scoreNameMatch`, with
-singular/plural folded) plus the share of the column's distinct values (up to 5,000 sampled) found
-in another table's unique key, times 0.6. A join is kept when the name score is at least 25, the
-overlap at least 90% and the total at least 80, and only the best one per pair of tables. A key
-needs at least two distinct values, since a one-row table's columns are unique by accident. Each
+cannot be read gets a `relationships_not_read` warning and inference still runs. Attachment
+relationships (`__ATTACH`, media) are not joins and are skipped. Most GeMS databases declare none,
+so joins are also inferred within one source dataset with ugs-ingest's FK scoring: a column-name
+score (`scoreNameMatch`, with singular/plural folded) plus the share of the column's distinct
+values (up to 5,000 sampled) found in another table's unique key, times 0.6. A join is kept when
+the name score is at least 25, the overlap at least 90% and the total at least 80; or, for a source
+with only a generic `*ID` name (score 10), when every sampled value, at least 3 of them, is in a key
+named `*_ID` or `*ID`. Only the best join per pair of tables is kept. An inferred join targets only
+a non-spatial table; a spatial layer is a target only when declared. A key needs at least 3
+distinct values, an integer key numbering its rows 0..N or 1..N counts only when named for its
+table, and `OBJECTID`, `OBJECTID_n`, `FID`, `FID_*`, `Id` and `Shape_*` are never keys or foreign
+keys. Integer columns with nulls arrive from GDAL as float64, so they are never candidates. Each
 relationship runs from the table holding the foreign key (`origin`, e.g. MapUnitPolys) to the keyed
 table (`destination`, e.g. DescriptionOfMapUnits) and says whether it was `declared` or `inferred`
-(with its `confidence` and `overlap`). Each layer entry records its `source` dataset and `kind`:
-`layer` (spatial), `table` (non-spatial, in a relationship) or `supporting`.
+(with its `confidence` and `overlap`). Each layer entry records its `source` dataset, which is also
+its inference scope: a geodatabase layer's label prefix (the stem, after its folder when the name
+collided), or a shapefile's folder. A column that cannot be profiled gets one
+`relationships_not_inferred` warning per layer, and the layer's other columns are still used.
 
 The pubs ingest publishes them in the serving topics' shape. A non-spatial destination is a
 `roles: ["data", "related"]` asset on the origin Item, keyed by the destination's label, pointing at
@@ -171,7 +178,10 @@ the viewer groups a pub's items without fetching them.
 
 For pubs extracted before relationships were recorded, `--relations-backfill [SID ...]` computes
 them from the GeoParquet already on GCS (only its string and integer columns), keeps any declared
-relationships the manifest holds, and writes nothing for a series with a layer it cannot read. Run
+relationships the manifest holds, and writes nothing for a series with a layer it cannot read. Its
+scopes come from the labels, as extraction's do. When a label carries a folder prefix because its
+name was taken, the bundle has several folders and a bare shapefile label's folder is unknown: it is
+left out of inference with a `relationships_scope_unknown` warning until `--force` re-extracts. Run
 it on the job (Extract map layers → Record relationships in the admin console), then **Rebuild pubs
 STAC**:
 

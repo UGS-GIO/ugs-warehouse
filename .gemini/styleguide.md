@@ -79,7 +79,7 @@ The pipeline sink. Upstream: the vector producer reads **dataELT**'s serving `{s
 - Vector = scale-to-zero service, pubs = sharded Jobs; admin console behind IAP. Deploy footgun: `--no-traffic --tag` pins traffic to the old revision — shift with `--to-latest` after. No secrets in code/logs (DSNs/creds via env/Secret Manager). `_current` (and the `geom` column) is an upstream contract — coordinate rather than edit here. GCP/Vertex only.
 
 ## Existing tooling & memory
-- Flag new code that redoes what a dependency or a repo helper already does. Name the replacement. The list is in AGENTS.md "Use existing tooling" (pystac, rustac, rio-stac, gpio, obstore, `sink_pmtiles.run_tippecanoe`, `core/stac.py` builders, viewer helpers in `stac.ts`/`map-model.ts`/`data/columns.ts`). Also check portolan-sdi, developmentseed and stac-utils.
+- Flag new code that redoes what a dependency or a repo helper already does. Name the replacement. The list is in AGENTS.md "Use existing tooling" (pystac, rustac, rio-stac, gpio, obstore, the tippecanoe step in `vector/sink_pmtiles.py`, `core/stac.py` builders, viewer helpers in `stac.ts`/`map-model.ts`/`data/columns.ts`). Also check portolan-sdi, developmentseed and stac-utils.
 - Flag a second copy of an existing helper in this repo, even a small one.
 - Memory: Cloud Run `/tmp` is RAM. Flag two copies of a dataset alive at once (a frame plus its `to_crs` copy, the previous loop's frame during the next read), full docs kept when only index entries are needed, and per-object calls where one batch call works.
 

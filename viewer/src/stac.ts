@@ -220,9 +220,11 @@ export const plateHrefOf = (d: StacDoc | undefined, base?: string): string | und
   try { return new URL(link.href, from).href; } catch { return undefined; }
 };
 
-/** The publication's plate Item (see plateHrefOf), fetched; undefined while loading or when none. */
-export function usePlate(d: StacDoc | undefined): StacDoc | undefined {
-  return useStac(plateHrefOf(d)).data;
+/** The publication's plate Item (see plateHrefOf), fetched: `plate` is undefined while loading or
+ *  when there is none; `error` is set when the fetch failed, so the page can say so. */
+export function usePlate(d: StacDoc | undefined): { plate?: StacDoc; error?: unknown } {
+  const q = useStac(plateHrefOf(d));
+  return { plate: q.data, error: q.error ?? undefined };
 }
 
 // Whether the tiles service (XYZ, GL style, ArcGIS VectorTileServer) serves this item. It serves the

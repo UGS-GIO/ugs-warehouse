@@ -15,7 +15,7 @@ import { ensureCogProtocol } from "./cog";
 import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { boundsOf, defaultVectorLayers, type FocusSel, GEOM_FILTER, pickFeature, validBbox } from "./map-model";
+import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, previewDefaultLayers, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
 import { joinsRows, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
@@ -26,8 +26,8 @@ ensurePmtilesProtocol();   // this module is lazy, so registration happens the f
 const LIGHT_BASEMAP = protomapsStyle("white", DIRECT);
 
 // Neutral render used until (or without) a ugs-styles style: visible borders, not faux cartography.
-// The Map page's unstyled layers use the same per-geometry layers in their swatch colour.
-const NEUTRAL_LAYERS = defaultVectorLayers("#374151").map(({ type, filter, paint }) => ({ type, filter, paint }));
+// The Map page's unstyled layers come from the same defaultVectorLayers (map-model).
+const NEUTRAL_LAYERS = previewDefaultLayers();
 
 // Load a baked sprite sheet (pie-wedge icons for box-type) into the map via addImage. Idempotent.
 async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void> {

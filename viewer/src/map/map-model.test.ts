@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type ActiveLayer, boundsOf, clampSize, colorForId, defaultVectorLayers, DETENTS, GEOM_FILTER, hasFootprint, LAYER_COLORS, layerParam,
+import { type ActiveLayer, boundsOf, clampSize, colorForId, defaultVectorLayers, DETENTS, GEOM_FILTER, hasFootprint, LAYER_COLORS, layerParam, mapDefaultLayers, NEUTRAL_VECTOR_COLOR, previewDefaultLayers,
   mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
   validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
@@ -285,6 +285,17 @@ describe("orderedSublayerIds", () => {
       { styledCount: () => undefined, cogReady: false }))
       .toEqual(["rpm-a_b_c-raster", "pm-qfaults-fill", "pm-qfaults-line", "pm-qfaults-circle"]);
     expect(slugOf("a.b:c")).toBe("a_b_c");
+  });
+});
+
+describe("the unstyled renders on the preview and the Map page", () => {
+  it("are both defaultVectorLayers: neutral in the preview, the layer's swatch on the Map page", () => {
+    const strip = (ls: ReturnType<typeof defaultVectorLayers>) => ls.map(({ type, filter, paint }) => ({ type, filter, paint }));
+    expect(previewDefaultLayers()).toEqual(strip(defaultVectorLayers(NEUTRAL_VECTOR_COLOR)));
+    expect(mapDefaultLayers("hazards_qfaults")).toEqual(defaultVectorLayers(colorForId("hazards_qfaults")));
+    // Same layers, same filters, same paint properties: only the colour differs.
+    expect(strip(mapDefaultLayers("x")).map((l) => [l.type, l.filter, Object.keys(l.paint)]))
+      .toEqual(previewDefaultLayers().map((l) => [l.type, l.filter, Object.keys(l.paint)]));
   });
 });
 

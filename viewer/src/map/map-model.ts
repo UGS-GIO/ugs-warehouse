@@ -167,6 +167,13 @@ export const defaultVectorLayers = (color: string) => [
              "circle-stroke-color": "#ffffff", "circle-stroke-width": 0.5 } },
 ];
 
+// The two unstyled renders, both from defaultVectorLayers so they cannot drift: the preview's in a
+// neutral colour, the Map page's in the layer's swatch colour (the tray and legend show the same).
+export const NEUTRAL_VECTOR_COLOR = "#374151";
+export const previewDefaultLayers = () =>
+  defaultVectorLayers(NEUTRAL_VECTOR_COLOR).map(({ type, filter, paint }) => ({ type, filter, paint }));
+export const mapDefaultLayers = (layerId: string) => defaultVectorLayers(colorForId(layerId));
+
 // A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
 // to open it on click. Aspatial items (no bbox) are filtered out by the caller.
 export type Footprint = { href: string; id: string; title: string; bbox: number[] };

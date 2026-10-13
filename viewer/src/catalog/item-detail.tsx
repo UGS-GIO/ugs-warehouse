@@ -186,8 +186,8 @@ function PublicationParts({ item, collectionId }: { item: StacDoc; collectionId:
 
 // On a publication page, "Add to map" for its plate, as on the plate's own page. Nothing for a
 // report-only or single-file publication (no plate Item), or while the plate loads.
-function PlateAddToMap({ item }: { item: StacDoc }) {
-  const plate = usePlate(item);
+export function PlateAddToMap({ item }: { item: StacDoc }) {
+  const { plate } = usePlate(item);
   return plate?.id ? <AddToMapButton large layerId={String(plate.id)} doc={plate} /> : null;
 }
 

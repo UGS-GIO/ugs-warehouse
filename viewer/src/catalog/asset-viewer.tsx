@@ -242,9 +242,19 @@ export function Preview({ item }: { item: StacDoc }) {
 
 // A publication's assets plus its plate's map, the PDF staying the default tab.
 function PlatedAssetViewer({ item }: { item: StacDoc }) {
-  const plate = usePlate(item);
+  const { plate, error } = usePlate(item);
   const extra = useMemo(() => plateEntry(plate), [plate]);
-  return <AssetViewer item={item} extra={extra} />;
+  return (
+    <>
+      <AssetViewer item={item} extra={extra} />
+      {/* A plate that failed to load is said, not silently missing from the tabs. */}
+      {error != null && (
+        <div role="alert" className="mt-2 text-xs text-destructive">
+          Map plate could not be loaded: {error instanceof Error ? error.message : String(error)}
+        </div>
+      )}
+    </>
+  );
 }
 
 // ---- API & data endpoints ----

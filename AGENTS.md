@@ -62,6 +62,7 @@ GCS auth is ADC: `gcloud auth application-default login` locally, the service ac
 
 ## Conventions
 
+- Branch from `develop` and open PRs against `develop`. `main` only takes release PRs from `develop`, and `main-source.yml` fails any other PR into `main`.
 - Python 3.11+, `from __future__ import annotations` at the top of each module.
 - Target geometry is **EPSG:4326**; `transform.TARGET_SRS` / `H3_RESOLUTION` are the single source of truth.
 - dbt convention: the geometry column is `geom`; `_current` is the table suffix.

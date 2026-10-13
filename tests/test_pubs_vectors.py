@@ -814,3 +814,145 @@ def test_a_tiling_failure_is_an_error_but_the_geoparquet_stays_published(monkeyp
     assert vectors.pmtiles_object("M-202", "faults") not in store
     assert json.loads(store[f"{vectors.VECTORS_PREFIX}/M-202/_manifest.json"]) == manifest
     assert os.listdir(tmp_path) == []
+
+
+# ---------------------------------------------------------------------------
+# --pmtiles-backfill: tiles already-extracted layers from their GeoParquet on GCS
+# ---------------------------------------------------------------------------
+
+def _backfill_store(monkeypatch, tmp_path, manifests: dict[str, dict]):
+    """GCS double for the backfill: each series' manifest plus a real GeoParquet per spatial layer,
+    the versioned read/conditional write the backfill uses, and a zip download that must not run."""
+    from ugs_warehouse.pubs import harvest
+
+    store = _mem_gcs(monkeypatch)
+    gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]}, crs="EPSG:26912")
+    for sid, doc in manifests.items():
+        store[f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json"] = json.dumps(doc).encode()
+        for lay in doc["layers"]:
+            if lay.get("spatial"):
+                local = tmp_path / f"{sid}_{lay['label']}.parquet"
+                vectors.geoparquet.write(gdf, local)
+                store[f"{vectors.VECTORS_PREFIX}/{sid}/{lay['label']}.parquet"] = local.read_bytes()
+
+    def download(path, dest, **kw):
+        with open(dest, "wb") as fh:
+            fh.write(store[path])
+
+    def put_if_unchanged(data, path, version, **kw):
+        assert version == {"version": path}
+        store[path] = data
+
+    monkeypatch.setattr(vectors.gcs, "download", download)
+    monkeypatch.setattr(vectors.gcs, "get_bytes_versioned", lambda p: (store[p], {"version": p}))
+    monkeypatch.setattr(vectors.gcs, "put_bytes_if_unchanged", put_if_unchanged)
+    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: store[p])
+    monkeypatch.setattr(vectors.gcs, "list_paths", lambda prefix: [p for p in store if p.startswith(prefix)])
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: pytest.fail("backfill re-downloaded a zip"))
+    return store
+
+
+def _manifest(*layers, errors=None, warnings=None):
+    return {"spatial": [lay["label"] for lay in layers if lay["spatial"]],
+            "tables": [lay["label"] for lay in layers if not lay["spatial"]],
+            "layers": list(layers), "empty": [], "errors": errors or [], "warnings": warnings or []}
+
+
+def test_backfill_tiles_only_layers_without_pmtiles(monkeypatch, tmp_path, capsys):
+    store = _backfill_store(monkeypatch, tmp_path, {"M-300": _manifest(
+        {"label": "done", "spatial": True, "pmtiles": True, "pmtiles_layer": "done"},
+        {"label": "todo", "spatial": True},
+        {"label": "dmu", "spatial": False})})
+
+    assert vectors.backfill_pmtiles(["M-300"]) == 0
+
+    assert vectors.pmtiles_object("M-300", "todo") in store
+    assert vectors.pmtiles_object("M-300", "done") not in store  # skipped, not rebuilt
+    layers = {lay["label"]: lay for lay in
+              json.loads(store[f"{vectors.VECTORS_PREFIX}/M-300/_manifest.json"])["layers"]}
+    assert layers["todo"]["pmtiles"] is True and layers["todo"]["pmtiles_layer"] == "todo"
+    assert "pmtiles" not in layers["dmu"]
+    assert "1 built, 1 skipped, 0 failed" in capsys.readouterr().out
+
+
+def test_backfill_force_rebuilds_layers_that_have_pmtiles(monkeypatch, tmp_path):
+    store = _backfill_store(monkeypatch, tmp_path, {"M-301": _manifest(
+        {"label": "done", "spatial": True, "pmtiles": True, "pmtiles_layer": "done"})})
+
+    assert vectors.backfill_pmtiles(["M-301"], force=True) == 0
+    assert store[vectors.pmtiles_object("M-301", "done")] == b"tiles:done"
+
+
+def test_backfill_skips_a_layer_with_no_geometry_to_tile(monkeypatch, tmp_path, capsys):
+    store = _backfill_store(monkeypatch, tmp_path, {"M-307": _manifest(
+        {"label": "blank", "spatial": True},
+        warnings=[{"label": "blank", "warning": vectors._NO_TILES}])})
+    before = dict(store)
+
+    assert vectors.backfill_pmtiles(["M-307"]) == 0
+    assert store == before and "0 built, 1 skipped" in capsys.readouterr().out
+
+
+def test_backfill_with_no_series_visits_every_clean_manifest(monkeypatch, tmp_path):
+    store = _backfill_store(monkeypatch, tmp_path, {
+        "M-302": _manifest({"label": "a", "spatial": True}),
+        "M-303": _manifest({"label": "b", "spatial": True},
+                           errors=[{"label": "x", "error": "RuntimeError: unreadable"}])})
+
+    assert vectors.backfill_pmtiles([]) == 0
+    assert vectors.pmtiles_object("M-302", "a") in store
+    assert vectors.pmtiles_object("M-303", "b") not in store  # not clean: extraction retries it
+
+
+def test_backfill_reports_a_failed_layer_exits_nonzero_and_keeps_the_rest(monkeypatch, tmp_path, capsys):
+    store = _backfill_store(monkeypatch, tmp_path, {"M-304": _manifest(
+        {"label": "bad", "spatial": True}, {"label": "good", "spatial": True})})
+
+    def tiler(geojsonl, pmtiles, layer, **kw):
+        if layer == "bad":
+            raise RuntimeError("tippecanoe exited 1 for M-304/bad")
+        _fake_tippecanoe(geojsonl, pmtiles, layer)
+
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", tiler)
+
+    assert vectors.backfill_pmtiles(["M-304"]) == 1
+
+    out = capsys.readouterr()
+    assert "1 built, 0 skipped, 1 failed" in out.out and "M-304/bad" in out.err
+    stored = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-304/_manifest.json"])
+    layers = {lay["label"]: lay for lay in stored["layers"]}
+    assert layers["good"]["pmtiles"] is True and "pmtiles" not in layers["bad"]
+    assert stored["errors"] == []  # the series stays clean, so extraction does not re-download it
+
+
+def test_backfill_clears_the_tiling_error_extraction_left(monkeypatch, tmp_path):
+    store = _backfill_store(monkeypatch, tmp_path, {"M-305": _manifest(
+        {"label": "a", "spatial": True},
+        errors=[{"label": "a", "error": vectors.PMTILES_ERROR + "RuntimeError: x"},
+                {"label": "z", "error": "RuntimeError: unreadable"}])})
+
+    assert vectors.backfill_pmtiles(["M-305"]) == 0
+    stored = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-305/_manifest.json"])
+    assert stored["errors"] == [{"label": "z", "error": "RuntimeError: unreadable"}]
+
+
+def test_backfill_fails_a_series_whose_manifest_has_no_layer_metadata(monkeypatch, tmp_path, capsys):
+    _backfill_store(monkeypatch, tmp_path, {})
+    monkeypatch.setattr(vectors.gcs, "get_bytes_versioned",
+                        lambda p: (b'{"spatial": ["a"], "tables": []}', {"version": p}))
+
+    assert vectors.backfill_pmtiles(["M-306"]) == 1
+    assert "re-extract with --force" in capsys.readouterr().err
+
+
+def test_the_cli_runs_the_backfill(monkeypatch):
+    import sys
+
+    calls = []
+    monkeypatch.setattr(vectors, "backfill_pmtiles",
+                        lambda sids, force=False, limit=None: calls.append((sids, force)) or 0)
+    monkeypatch.setattr(sys, "argv", ["vectors", "--pmtiles-backfill", "M-1", "--force"])
+    assert vectors.main() == 0
+    monkeypatch.setattr(sys, "argv", ["vectors", "--pmtiles-backfill"])
+    assert vectors.main() == 0
+    assert calls == [(["M-1"], True), ([], False)]

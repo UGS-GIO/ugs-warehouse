@@ -17,6 +17,7 @@ layer never looks like a pub that simply has none.
 
     python -m ugs_warehouse.pubs.vectors M-299DM
     python -m ugs_warehouse.pubs.vectors --all
+    python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...] [--force]
 """
 from __future__ import annotations
 
@@ -519,15 +520,100 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
 
 
 
+def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, list[str]]:
+    """Build the PMTiles a series' manifest does not record yet, from the GeoParquet already on
+    GCS, and record them in the manifest. `force` rebuilds layers that have them. Returns (layers
+    built, layers skipped, an error per layer that failed). A success clears that layer's earlier
+    PMTILES_ERROR; a failure is returned, not written, so the series stays clean for extraction."""
+    import geopandas as gpd
+
+    path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
+    raw, version = gcs.get_bytes_versioned(path)
+    manifest = json.loads(raw.decode())
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("layers"), list):
+        raise ValueError(f"{path} records no per-layer metadata; re-extract with --force")
+    manifest.setdefault("errors", [])
+    manifest.setdefault("warnings", [])
+    no_tiles = {w.get("label") for w in manifest["warnings"] if w.get("warning") == _NO_TILES}
+    spatial = [e for e in manifest["layers"] if e.get("spatial")]
+    todo = [e for e in spatial if force or not (e.get("pmtiles") or e["label"] in no_tiles)]
+    built, errors, changed = 0, [], False
+    for entry in todo:
+        label = entry["label"]
+        result: dict = {"errors": [], "warnings": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                local = os.path.join(tmp, f"{label}.parquet")
+                gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
+                gdf = gpd.read_parquet(local)
+                os.remove(local)
+            except Exception as e:
+                errors.append(f"{series_id}/{label}: {_error(e)}")
+                print(f"  {series_id}/{label}: GeoParquet unreadable: {e}", file=sys.stderr)
+                continue
+            ok = _tile_into(entry, gdf, series_id, tmp, result)
+        errors += [f"{series_id}/{label}: {e['error']}" for e in result["errors"]]
+        new_warnings = [w for w in result["warnings"] if w not in manifest["warnings"]]
+        manifest["warnings"] += new_warnings
+        changed |= bool(new_warnings)
+        if ok:
+            built += 1
+            changed = True
+            manifest["errors"] = [e for e in manifest["errors"] if not (
+                e.get("label") == label and e.get("error", "").startswith(PMTILES_ERROR))]
+    if changed:
+        gcs.put_bytes_if_unchanged(json.dumps(manifest).encode(), path, version,
+                                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+    return built, len(spatial) - len(todo), errors
+
+
+def backfill_pmtiles(series_ids: list[str], force: bool = False, limit: int | None = None) -> int:
+    """Build missing PMTiles for already-extracted layers without re-downloading any zip. No
+    `series_ids` means every series with a clean manifest. Prints a summary; returns 1 when any
+    layer or series failed."""
+    sids = ([identity.Pub.parse(s).series_id for s in series_ids] if series_ids
+            else sorted(extracted_series()))
+    if limit:
+        sids = sids[:limit]
+    built = skipped = 0
+    errors: list[str] = []
+    for sid in sids:
+        try:
+            b, sk, errs = _backfill_series(sid, force=force)
+        except Exception as e:
+            errors.append(f"{sid}: {_error(e)}")
+            print(f"{sid}: FAIL {_error(e)}", file=sys.stderr)
+            continue
+        built, skipped, errors = built + b, skipped + sk, errors + errs
+        print(f"{sid}: {b} PMTiles built, {sk} skipped"
+              + (f", {len(errs)} failed" if errs else ""))
+    print(f"PMTiles backfill over {len(sids)} series: {built} built, {skipped} skipped, "
+          f"{len(errors)} failed")
+    if errors:
+        print("Failed:\n  " + "\n  ".join(errors), file=sys.stderr)
+        return 1
+    return 0
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Extract GIS publication vector layers to GCS")
-    g = ap.add_mutually_exclusive_group(required=True)
+    g = ap.add_mutually_exclusive_group()
     g.add_argument("series_id", nargs="*", default=[], help="Series ID(s) to extract")
     g.add_argument("--all", action="store_true", help="Extract all series IDs from metadata")
     ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to extract")
     ap.add_argument("--dry-run", action="store_true", help="Dry run (check URLs and schema only)")
     ap.add_argument("--force", action="store_true", help="Force extraction even if artifacts exist")
+    ap.add_argument("--pmtiles-backfill", action="store_true",
+                    help="Build missing PMTiles from extracted GeoParquet (the given series, or every "
+                         "cleanly extracted one); --force rebuilds existing ones")
     args = ap.parse_args()
+
+    if args.pmtiles_backfill:
+        if args.all or args.dry_run:
+            ap.error("--pmtiles-backfill takes series ids or none, not --all or --dry-run")
+        return backfill_pmtiles(args.series_id, force=args.force, limit=args.limit)
+    if not args.all and not args.series_id:
+        ap.error("give series ids or --all")
 
     sids = []
     existing = None

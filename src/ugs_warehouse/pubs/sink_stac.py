@@ -414,12 +414,13 @@ def build_publication(p: dict, attachments: list[dict], *,
             data["table:columns"] = meta["columns"]
         assets, links, exts = {"data": data}, [], [stac.TABLE_EXT] if meta.get("columns") else []
         # Tiles carry the same asset + web-map link as a serving topic's, so the viewer previews
-        # the layer and adds it to the map the same way.
+        # the layer and adds it to the map the same way. The item's `proj:*` is the layer's native
+        # CRS; the tiles state their own, which overrides it.
         if meta.get("pmtiles_layer"):
             pm_url = config.public_url(pmtiles_object(sid.upper(), label))
-            assets["pmtiles"] = stac.pmtiles_asset(pm_url)
+            assets["pmtiles"] = {**stac.pmtiles_asset(pm_url), "proj:code": "EPSG:4326"}
             links = [stac.pmtiles_link(pm_url, [meta["pmtiles_layer"]])]
-            exts.append(stac.WEB_MAP_LINKS_EXT)
+            exts += [stac.WEB_MAP_LINKS_EXT, stac.PROJ_EXT]
         items.append(item(layer_id(label), ltitle, assets,
             geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
             footprint_source=LAYER_BBOX_SOURCE if lb else aoi_source,

@@ -417,8 +417,11 @@ def test_a_tiled_layer_item_carries_the_same_pmtiles_shape_as_a_serving_topic(mo
 
     href = "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__Faults.pmtiles"
     assert asset["href"] == link["href"] == href
+    # The serving topic's asset, plus the tiles' own CRS over the item's native one.
     assert {k: v for k, v in asset.items() if k != "href"} == \
-        {k: v for k, v in topic_asset.items() if k != "href"}
+        {**{k: v for k, v in topic_asset.items() if k != "href"}, "proj:code": "EPSG:4326"}
+    assert faults["properties"]["proj:code"] == "EPSG:26912"
+    assert stac.PROJ_EXT in faults["stac_extensions"]
     assert link["pmtiles:layers"] == ["geo__Faults"]
     assert {k: v for k, v in link.items() if k not in ("href", "pmtiles:layers")} == \
         {k: v for k, v in topic_link.items() if k not in ("href", "pmtiles:layers")}
@@ -452,8 +455,9 @@ def test_a_lone_tiled_layer_moves_its_tiles_and_link_to_the_collection():
     coll, items = _build(has_cog=False, companion_tables=[], layers=TILED)
     assert items == []
     assert coll["assets"]["data"]["proj:code"] == "EPSG:26912"
-    # The tiles are in EPSG:4326, so the layer's CRS and row count stay off them.
-    assert not any(k.startswith(("proj:", "table:")) for k in coll["assets"]["pmtiles"])
+    # The tiles keep their own EPSG:4326; the layer's CRS and row count stay off them.
+    assert coll["assets"]["pmtiles"]["proj:code"] == "EPSG:4326"
+    assert not any(k.startswith("table:") for k in coll["assets"]["pmtiles"])
     (link,) = [lk for lk in coll["links"] if lk["rel"] == "pmtiles"]
     assert link["href"] == coll["assets"]["pmtiles"]["href"]
     assert stac.WEB_MAP_LINKS_EXT in coll["stac_extensions"]

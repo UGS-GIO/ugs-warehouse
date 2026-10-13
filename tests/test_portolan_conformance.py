@@ -153,8 +153,20 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
         [], has_cover=True, vector_layers=["geo__Faults"],
         companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}],
         layers={"geo__Faults": {"rows": 12, "bbox": [-112.4, 40.6, -112.1, 40.9],
-                                "geometry_types": ["LineString"], "proj_code": "EPSG:26912"},
+                                "geometry_types": ["LineString"], "proj_code": "EPSG:26912",
+                                "pmtiles_layer": "geo__Faults"},
                 "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}},
+        override={})
+
+    # A publication whose only data is one tiled layer: the layer, its tiles and their web-map
+    # link sit on the Collection.
+    _write_pub(
+        {"series_id": "OFR-790", "series": "OFR", "pub_year": "2026", "pub_publisher": "UGS",
+         "pub_name": "Faults of a single-layer map", "pub_scale": "1:24,000"},
+        [], has_cover=True, vector_layers=["faults"],
+        layers={"faults": {"rows": 3, "bbox": [-112.4, 40.6, -112.1, 40.9],
+                           "geometry_types": ["LineString"], "proj_code": "EPSG:26912",
+                           "pmtiles_layer": "faults"}},
         override={})
 
     stac.refresh_catalog()
@@ -218,6 +230,14 @@ def test_the_catalog_the_fence_builds_is_the_shape_we_publish(monkeypatch, tmp_p
     item_dirs = sorted(p.name for p in mills.iterdir() if p.is_dir())
     assert any(n.endswith("geo__Faults") for n in item_dirs), item_dirs
     assert any(n.endswith("geo__DMU") for n in item_dirs), item_dirs
+    faults_dir = next(mills / n for n in item_dirs if n.endswith("geo__Faults"))
+    faults = json.loads((faults_dir / f"{faults_dir.name}.json").read_text())
+    assert faults["assets"]["pmtiles"]["proj:code"] == "EPSG:4326"
+    assert any(lk["rel"] == "pmtiles" for lk in faults["links"])
+    single_dir = root / "ugs-publications" / "OFR" / "OFR-790"
+    single = json.loads((single_dir / "collection.json").read_text())
+    assert [p for p in single_dir.iterdir() if p.is_dir()] == []
+    assert "pmtiles" in single["assets"] and any(lk["rel"] == "pmtiles" for lk in single["links"])
     items = json.loads((root / "ugs-serving-topics" / "hazards" / "collection.json").read_text())
     assert [lk for lk in items["links"] if lk["rel"] == "item"]
 

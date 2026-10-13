@@ -48,6 +48,16 @@ GUARDED = {
     "PTL-PRV-002",  # exactly one host, listed last
 }
 
+# Each serving-topic layer is published twice while the viewers move: as an item in its schema
+# collection and as its own collection in the same folder. rashid reads the folder as owned by the
+# layer collection, so the item's parent and the schema collection's item link look wrong to it.
+# Expected until the old items are retired (#257 step 4); then delete this and the check below.
+TRANSITIONAL = {"PTL-LNK-002", "PTL-LNK-006"}
+
+
+def _transitional(finding) -> bool:
+    return finding.rule_id in TRANSITIONAL and "ugs-serving-topics/" in str(finding.path)
+
 
 def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
     """Write a representative catalog through the real builders and return its root."""
@@ -136,7 +146,7 @@ def test_the_builders_produce_a_catalog_that_passes_the_rules_we_have_fixed(monk
     root = _catalog_on_disk(monkeypatch, tmp_path)
 
     report = rashid.validate(root, data=False, schema=True)
-    broken = [f for f in report.findings if f.rule_id in GUARDED]
+    broken = [f for f in report.findings if f.rule_id in GUARDED and not _transitional(f)]
 
     assert not broken, "\n".join(
         f"{f.rule_id} {f.severity.value if hasattr(f.severity, 'value') else f.severity} "
@@ -159,6 +169,23 @@ def test_the_catalog_the_fence_builds_is_the_shape_we_publish(monkeypatch, tmp_p
     assert (root / "ugs-publications" / "OFR" / "OFR-593" / "OFR-593.json").exists()
     items = json.loads((root / "ugs-serving-topics" / "hazards" / "collection.json").read_text())
     assert [lk for lk in items["links"] if lk["rel"] == "item"]
+
+
+def test_each_serving_topic_layer_is_also_its_own_collection(monkeypatch, tmp_path):
+    root = _catalog_on_disk(monkeypatch, tmp_path)
+    schema = json.loads((root / "ugs-serving-topics" / "hazards" / "collection.json").read_text())
+    layer = json.loads((root / "ugs-serving-topics" / "hazards" / "hazards_qfaults" / "collection.json").read_text())
+    rollup = json.loads((root / "ugs-serving-topics" / "items.json").read_text())
+
+    assert any(lk["rel"] == "child" and lk["href"] == "./hazards_qfaults/collection.json"
+               for lk in schema["links"])
+    assert layer["id"] == "hazards_qfaults" and layer["type"] == "Collection"
+    assert {"data", "pmtiles"} <= set(layer["assets"])
+    assert not [lk for lk in layer["links"] if lk["rel"] == "item"]
+    assert (root / "ugs-serving-topics" / "hazards" / "hazards_qfaults" / "AGENTS.md").exists()
+    entry = next(e for e in rollup["items"] if e["id"] == "hazards_qfaults")
+    link = next(lk for lk in entry["links"] if lk["rel"] == stac.LAYER_COLLECTION_REL)
+    assert link["href"] == "./hazards/hazards_qfaults/collection.json"
 
 
 def _bad_catalog(tmp_path: Path) -> Path:

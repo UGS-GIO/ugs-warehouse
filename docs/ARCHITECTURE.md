@@ -197,7 +197,7 @@ tiling failed at extraction, or a layer or pub whose self-heal failed (each is l
 time budget left pending is not a failure.
 
 The pubs ingest runs the same self-heal before it writes the items (stopping new series after
-900 s), so any refresh, Full refresh or **Rebuild pubs STAC**, catches these up and publishes them in
+600 s), so any refresh, Full refresh or **Rebuild pubs STAC**, catches these up and publishes them in
 the same run. Pubs extracted before PMTiles and relationships were recorded catch up this way:
 repeat a refresh until it reports 0 pending.
 

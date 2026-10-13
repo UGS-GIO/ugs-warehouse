@@ -268,7 +268,7 @@ def _file_meta_index() -> dict[str, gcs.FileMeta]:
 
 # The self-heal stops starting series this long after build_catalog starts, so the rest of the
 # ingest still fits the job's 1800 s task timeout.
-HEAL_BUDGET_S = 900
+HEAL_BUDGET_S = 600
 
 
 def _self_heal(pubs: list[dict], deadline: float) -> vectors.Heal:

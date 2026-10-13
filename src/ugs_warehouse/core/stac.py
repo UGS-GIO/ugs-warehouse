@@ -543,14 +543,21 @@ def _group_items(paths: list[str]) -> dict[str, list[str]]:
 UTAH_BBOX = [-114.1, 36.9, -108.9, 42.1]  # fallback when items carry no bbox
 
 
+def union_bbox(boxes: list[list[float]]) -> list[float] | None:
+    """The [W, S, E, N] box covering every 2D box in `boxes`, or None when there are none."""
+    if not boxes:
+        return None
+    return [min(b[0] for b in boxes), min(b[1] for b in boxes),
+            max(b[2] for b in boxes), max(b[3] for b in boxes)]
+
+
 def _extent(items: list[dict]) -> dict:
     """Real spatial + temporal extent from the collection's items (union bbox, min/max
     datetime). Falls back to the Utah bbox if no item bboxes are present."""
     bxs = [to_2d_bbox(it["bbox"]) for it in items if it.get("bbox") and len(it["bbox"]) in (4, 6)]
     dts = sorted(it["properties"]["datetime"] for it in items
                  if it.get("properties", {}).get("datetime"))
-    bbox = ([min(b[0] for b in bxs), min(b[1] for b in bxs),
-             max(b[2] for b in bxs), max(b[3] for b in bxs)] if bxs else UTAH_BBOX)
+    bbox = union_bbox(bxs) or UTAH_BBOX
     interval = [[dts[0], dts[-1]]] if dts else [[None, None]]
     return {"spatial": {"bbox": [bbox]}, "temporal": {"interval": interval}}
 

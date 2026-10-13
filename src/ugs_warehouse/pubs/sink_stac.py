@@ -541,8 +541,7 @@ def build_publication(p: dict, attachments: list[dict], *,
         assets["thumbnail"] = plate_preview
 
     boxes = [*([to_2d_bbox(bbox)] if bbox else []), *item_bboxes]
-    ext_bbox = ([min(b[0] for b in boxes), min(b[1] for b in boxes),
-                 max(b[2] for b in boxes), max(b[3] for b in boxes)] if boxes else stac.UTAH_BBOX)
+    ext_bbox = stac.union_bbox(boxes) or stac.UTAH_BBOX
     extent = {"spatial": {"bbox": [ext_bbox]},
               "temporal": {"interval": [[dt, dt] if dt else [EARLIEST_RECORD, now]]}}
     links = [{"rel": "alternate", "href": f"{LANDING}{quoted_sid}", "type": "text/html",

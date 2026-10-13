@@ -77,6 +77,17 @@ USAGE_THUMBNAIL = "Styled preview image"
 USAGE_STYLE = "MapLibre GL style — how to draw this layer"
 
 
+# A serving-topic layer is also published as its own collection, beside its item, so the catalog
+# can move to Portolan's one-dataset-per-collection grain without breaking a consumer (#257). Index
+# entries point at it under this rel.
+LAYER_COLLECTION_REL = "ugs-layer-collection"
+
+
+def has_layer_collections(collection_path: str) -> bool:
+    """True for a serving-topic schema collection, whose items each get a layer collection."""
+    return collection_path.startswith(f"{SERVING_TOPICS_CATALOG}/")
+
+
 def has_feature_service(collection_path: str) -> bool:
     """True when the collection at `collection_path` is served live by OGC API Features
     (featureserv/) — the flat collections and the serving-topic schemas. Single source for the
@@ -549,7 +560,7 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
                     service: bool | None = None, mappable: int | None = None,
                     description: str | None = None,
                     item_titles: dict[str, str] | None = None,
-                    assets: dict | None = None) -> dict:
+                    assets: dict | None = None, layers: bool = False) -> dict:
     """A collection.json at `{path}/collection.json`. `collection` is its STAC id (a series
     code like `DS` when nested, else the path). Root/parent links climb out per path depth;
     the OGC API Features link is added only for flat collections (serving topics — nested
@@ -604,9 +615,54 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json",
                "title": (item_titles or {}).get(i) or i}
               for i in sorted(item_ids)],
+            # The same layers as collections (see LAYER_COLLECTION_REL).
+            *([{"rel": "child", "href": f"./{i}/collection.json", "type": "application/json",
+                "title": (item_titles or {}).get(i) or i} for i in sorted(item_ids)] if layers else []),
         ],
     }
     return doc
+
+
+def _layer_collection_doc(item: dict, path: str) -> dict:
+    """A serving-topic layer as its own collection, at `{path}/{id}/collection.json`.
+
+    Portolan's grain: one dataset per collection, its data, preview and style as collection-level
+    assets, and no items. Derived from the layer's item, so the two cannot disagree.
+    """
+    props = item.get("properties") or {}
+    assets = item.get("assets") or {}
+    title = props.get("title") or prettify(item["id"])
+    exts = [PORTOLAN_SCHEMA, WEB_MAP_LINKS_EXT]
+    if any("table:columns" in a for a in assets.values()):
+        exts.append(TABLE_EXT)
+    if any("file:size" in a or "file:checksum" in a for a in assets.values()):
+        exts.append(FILE_EXT)
+    depth = path.count("/") + 2
+    return {
+        "type": "Collection",
+        "stac_version": STAC_VERSION,
+        "stac_extensions": exts,
+        "id": item["id"],
+        "title": title,
+        "description": props.get("description") or f"UGS warehouse — {title}.",
+        **({"keywords": props["keywords"]} if props.get("keywords") else {}),
+        "license": config.DATA_LICENSE,
+        "providers": config.PROVIDERS,
+        "extent": _extent([item]),
+        # Our own fields ride along unchanged; standard clients ignore them.
+        **{k: v for k, v in props.items() if k.startswith("ugs:")},
+        "assets": assets,
+        "links": [
+            {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
+            {"rel": "parent", "href": "../collection.json", "type": "application/json"},
+            {"rel": "self", "href": "./collection.json", "type": "application/json"},
+            {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
+            *catalog_docs.markdown_links(),
+            # pmtiles, service and related links describe the layer, not where the item sits.
+            *[lnk for lnk in item.get("links") or []
+              if lnk.get("rel") not in ("self", "root", "parent", "collection", "license")],
+        ],
+    }
 
 
 def _collection_assets(path: str, items: list[dict], mirror: object | None = None) -> dict:
@@ -726,7 +782,8 @@ def _no_footprint(doc: dict, props: dict) -> bool:
         or props.get("ugs:footprint_source") == PLACEHOLDER_FOOTPRINT
 
 
-def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None) -> dict:
+def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None,
+                 layer: bool = False) -> dict:
     """A compact, list-renderable subset of a STAC item (mini-doc): id, bbox, a few
     properties, asset summaries, a `rel:self` pointer to the full item, and any web-map
     links (pmtiles/cog) for map overlays.
@@ -754,7 +811,9 @@ def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None)
     sub = prefix if prefix is not None else f"{item['collection']}/" if rollup and item.get("collection") else ""
     self_link = {"rel": "self", "href": f"./{sub}{item['id']}/{item['id']}.json",
                  "type": "application/geo+json"}
-    entry["links"] = [self_link, *_web_map_links(item)]
+    layer_link = [{"rel": LAYER_COLLECTION_REL, "href": f"./{sub}{item['id']}/collection.json",
+                   "type": "application/json"}] if layer else []
+    entry["links"] = [self_link, *_web_map_links(item), *layer_link]
     return entry
 
 
@@ -808,10 +867,11 @@ def _collection_index_entry(coll: dict, *, prefix: str, item_count: int | None =
     return entry
 
 
-def _index_doc(collection: str, items: list[dict], *, rollup: bool = False) -> dict:
+def _index_doc(collection: str, items: list[dict], *, rollup: bool = False,
+               layer: bool = False) -> dict:
     """`rollup` = this index spans child collections (ROLLUP_INDEX_CATALOGS), so it sits one
     directory above the items it lists and their `self` hrefs need the collection segment."""
-    return _entries_doc(collection, [_index_entry(it, rollup=rollup)
+    return _entries_doc(collection, [_index_entry(it, rollup=rollup, layer=layer)
                                      for it in sorted(items, key=lambda it: it.get("id", ""))])
 
 
@@ -1041,6 +1101,15 @@ def _write_pub_series(pub_colls: dict[str, int], has_mappable_item: set[str]
     return by_group, skipped, {p: d for p, d in docs.items() if isinstance(d, dict)}
 
 
+def _write_layer_collection(item: dict, path: str) -> None:
+    """Write one layer's collection.json and its README.md + AGENTS.md beside its item."""
+    lpath = f"{path}/{item['id']}"
+    doc = _layer_collection_doc(item, path)
+    _write_json(doc, f"{config.STAC_PREFIX}/{lpath}/collection.json")
+    _write_markdown(lpath, title=doc["title"], description=doc["description"], kind="layer",
+                    children=0, extent=doc["extent"], items=[item], service=True)
+
+
 def refresh_catalog(*, strict: bool = False) -> list[str]:
     """Rebuild the root catalog + every non-publication collection.json by listing items in GCS.
 
@@ -1133,13 +1202,17 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             # The mirror is derived from these same items, so it is rebuilt whenever the
             # collection is — the two cannot drift.
             mirror = item_mirror.write(path, items)
+            layers = has_layer_collections(path)
             _write_json(_collection_doc(cid, path, item_ids, _extent(items), title=title,
                                         mappable=mappable, description=desc,
                                         item_titles=item_titles,
-                                        assets=_collection_assets(path, items, mirror)),
+                                        assets=_collection_assets(path, items, mirror),
+                                        layers=layers),
                         f"{config.STAC_PREFIX}/{path}/collection.json")
-            _write_json(_index_doc(cid, items), f"{config.STAC_PREFIX}/{path}/items.json")
-            everything.extend(_index_entry(it, prefix=f"{path}/") for it in items)
+            _write_json(_index_doc(cid, items, layer=layers), f"{config.STAC_PREFIX}/{path}/items.json")
+            everything.extend(_index_entry(it, prefix=f"{path}/", layer=layers) for it in items)
+            if layers:
+                list(executor.map(lambda it, p=path: _write_layer_collection(it, p), items))
             _write_markdown(path, title=title or prettify(cid),
                             description=desc or f"UGS warehouse — {title or cid}.",
                             kind="collection", children=len(item_ids),
@@ -1174,7 +1247,8 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             ptitle = prettify(top.replace("ugs-", ""))
             rolled = rollup.get(top)
             if rolled is not None:  # one index spanning every child collection
-                _write_json(_index_doc(top, rolled, rollup=True), f"{config.STAC_PREFIX}/{top}/items.json")
+                _write_json(_index_doc(top, rolled, rollup=True, layer=top == SERVING_TOPICS_CATALOG),
+                            f"{config.STAC_PREFIX}/{top}/items.json")
             _write_json(_subcatalog_doc(top, kids, title=ptitle, items_index=rolled is not None),
                         f"{config.STAC_PREFIX}/{top}/catalog.json")
             _write_markdown(top, title=ptitle,

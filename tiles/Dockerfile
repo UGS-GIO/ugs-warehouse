@@ -10,7 +10,7 @@ FROM python:3.12-slim
 # match and no reason to build it ourselves.
 COPY --from=pmtiles /go-pmtiles /go-pmtiles
 WORKDIR /app
-RUN pip install --no-cache-dir fastapi==0.115.6 "uvicorn[standard]==0.34.0" \
+RUN pip install --no-cache-dir fastapi==0.143.0 "uvicorn[standard]==0.54.0" \
     && useradd --uid 65532 --create-home --home-dir /home/nonroot nonroot
 COPY app.py entrypoint.sh ./
 RUN chmod +x entrypoint.sh

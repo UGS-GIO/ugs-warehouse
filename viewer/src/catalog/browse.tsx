@@ -21,6 +21,7 @@ import { type Asset, assetKind, cogAsset, IS_REVIEW, pmtilesLink, rasterTilesAss
 import { DataTable, Pager } from "@/data/table";
 import { useIsDesktop } from "@/ui/use-breakpoint";
 import { C, humanize, toggle } from "@/ui/ui";
+import { Breadcrumb, type Crumb } from "./breadcrumb";
 import { useDataSaver } from "@/lib/data-saver";
 
 const itemIdOf = (it: ItemRef): string =>
@@ -175,20 +176,6 @@ function Collections({ collections, heading, onOpen, onOpenItem }: {
         })}
       </div>
     </>
-  );
-}
-
-function Breadcrumb({ crumbs }: { crumbs: { label: string; onClick?: () => void }[] }) {
-  return (
-    <div className="mb-1 text-sm">
-      {crumbs.map((c, i) => (
-        <span key={i}>
-          {i > 0 && <span className={C.muted}> / </span>}
-          {c.onClick ? <span className={C.crumb} onClick={c.onClick}>{c.label}</span>
-            : <span className={i === crumbs.length - 1 ? "" : C.muted}>{c.label}</span>}
-        </span>
-      ))}
-    </div>
   );
 }
 
@@ -572,7 +559,7 @@ export function CollectionItems({ items, itemsLoading, noIndex, breadcrumb, seri
   items: ItemRef[];
   itemsLoading: boolean;
   noIndex?: boolean;               // a catalog with no item index: say so instead of an empty list
-  breadcrumb: { label: string; onClick?: () => void }[];
+  breadcrumb: Crumb[];
   series: string[];
   onOpenItem: (href: string) => void;
   onSeries: (codes: string[]) => void;
@@ -598,7 +585,7 @@ export function CollectionsGrid({
   cards: CollectionSummary[];
   allItems: ItemRef[];
   itemsLoading: boolean;
-  breadcrumb: { label: string; onClick?: () => void }[];
+  breadcrumb: Crumb[];
   atRoot: boolean;
   layerCollectionIds: string[];
   series: string[];

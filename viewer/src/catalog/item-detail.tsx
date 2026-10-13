@@ -25,6 +25,7 @@ import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionP
   pmtilesLink, relatedJoins, relatedLinks, type ForeignKey, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
+import { Breadcrumb, type Crumb } from "./breadcrumb";
 import { Unavailable } from "@/offline/offline-notice";
 import { SaveLayerOffline } from "@/offline/save-layer-offline";
 
@@ -347,7 +348,7 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
   error?: unknown;                 // the item request's error, so a failure shows as one, not as loading
   missing?: string;                // an id this catalog does not have: say so instead of loading
   partOf?: PartOf;                 // the publication an Item belongs to
-  crumbs?: { label: string; onClick?: () => void }[];  // a full trail, replacing `collection / id`
+  crumbs?: Crumb[];  // a full trail, replacing `collection / id`
   onExplore?: () => void;          // full-screen Preview (offered in the Discover drawer)
   layout?: "page" | "drawer";      // page = full-width 2/3·1/3 grid; drawer = single column
 }) {
@@ -372,22 +373,8 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
   const via = viaLink(item);
   const cite = citeLink(item);
 
-  const crumb = crumbs ? (
-    <div className="mb-1.5 text-xs">
-      {crumbs.map((c, i) => (
-        <span key={i}>
-          {i > 0 && <span className={C.muted}> / </span>}
-          {c.onClick ? <span className={C.crumb} onClick={c.onClick}>{c.label}</span>
-            : <span className={C.muted}>{c.label}</span>}
-        </span>
-      ))}
-    </div>
-  ) : (
-    <div className="mb-1.5 text-xs">
-      <span className={C.crumb} onClick={onBack}>{collectionId}</span>
-      <span className={C.muted}> / {item.id}</span>
-    </div>
-  );
+  const crumb = <Breadcrumb className="mb-1.5 text-xs"
+    crumbs={crumbs ?? [{ label: collectionId, onClick: onBack }, { label: String(item.id ?? "") }]} />;
 
   // The item-view getters read an ItemRef; build a lightweight one over the resolved doc.
   const it: ItemRef = { collId: collectionId, href: "", data: item };

@@ -749,6 +749,28 @@ def test_layer_tiling_reuses_the_serving_topic_tippecanoe_call(monkeypatch, tmp_
     assert os.listdir(tmp_path) == []  # temp files deleted: the job's disk is memory
 
 
+def test_rows_without_geometry_are_left_out_of_the_tiles(monkeypatch, tmp_path):
+    from ugs_warehouse.vector import sink_pmtiles
+
+    store = _mem_gcs(monkeypatch)
+    lines: list[str] = []
+
+    def tiler(geojsonl, pmtiles, layer, **kw):
+        with open(geojsonl) as fh:
+            lines.extend(fh)
+        _fake_tippecanoe(geojsonl, pmtiles, layer)
+
+    monkeypatch.setattr(sink_pmtiles, "run_tippecanoe", tiler)
+    gdf = gpd.GeoDataFrame({"Type": ["a", "b", "c"],
+                            "geometry": [Point(424000, 4512000), None, Point()]},
+                           index=[0, 0, 1], crs="EPSG:26912")  # a repeated index label too
+
+    assert vectors._tile_layer(gdf, "M-209", "pts", str(tmp_path)) is True
+    assert [json.loads(ln)["properties"]["Type"] for ln in lines] == ["a"]
+    assert vectors.pmtiles_object("M-209", "pts") in store
+    assert len(gdf) == 3  # the caller's frame is untouched
+
+
 def test_a_tippecanoe_failure_raises_with_its_stderr(monkeypatch):
     import subprocess
 
@@ -973,6 +995,20 @@ def test_backfill_retries_a_failed_layer_and_clears_its_warning(monkeypatch, tmp
     assert vectors.pmtiles_object("M-305", "a") in store
     stored = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-305/_manifest.json"])
     assert stored["warnings"] == [other]
+
+
+def test_a_manifest_changed_during_the_backfill_is_reported_not_overwritten(monkeypatch, tmp_path, capsys):
+    store = _backfill_store(monkeypatch, tmp_path, {"M-308": _manifest({"label": "a", "spatial": True})})
+    before = store[f"{vectors.VECTORS_PREFIX}/M-308/_manifest.json"]
+
+    def changed(data, path, version, **kw):
+        raise vectors.gcs.Changed(path)
+
+    monkeypatch.setattr(vectors.gcs, "put_bytes_if_unchanged", changed)
+
+    assert vectors.backfill_pmtiles(["M-308"]) == 1
+    assert store[f"{vectors.VECTORS_PREFIX}/M-308/_manifest.json"] == before
+    assert "M-308: Changed" in capsys.readouterr().err
 
 
 def test_backfill_fails_a_series_whose_manifest_has_no_layer_metadata(monkeypatch, tmp_path, capsys):

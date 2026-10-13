@@ -129,7 +129,8 @@ same `pmtiles` asset and `rel=pmtiles` web-map link as a serving topic, so the v
 and the Map page can add it. `python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...]`
 tiles layers that have no PMTiles yet or a `pmtiles_failed` warning, from their GeoParquet and
 without downloading the zip again, and clears the warning once a layer tiles (`--force` rebuilds
-every layer).
+every layer). If the series' manifest changed while the backfill ran, its manifest update is
+discarded and reported, and the next backfill rebuilds those layers.
 The per-map units GeoParquet has no PMTiles.
 
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.

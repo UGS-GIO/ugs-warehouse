@@ -279,13 +279,19 @@ def _tile_layer(gdf, series_id: str, label: str, tmp: str | None = None) -> bool
     """Tile `gdf` as `<label>.pmtiles` beside its GeoParquet: reprojected to EPSG:4326 (tippecanoe
     reads lon/lat), one tile layer named `label`, built with the serving topics' tippecanoe flags.
     Returns False, writing nothing, when no row has a geometry. Temp files go under `tmp` and are
-    deleted before returning, since the job's disk is memory."""
-    geo = gdf[~(gdf.geometry.isna() | gdf.geometry.is_empty)]
-    if geo.empty:
+    deleted before returning, since the job's disk is memory. Holds at most `gdf` plus one
+    reprojected copy, beyond a moment while rows without geometry are dropped."""
+    blank = (gdf.geometry.isna() | gdf.geometry.is_empty).to_numpy()
+    if blank.all():
         return False
     with tempfile.TemporaryDirectory(dir=tmp) as d:
         geojsonl = os.path.join(d, f"{label}.geojsonl")
-        geo.to_crs(4326).to_file(geojsonl, driver="GeoJSONSeq", engine="pyogrio")
+        wgs84 = gdf.to_crs(4326)
+        if blank.any():
+            wgs84 = wgs84[~blank]
+        del blank
+        wgs84.to_file(geojsonl, driver="GeoJSONSeq", engine="pyogrio")
+        del wgs84
         pmtiles = os.path.join(d, f"{label}.pmtiles")
         sink_pmtiles.run_tippecanoe(geojsonl, pmtiles, label, what=f"{series_id}/{label}")
         os.remove(geojsonl)
@@ -577,24 +583,28 @@ def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, lis
     spatial = [e for e in manifest["layers"] if e.get("spatial")]
     todo = [e for e in spatial if force or e["label"] in missing]
     built, errors = 0, []
-    for entry in todo:
-        label = entry["label"]
-        with tempfile.TemporaryDirectory() as tmp:
+    # The same per-series work dir extraction uses; it holds one layer's files at a time.
+    with tempfile.TemporaryDirectory(prefix=f"v_{series_id.replace('/', '_')}_") as work:
+        for entry in todo:
+            label = entry["label"]
+            local = os.path.join(work, f"{label}.parquet")
             try:
-                local = os.path.join(tmp, f"{label}.parquet")
                 gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
                 gdf = gpd.read_parquet(local)
-                os.remove(local)
             except Exception as e:
                 errors.append(f"{series_id}/{label}: {_error(e)}")
                 print(f"  {series_id}/{label}: GeoParquet unreadable: {e}", file=sys.stderr)
                 continue
+            finally:
+                if os.path.exists(local):
+                    os.remove(local)
             manifest["warnings"] = [w for w in manifest["warnings"] if not (
                 w.get("label") == label and w.get("code") in (PMTILES_FAILED, NO_GEOMETRY))]
-            if _tile_into(entry, gdf, series_id, tmp, manifest):
+            if _tile_into(entry, gdf, series_id, work, manifest):
                 built += 1
-        errors += [f"{series_id}/{label}: {w['warning']}" for w in manifest["warnings"]
-                   if w.get("label") == label and w.get("code") == PMTILES_FAILED]
+            del gdf
+            errors += [f"{series_id}/{label}: {w['warning']}" for w in manifest["warnings"]
+                       if w.get("label") == label and w.get("code") == PMTILES_FAILED]
     if json.dumps(manifest) != before:
         gcs.put_bytes_if_unchanged(json.dumps(manifest).encode(), path, version,
                                    content_type="application/json", cache_control=gcs.CACHE_MUTABLE)

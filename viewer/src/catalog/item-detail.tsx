@@ -64,6 +64,11 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
   // The reference tables' section: open from the start when they are all there is, or when one of
   // them is open; after that the toggle (the user's, or that auto-open) is what it shows.
   const [refsOpen, setRefsOpen] = useState<boolean>();
+  // A key's target by the title of this item's related table or link at the same href, else its
+  // resource id humanised.
+  const refLabel = (fk: ForeignKey) =>
+    (fk.reference.href && (tables.find((t) => t.asset.href === fk.reference.href)?.asset.title
+      ?? links.find((l) => l.href === fk.reference.href)?.title)) || humanize(fk.reference.resource);
   const tableRow = ({ key, asset }: { key: string; asset: Asset }) => (
     <li key={key}>
       <div className="flex flex-wrap items-center gap-2">
@@ -119,8 +124,8 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
               <li key={i}>
                 <code>{fk.fields.join(", ")}</code> →{" "}
                 {fk.reference.href
-                  ? <a href={fk.reference.href} className="font-medium text-primary hover:underline" download>{humanize(fk.reference.resource)}</a>
-                  : <span className="font-medium">{humanize(fk.reference.resource)}</span>}
+                  ? <a href={fk.reference.href} className="font-medium text-primary hover:underline" download>{refLabel(fk)}</a>
+                  : <span className="font-medium">{refLabel(fk)}</span>}
                 .<code>{fk.reference.fields.join(", ")}</code>
                 <InferredMark fk={fk} />
               </li>

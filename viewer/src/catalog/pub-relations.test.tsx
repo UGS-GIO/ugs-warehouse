@@ -8,6 +8,7 @@ import { FeatureCard } from "@/map/feature-card";
 import { PreviewMapProvider } from "@/map/preview-map";
 import { RelatedLinks } from "@/map/related-links";
 import type { StacDoc } from "@/stac";
+import { humanize } from "@/ui/ui";
 import { RelatedPanel } from "./item-detail";
 
 // The related-row read a click makes (hyparquet, an exact match on the key column).
@@ -131,6 +132,29 @@ describe("RelatedPanel on a publication layer", () => {
     // The key to the collapsed reference table stays; the key to the DMU table, shown above, does not.
     expect(own.textContent).toContain("DataSourceID");
     expect(own.textContent).not.toContain("MapUnit");
+  });
+
+  it("labels a key's target with the title of the related table or link at the same href", () => {
+    const { rerender } = wrap(<RelatedPanel item={mapUnitPolys} />);
+    const own = () => screen.getByText("This layer references").parentElement as HTMLElement;
+    expect(within(own()).getByRole("link", { name: "Data Sources" }).getAttribute("href")).toBe(SOURCES);
+    expect(own().textContent).not.toContain("OFR 784DM");
+    // A related link at that href names it when no related table does.
+    const { OFR784DM__DataSources: _src, ...assets } = mapUnitPolys.assets ?? {};
+    const linked = { ...mapUnitPolys, assets, links: [{ rel: "related", href: SOURCES, title: "Data sources table" }] };
+    rerender(<QueryClientProvider client={new QueryClient()}><PreviewMapProvider><RelatedPanel item={linked} /></PreviewMapProvider></QueryClientProvider>);
+    expect(within(own()).getByRole("link", { name: "Data sources table" })).toBeDefined();
+  });
+
+  it("keeps the humanised resource for a key with no related table or link at its href", () => {
+    const topic: StacDoc = { type: "Feature", id: "hazards_qfaults", properties: {}, links: [], assets: {
+      data: { href: "https://x/qfaults.parquet", roles: ["data"], "ugs:foreign_keys": [
+        { fields: ["unit_id"], reference: { resource: "hazards_qfault_units", href: "https://x/units.parquet", fields: ["id"] } },
+        { fields: ["src"], reference: { resource: "hazards_sources", fields: ["id"] } }] } } };
+    wrap(<RelatedPanel item={topic} />);
+    const own = screen.getByText("This layer references").parentElement as HTMLElement;
+    expect(within(own).getByRole("link").textContent).toBe(humanize("hazards_qfault_units"));
+    expect(own.textContent).toContain(humanize("hazards_sources"));
   });
 
   it("keeps the reference section open once opened, through a table opening and closing", async () => {

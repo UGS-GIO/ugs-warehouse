@@ -22,7 +22,8 @@ NAME_GATE = 25
 ACCEPT_TOTAL = 80
 ACCEPT_OVERLAP = 90.0
 # A second, lower bar for a source with only a generic `*ID` name: every sampled value, at least
-# MIN_SHARED of them, found in a target key named `*_ID` / `*ID` (LocationSourceID -> DataSources_ID).
+# MIN_SHARED of them, found in a target key named `*_ID` / `*ID`, and a word in common with the
+# target (DefinitionSourceID -> DataSources.DataSources_ID share "source").
 LOW_NAME_GATE = 10
 MIN_SHARED = 3
 SAMPLE_SIZE = 5000
@@ -166,12 +167,26 @@ def _affinity(col: str, table: str) -> bool:
     return any(len(f) >= 3 and f in table.lower() for f in _forms(m.group(1) if m else col.lower()))
 
 
-def _accepted(name: int, overlap: float, shared: int, target_col: str) -> bool:
-    """The main bar (NAME_GATE, ACCEPT_OVERLAP, ACCEPT_TOTAL), or the low-name bar."""
+def _tokens(name: str) -> set[str]:
+    """A name's words of 4+ characters, split on underscores and CamelCase, lowercased, singular,
+    after any `_id`/`id` suffix: DefinitionSourceID -> {definition, source}."""
+    m = _FK_SUFFIX.match(name)
+    stem = m.group(1) if m else name
+    words = (w.lower() for part in stem.split("_")
+             for w in re.findall(r"[A-Z]+(?![a-z])|[A-Z]?[a-z]+|\d+", part))
+    return {w[:-3] + "y" if w.endswith("ies") else w[:-1] if w.endswith("s") else w
+            for w in words if len(w) >= 4}
+
+
+def _accepted(name: int, overlap: float, shared: int, source_col: str, target_col: str,
+              target_table: str) -> bool:
+    """The main bar (NAME_GATE, ACCEPT_OVERLAP, ACCEPT_TOTAL), or the low-name bar, which also needs
+    a word the source column shares with the target table or key (`_tokens`)."""
     if name >= NAME_GATE and overlap >= ACCEPT_OVERLAP and name + overlap * 0.6 >= ACCEPT_TOTAL:
         return True
     return (name >= LOW_NAME_GATE and overlap == 100 and shared >= MIN_SHARED
-            and bool(_ID_KEY.search(target_col)))
+            and bool(_ID_KEY.search(target_col))
+            and bool(_tokens(source_col) & (_tokens(target_table) | _tokens(target_col))))
 
 
 def infer(layers: list[Layer]) -> list[dict]:
@@ -199,7 +214,7 @@ def infer(layers: list[Layer]) -> list[dict]:
                         continue
                     shared = len(sc.sample & tc.keys)
                     overlap = 100 * shared / len(sc.sample)
-                    if not _accepted(name, overlap, shared, tcol):
+                    if not _accepted(name, overlap, shared, scol, tcol, t.name):
                         continue
                     total = name + overlap * 0.6
                     rank = (total, overlap, affinity, len(tc.keys), scol, tcol)

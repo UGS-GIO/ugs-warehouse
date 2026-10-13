@@ -155,7 +155,8 @@ score (`scoreNameMatch`, with singular/plural folded) plus the share of the colu
 values (up to 5,000 sampled) found in another table's unique key, times 0.6. A join is kept when
 the name score is at least 25, the overlap at least 90% and the total at least 80; or, for a source
 with only a generic `*ID` name (score 10), when every sampled value, at least 3 of them, is in a key
-named `*_ID` or `*ID`. Only the best join per pair of tables is kept. An inferred join targets only
+named `*_ID` or `*ID` and the column shares a word of 4+ letters with the target table or key
+(DefinitionSourceID and DataSources share "source"). Only the best join per pair of tables is kept. An inferred join targets only
 a non-spatial table; a spatial layer is a target only when declared. A key needs at least 3
 distinct values, an integer key numbering its rows 0..N or 1..N counts only when named for its
 table, and `OBJECTID`, `OBJECTID_n`, `FID`, `FID_*`, `Id` and `Shape_*` are never keys or foreign

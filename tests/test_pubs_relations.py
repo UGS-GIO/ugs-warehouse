@@ -222,6 +222,29 @@ def test_the_low_name_bar_needs_every_value_three_shared_and_an_id_key():
     assert relations.infer([_layer("DataSources", Code=["DAS1", "DAS2", "DAS3"]), three]) == []
 
 
+def test_the_low_name_bar_needs_a_word_shared_with_the_target():
+    # Two unrelated tables whose codes happen to coincide: no word in common, no join.
+    zones = _layer("Zones", ZoneCode_ID=["A1", "B2", "C3", "D4"])
+    types = _layer("Features", TypeID=["A1", "B2", "C3", "A1"])
+    assert relations.infer([zones, types]) == []
+    # The same values under a name that shares "zone" with the table do join.
+    assert _pairs(relations.infer([zones, _layer("Features", ZoneTypeID=["A1", "B2", "C3", "A1"])])) \
+        == {"Features.ZoneTypeID -> Zones.ZoneCode_ID"}
+
+
+@pytest.mark.parametrize("name, tokens", [
+    ("DefinitionSourceID", {"definition", "source"}),
+    ("DataSources", {"data", "source"}),           # plurals folded
+    ("DataSources_ID", {"data", "source"}),
+    ("ZoneCode_ID", {"zone", "code"}),
+    ("TypeID", {"type"}),
+    ("Map_Key", set()),                            # words under 4 characters do not count
+    ("GeoMaterialDict", {"material", "dict"}),
+])
+def test_name_tokens(name, tokens):
+    assert relations._tokens(name) == tokens
+
+
 def test_a_layer_never_relates_to_itself_or_across_source_datasets():
     same = _layer("A", Code=["a", "b", "c"], CodeID=["a", "b", "c"])
     assert relations.infer([same]) == []

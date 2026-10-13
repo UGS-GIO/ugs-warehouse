@@ -194,7 +194,7 @@ are missing, from their GeoParquet on GCS and without downloading a zip:
 
 Series whose only work is retrying a failed layer go last. In a regular `--all` run, extraction and
 the self-heal share one time budget, `VECTORS_TIME_BUDGET_S` (default 2700 s, inside the job's
-3600 s timeout). Extraction goes first: it stops starting pubs once the budget is spent and lists
+7200 s timeout). Extraction goes first: it stops starting pubs once the budget is spent and lists
 the pubs left for the next run, so the self-heal only runs once the backlog of new pubs is cleared.
 The self-heal stops starting series, finishes the one in progress, and prints `Self-heal: N layers
 tiled, M pubs' relationships recorded, units upgraded: U; K layers, J pubs and P units files still

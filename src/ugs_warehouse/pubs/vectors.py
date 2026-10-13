@@ -767,7 +767,7 @@ def _relations_series(series_id: str) -> list[str]:
 
 
 # Extraction, then self-heal, stop starting pubs or series once the run has used this much time,
-# leaving room to finish the one in progress inside the job's 3600 s task timeout.
+# leaving room to finish the one in progress inside the job's 7200 s task timeout.
 TIME_BUDGET_S = float(os.environ.get("VECTORS_TIME_BUDGET_S", "2700"))
 
 

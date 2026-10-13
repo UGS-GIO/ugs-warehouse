@@ -1105,8 +1105,16 @@ def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(m
         f"M-{n}": _manifest({"label": "a", "spatial": True}, {"label": "b", "spatial": True})
         for n in (10, 11, 12)})
     _batch_run(monkeypatch, ["M-10", "M-11", "M-12"])
-    clock = iter([0.0, 0.0, 9999.0, 9999.0])  # the run starts; M-10 starts; the budget is spent
-    monkeypatch.setattr(vectors.time, "monotonic", lambda: next(clock))
+    real_tile = vectors._tile_missing
+    healed: list[str] = []
+
+    def tile(sid):
+        healed.append(sid)
+        return real_tile(sid)
+
+    # The budget is spent once the first series has healed, however often the clock is read.
+    monkeypatch.setattr(vectors, "_tile_missing", tile)
+    monkeypatch.setattr(vectors.time, "monotonic", lambda: 9999.0 if healed else 0.0)
 
     assert vectors.main() == 0
     out = capsys.readouterr().out
@@ -1114,6 +1122,67 @@ def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(m
             "pending, the next run continues") in out
     assert vectors.pmtiles_object("M-10", "a") in store  # the series in progress finished
     assert vectors.pmtiles_object("M-11", "a") not in store
+
+
+@pytest.mark.parametrize("step", ["_tile_missing", "_relations_series"])
+def test_a_series_that_raises_fails_the_run_and_the_next_series_still_heals(
+        monkeypatch, tmp_path, capsys, step):
+    store = _gems_store(monkeypatch, tmp_path, "M-20")
+    store.update({k.replace("/M-20/", "/M-21/"): v for k, v in list(store.items()) if "/M-20/" in k})
+    _batch_run(monkeypatch, ["M-20", "M-21"])
+    real = getattr(vectors, step)
+
+    def flaky(sid):
+        if sid == "M-20":
+            raise ConnectionError("GCS unreachable")
+        return real(sid)
+
+    monkeypatch.setattr(vectors, step, flaky)
+    assert vectors.main() == 1
+    err = capsys.readouterr().err
+    assert "M-20: self-heal FAIL ConnectionError: GCS unreachable" in err
+    assert "1 self-heal failures this run" in err
+    doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-21/_manifest.json"])
+    assert doc["relations_version"] == vectors.relations.RELATIONS_VERSION
+    assert vectors.pmtiles_object("M-21", "geo__Polys") in store
+
+
+def test_self_heal_records_a_raising_series_in_failed(monkeypatch, tmp_path):
+    _backfill_store(monkeypatch, tmp_path, {"M-1": _manifest({"label": "a", "spatial": True}),
+                                            "M-2": _manifest({"label": "b", "spatial": True})})
+    real = vectors._tile_missing
+    monkeypatch.setattr(vectors, "_tile_missing",
+                        lambda sid: (_ for _ in ()).throw(OSError("boom")) if sid == "M-1" else real(sid))
+    heal = vectors.self_heal(vectors.clean_manifests())
+    assert heal.failed == ["M-1: OSError: boom"] and heal.tiled == 1
+
+
+def test_a_targeted_run_does_not_heal_a_pub_it_just_extracted(monkeypatch, tmp_path, capsys):
+    import sys
+
+    store = _mem_gcs(monkeypatch)
+    srcs = [("a.shp", None, "faults", True)]
+    spatial_gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]},
+                                   crs="EPSG:26912")
+    monkeypatch.setattr("geopandas.read_file", lambda path, layer=None, engine=None: spatial_gdf)
+
+    def boom(geojsonl, pmtiles, layer, **kw):
+        raise RuntimeError("tippecanoe exited 1")
+
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", boom)
+    _stub_bundle(monkeypatch, tmp_path, (srcs, []))
+    # The bucket as extraction leaves it, so the just-extracted pub's clean manifest is visible.
+    monkeypatch.setattr(vectors.gcs, "list_paths", lambda prefix: [k for k in store if k.startswith(prefix)])
+    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda path: store[path])
+    healed = []
+    monkeypatch.setattr(vectors, "self_heal", lambda manifests, **k: healed.append(set(manifests))
+                        or vectors.Heal())
+    monkeypatch.setattr(sys, "argv", ["vectors", "M-205"])
+
+    assert vectors.main() == 1  # the tiling failure, reported once, by extraction
+    assert healed == [set()]
+    assert capsys.readouterr().err.count("M-205/faults") == 1
+    assert vectors._clean_manifest_of("M-205")  # clean, so only the exclusion kept it out
 
 
 def test_a_retried_tiling_failure_fails_the_run(monkeypatch, tmp_path, capsys):

@@ -883,14 +883,21 @@ def main() -> int:
 
     failed: list[str] = []
     untiled: list[str] = []
+    extracted: set[str] = set()
     for sid in sids:
         res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing,
                           untiled=untiled)
+        if res != "skip":
+            extracted.add(identity.Pub.parse(sid).series_id)
         if res.startswith("fail"):
             failed.append(f"{sid} ({res})")
     if not args.all and not args.force:
-        # A targeted run heals the pubs it names; the ones it just extracted need nothing.
-        manifests = {sid: m for s in sids if (m := _clean_manifest_of(sid := identity.Pub.parse(s).series_id))}
+        # A targeted run heals the named pubs it did not extract this run, as `--all` heals only
+        # the pubs already clean when it started: a layer whose tiling just failed is reported
+        # once, by extraction, and retried by the next run.
+        manifests = {sid: m for s in sids
+                     if (sid := identity.Pub.parse(s).series_id) not in extracted
+                     and (m := _clean_manifest_of(sid))}
     if args.dry_run:
         pending = sum(len(missing_tiles(m)) for m in manifests.values())
         print(f"[dry-run] self-heal would tile {pending} layers and record relationships for "

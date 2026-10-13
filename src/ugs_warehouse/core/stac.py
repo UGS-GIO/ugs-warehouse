@@ -378,6 +378,22 @@ def write_collection(coll: dict, *, children: int) -> str:
     return obj
 
 
+PLATE_SUFFIX = "_plate"
+
+
+def renders_for_item(item: dict, asset_keys: set[str] | None = None) -> tuple[dict, dict | None]:
+    """`styles.renders_for` for a STAC item. A publication's plate Item (`<SID>_plate`) with no
+    style of its own falls back to the style keyed by `<SID>`, the id it had as a whole-pub Item.
+    Layer Items match only their own id."""
+    keys = set((item.get("assets") or {}).keys()) if asset_keys is None else asset_keys
+    iid = item["id"]
+    result = styles.renders_for(iid, keys)
+    if result[0] or not iid.endswith(PLATE_SUFFIX) \
+            or "ugs:series_id" not in (item.get("properties") or {}):
+        return result
+    return styles.renders_for(iid[: -len(PLATE_SUFFIX)], keys)
+
+
 def attach_renders(item: dict) -> None:
     """Attach a `ugs:renders` block (+ a vector `style` asset) by looking the item id up in the
     ugs-styles manifest. No-op when nothing matches (mutates item in place).
@@ -390,8 +406,7 @@ def attach_renders(item: dict) -> None:
     `ugs:renders` is the UGS-prefixed equivalent (identical shape): spec-legal, no schema to fail.
     The standard `roles:["style"]` `style` asset is the interoperable pointer to the GL style.
     """
-    renders, style_asset = styles.renders_for(
-        item["id"], set((item.get("assets") or {}).keys()))
+    renders, style_asset = renders_for_item(item)
     if not renders:
         return
     item.setdefault("properties", {})["ugs:renders"] = renders

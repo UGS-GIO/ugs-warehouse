@@ -88,11 +88,17 @@ def report(*, collection: str = "ugs-serving-topics") -> int:
             except Exception:  # noqa: BLE001
                 continue
             keys = set((item.get("assets") or {}).keys())
-            renders, _ = styles.renders_for(iid, keys)
+            renders, _ = stac.renders_for_item(item, keys)
+            is_plate = iid.endswith(stac.PLATE_SUFFIX) and "ugs:series_id" in (item.get("properties") or {})
+            plate_base = iid[: -len(stac.PLATE_SUFFIX)] if is_plate else None
+            # A plate may be bound under its pub's id; report that id as in scope, not an orphan.
+            if plate_base in man_ids:
+                scope_ids.add(plate_base)
+            style_id = iid if iid in man_ids else plate_base if plate_base in man_ids else None
             if renders:
                 matched.append(iid)
-            elif iid in man_ids:
-                asset_miss.append((iid, sorted(man_assets.get(iid, set())), sorted(keys)))
+            elif style_id:
+                asset_miss.append((iid, sorted(man_assets.get(style_id, set())), sorted(keys)))
             else:
                 no_style.append(iid)
 

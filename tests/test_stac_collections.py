@@ -403,8 +403,9 @@ def test_refresh_keeps_index_rows_not_full_publication_items(monkeypatch):
 
     def check(*a, **k):
         gc.collect()
-        alive.extend(o for o in gc.get_objects()
-                     if isinstance(o, dict) and o.get("stac_version") and str(o.get("id", "")).endswith("_layer"))
+        alive.extend(o for o in gc.get_objects()  # plain dicts: other libraries' mappings vary
+                     if type(o) is dict and o.get("stac_version")
+                     and "MARKER" in str((o.get("properties") or {}).get("proj:wkt2")))
         return real(*a, **k)
 
     monkeypatch.setattr(stac, "_write_pub_series", check)

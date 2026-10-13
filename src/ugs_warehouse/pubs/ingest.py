@@ -19,7 +19,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs, stac
-from . import editions, identity, prune, relations, sink_stac, source, threed, topic, vectors
+from . import editions, identity, relations, sink_stac, source, threed, topic, vectors
 
 
 def _list(prefix: str, bucket: str | None) -> list[str]:
@@ -212,7 +212,7 @@ def _prune_stale_items(coll_path: str, keep: set[str]) -> None:
         head, sep, _ = path[len(root):].partition("/")
         if sep and head not in keep:
             stale.setdefault(head, []).append(path)
-    prune.delete_verified([p for paths in stale.values() for p in paths])
+    gcs.delete_many([p for paths in stale.values() for p in paths])
     for head, paths in sorted(stale.items()):
         print(f"[pubs] removed stale item {coll_path}/{head} ({len(paths)} objects)", file=sys.stderr)
 

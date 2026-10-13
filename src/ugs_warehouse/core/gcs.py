@@ -23,7 +23,7 @@ from typing import NamedTuple
 import obstore as obs
 from google.api_core.exceptions import NotFound
 from google.cloud import storage as gcloud_storage
-from obstore.exceptions import AlreadyExistsError, PreconditionError
+from obstore.exceptions import AlreadyExistsError, NotFoundError, PreconditionError
 from obstore.store import GCSStore
 
 from . import config
@@ -313,6 +313,34 @@ def delete(object_path: str) -> None:
         obs.delete(_store(), object_path)
     except Exception:  # noqa: BLE001 — already gone / race → nothing to clean
         pass
+
+
+# Paths per batched delete call. GCS has no bulk delete; obstore runs these as concurrent requests.
+DELETE_BATCH = 1000
+
+
+def delete_many(paths: list[str], *, strict: bool = True) -> None:
+    """Delete objects, one batched `obs.delete` per DELETE_BATCH paths. A missing object is not an
+    error. With `strict`, any other failure raises once every path has been tried; without it,
+    failures are ignored like `delete`'s."""
+    failed: list[str] = []
+    for start in range(0, len(paths), DELETE_BATCH):
+        batch = list(paths[start:start + DELETE_BATCH])
+        try:
+            obs.delete(_store(), batch)
+            continue
+        except Exception:  # noqa: BLE001 - one error per batch: retried path by path to classify
+            pass
+        # A path the batch already deleted reads as not found here.
+        for path in batch:
+            try:
+                obs.delete(_store(), path)
+            except (FileNotFoundError, NotFoundError):
+                pass
+            except Exception as e:  # noqa: BLE001 - collected and raised below when strict
+                failed.append(f"{path}: {type(e).__name__}: {e}")
+    if failed and strict:
+        raise RuntimeError(f"{len(failed)} object(s) not deleted: {failed}")
 
 
 class LeaseTimeout(RuntimeError):

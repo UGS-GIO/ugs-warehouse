@@ -87,16 +87,19 @@ def test_renamed_reads_collection_json_then_the_old_item(monkeypatch):
 
 
 def _live_store(monkeypatch, module, paths: list[str], *, works: bool = True) -> list[str]:
-    """A fake bucket: `delete` records the path and (when `works`) drops it from what is listed."""
+    """A fake bucket: `delete_many` records the paths and drops them from what is listed, or, when
+    not `works`, raises as a strict delete does."""
     live = set(paths)
     deleted: list[str] = []
 
-    def delete(path):
-        deleted.append(path)
-        if works:
-            live.discard(path)
+    def delete_many(batch, *, strict=True):
+        assert strict
+        deleted.extend(batch)
+        if not works:
+            raise RuntimeError(f"{len(batch)} object(s) not deleted: {batch}")
+        live.difference_update(batch)
 
-    monkeypatch.setattr(module.gcs, "delete", delete)
+    monkeypatch.setattr(module.gcs, "delete_many", delete_many)
     monkeypatch.setattr(module.gcs, "list_paths", lambda root: sorted(p for p in live if p.startswith(root)))
     return deleted
 
@@ -229,7 +232,7 @@ def test_stale_item_dirs_are_removed_and_the_collection_files_kept(monkeypatch, 
     assert deleted == [f"{base}/OFR-1_x/OFR-1_x.json"]  # the plate is already gone from the store
 
 
-def test_a_delete_that_silently_fails_raises_and_reports_no_removal(monkeypatch, capsys):
+def test_a_delete_that_fails_raises_and_reports_no_removal(monkeypatch, capsys):
     from ugs_warehouse.pubs import ingest
 
     base = f"{PFX}/ugs-publications/OFR/OFR-1"
@@ -246,7 +249,7 @@ def test_prune_apply_raises_when_a_delete_does_not_take(monkeypatch):
     _catalog(monkeypatch, orphans, SOURCE)
     _live_store(monkeypatch, P, paths, works=False)
     monkeypatch.setattr(sys, "argv", ["prune", "--apply"])
-    with pytest.raises(RuntimeError, match="still present"):
+    with pytest.raises(RuntimeError, match="not deleted"):
         P.main()
 
 
@@ -257,5 +260,5 @@ def test_legacy_apply_raises_when_a_delete_does_not_take(monkeypatch):
     monkeypatch.setattr(P, "orphan_pub_paths", lambda expected=None: [])
     monkeypatch.setattr(P, "legacy_layout_paths", lambda expected=None, groups=None: list(legacy))
     monkeypatch.setattr(sys, "argv", ["prune", "--legacy", "--apply"])
-    with pytest.raises(RuntimeError, match="still present"):
+    with pytest.raises(RuntimeError, match="not deleted"):
         P.main()

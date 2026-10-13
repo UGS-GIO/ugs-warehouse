@@ -213,6 +213,18 @@ def test_a_layer_named_like_a_reserved_item_keeps_a_distinct_id(capsys):
     assert "renamed" not in capsys.readouterr().err
 
 
+@pytest.mark.parametrize("sid, pub_id", [
+    ("BYU_GS-V24_CO-OPCREEK", "BYU_GS-V24_CO-OPCREEK"),   # single underscores are kept
+    ("BYU__GS___V24", "BYU_GS_V24"),                      # runs collapse: no pub id holds `__`
+    ("Geologic map of Utah", "Geologic-map-of-Utah"),
+])
+def test_a_publication_id_never_holds_a_double_underscore(sid, pub_id):
+    assert sink_stac.item_id_for(sid) == pub_id
+    layer = sink_stac.layer_item_id(sid, "Shapefiles__faults")
+    assert layer.split("__", 1) == [pub_id, "Shapefiles__faults"]  # the first `__` ends the pub id
+    assert sink_stac.plate_item_id(sid) == f"{pub_id}_plate"
+
+
 def test_layer_ids_cannot_collide_with_another_publications_id():
     # A pub id can hold `_` (BYU_GS-V24_CO-OPCREEK); `__` separates the label.
     assert sink_stac.layer_item_id("BYU_GS-V24", "CO-OPCREEK") == "BYU_GS-V24__CO-OPCREEK"

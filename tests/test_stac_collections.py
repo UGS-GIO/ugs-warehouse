@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from ugs_warehouse.core import config, stac
 
 
@@ -382,6 +384,22 @@ def test_refresh_indexes_publication_items_and_counts_mappable(monkeypatch):
     root = json.loads(store[f"{p}/catalog.json"])
     link = next(lk for lk in root["links"] if lk.get("href") == "./ugs-publications/catalog.json")
     assert link["ugs:mappable_count"] == 1
+
+
+def test_refresh_reports_an_item_id_held_by_two_collections(monkeypatch):
+    store = _memstore(monkeypatch)
+    for coll in ("hazards", "energy"):
+        stac.write_item(stac.build_item(
+            item_id="faults", collection=coll, collection_path=f"ugs-serving-topics/{coll}",
+            geometry=None, bbox=None, datetime_iso="2020-01-01T00:00:00Z",
+            properties={"title": "Faults"}, assets={}))
+
+    problems = stac.refresh_catalog()
+    assert problems == ["duplicate item id faults: ugs-serving-topics/energy/faults, "
+                        "ugs-serving-topics/hazards/faults"]
+    assert f"{config.STAC_PREFIX}/catalog.json" in store  # reported after the catalog is written
+    with pytest.raises(RuntimeError, match="duplicate item id faults"):
+        stac.refresh_catalog(strict=True)
 
 
 def test_refresh_keeps_index_rows_not_full_publication_items(monkeypatch):

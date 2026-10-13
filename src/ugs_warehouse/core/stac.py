@@ -440,6 +440,9 @@ def write_collection(coll: dict, *, children: int) -> str:
 PLATE_SUFFIX = "_plate"
 # Everything outside RFC 3986's unreserved set needs escaping in a path segment. See `item_id_for`.
 _UNSAFE_IN_PATH = re.compile(r"[^A-Za-z0-9._~-]+")
+# A publication id never holds `__`, so the first `__` in a layer's id (`<pub id>__<label>`)
+# always ends the publication id.
+_DOUBLE_UNDERSCORE = re.compile(r"_{2,}")
 
 
 def item_id_for(sid: str) -> str:
@@ -448,7 +451,7 @@ def item_id_for(sid: str) -> str:
     The id is also a directory name and the last segment of every link that reaches the item, so a
     space in it (`Geologic map of Utah`, `557.92 UT1CO`) would be a raw space in links a strict
     client rejects. The exact source string stays on the item as `ugs:series_id`."""
-    return _UNSAFE_IN_PATH.sub("-", (sid or "").strip())
+    return _DOUBLE_UNDERSCORE.sub("_", _UNSAFE_IN_PATH.sub("-", (sid or "").strip()))
 
 
 def plate_item_id(sid: str) -> str:
@@ -1118,6 +1121,17 @@ def _write_layer_collection(item: dict, path: str) -> None:
                     children=0, extent=doc["extent"], items=[item], service=True)
 
 
+def _duplicate_item_ids(groups: dict[str, list[str]]) -> list[str]:
+    """A problem for each item id held by more than one indexed collection, naming every path.
+    Item ids are unique across the catalog; this is a safety net that should never fire."""
+    paths: dict[str, list[str]] = {}
+    for coll, ids in groups.items():
+        for iid in ids:
+            paths.setdefault(iid, []).append(f"{coll}/{iid}")
+    return [f"duplicate item id {iid}: {', '.join(sorted(where))}"
+            for iid, where in sorted(paths.items()) if len(where) > 1]
+
+
 def refresh_catalog(*, strict: bool = False) -> list[str]:
     """Rebuild the root catalog + every non-publication collection.json by listing items in GCS.
 
@@ -1127,7 +1141,8 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     collection.json over `<SID>/<SID>.json` items, and the new-layout objects in it are ignored.
 
     Returns the problems found (publication items with no collection.json, unreadable or malformed
-    publication collection.json, items that failed to load), each also printed. The root files are always written; `strict` then raises
+    publication collection.json, items that failed to load, an item id held twice), each also
+    printed. The root files are always written; `strict` then raises
     if there were problems.
 
     Derive-from-truth + idempotent: safe to run after each ingest or on demand. Under
@@ -1153,6 +1168,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
         if g in migrated or (_is_pub_collection_path(g)
                              and (g in orphans or g.rsplit("/", 1)[0] not in migrated)):
             del groups[g]
+    problems += _duplicate_item_ids(groups)
     pub_colls = {p: 0 for p in pub_colls if p.rsplit("/", 1)[0] in migrated}
     pub_mappable: set[str] = set()
     # Each publication's Items as index rows only: the full docs (table:columns, proj:wkt2) are

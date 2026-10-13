@@ -3,7 +3,7 @@
 # only on a tippecanoe version bump:
 #   gcloud builds submit --config=cloudbuild.tippecanoe.yaml --project=ut-dnr-ugs-backend-tools .
 FROM debian:bookworm-slim AS build
-ARG TIPPECANOE_REF=2.79.0
+ARG TIPPECANOE_REF=main
 RUN apt-get update && apt-get install -y --no-install-recommends \
       build-essential git ca-certificates libsqlite3-dev zlib1g-dev \
     && rm -rf /var/lib/apt/lists/* \

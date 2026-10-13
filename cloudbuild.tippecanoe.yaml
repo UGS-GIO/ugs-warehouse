@@ -5,7 +5,7 @@
 substitutions:
   _REGION: us-central1
   _AR_REPO: ugs-warehouse
-  _TIPPECANOE_REF: 2.79.0
+  _TIPPECANOE_REF: main
 
 steps:
   - name: gcr.io/cloud-builders/docker

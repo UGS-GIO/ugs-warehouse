@@ -352,6 +352,7 @@ def _stub_8bit(monkeypatch, harvest):
     """_harvest_attempt tests fake the plate and COG files; treat both as already 8-bit."""
     monkeypatch.setattr(harvest, "_plate_kind", lambda p: "byte")
     monkeypatch.setattr(harvest, "_band_types", lambda p: ["Byte"] * 4)
+    monkeypatch.setattr(harvest, "_embed_band_statistics", lambda p: None)  # the plate is a fake
 
 
 # --- color source selection (ALL-5995) --------------------------------------------------------
@@ -619,7 +620,10 @@ def test_cog_zoom_strategy_reaches_cog_translate(monkeypatch, tmp_path):
 
     assert _harvest_attempt(pub, ["http://x/m-z.zip"]) == "ok"
     assert seen["zoom_level_strategy"] == "upper"
-    assert seen["web_optimized"] is True   # still web-optimized, only the zoom rounding changed
+    # Still web-mercator tiled (`tms`, which rio-cogeo wants in place of web_optimized), carrying
+    # the band statistics embedded on its input.
+    assert seen["tms"].id == "WebMercatorQuad" and "web_optimized" not in seen
+    assert seen["forward_band_tags"] is True
 
 
 @pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
@@ -767,6 +771,7 @@ def _attempt_with(monkeypatch, tmp_path, kind, cog_types=("Byte",) * 4):
     monkeypatch.setattr(harvest, "_plate_kind", lambda p: kind)
     monkeypatch.setattr(harvest, "_lineart_to_byte", lambda p, work: str(tmp_path / "plate.lineart.tif"))
     monkeypatch.setattr(harvest, "_band_types", lambda p: list(cog_types))
+    monkeypatch.setattr(harvest, "_embed_band_statistics", lambda p: None)  # the plate is a fake
 
     def fake_cog_translate(src, dst, prof, **k):
         with open(dst, "wb") as f:
@@ -1058,3 +1063,50 @@ def test_units_only_extracts_the_units_and_picks_no_plate(monkeypatch, tmp_path)
     assert shp == str(tmp_path / "work" / "gis/GeologicUnits.shp")
     assert os.path.exists(shp)
     render.assert_not_called()
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_a_plate_cog_carries_band_statistics_with_the_web_mercator_tiling(tmp_path):
+    """The real path on a tiny RGBA plate: statistics embedded on the input reach every COG band,
+    the alpha band included, the COG validates, and `tms` tiles exactly as `web_optimized` did."""
+    import warnings
+
+    import morecantile
+    import numpy as np
+    import rasterio
+    from rasterio.enums import ColorInterp
+    from rasterio.transform import from_origin
+    from rio_cogeo.cogeo import cog_translate, cog_validate
+    from rio_cogeo.profiles import cog_profiles
+
+    from ugs_warehouse.pubs import harvest
+
+    src = str(tmp_path / "rgba.tif")
+    data = np.zeros((4, 300, 400), dtype="uint8")
+    data[0, :, :200], data[0, :, 200:] = 50, 250  # the half the alpha masks out carries 250
+    data[1], data[2] = 100, 150
+    data[3, :, :200] = 255
+    with rasterio.open(src, "w", driver="GTiff", width=400, height=300, count=4, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(-12_400_000, 4_900_000, 30, 30)) as ds:
+        ds.write(data)
+        ds.colorinterp = (ColorInterp.red, ColorInterp.green, ColorInterp.blue, ColorInterp.alpha)
+
+    harvest._embed_band_statistics(src)
+    cog, old = str(tmp_path / "new.tif"), str(tmp_path / "old.tif")
+    prof = cog_profiles.get("deflate")
+    cog_translate(src, cog, dict(prof), tms=morecantile.tms.get("WebMercatorQuad"),
+                  forward_band_tags=True, quiet=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        cog_translate(src, old, dict(prof), web_optimized=True, quiet=True)
+
+    assert cog_validate(cog)[0]
+    with rasterio.open(cog) as new, rasterio.open(old) as was:
+        stats = [{k: float(new.tags(b)[f"STATISTICS_{k}"]) for k in ("MINIMUM", "MAXIMUM", "MEAN", "STDDEV")}
+                 for b in new.indexes]
+        assert (new.transform, new.shape, new.block_shapes, new.overviews(1)) == (
+            was.transform, was.shape, was.block_shapes, was.overviews(1))
+        assert {k: new.tags()[k] for k in ("TILING_SCHEME_NAME", "TILING_SCHEME_ZOOM_LEVEL")} == {
+            k: was.tags()[k] for k in ("TILING_SCHEME_NAME", "TILING_SCHEME_ZOOM_LEVEL")}
+    assert stats[0] == {"MINIMUM": 50.0, "MAXIMUM": 50.0, "MEAN": 50.0, "STDDEV": 0.0}  # masked out
+    assert stats[3]["MINIMUM"] == 0.0 and stats[3]["MAXIMUM"] == 255.0  # the alpha band too

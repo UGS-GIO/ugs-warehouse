@@ -479,6 +479,19 @@ def ensure_rgb(tif):
     return tif
 
 
+def _embed_band_statistics(tif: str) -> None:
+    """Store each band's exact statistics (alpha included) as STATISTICS_* band tags on `tif`, the
+    8-bit raster a COG is made from; `cog_translate(forward_band_tags=True)` copies them into the
+    COG. GDAL leaves pixels the alpha band masks out of the color bands' statistics. Written to the
+    input, never the finished COG, since updating a COG in place breaks its layout."""
+    import rasterio
+
+    with rasterio.open(tif, "r+") as ds:
+        for bidx, st in zip(ds.indexes, ds.stats(approx=False)):
+            ds.update_tags(bidx, STATISTICS_MINIMUM=st.min, STATISTICS_MAXIMUM=st.max,
+                           STATISTICS_MEAN=st.mean, STATISTICS_STDDEV=st.std)
+
+
 def _gdalinfo(path, *flags) -> dict:
     """gdalinfo -json, which (unlike the rasterio wheel) reads WEBP-compressed COGs. stderr is captured
     because the attempt's handler logs a failure's `e.stderr`."""
@@ -854,8 +867,12 @@ def _write_previews(pub: identity.Pub, cog: str, work: str) -> None:
 def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
     """One harvest attempt over a set of source zip URL(s), with the plate taken from the map's
     source raster object when `source` is set. Returns 'ok' | 'fail:…'."""
+    import morecantile
     from rio_cogeo.cogeo import cog_translate, cog_validate
     from rio_cogeo.profiles import cog_profiles
+
+    # The tiling `web_optimized=True` selected, which rio-cogeo deprecates in favour of `tms`.
+    web_mercator = morecantile.tms.get("WebMercatorQuad")
 
     series_id = pub.series_id
     _series_ctx.set(series_id)
@@ -934,6 +951,7 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
             prof["predictor"] = 2
 
         rgb_clipped = ensure_rgb(clipped)
+        _embed_band_statistics(rgb_clipped)
 
         def _to_lzw(why: str) -> None:
             hlog(f"webp COG {why} → retry with lzw", step="cog", level="WARNING")
@@ -941,14 +959,14 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
                 os.remove(cog)
             prof["compress"] = "lzw"
             prof.pop("WEBP_LEVEL", None)        # webp-only; lzw rejects it
-            cog_translate(rgb_clipped, cog, prof, web_optimized=True,
+            cog_translate(rgb_clipped, cog, prof, tms=web_mercator, forward_band_tags=True,
                           zoom_level_strategy=COG_ZOOM_STRATEGY,
                           overview_resampling="bilinear", quiet=True)
 
-        # webp can still fail to encode a plate; lossless lzw keeps web_optimized
+        # webp can still fail to encode a plate; lossless lzw keeps the web-mercator tiling
         # so the result is still tiled + overviewed for range reads.
         try:
-            cog_translate(rgb_clipped, cog, prof, web_optimized=True,
+            cog_translate(rgb_clipped, cog, prof, tms=web_mercator, forward_band_tags=True,
                           zoom_level_strategy=COG_ZOOM_STRATEGY,
                           overview_resampling="bilinear", quiet=True)
         except Exception as e:  # noqa: BLE001 — any encode failure is worth one lossless retry

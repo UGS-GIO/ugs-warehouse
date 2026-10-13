@@ -119,7 +119,9 @@ Metadata comes from the publications app's live feed (`publications.pubs_feed_v1
 is required. The ops console's **Full refresh** runs the jobs in order: cover thumbnails, 3D,
 map layers from each new pub's GIS zip, a prune of items the feed no longer lists, the pubs
 ingest, and the full-text search index. New map plates need **Harvest COGs** first. GeoParquet is
-written with geoparquet-io, and COG band metadata is read with rio-stac. A publisher's plain TIFF
+written with geoparquet-io, and COG band metadata is read with rio-stac. A new plate COG embeds each
+band's statistics (`STATISTICS_MINIMUM/MAXIMUM/MEAN/STDDEV`, alpha included), computed over the
+8-bit raster it is made from before rio-cogeo copies them in. A publisher's plain TIFF
 scan is a `source` asset, and a pub with no year gets a `start_datetime`/`end_datetime` interval
 flagged `ugs:date_unknown`.
 

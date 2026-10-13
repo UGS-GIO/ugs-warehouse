@@ -608,7 +608,7 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
         out, failed = _vector_manifests_by_sid()
 
     # keyed by uppercased series_id, matching the other discovery maps
-    assert out["M-100"] == {**manifest, "columns": {}, "relationships": [], "layers": {}}
+    assert out["M-100"] == {**manifest, "empty": [], "columns": {}, "relationships": [], "layers": {}}
     assert "DS-2" not in out
     assert "DS-2" in failed and "FileNotFoundError" in failed["DS-2"]
 
@@ -670,8 +670,12 @@ def test_vector_manifests_by_sid_carries_relationships_and_each_layers_source():
             "layers": [{"label": "geo__Polys", "spatial": True, "kind": "layer", "source": "Geo"},
                        {"label": "geo__DMU", "spatial": False}]}
     bad = {**good, "relationships": [{**rel, "destination_cols": []}]}
+    no_how = {**good, "relationships": [{k: v for k, v in rel.items() if k != "detected_by"}]}
+    no_confidence = {**good, "relationships": [{k: v for k, v in rel.items() if k != "confidence"}]}
     bodies = {f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json": json.dumps(good).encode(),
-              f"{vectors.VECTORS_PREFIX}/M-101/_manifest.json": json.dumps(bad).encode()}
+              f"{vectors.VECTORS_PREFIX}/M-101/_manifest.json": json.dumps(bad).encode(),
+              f"{vectors.VECTORS_PREFIX}/M-102/_manifest.json": json.dumps(no_how).encode(),
+              f"{vectors.VECTORS_PREFIX}/M-103/_manifest.json": json.dumps(no_confidence).encode()}
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=list(bodies)), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
         out, failed = _vector_manifests_by_sid()
@@ -684,6 +688,8 @@ def test_vector_manifests_by_sid_carries_relationships_and_each_layers_source():
     assert "kind" not in layers["geo__Polys"]
     # A malformed relationship fails its publication rather than publishing a broken join.
     assert "M-101" not in out and "malformed relationship" in failed["M-101"]
+    # Without `detected_by` an inferred join would publish as declared; inferred needs a confidence.
+    assert {"M-102", "M-103"} <= set(failed) and not {"M-102", "M-103"} & set(out)
 
 
 def test_vector_manifests_by_sid_carries_a_layers_pmtiles_only_when_built():
@@ -730,7 +736,8 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
         out, failed = _vector_manifests_by_sid()  # must return, not raise
 
-    assert out["M-100"] == {**good, "columns": {}, "relationships": [], "layers": {}}  # unaffected by the sibling's bad manifest
+    assert out["M-100"] == {**good, "empty": [], "columns": {}, "relationships": [],
+                            "layers": {}}  # unaffected by the sibling's bad manifest
     assert "DS-9" not in out  # not crashed on
     assert bad_path in failed["DS-9"]  # reported to the caller
     assert bad_path in capsys.readouterr().err  # and named on stderr

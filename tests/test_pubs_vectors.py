@@ -1163,6 +1163,25 @@ def test_declared_relationships_replace_inferred_ones_and_unpublishable_ones_war
     assert warning["code"] == vectors.relations.RELATIONSHIP_SKIPPED and "stations_rel" in warning["warning"]
 
 
+def test_a_layer_that_cannot_be_profiled_is_an_error_and_extraction_goes_on(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    srcs = _gems_frames(monkeypatch)
+    real = vectors.relations.profile_frame
+
+    def boom(frame, keys=True):
+        if "Term" in frame.columns:
+            raise MemoryError("glossary too big")
+        return real(frame, keys)
+
+    monkeypatch.setattr(vectors.relations, "profile_frame", boom)
+    manifest = vectors._extract_and_upload(str(tmp_path), "OFR-784DM", srcs)
+
+    assert manifest["errors"] == [{"label": srcs[2][2],
+                                   "error": "not profiled for relationships: MemoryError: glossary too big"}]
+    assert len(manifest["layers"]) == 3 and f"{vectors.VECTORS_PREFIX}/OFR-784DM/_manifest.json" in store
+    assert [r["destination_cols"] for r in manifest["relationships"]] == [["MapUnit"]]
+
+
 def test_a_column_that_cannot_be_profiled_warns_once_and_the_rest_still_join(monkeypatch, tmp_path):
     store = _mem_gcs(monkeypatch)
     srcs = _gems_frames(monkeypatch)

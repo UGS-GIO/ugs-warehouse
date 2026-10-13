@@ -549,13 +549,31 @@ def test_two_keys_to_one_table_share_its_asset():
     assert len([lk for lk in items["geo__DMU"]["links"] if lk["rel"] == "related"]) == 1
 
 
-def test_a_relationship_with_an_unpublished_end_is_skipped(capsys):
-    rel = {**MUP_TO_DMU, "destination": "geo__T_1_PolyErrors"}
-    _, items = _related(relationships=[rel],
+def test_a_relationship_to_a_validation_or_empty_layer_is_skipped_silently(capsys):
+    to_errors = {**MUP_TO_DMU, "destination": "geo__T_1_PolyErrors"}
+    to_empty = {**MUP_TO_DMU, "destination": "geo__Stations"}
+    _, items = _related(relationships=[to_errors, to_empty], empty_layers=["geo__Stations"],
                         companion_tables=[{"label": "geo__DMU"}, {"label": "geo__T_1_PolyErrors"}])
-    assert "geo__T_1_PolyErrors" not in items["geo__MapUnitPolys"]["assets"]
+    assert set(items["geo__MapUnitPolys"]["assets"]) == {"data"}
     assert "ugs:foreign_keys" not in items["geo__MapUnitPolys"]["assets"]["data"]
-    assert "relationship geo__MapUnitPolys -> geo__T_1_PolyErrors skipped" in capsys.readouterr().err
+    assert "relationship" not in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("rel", [
+    {**MUP_TO_DMU, "destination": "geo__Nowhere"},             # names a label not published
+    {**MUP_TO_DMU, "destination": "geo__MapUnitPolys"},        # relates a layer to itself
+])
+def test_a_relationship_naming_any_other_unpublished_layer_fails_the_pub(rel):
+    with pytest.raises(ValueError, match="not a separate published layer"):
+        _related(relationships=[rel])
+
+
+def test_a_foreign_key_carries_detected_by_as_recorded():
+    declared = {**MUP_TO_DMU, "detected_by": "declared"}
+    del declared["confidence"]
+    _, items = _related(relationships=[declared])
+    (fk,) = items["geo__MapUnitPolys"]["assets"]["geo__DMU"]["ugs:foreign_keys"]
+    assert fk["ugs:detected_by"] == "declared" and "ugs:confidence" not in fk
 
 
 def test_a_related_table_named_like_another_asset_gets_its_own_key():
@@ -570,6 +588,8 @@ def test_items_and_their_collection_links_carry_kind_and_source_dataset():
     coll, items = _related()
     props = {k: (it["properties"].get("ugs:layer_kind"), it["properties"].get("ugs:source_dataset"))
              for k, it in items.items()}
+    assert items["geo__DMU"]["properties"]["ugs:source_key"] == "OFR784DM_MillsJunction"
+    assert items["geo__Faults"]["properties"]["ugs:source_key"] == "geo"
     assert props == {
         "plate": (None, None),
         "geo__MapUnitPolys": ("layer", "OFR784DM Mills Junction"),
@@ -579,6 +599,7 @@ def test_items_and_their_collection_links_carry_kind_and_source_dataset():
     links = {lk["href"]: lk for lk in coll["links"] if lk["rel"] == "item"}
     dmu = links["./OFR-784DM_geo__DMU/OFR-784DM_geo__DMU.json"]
     assert dmu["ugs:layer_kind"] == "table" and dmu["ugs:source_dataset"] == "OFR784DM Mills Junction"
+    assert dmu["ugs:source_key"] == "OFR784DM_MillsJunction"  # grouping key; the title is for display
     assert "ugs:layer_kind" not in links["./OFR-784DM_plate/OFR-784DM_plate.json"]
 
 

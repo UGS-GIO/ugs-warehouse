@@ -1,14 +1,7 @@
-"""Relationships between the layers and tables of one publication's GIS bundle.
-
-Declared relationship classes come from a geodatabase through `ogrinfo -json`. Others are inferred
-within one source dataset (a geodatabase, or a folder of shapefiles) from column names and values:
-the name rule is ugs-ingest's FK proposer (`scoreNameMatch`), and the value score is the share of
-the source column's distinct values found in the target key. Inferred joins are published without
-review, so the acceptance bar is higher than the proposer's, and they target only non-spatial
-tables: a spatial layer is a destination only when the geodatabase declares it.
-
-A relationship runs from its origin, the table holding the foreign key (MapUnitPolys), to its
-destination, the keyed table (DescriptionOfMapUnits).
+"""Relationships between the layers and tables of one publication's GIS bundle: declared ones read
+from a geodatabase with `ogrinfo -json`, and ones inferred from column names (ugs-ingest's
+`scoreNameMatch`) and values. Each runs from its origin, the table holding the foreign key, to its
+destination, the keyed table. The rules and their reasons: docs/ARCHITECTURE.md.
 """
 from __future__ import annotations
 
@@ -190,11 +183,8 @@ def _accepted(name: int, overlap: float, shared: int, source_col: str, target_co
 
 
 def infer(layers: list[Layer]) -> list[dict]:
-    """Relationships inferred from a layer to a non-spatial table of the same group (`_accepted`).
-    A target key that numbers its rows (0..N or 1..N) counts only when its name is its table's
-    (`_affinity`). One relationship is kept per origin/destination pair, the best scored: total,
-    then overlap, then `_affinity`. Of a pair found in both directions, the one whose destination
-    holds more keys is kept."""
+    """Relationships from a layer to a non-spatial table of the same group that pass `_accepted`,
+    the best one per pair of tables. A row-numbering integer key counts only with `_affinity`."""
     best: dict[tuple[str, str], tuple[tuple, dict]] = {}
     for t in layers:
         if t.spatial:

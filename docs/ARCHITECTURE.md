@@ -176,13 +176,16 @@ every destination links back to its origin. The origin's `data` asset carries it
 Each foreign key has `ugs:detected_by` and, when inferred, `ugs:confidence`. A table that at least
 max(3, half the pub's map layers) of those layers point at (DataSources on a GeMS map) is a shared
 lookup, and its related assets carry `roles: ["data", "related", "reference"]`. Layer and table
-Items carry `ugs:layer_kind` and `ugs:source_dataset`, and the Collection's `rel=item` links repeat
-both so the viewer groups a pub's items without fetching them. The kind is `layer` for a spatial
-layer, `table` for a non-spatial one in a relationship the ingest publishes (a relationship to an
-unpublished layer does not count) and `supporting` otherwise.
+Items carry `ugs:layer_kind`, `ugs:source_key` (the source dataset, the grouping key) and
+`ugs:source_dataset` (its title), and the Collection's `rel=item` links repeat all three so the
+viewer groups a pub's items without fetching them. The kind is `layer` for a spatial layer, `table`
+for a non-spatial one in a relationship the ingest publishes and `supporting` otherwise. A
+relationship to a GeMS validation layer or an empty layer is skipped, since neither is published;
+one naming any other label the manifest does not publish fails the pub. A relationship must say
+whether it was `declared` or `inferred` (with an integer `confidence`), or the pub fails.
 
-For pubs extracted before relationships were recorded, `--relations-backfill [SID ...]` computes
-them from the GeoParquet already on GCS (only its string and integer columns), keeps any declared
+`--relations-backfill [SID ...]` recomputes them, for manifests that lack them or after a rule
+change, from the GeoParquet already on GCS (only its string and integer columns), keeps any declared
 relationships the manifest holds, and writes nothing for a series with a layer it cannot read. Its
 scopes come from the labels, as extraction's do. When a label carries a folder prefix because its
 name was taken, the bundle has several folders and a bare shapefile label's folder is unknown: it is

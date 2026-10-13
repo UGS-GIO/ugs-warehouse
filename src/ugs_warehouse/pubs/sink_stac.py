@@ -274,6 +274,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                       companion_tables: list[dict] | None = None,
                       layers: dict | None = None,
                       relationships: list[dict] | None = None,
+                      empty_layers: list[str] | None = None,
                       override: dict | None = None,
                       contents: list[dict] | None = None,
                       mirrored: set[str] | None = None,
@@ -286,7 +287,8 @@ def build_publication(p: dict, attachments: list[dict], *,
     fence are Items in it. A publication with none of those, or with exactly one, is a Collection
     with no Items; a lone data file becomes a collection-level asset. `relationships` (the vector
     manifest's) become related-table assets, `ugs:foreign_keys` and `related` links on the layer
-    and table Items, in the serving topics' shape."""
+    and table Items, in the serving topics' shape. `empty_layers` are the manifest's layers with no
+    rows, which were never uploaded."""
     sid = (p.get("series_id") or "").strip()
     pub_id = item_id_for(sid)
     coll_path = pub_collection_path(p)
@@ -294,6 +296,8 @@ def build_publication(p: dict, attachments: list[dict], *,
         if is_validation_layer(label):
             print(f"[pubs] {pub_id}: skipped {label!r} (GeMS validation output, not map data)",
                   file=sys.stderr)
+    unpublished = {lb for lb in [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]
+                   if is_validation_layer(lb)} | set(empty_layers or [])
     vector_layers = [lb for lb in vector_layers or [] if not is_validation_layer(lb)]
     companion_tables = [t for t in companion_tables or [] if not is_validation_layer(t["label"])]
     yr = (p.get("pub_year") or "").strip()
@@ -371,14 +375,15 @@ def build_publication(p: dict, attachments: list[dict], *,
     titles = layer_titles(labels)
     rel_assets, rel_links, own_fks, published = _relationship_parts(
         sid, coll_path, relationships or [], ids, titles,
-        {t["label"]: t.get("columns") for t in companion_tables or []}, set(vector_layers or []))
+        {t["label"]: t.get("columns") for t in companion_tables or []}, set(vector_layers or []),
+        unpublished)
 
     def kind_props(label: str, spatial: bool) -> dict:
-        """The Item's `ugs:layer_kind`, from the relationships published here, and humanised
-        `ugs:source_dataset`."""
+        """The Item's `ugs:layer_kind` (from the relationships published here), its source dataset's
+        key and its humanised title."""
         source = layer_meta.get(label, {}).get("source") or source_of_label(label, sid)
         return {"ugs:layer_kind": layer_kind(spatial, label, published),
-                "ugs:source_dataset": layer_title(source)[0]}
+                "ugs:source_key": source, "ugs:source_dataset": layer_title(source)[0]}
 
     def with_related(label: str, data: dict) -> tuple[dict, list[str]]:
         """The Item's assets: its data (carrying its own foreign keys), then its related tables
@@ -587,7 +592,7 @@ def build_publication(p: dict, attachments: list[dict], *,
 
 
 # Item properties a publication's rel=item links repeat, so the viewer groups its items unfetched.
-ITEM_LINK_FIELDS = ("ugs:layer_kind", "ugs:source_dataset")
+ITEM_LINK_FIELDS = ("ugs:layer_kind", "ugs:source_key", "ugs:source_dataset")
 # A related table that many of the pub's map layers point at (DataSources on a GeMS map) is a
 # lookup shared across the map rather than one layer's companion; its assets carry this role.
 REFERENCE_ROLE = "reference"
@@ -595,19 +600,14 @@ REFERENCE_ROLE = "reference"
 
 def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids: dict[str, str],
                         titles: dict[str, tuple[str, str | None]],
-                        table_columns: dict[str, list | None],
-                        spatial: set[str]) -> tuple[dict, dict, dict, list[dict]]:
-    """The publication's relationships as STAC pieces, per label: ({origin: {destination label:
-    related-table asset}}, {label: [related links]}, {origin: [its own foreign keys]}, [the
-    relationships published]).
-
-    A non-spatial destination becomes a `roles: ["data", "related"]` asset on the origin pointing at
-    the destination's parquet, its foreign key flipped to destination -> origin so the viewer's
-    click-join filters the table by the clicked feature (vector/related.py `_inverted_rel`). A
-    spatial destination is a `related` link instead. Every destination links back to its origin.
-    Each foreign key records how it was found (`ugs:detected_by`, and `ugs:confidence` when
-    inferred). A relationship with an end that is not published is skipped. A table that at least
-    max(3, half the pub's map layers) of those layers point at gets REFERENCE_ROLE on its assets."""
+                        table_columns: dict[str, list | None], spatial: set[str],
+                        unpublished: set[str]) -> tuple[dict, dict, dict, list[dict]]:
+    """The relationships as STAC pieces, per label: ({origin: {destination: related-table asset}},
+    {label: [related links]}, {origin: [own foreign keys]}, [relationships published]). A
+    related-table asset's foreign key is flipped to destination -> origin, as vector/related.py
+    `_inverted_rel` does, so the viewer's click-join filters the table by the clicked feature. A
+    relationship to a validation or empty layer (`unpublished`) is skipped; one naming any other
+    label not published raises."""
     assets: dict[str, dict] = {}
     published: list[dict] = []
     links: dict[str, list[dict]] = {}
@@ -624,13 +624,15 @@ def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids
 
     for r in relationships:
         o, d = r["origin"], r["destination"]
-        if o not in ids or d not in ids or o == d:
-            print(f"[pubs] {item_id_for(sid)}: relationship {o} -> {d} skipped (an end is not "
-                  "published)", file=sys.stderr)
+        missing = [end for end in (o, d) if end not in ids]
+        if missing and all(end in unpublished for end in missing):
             continue
+        if missing or o == d:
+            raise ValueError(f"{item_id_for(sid)}: relationship {o} -> {d} names "
+                             f"{missing or [o]}, which is not a separate published layer or table")
         published.append(r)
-        how = {"ugs:detected_by": r.get("detected_by") or "declared",
-               **({"ugs:confidence": r["confidence"]} if r.get("confidence") is not None else {})}
+        how = {"ugs:detected_by": r["detected_by"],
+               **({"ugs:confidence": r["confidence"]} if r["detected_by"] == "inferred" else {})}
         fks.setdefault(o, []).append({"fields": list(r["origin_cols"]),
                                       "reference": {"resource": ids[d], "href": parquet(d),
                                                     "fields": list(r["destination_cols"])}, **how})

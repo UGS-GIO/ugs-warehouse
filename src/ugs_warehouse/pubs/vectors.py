@@ -18,7 +18,7 @@ clean manifests show still without PMTiles and exits non-zero while any remain;
 The manifest also lists the relationships between a bundle's layers and tables (`relations.py`):
 declared geodatabase relationship classes, and joins inferred within one source dataset. Each
 layer entry records its `source` dataset and its `kind` (`layer`, `table` or `supporting`).
-`--relations-backfill` computes them for pubs extracted before they were recorded.
+`--relations-backfill` computes them from the extracted GeoParquet for manifests that lack them.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
 layer never looks like a pub that simply has none.
@@ -413,9 +413,17 @@ def _dataset_name(work: str, series_id: str, path: str, layer: str | None, label
 
 def _profile_into(profiles: list, entry: dict, frame, name: str, manifest: dict) -> None:
     """Keep what relationship inference needs of one layer read in memory, scoped by its `source`.
-    A spatial layer is never an inferred target, so it keeps no key sets."""
-    columns, failed = relations.profile_frame(frame, keys=not entry["spatial"])
-    profiles.append(relations.Layer(entry["label"], name, entry["source"], columns, entry["spatial"]))
+    A spatial layer is never an inferred target, so it keeps no key sets. A layer that cannot be
+    profiled at all is an error, and extraction goes on."""
+    try:
+        columns, failed = relations.profile_frame(frame, keys=not entry["spatial"])
+        profiles.append(relations.Layer(entry["label"], name, entry["source"], columns,
+                                        entry["spatial"]))
+    except Exception as e:
+        manifest["errors"].append({"label": entry["label"],
+                                   "error": f"not profiled for relationships: {_error(e)}"})
+        print(f"  layer {entry['label']}: not profiled for relationships: {e}", file=sys.stderr)
+        return
     _warn_unprofiled(manifest, entry["label"], failed)
 
 
@@ -728,15 +736,10 @@ def backfill_pmtiles(series_ids: list[str], force: bool = False, limit: int | No
 
 
 def _relations_series(series_id: str) -> tuple[dict, list[str]]:
-    """Compute a series' relationships, layer kinds and sources from its GeoParquet on GCS, reading
-    only the string and integer columns, and record them in its manifest. Declared relationships
-    the manifest already holds are kept, since the geodatabase is not at hand to read them again;
-    a manifest that never recorded relationships gets a RELATIONSHIPS_NOT_READ warning. A layer's
-    scope is its recorded `source`, else its label's prefix (`relations.source_of_label`). When the
-    labels show the bundle has several folders (`relations.collided`), a shapefile with no prefix
-    and no recorded source could sit in any of them: it is left out of inference with a
-    SCOPE_UNKNOWN warning. Nothing is written when any layer cannot be read, since joins inferred
-    without it could be wrong."""
+    """Record a series' relationships, layer kinds and sources in its manifest, from the string and
+    integer columns of its GeoParquet on GCS. Declared relationships already recorded are kept: the
+    geodatabase is not at hand to read them again. Nothing is written when a layer cannot be read,
+    since joins inferred without it could be wrong."""
     import pyarrow.parquet as pq
 
     path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"

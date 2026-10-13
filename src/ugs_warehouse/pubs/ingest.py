@@ -146,7 +146,7 @@ def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict]
     tables, so build_publication doesn't have to guess a layer's kind from its name. `columns` holds each
     layer's recorded schema and `layers` its row count, bbox and CRS; manifests written before they
     were recorded have none (empty maps / None values); `source` comes from the label when the
-    manifest predates it. A layer's kind is not read: build_publication derives it from the
+    manifest records none. A layer's kind is not read: build_publication derives it from the
     relationships it publishes}, {SID: cause} for each manifest that exists but could not be read
     or parsed). A series with no manifest appears in neither map."""
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
@@ -163,6 +163,7 @@ def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict]
             layer_docs = [lay for lay in doc.get("layers") or [] if lay.get("label")]
             rels = _relationships(doc.get("relationships") or [])
             out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or [],
+                        "empty": doc.get("empty") or [],
                         "columns": {lay["label"]: lay["columns"] for lay in layer_docs if lay.get("columns")},
                         "relationships": rels,
                         "layers": {lay["label"]: {"rows": lay.get("rows"), "bbox": lay.get("bbox"),
@@ -182,14 +183,18 @@ def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict]
 
 
 def _relationships(rels: list) -> list[dict]:
-    """A manifest's relationships, each checked for the fields the items are built from. A malformed
-    one raises, so its publication fails instead of publishing a broken join."""
+    """A manifest's relationships, each checked for the fields the items are built from: ends,
+    matching column lists, `detected_by` and, when inferred, an integer `confidence`. A malformed
+    one raises, so its publication fails instead of publishing a broken or mislabelled join."""
     for r in rels:
         ok = (isinstance(r, dict) and all(isinstance(r.get(k), str) and r[k]
                                           for k in ("origin", "destination"))
               and all(isinstance(r.get(k), list) and r[k] and all(isinstance(c, str) for c in r[k])
                       for k in ("origin_cols", "destination_cols"))
-              and len(r["origin_cols"]) == len(r["destination_cols"]))
+              and len(r["origin_cols"]) == len(r["destination_cols"])
+              and r.get("detected_by") in ("declared", "inferred")
+              and (r["detected_by"] == "declared" or (isinstance(r.get("confidence"), int)
+                                                      and not isinstance(r["confidence"], bool))))
         if not ok:
             raise ValueError(f"malformed relationship {r!r}")
     return rels
@@ -340,6 +345,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
                               for t in manifest["tables"]],
             layers=manifest.get("layers", {}),
             relationships=manifest.get("relationships", []),
+            empty_layers=manifest.get("empty", []),
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
             edition=edition_graph.get(sid),
             mosaic_tier=tier_by_sid.get(up),

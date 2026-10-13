@@ -70,6 +70,7 @@ src/ugs_warehouse/
 │   └── ingest.py topics.py
 ├── pubs/        producer B: publications → COG/footprints/units/thumbs/STAC
 │   ├── harvest.py (zip→COG) footprints.py vectors.py units_pmtiles.py thumbs.py
+│   ├── relations.py  joins between a pub's layers and tables (declared or inferred) → manifest
 │   └── source.py identity.py sink_stac.py topic.py ingest.py
 ├── raster/      standalone raster COGs → STAC (consume.py, sink_stac.py)
 └── restyle.py   rebind ugs:renders from the manifest, no reingest

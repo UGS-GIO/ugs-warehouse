@@ -1,11 +1,12 @@
 // @vitest-environment jsdom
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { FeatureCard } from "@/map/feature-card";
 import { PreviewMapProvider } from "@/map/preview-map";
+import { RelatedLinks } from "@/map/related-links";
 import type { StacDoc } from "@/stac";
 import { RelatedPanel } from "./item-detail";
 
@@ -27,7 +28,9 @@ const mapUnitPolys: StacDoc = {
   assets: {
     data: { href: ORIGIN, type: "application/vnd.apache.parquet", roles: ["data"],
             "ugs:foreign_keys": [{ fields: ["MapUnit"], reference: { resource: "OFR-784DM_OFR784DM__DescriptionOfMapUnits", href: DMU, fields: ["MapUnit"] },
-                                    "ugs:detected_by": "inferred", "ugs:confidence": 100 }] },
+                                    "ugs:detected_by": "inferred", "ugs:confidence": 100 },
+                                  { fields: ["DataSourceID"], reference: { resource: "OFR-784DM_OFR784DM__DataSources", href: SOURCES, fields: ["DataSources_ID"] },
+                                    "ugs:detected_by": "declared" }] },
     OFR784DM__DescriptionOfMapUnits: { href: DMU, type: "application/vnd.apache.parquet", roles: ["data", "related"],
       title: "Description Of Map Units", "ugs:foreign_keys": [fk(["MapUnit"], ["MapUnit"], { "ugs:detected_by": "inferred", "ugs:confidence": 100 })] },
     OFR784DM__DataSources: { href: SOURCES, type: "application/vnd.apache.parquet", roles: ["data", "related", "reference"],
@@ -74,13 +77,78 @@ describe("a map click on a publication layer", () => {
   });
 });
 
+describe("reference tables when there is no primary join", () => {
+  const props = { MapUnit: "Qal", DataSourceID: "DAS1" };
+  it("FeatureCard shows them open, and reads their rows", async () => {
+    readMatching.mockResolvedValue({ total: 1, columns: ["DataSources_ID", "Source"],
+                                     rows: [{ DataSources_ID: "DAS1", Source: "Field mapping" }] });
+    const { OFR784DM__DescriptionOfMapUnits: _dmu, ...assets } = mapUnitPolys.assets ?? {};
+    wrap(<FeatureCard item={{ ...mapUnitPolys, assets }} props={props} />);
+    expect(screen.getByRole("button", { name: /References: Data Sources/ }).getAttribute("aria-expanded")).toBe("true");
+    expect(await screen.findByText("Field mapping")).toBeDefined();
+    expect(screen.queryByText("Related")).toBeNull();
+  });
+});
+
+describe("the Map page's related-table launchers", () => {
+  const info = (tables: { key: string; title: string; reference?: boolean }[]) => ({ itemHref: "https://x/item.json", tables });
+
+  it("lists the feature's own tables, then the reference tables collapsed", async () => {
+    const onOpen = vi.fn();
+    const { container } = render(<RelatedLinks props={{ MapUnit: "Qal" }} onOpen={onOpen}
+      info={info([{ key: "dmu", title: "Description Of Map Units" }, { key: "src", title: "Data Sources", reference: true }])} />);
+    expect(screen.getByText("Related tables")).toBeDefined();
+    const refs = container.querySelector("details") as HTMLDetailsElement;
+    expect(refs.open).toBe(false);
+    expect(refs.textContent).toContain("References: Data Sources");
+    expect(refs.contains(screen.getByRole("button", { name: /Description Of Map Units/ }))).toBe(false);
+    await userEvent.click(refs.querySelector("summary") as HTMLElement);
+    await userEvent.click(within(refs).getByRole("button", { name: /Data Sources/ }));
+    expect(onOpen).toHaveBeenCalledWith({ itemHref: "https://x/item.json", relatedKey: "src", title: "Data Sources",
+                                          props: { MapUnit: "Qal" } });
+  });
+
+  it("shows the reference tables open when they are all there is", () => {
+    const { container } = render(<RelatedLinks props={{}} onOpen={vi.fn()}
+      info={info([{ key: "src", title: "Data Sources", reference: true }])} />);
+    expect((container.querySelector("details") as HTMLDetailsElement).open).toBe(true);
+    expect(screen.queryByText("Related tables")).toBeNull();
+  });
+});
+
 describe("RelatedPanel on a publication layer", () => {
   it("marks the inferred join subtly, with its confidence, and the declared one not at all", () => {
     wrap(<RelatedPanel item={mapUnitPolys} />);
     const marks = screen.getAllByText("inferred");
-    // The DMU table's key and the layer's own outgoing key are both inferred; DataSources is declared.
-    expect(marks).toHaveLength(2);
+    // The DMU table's key; the layer's own key to it is not listed again. DataSources is declared.
+    expect(marks).toHaveLength(1);
     expect(marks[0].getAttribute("title")).toContain("confidence 100 of 100");
+  });
+
+  it("lists the layer's own keys less those a primary related table already shows", () => {
+    wrap(<RelatedPanel item={mapUnitPolys} />);
+    const own = screen.getByText("This layer references").parentElement as HTMLElement;
+    // The key to the collapsed reference table stays; the key to the DMU table, shown above, does not.
+    expect(own.textContent).toContain("DataSourceID");
+    expect(own.textContent).not.toContain("MapUnit");
+  });
+
+  it("keeps the reference section open once opened, through a table opening and closing", async () => {
+    const { container } = wrap(<RelatedPanel item={mapUnitPolys} />);
+    const refs = container.querySelector("details") as HTMLDetailsElement;
+    await userEvent.click(refs.querySelector("summary") as HTMLElement);
+    expect(refs.open).toBe(true);
+    const view = within(refs).getByRole("button", { name: "View" });
+    await userEvent.click(view);
+    await userEvent.click(within(refs).getByRole("button", { name: "Hide" }));
+    expect(refs.open).toBe(true);
+  });
+
+  it("opens the reference section from the start when there are no primary related tables", () => {
+    const { OFR784DM__DescriptionOfMapUnits: _dmu, ...assets } = mapUnitPolys.assets ?? {};
+    const { container } = wrap(<RelatedPanel item={{ ...mapUnitPolys, assets }} />);
+    expect((container.querySelector("details") as HTMLDetailsElement).open).toBe(true);
+    expect(screen.queryByText("Related tables")).toBeNull();
   });
 
   it("puts the reference table after the primary ones, collapsed", () => {

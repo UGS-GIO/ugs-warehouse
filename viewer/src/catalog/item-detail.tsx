@@ -57,6 +57,12 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
   const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
   const primary = tables.filter((t) => !isReferenceAsset(t.asset));
   const refs = tables.filter((t) => isReferenceAsset(t.asset));
+  // The layer's own outgoing keys, less those a primary related table below already shows (a
+  // publication's data asset carries both). A key to a collapsed reference table stays listed.
+  const ownKeys = fks.filter((fk) => !primary.some((t) => t.asset.href === fk.reference.href));
+  // The reference tables' section: open from the start when they are all there is, or when one of
+  // them is open; after that the toggle (the user's, or that auto-open) is what it shows.
+  const [refsOpen, setRefsOpen] = useState<boolean>();
   const tableRow = ({ key, asset }: { key: string; asset: Asset }) => (
     <li key={key}>
       <div className="flex flex-wrap items-center gap-2">
@@ -90,7 +96,7 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
       {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
     </li>
   );
-  if (!links.length && !tables.length && !fks.length) return null;
+  if (!links.length && !tables.length && !ownKeys.length) return null;
   return (
     <section ref={sectionRef} className="mt-4 rounded-md border border-border p-3">
       <h3 className="text-sm font-semibold">Related</h3>
@@ -104,11 +110,11 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
           </ul>
         </div>
       )}
-      {fks.length > 0 && (
+      {ownKeys.length > 0 && (
         <div className="mt-2">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">This layer references</div>
           <ul className="mt-1 space-y-0.5 text-xs">
-            {fks.map((fk, i) => (
+            {ownKeys.map((fk, i) => (
               <li key={i}>
                 <code>{fk.fields.join(", ")}</code> →{" "}
                 {fk.reference.href
@@ -128,9 +134,10 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
         </div>
       )}
       {/* Reference tables (most of the publication's layers point at them) come after the layer's
-          own joins, collapsed unless one of them is open. */}
+          own joins, collapsed unless they are all there is or one of them is open (refsOpen). */}
       {refs.length > 0 && (
-        <details className="mt-2" open={refs.some((t) => isOpen(t.key))}>
+        <details className="mt-2" open={refsOpen ?? (!primary.length || refs.some((t) => isOpen(t.key)))}
+          onToggle={(e) => setRefsOpen(e.currentTarget.open)}>
           <summary className="cursor-pointer text-xs uppercase tracking-wide text-muted-foreground">
             Reference tables: <span className="normal-case">{refs.map((t) => t.asset.title ?? t.key).join(", ")}</span>
           </summary>

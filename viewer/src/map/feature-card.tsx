@@ -45,12 +45,13 @@ function PeekRow({ join, value, onOpen }: {
 }
 
 // Reference tables (most of the publication's layers point at them, e.g. its data sources) after the
-// feature's own joins, collapsed. Their rows are read only once opened, so a click costs no extra
-// reads for them.
-function ReferencePeeks({ joins, props, onOpen }: {
+// feature's own joins, collapsed unless they are all there is. Their rows are read only once opened,
+// so a click costs no extra reads for them.
+function ReferencePeeks({ joins, props, onOpen, defaultOpen = false }: {
   joins: RelatedJoin[]; props: Record<string, unknown>; onOpen?: (relatedKey: string, value: string) => void;
+  defaultOpen?: boolean;   // open from the start when there are no primary joins above it
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(defaultOpen);
   return (
     <div className="mt-2 border-t border-border pt-2">
       <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
@@ -124,7 +125,7 @@ export function FeatureCard({ item, props, onOpenRelated, onClear, onZoom }: {
           {primary.map((j) => <PeekRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpenRelated} />)}
         </div>
       )}
-      {refs.length > 0 && <ReferencePeeks joins={refs} props={props} onOpen={onOpenRelated} />}
+      {refs.length > 0 && <ReferencePeeks joins={refs} props={props} onOpen={onOpenRelated} defaultOpen={!primary.length} />}
       {IS_REVIEW && <ReviewComment item={item} props={props} />}
     </section>
   );

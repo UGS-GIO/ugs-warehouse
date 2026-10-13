@@ -774,6 +774,29 @@ def test_extraction_releases_each_layer_before_reading_the_next(monkeypatch, tmp
     assert manifest["errors"] == [] and len(alive) == 3
 
 
+def test_a_layer_that_fails_is_released_before_the_next_is_read(monkeypatch, tmp_path):
+    """The failure path `continue`s past the normal release; the next read still finds the failed
+    layer's frame gone."""
+    import gc
+    import weakref
+
+    _mem_gcs(monkeypatch)
+    alive: list = []
+
+    def read_file(path, layer=None, engine=None):
+        gc.collect()
+        assert all(ref() is None for ref in alive), "the failed layer is still in memory"
+        gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]},
+                               crs=None if layer == "L1" else "EPSG:26912")  # L1 fails: no CRS
+        alive.append(weakref.ref(gdf))
+        return gdf
+
+    monkeypatch.setattr("geopandas.read_file", read_file)
+    srcs = [("b.gdb", f"L{i}", f"b__L{i}", True) for i in range(3)]
+    manifest = vectors._extract_and_upload(str(tmp_path), "M-211", srcs)
+    assert [e["label"] for e in manifest["errors"]] == ["b__L1"] and len(alive) == 3
+
+
 def test_rows_without_geometry_are_left_out_of_the_tiles(monkeypatch, tmp_path):
     from ugs_warehouse.vector import sink_pmtiles
 

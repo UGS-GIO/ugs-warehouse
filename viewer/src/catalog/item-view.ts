@@ -5,6 +5,7 @@
 // it runs in the node test env. Consolidates the getters that had drifted between browse.tsx and
 // discovery-model.ts into ONE source of truth (both now import from here).
 import type { ItemRef } from "./browse";
+import { GEOM_NAMES } from "@/data/columns";
 import {
   type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, KIND_RANK,
   parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, type TableColumn, zarrAsset,
@@ -69,11 +70,10 @@ export const fmtDate = (iso: string): string => {
 
 // Whether the item's data has geometry to export as a spatial format. A null geometry, or a
 // published column schema with no geometry column, means a plain table.
-const GEOM_COLUMN_NAMES = new Set(["geom", "geometry", "wkb_geometry"]);
 export const isSpatialData = (d: StacDoc | undefined): boolean => {
   if (!d || d.geometry === null) return false;
   const cols = tableColumns(d);
-  return !cols || cols.some((c) => c.type?.toLowerCase() === "geometry" || GEOM_COLUMN_NAMES.has(c.name));
+  return !cols || cols.some((c) => c.type?.toLowerCase() === "geometry" || GEOM_NAMES.includes(c.name));
 };
 
 // The doc id bridging a MiniSearch hit (built by search-index.toSearchDoc) back to its item.

@@ -121,11 +121,14 @@ flagged `ugs:date_unknown`.
 Each map layer extracted from a GIS zip is written as GeoParquet in its own CRS plus PMTiles in
 EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with the serving topics'
 tippecanoe flags and one tile layer named for the label. The series' `_manifest.json` records
-`pmtiles` and `pmtiles_layer` per layer, and a layer whose tiling fails keeps its GeoParquet and is
-listed under `errors`. A tiled layer's Item carries the same `pmtiles` asset and `rel=pmtiles`
-web-map link as a serving topic, so the viewer previews it and the Map page can add it.
-`python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...]` tiles layers that have no
-PMTiles yet from their GeoParquet, without downloading the zip again (`--force` rebuilds them).
+`pmtiles` and `pmtiles_layer` per layer. A layer whose tiling fails keeps its GeoParquet and gets
+a `pmtiles_failed` warning instead of an error, so the pub stays extracted and is not downloaded
+again; the run lists those layers at the end and exits non-zero. A tiled layer's Item carries the
+same `pmtiles` asset and `rel=pmtiles` web-map link as a serving topic, so the viewer previews it
+and the Map page can add it. `python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...]`
+tiles layers that have no PMTiles yet or a `pmtiles_failed` warning, from their GeoParquet and
+without downloading the zip again, and clears the warning once a layer tiles (`--force` rebuilds
+every layer).
 The per-map units GeoParquet has no PMTiles.
 
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.

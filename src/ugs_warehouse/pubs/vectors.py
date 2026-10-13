@@ -10,7 +10,9 @@ layers (contacts, faults, folds, etc.) and their companion tables to GCS and STA
 ingest) doesn't have to guess from names, plus each layer's rows, columns, CRS and WGS84 bbox,
 the layers that were empty, and every layer or geodatabase that could not be read. Each spatial
 layer is also tiled to `<label>.pmtiles` (EPSG:4326, one tile layer named for the label) for map
-display; its manifest entry records `pmtiles` and `pmtiles_layer`.
+display; its manifest entry records `pmtiles` and `pmtiles_layer`. A layer whose tiling fails
+keeps its GeoParquet, gets a `pmtiles_failed` warning, and is listed at the end of the run, which
+then exits non-zero; `--pmtiles-backfill` retries it without a re-download.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
 layer never looks like a pub that simply has none.
@@ -39,8 +41,9 @@ from . import geoparquet, harvest, identity, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME
-# Starts the manifest error for a layer whose GeoParquet published but whose tiles did not.
-PMTILES_ERROR = "PMTiles not built: "
+# Warning code for a layer whose GeoParquet published but whose tiles did not. A warning, not an
+# error, so the series stays clean and the batch run does not download its zip again.
+PMTILES_FAILED = "pmtiles_failed"
 _NO_TILES = "every geometry is null or empty; no PMTiles built"
 
 
@@ -316,8 +319,8 @@ def _extract_and_upload(
     "empty": [labels], "errors": [...], "warnings": [...]}.
 
     Spatial layers keep their geometry (GeoParquet via gpio, plus a bbox column) and are tiled to
-    `{label}.pmtiles` beside it; a layer whose tiling fails keeps its GeoParquet and is listed
-    under "errors" with a PMTILES_ERROR message. Non-spatial GeMS companion tables are read
+    `{label}.pmtiles` beside it; a layer whose tiling fails keeps its GeoParquet and gets a
+    PMTILES_FAILED warning. Non-spatial GeMS companion tables are read
     WITHOUT geometry via pyogrio and written as plain Parquet. Raw
     schema is preserved verbatim either way — no rename, no type coercion. A layer with 0 rows is
     listed under "empty" and not uploaded. A layer that cannot be read or uploaded, or a spatial
@@ -374,21 +377,27 @@ def _extract_and_upload(
 
 
 def _tile_into(entry: dict, gdf, series_id: str, tmp: str | None, manifest: dict) -> bool:
-    """Tile one layer and record the result on its manifest `entry`: `pmtiles` and `pmtiles_layer`
-    when built, a warning when it has no geometry to tile, an error when tiling fails. Returns
-    whether the tiles were built."""
+    """Tile one layer and record the result: `pmtiles` and `pmtiles_layer` on its manifest `entry`
+    when built, else a warning in `manifest` (PMTILES_FAILED when tiling fails, _NO_TILES when it
+    has no geometry). Returns whether the tiles were built."""
     label = entry["label"]
     try:
         built = _tile_layer(gdf, series_id, label, tmp)
     except Exception as e:
-        manifest["errors"].append({"label": label, "error": f"{PMTILES_ERROR}{_error(e)}"})
-        print(f"  layer {label}: {PMTILES_ERROR}{e}", file=sys.stderr)
+        manifest["warnings"].append({"label": label, "code": PMTILES_FAILED,
+                                     "warning": f"PMTiles not built: {_error(e)}"})
+        print(f"  layer {label}: PMTiles not built: {e}", file=sys.stderr)
         return False
     if not built:
         manifest["warnings"].append({"label": label, "warning": _NO_TILES})
         return False
     entry.update(pmtiles=True, pmtiles_layer=label)
     return True
+
+
+def tiling_failures(manifest: dict) -> list[str]:
+    """Labels of the layers whose tiling failed, from their PMTILES_FAILED warnings."""
+    return [w["label"] for w in manifest.get("warnings") or [] if w.get("code") == PMTILES_FAILED]
 
 
 def _clean_manifest(path: str) -> bool:
@@ -437,9 +446,9 @@ def extracted_series() -> set[str]:
 
 
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
-                existing: set[str] | None = None) -> str:
+                existing: set[str] | None = None, untiled: list[str] | None = None) -> str:
     """Extract and upload all vector layers and non-spatial companion tables for a given
-    series_id.
+    series_id. Each layer whose tiling failed is appended to `untiled` as `SID/label`.
 
     Returns: 'ok', 'skip', 'unsupported' (only unreadable containers such as .mdb), or 'fail:*'.
     """
@@ -488,6 +497,12 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
             return "skip"
 
         manifest = _extract_and_upload(work, series_id, srcs, source_errors)
+        failed_tiles = tiling_failures(manifest)
+        if failed_tiles:
+            print(f"{series_id}: {len(failed_tiles)} layers have no PMTiles (tiling failed): "
+                  f"{', '.join(failed_tiles)}", file=sys.stderr)
+            if untiled is not None:
+                untiled += [f"{series_id}/{lb}" for lb in failed_tiles]
         n_spatial, n_tables = len(manifest["spatial"]), len(manifest["tables"])
         errors = manifest["errors"]
         if errors:
@@ -521,10 +536,10 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
 
 
 def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, list[str]]:
-    """Build the PMTiles a series' manifest does not record yet, from the GeoParquet already on
-    GCS, and record them in the manifest. `force` rebuilds layers that have them. Returns (layers
-    built, layers skipped, an error per layer that failed). A success clears that layer's earlier
-    PMTILES_ERROR; a failure is returned, not written, so the series stays clean for extraction."""
+    """Build the PMTiles a series' manifest does not record yet (including layers with a
+    PMTILES_FAILED warning), from the GeoParquet already on GCS, and record them in the manifest.
+    `force` rebuilds layers that have them. Returns (layers built, layers skipped, an error per
+    layer that failed). A layer's tiling warnings are replaced by this attempt's outcome."""
     import geopandas as gpd
 
     path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
@@ -532,15 +547,16 @@ def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, lis
     manifest = json.loads(raw.decode())
     if not isinstance(manifest, dict) or not isinstance(manifest.get("layers"), list):
         raise ValueError(f"{path} records no per-layer metadata; re-extract with --force")
-    manifest.setdefault("errors", [])
     manifest.setdefault("warnings", [])
+    before = json.dumps(manifest)
+    failed = set(tiling_failures(manifest))
     no_tiles = {w.get("label") for w in manifest["warnings"] if w.get("warning") == _NO_TILES}
     spatial = [e for e in manifest["layers"] if e.get("spatial")]
-    todo = [e for e in spatial if force or not (e.get("pmtiles") or e["label"] in no_tiles)]
-    built, errors, changed = 0, [], False
+    todo = [e for e in spatial if force or e["label"] in failed
+            or not (e.get("pmtiles") or e["label"] in no_tiles)]
+    built, errors = 0, []
     for entry in todo:
         label = entry["label"]
-        result: dict = {"errors": [], "warnings": []}
         with tempfile.TemporaryDirectory() as tmp:
             try:
                 local = os.path.join(tmp, f"{label}.parquet")
@@ -551,17 +567,14 @@ def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, lis
                 errors.append(f"{series_id}/{label}: {_error(e)}")
                 print(f"  {series_id}/{label}: GeoParquet unreadable: {e}", file=sys.stderr)
                 continue
-            ok = _tile_into(entry, gdf, series_id, tmp, result)
-        errors += [f"{series_id}/{label}: {e['error']}" for e in result["errors"]]
-        new_warnings = [w for w in result["warnings"] if w not in manifest["warnings"]]
-        manifest["warnings"] += new_warnings
-        changed |= bool(new_warnings)
-        if ok:
-            built += 1
-            changed = True
-            manifest["errors"] = [e for e in manifest["errors"] if not (
-                e.get("label") == label and e.get("error", "").startswith(PMTILES_ERROR))]
-    if changed:
+            manifest["warnings"] = [w for w in manifest["warnings"] if not (
+                w.get("label") == label
+                and (w.get("code") == PMTILES_FAILED or w.get("warning") == _NO_TILES))]
+            if _tile_into(entry, gdf, series_id, tmp, manifest):
+                built += 1
+        errors += [f"{series_id}/{label}: {w['warning']}" for w in manifest["warnings"]
+                   if w.get("label") == label and w.get("code") == PMTILES_FAILED]
+    if json.dumps(manifest) != before:
         gcs.put_bytes_if_unchanged(json.dumps(manifest).encode(), path, version,
                                    content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
     return built, len(spatial) - len(todo), errors
@@ -660,15 +673,19 @@ def main() -> int:
         sids = sids[:args.limit]
 
     failed: list[str] = []
+    untiled: list[str] = []
     for sid in sids:
-        res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing)
+        res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing,
+                          untiled=untiled)
         if res.startswith("fail"):
             failed.append(f"{sid} ({res})")
+    if untiled:
+        print(f"{len(untiled)} layers published without PMTiles (tiling failed; retry with "
+              f"--pmtiles-backfill): {', '.join(untiled)}", file=sys.stderr)
     if failed:
         print(f"{len(failed)} of {len(sids)} publications failed: {', '.join(failed)}",
               file=sys.stderr)
-        return 1
-    return 0
+    return 1 if failed or untiled else 0
 
 
 if __name__ == "__main__":

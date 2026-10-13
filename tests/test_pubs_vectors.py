@@ -793,7 +793,7 @@ def test_the_manifest_records_each_spatial_layers_pmtiles(monkeypatch, tmp_path)
     assert os.listdir(tmp_path) == []
 
 
-def test_a_tiling_failure_is_an_error_but_the_geoparquet_stays_published(monkeypatch, tmp_path):
+def test_a_tiling_failure_is_a_warning_and_the_geoparquet_stays_published(monkeypatch, tmp_path):
     store = _mem_gcs(monkeypatch)
     spatial_gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]},
                                    crs="EPSG:26912")
@@ -807,13 +807,47 @@ def test_a_tiling_failure_is_an_error_but_the_geoparquet_stays_published(monkeyp
     manifest = vectors._extract_and_upload(str(tmp_path), "M-202", [("a.shp", None, "faults", True)])
 
     assert manifest["spatial"] == ["faults"]
-    assert manifest["errors"] == [{"label": "faults", "error": vectors.PMTILES_ERROR
-                                   + "RuntimeError: tippecanoe exited 1 for M-202/faults"}]
+    assert manifest["errors"] == []  # the series stays clean, so the batch run never re-downloads it
+    assert manifest["warnings"] == [{
+        "label": "faults", "code": vectors.PMTILES_FAILED,
+        "warning": "PMTiles not built: RuntimeError: tippecanoe exited 1 for M-202/faults"}]
+    assert vectors.tiling_failures(manifest) == ["faults"]
     assert "pmtiles" not in manifest["layers"][0]
     assert f"{vectors.VECTORS_PREFIX}/M-202/faults.parquet" in store
     assert vectors.pmtiles_object("M-202", "faults") not in store
     assert json.loads(store[f"{vectors.VECTORS_PREFIX}/M-202/_manifest.json"]) == manifest
     assert os.listdir(tmp_path) == []
+
+
+def test_a_tiling_failure_keeps_the_pub_clean_and_is_listed_at_the_end_of_the_run(
+        monkeypatch, tmp_path, capsys):
+    import sys
+
+    from ugs_warehouse.pubs import harvest
+
+    store = _mem_gcs(monkeypatch)
+    spatial_gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]},
+                                   crs="EPSG:26912")
+    monkeypatch.setattr("geopandas.read_file", lambda path, layer=None, engine=None: spatial_gdf)
+
+    def boom(geojsonl, pmtiles, layer, **kw):
+        raise RuntimeError("tippecanoe exited 1")
+
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", boom)
+    _stub_bundle(monkeypatch, tmp_path, ([("a.shp", None, "faults", True)], []))
+    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: store[p])
+
+    untiled: list[str] = []
+    assert vectors.extract_one("M-203", untiled=untiled) == "ok"
+    assert untiled == ["M-203/faults"]
+    assert vectors._clean_manifest(f"{vectors.VECTORS_PREFIX}/M-203/_manifest.json")
+
+    monkeypatch.setattr(harvest, "zip_urls", lambda sid: (None, "https://x/gis.zip"))
+    monkeypatch.setattr(sys, "argv", ["vectors", "M-203", "M-204", "--force"])
+    assert vectors.main() == 1
+    err = capsys.readouterr().err
+    assert ("2 layers published without PMTiles (tiling failed; retry with --pmtiles-backfill): "
+            "M-203/faults, M-204/faults") in err
 
 
 # ---------------------------------------------------------------------------
@@ -923,17 +957,21 @@ def test_backfill_reports_a_failed_layer_exits_nonzero_and_keeps_the_rest(monkey
     layers = {lay["label"]: lay for lay in stored["layers"]}
     assert layers["good"]["pmtiles"] is True and "pmtiles" not in layers["bad"]
     assert stored["errors"] == []  # the series stays clean, so extraction does not re-download it
+    assert vectors.tiling_failures(stored) == ["bad"]  # the next backfill retries it
 
 
-def test_backfill_clears_the_tiling_error_extraction_left(monkeypatch, tmp_path):
+def test_backfill_retries_a_failed_layer_and_clears_its_warning(monkeypatch, tmp_path):
+    other = {"label": "a", "warning": "bbox not computed: x"}
     store = _backfill_store(monkeypatch, tmp_path, {"M-305": _manifest(
-        {"label": "a", "spatial": True},
-        errors=[{"label": "a", "error": vectors.PMTILES_ERROR + "RuntimeError: x"},
-                {"label": "z", "error": "RuntimeError: unreadable"}])})
+        {"label": "a", "spatial": True, "pmtiles": True, "pmtiles_layer": "a"},
+        warnings=[{"label": "a", "code": vectors.PMTILES_FAILED, "warning": "PMTiles not built: x"},
+                  other])})
 
-    assert vectors.backfill_pmtiles(["M-305"]) == 0
+    assert vectors.backfill_pmtiles([]) == 0  # a warning leaves the manifest clean, so it is visited
+
+    assert vectors.pmtiles_object("M-305", "a") in store
     stored = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-305/_manifest.json"])
-    assert stored["errors"] == [{"label": "z", "error": "RuntimeError: unreadable"}]
+    assert stored["warnings"] == [other]
 
 
 def test_backfill_fails_a_series_whose_manifest_has_no_layer_metadata(monkeypatch, tmp_path, capsys):

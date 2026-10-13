@@ -26,6 +26,32 @@ def ops_stac(monkeypatch):
     return mod
 
 
+@pytest.fixture
+def ops_jobs(monkeypatch):
+    """admin/ops/jobs.py loaded by path with `django.conf.settings` stubbed (dry-run jobs)."""
+    conf = types.ModuleType("django.conf")
+    conf.settings = types.SimpleNamespace(JOBS_DRY_RUN=True, GCP_PROJECT="p", GCP_REGION="us-central1")
+    monkeypatch.setitem(sys.modules, "django", types.ModuleType("django"))
+    monkeypatch.setitem(sys.modules, "django.conf", conf)
+    path = Path(__file__).resolve().parents[1] / "admin" / "ops" / "jobs.py"
+    spec = importlib.util.spec_from_file_location("ops_jobs_under_test", path)
+    mod = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, "ops_jobs_under_test", mod)  # @dataclass looks its module up
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_extract_map_layers_offers_the_pmtiles_backfill(ops_jobs):
+    """The vectors job runs `python`, so the backfill's args name the module, as the deployed job's
+    `-m,ugs_warehouse.pubs.vectors,--all` does."""
+    job = ops_jobs.JOBS["vectors"]
+    assert ("pmtiles-backfill", "Build map tiles (PMTiles backfill)") in job.modes
+    assert "PMTiles" in job.description
+    res = ops_jobs.run_mode("vectors", "pmtiles-backfill")
+    assert res["ok"] and res["dry_run"]
+    assert res["message"].endswith("ugs-pubs-vectors -m ugs_warehouse.pubs.vectors --pmtiles-backfill")
+
+
 def _entry(id_, self_href, *, cog=False, pub=None):
     props = {"ugs:in_publication": pub, "ugs:publication_title": "T"} if pub else {}
     assets = {"cog": {"href": f"https://x/{id_}.cog.tif", "type": COG}} if cog else {}

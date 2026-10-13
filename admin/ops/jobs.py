@@ -75,7 +75,11 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Runs as 5 parallel shards (each task strides 1/5 of the worklist).", danger=True, tasks=5),
     Job("vectors", "ugs-pubs-vectors", "Extract map layers",
         "Extract every layer and companion table from the GIS zip of each pub that has one, as "
-        "GeoParquet. Skips pubs already extracted; then Rebuild pubs STAC to bind them."),
+        "GeoParquet, and build PMTiles for each map layer. Skips pubs already extracted; then "
+        "Rebuild pubs STAC to bind them. Fails while any extracted layer has no PMTiles: run Build "
+        "map tiles (the PMTiles backfill) once after the deploy that adds them, and to retry a "
+        "layer whose tiling failed.",
+        modes=(("pmtiles-backfill", "Build map tiles (PMTiles backfill)"),), modes_label="Only:"),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
         "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
@@ -199,11 +203,12 @@ def run_ingest(force: bool = False) -> dict:
 
 
 # A job's variants: args that replace its configured ones. ducklake-maintain's entrypoint runs
-# `python -m $RUN_MODULE "$@"`, so its modes are read-only CLI flags. restyle runs `python`, so its
-# mode names a module: the catalog rebuild an ingest ends with.
+# `python -m $RUN_MODULE "$@"`, so its modes are read-only CLI flags. restyle and vectors run
+# `python`, so their modes name the module too.
 MODE_ARGS = {
     "ducklake-maintain": {"report": ["--report"], "dry-run": ["--dry-run"]},
     "restyle": {"refresh": ["-m", "scripts.refresh_stac"]},
+    "vectors": {"pmtiles-backfill": ["-m", "ugs_warehouse.pubs.vectors", "--pmtiles-backfill"]},
 }
 
 

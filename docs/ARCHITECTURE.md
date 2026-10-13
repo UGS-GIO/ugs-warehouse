@@ -131,7 +131,20 @@ tiles layers that have no PMTiles yet or a `pmtiles_failed` warning, from their 
 without downloading the zip again, and clears the warning once a layer tiles (`--force` rebuilds
 every layer). If the series' manifest changed while the backfill ran, its manifest update is
 discarded and reported, and the next backfill rebuilds those layers.
-The per-map units GeoParquet has no PMTiles.
+A pub's `_units` Item (`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own; the
+statewide `geolmap/units/units.pmtiles` from `pubs/units_pmtiles.py` is a separate artifact.
+
+After a deploy that adds PMTiles, the `ugs-pubs-vectors` job (`--all`) exits non-zero until the
+backfill has run once. Run the backfill on the deployed job, then **Rebuild pubs STAC** to bind the
+tiles, from the admin console (Extract map layers → Build map tiles) or with:
+
+```bash
+gcloud run jobs execute ugs-pubs-vectors --region=us-central1 \
+  --args=-m,ugs_warehouse.pubs.vectors,--pmtiles-backfill
+```
+
+`--args` replaces the job's `-m,ugs_warehouse.pubs.vectors,--all` (its command is `python`), so
+the module path has to be given again.
 
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so

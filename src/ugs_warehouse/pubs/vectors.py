@@ -721,8 +721,9 @@ def main() -> int:
         print(f"{len(untiled)} layers published without PMTiles (tiling failed; retry with "
               f"--pmtiles-backfill): {', '.join(untiled)}", file=sys.stderr)
     if standing:
+        more = ", ... (run --pmtiles-backfill for the rest)" if len(standing) > 20 else ""
         print(f"{len(standing)} layers still without PMTiles, run --pmtiles-backfill: "
-              f"{', '.join(standing)}", file=sys.stderr)
+              f"{', '.join(standing[:20])}{more}", file=sys.stderr)
     if failed:
         print(f"{len(failed)} of {len(sids)} publications failed: {', '.join(failed)}",
               file=sys.stderr)

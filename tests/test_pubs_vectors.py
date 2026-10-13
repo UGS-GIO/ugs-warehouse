@@ -1064,3 +1064,23 @@ def test_every_batch_run_lists_standing_tiling_failures_until_the_backfill_build
 
     assert vectors.main() == 0
     assert "without PMTiles" not in capsys.readouterr().err
+
+
+def test_standing_tiling_failures_print_a_count_and_the_first_20(monkeypatch, tmp_path, capsys):
+    """Before the first backfill every layer is standing; the run prints how many, the first 20,
+    and where the rest go, not thousands of labels."""
+    import sys
+
+    from ugs_warehouse.pubs import harvest, source
+
+    _backfill_store(monkeypatch, tmp_path, {"M-1DM": _manifest(
+        *[{"label": f"l{n:02d}", "spatial": True} for n in range(25)])})
+    monkeypatch.setattr(source, "read_pubs", lambda: [{"series_id": "M-1DM"}])
+    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, "https://x/gis.zip"))
+    monkeypatch.setattr(sys, "argv", ["vectors", "--all"])
+
+    assert vectors.main() == 1
+    line = next(ln for ln in capsys.readouterr().err.splitlines() if "still without PMTiles" in ln)
+    assert line.startswith("25 layers still without PMTiles, run --pmtiles-backfill: M-1DM/l00, ")
+    assert "M-1DM/l19" in line and "M-1DM/l20" not in line
+    assert line.endswith(", ... (run --pmtiles-backfill for the rest)")

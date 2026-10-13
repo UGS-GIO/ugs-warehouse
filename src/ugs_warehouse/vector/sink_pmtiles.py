@@ -47,8 +47,8 @@ TILE_OPTS = [
     # and silently drops features to fit the 500KB/tile, 200k-feature/tile defaults.
     "--no-tile-size-limit",
     "--no-feature-limit",
-    # NOTE: --use-attribute-for-id=feature_id is appended per-topic via run_tippecanoe — it takes
-    # the input's id attr, so it's NOT a fixed option. Always feature_id, never ugs_key: see
+    # NOTE: --use-attribute-for-id=feature_id is appended per-topic via run_tippecanoe, since it
+    # takes the input's id attr; it is NOT a fixed option. Always feature_id, never ugs_key: see
     # tiling_signature for why.
 ]
 
@@ -112,10 +112,8 @@ def run_tippecanoe(geojsonl: str, pmtiles: str, layer: str, *, id_attr: str | No
 def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> gcs.FileMeta:
     """tippecanoe over a GeoJSONSeq file → PMTiles → GCS (latest pointer). Output sits next to the
     input so callers control the temp dir. `id_attr` (always `feature_id`) is promoted to the native
-    MVT feature id so the viewer can join a clicked map feature to its GeoParquet table row — both
-    carry the same id; MapLibre exposes it as `feature.id`. `ugs_key`, when present, is NOT used as
-    the id here (see tiling_signature): `--use-attribute-for-id` would MOVE it out of `properties`,
-    and the viewer's ugs_key-keyed row-commenting reads it from the tile properties."""
+    MVT feature id so the viewer can join a clicked map feature to its GeoParquet table row: both
+    carry the same id, and MapLibre exposes it as `feature.id`."""
     pmtiles = os.path.join(os.path.dirname(geojsonl), f"{topic.stem}.pmtiles")
     run_tippecanoe(geojsonl, pmtiles, topic.stem, id_attr=id_attr, what=topic.fqn)
     gcs_object = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"

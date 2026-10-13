@@ -201,6 +201,21 @@ def layer_title(label: str) -> tuple[str, str | None]:
     return title, f"From {prefix}" if prefix else None
 
 
+# Folder names that say what kind of file is inside, not which dataset it is.
+_GENERIC_FOLDERS = {"shapefiles", "shapefile", "shp", "gis", "gis_data", "gisdata", "data",
+                    "database", "gdb", "geodatabase"}
+
+
+def source_title(source: str) -> str:
+    """A source dataset's title from its whole folder path (`Cedar_Mesa_S__Shapefiles` -> "Cedar
+    Mesa S"): each folder read as words, generic folder names and a `.gdb` extension dropped, the
+    rest joined with " · ". With nothing distinctive left, the last folder's name."""
+    parts = [p for p in source.split("__") if p]
+    kept = [p for p in (re.sub(r"\.gdb$", "", p, flags=re.IGNORECASE) for p in parts)
+            if p and p.lower() not in _GENERIC_FOLDERS]
+    return " · ".join(layer_title(p)[0] for p in kept or parts[-1:] or [source])
+
+
 def layer_titles(labels: list[str]) -> dict[str, tuple[str, str | None]]:
     """`layer_title` for every layer and table label of one publication. Where two labels read as
     the same title, each that has a `<dir>__` prefix carries the dir in its title, e.g.
@@ -371,7 +386,7 @@ def build_publication(p: dict, attachments: list[dict], *,
         key and its humanised title."""
         source = layer_meta.get(label, {}).get("source") or source_of_label(label, sid)
         return {"ugs:layer_kind": layer_kind(spatial, label, published),
-                "ugs:source_key": source, "ugs:source_dataset": layer_title(source)[0]}
+                "ugs:source_key": source, "ugs:source_dataset": source_title(source)}
 
     def with_related(label: str, data: dict) -> tuple[dict, list[str]]:
         """The Item's assets: its data (carrying its own foreign keys), then its related tables

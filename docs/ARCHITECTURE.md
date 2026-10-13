@@ -182,7 +182,8 @@ Each foreign key has `ugs:detected_by` and, when inferred, `ugs:confidence`. A t
 max(3, half the pub's map layers) of those layers point at (DataSources on a GeMS map) is a shared
 lookup, and its related assets carry `roles: ["data", "related", "reference"]`. Layer and table
 Items carry `ugs:layer_kind`, `ugs:source_key` (the source dataset, the grouping key) and
-`ugs:source_dataset` (its title), and the Collection's `rel=item` links repeat all three so the
+`ugs:source_dataset` (its title, read from the whole folder path with generic names such as
+`Shapefiles` or `GIS_Data` dropped), and the Collection's `rel=item` links repeat all three so the
 viewer groups a pub's items without fetching them. The kind is `layer` for a spatial layer, `table`
 for a non-spatial one in a relationship the ingest publishes and `supporting` otherwise. A
 relationship to a GeMS validation layer or an empty layer is skipped, since neither is published;

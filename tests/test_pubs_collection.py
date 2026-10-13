@@ -614,6 +614,28 @@ def test_ids_of_renamed_layers_are_what_relationships_point_at(capsys):
     assert back["href"].endswith("/OFR-784DM__faults_2/OFR-784DM__faults_2.json")
 
 
+@pytest.mark.parametrize("source, title", [
+    ("Cedar_Mesa_S__Shapefiles", "Cedar Mesa S"),                 # OFR-443DM's quad folders
+    ("The_Rincon__Shapefiles", "The Rincon"),
+    ("GIS_Data__Mexican_Hat__shp", "Mexican Hat"),
+    ("Bluff__Geology.gdb", "Bluff · Geology"),                     # two distinctive folders
+    ("OFR784DM_MillsJunction", "OFR784DM Mills Junction"),         # a GeMS geodatabase stem
+    ("Shapefiles", "Shapefiles"),                                  # nothing distinctive: kept
+    ("GIS__Shapefiles", "Shapefiles"),
+])
+def test_a_source_title_reads_its_whole_folder_path(source, title):
+    assert sink_stac.source_title(source) == title
+
+
+def test_quad_folders_of_one_publication_get_distinct_source_titles():
+    labels = ["Cedar_Mesa_S__Shapefiles__faults", "The_Rincon__Shapefiles__unitsymspoly"]
+    _, items = _build(has_cog=False, vector_layers=labels, companion_tables=[], layers={})
+    got = {(it["properties"]["ugs:source_key"], it["properties"]["ugs:source_dataset"])
+           for it in items}
+    assert got == {("Cedar_Mesa_S__Shapefiles", "Cedar Mesa S"),
+                   ("The_Rincon__Shapefiles", "The Rincon")}
+
+
 def test_kind_comes_from_the_relationships_published_not_the_manifest(capsys):
     # The table's only relationship is to a validation layer, which is never published.
     rel = {**MUP_TO_DMU, "origin": "geo__T_1_PointErrors"}

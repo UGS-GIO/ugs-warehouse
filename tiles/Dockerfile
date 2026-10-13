@@ -3,7 +3,7 @@
 #
 # No data copy and no new artifact: tiles are range reads against the same PMTiles the viewer uses.
 # Scale-to-zero on Cloud Run; behind the CDN it only ever sees cache misses.
-FROM ghcr.io/protomaps/go-pmtiles:latest AS pmtiles
+FROM ghcr.io/protomaps/go-pmtiles:v1.31.2 AS pmtiles
 
 FROM python:3.12-slim
 # The upstream binary is statically linked, so it runs as-is on this base — no runtime deps to

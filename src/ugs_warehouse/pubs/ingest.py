@@ -22,10 +22,6 @@ from ..core import config, gcs, stac
 from . import editions, identity, relations, sink_stac, source, threed, topic, vectors
 
 
-def _list(prefix: str) -> list[str]:
-    return gcs.list_paths(prefix)
-
-
 def _names(prefix: str) -> list[str]:
     return [path.rsplit("/", 1)[-1] for path in gcs.list_paths(prefix)]
 
@@ -35,7 +31,7 @@ def _ids(names: list[str], suffix: str) -> set[str]:
 
 
 def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
-    return _ids([path.rsplit("/", 1)[-1] for path in _list(prefix)], suffix)
+    return _ids(_names(prefix), suffix)
 
 
 def _image_ids() -> tuple[set[str], set[str]]:
@@ -128,7 +124,7 @@ def _unit_ids() -> set[str]:
     are NOT series ids and must be skipped, or they'd register as bogus units."""
     pfx = identity.UNITS_PREFIX.rstrip("/") + "/"
     out: set[str] = set()
-    for path in _list(identity.UNITS_PREFIX):
+    for path in gcs.list_paths(identity.UNITS_PREFIX):
         rest = path[len(pfx):] if path.startswith(pfx) else path
         head, sep, _ = rest.partition("/")
         if sep and head:           # has a sub-path → it's a per-series directory, not a root file
@@ -151,7 +147,7 @@ def _vector_manifests_by_sid() -> tuple[dict[str, dict], dict[str, str]]:
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
     out: dict[str, dict] = {}
     failed: dict[str, str] = {}
-    for path in _list(vectors.VECTORS_PREFIX):
+    for path in gcs.list_paths(vectors.VECTORS_PREFIX):
         if not path.endswith("/_manifest.json"):
             continue
         rest = path[len(pfx):] if path.startswith(pfx) else path

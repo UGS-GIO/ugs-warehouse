@@ -11,6 +11,10 @@ import shutil
 import subprocess
 from dataclasses import dataclass
 
+# The inference rules' version, recorded in each manifest. Bump it whenever the rules below change:
+# the vectors run then recomputes every manifest's relationships.
+RELATIONS_VERSION = 1
+
 NAME_GATE = 25
 ACCEPT_TOTAL = 80
 ACCEPT_OVERLAP = 90.0

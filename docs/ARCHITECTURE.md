@@ -128,28 +128,10 @@ EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with t
 tippecanoe flags and one tile layer named for the label. The series' `_manifest.json` records
 `pmtiles` and `pmtiles_layer` per layer. A layer whose tiling fails keeps its GeoParquet and gets
 a `pmtiles_failed` warning instead of an error, so the pub stays extracted and is not downloaded
-again. Every `--all` run lists the layers still without PMTiles, read from the manifests it
-already loads, and exits non-zero until the backfill builds them. A tiled layer's Item carries the
-same `pmtiles` asset and `rel=pmtiles` web-map link as a serving topic, so the viewer previews it
-and the Map page can add it. `python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...]`
-tiles layers that have no PMTiles yet or a `pmtiles_failed` warning, from their GeoParquet and
-without downloading the zip again, and clears the warning once a layer tiles (`--force` rebuilds
-every layer). If the series' manifest changed while the backfill ran, its manifest update is
-discarded and reported, and the next backfill rebuilds those layers.
-A pub's `_units` Item (`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own; the
+again; the next run's self-heal retries it (below). A tiled layer's Item carries the same `pmtiles`
+asset and `rel=pmtiles` web-map link as a serving topic, so the viewer previews it and the Map page
+can add it. A pub's `_units` Item (`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own; the
 statewide `geolmap/units/units.pmtiles` from `pubs/units_pmtiles.py` is a separate artifact.
-
-After a deploy that adds PMTiles, the `ugs-pubs-vectors` job (`--all`) exits non-zero until the
-backfill has run once. Run the backfill on the deployed job, then **Rebuild pubs STAC** to bind the
-tiles, from the admin console (Extract map layers → Build map tiles) or with:
-
-```bash
-gcloud run jobs execute ugs-pubs-vectors --region=us-central1 \
-  --args=-m,ugs_warehouse.pubs.vectors,--pmtiles-backfill
-```
-
-`--args` replaces the job's `-m,ugs_warehouse.pubs.vectors,--all` (its command is `python`), so
-the module path has to be given again.
 
 The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
 classes a geodatabase declares are read with `ogrinfo -json`; a geodatabase whose relationships
@@ -190,19 +172,33 @@ relationship to a GeMS validation layer or an empty layer is skipped, since neit
 one naming any other label the manifest does not publish fails the pub. A relationship must say
 whether it was `declared` or `inferred` (with an integer `confidence`), or the pub fails.
 
-`--relations-backfill [SID ...]` recomputes them, for manifests that lack them or after a rule
-change, from the GeoParquet already on GCS (only its string and integer columns), keeps any declared
-relationships the manifest holds, and writes nothing for a series with a layer it cannot read. Its
-scopes come from the labels, as extraction's do. When a label carries a folder prefix because its
-name was taken, the bundle has several folders and a bare shapefile label's folder is unknown: it is
-left out of inference with a `relationships_scope_unknown` warning until `--force` re-extracts. Run
-it on the job (Extract map layers → Record relationships in the admin console), then **Rebuild pubs
-STAC**:
+**Self-heal.** After extracting new pubs and retrying failed ones, every vectors run (`--all`, or
+`python -m ugs_warehouse.pubs.vectors SID ...` for those SIDs) fills in what cleanly extracted pubs
+are missing, from their GeoParquet on GCS and without downloading a zip:
 
-```bash
-gcloud run jobs execute ugs-pubs-vectors --region=us-central1 \
-  --args=-m,ugs_warehouse.pubs.vectors,--relations-backfill
-```
+- PMTiles for each spatial layer with none that is not `no_geometry`, including layers with a
+  `pmtiles_failed` warning (the warning clears once the layer tiles);
+- relationships for each manifest with no `relations_version`, or one older than
+  `relations.RELATIONS_VERSION`. Bumping that number with a change to the inference rules makes the
+  next runs recompute every pub's relationships. Declared relationships already recorded are kept,
+  since the geodatabase is not at hand, and nothing is written for a pub with a layer that cannot
+  be read. Scopes come from the labels, as at extraction. When a label carries a folder prefix
+  because its name was taken, the bundle has several folders and a bare shapefile label's folder is
+  unknown: it is left out of inference with a `relationships_scope_unknown` warning until `--force`
+  re-extracts.
+
+Series whose only work is retrying a failed layer go last. The self-heal stops starting series once
+the run has used `VECTORS_TIME_BUDGET_S` (default 2700 s, inside the job's 3600 s timeout), finishes
+the one in progress, and prints `Self-heal: N layers tiled, M pubs' relationships recorded; K layers
+and J pubs still pending, the next run continues`. A forced run re-extracts everything instead.
+
+The run exits 1 only for work that failed in that run: a pub that failed to extract, a layer whose
+tiling failed at extraction, or a layer or pub whose self-heal failed (each is listed). Work the
+time budget left pending is not a failure.
+
+**Rollout.** Pubs extracted before PMTiles and relationships were recorded catch up on their own:
+the first full refreshes (or runs of Extract map layers) work through them within the budget. Run
+the vectors job again until it reports 0 pending, then **Rebuild pubs STAC** to bind them.
 
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so

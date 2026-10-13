@@ -11,22 +11,22 @@ ingest) doesn't have to guess from names, plus each layer's rows, columns, CRS a
 the layers that were empty, and every layer or geodatabase that could not be read. Each spatial
 layer is also tiled to `<label>.pmtiles` (EPSG:4326, one tile layer named for the label) for map
 display; its manifest entry records `pmtiles` and `pmtiles_layer`. A layer whose tiling fails
-keeps its GeoParquet and gets a `pmtiles_failed` warning. Every `--all` run lists the layers its
-clean manifests show still without PMTiles and exits non-zero while any remain;
-`--pmtiles-backfill` builds them without a re-download.
+keeps its GeoParquet and gets a `pmtiles_failed` warning.
 
 The manifest also lists the relationships between a bundle's layers and tables (`relations.py`):
 declared geodatabase relationship classes, and joins inferred within one source dataset. Each
 layer entry records its `source` dataset and its `kind` (`layer`, `table` or `supporting`).
-`--relations-backfill` computes them from the extracted GeoParquet for manifests that lack them.
+
+After extracting, a run self-heals the cleanly extracted pubs it covers (`self_heal`): it tiles
+layers that have no PMTiles and records relationships where the manifest has none or predates
+`relations.RELATIONS_VERSION`, from the GeoParquet already on GCS, within a time budget
+(`VECTORS_TIME_BUDGET_S`); what the budget leaves waits for the next run.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
 layer never looks like a pub that simply has none.
 
     python -m ugs_warehouse.pubs.vectors M-299DM
     python -m ugs_warehouse.pubs.vectors --all
-    python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...] [--force]
-    python -m ugs_warehouse.pubs.vectors --relations-backfill [SID ...]
 """
 from __future__ import annotations
 
@@ -40,8 +40,8 @@ import sys
 import tempfile
 import time
 import zipfile
-from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 
 from ..core import config, gcs
 from ..vector import sink_pmtiles
@@ -401,7 +401,7 @@ def _extract_and_upload(
 
 def _dataset_name(work: str, series_id: str, path: str, layer: str | None, label: str) -> str:
     """The source dataset a layer came from, which is also its inference scope: for a geodatabase
-    layer its label's prefix (the stem, after the folder when the name collided), so the backfill
+    layer its label's prefix (the stem, after the folder when the name collided), so the self-heal
     reads the same scope from the label; for a shapefile its folder inside the bundle (the series
     id for the bundle's root), which a collided label also carries as its prefix."""
     if layer is not None:
@@ -464,8 +464,9 @@ def _declared_relationships(srcs: list[tuple[str, str | None, str, bool]], uploa
 
 
 def _set_relationships(manifest: dict, rels: list[dict]) -> None:
-    """Record `rels` and each layer's resulting `kind`."""
+    """Record `rels`, the inference rules' version and each layer's resulting `kind`."""
     manifest["relationships"] = rels
+    manifest["relations_version"] = relations.RELATIONS_VERSION
     for entry in manifest["layers"]:
         entry["kind"] = relations.layer_kind(bool(entry.get("spatial")), entry["label"], rels)
 
@@ -501,7 +502,7 @@ def tiling_failures(manifest: dict) -> list[str]:
 
 def missing_tiles(manifest: dict) -> list[str]:
     """Spatial layers still without PMTiles: a PMTILES_FAILED warning, or no `pmtiles` flag and no
-    NO_GEOMETRY warning. These are what the backfill builds."""
+    NO_GEOMETRY warning. These are what the self-heal tiles."""
     failed, blank = _warned(manifest, PMTILES_FAILED), _warned(manifest, NO_GEOMETRY)
     return [e["label"] for e in manifest.get("layers") or [] if e.get("spatial") and (
         e["label"] in failed or not (e.get("pmtiles") or e["label"] in blank))]
@@ -522,8 +523,10 @@ def _read_manifest(path: str) -> dict | None:
     return doc if "layers" in doc and not doc.get("errors") else None
 
 
-def _clean_manifest(path: str) -> bool:
-    return _read_manifest(path) is not None
+def _clean_manifest_of(series_id: str) -> dict | None:
+    """A series' manifest when it exists and is clean (`_read_manifest`), from its own listing."""
+    path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
+    return _read_manifest(path) if path in gcs.list_paths(f"{VECTORS_PREFIX}/{series_id}/") else None
 
 
 def _series_with(*names: str) -> set[str]:
@@ -577,11 +580,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
 
     if not force and not dry_run:
         # `existing` is one listing for a batch run; a single pub reads only its own manifest.
-        if existing is not None:
-            done = series_id in existing
-        else:
-            mpath = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
-            done = mpath in gcs.list_paths(f"{VECTORS_PREFIX}/{series_id}/") and _clean_manifest(mpath)
+        done = series_id in existing if existing is not None else _clean_manifest_of(series_id) is not None
         if done:
             print(f"{series_id}: SKIP (already extracted cleanly)")
             return "skip"
@@ -651,11 +650,11 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
 
 
 
-def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, list[str]]:
+def _tile_missing(series_id: str) -> tuple[int, list[str]]:
     """Build the PMTiles a series' manifest does not record yet (including layers with a
     PMTILES_FAILED warning), from the GeoParquet already on GCS, and record them in the manifest.
-    `force` rebuilds layers that have them. Returns (layers built, layers skipped, an error per
-    layer that failed). A layer's tiling warnings are replaced by this attempt's outcome."""
+    Returns (layers built, an error per layer that failed). A layer's tiling warnings are replaced
+    by this attempt's outcome."""
     import geopandas as gpd
 
     path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
@@ -666,8 +665,7 @@ def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, lis
     manifest.setdefault("warnings", [])
     before = json.dumps(manifest)
     missing = set(missing_tiles(manifest))
-    spatial = [e for e in manifest["layers"] if e.get("spatial")]
-    todo = [e for e in spatial if force or e["label"] in missing]
+    todo = [e for e in manifest["layers"] if e.get("spatial") and e["label"] in missing]
     built, errors = 0, []
     # The same per-series work dir extraction uses; it holds one layer's files at a time.
     with tempfile.TemporaryDirectory(prefix=f"v_{series_id.replace('/', '_')}_") as work:
@@ -694,54 +692,20 @@ def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, lis
     if json.dumps(manifest) != before:
         gcs.put_bytes_if_unchanged(json.dumps(manifest).encode(), path, version,
                                    content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-    return built, len(spatial) - len(todo), errors
+    return built, errors
 
 
-def _run_backfill(series_ids: list[str], limit: int | None, title: str, counted: tuple[str, ...],
-                  step) -> int:
-    """Run `step(series_id) -> ({count name: n}, [error, ...])` over the given series, or every
-    series with a clean manifest. A series that raises is reported and the rest still run. Prints
-    each series' counts and a summary; returns 1 when any series or layer failed."""
-    sids = ([identity.Pub.parse(s).series_id for s in series_ids] if series_ids
-            else sorted(extracted_series()))
-    if limit:
-        sids = sids[:limit]
-    totals: Counter = Counter()
-    errors: list[str] = []
-    for sid in sids:
-        try:
-            counts, errs = step(sid)
-        except Exception as e:
-            errors.append(f"{sid}: {_error(e)}")
-            print(f"{sid}: FAIL {_error(e)}", file=sys.stderr)
-            continue
-        totals.update(counts)
-        errors += errs
-        print(f"{sid}: " + ", ".join(f"{counts[k]} {k}" for k in counted)
-              + (f", {len(errs)} failed" if errs else ""))
-    print(f"{title} over {len(sids)} series: " + ", ".join(f"{totals[k]} {k}" for k in counted)
-          + f", {len(errors)} failed")
-    if errors:
-        print("Failed:\n  " + "\n  ".join(errors), file=sys.stderr)
-        return 1
-    return 0
+def needs_relations(manifest: dict) -> bool:
+    """True when a manifest's relationships predate the current inference rules, or were never
+    recorded (`relations.RELATIONS_VERSION`)."""
+    return (manifest.get("relations_version") or 0) < relations.RELATIONS_VERSION
 
 
-def backfill_pmtiles(series_ids: list[str], force: bool = False, limit: int | None = None) -> int:
-    """Build missing PMTiles for already-extracted layers without re-downloading any zip. No
-    `series_ids` means every series with a clean manifest."""
-    def step(sid: str) -> tuple[dict, list[str]]:
-        built, skipped, errs = _backfill_series(sid, force=force)
-        return {"built": built, "skipped": skipped}, errs
-
-    return _run_backfill(series_ids, limit, "PMTiles backfill", ("built", "skipped"), step)
-
-
-def _relations_series(series_id: str) -> tuple[dict, list[str]]:
+def _relations_series(series_id: str) -> list[str]:
     """Record a series' relationships, layer kinds and sources in its manifest, from the string and
     integer columns of its GeoParquet on GCS. Declared relationships already recorded are kept: the
-    geodatabase is not at hand to read them again. Nothing is written when a layer cannot be read,
-    since joins inferred without it could be wrong."""
+    geodatabase is not at hand to read them again. Returns an error per layer that could not be
+    read; then nothing is written, since joins inferred without it could be wrong."""
     import pyarrow.parquet as pq
 
     path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
@@ -772,7 +736,7 @@ def _relations_series(series_id: str) -> tuple[dict, list[str]]:
     with tempfile.TemporaryDirectory(prefix=f"v_{series_id.replace('/', '_')}_") as work:
         for entry in manifest["layers"]:
             label = entry["label"]
-            if label in unscoped:  # no source recorded, so a later backfill still knows it
+            if label in unscoped:  # no source recorded, so a later run still knows it
                 continue
             entry.setdefault("source", relations.source_of_label(label, series_id))
             local = os.path.join(work, f"{label}.parquet")
@@ -793,25 +757,71 @@ def _relations_series(series_id: str) -> tuple[dict, list[str]]:
                 if os.path.exists(local):
                     os.remove(local)
     if errors:
-        return {"relationships": 0, "manifests updated": 0}, errors
+        return errors
     declared = [r for r in manifest.get("relationships") or [] if r.get("detected_by") == "declared"]
     _set_relationships(manifest, relations.merge(declared, relations.infer(profiles)))
-    changed = json.dumps(manifest) != before
-    if changed:
+    if json.dumps(manifest) != before:
         gcs.put_bytes_if_unchanged(json.dumps(manifest).encode(), path, version,
                                    content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-    return {"relationships": len(manifest["relationships"]), "manifests updated": int(changed)}, []
+    return []
 
 
-def backfill_relations(series_ids: list[str], limit: int | None = None) -> int:
-    """Record relationships, layer kinds and sources for already-extracted pubs, from their
-    GeoParquet on GCS, without re-downloading any zip. No `series_ids` means every series with a
-    clean manifest."""
-    return _run_backfill(series_ids, limit, "Relationships backfill",
-                         ("relationships", "manifests updated"), _relations_series)
+# Self-heal stops starting series once the run has used this much time, leaving room to finish the
+# series in progress inside the job's 3600 s task timeout.
+TIME_BUDGET_S = float(os.environ.get("VECTORS_TIME_BUDGET_S", "2700"))
+
+
+@dataclass
+class Heal:
+    """One self-heal pass: layers tiled, pubs whose relationships were recorded, an error per
+    layer or pub that failed this run, and the work left for the next run by the time budget."""
+    tiled: int = 0
+    related: int = 0
+    failed: list[str] = field(default_factory=list)
+    pending_layers: int = 0
+    pending_pubs: int = 0
+
+    def summary(self) -> str:
+        return (f"Self-heal: {self.tiled} layers tiled, {self.related} pubs' relationships recorded"
+                + (f"; {self.pending_layers} layers and {self.pending_pubs} pubs still pending, the "
+                   "next run continues" if self.pending_layers or self.pending_pubs else "")
+                + (f"; {len(self.failed)} failed" if self.failed else ""))
+
+
+def self_heal(manifests: dict[str, dict], *, deadline: float | None = None) -> Heal:
+    """Fill in the derivatives clean manifests are missing, from their GeoParquet on GCS and without
+    downloading any zip: PMTiles for spatial layers that have none (`missing_tiles`), and
+    relationships for manifests that need them (`needs_relations`). Series with only a failed
+    layer to retry go last, as extraction orders retries last. No new series starts once
+    `time.monotonic()` passes `deadline`; the one in progress finishes, and what is left is counted
+    as pending, not failed."""
+    heal = Heal()
+    todo = [(sid, m) for sid, m in sorted(manifests.items())
+            if missing_tiles(m) or needs_relations(m)]
+    todo.sort(key=lambda sm: set(missing_tiles(sm[1])) <= _warned(sm[1], PMTILES_FAILED)
+              and not needs_relations(sm[1]))
+    for sid, manifest in todo:
+        if deadline is not None and time.monotonic() >= deadline:
+            heal.pending_layers += len(missing_tiles(manifest))
+            heal.pending_pubs += int(needs_relations(manifest))
+            continue
+        try:
+            if missing_tiles(manifest):
+                built, errs = _tile_missing(sid)
+                heal.tiled += built
+                heal.failed += errs
+            if needs_relations(manifest):
+                errs = _relations_series(sid)
+                heal.related += int(not errs)
+                heal.failed += errs
+        except Exception as e:
+            heal.failed.append(f"{sid}: {_error(e)}")
+            print(f"{sid}: self-heal FAIL {_error(e)}", file=sys.stderr)
+    return heal
 
 
 def main() -> int:
+    started = time.monotonic()
     ap = argparse.ArgumentParser(description="Extract GIS publication vector layers to GCS")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("series_id", nargs="*", default=[], help="Series ID(s) to extract")
@@ -819,42 +829,23 @@ def main() -> int:
     ap.add_argument("--limit", type=int, default=None, help="Limit number of publications to extract")
     ap.add_argument("--dry-run", action="store_true", help="Dry run (check URLs and schema only)")
     ap.add_argument("--force", action="store_true", help="Force extraction even if artifacts exist")
-    ap.add_argument("--pmtiles-backfill", action="store_true",
-                    help="Build missing PMTiles from extracted GeoParquet (the given series, or every "
-                         "cleanly extracted one); --force rebuilds existing ones")
-    ap.add_argument("--relations-backfill", action="store_true",
-                    help="Record relationships, layer kinds and sources from extracted GeoParquet "
-                         "(the given series, or every cleanly extracted one)")
     args = ap.parse_args()
-
-    if args.pmtiles_backfill or args.relations_backfill:
-        if args.all or args.dry_run or (args.pmtiles_backfill and args.relations_backfill):
-            ap.error("--pmtiles-backfill or --relations-backfill takes series ids or none, not "
-                     "--all, --dry-run or the other backfill")
-        if args.relations_backfill:
-            if args.force:
-                ap.error("--relations-backfill always recomputes; --force does not apply")
-            return backfill_relations(args.series_id, limit=args.limit)
-        return backfill_pmtiles(args.series_id, force=args.force, limit=args.limit)
     if not args.all and not args.series_id:
         ap.error("give series ids or --all")
 
     sids = []
     existing = None
-    standing: list[str] = []
+    manifests: dict[str, dict] = {}
     if args.all:
         print(f"Loading publications from source: {source.source_name()}")
         all_sids = [s for p in source.read_pubs() if (s := (p.get("series_id") or "").strip())]
         # A batch run only visits pubs whose attachments list a GIS zip, and checks what is already
         # extracted with one listing, so a weekly run costs about nothing when nothing is new.
         sids = [s for s in all_sids if harvest._get_attached_zips(s)[1]]
-        manifests = {} if args.force else clean_manifests()
+        # A forced run re-extracts every pub, so nothing is left to heal.
+        listed = set(sids)
+        manifests = {} if args.force else {s: m for s, m in clean_manifests().items() if s in listed}
         existing = None if args.force else set(manifests)
-        # Clean pubs are skipped below, so their manifests are the only record of their untiled
-        # layers. A forced run re-tiles every pub and reports them itself.
-        standing = [f"{s}/{lb}" for s in sorted(set(sids) & set(manifests))
-                    for lb in missing_tiles(manifests[s])]
-        del manifests
         unsupported: list[str] = []
         nothing: list[str] = []
         if existing is not None:
@@ -897,17 +888,31 @@ def main() -> int:
                           untiled=untiled)
         if res.startswith("fail"):
             failed.append(f"{sid} ({res})")
+    if not args.all and not args.force:
+        # A targeted run heals the pubs it names; the ones it just extracted need nothing.
+        manifests = {sid: m for s in sids if (m := _clean_manifest_of(sid := identity.Pub.parse(s).series_id))}
+    if args.dry_run:
+        pending = sum(len(missing_tiles(m)) for m in manifests.values())
+        print(f"[dry-run] self-heal would tile {pending} layers and record relationships for "
+              f"{sum(needs_relations(m) for m in manifests.values())} pubs")
+        heal = Heal()
+    else:
+        heal = self_heal(manifests, deadline=started + TIME_BUDGET_S)
+        print(heal.summary())
+    # Exit 1 only for work that failed in THIS run: a pub that failed to extract, a layer whose
+    # tiling failed at extraction, or a layer or pub whose self-heal failed. Work the time budget
+    # left pending is not a failure; the next run continues it.
     if untiled:
-        print(f"{len(untiled)} layers published without PMTiles (tiling failed; retry with "
-              f"--pmtiles-backfill): {', '.join(untiled)}", file=sys.stderr)
-    if standing:
-        more = ", ... (run --pmtiles-backfill for the rest)" if len(standing) > 20 else ""
-        print(f"{len(standing)} layers still without PMTiles, run --pmtiles-backfill: "
-              f"{', '.join(standing[:20])}{more}", file=sys.stderr)
+        print(f"{len(untiled)} layers published without PMTiles (tiling failed this run; the next "
+              f"run retries them): {', '.join(untiled)}", file=sys.stderr)
+    if heal.failed:
+        more = f", ... ({len(heal.failed) - 20} more)" if len(heal.failed) > 20 else ""
+        print(f"{len(heal.failed)} self-heal failures this run (the next run retries them): "
+              f"{', '.join(heal.failed[:20])}{more}", file=sys.stderr)
     if failed:
         print(f"{len(failed)} of {len(sids)} publications failed: {', '.join(failed)}",
               file=sys.stderr)
-    return 1 if failed or untiled or standing else 0
+    return 1 if failed or untiled or heal.failed else 0
 
 
 if __name__ == "__main__":

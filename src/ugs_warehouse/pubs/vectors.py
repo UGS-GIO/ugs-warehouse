@@ -11,8 +11,9 @@ ingest) doesn't have to guess from names, plus each layer's rows, columns, CRS a
 the layers that were empty, and every layer or geodatabase that could not be read. Each spatial
 layer is also tiled to `<label>.pmtiles` (EPSG:4326, one tile layer named for the label) for map
 display; its manifest entry records `pmtiles` and `pmtiles_layer`. A layer whose tiling fails
-keeps its GeoParquet, gets a `pmtiles_failed` warning, and is listed at the end of the run, which
-then exits non-zero; `--pmtiles-backfill` retries it without a re-download.
+keeps its GeoParquet and gets a `pmtiles_failed` warning. Every `--all` run lists the layers its
+clean manifests show still without PMTiles and exits non-zero while any remain;
+`--pmtiles-backfill` builds them without a re-download.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
 layer never looks like a pub that simply has none.
@@ -44,7 +45,8 @@ PARQUET_MIME = config.PARQUET_MIME
 # Warning code for a layer whose GeoParquet published but whose tiles did not. A warning, not an
 # error, so the series stays clean and the batch run does not download its zip again.
 PMTILES_FAILED = "pmtiles_failed"
-_NO_TILES = "every geometry is null or empty; no PMTiles built"
+# Warning code for a layer with no geometry to tile. Not a failure: it never gets PMTiles.
+NO_GEOMETRY = "no_geometry"
 
 
 def _safe(name: str) -> str:
@@ -378,7 +380,7 @@ def _extract_and_upload(
 
 def _tile_into(entry: dict, gdf, series_id: str, tmp: str | None, manifest: dict) -> bool:
     """Tile one layer and record the result: `pmtiles` and `pmtiles_layer` on its manifest `entry`
-    when built, else a warning in `manifest` (PMTILES_FAILED when tiling fails, _NO_TILES when it
+    when built, else a warning in `manifest` (PMTILES_FAILED when tiling fails, NO_GEOMETRY when it
     has no geometry). Returns whether the tiles were built."""
     label = entry["label"]
     try:
@@ -389,10 +391,15 @@ def _tile_into(entry: dict, gdf, series_id: str, tmp: str | None, manifest: dict
         print(f"  layer {label}: PMTiles not built: {e}", file=sys.stderr)
         return False
     if not built:
-        manifest["warnings"].append({"label": label, "warning": _NO_TILES})
+        manifest["warnings"].append({"label": label, "code": NO_GEOMETRY,
+                                     "warning": "every geometry is null or empty; no PMTiles built"})
         return False
     entry.update(pmtiles=True, pmtiles_layer=label)
     return True
+
+
+def _warned(manifest: dict, code: str) -> set[str]:
+    return {w.get("label") for w in manifest.get("warnings") or [] if w.get("code") == code}
 
 
 def tiling_failures(manifest: dict) -> list[str]:
@@ -400,19 +407,31 @@ def tiling_failures(manifest: dict) -> list[str]:
     return [w["label"] for w in manifest.get("warnings") or [] if w.get("code") == PMTILES_FAILED]
 
 
-def _clean_manifest(path: str) -> bool:
-    """True when the manifest at `path` reads as an object that records per-layer metadata and
-    no errors. An unreadable manifest is reported and counts as not done, and so does one with no
-    `layers` list, so ordinary resumable runs re-extract it instead of needing --force."""
+def missing_tiles(manifest: dict) -> list[str]:
+    """Spatial layers still without PMTiles: a PMTILES_FAILED warning, or no `pmtiles` flag and no
+    NO_GEOMETRY warning. These are what the backfill builds."""
+    failed, blank = _warned(manifest, PMTILES_FAILED), _warned(manifest, NO_GEOMETRY)
+    return [e["label"] for e in manifest.get("layers") or [] if e.get("spatial") and (
+        e["label"] in failed or not (e.get("pmtiles") or e["label"] in blank))]
+
+
+def _read_manifest(path: str) -> dict | None:
+    """The manifest at `path` when it reads as an object that records per-layer metadata and no
+    errors, else None. An unreadable manifest is reported and counts as not done, and so does one
+    with no `layers` list, so ordinary resumable runs re-extract it instead of needing --force."""
     try:
         doc = json.loads(gcs.get_bytes(path).decode())
     except Exception as e:
         print(f"  unreadable manifest {path}, re-extracting: {_error(e)}", file=sys.stderr)
-        return False
+        return None
     if not isinstance(doc, dict):
         print(f"  manifest {path} is not an object, re-extracting", file=sys.stderr)
-        return False
-    return "layers" in doc and not doc.get("errors")
+        return None
+    return doc if "layers" in doc and not doc.get("errors") else None
+
+
+def _clean_manifest(path: str) -> bool:
+    return _read_manifest(path) is not None
 
 
 def _series_with(*names: str) -> set[str]:
@@ -434,15 +453,20 @@ def _last_attempt(series_id: str) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
-def extracted_series() -> set[str]:
-    """Series ids extracted cleanly: a readable `_manifest.json` that lists no errors, from one
-    listing of the vectors prefix. A series with errors, or with layers but no manifest, is left
-    out, so every run retries it and reports it again instead of the failure going quiet."""
+def clean_manifests() -> dict[str, dict]:
+    """{series id: manifest} for each series extracted cleanly: a readable `_manifest.json` that
+    lists no errors, from one listing of the vectors prefix. A series with errors, or with layers
+    but no manifest, is left out, so every run retries it and reports it again instead of the
+    failure going quiet."""
     pfx = VECTORS_PREFIX.rstrip("/") + "/"
     paths = [p for p in gcs.list_paths(pfx) if p.endswith("/_manifest.json")]
     with ThreadPoolExecutor(max_workers=16) as ex:
-        clean = list(ex.map(_clean_manifest, paths))
-    return {p.removeprefix(pfx).split("/", 1)[0] for p, ok in zip(paths, clean) if ok}
+        docs = list(ex.map(_read_manifest, paths))
+    return {p.removeprefix(pfx).split("/", 1)[0]: d for p, d in zip(paths, docs) if d is not None}
+
+
+def extracted_series() -> set[str]:
+    return set(clean_manifests())
 
 
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
@@ -549,11 +573,9 @@ def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, lis
         raise ValueError(f"{path} records no per-layer metadata; re-extract with --force")
     manifest.setdefault("warnings", [])
     before = json.dumps(manifest)
-    failed = set(tiling_failures(manifest))
-    no_tiles = {w.get("label") for w in manifest["warnings"] if w.get("warning") == _NO_TILES}
+    missing = set(missing_tiles(manifest))
     spatial = [e for e in manifest["layers"] if e.get("spatial")]
-    todo = [e for e in spatial if force or e["label"] in failed
-            or not (e.get("pmtiles") or e["label"] in no_tiles)]
+    todo = [e for e in spatial if force or e["label"] in missing]
     built, errors = 0, []
     for entry in todo:
         label = entry["label"]
@@ -568,8 +590,7 @@ def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, lis
                 print(f"  {series_id}/{label}: GeoParquet unreadable: {e}", file=sys.stderr)
                 continue
             manifest["warnings"] = [w for w in manifest["warnings"] if not (
-                w.get("label") == label
-                and (w.get("code") == PMTILES_FAILED or w.get("warning") == _NO_TILES))]
+                w.get("label") == label and w.get("code") in (PMTILES_FAILED, NO_GEOMETRY))]
             if _tile_into(entry, gdf, series_id, tmp, manifest):
                 built += 1
         errors += [f"{series_id}/{label}: {w['warning']}" for w in manifest["warnings"]
@@ -630,13 +651,20 @@ def main() -> int:
 
     sids = []
     existing = None
+    standing: list[str] = []
     if args.all:
         print(f"Loading publications from source: {source.source_name()}")
         all_sids = [s for p in source.read_pubs() if (s := (p.get("series_id") or "").strip())]
         # A batch run only visits pubs whose attachments list a GIS zip, and checks what is already
         # extracted with one listing, so a weekly run costs about nothing when nothing is new.
         sids = [s for s in all_sids if harvest._get_attached_zips(s)[1]]
-        existing = None if args.force else extracted_series()
+        manifests = {} if args.force else clean_manifests()
+        existing = None if args.force else set(manifests)
+        # Clean pubs are skipped below, so their manifests are the only record of their untiled
+        # layers. A forced run re-tiles every pub and reports them itself.
+        standing = [f"{s}/{lb}" for s in sorted(set(sids) & set(manifests))
+                    for lb in missing_tiles(manifests[s])]
+        del manifests
         unsupported: list[str] = []
         nothing: list[str] = []
         if existing is not None:
@@ -682,10 +710,13 @@ def main() -> int:
     if untiled:
         print(f"{len(untiled)} layers published without PMTiles (tiling failed; retry with "
               f"--pmtiles-backfill): {', '.join(untiled)}", file=sys.stderr)
+    if standing:
+        print(f"{len(standing)} layers still without PMTiles, run --pmtiles-backfill: "
+              f"{', '.join(standing)}", file=sys.stderr)
     if failed:
         print(f"{len(failed)} of {len(sids)} publications failed: {', '.join(failed)}",
               file=sys.stderr)
-    return 1 if failed or untiled else 0
+    return 1 if failed or untiled or standing else 0
 
 
 if __name__ == "__main__":

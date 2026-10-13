@@ -123,7 +123,8 @@ EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with t
 tippecanoe flags and one tile layer named for the label. The series' `_manifest.json` records
 `pmtiles` and `pmtiles_layer` per layer. A layer whose tiling fails keeps its GeoParquet and gets
 a `pmtiles_failed` warning instead of an error, so the pub stays extracted and is not downloaded
-again; the run lists those layers at the end and exits non-zero. A tiled layer's Item carries the
+again. Every `--all` run lists the layers still without PMTiles, read from the manifests it
+already loads, and exits non-zero until the backfill builds them. A tiled layer's Item carries the
 same `pmtiles` asset and `rel=pmtiles` web-map link as a serving topic, so the viewer previews it
 and the Map page can add it. `python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...]`
 tiles layers that have no PMTiles yet or a `pmtiles_failed` warning, from their GeoParquet and

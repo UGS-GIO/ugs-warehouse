@@ -250,7 +250,8 @@ def test_a_layer_whose_geometries_are_all_null_keeps_its_rows_with_a_warning(mon
     assert manifest["spatial"] == ["faults"] and manifest["layers"][0]["bbox"] is None
     assert manifest["warnings"] == [
         {"label": "faults", "warning": "every geometry is null or empty; bbox not computed"},
-        {"label": "faults", "warning": "every geometry is null or empty; no PMTiles built"}]
+        {"label": "faults", "code": vectors.NO_GEOMETRY,
+         "warning": "every geometry is null or empty; no PMTiles built"}]
     assert "pmtiles" not in manifest["layers"][0]
 
 
@@ -920,7 +921,7 @@ def test_backfill_force_rebuilds_layers_that_have_pmtiles(monkeypatch, tmp_path)
 def test_backfill_skips_a_layer_with_no_geometry_to_tile(monkeypatch, tmp_path, capsys):
     store = _backfill_store(monkeypatch, tmp_path, {"M-307": _manifest(
         {"label": "blank", "spatial": True},
-        warnings=[{"label": "blank", "warning": vectors._NO_TILES}])})
+        warnings=[{"label": "blank", "code": vectors.NO_GEOMETRY, "warning": "no geometry"}])})
     before = dict(store)
 
     assert vectors.backfill_pmtiles(["M-307"]) == 0
@@ -994,3 +995,36 @@ def test_the_cli_runs_the_backfill(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["vectors", "--pmtiles-backfill"])
     assert vectors.main() == 0
     assert calls == [(["M-1"], True), ([], False)]
+
+
+def test_every_batch_run_lists_standing_tiling_failures_until_the_backfill_builds_them(
+        monkeypatch, tmp_path, capsys):
+    """The job's retry re-runs --all after the pub went clean, so the run itself must keep naming
+    layers its clean manifests show without PMTiles, not only the ones this run tried to tile."""
+    import sys
+
+    from ugs_warehouse.pubs import harvest, source
+
+    store = _backfill_store(monkeypatch, tmp_path, {"M-1DM": _manifest(
+        {"label": "failed", "spatial": True},
+        {"label": "never", "spatial": True},
+        {"label": "done", "spatial": True, "pmtiles": True, "pmtiles_layer": "done"},
+        {"label": "blank", "spatial": True},
+        {"label": "dmu", "spatial": False},
+        warnings=[{"label": "failed", "code": vectors.PMTILES_FAILED, "warning": "PMTiles not built: x"},
+                  {"label": "blank", "code": vectors.NO_GEOMETRY, "warning": "no geometry"}])})
+    monkeypatch.setattr(source, "read_pubs", lambda: [{"series_id": "M-1DM"}])
+    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, "https://x/gis.zip"))
+    monkeypatch.setattr(sys, "argv", ["vectors", "--all"])
+
+    assert vectors.main() == 1  # the clean pub is skipped, never re-downloaded
+    err = capsys.readouterr().err
+    assert ("2 layers still without PMTiles, run --pmtiles-backfill: M-1DM/failed, M-1DM/never"
+            in err)
+
+    assert vectors.backfill_pmtiles(["M-1DM"]) == 0
+    assert vectors.pmtiles_object("M-1DM", "never") in store
+    capsys.readouterr()
+
+    assert vectors.main() == 0
+    assert "without PMTiles" not in capsys.readouterr().err

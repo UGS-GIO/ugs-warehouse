@@ -8,7 +8,9 @@ schema is preserved verbatim for both. Independent of the COG harvest, providing
 layers (contacts, faults, folds, etc.) and their companion tables to GCS and STAC. A per-series
 `_manifest.json` records which extracted labels are spatial vs tables, so downstream (STAC
 ingest) doesn't have to guess from names, plus each layer's rows, columns, CRS and WGS84 bbox,
-the layers that were empty, and every layer or geodatabase that could not be read.
+the layers that were empty, and every layer or geodatabase that could not be read. Each spatial
+layer is also tiled to `<label>.pmtiles` (EPSG:4326, one tile layer named for the label) for map
+display; its manifest entry records `pmtiles` and `pmtiles_layer`.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
 layer never looks like a pub that simply has none.
@@ -31,10 +33,14 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs
+from ..vector import sink_pmtiles
 from . import geoparquet, harvest, identity, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME
+# Starts the manifest error for a layer whose GeoParquet published but whose tiles did not.
+PMTILES_ERROR = "PMTiles not built: "
+_NO_TILES = "every geometry is null or empty; no PMTiles built"
 
 
 def _safe(name: str) -> str:
@@ -259,6 +265,29 @@ def _spatial_meta(gdf, geo: dict | None, label: str, warnings: list[dict]) -> di
     return meta
 
 
+def pmtiles_object(series_id: str, label: str) -> str:
+    return f"{VECTORS_PREFIX}/{series_id}/{label}.pmtiles"
+
+
+def _tile_layer(gdf, series_id: str, label: str, tmp: str | None = None) -> bool:
+    """Tile `gdf` as `<label>.pmtiles` beside its GeoParquet: reprojected to EPSG:4326 (tippecanoe
+    reads lon/lat), one tile layer named `label`, built with the serving topics' tippecanoe flags.
+    Returns False, writing nothing, when no row has a geometry. Temp files go under `tmp` and are
+    deleted before returning, since the job's disk is memory."""
+    geo = gdf[~(gdf.geometry.isna() | gdf.geometry.is_empty)]
+    if geo.empty:
+        return False
+    with tempfile.TemporaryDirectory(dir=tmp) as d:
+        geojsonl = os.path.join(d, f"{label}.geojsonl")
+        geo.to_crs(4326).to_file(geojsonl, driver="GeoJSONSeq", engine="pyogrio")
+        pmtiles = os.path.join(d, f"{label}.pmtiles")
+        sink_pmtiles.run_tippecanoe(geojsonl, pmtiles, label, what=f"{series_id}/{label}")
+        os.remove(geojsonl)
+        gcs.upload(pmtiles, pmtiles_object(series_id, label), content_type=config.PMTILES_MIME,
+                   cache_control=gcs.CACHE_MUTABLE)
+    return True
+
+
 def _write_manifest(series_id: str, manifest: dict) -> None:
     gcs.put_bytes(json.dumps(manifest).encode(), f"{VECTORS_PREFIX}/{series_id}/_manifest.json",
                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
@@ -285,8 +314,10 @@ def _extract_and_upload(
     that manifest: {"spatial": [labels], "tables": [labels], "layers": [per-layer metadata],
     "empty": [labels], "errors": [...], "warnings": [...]}.
 
-    Spatial layers keep their geometry (GeoParquet via gpio, plus a bbox column). Non-spatial GeMS
-    companion tables are read WITHOUT geometry via pyogrio and written as plain Parquet. Raw
+    Spatial layers keep their geometry (GeoParquet via gpio, plus a bbox column) and are tiled to
+    `{label}.pmtiles` beside it; a layer whose tiling fails keeps its GeoParquet and is listed
+    under "errors" with a PMTILES_ERROR message. Non-spatial GeMS companion tables are read
+    WITHOUT geometry via pyogrio and written as plain Parquet. Raw
     schema is preserved verbatim either way — no rename, no type coercion. A layer with 0 rows is
     listed under "empty" and not uploaded. A layer that cannot be read or uploaded, or a spatial
     layer with no CRS, is listed under "errors" and the rest still extract. A CRS-less layer is
@@ -331,11 +362,32 @@ def _extract_and_upload(
         except Exception as e:
             manifest["errors"].append({"label": label, "error": _error(e)})
             print(f"  layer {label} failed: {e}", file=sys.stderr)
+            continue
+        if is_spatial:
+            _tile_into(entry, gdf, series_id, work, manifest)
 
     if manifest["spatial"] or manifest["tables"]:
         _write_manifest(series_id, manifest)
 
     return manifest
+
+
+def _tile_into(entry: dict, gdf, series_id: str, tmp: str | None, manifest: dict) -> bool:
+    """Tile one layer and record the result on its manifest `entry`: `pmtiles` and `pmtiles_layer`
+    when built, a warning when it has no geometry to tile, an error when tiling fails. Returns
+    whether the tiles were built."""
+    label = entry["label"]
+    try:
+        built = _tile_layer(gdf, series_id, label, tmp)
+    except Exception as e:
+        manifest["errors"].append({"label": label, "error": f"{PMTILES_ERROR}{_error(e)}"})
+        print(f"  layer {label}: {PMTILES_ERROR}{e}", file=sys.stderr)
+        return False
+    if not built:
+        manifest["warnings"].append({"label": label, "warning": _NO_TILES})
+        return False
+    entry.update(pmtiles=True, pmtiles_layer=label)
+    return True
 
 
 def _clean_manifest(path: str) -> bool:
@@ -445,7 +497,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
                    else "fail:layers")
             print(f"{series_id}: {'UNSUPPORTED' if res == 'unsupported' else 'FAIL'} "
                   f"({n_spatial} vector layers + {n_tables} companion tables uploaded, "
-                  f"{len(errors)} unreadable: {unreadable})", file=sys.stderr)
+                  f"{len(errors)} failed: {unreadable})", file=sys.stderr)
             _record_attempt(series_id, {"result": res, "errors": errors})
             return res
         if n_spatial + n_tables == 0:
@@ -464,6 +516,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         return f"fail:{type(e).__name__}"
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
 
 
 def main() -> int:

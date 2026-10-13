@@ -17,10 +17,17 @@ pd = pytest.importorskip("pandas")
 Point = pytest.importorskip("shapely.geometry").Point
 
 
+def _fake_tippecanoe(geojsonl, pmtiles, layer, *, id_attr=None, what=None):
+    with open(pmtiles, "wb") as fh:
+        fh.write(f"tiles:{layer}".encode())
+
+
 def _mem_gcs(monkeypatch):
     """In-memory GCS double. `upload` reads the real local file's bytes (so a test can read back
-    what `to_parquet` actually wrote); `put_bytes` stores the bytes directly."""
+    what `to_parquet` actually wrote); `put_bytes` stores the bytes directly. tippecanoe is
+    stubbed, so tests never need the binary."""
     store: dict[str, bytes] = {}
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", _fake_tippecanoe)
 
     def _upload(local, path, **kwargs):
         with open(local, "rb") as fh:
@@ -102,9 +109,10 @@ def test_extract_and_upload_writes_spatial_and_table_parquet_and_manifest(monkey
     assert manifest["errors"] == []
 
     spatial_path = f"{vectors.VECTORS_PREFIX}/M-100/geo__ContactsAndFaults.parquet"
+    tiles_path = f"{vectors.VECTORS_PREFIX}/M-100/geo__ContactsAndFaults.pmtiles"
     table_path = f"{vectors.VECTORS_PREFIX}/M-100/geo__DescriptionOfMapUnits.parquet"
     manifest_path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
-    assert store.keys() == {spatial_path, table_path, manifest_path}
+    assert store.keys() == {spatial_path, tiles_path, table_path, manifest_path}
     assert json.loads(store[manifest_path]) == manifest
 
     # Raw schema preserved verbatim: no rename/coercion, no geometry injected into the table.
@@ -241,7 +249,9 @@ def test_a_layer_whose_geometries_are_all_null_keeps_its_rows_with_a_warning(mon
 
     assert manifest["spatial"] == ["faults"] and manifest["layers"][0]["bbox"] is None
     assert manifest["warnings"] == [
-        {"label": "faults", "warning": "every geometry is null or empty; bbox not computed"}]
+        {"label": "faults", "warning": "every geometry is null or empty; bbox not computed"},
+        {"label": "faults", "warning": "every geometry is null or empty; no PMTiles built"}]
+    assert "pmtiles" not in manifest["layers"][0]
 
 
 def test_a_bbox_that_cannot_be_computed_costs_the_bbox_not_the_layer(monkeypatch, tmp_path):
@@ -693,3 +703,114 @@ def test_same_named_shapefiles_in_different_folders_keep_distinct_labels(tmp_pat
     srcs, _ = vectors._sources(str(tmp_path))
 
     assert sorted(s[2] for s in srcs) == ["b__faults", "faults"]
+
+
+# ---------------------------------------------------------------------------
+# PMTiles: every extracted spatial layer is tiled beside its GeoParquet
+# ---------------------------------------------------------------------------
+
+def test_layer_tiling_reuses_the_serving_topic_tippecanoe_call(monkeypatch, tmp_path):
+    """The pubs tiler goes through sink_pmtiles.run_tippecanoe: same binary and fixed flags, the
+    label as the tile layer, no feature-id attribute (pub layers carry no feature_id), and the
+    GeoJSONSeq it reads is in lon/lat."""
+    import subprocess
+
+    from ugs_warehouse.vector import sink_pmtiles
+
+    real = sink_pmtiles.run_tippecanoe
+    store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(sink_pmtiles, "run_tippecanoe", real)
+    seen: dict = {}
+
+    def fake_run(cmd, **kwargs):
+        seen["cmd"] = cmd
+        with open(cmd[-1]) as fh:
+            seen["feature"] = json.loads(fh.readline())
+        with open(cmd[cmd.index("-o") + 1], "wb") as fh:
+            fh.write(b"tiles")
+        return subprocess.CompletedProcess(cmd, 0)
+
+    monkeypatch.setattr(sink_pmtiles.shutil, "which", lambda b: f"/bin/{b}")
+    monkeypatch.setattr(sink_pmtiles.subprocess, "run", fake_run)
+    gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]}, crs="EPSG:26912")
+
+    assert vectors._tile_layer(gdf, "M-200", "geo__Faults", str(tmp_path)) is True
+
+    cmd = seen["cmd"]
+    assert cmd[0] == sink_pmtiles.TIPPECANOE_BIN
+    assert cmd[cmd.index("-l") + 1] == "geo__Faults"
+    assert cmd[cmd.index("-l") + 2:-1] == [*sink_pmtiles.TILE_OPTS, *sink_pmtiles.EXTRA_OPTS]
+    assert not any(c.startswith("--use-attribute-for-id") for c in cmd)
+    lon, lat = seen["feature"]["geometry"]["coordinates"]
+    assert -112 < lon < -111.8 and 40.7 < lat < 40.8
+    assert seen["feature"]["properties"] == {"Type": "fault"}
+    assert store == {vectors.pmtiles_object("M-200", "geo__Faults"): b"tiles"}
+    assert os.listdir(tmp_path) == []  # temp files deleted: the job's disk is memory
+
+
+def test_a_tippecanoe_failure_raises_with_its_stderr(monkeypatch):
+    import subprocess
+
+    from ugs_warehouse.vector import sink_pmtiles
+
+    def boom(cmd, **kwargs):
+        raise subprocess.CalledProcessError(1, cmd, stderr="bad geometry in feature 3")
+
+    monkeypatch.setattr(sink_pmtiles.shutil, "which", lambda b: f"/bin/{b}")
+    monkeypatch.setattr(sink_pmtiles.subprocess, "run", boom)
+
+    with pytest.raises(RuntimeError, match="exited 1 for M-1/faults:\nbad geometry in feature 3"):
+        sink_pmtiles.run_tippecanoe("in.geojsonl", "out.pmtiles", "faults", what="M-1/faults")
+
+
+def test_a_missing_tippecanoe_binary_raises(monkeypatch):
+    from ugs_warehouse.vector import sink_pmtiles
+
+    monkeypatch.setattr(sink_pmtiles.shutil, "which", lambda b: None)
+    with pytest.raises(RuntimeError, match="not on PATH"):
+        sink_pmtiles.run_tippecanoe("in.geojsonl", "out.pmtiles", "faults")
+
+
+def test_the_manifest_records_each_spatial_layers_pmtiles(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    spatial_gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]},
+                                   crs="EPSG:26912")
+    monkeypatch.setattr("geopandas.read_file", lambda path, layer=None, engine=None: spatial_gdf)
+    monkeypatch.setattr("pyogrio.read_dataframe",
+                        lambda path, layer=None, read_geometry=True: pd.DataFrame({"MapUnit": ["Qal"]}))
+
+    vectors._extract_and_upload(str(tmp_path), "M-201", [
+        ("b.gdb", "ContactsAndFaults", "geo__ContactsAndFaults", True),
+        ("b.gdb", "DMU", "geo__DMU", False)])
+
+    stored = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-201/_manifest.json"])
+    layers = {lay["label"]: lay for lay in stored["layers"]}
+    assert layers["geo__ContactsAndFaults"]["pmtiles"] is True
+    assert layers["geo__ContactsAndFaults"]["pmtiles_layer"] == "geo__ContactsAndFaults"
+    assert "pmtiles" not in layers["geo__DMU"]  # a table is never tiled
+    assert store[vectors.pmtiles_object("M-201", "geo__ContactsAndFaults")] == b"tiles:geo__ContactsAndFaults"
+    assert stored["errors"] == []
+    assert os.listdir(tmp_path) == []
+
+
+def test_a_tiling_failure_is_an_error_but_the_geoparquet_stays_published(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    spatial_gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]},
+                                   crs="EPSG:26912")
+    monkeypatch.setattr("geopandas.read_file", lambda path, layer=None, engine=None: spatial_gdf)
+
+    def boom(geojsonl, pmtiles, layer, **kw):
+        raise RuntimeError("tippecanoe exited 1 for M-202/faults")
+
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", boom)
+
+    manifest = vectors._extract_and_upload(str(tmp_path), "M-202", [("a.shp", None, "faults", True)])
+
+    assert manifest["spatial"] == ["faults"]
+    assert manifest["errors"] == [{"label": "faults", "error": vectors.PMTILES_ERROR
+                                   + "RuntimeError: tippecanoe exited 1 for M-202/faults"}]
+    assert "pmtiles" not in manifest["layers"][0]
+    assert f"{vectors.VECTORS_PREFIX}/M-202/faults.parquet" in store
+    assert vectors.pmtiles_object("M-202", "faults") not in store
+    assert json.loads(store[f"{vectors.VECTORS_PREFIX}/M-202/_manifest.json"]) == manifest
+    assert os.listdir(tmp_path) == []

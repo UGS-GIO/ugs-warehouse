@@ -47,7 +47,7 @@ TILE_OPTS = [
     # and silently drops features to fit the 500KB/tile, 200k-feature/tile defaults.
     "--no-tile-size-limit",
     "--no-feature-limit",
-    # NOTE: --use-attribute-for-id=feature_id is appended per-topic in _tile_and_upload — it takes
+    # NOTE: --use-attribute-for-id=feature_id is appended per-topic via run_tippecanoe — it takes
     # the input's id attr, so it's NOT a fixed option. Always feature_id, never ugs_key: see
     # tiling_signature for why.
 ]
@@ -79,6 +79,36 @@ def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> Non
     con.execute(f"COPY (SELECT * FROM {view}) TO '{path}' (FORMAT GDAL, DRIVER 'GeoJSONSeq')")
 
 
+def run_tippecanoe(geojsonl: str, pmtiles: str, layer: str, *, id_attr: str | None = None,
+                   what: str | None = None) -> None:
+    """tippecanoe over a GeoJSONSeq file into `pmtiles`, one tile layer named `layer`, with the fixed
+    TILE_OPTS + TIPPECANOE_OPTS. `id_attr` is promoted to the MVT feature id. Raises RuntimeError
+    carrying tippecanoe's stderr, naming `what` (default `layer`)."""
+    if not shutil.which(TIPPECANOE_BIN):
+        raise RuntimeError(
+            f"{TIPPECANOE_BIN} not on PATH — install tippecanoe in the runtime image"
+        )
+    cmd = [
+        TIPPECANOE_BIN,
+        "-o", pmtiles,
+        "-l", layer,
+        *TILE_OPTS,
+        *([f"--use-attribute-for-id={id_attr}"] if id_attr else []),
+        *EXTRA_OPTS,
+        geojsonl,
+    ]
+    try:
+        subprocess.run(cmd, check=True, capture_output=True, text=True)
+    except subprocess.CalledProcessError as e:
+        # check=True alone gives a bare "exit status N"; the stderr has the reason (bad geometry,
+        # id collisions, ...), so callers that log str(e) show the root cause.
+        detail = (e.stderr or e.stdout or "").strip()
+        raise RuntimeError(
+            f"tippecanoe exited {e.returncode} for {what or layer}"
+            + (f":\n{detail}" if detail else "")
+        ) from e
+
+
 def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> gcs.FileMeta:
     """tippecanoe over a GeoJSONSeq file → PMTiles → GCS (latest pointer). Output sits next to the
     input so callers control the temp dir. `id_attr` (always `feature_id`) is promoted to the native
@@ -86,31 +116,8 @@ def _tile_and_upload(topic: Topic, geojsonl: str, id_attr: str) -> gcs.FileMeta:
     carry the same id; MapLibre exposes it as `feature.id`. `ugs_key`, when present, is NOT used as
     the id here (see tiling_signature): `--use-attribute-for-id` would MOVE it out of `properties`,
     and the viewer's ugs_key-keyed row-commenting reads it from the tile properties."""
-    if not shutil.which(TIPPECANOE_BIN):
-        raise RuntimeError(
-            f"{TIPPECANOE_BIN} not on PATH — install tippecanoe in the runtime image"
-        )
     pmtiles = os.path.join(os.path.dirname(geojsonl), f"{topic.stem}.pmtiles")
-    cmd = [
-        TIPPECANOE_BIN,
-        "-o", pmtiles,
-        "-l", topic.stem,
-        *TILE_OPTS,
-        f"--use-attribute-for-id={id_attr}",
-        *EXTRA_OPTS,
-        geojsonl,
-    ]
-    try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except subprocess.CalledProcessError as e:
-        # tippecanoe's stderr has the actual reason (bad geometry, id collisions, etc).
-        # check=True alone only gives a bare "exit status N" — fold the real message in so
-        # ingest.py's per-sink FAILED log (which prints str(e)) shows root cause, not just rc.
-        detail = (e.stderr or e.stdout or "").strip()
-        raise RuntimeError(
-            f"tippecanoe exited {e.returncode} for {topic.fqn}"
-            + (f":\n{detail}" if detail else "")
-        ) from e
+    run_tippecanoe(geojsonl, pmtiles, topic.stem, id_attr=id_attr, what=topic.fqn)
     gcs_object = f"{config.PMTILES_PREFIX}/{topic.stem}/{topic.stem}.pmtiles"
     # pmtiles is a "latest" pointer, overwritten each ingest -> revalidate via CDN.
     meta = gcs.upload(pmtiles, gcs_object, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)

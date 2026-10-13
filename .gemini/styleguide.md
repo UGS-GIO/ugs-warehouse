@@ -78,6 +78,11 @@ The pipeline sink. Upstream: the vector producer reads **dataELT**'s serving `{s
 ## Cloud Run / deploy & security
 - Vector = scale-to-zero service, pubs = sharded Jobs; admin console behind IAP. Deploy footgun: `--no-traffic --tag` pins traffic to the old revision — shift with `--to-latest` after. No secrets in code/logs (DSNs/creds via env/Secret Manager). `_current` (and the `geom` column) is an upstream contract — coordinate rather than edit here. GCP/Vertex only.
 
+## Existing tooling & memory
+- Flag new code that redoes what a dependency or a repo helper already does. Name the replacement. The list is in AGENTS.md "Use existing tooling" (pystac, rustac, rio-stac, gpio, obstore, the tippecanoe step in `vector/sink_pmtiles.py`, `core/stac.py` builders, viewer helpers in `stac.ts`/`map-model.ts`/`data/columns.ts`). Also check portolan-sdi, developmentseed and stac-utils.
+- Flag a second copy of an existing helper in this repo, even a small one.
+- Memory: Cloud Run `/tmp` is RAM. Flag two copies of a dataset alive at once (a frame plus its `to_crs` copy, the previous loop's frame during the next read), full docs kept when only index entries are needed, and per-object calls where one batch call works.
+
 ## Review scope & severity
 - Skip (don't post findings): `viewer/package-lock.json` (lockfile) and `viewer/src/routeTree.gen.ts` (generated). The STAC catalog / GeoParquet / PMTiles / COG are build output published to GCS, not committed source — don't line-review them if a PR ever adds one.
 - Blocking here (not a nit): merge to `main` auto-deploys — the `ugs-warehouse-deploy` Cloud Build trigger rebuilds the producer images + Cloud Run, and the viewer goes live on Firebase. So a swallowed error corrupting the catalog/warehouse, a break to the dataELT `_current` upstream contract, or a change to STAC item/collection/asset shape or CRS handling (`target_epsg=0`→4326) that ripples to downstream viewers is blocking.

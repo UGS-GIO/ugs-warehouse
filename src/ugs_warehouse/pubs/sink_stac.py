@@ -619,10 +619,9 @@ def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids
         return config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet")
 
     def link(frm: str, to: str) -> None:
-        href = config.public_url(stac.item_object_path(coll_path, ids[to]))
-        if all(lk["href"] != href for lk in links.get(frm, [])):
-            links.setdefault(frm, []).append({"rel": "related", "href": href,
-                                              "type": "application/geo+json", "title": titles[to][0]})
+        new = stac.related_link(coll_path, ids[to], titles[to][0])
+        if all(lk["href"] != new["href"] for lk in links.get(frm, [])):
+            links.setdefault(frm, []).append(new)
 
     for r in relationships:
         o, d = r["origin"], r["destination"]
@@ -635,13 +634,10 @@ def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids
         published.append(r)
         how = {"ugs:detected_by": r["detected_by"],
                **({"ugs:confidence": r["confidence"]} if r["detected_by"] == "inferred" else {})}
-        fks.setdefault(o, []).append({"fields": list(r["origin_cols"]),
-                                      "reference": {"resource": ids[d], "href": parquet(d),
-                                                    "fields": list(r["destination_cols"])}, **how})
+        fks.setdefault(o, []).append(stac.foreign_key(r["origin_cols"], ids[d], parquet(d),
+                                                      r["destination_cols"], **how))
         if d in table_columns:
-            fk = {"fields": list(r["destination_cols"]),
-                  "reference": {"resource": ids[o], "href": parquet(o),
-                                "fields": list(r["origin_cols"])}, **how}
+            fk = stac.foreign_key(r["destination_cols"], ids[o], parquet(o), r["origin_cols"], **how)
             existing = assets.setdefault(o, {}).get(d)
             if existing is not None:
                 existing["ugs:foreign_keys"].append(fk)

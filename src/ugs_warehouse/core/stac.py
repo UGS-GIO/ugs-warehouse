@@ -255,6 +255,24 @@ def item_object_path(collection_path: str, item_id: str) -> str:
     return f"{config.STAC_PREFIX}/{collection_path}/{item_id}/{item_id}.json"
 
 
+def related_link(collection_path: str, item_id: str, title: str) -> dict:
+    """A STAC `related` link to an item, by its absolute CDN href (no relative-depth math). Both
+    producers build their relationship links here, so the shapes cannot drift."""
+    return {"rel": "related", "href": config.public_url(item_object_path(collection_path, item_id)),
+            "type": "application/geo+json", "title": title}
+
+
+def foreign_key(fields: list[str], resource: str, href: str, ref_fields: list[str],
+                **extra) -> dict:
+    """A Frictionless Table Schema foreignKey (`ugs:foreign_keys` entry): the asset's `fields`
+    reference `ref_fields` of `resource`, whose file is `href`. `resource` alone is a bare name
+    Frictionless resolves inside a datapackage, which this catalog has none of, so `href` names the
+    file. `extra` adds UGS fields such as `ugs:detected_by`. Both producers build their foreign keys
+    here."""
+    return {"fields": list(fields),
+            "reference": {"resource": resource, "href": href, "fields": list(ref_fields)}, **extra}
+
+
 def collection_object_path(collection_path: str) -> str:
     """GCS path of the collection.json at `collection_path` (e.g. a publication's
     `ugs-publications/OFR/OFR-1`)."""

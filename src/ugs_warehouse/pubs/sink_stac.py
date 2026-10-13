@@ -18,6 +18,7 @@ from collections import Counter
 
 from ..core import config, stac
 from ..core.bbox import to_2d_bbox
+from ..core.stac import item_id_for, plate_item_id  # noqa: F401 (re-exported)
 from . import counties, identity, topic
 from .relations import layer_kind, source_of_label
 from .scale import MOSAIC_TIER_LABEL
@@ -49,8 +50,6 @@ COG_MIME = config.COG_MIME
 FOOTPRINT_FALLBACK = stac.PLACEHOLDER_FOOTPRINT
 LAYER_BBOX_SOURCE = "layer"
 PARQUET_MIME = config.PARQUET_MIME
-# Everything outside RFC 3986's unreserved set needs escaping in a path segment. See `item_id_for`.
-_UNSAFE_IN_PATH = re.compile(r"[^A-Za-z0-9._~-]+")
 
 # series_id alpha prefix -> canonical pub type (the free-text `series` field is dirty).
 PREFIX_TYPE = {
@@ -92,18 +91,6 @@ def series_code(sid: str) -> str:
     ugs-publications. Numeric/prefixless ids bucket as OTHER."""
     m = re.match(r"([A-Za-z]+)", (sid or "").strip())
     return m.group(1).upper() if m else "OTHER"
-
-
-def item_id_for(sid: str) -> str:
-    """The published item id: the source's series id, made safe to sit in a URI path.
-
-    The id is also a directory name and the last segment of every link that reaches the item, so a
-    space in it (`Geologic map of Utah`, `557.92 UT1CO`) put a raw space in the item's own `self`
-    link, in its collection's `item` link and in the ISO sidecar URL. A browser re-encodes those
-    silently; a strict client rejects them, which is what a static catalog is read by. The exact
-    source string stays on the item as `ugs:series_id`.
-    """
-    return _UNSAFE_IN_PATH.sub("-", (sid or "").strip())
 
 
 def issue_volume(sid: str) -> int | None:
@@ -193,10 +180,6 @@ def pub_collection_path(p: dict) -> str:
     """Layout path of a publication's Collection: `<group>/<SERIES>/<SID>`."""
     sid = (p.get("series_id") or "").strip()
     return f"{collection_group(p)}/{series_code(sid)}/{item_id_for(sid)}"
-
-
-def plate_item_id(sid: str) -> str:
-    return f"{item_id_for(sid)}_plate"
 
 
 def layer_item_id(sid: str, label: str) -> str:

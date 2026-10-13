@@ -395,12 +395,27 @@ def write_collection(coll: dict, *, children: int) -> str:
 
 
 PLATE_SUFFIX = "_plate"
+# Everything outside RFC 3986's unreserved set needs escaping in a path segment. See `item_id_for`.
+_UNSAFE_IN_PATH = re.compile(r"[^A-Za-z0-9._~-]+")
+
+
+def item_id_for(sid: str) -> str:
+    """A publication's published id: its series id, made safe to sit in a URI path.
+
+    The id is also a directory name and the last segment of every link that reaches the item, so a
+    space in it (`Geologic map of Utah`, `557.92 UT1CO`) would be a raw space in links a strict
+    client rejects. The exact source string stays on the item as `ugs:series_id`."""
+    return _UNSAFE_IN_PATH.sub("-", (sid or "").strip())
+
+
+def plate_item_id(sid: str) -> str:
+    return f"{item_id_for(sid)}{PLATE_SUFFIX}"
 
 
 def renders_for_item(item: dict, asset_keys: set[str] | None = None) -> tuple[dict, dict | None]:
     """`styles.renders_for` for a STAC item. A publication's plate Item (`<SID>_plate`) with no
-    style of its own falls back to the style keyed by `<SID>`, the id it had as a whole-pub Item.
-    Layer Items match only their own id."""
+    style of its own uses the style keyed by its publication's id. Layer Items match only their
+    own id."""
     keys = set((item.get("assets") or {}).keys()) if asset_keys is None else asset_keys
     result = styles.renders_for(item["id"], keys)
     base = plate_base_id(item)
@@ -412,8 +427,6 @@ def renders_for_item(item: dict, asset_keys: set[str] | None = None) -> tuple[di
 def plate_base_id(item: dict) -> str | None:
     """The publication id a plate Item's style falls back to, or None when `item` is not its
     publication's plate. A layer whose id also ends in `_plate` is not the plate."""
-    from ..pubs.sink_stac import plate_item_id  # pubs builds on core; imported at call time
-
     sid = (item.get("properties") or {}).get("ugs:series_id")
     if not isinstance(sid, str) or item.get("id") != plate_item_id(sid):
         return None

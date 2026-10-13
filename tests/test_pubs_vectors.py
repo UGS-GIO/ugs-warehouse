@@ -1186,3 +1186,95 @@ def test_a_shapefiles_source_is_its_folder_in_the_bundle(tmp_path):
         == "Landslides"
     assert vectors._dataset_name(work, "M-246DM", os.path.join(work, "x", "Geo.gdb"), "Faults") == "Geo"
 
+
+def _relations_store(monkeypatch, tmp_path, sid: str, frames: dict, **manifest_extra):
+    """GCS double for the relationships backfill: a manifest from before relationships were
+    recorded, and each layer's (Geo)Parquet."""
+    store = _backfill_store(monkeypatch, tmp_path, {})
+    layers = []
+    for label, frame in frames.items():
+        local = tmp_path / f"{label}.parquet"
+        spatial = isinstance(frame, gpd.GeoDataFrame)
+        if spatial:
+            vectors.geoparquet.write(frame, local)
+        else:
+            frame.to_parquet(local)
+        store[f"{vectors.VECTORS_PREFIX}/{sid}/{label}.parquet"] = local.read_bytes()
+        layers.append({"label": label, "spatial": spatial, "rows": len(frame)})
+    doc = {**_manifest(*layers), **manifest_extra}
+    store[f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json"] = json.dumps(doc).encode()
+    return store
+
+
+def _gems_parquet():
+    return {"geo__MapUnitPolys": gpd.GeoDataFrame(
+                {"MapUnit": ["Qal", "Qaf", "Qal"], "Shape_Area": [1.0, 2.0, 3.0],
+                 "geometry": [Point(424000, 4512000)] * 3}, crs="EPSG:26912"),
+            "geo__DescriptionOfMapUnits": pd.DataFrame({"MapUnit": ["Qal", "Qaf"], "Age": [1.5, 2.5]}),
+            "geo__Glossary": pd.DataFrame({"Term": ["certain", "questionable"]})}
+
+
+def test_relations_backfill_records_them_from_the_extracted_geoparquet(monkeypatch, tmp_path, capsys):
+    import pyarrow.parquet as pq
+
+    store = _relations_store(monkeypatch, tmp_path, "M-400", _gems_parquet())
+    read = []
+    real = pq.read_table
+    monkeypatch.setattr(pq, "read_table", lambda p, columns=None, **kw: read.append(columns)
+                        or real(p, columns=columns, **kw))
+
+    assert vectors.backfill_relations(["M-400"]) == 0
+
+    doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-400/_manifest.json"])
+    assert [(r["origin"], r["destination"], r["detected_by"]) for r in doc["relationships"]] == [
+        ("geo__MapUnitPolys", "geo__DescriptionOfMapUnits", "inferred")]
+    assert {e["label"]: (e["kind"], e["source"]) for e in doc["layers"]} == {
+        "geo__MapUnitPolys": ("layer", "geo"), "geo__DescriptionOfMapUnits": ("table", "geo"),
+        "geo__Glossary": ("supporting", "geo")}
+    assert [w["code"] for w in doc["warnings"]] == [vectors.relations.RELATIONSHIPS_NOT_READ]
+    # Only string and integer columns are read: no geometry, no floats.
+    assert read == [["MapUnit"], ["MapUnit"], ["Term"]]
+    assert "1 relationships, 1 manifests updated, 0 failed" in capsys.readouterr().out
+
+
+def test_relations_backfill_keeps_declared_relationships_and_is_idempotent(monkeypatch, tmp_path):
+    declared = {"origin": "geo__Glossary", "origin_cols": ["Term"],
+                "destination": "geo__DescriptionOfMapUnits", "destination_cols": ["MapUnit"],
+                "cardinality": "many_to_one", "detected_by": "declared"}
+    store = _relations_store(monkeypatch, tmp_path, "M-401", _gems_parquet(), relationships=[declared])
+
+    assert vectors.backfill_relations(["M-401"]) == 0
+    doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-401/_manifest.json"])
+    assert doc["relationships"][0] == declared and len(doc["relationships"]) == 2
+    assert doc["warnings"] == []  # the extraction that recorded them already reported what it read
+
+    before = store[f"{vectors.VECTORS_PREFIX}/M-401/_manifest.json"]
+    monkeypatch.setattr(vectors.gcs, "put_bytes_if_unchanged",
+                        lambda *a, **k: pytest.fail("an unchanged manifest was rewritten"))
+    assert vectors.backfill_relations(["M-401"]) == 0
+    assert store[f"{vectors.VECTORS_PREFIX}/M-401/_manifest.json"] == before
+
+
+def test_relations_backfill_writes_nothing_when_a_layer_cannot_be_read(monkeypatch, tmp_path, capsys):
+    store = _relations_store(monkeypatch, tmp_path, "M-402", _gems_parquet())
+    del store[f"{vectors.VECTORS_PREFIX}/M-402/geo__Glossary.parquet"]
+    before = store[f"{vectors.VECTORS_PREFIX}/M-402/_manifest.json"]
+
+    assert vectors.backfill_relations(["M-402"]) == 1
+    assert store[f"{vectors.VECTORS_PREFIX}/M-402/_manifest.json"] == before
+    assert "M-402/geo__Glossary: KeyError" in capsys.readouterr().err
+
+
+def test_the_cli_runs_the_relations_backfill(monkeypatch):
+    import sys
+
+    calls = []
+    monkeypatch.setattr(vectors, "backfill_relations",
+                        lambda sids, limit=None: calls.append((sids, limit)) or 0)
+    monkeypatch.setattr(sys, "argv", ["vectors", "--relations-backfill", "M-1", "--limit", "5"])
+    assert vectors.main() == 0
+    assert calls == [(["M-1"], 5)]
+    for argv in (["--relations-backfill", "--force"], ["--relations-backfill", "--pmtiles-backfill"]):
+        monkeypatch.setattr(sys, "argv", ["vectors", *argv])
+        with pytest.raises(SystemExit):
+            vectors.main()

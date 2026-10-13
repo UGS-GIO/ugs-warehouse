@@ -160,6 +160,17 @@ table (`destination`, e.g. DescriptionOfMapUnits) and says whether it was `decla
 (with its `confidence` and `overlap`). Each layer entry records its `source` dataset and `kind`:
 `layer` (spatial), `table` (non-spatial, in a relationship) or `supporting`.
 
+For pubs extracted before relationships were recorded, `--relations-backfill [SID ...]` computes
+them from the GeoParquet already on GCS (only its string and integer columns), keeps any declared
+relationships the manifest holds, and writes nothing for a series with a layer it cannot read. Run
+it on the job (Extract map layers → Record relationships in the admin console), then **Rebuild pubs
+STAC**:
+
+```bash
+gcloud run jobs execute ugs-pubs-vectors --region=us-central1 \
+  --args=-m,ugs_warehouse.pubs.vectors,--relations-backfill
+```
+
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so
 the legacy URL's path *is* the object path. A mirrored file's asset serves from our CDN and keeps

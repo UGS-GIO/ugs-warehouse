@@ -18,6 +18,7 @@ clean manifests show still without PMTiles and exits non-zero while any remain;
 The manifest also lists the relationships between a bundle's layers and tables (`relations.py`):
 declared geodatabase relationship classes, and joins inferred within one source dataset. Each
 layer entry records its `source` dataset and its `kind` (`layer`, `table` or `supporting`).
+`--relations-backfill` computes them for pubs extracted before they were recorded.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
 layer never looks like a pub that simply has none.
@@ -25,6 +26,7 @@ layer never looks like a pub that simply has none.
     python -m ugs_warehouse.pubs.vectors M-299DM
     python -m ugs_warehouse.pubs.vectors --all
     python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...] [--force]
+    python -m ugs_warehouse.pubs.vectors --relations-backfill [SID ...]
 """
 from __future__ import annotations
 
@@ -38,6 +40,7 @@ import sys
 import tempfile
 import time
 import zipfile
+from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs
@@ -677,32 +680,103 @@ def _backfill_series(series_id: str, force: bool = False) -> tuple[int, int, lis
     return built, len(spatial) - len(todo), errors
 
 
-def backfill_pmtiles(series_ids: list[str], force: bool = False, limit: int | None = None) -> int:
-    """Build missing PMTiles for already-extracted layers without re-downloading any zip. No
-    `series_ids` means every series with a clean manifest. Prints a summary; returns 1 when any
-    layer or series failed."""
+def _run_backfill(series_ids: list[str], limit: int | None, title: str, counted: tuple[str, ...],
+                  step) -> int:
+    """Run `step(series_id) -> ({count name: n}, [error, ...])` over the given series, or every
+    series with a clean manifest. A series that raises is reported and the rest still run. Prints
+    each series' counts and a summary; returns 1 when any series or layer failed."""
     sids = ([identity.Pub.parse(s).series_id for s in series_ids] if series_ids
             else sorted(extracted_series()))
     if limit:
         sids = sids[:limit]
-    built = skipped = 0
+    totals: Counter = Counter()
     errors: list[str] = []
     for sid in sids:
         try:
-            b, sk, errs = _backfill_series(sid, force=force)
+            counts, errs = step(sid)
         except Exception as e:
             errors.append(f"{sid}: {_error(e)}")
             print(f"{sid}: FAIL {_error(e)}", file=sys.stderr)
             continue
-        built, skipped, errors = built + b, skipped + sk, errors + errs
-        print(f"{sid}: {b} PMTiles built, {sk} skipped"
+        totals.update(counts)
+        errors += errs
+        print(f"{sid}: " + ", ".join(f"{counts[k]} {k}" for k in counted)
               + (f", {len(errs)} failed" if errs else ""))
-    print(f"PMTiles backfill over {len(sids)} series: {built} built, {skipped} skipped, "
-          f"{len(errors)} failed")
+    print(f"{title} over {len(sids)} series: " + ", ".join(f"{totals[k]} {k}" for k in counted)
+          + f", {len(errors)} failed")
     if errors:
         print("Failed:\n  " + "\n  ".join(errors), file=sys.stderr)
         return 1
     return 0
+
+
+def backfill_pmtiles(series_ids: list[str], force: bool = False, limit: int | None = None) -> int:
+    """Build missing PMTiles for already-extracted layers without re-downloading any zip. No
+    `series_ids` means every series with a clean manifest."""
+    def step(sid: str) -> tuple[dict, list[str]]:
+        built, skipped, errs = _backfill_series(sid, force=force)
+        return {"built": built, "skipped": skipped}, errs
+
+    return _run_backfill(series_ids, limit, "PMTiles backfill", ("built", "skipped"), step)
+
+
+def _relations_series(series_id: str) -> tuple[dict, list[str]]:
+    """Compute a series' relationships, layer kinds and sources from its GeoParquet on GCS, reading
+    only the string and integer columns, and record them in its manifest. Declared relationships
+    the manifest already holds are kept, since the geodatabase is not at hand to read them again;
+    a manifest that never recorded relationships gets a RELATIONSHIPS_NOT_READ warning. Nothing is
+    written when any layer cannot be read, since joins inferred without it could be wrong."""
+    import pyarrow.parquet as pq
+
+    path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
+    raw, version = gcs.get_bytes_versioned(path)
+    manifest = json.loads(raw.decode())
+    if not isinstance(manifest, dict) or not isinstance(manifest.get("layers"), list):
+        raise ValueError(f"{path} records no per-layer metadata; re-extract with --force")
+    before = json.dumps(manifest)
+    profiles: list[relations.Layer] = []
+    errors: list[str] = []
+    with tempfile.TemporaryDirectory(prefix=f"v_{series_id.replace('/', '_')}_") as work:
+        for entry in manifest["layers"]:
+            label = entry["label"]
+            entry.setdefault("source", relations.source_of_label(label, series_id))
+            local = os.path.join(work, f"{label}.parquet")
+            try:
+                gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
+                columns, _ = _schema(local)
+                keyed = [c["name"] for c in columns if c["type"] in ("string", "integer")]
+                table = pq.read_table(local, columns=keyed)
+                profiles.append(relations.Layer(label, relations.layer_name(label), entry["source"],
+                                                relations.profile_table(table)))
+                del table
+            except Exception as e:
+                errors.append(f"{series_id}/{label}: {_error(e)}")
+                print(f"  {series_id}/{label}: not read for relationships: {e}", file=sys.stderr)
+            finally:
+                if os.path.exists(local):
+                    os.remove(local)
+    if errors:
+        return {"relationships": 0, "manifests updated": 0}, errors
+    if "relationships" not in manifest:
+        manifest.setdefault("warnings", []).append({
+            "code": relations.RELATIONSHIPS_NOT_READ,
+            "warning": "declared relationships not read: computed from the extracted GeoParquet, "
+                       "without the geodatabase; re-extract with --force to read them"})
+    declared = [r for r in manifest.get("relationships") or [] if r.get("detected_by") == "declared"]
+    _set_relationships(manifest, relations.merge(declared, relations.infer(profiles)))
+    changed = json.dumps(manifest) != before
+    if changed:
+        gcs.put_bytes_if_unchanged(json.dumps(manifest).encode(), path, version,
+                                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+    return {"relationships": len(manifest["relationships"]), "manifests updated": int(changed)}, []
+
+
+def backfill_relations(series_ids: list[str], limit: int | None = None) -> int:
+    """Record relationships, layer kinds and sources for already-extracted pubs, from their
+    GeoParquet on GCS, without re-downloading any zip. No `series_ids` means every series with a
+    clean manifest."""
+    return _run_backfill(series_ids, limit, "Relationships backfill",
+                         ("relationships", "manifests updated"), _relations_series)
 
 
 def main() -> int:
@@ -716,11 +790,19 @@ def main() -> int:
     ap.add_argument("--pmtiles-backfill", action="store_true",
                     help="Build missing PMTiles from extracted GeoParquet (the given series, or every "
                          "cleanly extracted one); --force rebuilds existing ones")
+    ap.add_argument("--relations-backfill", action="store_true",
+                    help="Record relationships, layer kinds and sources from extracted GeoParquet "
+                         "(the given series, or every cleanly extracted one)")
     args = ap.parse_args()
 
-    if args.pmtiles_backfill:
-        if args.all or args.dry_run:
-            ap.error("--pmtiles-backfill takes series ids or none, not --all or --dry-run")
+    if args.pmtiles_backfill or args.relations_backfill:
+        if args.all or args.dry_run or (args.pmtiles_backfill and args.relations_backfill):
+            ap.error("--pmtiles-backfill or --relations-backfill takes series ids or none, not "
+                     "--all, --dry-run or the other backfill")
+        if args.relations_backfill:
+            if args.force:
+                ap.error("--relations-backfill always recomputes; --force does not apply")
+            return backfill_relations(args.series_id, limit=args.limit)
         return backfill_pmtiles(args.series_id, force=args.force, limit=args.limit)
     if not args.all and not args.series_id:
         ap.error("give series ids or --all")

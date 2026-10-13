@@ -78,8 +78,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "GeoParquet, and build PMTiles for each map layer. Skips pubs already extracted; then "
         "Rebuild pubs STAC to bind them. Fails while any extracted layer has no PMTiles: run Build "
         "map tiles (the PMTiles backfill) once after the deploy that adds them, and to retry a "
-        "layer whose tiling failed.",
-        modes=(("pmtiles-backfill", "Build map tiles (PMTiles backfill)"),), modes_label="Only:"),
+        "layer whose tiling failed. Record relationships computes the joins between each pub's "
+        "layers and tables from its extracted GeoParquet; then Rebuild pubs STAC.",
+        modes=(("pmtiles-backfill", "Build map tiles (PMTiles backfill)"),
+               ("relations-backfill", "Record relationships (backfill)")), modes_label="Only:"),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
         "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
@@ -208,7 +210,8 @@ def run_ingest(force: bool = False) -> dict:
 MODE_ARGS = {
     "ducklake-maintain": {"report": ["--report"], "dry-run": ["--dry-run"]},
     "restyle": {"refresh": ["-m", "scripts.refresh_stac"]},
-    "vectors": {"pmtiles-backfill": ["-m", "ugs_warehouse.pubs.vectors", "--pmtiles-backfill"]},
+    "vectors": {"pmtiles-backfill": ["-m", "ugs_warehouse.pubs.vectors", "--pmtiles-backfill"],
+                "relations-backfill": ["-m", "ugs_warehouse.pubs.vectors", "--relations-backfill"]},
 }
 
 

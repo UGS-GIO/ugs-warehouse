@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, catalogItemHref, citeLink, collectionAsItem, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, catalogItemHref, citeLink, collectionAsItem, isServingTopic, plateHrefOf, stacDocQuery, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
+import { joinsRows } from "./map/preview-spec";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 
@@ -453,5 +454,53 @@ describe("publication links", () => {
     expect(collectionLink({ links: [
       { rel: "parent", href: "../p.json" }, { rel: "collection", href: "../collection.json" },
     ] })?.href).toBe("../collection.json");
+  });
+});
+
+describe("the publication's plate", () => {
+  const url = "https://cdn/stac/ugs-publications/M/M-246DM/collection.json";
+  const coll = (links: StacDoc["links"], assets: StacDoc["assets"] = {}): StacDoc =>
+    ({ type: "Collection", id: "M-246DM", links, assets });
+  const items = [
+    { rel: "item", href: "./M-246DM_UtahLandslideMaps__DebrisFlowPaths/M-246DM_UtahLandslideMaps__DebrisFlowPaths.json" },
+    { rel: "item", href: "./M-246DM_plate/M-246DM_plate.json", title: "Map plate" },
+  ];
+
+  it("is the rel=item link whose id ends _plate, resolved against the Collection's URL", () => {
+    expect(plateHrefOf(coll(items), url)).toBe("https://cdn/stac/ugs-publications/M/M-246DM/M-246DM_plate/M-246DM_plate.json");
+  });
+
+  it("is none for a report-only pub, a single-file pub (COG already on the Collection), or an Item", () => {
+    expect(plateHrefOf(coll([]), url)).toBeUndefined();
+    expect(plateHrefOf(coll(items.slice(0, 1)), url)).toBeUndefined();
+    const cog = { cog: { href: "https://x/p.cog.tif", type: "image/tiff; application=geotiff; profile=cloud-optimized" } };
+    expect(plateHrefOf(coll(items, cog), url)).toBeUndefined();
+    expect(plateHrefOf({ type: "Feature", links: items }, url)).toBeUndefined();
+  });
+
+  it("resolves from where the Collection was fetched, through its normalised item shape", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify(coll(items))));
+    const doc = await stacDocQuery(url).queryFn();
+    fetchMock.mockRestore();
+    expect(plateHrefOf(collectionAsItem(doc))).toBe("https://cdn/stac/ugs-publications/M/M-246DM/M-246DM_plate/M-246DM_plate.json");
+  });
+});
+
+describe("isServingTopic", () => {
+  it("is the vector producer's ugs:dbt_schema stamp, which a publication layer does not carry", () => {
+    expect(isServingTopic({ properties: { "ugs:dbt_schema": "hazards" } })).toBe(true);
+    expect(isServingTopic({ properties: { "ugs:series_id": "M-246DM" } })).toBe(false);
+    expect(isServingTopic(undefined)).toBe(false);
+  });
+});
+
+describe("joinsRows", () => {
+  const item: StacDoc = { id: "x" };
+  it("lets a clicked tile feature page the table only when tile ids are its feature_ids", () => {
+    expect(joinsRows({ kind: "vector", item, pmHref: "a.pmtiles", sourceLayer: "x", rowIds: true })).toBe(true);
+    expect(joinsRows({ kind: "vector", item, pmHref: "a.pmtiles", sourceLayer: "x", rowIds: false })).toBe(false);
+    expect(joinsRows({ kind: "vector", item, pmHref: "a.pmtiles", sourceLayer: "x" })).toBe(false);
+    expect(joinsRows({ kind: "cog", item, href: "a.tif" })).toBe(false);
+    expect(joinsRows(null)).toBe(false);
   });
 });

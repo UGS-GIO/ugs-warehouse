@@ -8,18 +8,22 @@
 import type { MouseEvent } from "react";
 
 import { idOf, useViewCtx } from "@/app";
+import type { StacDoc } from "@/stac";
 
-export function AddToMapButton({ layerId, compact = false, large = false }: {
+export function AddToMapButton({ layerId, doc, compact = false, large = false }: {
   // The layer to add. Omit ONLY where the component renders inside the open item's own panel (item
   // detail): it then targets the open item — idOf(itemUrl), the authoritative id for that panel.
   // Pass it explicitly (as the cards/rows do) anywhere the shown item may not be the open one.
   layerId?: string;
+  // The layer's own doc, when it is neither the open item nor in the loaded layer set yet (a
+  // publication's plate, shown on the publication page): it is a layer if it draws as one.
+  doc?: StacDoc;
   compact?: boolean;   // dense chip for a result card/row; default is a detail-panel action button
   large?: boolean;     // the item page's action row
 }) {
   const c = useViewCtx();
   const id = layerId ?? (c.itemUrl ? idOf(c.itemUrl) : undefined);
-  const isLayer = Boolean(id && c.isLayerId(id));
+  const isLayer = Boolean(id && (c.isLayerId(id) || (doc && c.drawsAsLayer(doc))));
   if (!id || !isLayer) return null;
 
   const on = c.isActive(id);

@@ -15,9 +15,9 @@ import { ensureCogProtocol } from "./cog";
 import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
-import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, validBbox } from "./map-model";
+import { boundsOf, defaultVectorLayers, type FocusSel, GEOM_FILTER, pickFeature, validBbox } from "./map-model";
 import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
-import { type PreviewSpec, type Renders, specItemId } from "./preview-spec";
+import { joinsRows, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
 
@@ -25,16 +25,9 @@ ensurePmtilesProtocol();   // this module is lazy, so registration happens the f
 
 const LIGHT_BASEMAP = protomapsStyle("white", DIRECT);
 
-// Neutral, geometry-agnostic render used until a ugs-styles style is bound — visible borders, not
-// faux cartography. fill/line/circle all added so any geometry type shows.
-const NEUTRAL_LAYERS = [
-  { type: "fill", filter: GEOM_FILTER.fill,
-    paint: { "fill-color": "#6b7280", "fill-opacity": 0.15, "fill-outline-color": "#374151" } },
-  { type: "line", filter: GEOM_FILTER.line,
-    paint: { "line-color": "#374151", "line-width": 1.1 } },
-  { type: "circle", filter: GEOM_FILTER.point,
-    paint: { "circle-color": "#374151", "circle-radius": 3.5, "circle-opacity": 0.85 } },
-];
+// Neutral render used until (or without) a ugs-styles style: visible borders, not faux cartography.
+// The Map page's unstyled layers use the same per-geometry layers in their swatch colour.
+const NEUTRAL_LAYERS = defaultVectorLayers("#374151").map(({ type, filter, paint }) => ({ type, filter, paint }));
 
 // Load a baked sprite sheet (pie-wedge icons for box-type) into the map via addImage. Idempotent.
 async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void> {
@@ -227,7 +220,9 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     highlightFeature(fid);  // exact outline via the tile's feature-state, no parquet read
     // The tile's copy of the geometry, so a long line is cut at the tile edge; near enough to zoom to.
     onFeatureSelect?.(props, fid, turfBbox(f.geometry) as FocusSel["bbox"]);
-    if (fid != null) onFeatureClick(fid, props);
+    // The table only pages to the feature when tile ids are its feature_ids; otherwise the card
+    // above shows the tile's attributes and the table is left as it is.
+    if (fid != null && joinsRows(spec)) onFeatureClick(fid, props);
   };
 
   const cluster = (

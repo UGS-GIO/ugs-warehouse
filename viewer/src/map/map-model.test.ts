@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type ActiveLayer, boundsOf, clampSize, colorForId, DETENTS, hasFootprint, LAYER_COLORS, layerParam,
+import { type ActiveLayer, boundsOf, clampSize, colorForId, defaultVectorLayers, DETENTS, GEOM_FILTER, hasFootprint, LAYER_COLORS, layerParam,
   mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
   validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
@@ -285,5 +285,22 @@ describe("orderedSublayerIds", () => {
       { styledCount: () => undefined, cogReady: false }))
       .toEqual(["rpm-a_b_c-raster", "pm-qfaults-fill", "pm-qfaults-line", "pm-qfaults-circle"]);
     expect(slugOf("a.b:c")).toBe("a_b_c");
+  });
+});
+
+describe("defaultVectorLayers", () => {
+  it("draws every geometry type visibly when there is no style: fill + outline, line, circle", () => {
+    const layers = defaultVectorLayers("#123456");
+    expect(layers.map((l) => [l.kind, l.type])).toEqual([["fill", "fill"], ["line", "line"], ["circle", "circle"]]);
+    expect(layers.map((l) => l.filter)).toEqual([GEOM_FILTER.fill, GEOM_FILTER.line, GEOM_FILTER.point]);
+    const [fill, line, circle] = layers;
+    expect(fill.paint["fill-color"]).toBe("#123456");
+    expect(fill.paint["fill-opacity"]).toBeGreaterThan(0);
+    expect(fill.paint["fill-outline-color"]).toBe("#123456");
+    // The line layer's filter takes polygons too, so a polygon gets a real outline.
+    expect(GEOM_FILTER.line).toContainEqual(expect.arrayContaining(["Polygon"]));
+    expect(line.paint["line-width"]).toBeGreaterThan(0);
+    expect(circle.paint["circle-radius"]).toBeGreaterThan(0);
+    expect(circle.paint["circle-opacity"]).toBeGreaterThan(0);
   });
 });

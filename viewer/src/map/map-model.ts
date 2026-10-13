@@ -153,6 +153,20 @@ export const GEOM_FILTER: Record<"fill" | "line" | "point", GeomFilter> = {
   point: ["match", ["geometry-type"], ["Point", "MultiPoint"], true, false],
 };
 
+// How a vector layer draws when it has no bound ugs-styles render (a publication layer, or a topic
+// whose style has not loaded): one layer per geometry type, so whatever it holds shows. Polygons get
+// a translucent fill and an outline (the line layer's filter takes polygons too), lines a line, points
+// a circle. The preview passes a neutral colour; the Map page the layer's swatch colour.
+export const defaultVectorLayers = (color: string) => [
+  { kind: "fill" as const, type: "fill" as const, filter: GEOM_FILTER.fill,
+    paint: { "fill-color": color, "fill-opacity": 0.15, "fill-outline-color": color } },
+  { kind: "line" as const, type: "line" as const, filter: GEOM_FILTER.line,
+    paint: { "line-color": color, "line-width": 1.2 } },
+  { kind: "circle" as const, type: "circle" as const, filter: GEOM_FILTER.point,
+    paint: { "circle-color": color, "circle-radius": 3.5, "circle-opacity": 0.85,
+             "circle-stroke-color": "#ffffff", "circle-stroke-width": 0.5 } },
+];
+
 // A catalog item's footprint for the Coverage overlay — its bbox (drawn as a rectangle) + enough
 // to open it on click. Aspatial items (no bbox) are filtered out by the caller.
 export type Footprint = { href: string; id: string; title: string; bbox: number[] };

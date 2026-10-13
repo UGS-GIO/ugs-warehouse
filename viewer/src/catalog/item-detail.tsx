@@ -20,7 +20,7 @@ import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, ki
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { type Asset, catalogItemHref, citeLink, collectionParts, contentsOf, hasFootprint, IS_REVIEW, ownForeignKeys, relatedAssets,
-  pmtilesLink, relatedJoins, relatedLinks, type StacDoc, tableColumns, viaLink } from "@/stac";
+  pmtilesLink, relatedJoins, relatedLinks, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
 import { Unavailable } from "@/offline/offline-notice";
@@ -182,6 +182,13 @@ function PublicationParts({ item, collectionId }: { item: StacDoc; collectionId:
       </ul>
     </section>
   );
+}
+
+// On a publication page, "Add to map" for its plate, as on the plate's own page. Nothing for a
+// report-only or single-file publication (no plate Item), or while the plate loads.
+function PlateAddToMap({ item }: { item: StacDoc }) {
+  const plate = usePlate(item);
+  return plate?.id ? <AddToMapButton large layerId={String(plate.id)} doc={plate} /> : null;
 }
 
 export type PartOf = { title: string; c: string; i: string };
@@ -359,6 +366,7 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
           {page && listedAssets(item).length > 0 && <a href="#downloads" className={`${PRIMARY} lg:hidden`}>Download</a>}
           {hasGeom && <button onClick={onMap} className={SECONDARY}>View on map</button>}
           <AddToMapButton large />
+          <PlateAddToMap item={item} />
           <SaveLayerOffline item={item} className={SECONDARY} />
           {onExplore && <button onClick={onExplore} className={SECONDARY}>Explore ⤢</button>}
           {via && <a href={via.href} target="_blank" rel="noopener" className={SECONDARY}>{via.title ?? "Publication page"} ↗</a>}

@@ -195,7 +195,11 @@ export const collectionAsItem = (d: StacDoc): StacDoc => {
   if (start && !props["ugs:date_unknown"]) props.datetime = start;
   // The placeholder extent is not a footprint, so it does not become the item's bbox.
   const bbox = props["ugs:footprint_source"] === "utah-bbox" ? undefined : extent?.spatial?.bbox?.[0];
-  return { ...d, bbox, properties: props };
+  const out = { ...d, bbox, properties: props };
+  // Same document, so the same URL to resolve its relative links against.
+  const from = fetchedFrom.get(d);
+  if (from) fetchedFrom.set(out, from);
+  return out;
 };
 
 // A Collection's Items (its layers and tables), from the titled rel=item links: no fetch per item.
@@ -204,6 +208,29 @@ export const collectionParts = (d: StacDoc | undefined): { id: string; title: st
     const id = idOf(l.href.split(/[?#]/)[0]);
     return { id, title: l.title ?? id };
   });
+
+// A publication's map plate: the Item among its rel=item links whose id ends `_plate`, as an
+// absolute URL (against `base`, else the URL the Collection was fetched from). None for a report-only
+// publication, or a single-file one, whose plate COG already sits on the Collection.
+export const plateHrefOf = (d: StacDoc | undefined, base?: string): string | undefined => {
+  if (d?.type !== "Collection" || cogAsset(d)) return undefined;
+  const link = (d.links ?? []).find((l) => l.rel === "item" && idOf(l.href.split(/[?#]/)[0]).endsWith("_plate"));
+  const from = base ?? fetchedFrom.get(d);
+  if (!link || !from) return undefined;
+  try { return new URL(link.href, from).href; } catch { return undefined; }
+};
+
+/** The publication's plate Item (see plateHrefOf), fetched; undefined while loading or when none. */
+export function usePlate(d: StacDoc | undefined): StacDoc | undefined {
+  return useStac(plateHrefOf(d)).data;
+}
+
+// Whether the tiles service (XYZ, GL style, ArcGIS VectorTileServer) serves this item. It serves the
+// serving-topics index, whose items the vector producer stamps with `ugs:dbt_schema`; a publication
+// layer has PMTiles of its own but is not in that index. The same items' tiles carry `feature_id` as
+// the feature id, which is what joins a clicked map feature to its table row.
+export const isServingTopic = (d: StacDoc | undefined): boolean =>
+  typeof (d?.properties as Record<string, unknown> | undefined)?.["ugs:dbt_schema"] === "string";
 
 // Registry-driven relationships (the warehouse emits these from raw.schema_registry):
 //  • related links — the FK graph (item ↔ related serving-topic item)

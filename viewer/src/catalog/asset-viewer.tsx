@@ -8,10 +8,11 @@ import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
 import { FeatureCard } from "@/map/feature-card";
 import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
-import { type Asset, type AssetKind, assetKind, isDrawableCog, KIND_RANK, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
-  summaryFieldsOf, tableColumns, thumbnailAsset } from "@/stac";
+import { type Asset, type AssetKind, isDrawableCog, isServingTopic, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
+  summaryFieldsOf, tableColumns, thumbnailAsset, usePlate } from "@/stac";
 import { C, toggle } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
+import { type AssetEntry, assetEntries, plateEntry, previewKindOf } from "./item-view";
 
 // deck.gl's mesh layers and the terrain builder: only items with a 3D asset need them, so they load
 // with the first one rather than with every catalog page.
@@ -77,7 +78,8 @@ function VectorPreview({ item }: { item: StacDoc }) {
   const pm = pmtilesLink(item);
   const { setFocus, pick, mapMismatch } = usePreviewMap();
   const spec: PreviewSpec = pm
-    ? { kind: "vector", item, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? String(item.id ?? "") }
+    ? { kind: "vector", item, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? String(item.id ?? ""),
+        rowIds: isServingTopic(item) }
     : null;
   return (
     <>
@@ -187,17 +189,8 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
 // Tabbed viewer over every asset on an item: previewable files (PDF, image, COG, parquet, text)
 // get a tab + inline pane; the rest are listed as download links. The default tab is the
 // highest-priority file (map > pdf > data > image > text).
-function AssetViewer({ item }: { item: StacDoc }) {
-  const entries = useMemo(() => Object.entries(item.assets ?? {})
-    // thumbnails are redundant with the real image/cog; skip as their own tab
-    .filter(([, a]) => !a.roles?.includes("thumbnail"))
-    .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
-    .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
-      || KIND_RANK[x.kind] - KIND_RANK[y.kind]
-      // A raster item carries the canonical COG in its source projection AND a web-mercator
-      // derivative. Both are kind "cog", so a stable sort left whichever came first as the default
-      // tab — the native one, which this client cannot draw (warehouse#84).
-      || Number(isDrawableCog(y.asset, item)) - Number(isDrawableCog(x.asset, item))), [item]);
+function AssetViewer({ item, extra }: { item: StacDoc; extra?: AssetEntry }) {
+  const entries = useMemo(() => assetEntries(item, extra), [item, extra]);
   const tabs = entries.filter((e) => e.kind !== "other");
   const others = entries.filter((e) => e.kind === "other");
   // No reset-on-item-change effect: `active` below falls back to the first tab whenever the
@@ -227,7 +220,7 @@ function AssetViewer({ item }: { item: StacDoc }) {
           ))}
         </div>
       )}
-      <AssetPane kind={active.kind} asset={active.asset} item={item} />
+      <AssetPane kind={active.kind} asset={active.asset} item={active.doc ?? item} />
       {others.length > 0 && (
         <div className="mt-2 text-xs text-muted-foreground">
           Other files: <AssetChips assets={Object.fromEntries(others.map((e) => [e.key, e.asset]))} />
@@ -237,13 +230,21 @@ function AssetViewer({ item }: { item: StacDoc }) {
   );
 }
 
-// Preview: vector serving topics → interactive PMTiles map + linked dataset explorer;
-// geologic map mosaics → interactive raster PMTiles map; everything else (publications) →
-// the tabbed asset viewer so users can peruse every file in-page.
+// Preview (previewKindOf): vector tiles (serving topics, publication layers) → interactive PMTiles
+// map + linked dataset explorer; geologic map mosaics → interactive raster PMTiles map; everything
+// else (publications, with their plate as a Map tab) → the tabbed asset viewer.
 export function Preview({ item }: { item: StacDoc }) {
-  if (pmtilesLink(item)) return <VectorPreview item={item} />;
-  if (rasterTilesAsset(item)) return <RasterMosaicPreview item={item} />;
-  return <AssetViewer item={item} />;
+  const kind = previewKindOf(item);
+  if (kind === "vector") return <VectorPreview item={item} />;
+  if (kind === "mosaic") return <RasterMosaicPreview item={item} />;
+  return <PlatedAssetViewer item={item} />;
+}
+
+// A publication's assets plus its plate's map, the PDF staying the default tab.
+function PlatedAssetViewer({ item }: { item: StacDoc }) {
+  const plate = usePlate(item);
+  const extra = useMemo(() => plateEntry(plate), [plate]);
+  return <AssetViewer item={item} extra={extra} />;
 }
 
 // ---- API & data endpoints ----

@@ -7,8 +7,8 @@
 import type { ItemRef } from "./browse";
 import { validBbox } from "@/map/map-model";
 import {
-  type Asset, assetKind, cogAsset, isPlaceholderFootprint, parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns,
-  type TableColumn, zarrAsset,
+  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, isDrawableCog, isPlaceholderFootprint, KIND_RANK,
+  parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, type TableColumn, zarrAsset,
 } from "@/stac";
 
 // ---- field getters (null-safe; the single home for what browse.tsx + discovery-model.ts duplicated) ----
@@ -166,6 +166,39 @@ export const categoryLabel = (key: string): string =>
 const FORMAT_LABEL: Partial<Record<ReturnType<typeof assetKind>, string>> = {
   cog: "COG", zarr: "Datacube", threeD: "3D", pdf: "PDF", image: "Image", parquet: "GeoParquet", text: "Text",
 };
+// ---- the item preview ----
+// Which preview an item gets: vector tiles (a serving topic, or a publication layer with its own
+// PMTiles) → the map plus its table; a raster mosaic → its tiles; anything else → the asset tabs.
+export const previewKindOf = (d: StacDoc): "vector" | "mosaic" | "assets" =>
+  pmtilesLink(d) ? "vector" : rasterTilesAsset(d) ? "mosaic" : "assets";
+
+// ---- the asset viewer's tabs ----
+export type AssetEntry = { key: string; asset: Asset; kind: AssetKind; doc?: StacDoc };
+
+// The publication's plate as one more tab: its COG (the drawable copy where there is one), read with
+// the plate Item for its projection. Absent until the plate loads, and for a pub with no plate.
+export const plateEntry = (plate: StacDoc | undefined): AssetEntry | undefined => {
+  const asset = plate && (cogRenderAsset(plate) ?? cogAsset(plate));
+  return asset && plate
+    ? { key: "plate", kind: "cog", doc: plate,
+        asset: { ...asset, title: String(plate.properties?.title ?? asset.title ?? "Map plate") } }
+    : undefined;
+};
+
+// The tabs over an item's assets, the publication PDF first, then by kind. `extra` (the plate) follows.
+export const assetEntries = (item: StacDoc, extra?: AssetEntry): AssetEntry[] => [
+  ...Object.entries(item.assets ?? {})
+    // thumbnails are redundant with the real image/cog; skip as their own tab
+    .filter(([, a]) => !a.roles?.includes("thumbnail"))
+    .map(([key, a]) => ({ key, asset: a, kind: assetKind(a) }))
+    .sort((x, y) => (x.key === "publication" ? -1 : y.key === "publication" ? 1 : 0)
+      || KIND_RANK[x.kind] - KIND_RANK[y.kind]
+      // A raster item carries the canonical COG in its source projection AND a web-mercator
+      // derivative, both kind "cog"; the drawable one leads, since this client cannot draw the other.
+      || Number(isDrawableCog(y.asset, item)) - Number(isDrawableCog(x.asset, item))),
+  ...(extra ? [extra] : []),
+];
+
 // A thumbnail or a metadata record (the ISO 19139 sidecar) describes the dataset; it isn't one of
 // its formats, so format chips and the Format facet skip it.
 export const isFormatAsset = (a: Asset): boolean =>

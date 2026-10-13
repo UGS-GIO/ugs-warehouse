@@ -3,8 +3,10 @@
 import { validBbox } from "./map-model";
 import { hasFootprint, rendersOf, type StacDoc } from "@/stac";
 
+// `rowIds`: the tile feature ids are the table's `feature_id`, so a clicked feature can page the
+// table to its row. Off for tiles built without them (a publication layer).
 export type PreviewSpec =
-  | { kind: "vector"; item: StacDoc; pmHref: string; sourceLayer: string }
+  | { kind: "vector"; item: StacDoc; pmHref: string; sourceLayer: string; rowIds?: boolean }
   | { kind: "cog"; item: StacDoc; href: string }
   | { kind: "rasterpm"; item: StacDoc; href: string }
   | { kind: "footprint"; item: StacDoc; geometry: GeoJSON.Geometry }
@@ -13,6 +15,9 @@ export type PreviewSpec =
 export type Renders = ReturnType<typeof rendersOf>;
 
 export const specItemId = (s: PreviewSpec): string => (s ? String(s.item.id ?? "") : "");
+
+// Whether a clicked tile feature's id names its table row (see `rowIds`).
+export const joinsRows = (s: PreviewSpec): boolean => s?.kind === "vector" && s.rowIds === true;
 
 export const bboxPolygon = (b: number[]): GeoJSON.Polygon => {
   const [w, s, e, n] = b;

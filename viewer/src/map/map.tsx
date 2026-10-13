@@ -18,7 +18,7 @@ import { BasemapMenu } from "./basemap-menu";
 import lightThumb from "@/assets/basemaps/light.webp";
 import satelliteThumb from "@/assets/basemaps/satellite.webp";
 import streetsThumb from "@/assets/basemaps/streets.webp";
-import { type ActiveLayer, colorForId, type Footprint, GEOM_FILTER, orderedSublayerIds, pickFeature, slugOf, validBbox } from "./map-model";
+import { type ActiveLayer, colorForId, defaultVectorLayers, type Footprint, orderedSublayerIds, pickFeature, slugOf, validBbox } from "./map-model";
 import { fitTo, setMapTarget, setPin, takeFocus, usePin } from "./camera";
 import { COG_GATE, type Gate, gateOf, gateZoom, groupGate, useGatedOut, ZoomGateNotice } from "./zoomgate";
 import { useIsDesktop } from "@/ui/use-breakpoint";
@@ -510,11 +510,10 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
               // An array, NOT a fragment: Source clones each child to inject `source`, and cloning a
               // fragment puts the prop on the fragment (three React warnings per layer, and no
               // source on the layers). Explicit `source` for the same reason — don't rely on inject.
-              [
-                <Layer key="fill" id={`pm-${s}-fill`} source={`pm-${s}`} type="fill" source-layer={pmLayer} filter={GEOM_FILTER.fill} paint={{ "fill-color": c, "fill-opacity": 0.15 }} />,
-                <Layer key="line" id={`pm-${s}-line`} source={`pm-${s}`} type="line" source-layer={pmLayer} filter={GEOM_FILTER.line} paint={{ "line-color": c, "line-width": 1.2 }} />,
-                <Layer key="circle" id={`pm-${s}-circle`} source={`pm-${s}`} type="circle" source-layer={pmLayer} filter={GEOM_FILTER.point} paint={{ "circle-color": c, "circle-radius": 3, "circle-opacity": 0.85 }} />,
-              ]
+              defaultVectorLayers(c).map(({ kind, type, filter, paint }) => (
+                <Layer key={kind} {...({ id: `pm-${s}-${kind}`, source: `pm-${s}`, type, "source-layer": pmLayer,
+                  filter, paint } as LayerProps)} />
+              ))
             )}
           </Source>
         );

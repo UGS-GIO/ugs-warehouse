@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { featureEndpoints } from "./catalog";
 import { Panel } from "./panel";
-import { assetKind, esriVectorTileUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
+import { assetKind, esriVectorTileUrl, FEATURES_BASE, isServingTopic, pmtilesLink, rendersOf, type StacDoc,
   tilesStyleUrl, xyzTilesUrl } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
@@ -78,9 +78,10 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   const rows: Row[] = [];
   // Only an item with its own `rel=service` link is served (featureEndpoints).
   rows.push(...featureEndpoints(item, FEATURES_BASE));
-  // The tiles service exists for clients that cannot read PMTiles directly. Only offered when the
-  // item actually has PMTiles, since that archive is what it serves.
-  if (pm) {
+  // The tiles service exists for clients that cannot read PMTiles directly. Only offered for an item
+  // it serves: one with PMTiles in the serving-topics index (isServingTopic). A publication layer's
+  // PMTiles is still in the Assets list, read straight off the CDN.
+  if (pm && isServingTopic(item)) {
     const xyz = xyzTilesUrl(id);
     if (xyz) rows.push({ label: "XYZ tiles (fallback)", desc: "For clients that cannot read PMTiles. Prefer the PMTiles asset", url: xyz });
     const style = tilesStyleUrl(id, chosen);

@@ -593,7 +593,7 @@ function useViewState() {
     search, setSearch, threeD, setThreeD, browseAll, setBrowseAll,
     layerCollIds, setSeries,
     revealInfo, activeLayers, footprints, layerRows, idsForMap, toggleLayer, toggleLayers, styleCache,
-    addLayer, removeLayer, isActive, isLayerId, setLayerOrder,
+    addLayer, removeLayer, isActive, isLayerId, drawsAsLayer, setLayerOrder,
   };
 }
 

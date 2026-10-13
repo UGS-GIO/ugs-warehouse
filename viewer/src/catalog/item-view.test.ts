@@ -3,7 +3,7 @@ import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatsOf, hasGeometry, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
-  series, title, typeOf, year,
+  assetEntries, plateEntry, previewKindOf, series, title, typeOf, year,
 } from "./item-view";
 import { collectionAsItem, type StacDoc } from "@/stac";
 
@@ -130,6 +130,59 @@ describe("formatsOf", () => {
       metadata: { href: "x.xml", type: "application/xml", roles: ["metadata"], title: "ISO 19139 metadata" },
     } });
     expect(formatsOf(it)).toEqual(["PDF"]);
+  });
+});
+
+// Task P's shapes: a publication layer Item carries the serving-topic PMTiles asset and link, with no
+// `ugs:renders` style; a multi-item publication Collection links its plate Item.
+const COG = "image/tiff; application=geotiff; profile=cloud-optimized";
+const pubLayer: StacDoc = {
+  type: "Feature", id: "M-246DM_UtahLandslideMaps__DebrisFlowPaths",
+  properties: { title: "Debris Flow Paths", "ugs:series_id": "M-246DM" },
+  assets: {
+    data: { href: "https://x/vectors/M-246DM/UtahLandslideMaps__DebrisFlowPaths.parquet", type: "application/vnd.apache.parquet", roles: ["data"] },
+    pmtiles: { href: "https://x/vectors/M-246DM/UtahLandslideMaps__DebrisFlowPaths.pmtiles", type: "application/vnd.pmtiles", roles: ["visual"] },
+  },
+  links: [{ rel: "pmtiles", href: "https://x/vectors/M-246DM/UtahLandslideMaps__DebrisFlowPaths.pmtiles",
+            type: "application/vnd.pmtiles", "pmtiles:layers": ["UtahLandslideMaps__DebrisFlowPaths"] }],
+};
+const plate: StacDoc = {
+  type: "Feature", id: "M-246DM_plate", properties: { title: "Map plate" },
+  assets: {
+    cog: { href: "https://x/M-246DM.cog.tif", type: COG, roles: ["data", "cloud-optimized"], "proj:code": "EPSG:3857" },
+    thumbnail: { href: "https://x/M-246DM.webp", type: "image/webp", roles: ["thumbnail"] },
+  },
+};
+
+describe("previewKindOf", () => {
+  it("gives a publication layer with PMTiles the vector preview, like a serving topic", () => {
+    expect(previewKindOf(pubLayer)).toBe("vector");
+    expect(previewKindOf({ ...pubLayer, links: [] })).toBe("assets");
+    expect(previewKindOf({ type: "Collection", assets: { publication: { href: "x.pdf", type: "application/pdf" } } }))
+      .toBe("assets");
+  });
+});
+
+describe("the publication's asset tabs", () => {
+  const pubAssets: StacDoc = { type: "Collection", id: "M-246DM", assets: {
+    thumbnail: { href: "c.webp", type: "image/webp", roles: ["thumbnail"] },
+    gis_data_zip: { href: "a.zip", type: "application/zip", roles: ["source"] },
+    publication: { href: "m.pdf", type: "application/pdf", title: "Publication" },
+  } };
+
+  it("adds the plate's COG as a Map tab, the PDF staying first", () => {
+    const tabs = assetEntries(pubAssets, plateEntry(plate)).filter((e) => e.kind !== "other");
+    expect(tabs.map((e) => [e.key, e.kind])).toEqual([["publication", "pdf"], ["plate", "cog"]]);
+    const tab = tabs[1];
+    expect(tab.asset.href).toBe("https://x/M-246DM.cog.tif");
+    expect(tab.asset.title).toBe("Map plate");
+    expect(tab.doc).toBe(plate);   // drawn with the plate Item, for its projection
+  });
+
+  it("has no Map tab without a plate (a report, or before the plate loads)", () => {
+    expect(plateEntry(undefined)).toBeUndefined();
+    expect(plateEntry({ type: "Feature", id: "x_plate", assets: {} })).toBeUndefined();
+    expect(assetEntries(pubAssets).map((e) => e.key)).toEqual(["publication", "gis_data_zip"]);
   });
 });
 

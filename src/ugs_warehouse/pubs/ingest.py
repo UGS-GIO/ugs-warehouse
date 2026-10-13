@@ -19,7 +19,7 @@ import sys
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs, stac
-from . import editions, identity, prune, sink_stac, source, threed, topic, vectors
+from . import editions, identity, prune, relations, sink_stac, source, threed, topic, vectors
 
 
 def _list(prefix: str, bucket: str | None) -> list[str]:
@@ -133,14 +133,15 @@ def _unit_ids(bucket: str | None = None) -> set[str]:
 
 def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict], dict[str, str]]:
     """({SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
-    "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2, columns,
-    pmtiles_layer}}}} from
+    "relationships": [...], "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2,
+    columns, pmtiles_layer, kind, source}}}} from
     the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
     — the AUTHORITATIVE record of which extracted layers are spatial vs non-spatial GeMS companion
     tables, so build_publication doesn't have to guess a layer's kind from its name. `columns` holds each
     layer's recorded schema and `layers` its row count, bbox and CRS; manifests written before they
-    were recorded have none (empty maps / None values)}, {SID: cause} for each manifest that exists
-    but could not be read or parsed). A series with no manifest appears in neither map."""
+    were recorded have none (empty maps / None values); `kind` and `source` are derived from the
+    label and relationships when the manifest predates them}, {SID: cause} for each manifest that
+    exists but could not be read or parsed). A series with no manifest appears in neither map."""
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
     out: dict[str, dict] = {}
     failed: dict[str, str] = {}
@@ -153,20 +154,40 @@ def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict]
             raw = gcs.get_bytes(path) if bucket is None else gcs.get_bytes(path, bucket=bucket)
             doc = json.loads(raw.decode())
             layer_docs = [lay for lay in doc.get("layers") or [] if lay.get("label")]
+            rels = _relationships(doc.get("relationships") or [])
             out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or [],
                         "columns": {lay["label"]: lay["columns"] for lay in layer_docs if lay.get("columns")},
+                        "relationships": rels,
                         "layers": {lay["label"]: {"rows": lay.get("rows"), "bbox": lay.get("bbox"),
                                                   "geometry_types": lay.get("geometry_types") or [],
                                                   "proj_code": lay.get("proj_code"),
                                                   "proj_wkt2": lay.get("proj_wkt2"),
                                                   "columns": lay.get("columns"),
                                                   "pmtiles_layer": (lay.get("pmtiles_layer")
-                                                                    if lay.get("pmtiles") else None)}
+                                                                    if lay.get("pmtiles") else None),
+                                                  "kind": lay.get("kind") or relations.layer_kind(
+                                                      bool(lay.get("spatial")), lay["label"], rels),
+                                                  "source": lay.get("source")
+                                                  or relations.source_of_label(lay["label"], sid)}
                                    for lay in layer_docs}}
         except Exception as e:  # noqa: BLE001 (recorded per series; the caller fails that pub)
             failed[sid] = f"unreadable vector manifest {path}: {type(e).__name__}: {e}"
             print(f"[pubs] {failed[sid]}", file=sys.stderr)
     return out, failed
+
+
+def _relationships(rels: list) -> list[dict]:
+    """A manifest's relationships, each checked for the fields the items are built from. A malformed
+    one raises, so its publication fails instead of publishing a broken join."""
+    for r in rels:
+        ok = (isinstance(r, dict) and all(isinstance(r.get(k), str) and r[k]
+                                          for k in ("origin", "destination"))
+              and all(isinstance(r.get(k), list) and r[k] and all(isinstance(c, str) for c in r[k])
+                      for k in ("origin_cols", "destination_cols"))
+              and len(r["origin_cols"]) == len(r["destination_cols"]))
+        if not ok:
+            raise ValueError(f"malformed relationship {r!r}")
+    return rels
 
 
 def _prune_stale_items(coll_path: str, keep: set[str]) -> None:
@@ -313,6 +334,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             companion_tables=[{"label": t, "columns": manifest.get("columns", {}).get(t)}
                               for t in manifest["tables"]],
             layers=manifest.get("layers", {}),
+            relationships=manifest.get("relationships", []),
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
             edition=edition_graph.get(sid),
             mosaic_tier=tier_by_sid.get(up),

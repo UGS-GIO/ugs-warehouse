@@ -463,3 +463,129 @@ def test_a_lone_tiled_layer_moves_its_tiles_and_link_to_the_collection():
     assert stac.WEB_MAP_LINKS_EXT in coll["stac_extensions"]
     entry = stac._collection_index_entry(coll, prefix="ugs-publications/OFR/OFR-784DM/")
     assert any(lk["rel"] == "pmtiles" for lk in entry["links"])
+
+
+# --- relationships and grouping ------------------------------------------------------------------
+
+VEC = stac.config.public_url("geolmap/vectors/OFR-784DM")
+ITEMS = stac.config.public_url(f"{stac.config.STAC_PREFIX}/ugs-publications/OFR/OFR-784DM")
+DMU_COLS = [{"name": "MapUnit", "type": "string"}, {"name": "Age", "type": "string"}]
+MUP_TO_DMU = {"origin": "geo__MapUnitPolys", "origin_cols": ["MapUnit"],
+              "destination": "geo__DMU", "destination_cols": ["MapUnit"],
+              "cardinality": "many_to_one", "detected_by": "inferred", "confidence": 100, "overlap": 100.0}
+
+
+def _related(**kw):
+    args = dict(vector_layers=["geo__MapUnitPolys", "geo__Faults"],
+                companion_tables=[{"label": "geo__DMU", "columns": DMU_COLS},
+                                  {"label": "geo__Glossary", "columns": None}],
+                layers={"geo__MapUnitPolys": {"rows": 3, "bbox": [-112.4, 40.6, -112.1, 40.9],
+                                              "kind": "layer", "source": "OFR784DM_MillsJunction"},
+                        "geo__Faults": {"rows": 2, "bbox": [-112.4, 40.6, -112.1, 40.9]},
+                        "geo__DMU": {"rows": 41, "kind": "table", "source": "OFR784DM_MillsJunction"},
+                        "geo__Glossary": {"rows": 9}},
+                relationships=[MUP_TO_DMU])
+    coll, items = _build(**{**args, **kw})
+    return coll, {it["id"].removeprefix("OFR-784DM_"): it for it in items}
+
+
+def test_a_layer_carries_its_related_table_in_the_serving_topic_shape():
+    _, items = _related()
+    mup = items["geo__MapUnitPolys"]
+
+    assert mup["assets"]["geo__DMU"] == {
+        "href": f"{VEC}/geo__DMU.parquet", "type": "application/vnd.apache.parquet",
+        "roles": ["data", "related"], "title": "DMU",
+        # Flipped, as vector/related.py `_inverted_rel` does: the table's column -> the layer's.
+        "ugs:foreign_keys": [{"fields": ["MapUnit"],
+                              "reference": {"resource": "OFR-784DM_geo__MapUnitPolys",
+                                            "href": f"{VEC}/geo__MapUnitPolys.parquet",
+                                            "fields": ["MapUnit"]},
+                              "ugs:detected_by": "inferred", "ugs:confidence": 100}],
+        "table:columns": DMU_COLS}
+    # The layer's own outgoing key sits on its data asset, as on a serving topic.
+    assert mup["assets"]["data"]["ugs:foreign_keys"] == [{
+        "fields": ["MapUnit"],
+        "reference": {"resource": "OFR-784DM_geo__DMU", "href": f"{VEC}/geo__DMU.parquet",
+                      "fields": ["MapUnit"]},
+        "ugs:detected_by": "inferred", "ugs:confidence": 100}]
+    assert stac.TABLE_EXT in mup["stac_extensions"]
+    # The table links back to the layer that references it.
+    back = [lk for lk in items["geo__DMU"]["links"] if lk["rel"] == "related"]
+    assert back == [{"rel": "related", "href": f"{ITEMS}/OFR-784DM_geo__MapUnitPolys/OFR-784DM_geo__MapUnitPolys.json",
+                     "type": "application/geo+json", "title": "Map Unit Polys"}]
+    assert not [lk for lk in mup["links"] if lk["rel"] == "related"]
+
+
+def test_the_related_table_matches_what_the_viewer_click_join_reads():
+    """viewer/src/stac.ts relatedJoins: a related asset's single-column FK gives
+    childField = fields[0] (the table's column) and parentField = reference.fields[0] (the clicked
+    feature's)."""
+    _, items = _related(relationships=[{**MUP_TO_DMU, "origin_cols": ["UnitCode"]}])
+    (fk,) = items["geo__MapUnitPolys"]["assets"]["geo__DMU"]["ugs:foreign_keys"]
+    assert (fk["fields"][0], fk["reference"]["fields"][0]) == ("MapUnit", "UnitCode")
+
+
+def test_a_spatial_destination_is_a_related_link_both_ways():
+    rel = {**MUP_TO_DMU, "origin": "geo__Faults", "destination": "geo__MapUnitPolys",
+           "detected_by": "declared", "confidence": None}
+    _, items = _related(relationships=[rel])
+
+    def related(item_id):
+        return [lk["href"].rsplit("/", 1)[-1] for lk in items[item_id]["links"] if lk["rel"] == "related"]
+
+    assert related("geo__Faults") == ["OFR-784DM_geo__MapUnitPolys.json"]
+    assert related("geo__MapUnitPolys") == ["OFR-784DM_geo__Faults.json"]
+    assert not any("related" in a["roles"] for a in items["geo__Faults"]["assets"].values())
+    (fk,) = items["geo__Faults"]["assets"]["data"]["ugs:foreign_keys"]
+    assert fk["ugs:detected_by"] == "declared" and "ugs:confidence" not in fk
+
+
+def test_two_keys_to_one_table_share_its_asset():
+    second = {**MUP_TO_DMU, "origin_cols": ["Label"], "destination_cols": ["Label"]}
+    _, items = _related(relationships=[MUP_TO_DMU, second])
+    fks = items["geo__MapUnitPolys"]["assets"]["geo__DMU"]["ugs:foreign_keys"]
+    assert [fk["fields"] for fk in fks] == [["MapUnit"], ["Label"]]
+    assert len([lk for lk in items["geo__DMU"]["links"] if lk["rel"] == "related"]) == 1
+
+
+def test_a_relationship_with_an_unpublished_end_is_skipped(capsys):
+    rel = {**MUP_TO_DMU, "destination": "geo__T_1_PolyErrors"}
+    _, items = _related(relationships=[rel],
+                        companion_tables=[{"label": "geo__DMU"}, {"label": "geo__T_1_PolyErrors"}])
+    assert "geo__T_1_PolyErrors" not in items["geo__MapUnitPolys"]["assets"]
+    assert "ugs:foreign_keys" not in items["geo__MapUnitPolys"]["assets"]["data"]
+    assert "relationship geo__MapUnitPolys -> geo__T_1_PolyErrors skipped" in capsys.readouterr().err
+
+
+def test_a_related_table_named_like_another_asset_gets_its_own_key():
+    rel = {**MUP_TO_DMU, "destination": "pmtiles"}
+    _, items = _related(relationships=[rel],
+                        companion_tables=[{"label": "pmtiles", "columns": None}])
+    assets = items["geo__MapUnitPolys"]["assets"]
+    assert "related" in assets["pmtiles_2"]["roles"] and "pmtiles" not in assets
+
+
+def test_items_and_their_collection_links_carry_kind_and_source_dataset():
+    coll, items = _related()
+    props = {k: (it["properties"].get("ugs:layer_kind"), it["properties"].get("ugs:source_dataset"))
+             for k, it in items.items()}
+    assert props == {
+        "plate": (None, None),
+        "geo__MapUnitPolys": ("layer", "OFR784DM Mills Junction"),
+        "geo__Faults": ("layer", "Geo"),               # from the label when the manifest has none
+        "geo__DMU": ("table", "OFR784DM Mills Junction"),
+        "geo__Glossary": ("supporting", "Geo")}
+    links = {lk["href"]: lk for lk in coll["links"] if lk["rel"] == "item"}
+    dmu = links["./OFR-784DM_geo__DMU/OFR-784DM_geo__DMU.json"]
+    assert dmu["ugs:layer_kind"] == "table" and dmu["ugs:source_dataset"] == "OFR784DM Mills Junction"
+    assert "ugs:layer_kind" not in links["./OFR-784DM_plate/OFR-784DM_plate.json"]
+
+
+def test_ids_of_renamed_layers_are_what_relationships_point_at(capsys):
+    rel = {**MUP_TO_DMU, "origin": "plate"}
+    _, items = _related(vector_layers=["plate"], relationships=[rel])
+    (fk,) = items["layer_plate"]["assets"]["geo__DMU"]["ugs:foreign_keys"]
+    assert fk["reference"]["resource"] == "OFR-784DM_layer_plate"
+    (back,) = [lk for lk in items["geo__DMU"]["links"] if lk["rel"] == "related"]
+    assert back["href"].endswith("/OFR-784DM_layer_plate/OFR-784DM_layer_plate.json")

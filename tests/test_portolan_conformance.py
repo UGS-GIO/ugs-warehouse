@@ -146,7 +146,8 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
         {"series_id": "C-139", "series": "C", "pub_year": "1990", "pub_publisher": "UGS",
          "pub_name": "A circular with no extracted data"}, [], has_cover=True, override={})
 
-    # A publication with an extracted vector layer and a companion table: both become Items.
+    # A publication with an extracted vector layer and a companion table: both become Items, joined
+    # by an inferred relationship (a related-table asset on the layer, a related link back).
     _write_pub(
         {"series_id": "OFR-784DM", "series": "OFR", "pub_year": "2026", "pub_publisher": "UGS",
          "pub_name": "Interim geologic map of Mills Junction", "pub_scale": "1:24,000"},
@@ -156,6 +157,10 @@ def _catalog_on_disk(monkeypatch, tmp_path: Path) -> Path:
                                 "geometry_types": ["LineString"], "proj_code": "EPSG:26912",
                                 "pmtiles_layer": "geo__Faults"},
                 "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}},
+        relationships=[{"origin": "geo__Faults", "origin_cols": ["MapUnit"],
+                        "destination": "geo__DMU", "destination_cols": ["MapUnit"],
+                        "cardinality": "many_to_one", "detected_by": "inferred",
+                        "confidence": 100, "overlap": 100.0}],
         override={})
 
     # A publication whose only data is one tiled layer: the layer, its tiles and their web-map
@@ -234,6 +239,13 @@ def test_the_catalog_the_fence_builds_is_the_shape_we_publish(monkeypatch, tmp_p
     faults = json.loads((faults_dir / f"{faults_dir.name}.json").read_text())
     assert faults["assets"]["pmtiles"]["proj:code"] == "EPSG:4326"
     assert any(lk["rel"] == "pmtiles" for lk in faults["links"])
+    assert faults["assets"]["geo__DMU"]["roles"] == ["data", "related"]
+    dmu_dir = next(mills / n for n in item_dirs if n.endswith("geo__DMU"))
+    dmu = json.loads((dmu_dir / f"{dmu_dir.name}.json").read_text())
+    assert [lk["rel"] for lk in dmu["links"]].count("related") == 1
+    mills_coll = json.loads((mills / "collection.json").read_text())
+    assert {lk.get("ugs:layer_kind") for lk in mills_coll["links"] if lk["rel"] == "item"} \
+        == {"layer", "table"}
     single_dir = root / "ugs-publications" / "OFR" / "OFR-790"
     single = json.loads((single_dir / "collection.json").read_text())
     assert [p for p in single_dir.iterdir() if p.is_dir()] == []

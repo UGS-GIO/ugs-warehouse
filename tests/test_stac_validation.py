@@ -189,3 +189,23 @@ def test_a_publication_with_a_table_and_no_footprint_validates():
     assert table["geometry"] is None and "bbox" not in table
     for it in items:
         _validate(_drop_private(it))
+
+
+def test_publication_items_joined_by_a_relationship_validate():
+    from ugs_warehouse.pubs import sink_stac as pubs_sink
+
+    coll, items = pubs_sink.build_publication(
+        {"series_id": "OFR-1", "pub_year": "2020", "pub_name": "A map"}, [], override={},
+        vector_layers=["geo__Polys", "geo__Faults"],
+        layers={"geo__Polys": {"rows": 2, "bbox": [-112.0, 40.0, -111.0, 41.0]},
+                "geo__Faults": {"rows": 2, "bbox": [-112.0, 40.0, -111.0, 41.0]},
+                "geo__DMU": {"rows": 2}},
+        companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}],
+        relationships=[
+            {"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
+             "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100},
+            {"origin": "geo__Faults", "origin_cols": ["PolyID"], "destination": "geo__Polys",
+             "destination_cols": ["Polys_ID"], "detected_by": "declared"}])
+    _validate(_drop_private(coll))
+    for it in items:
+        _validate(_drop_private(it))

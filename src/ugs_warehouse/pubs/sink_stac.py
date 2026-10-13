@@ -19,6 +19,7 @@ from collections import Counter
 from ..core import config, stac
 from ..core.bbox import to_2d_bbox
 from . import counties, identity, topic
+from .relations import layer_kind, source_of_label
 from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
 from .vectors import VECTORS_PREFIX, pmtiles_object
@@ -289,6 +290,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                       vector_layers: list[str] | None = None,
                       companion_tables: list[dict] | None = None,
                       layers: dict | None = None,
+                      relationships: list[dict] | None = None,
                       override: dict | None = None,
                       contents: list[dict] | None = None,
                       mirrored: set[str] | None = None,
@@ -299,7 +301,9 @@ def build_publication(p: dict, attachments: list[dict], *,
     The Collection carries the documents (PDF, cover, original zips) and the publication's
     metadata; the plate COG, the units GeoParquet, each extracted layer and table, and the 3D
     fence are Items in it. A publication with none of those, or with exactly one, is a Collection
-    with no Items; a lone data file becomes a collection-level asset."""
+    with no Items; a lone data file becomes a collection-level asset. `relationships` (the vector
+    manifest's) become related-table assets, `ugs:foreign_keys` and `related` links on the layer
+    and table Items, in the serving topics' shape."""
     sid = (p.get("series_id") or "").strip()
     pub_id = item_id_for(sid)
     coll_path = pub_collection_path(p)
@@ -379,6 +383,35 @@ def build_publication(p: dict, attachments: list[dict], *,
         taken[new.casefold()] = new
         return new
 
+    labels = [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]
+    ids = {label: layer_id(label) for label in labels}
+    titles = layer_titles(labels)
+    rel_assets, rel_links, own_fks = _relationship_parts(
+        sid, coll_path, relationships or [], ids, titles,
+        {t["label"]: t.get("columns") for t in companion_tables or []})
+
+    def kind_props(label: str, spatial: bool) -> dict:
+        """The Item's `ugs:layer_kind` and humanised `ugs:source_dataset`."""
+        meta = layer_meta.get(label, {})
+        source = meta.get("source") or source_of_label(label, sid)
+        return {"ugs:layer_kind": meta.get("kind") or layer_kind(spatial, label, relationships or []),
+                "ugs:source_dataset": layer_title(source)[0]}
+
+    def with_related(label: str, data: dict) -> tuple[dict, list[str]]:
+        """The Item's assets: its data (carrying its own foreign keys), then its related tables
+        keyed by label, moved off a key the data or tiles use."""
+        if own_fks.get(label):
+            data["ugs:foreign_keys"] = own_fks[label]
+        assets = {"data": data}
+        for key, asset in rel_assets.get(label, {}).items():
+            new, n = key, 1
+            while new in assets or new in ("pmtiles", "thumbnail"):
+                n += 1
+                new = f"{key}_{n}"
+            assets[new] = asset
+        exts = [stac.TABLE_EXT] if any("table:columns" in a for a in assets.values()) else []
+        return assets, exts
+
     mosaic = ([{"rel": "related",
                 "href": config.public_url(stac.item_object_path("ugs-geologic-maps", f"geologic-maps-{mosaic_tier}")),
                 "type": "application/geo+json",
@@ -401,7 +434,6 @@ def build_publication(p: dict, attachments: list[dict], *,
             "href": config.public_url(f"{identity.UNITS_PREFIX}/{sid.upper()}/{sid.upper()}.units.parquet"),
             "type": PARQUET_MIME, "title": "Geologic unit polygons (GeoParquet)", "roles": ["data"]}},
             geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source, extra={"proj:code": "EPSG:4326"}))
-    titles = layer_titles([*(vector_layers or []), *(t["label"] for t in companion_tables or [])])
     for label in vector_layers or []:
         meta = layer_meta.get(label, {})
         lb = meta.get("bbox")
@@ -412,7 +444,8 @@ def build_publication(p: dict, attachments: list[dict], *,
         # The manifest's recorded schema rides the data asset, as on a companion table.
         if meta.get("columns"):
             data["table:columns"] = meta["columns"]
-        assets, links, exts = {"data": data}, [], [stac.TABLE_EXT] if meta.get("columns") else []
+        assets, exts = with_related(label, data)
+        links = []
         # Tiles carry the same asset + web-map link as a serving topic's, so the viewer previews
         # the layer and adds it to the map the same way. The item's `proj:*` is the layer's native
         # CRS; the tiles state their own, which overrides it.
@@ -421,11 +454,12 @@ def build_publication(p: dict, attachments: list[dict], *,
             assets["pmtiles"] = {**stac.pmtiles_asset(pm_url), "proj:code": "EPSG:4326"}
             links = [stac.pmtiles_link(pm_url, [meta["pmtiles_layer"]])]
             exts += [stac.WEB_MAP_LINKS_EXT, stac.PROJ_EXT]
-        items.append(item(layer_id(label), ltitle, assets,
+        items.append(item(ids[label], ltitle, assets,
             geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
             footprint_source=LAYER_BBOX_SOURCE if lb else aoi_source,
-            extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {})},
-            links=links, extensions=exts or None))
+            extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {}),
+                   **kind_props(label, True)},
+            links=[*links, *rel_links.get(label, [])], extensions=exts or None))
     for t in companion_tables or []:
         label, meta = t["label"], layer_meta.get(t["label"], {})
         ltitle, ldesc = titles[label]
@@ -433,11 +467,13 @@ def build_publication(p: dict, attachments: list[dict], *,
                  "type": PARQUET_MIME, "title": ltitle, "roles": ["data"]}
         if t.get("columns"):
             asset["table:columns"] = t["columns"]
-        items.append(item(layer_id(label), ltitle, {"data": asset},
+        assets, exts = with_related(label, asset)
+        items.append(item(ids[label], ltitle, assets,
                           geometry=None, item_bbox=None,
                           extra={**({"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}),
-                                 **({"description": ldesc} if ldesc else {})},
-                          extensions=[stac.TABLE_EXT] if t.get("columns") else None))
+                                 **({"description": ldesc} if ldesc else {}),
+                                 **kind_props(label, False)},
+                          links=rel_links.get(label), extensions=exts or None))
     if has_3d:
         items.append(item(f"{pub_id}_fence", "3D fence diagram", {
             "fence_polygons": {"href": config.public_url(threed_object(sid, POLY_NAME)), "type": PARQUET_MIME,
@@ -561,5 +597,64 @@ def build_publication(p: dict, attachments: list[dict], *,
         collection_id=pub_id, collection_path=coll_path, title=title,
         description=desc or title, extent=extent, assets=assets,
         item_titles={it["id"]: it["properties"]["title"] for it in items},
+        item_link_fields={it["id"]: {k: it["properties"][k] for k in ITEM_LINK_FIELDS
+                                     if k in it["properties"]} for it in items},
         extra_links=links, fields=fields, stac_extensions=coll_exts or None)
     return coll, items
+
+
+# Item properties a publication's rel=item links repeat, so the viewer groups its items unfetched.
+ITEM_LINK_FIELDS = ("ugs:layer_kind", "ugs:source_dataset")
+
+
+def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids: dict[str, str],
+                        titles: dict[str, tuple[str, str | None]],
+                        table_columns: dict[str, list | None]) -> tuple[dict, dict, dict]:
+    """The publication's relationships as STAC pieces, per label: ({origin: {destination label:
+    related-table asset}}, {label: [related links]}, {origin: [its own foreign keys]}).
+
+    A non-spatial destination becomes a `roles: ["data", "related"]` asset on the origin pointing at
+    the destination's parquet, its foreign key flipped to destination -> origin so the viewer's
+    click-join filters the table by the clicked feature (vector/related.py `_inverted_rel`). A
+    spatial destination is a `related` link instead. Every destination links back to its origin.
+    Each foreign key records how it was found (`ugs:detected_by`, and `ugs:confidence` when
+    inferred). A relationship with an end that is not published is skipped."""
+    assets: dict[str, dict] = {}
+    links: dict[str, list[dict]] = {}
+    fks: dict[str, list[dict]] = {}
+
+    def parquet(label: str) -> str:
+        return config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{label}.parquet")
+
+    def link(frm: str, to: str) -> None:
+        href = config.public_url(stac.item_object_path(coll_path, ids[to]))
+        if all(lk["href"] != href for lk in links.get(frm, [])):
+            links.setdefault(frm, []).append({"rel": "related", "href": href,
+                                              "type": "application/geo+json", "title": titles[to][0]})
+
+    for r in relationships:
+        o, d = r["origin"], r["destination"]
+        if o not in ids or d not in ids or o == d:
+            print(f"[pubs] {item_id_for(sid)}: relationship {o} -> {d} skipped (an end is not "
+                  "published)", file=sys.stderr)
+            continue
+        how = {"ugs:detected_by": r.get("detected_by") or "declared",
+               **({"ugs:confidence": r["confidence"]} if r.get("confidence") is not None else {})}
+        fks.setdefault(o, []).append({"fields": list(r["origin_cols"]),
+                                      "reference": {"resource": ids[d], "href": parquet(d),
+                                                    "fields": list(r["destination_cols"])}, **how})
+        if d in table_columns:
+            fk = {"fields": list(r["destination_cols"]),
+                  "reference": {"resource": ids[o], "href": parquet(o),
+                                "fields": list(r["origin_cols"])}, **how}
+            existing = assets.setdefault(o, {}).get(d)
+            if existing is not None:
+                existing["ugs:foreign_keys"].append(fk)
+            else:
+                assets[o][d] = {"href": parquet(d), "type": PARQUET_MIME, "roles": ["data", "related"],
+                                "title": titles[d][0], "ugs:foreign_keys": [fk],
+                                **({"table:columns": table_columns[d]} if table_columns[d] else {})}
+        else:
+            link(o, d)
+        link(d, o)
+    return assets, links, fks

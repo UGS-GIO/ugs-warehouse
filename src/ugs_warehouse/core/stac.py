@@ -253,11 +253,13 @@ def collection_object_path(collection_path: str) -> str:
 def build_collection(*, collection_id: str, collection_path: str, title: str, description: str,
                      extent: dict, assets: dict, item_titles: dict[str, str],
                      extra_links: list[dict] | None = None, fields: dict | None = None,
-                     stac_extensions: list[str] | None = None) -> dict:
+                     stac_extensions: list[str] | None = None,
+                     item_link_fields: dict[str, dict] | None = None) -> dict:
     """A leaf Collection at `{collection_path}/collection.json` whose items sit at
     `./{id}/{id}.json`. Pure: the caller supplies the extent, assets and item titles. `fields` are
-    extra top-level members (`ugs:*`, `keywords`, `version`/`deprecated`). An empty `item_titles`
-    is a single-file collection: its data are the collection-level assets."""
+    extra top-level members (`ugs:*`, `keywords`, `version`/`deprecated`). `item_link_fields` adds
+    fields to an item's rel=item link, so a client can group items without fetching them. An empty
+    `item_titles` is a single-file collection: its data are the collection-level assets."""
     depth = collection_path.count("/") + 1
     fields = dict(fields or {})
     exts = [PORTOLAN_SCHEMA, *(stac_extensions or [])]
@@ -283,7 +285,8 @@ def build_collection(*, collection_id: str, collection_path: str, title: str, de
             *catalog_docs.markdown_links(),
             *(extra_links or []),
             *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json",
-               "title": item_titles[i] or i} for i in sorted(item_titles)],
+               "title": item_titles[i] or i, **(item_link_fields or {}).get(i, {})}
+              for i in sorted(item_titles)],
         ],
     }
     doc["_collection_path"] = collection_path

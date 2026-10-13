@@ -160,6 +160,15 @@ table (`destination`, e.g. DescriptionOfMapUnits) and says whether it was `decla
 (with its `confidence` and `overlap`). Each layer entry records its `source` dataset and `kind`:
 `layer` (spatial), `table` (non-spatial, in a relationship) or `supporting`.
 
+The pubs ingest publishes them in the serving topics' shape. A non-spatial destination is a
+`roles: ["data", "related"]` asset on the origin Item, keyed by the destination's label, pointing at
+its existing parquet, with `ugs:foreign_keys` flipped to destination → origin so the viewer's
+click-join filters the table by the clicked feature. A spatial destination is a `related` link, and
+every destination links back to its origin. The origin's `data` asset carries its own foreign keys.
+Each foreign key has `ugs:detected_by` and, when inferred, `ugs:confidence`. Layer and table Items
+carry `ugs:layer_kind` and `ugs:source_dataset`, and the Collection's `rel=item` links repeat both so
+the viewer groups a pub's items without fetching them.
+
 For pubs extracted before relationships were recorded, `--relations-backfill [SID ...]` computes
 them from the GeoParquet already on GCS (only its string and integer columns), keeps any declared
 relationships the manifest holds, and writes nothing for a series with a layer it cannot read. Run

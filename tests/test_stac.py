@@ -608,7 +608,7 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
         out, failed = _vector_manifests_by_sid()
 
     # keyed by uppercased series_id, matching the other discovery maps
-    assert out["M-100"] == {**manifest, "columns": {}, "layers": {}}
+    assert out["M-100"] == {**manifest, "columns": {}, "relationships": [], "layers": {}}
     assert "DS-2" not in out
     assert "DS-2" in failed and "FileNotFoundError" in failed["DS-2"]
 
@@ -653,7 +653,36 @@ def test_vector_manifests_by_sid_carries_each_layers_rows_and_bbox():
     assert out["M-100"]["layers"] == {"geo__Faults": {
         "rows": 12, "bbox": [-112.0, 40.0, -111.0, 41.0], "geometry_types": ["LineString"],
         "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]",
-        "columns": [{"name": "geometry", "type": "geometry"}], "pmtiles_layer": None}}
+        "columns": [{"name": "geometry", "type": "geometry"}], "pmtiles_layer": None,
+        # A manifest written before kind/source were recorded gets them from the label.
+        "kind": "layer", "source": "geo"}}
+
+
+def test_vector_manifests_by_sid_carries_relationships_and_each_layers_kind_and_source():
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+
+    rel = {"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
+           "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100}
+    good = {"spatial": ["geo__Polys"], "tables": ["geo__DMU"], "relationships": [rel],
+            "layers": [{"label": "geo__Polys", "spatial": True, "kind": "layer", "source": "Geo"},
+                       {"label": "geo__DMU", "spatial": False}]}
+    bad = {**good, "relationships": [{**rel, "destination_cols": []}]}
+    bodies = {f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json": json.dumps(good).encode(),
+              f"{vectors.VECTORS_PREFIX}/M-101/_manifest.json": json.dumps(bad).encode()}
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=list(bodies)), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
+        out, failed = _vector_manifests_by_sid()
+
+    assert out["M-100"]["relationships"] == [rel]
+    layers = out["M-100"]["layers"]
+    assert (layers["geo__Polys"]["kind"], layers["geo__Polys"]["source"]) == ("layer", "Geo")
+    # Not recorded: derived from the relationships and the label.
+    assert (layers["geo__DMU"]["kind"], layers["geo__DMU"]["source"]) == ("table", "geo")
+    # A malformed relationship fails its publication rather than publishing a broken join.
+    assert "M-101" not in out and "malformed relationship" in failed["M-101"]
 
 
 def test_vector_manifests_by_sid_carries_a_layers_pmtiles_only_when_built():
@@ -700,7 +729,7 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
         out, failed = _vector_manifests_by_sid()  # must return, not raise
 
-    assert out["M-100"] == {**good, "columns": {}, "layers": {}}  # unaffected by the sibling's bad manifest
+    assert out["M-100"] == {**good, "columns": {}, "relationships": [], "layers": {}}  # unaffected by the sibling's bad manifest
     assert "DS-9" not in out  # not crashed on
     assert bad_path in failed["DS-9"]  # reported to the caller
     assert bad_path in capsys.readouterr().err  # and named on stderr

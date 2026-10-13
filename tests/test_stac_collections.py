@@ -15,6 +15,25 @@ def test_bbox_polygon_closes_the_ring():
     assert ring[0] == ring[-1] == [-112.0, 40.0] and len(ring) == 5
 
 
+def test_both_collection_builders_share_one_skeleton():
+    ext = {"spatial": {"bbox": [[-112.0, 40.0, -111.0, 41.0]]}, "temporal": {"interval": [[None, None]]}}
+    pub = stac.build_collection(collection_id="OFR-1", collection_path="ugs-publications/OFR/OFR-1",
+                                title="T", description="D", extent=ext, assets={}, item_titles={})
+    series = stac._collection_doc("OFR", "ugs-publications/OFR", [], ext, title="T", description="D")
+    head = ["type", "stac_version", "stac_extensions", "id", "title", "description", "license",
+            "providers", "extent"]
+    assert list(pub)[:9] == list(series)[:9] == head
+    assert {k: pub[k] for k in head if k != "id"} == {k: series[k] for k in head if k != "id"}
+
+    def shared(doc):
+        return [lk for lk in doc["links"] if lk["rel"] not in ("item", stac.INDEX_REL)]
+
+    # Same root/parent/self/license/README/AGENTS links, in the same order; depth from each path.
+    assert [lk["rel"] for lk in shared(pub)] == [lk["rel"] for lk in shared(series)]
+    assert shared(pub)[0]["href"] == "../../../catalog.json"
+    assert shared(series)[0]["href"] == "../../catalog.json"
+
+
 def test_build_collection_links_assets_and_fields():
     coll = stac.build_collection(
         collection_id="OFR-1", collection_path="ugs-publications/OFR/OFR-1",

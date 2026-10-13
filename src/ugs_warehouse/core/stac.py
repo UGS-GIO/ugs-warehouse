@@ -261,6 +261,41 @@ def collection_object_path(collection_path: str) -> str:
     return f"{config.STAC_PREFIX}/{collection_path}/collection.json"
 
 
+def _collection_skeleton(*, collection_id: str, path: str, title: str, description: str,
+                         extent: dict, stac_extensions: list[str], fields: dict, assets: dict | None,
+                         head_links: list[dict] | None = None,
+                         tail_links: list[dict] | None = None) -> dict:
+    """The parts every collection.json shares, in one order: core fields, then `fields`, then
+    `assets` when there are any; links root/parent/self (depth from `path`), `head_links`, license,
+    the README/AGENTS links, then `tail_links`. License is CC-BY-4.0 by UGRC policy, with UGS as
+    producer, licensor and host."""
+    depth = path.count("/") + 1
+    return {
+        "type": "Collection",
+        "stac_version": STAC_VERSION,
+        "stac_extensions": stac_extensions,
+        "id": collection_id,
+        "title": title,
+        "description": description,
+        "license": config.DATA_LICENSE,
+        "providers": config.PROVIDERS,
+        "extent": extent,
+        **fields,
+        # A collection with nothing to carry omits the key rather than publish an empty object.
+        **({"assets": assets} if assets else {}),
+        "links": [
+            {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
+            {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
+            {"rel": "self", "href": "./collection.json", "type": "application/json"},
+            *(head_links or []),
+            {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
+            # Portolan requires README.md and AGENTS.md beside every node, linked from the JSON.
+            *catalog_docs.markdown_links(),
+            *(tail_links or []),
+        ],
+    }
+
+
 def build_collection(*, collection_id: str, collection_path: str, title: str, description: str,
                      extent: dict, assets: dict, item_titles: dict[str, str],
                      extra_links: list[dict] | None = None, fields: dict | None = None,
@@ -271,35 +306,17 @@ def build_collection(*, collection_id: str, collection_path: str, title: str, de
     extra top-level members (`ugs:*`, `keywords`, `version`/`deprecated`). `item_link_fields` adds
     fields to an item's rel=item link, so a client can group items without fetching them. An empty
     `item_titles` is a single-file collection: its data are the collection-level assets."""
-    depth = collection_path.count("/") + 1
     fields = dict(fields or {})
     exts = [PORTOLAN_SCHEMA, *(stac_extensions or [])]
     if ("version" in fields or "deprecated" in fields) and VERSION_EXT not in exts:
         exts.append(VERSION_EXT)
-    doc = {
-        "type": "Collection",
-        "stac_version": STAC_VERSION,
-        "stac_extensions": exts,
-        "id": collection_id,
-        "title": title,
-        "description": description,
-        "license": config.DATA_LICENSE,
-        "providers": config.PROVIDERS,
-        "extent": extent,
-        **fields,
-        **({"assets": assets} if assets else {}),
-        "links": [
-            {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
-            {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
-            {"rel": "self", "href": "./collection.json", "type": "application/json"},
-            {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
-            *catalog_docs.markdown_links(),
-            *(extra_links or []),
-            *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json",
-               "title": item_titles[i] or i, **(item_link_fields or {}).get(i, {})}
-              for i in sorted(item_titles)],
-        ],
-    }
+    doc = _collection_skeleton(
+        collection_id=collection_id, path=collection_path, title=title, description=description,
+        extent=extent, stac_extensions=exts, fields=fields, assets=assets,
+        tail_links=[*(extra_links or []),
+                    *[{"rel": "item", "href": f"./{i}/{i}.json", "type": "application/geo+json",
+                       "title": item_titles[i] or i, **(item_link_fields or {}).get(i, {})}
+                      for i in sorted(item_titles)]])
     doc["_collection_path"] = collection_path
     return doc
 
@@ -572,48 +589,30 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
     code like `DS` when nested, else the path). Root/parent links climb out per path depth;
     the OGC API Features link is added only for flat collections (serving topics — nested
     pub series aren't in featureserv) unless `service` is set explicitly."""
-    depth = path.count("/") + 1
     if service is None:
         # Flat collections, plus the nested serving-topic schemas — those are precisely the
         # collections whose items featureserv binds, and they'd otherwise be the only ones with
         # no pointer to the service that serves them.
         service = has_feature_service(path)
-    doc = {
-        "type": "Collection",
-        "stac_version": STAC_VERSION,
-        "stac_extensions": [PORTOLAN_SCHEMA],
-        "id": collection,
-        "title": title or prettify(collection),
-        "description": description or f"UGS warehouse — {title or collection}.",
-        # Utah state geo data is CC-BY-4.0 by UGRC policy (not "proprietary"). SPDX id + a
-        # rel:license link below; providers names UGS as producer/licensor/host.
-        "license": config.DATA_LICENSE,
-        "providers": config.PROVIDERS,
-        "extent": extent or {"spatial": {"bbox": [UTAH_BBOX]},
-                             "temporal": {"interval": [[None, None]]}},
+    return _collection_skeleton(
+        collection_id=collection, path=path, title=title or prettify(collection),
+        description=description or f"UGS warehouse — {title or collection}.",
+        extent=extent or {"spatial": {"bbox": [UTAH_BBOX]}, "temporal": {"interval": [[None, None]]}},
+        stac_extensions=[PORTOLAN_SCHEMA],
         # Counts are UGS-prefixed top-level extras, NOT `summaries` — STAC summaries values must be
         # arrays/ranges/JSON-Schema (they summarize item *property* ranges), so a scalar count there
         # fails strict validation. A prefixed top-level field is spec-legal (additionalProperties).
-        "ugs:item_count": len(item_ids),
-        **({"ugs:mappable_count": mappable} if mappable is not None else {}),
-        # Collection-level assets. STAC allows them and Portolan requires some of them (a
-        # thumbnail on a geospatial collection); a collection with nothing to carry omits the key
-        # rather than publishing an empty object.
-        **({"assets": assets} if assets else {}),
-        "links": [
-            {"rel": "root", "href": "../" * depth + "catalog.json", "type": "application/json"},
-            {"rel": "parent", "href": "../catalog.json", "type": "application/json"},
-            {"rel": "self", "href": "./collection.json", "type": "application/json"},
-            # Compact items index — one fetch for the whole list (viewers read this instead
-            # of N item.json fetches; the per-item docs stay the source of truth for detail).
-            # NOT rel:"items": STAC API reserves that for an ItemCollection endpoint, and a
-            # standard client (STAC Browser) that follows it here fails the whole collection
-            # with "not a valid list of STAC Items". Those clients use the rel:"item" links below.
-            {"rel": INDEX_REL, "href": "./items.json", "type": "application/json", "title": "Items index"},
-            {"rel": "license", "href": config.LICENSE_URL, "type": "text/html", "title": config.DATA_LICENSE},
-            # Portolan requires both files beside every node, linked from the JSON. refresh_catalog
-            # writes them; a link without its file is a broken link, so the two move together.
-            *catalog_docs.markdown_links(),
+        fields={"ugs:item_count": len(item_ids),
+                **({"ugs:mappable_count": mappable} if mappable is not None else {})},
+        assets=assets,
+        # Compact items index — one fetch for the whole list (viewers read this instead of N
+        # item.json fetches; the per-item docs stay the source of truth for detail). NOT
+        # rel:"items": STAC API reserves that for an ItemCollection endpoint, and a standard client
+        # (STAC Browser) that follows it here fails the whole collection with "not a valid list of
+        # STAC Items". Those clients use the rel:"item" links below.
+        head_links=[{"rel": INDEX_REL, "href": "./items.json", "type": "application/json",
+                     "title": "Items index"}],
+        tail_links=[
             # Service ROOT, not `/collections/{collection}`: featureserv names its collections after
             # STAC *item* ids (`hazards_qfaults`), so a per-collection path never existed on any
             # host. The queryable per-layer link lives on the item instead (vector.sink_stac).
@@ -625,9 +624,7 @@ def _collection_doc(collection: str, path: str, item_ids: list[str],
             # The same layers as collections (see LAYER_COLLECTION_REL).
             *([{"rel": "child", "href": f"./{i}/collection.json", "type": "application/json",
                 "title": (item_titles or {}).get(i) or i} for i in sorted(item_ids)] if layers else []),
-        ],
-    }
-    return doc
+        ])
 
 
 def _layer_collection_doc(item: dict, path: str) -> dict:

@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "@/catalog/browse";
 import {
   activeChips, applyFacets, bboxIntersects, DEFAULT_DISCOVERY, type DiscoveryState, discoveryPatch,
-  discoverable, effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, hasGeometry, parseDiscovery,
+  discoverable, effectiveSort, extractFacets, filterByViewport, GEOM_HAS, GEOM_NONE, parseDiscovery,
   sortItems, typeOf,
 } from "./discovery-model";
-import { rootIndexItems } from "@/stac";
+import { hasFootprint, rootIndexItems } from "@/stac";
 
 // Minimal item factory — only the fields the discovery core reads (collId, id, bbox, properties).
 const item = (collId: string, id: string, props: Record<string, unknown> = {}, bbox?: number[]): ItemRef =>
@@ -48,10 +48,10 @@ describe("extractFacets", () => {
   });
 });
 
-describe("hasGeometry / typeOf", () => {
+describe("hasFootprint / typeOf", () => {
   it("reads a valid bbox as geometry, rejects a missing one", () => {
-    expect(hasGeometry(items[0])).toBe(true);
-    expect(hasGeometry(items[3])).toBe(false);
+    expect(hasFootprint(items[0].data)).toBe(true);
+    expect(hasFootprint(items[3].data)).toBe(false);
   });
   it("prefers pub_type, falling back to topic then series", () => {
     expect(typeOf(items[2])).toBe("Geologic Map");

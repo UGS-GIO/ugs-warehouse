@@ -1,13 +1,12 @@
 // Pure, unit-tested item view-model: the field getters, the one "home category" taxonomy, the
 // byline, the format buckets, and the curated/derived metadata partition — everything the catalog
 // item + discovery cards + the item-detail page derive from a STAC item. Framework/DOM-free: it reads
-// the STAC shapes (type-only ItemRef) plus the already-pure stac.ts helpers + map-model.validBbox, so
+// the STAC shapes (type-only ItemRef) plus the already-pure stac.ts helpers, so
 // it runs in the node test env. Consolidates the getters that had drifted between browse.tsx and
 // discovery-model.ts into ONE source of truth (both now import from here).
 import type { ItemRef } from "./browse";
-import { validBbox } from "@/map/map-model";
 import {
-  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, isPlaceholderFootprint, KIND_RANK,
+  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, KIND_RANK,
   parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, type TableColumn, zarrAsset,
 } from "@/stac";
 
@@ -67,11 +66,6 @@ export const fmtDate = (iso: string): string => {
   if (d === "01") return `${MONTHS[+m - 1] ?? m} ${y}`;   // month precision → "Sep 2026"
   return iso;                                             // genuine full date
 };
-
-// "Has geometry" = a valid lon/lat bbox or an explicit geometry — i.e. it can draw on the map. The
-// statewide placeholder extent (`ugs:footprint_source: "utah-bbox"`) is not a footprint.
-export const hasGeometry = (it: ItemRef): boolean =>
-  !isPlaceholderFootprint(it.data) && Boolean(validBbox(it.data?.bbox) || it.data?.geometry);
 
 // Whether the item's data has geometry to export as a spatial format. A null geometry, or a
 // published column schema with no geometry column, means a plain table.

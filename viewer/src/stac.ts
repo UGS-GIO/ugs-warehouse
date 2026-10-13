@@ -2,6 +2,7 @@
 // -> items) on the CDN. No fetch useEffects; components call these hooks. JSON items stay
 // the source of truth (the warehouse writes them via core/stac).
 import { type QueryClient, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { validBbox } from "@/map/map-model";
 import { qk } from "@/query-keys";
 
 // Import guard: the pure item view-model (item-view.ts) reuses this module's asset helpers and is
@@ -170,14 +171,10 @@ export const citeLink = (d: StacDoc | undefined): Link | undefined =>
 export const isPlaceholderFootprint = (d: StacDoc | undefined): boolean =>
   (d?.properties as Record<string, unknown> | undefined)?.["ugs:footprint_source"] === "utah-bbox";
 
-// Whether a document has a real footprint to badge, draw or fly to: a geometry or a valid
-// [w,s,e,n] bbox, and not the placeholder.
-export const hasFootprint = (d: StacDoc | undefined): boolean => {
-  if (!d || isPlaceholderFootprint(d)) return false;
-  const b = d.bbox;
-  const validBox = Array.isArray(b) && b.length >= 4 && b.slice(0, 4).every(Number.isFinite);
-  return Boolean(d.geometry || validBox);
-};
+// The one footprint check: whether a document has a real footprint to badge, draw or fly to. A
+// geometry or a valid lon/lat bbox; never the placeholder, nor a null (aspatial) geometry.
+export const hasFootprint = (d: StacDoc | undefined): boolean =>
+  Boolean(d && !isPlaceholderFootprint(d) && d.geometry !== null && (d.geometry || validBbox(d.bbox)));
 
 // The collection an item belongs to (rel=collection, else rel=parent), as written (usually relative).
 export const collectionLink = (d: StacDoc | undefined): Link | undefined =>
@@ -201,7 +198,7 @@ export const collectionAsItem = (d: StacDoc): StacDoc => {
   const start = extent?.temporal?.interval?.[0]?.[0];
   if (start && !props["ugs:date_unknown"]) props.datetime = start;
   // The placeholder extent is not a footprint, so it does not become the item's bbox.
-  const bbox = props["ugs:footprint_source"] === "utah-bbox" ? undefined : extent?.spatial?.bbox?.[0];
+  const bbox = isPlaceholderFootprint({ properties: props }) ? undefined : extent?.spatial?.bbox?.[0];
   const out = { ...d, bbox, properties: props };
   // Same document, so the same URL to resolve its relative links against.
   const from = fetchedFrom.get(d);

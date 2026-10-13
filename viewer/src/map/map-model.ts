@@ -23,13 +23,6 @@ export function mapKindOf(f: MapKindFlags): MapKind {
   return "none";
 }
 
-// The footprint flag for mapKindOf: an item is footprint-drawable if it has geometry or a real bbox,
-// and not the statewide placeholder extent (`ugs:footprint_source: "utah-bbox"`).
-export function hasFootprint(item: StacDoc | undefined): boolean {
-  const placeholder = (item?.properties as Record<string, unknown> | undefined)?.["ugs:footprint_source"] === "utah-bbox";
-  return Boolean(item && !placeholder && (item.geometry || (Array.isArray(item.bbox) && item.bbox.length >= 4)));
-}
-
 // A [w,s,e,n] lon/lat bbox, or undefined if the item's bbox is missing/malformed. Handles the STAC
 // 2D (4 = [w,s,e,n]) and 3D (6 = [w,s,minZ,e,n,maxZ]) forms, and REJECTS out-of-range values — some
 // catalog items carry a bad bbox (projected metres, or a longitude leaked into the latitude slot).

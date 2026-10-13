@@ -6,8 +6,8 @@ import type { ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 
 import type { ItemRef } from "./browse";
-import { collectionLabel, dateOf, formatBadgeAssets, hasGeometry, seriesLabel, title, typeOf } from "./item-view";
-import { thumbnailAsset } from "@/stac";
+import { collectionLabel, dateOf, formatBadgeAssets, seriesLabel, title, typeOf } from "./item-view";
+import { hasFootprint, thumbnailAsset } from "@/stac";
 import { C } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
 
@@ -71,7 +71,7 @@ export function ResultCard({ it, density, on, link, addSlot }: CardProps) {
         <div className="min-w-0 flex-1">
           <div className="flex items-baseline gap-1.5">
             <p className={`min-w-0 flex-1 font-semibold leading-tight text-foreground ${compact ? "line-clamp-1" : "line-clamp-2"} text-sm`}>{title(it)}</p>
-            {hasGeometry(it) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
+            {hasFootprint(it.data) && <span className="shrink-0 text-[10px] font-medium text-primary"><span aria-hidden>◆</span> map</span>}
           </div>
           {sid && <div className="truncate font-mono text-[11px] text-muted-foreground" title={sid}>{sid}</div>}
           <div className="mt-1 truncate text-xs text-muted-foreground" title={metaLine(it)}>{metaLine(it)}</div>
@@ -94,7 +94,7 @@ export function ResultRow({ it, density, on, link, addSlot }: CardProps) {
         <span className="truncate text-sm text-foreground" title={title(it)}>{title(it)}</span>
         {sid && <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{sid}</span>}
         {!compact && <span className="hidden shrink-0 text-xs text-muted-foreground sm:inline">{collectionLabel(it.collId)}</span>}
-        {hasGeometry(it) && (
+        {hasFootprint(it.data) && (
           <span className="ml-auto shrink-0 text-primary">
             <span aria-hidden className="text-[10px]">◆</span><span className="sr-only">on the map</span>
           </span>

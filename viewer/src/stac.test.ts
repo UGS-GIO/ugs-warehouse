@@ -382,6 +382,17 @@ describe("placeholder footprints", () => {
     expect(hasFootprint({ bbox: [-112, 40, -111, 41], properties: { "ugs:footprint_source": "cog" } })).toBe(true);
     expect(hasFootprint(undefined)).toBe(false);
   });
+  it("needs a geometry or a valid lon/lat bbox, and never a null geometry", () => {
+    expect(hasFootprint({ geometry: { type: "Point", coordinates: [-111, 39] } })).toBe(true);
+    expect(hasFootprint({ bbox: [-114, 37, -109, 42] })).toBe(true);
+    expect(hasFootprint({ bbox: [-114, 37, 0, -109, 42, 0] })).toBe(true);
+    expect(hasFootprint({})).toBe(false);
+    expect(hasFootprint({ bbox: [1, 2] })).toBe(false);
+    // Projected metres, or a longitude in the latitude slot, is not a lon/lat footprint.
+    expect(hasFootprint({ bbox: [420000, 4100000, 460000, 4150000] })).toBe(false);
+    expect(hasFootprint({ bbox: [-114, -111, -109, 42] })).toBe(false);
+    expect(hasFootprint({ geometry: null, bbox: [-114, 37, -109, 42] })).toBe(false);
+  });
   it("keeps a placeholder Collection extent out of the normalised bbox", () => {
     const d = collectionAsItem({ ...pubCollection, "ugs:footprint_source": "utah-bbox",
       extent: { spatial: { bbox: [utah] }, temporal: { interval: [[null, null]] } } } as StacDoc);

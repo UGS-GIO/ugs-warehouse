@@ -2,10 +2,10 @@ import { describe, expect, it } from "vitest";
 import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
-  dateOf, fmtDate, formatsOf, hasGeometry, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
+  dateOf, fmtDate, formatsOf, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
   assetEntries, groupParts, PART_GROUP_OPEN, plateEntry, previewKindOf, series, title, typeOf, year,
 } from "./item-view";
-import { collectionAsItem, type StacDoc } from "@/stac";
+import { collectionAsItem, hasFootprint, type StacDoc } from "@/stac";
 
 // Minimal item factory — the fields the view-model reads (collId, id, bbox, properties, assets).
 const item = (
@@ -48,9 +48,9 @@ describe("field getters", () => {
     expect(fmtDate("")).toBe("");
   });
 
-  it("hasGeometry reads a valid bbox, rejects a missing one", () => {
-    expect(hasGeometry(item("c", "1", {}, { bbox: [-114, 37, -109, 42] }))).toBe(true);
-    expect(hasGeometry(item("c", "1"))).toBe(false);
+  it("hasFootprint reads a valid bbox, rejects a missing one", () => {
+    expect(hasFootprint(item("c", "1", {}, { bbox: [-114, 37, -109, 42] }).data)).toBe(true);
+    expect(hasFootprint(item("c", "1").data)).toBe(false);
   });
 
   it("rowCount / recordCountLabel only when a count is published", () => {
@@ -190,8 +190,8 @@ describe("footprints and spatial data", () => {
   it("does not count the statewide placeholder as a footprint", () => {
     const onUtah = item("ugs-publications/C", "C-139", { "ugs:footprint_source": "utah-bbox" },
       { bbox: [-114.05, 37, -109.04, 42] });
-    expect(hasGeometry(onUtah)).toBe(false);
-    expect(hasGeometry(item("c", "1", { "ugs:footprint_source": "cog" }, { bbox: [-112, 40, -111, 41] })))
+    expect(hasFootprint(onUtah.data)).toBe(false);
+    expect(hasFootprint(item("c", "1", { "ugs:footprint_source": "cog" }, { bbox: [-112, 40, -111, 41] }).data))
       .toBe(true);
   });
   it("treats null geometry, or a schema with no geometry column, as a plain table", () => {
@@ -235,7 +235,7 @@ describe("a publication Collection on the item page", () => {
     expect(kindLabel(it_)).toBe("Publication");
     expect(categorize(it_).key).toBe("publications");
     expect(formatsOf(it_)).toEqual(["PDF"]);
-    expect(hasGeometry(it_)).toBe(true);
+    expect(hasFootprint(it_.data)).toBe(true);
     const { curated } = curatedDerived(coll.properties ?? {});
     expect(curated.find((r) => r.label === "Published")?.value).toBe("Jun 2020");
   });

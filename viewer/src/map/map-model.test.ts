@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { type ActiveLayer, boundsOf, clampSize, colorForId, defaultVectorLayers, DETENTS, GEOM_FILTER, hasFootprint, LAYER_COLORS, layerParam, mapDefaultLayers, NEUTRAL_VECTOR_COLOR, previewDefaultLayers,
+import { type ActiveLayer, boundsOf, clampSize, colorForId, defaultVectorLayers, DETENTS, GEOM_FILTER, LAYER_COLORS, layerParam, mapDefaultLayers, NEUTRAL_VECTOR_COLOR, previewDefaultLayers,
   mapKindOf, nearestDetent, releaseDetent, contentTakesDrag, parseSheet, sheetParam, nextPick, NO_LAYERS, orderedSublayerIds, parseLayerParam, reorderLayers, slugOf,
   validBbox } from "./map-model";
 import type { StacDoc } from "@/stac";
@@ -67,24 +67,6 @@ describe("mapKindOf", () => {
     expect(mapKindOf({ raster: true, cog: true, footprint: true })).toBe("raster");
     expect(mapKindOf({ cog: true, footprint: true })).toBe("cog");
     expect(mapKindOf({ footprint: true })).toBe("footprint");
-  });
-});
-
-describe("hasFootprint", () => {
-  it("is true for geometry or a real (>=4) bbox", () => {
-    expect(hasFootprint({ geometry: { type: "Point", coordinates: [-111, 39] } } as StacDoc)).toBe(true);
-    expect(hasFootprint({ bbox: [-114, 37, -109, 42] } as StacDoc)).toBe(true);
-  });
-
-  it("is false for the statewide placeholder extent", () => {
-    expect(hasFootprint({ bbox: [-114, 37, -109, 42], properties: { "ugs:footprint_source": "utah-bbox" } } as StacDoc))
-      .toBe(false);
-  });
-
-  it("is false for aspatial items / too-short bbox / undefined", () => {
-    expect(hasFootprint(undefined)).toBe(false);
-    expect(hasFootprint({} as StacDoc)).toBe(false);
-    expect(hasFootprint({ bbox: [1, 2] } as StacDoc)).toBe(false);
   });
 });
 

@@ -1489,9 +1489,13 @@ def test_relations_backfill_writes_nothing_when_a_layer_cannot_be_read(monkeypat
 # The pubs ingest runs the same self-heal before it writes the items
 # ---------------------------------------------------------------------------
 
-def _ingest(monkeypatch, store, pubs: list[dict]):
+def _ingest(monkeypatch, store, pubs: list[dict], *, file_meta: bool = False):
     """A pubs ingest over `store`: the vector manifests and GeoParquet are real, the other
-    publication inputs empty, and the written Collections and Items captured."""
+    publication inputs empty, and the written Collections and Items captured. With `file_meta`,
+    the real `_file_meta_index` runs, its listing served from `store` (real sizes and sha256
+    multihashes), since the in-memory bucket has no google-cloud listing of its own."""
+    import hashlib
+
     from ugs_warehouse.core import stac
     from ugs_warehouse.pubs import editions, ingest, source
 
@@ -1500,7 +1504,12 @@ def _ingest(monkeypatch, store, pubs: list[dict]):
     monkeypatch.setattr(source, "read_attachments", lambda: [])
     monkeypatch.setattr(source, "source_name", lambda: "test")
     monkeypatch.setattr(editions, "footprint_rows", lambda: [])
-    monkeypatch.setattr(ingest, "_file_meta_index", lambda: {})
+    if file_meta:
+        monkeypatch.setattr(vectors.gcs, "list_file_meta", lambda prefix: {
+            p: vectors.gcs.FileMeta(len(b), "1220" + hashlib.sha256(b).hexdigest())
+            for p, b in store.items() if p.startswith(prefix)})
+    else:
+        monkeypatch.setattr(ingest, "_file_meta_index", lambda: {})
     monkeypatch.setattr(ingest, "_cog_headers", lambda cogs: {})
     monkeypatch.setattr(ingest, "_build_search_corpus", lambda: None)
     monkeypatch.setattr(ingest, "_prune_stale_items", lambda path, keep: None)
@@ -1568,4 +1577,39 @@ def test_an_ingest_limited_to_a_series_heals_only_that_series(monkeypatch, tmp_p
     assert ingest.build_catalog(series="M", skip_refresh=True) == 1
     assert vectors.pmtiles_object("M-1DM", "geo__Polys") in store
     assert vectors.pmtiles_object("OFR-5", "geo__Polys") not in store
+
+
+def test_a_pub_whose_heal_and_write_both_fail_counts_once(monkeypatch, tmp_path, capsys):
+    from ugs_warehouse.pubs import sink_stac
+
+    store = _gems_store(monkeypatch, tmp_path, "M-1DM")
+    ingest, _ = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}])
+
+    def boom(geojsonl, pmtiles, layer, **kw):
+        raise RuntimeError("tippecanoe exited 1")
+
+    def unwritable(*a, **k):
+        raise ValueError("bad publication")
+
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", boom)
+    monkeypatch.setattr(sink_stac, "build_publication", unwritable)
+    with pytest.raises(RuntimeError, match=r"^1 publication\(s\) failed: \['M-1DM'\]$"):
+        ingest.build_catalog(skip_refresh=True)
+    err = capsys.readouterr().err
+    assert "FAILED M-1DM: self-heal" in err and "FAILED M-1DM: ValueError: bad publication" in err
+
+
+def test_healed_tiles_carry_file_meta_in_the_same_run(monkeypatch, tmp_path):
+    import hashlib
+
+    store = _gems_store(monkeypatch, tmp_path, "M-1DM")
+    ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}],
+                              file_meta=True)
+
+    assert ingest.build_catalog(skip_refresh=True) == 1
+
+    pm = store[vectors.pmtiles_object("M-1DM", "geo__Polys")]
+    polys = next(d for d in written if d["id"] == "M-1DM__geo__Polys")
+    assert polys["assets"]["pmtiles"]["file:size"] == len(pm)
+    assert polys["assets"]["pmtiles"]["file:checksum"] == "1220" + hashlib.sha256(pm).hexdigest()
 

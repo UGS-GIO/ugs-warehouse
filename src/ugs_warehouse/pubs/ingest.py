@@ -399,7 +399,9 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     else:
         print(f"[pubs] wrote {n} publications (catalog refresh skipped)")
     if errors or refresh_error:
-        failed = [f"{len(errors)} publication(s) failed: {sorted(sid for sid, _ in errors)}"] if errors else []
+        # A pub whose heal and write both failed has two errors but counts once.
+        failed_sids = sorted({sid for sid, _ in errors})
+        failed = [f"{len(failed_sids)} publication(s) failed: {failed_sids}"] if errors else []
         refresh = [f"catalog refresh: {type(refresh_error).__name__}: {refresh_error}"] if refresh_error else []
         raise RuntimeError("; ".join(failed + refresh)) from refresh_error
     return n

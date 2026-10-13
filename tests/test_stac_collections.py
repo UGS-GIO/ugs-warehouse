@@ -384,6 +384,39 @@ def test_refresh_indexes_publication_items_and_counts_mappable(monkeypatch):
     assert link["ugs:mappable_count"] == 1
 
 
+def test_refresh_keeps_index_rows_not_full_publication_items(monkeypatch):
+    """By the time the publication catalogs are written, no full pub Item doc (with its
+    `table:columns` and `proj:wkt2`) is still in memory: only its index row."""
+    import gc
+
+    store = _memstore(monkeypatch)
+    for sid in ("OFR-1", "OFR-2"):
+        _pub(store, "ugs-publications", "OFR", sid, [])
+        stac.write_item(stac.build_item(
+            item_id=f"{sid}_layer", collection=sid, collection_path=f"ugs-publications/OFR/{sid}",
+            geometry=None, bbox=None, datetime_iso="2020-01-01T00:00:00Z",
+            properties={"title": "layer", "proj:wkt2": "PROJCRS[\"MARKER\"]"},
+            assets={"data": {"href": "https://x/l.parquet", "type": config.PARQUET_MIME,
+                             "roles": ["data"], "table:columns": [{"name": "MARKER"}]}}))
+    real = stac._write_pub_series
+    alive: list = []
+
+    def check(*a, **k):
+        gc.collect()
+        alive.extend(o for o in gc.get_objects()
+                     if isinstance(o, dict) and o.get("stac_version") and str(o.get("id", "")).endswith("_layer"))
+        return real(*a, **k)
+
+    monkeypatch.setattr(stac, "_write_pub_series", check)
+    stac.refresh_catalog()
+
+    assert alive == []
+    rows = [e for e in json.loads(store[f"{config.STAC_PREFIX}/items.json"])["items"]
+            if e["id"].endswith("_layer")]
+    assert [r["properties"]["ugs:in_publication"] for r in rows] == ["OFR-1", "OFR-2"]
+    assert "table:columns" not in json.dumps(rows) and "proj:wkt2" not in json.dumps(rows)
+
+
 def test_refresh_counts_a_single_file_plate_as_mappable(monkeypatch):
     store = _memstore(monkeypatch)
     cog = {"cog": {"href": "https://x/p.cog.tif", "type": config.COG_MIME, "roles": ["data", "cloud-optimized"]}}

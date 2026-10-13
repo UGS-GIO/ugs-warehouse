@@ -833,10 +833,14 @@ def _web_map_links(doc: dict) -> list[dict]:
 
 
 def _pub_item_index_entry(item: dict, coll: dict, *, prefix: str) -> dict:
-    """A publication Item's root-index entry: its `_index_entry`, tagged with the publication's id
-    and title (`ugs:in_publication`, `ugs:publication_title`). A list view drops tagged entries to
-    keep one card per publication; a map layer list keeps them and names the publication."""
-    entry = _index_entry(item, prefix=prefix)
+    """A publication Item's root-index entry: its `_index_entry`, tagged by `_tag_pub_entry`."""
+    return _tag_pub_entry(_index_entry(item, prefix=prefix), coll)
+
+
+def _tag_pub_entry(entry: dict, coll: dict) -> dict:
+    """Tag a publication Item's index entry with the publication's id and title
+    (`ugs:in_publication`, `ugs:publication_title`). A list view drops tagged entries to keep one
+    card per publication; a map layer list keeps them and names the publication."""
     entry["properties"]["ugs:in_publication"] = coll["id"]
     entry["properties"]["ugs:publication_title"] = coll.get("title") or coll["id"]
     return entry
@@ -1151,7 +1155,9 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             del groups[g]
     pub_colls = {p: 0 for p in pub_colls if p.rsplit("/", 1)[0] in migrated}
     pub_mappable: set[str] = set()
-    pub_items: dict[str, list[dict]] = {}
+    # Each publication's Items as index rows only: the full docs (table:columns, proj:wkt2) are
+    # dropped as each collection is read, so memory does not grow with every pub Item.
+    pub_rows: dict[str, list[dict]] = {}
 
     # 1. Write each leaf collection.json + items.json (flat or nested). collection id = the
     #    path's last segment (a series code when nested); title from the items' pub type.
@@ -1187,9 +1193,10 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
                 # Publication collections are written by the pubs ingest; refresh only indexes them.
                 # The count is of Items that loaded, the ones the indexes list.
                 pub_colls[path] = len(items)
-                pub_items[path] = items
+                pub_rows[path] = [_index_entry(it, prefix=f"{path}/") for it in items]
                 if any(_is_mappable(it) for it in items):
                     pub_mappable.add(path)
+                del items
                 continue
             # Title/description are inherited, never authored here: see _group_title. A group with
             # nothing to inherit stays None and _collection_doc falls back to prettify(id).
@@ -1236,8 +1243,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     # layer lists and searches still reach them. The series items.json lists publications only.
     for path, doc in pub_docs.items():
         everything.append(_collection_index_entry(doc, prefix=f"{path}/", item_count=pub_colls[path]))
-        everything.extend(_pub_item_index_entry(it, doc, prefix=f"{path}/")
-                          for it in pub_items.get(path, []))
+        everything.extend(_tag_pub_entry(row, doc) for row in pub_rows.get(path, []))
     tops: dict[str, list[str]] = {}
     for path in groups:
         if not _is_pub_collection_path(path):

@@ -749,6 +749,28 @@ def test_layer_tiling_reuses_the_serving_topic_tippecanoe_call(monkeypatch, tmp_
     assert seen["feature"]["properties"] == {"Type": "fault"}
     assert store == {vectors.pmtiles_object("M-200", "geo__Faults"): b"tiles"}
     assert os.listdir(tmp_path) == []  # temp files deleted: the job's disk is memory
+    assert gdf.crs.to_epsg() == 4326  # reprojected in place: no second full copy
+
+
+def test_extraction_releases_each_layer_before_reading_the_next(monkeypatch, tmp_path):
+    import gc
+    import weakref
+
+    _mem_gcs(monkeypatch)
+    alive: list = []
+
+    def read_file(path, layer=None, engine=None):
+        gc.collect()
+        assert all(ref() is None for ref in alive), "the previous layer is still in memory"
+        gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]},
+                               crs="EPSG:26912")
+        alive.append(weakref.ref(gdf))
+        return gdf
+
+    monkeypatch.setattr("geopandas.read_file", read_file)
+    srcs = [("b.gdb", f"L{i}", f"b__L{i}", True) for i in range(3)]
+    manifest = vectors._extract_and_upload(str(tmp_path), "M-210", srcs)
+    assert manifest["errors"] == [] and len(alive) == 3
 
 
 def test_rows_without_geometry_are_left_out_of_the_tiles(monkeypatch, tmp_path):

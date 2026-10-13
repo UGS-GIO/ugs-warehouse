@@ -286,17 +286,17 @@ def _tile_layer(gdf, series_id: str, label: str, tmp: str | None = None) -> bool
     """Tile `gdf` as `<label>.pmtiles` beside its GeoParquet: reprojected to EPSG:4326 (tippecanoe
     reads lon/lat), one tile layer named `label`, built with the serving topics' tippecanoe flags.
     Returns False, writing nothing, when no row has a geometry. Temp files go under `tmp` and are
-    deleted before returning, since the job's disk is memory. Holds at most `gdf` plus one
-    reprojected copy, beyond a moment while rows without geometry are dropped."""
+    deleted before returning, since the job's disk is memory. Reprojects `gdf` in place, since the
+    callers are done with it, so the most it holds is `gdf` plus, when some rows have no geometry,
+    a copy without them."""
     blank = (gdf.geometry.isna() | gdf.geometry.is_empty).to_numpy()
     if blank.all():
         return False
     with tempfile.TemporaryDirectory(dir=tmp) as d:
         geojsonl = os.path.join(d, f"{label}.geojsonl")
-        wgs84 = gdf.to_crs(4326)
-        if blank.any():
-            wgs84 = wgs84[~blank]
+        wgs84 = gdf[~blank] if blank.any() else gdf
         del blank
+        wgs84.to_crs(4326, inplace=True)
         wgs84.to_file(geojsonl, driver="GeoJSONSeq", engine="pyogrio")
         del wgs84
         pmtiles = os.path.join(d, f"{label}.pmtiles")
@@ -352,6 +352,7 @@ def _extract_and_upload(
     profiles: list[relations.Layer] = []
     for path, layer, label, is_spatial in srcs:
         dst = os.path.join(work, f"{label}.parquet")
+        gdf = df = None  # the previous layer is released before this one is read
         try:
             if is_spatial:
                 gdf = gpd.read_file(path, layer=layer, engine="pyogrio")
@@ -388,6 +389,7 @@ def _extract_and_upload(
                       layer or os.path.basename(path)[:-4], manifest)
         if is_spatial:
             _tile_into(entry, gdf, series_id, work, manifest)
+        del gdf, df
 
     if manifest["spatial"] or manifest["tables"]:
         declared = _declared_relationships(srcs, {e["label"] for e in manifest["layers"]}, manifest)

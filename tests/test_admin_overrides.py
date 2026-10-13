@@ -113,5 +113,11 @@ def test_ingest_applies_the_override_to_the_collection(store):
 
 def test_an_unreadable_override_fails_the_ingest(store):
     store[stac.override_object("OFR-1")] = b"{not json"
-    with pytest.raises(json.JSONDecodeError):
+    with pytest.raises(ValueError, match="unreadable override .*OFR-1.json: JSONDecodeError"):
+        ingest._overrides_by_sid()
+
+
+def test_an_override_that_is_not_an_object_fails_the_ingest(store):
+    store[stac.override_object("OFR-1")] = b'["Hand text"]'
+    with pytest.raises(ValueError, match="override .*OFR-1.json is not a JSON object"):
         ingest._overrides_by_sid()

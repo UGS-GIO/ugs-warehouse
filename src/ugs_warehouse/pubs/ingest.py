@@ -82,7 +82,13 @@ def _overrides_by_sid() -> dict[str, dict]:
         if not path.endswith(".json"):
             continue
         sid = path.rsplit("/", 1)[-1][: -len(".json")].upper()
-        out[sid] = json.loads(gcs.get_bytes(path).decode())
+        try:
+            doc = json.loads(gcs.get_bytes(path).decode())
+        except Exception as e:
+            raise ValueError(f"unreadable override {path}: {type(e).__name__}: {e}") from e
+        if not isinstance(doc, dict):
+            raise ValueError(f"override {path} is not a JSON object")
+        out[sid] = doc
     return out
 
 

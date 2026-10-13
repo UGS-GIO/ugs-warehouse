@@ -57,7 +57,7 @@ python -m pytest tests/ -q        # hermetic, no network
 ruff check src service scripts
 ```
 
-Ingest one serving table locally. This needs `gcloud` auth and `cloud_sql_proxy` to `mapping-db`:
+Dry-run or ingest one serving table locally. This needs `gcloud` auth and `cloud_sql_proxy` to `mapping-db`:
 
 ```bash
 cloud_sql_proxy -instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5433

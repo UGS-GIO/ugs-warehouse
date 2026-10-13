@@ -716,8 +716,9 @@ steps:
       - --args=-m,ugs_warehouse.pubs.vectors,--all
       # A statewide layer (M-228DM, 2.3M polygons) peaks near 8Gi, /tmp included, and takes about
       # 25 min; the timeout leaves room to finish one started at the 2700 s extraction budget.
+      # No retries: exit 1 means a pub's data failed, which a rerun repeats; the next run retries it.
       - --task-timeout=7200
-      - --max-retries=1
+      - --max-retries=0
       - --cpu=4
       - --memory=16Gi
 

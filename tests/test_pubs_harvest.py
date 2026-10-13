@@ -348,6 +348,40 @@ def test_report_records_produced_cog(monkeypatch, tmp_path):
     assert cog["compress"].lower() == "deflate"  # lossless master, not webp
 
 
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_a_new_units_file_uploads_mutable_and_its_cog_immutable(monkeypatch, tmp_path):
+    """The self-heal can rewrite a units file in place, so it is never cached as immutable; a COG
+    is write-once and stays immutable."""
+    from ugs_warehouse.pubs import harvest
+
+    pub = identity.Pub(series_id="M-1")
+    harvest._report_begin("M-1")
+    monkeypatch.setattr(harvest, "THUMBS", False)
+    monkeypatch.setattr(harvest, "footprint", lambda sid, work: ("cut.geojson", 1))
+    monkeypatch.setattr(harvest, "download", lambda *a, **k: None)
+    monkeypatch.setattr(harvest, "prepare_plates",
+                        lambda zips, work, **_: (str(tmp_path / "plate.tif"), str(tmp_path / "units.shp")))
+    monkeypatch.setattr(harvest, "ensure_rgb", lambda p: p)
+    monkeypatch.setattr(harvest, "run", lambda cmd: None)
+    monkeypatch.setattr(harvest.geoparquet, "write", lambda src, path: open(path, "wb").close())
+    _stub_8bit(monkeypatch, harvest)
+
+    def fake_cog_translate(src, dst, prof, **k):
+        with open(dst, "wb") as f:
+            f.write(b"x" * 200_000)
+
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_translate", fake_cog_translate)
+    monkeypatch.setattr("rio_cogeo.cogeo.cog_validate", lambda p: (True, [], []))
+    headers = {}
+    monkeypatch.setattr(harvest.gcs, "upload_write_once",
+                        lambda local, obj, **k: headers.__setitem__(obj, k["cache_control"]))
+    monkeypatch.setattr(harvest.gcs, "upload", lambda local, obj, **k: headers.__setitem__(obj, k["cache_control"]))
+
+    assert _harvest_attempt(pub, ["http://x/m-1.zip"]) == "ok"
+    assert headers == {pub.cog_object: harvest.gcs.CACHE_IMMUTABLE,
+                       f"{identity.UNITS_PREFIX}/M-1/M-1.units.parquet": harvest.gcs.CACHE_MUTABLE}
+
+
 def _stub_8bit(monkeypatch, harvest):
     """_harvest_attempt tests fake the plate and COG files; treat both as already 8-bit."""
     monkeypatch.setattr(harvest, "_plate_kind", lambda p: "byte")

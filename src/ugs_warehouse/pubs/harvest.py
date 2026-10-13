@@ -1019,7 +1019,7 @@ def _harvest_attempt(pub: identity.Pub, zurls, source=None) -> str:
             gpq = os.path.join(work, f"{series_id}.units.parquet")
             geoparquet.write(shp, gpq)
             units_obj = f"{identity.UNITS_PREFIX}/{series_id}/{series_id}.units.parquet"
-            gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_IMMUTABLE)
+            gcs.upload(gpq, units_obj, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
             _report("produced", units_parquet=units_obj)
         if THUMBS:
             _write_previews(pub, cog, work)

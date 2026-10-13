@@ -511,6 +511,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=({}, {})), \
+         patch("ugs_warehouse.pubs.vectors.clean_manifests", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_publication",
                return_value=({"_collection_path": "ugs-publications/DS/DS-1"}, [])) as mock_build, \
@@ -554,6 +555,7 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
          patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=({}, {})), \
+         patch("ugs_warehouse.pubs.vectors.clean_manifests", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows",
                side_effect=RuntimeError("footprints missing")), \
          patch("ugs_warehouse.pubs.sink_stac.build_publication",
@@ -758,6 +760,7 @@ def _build_catalog_patches(stack, manifests, pubs, written_items, written_colls,
         ("ugs_warehouse.pubs.ingest._mirrored_files", {"return_value": set()}),
         ("ugs_warehouse.pubs.ingest._cog_headers", {"return_value": {}}),
         ("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", {"return_value": (manifests, failed or {})}),
+        ("ugs_warehouse.pubs.vectors.clean_manifests", {"return_value": {}}),
         ("ugs_warehouse.pubs.editions.footprint_rows", {"return_value": []}),
         ("ugs_warehouse.core.stac.prior_collection_field", {"return_value": None}),
         ("ugs_warehouse.core.stac.prior_property", {"return_value": None}),

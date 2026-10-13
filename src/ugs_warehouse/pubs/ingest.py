@@ -16,6 +16,7 @@ import argparse
 import json
 import math
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs, stac
@@ -265,7 +266,27 @@ def _file_meta_index() -> dict[str, gcs.FileMeta]:
     return index
 
 
+# The self-heal stops starting series this long after build_catalog starts, so the rest of the
+# ingest still fits the job's 1800 s task timeout.
+HEAL_BUDGET_S = 900
+
+
+def _self_heal(pubs: list[dict], deadline: float) -> vectors.Heal:
+    """`vectors.self_heal` over the clean vector manifests of `pubs`: the PMTiles and
+    relationships extracted layers are missing, from their GeoParquet, before the items are built."""
+    wanted = {(p.get("series_id") or "").strip().upper() for p in pubs}
+    manifests = {sid: m for sid, m in vectors.clean_manifests().items() if sid.upper() in wanted}
+    heal = vectors.self_heal(manifests, deadline=deadline)
+    print(f"[pubs] {heal.summary(next_step='refresh')}")
+    return heal
+
+
 def build_catalog(limit: int | None = None, series: str | None = None, skip_refresh: bool = False) -> int:
+    """Write the publications' Collections and Items. First fill in the PMTiles and relationships
+    already-extracted pubs are missing (`_self_heal`, within HEAL_BUDGET_S), so the items carry them
+    in the same run; a heal failure fails the run like a publication's, and work left by the budget
+    waits for the next refresh."""
+    started = time.monotonic()
     print(f"[pubs] metadata source: {source.source_name()}")
     pubs = source.read_pubs()
     # Computed over the FULL corpus, before --series/--limit narrow `pubs` below: a same-quad
@@ -304,13 +325,17 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     heads = _cog_headers(cogs)  # footprints + COG asset fields from OUR COGs (no external service)
     mirrored = _mirrored_files()  # source files served from our CDN instead of the publisher's host
     vector_manifests, manifest_failures = _vector_manifests_by_sid()  # spatial/table split extracted by pubs/vectors.py
+    healed = _self_heal(pubs, started + HEAL_BUDGET_S)
+    if healed.tiled or healed.related:  # build the items from the healed manifests
+        vector_manifests, manifest_failures = _vector_manifests_by_sid()
     file_meta = _file_meta_index()  # file:size/checksum for the assets in our bucket
     n_foot = sum(1 for f, _ in heads.values() if f)
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "
           f"{len(units)} unit sets, {n_foot} footprints, {len(threed_ids)} 3D, "
           f"{len(mirrored)} mirrored source files, {len(vector_manifests)} vector manifests")
 
-    errors: list[tuple[str, str]] = []
+    errors: list[tuple[str, str]] = [(sid, f"self-heal: {len(errs)} failed this run: {'; '.join(errs)}")
+                                     for sid, errs in sorted(healed.failed_by_series.items())]
 
     def process_pub(p: dict) -> bool:
         """Write one publication; a failure is collected so the other publications still land."""

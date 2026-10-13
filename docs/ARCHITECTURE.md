@@ -196,9 +196,10 @@ The run exits 1 only for work that failed in that run: a pub that failed to extr
 tiling failed at extraction, or a layer or pub whose self-heal failed (each is listed). Work the
 time budget left pending is not a failure.
 
-**Rollout.** Pubs extracted before PMTiles and relationships were recorded catch up on their own:
-the first full refreshes (or runs of Extract map layers) work through them within the budget. Run
-the vectors job again until it reports 0 pending, then **Rebuild pubs STAC** to bind them.
+The pubs ingest runs the same self-heal before it writes the items (stopping new series after
+900 s), so any refresh, Full refresh or **Rebuild pubs STAC**, catches these up and publishes them in
+the same run. Pubs extracted before PMTiles and relationships were recorded catch up this way:
+repeat a refresh until it reports 0 pending.
 
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so

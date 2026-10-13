@@ -1483,3 +1483,89 @@ def test_relations_backfill_writes_nothing_when_a_layer_cannot_be_read(monkeypat
     assert _heal(["M-402"]) == 1
     assert store[f"{vectors.VECTORS_PREFIX}/M-402/_manifest.json"] == before
     assert "M-402/geo__Glossary: not read for relationships" in capsys.readouterr().err
+
+
+# ---------------------------------------------------------------------------
+# The pubs ingest runs the same self-heal before it writes the items
+# ---------------------------------------------------------------------------
+
+def _ingest(monkeypatch, store, pubs: list[dict]):
+    """A pubs ingest over `store`: the vector manifests and GeoParquet are real, the other
+    publication inputs empty, and the written Collections and Items captured."""
+    from ugs_warehouse.core import stac
+    from ugs_warehouse.pubs import editions, ingest, source
+
+    written: list[dict] = []
+    monkeypatch.setattr(source, "read_pubs", lambda: pubs)
+    monkeypatch.setattr(source, "read_attachments", lambda: [])
+    monkeypatch.setattr(source, "source_name", lambda: "test")
+    monkeypatch.setattr(editions, "footprint_rows", lambda: [])
+    monkeypatch.setattr(ingest, "_file_meta_index", lambda: {})
+    monkeypatch.setattr(ingest, "_cog_headers", lambda cogs: {})
+    monkeypatch.setattr(ingest, "_build_search_corpus", lambda: None)
+    monkeypatch.setattr(ingest, "_prune_stale_items", lambda path, keep: None)
+    monkeypatch.setattr(stac, "prior_collection_field", lambda *a, **k: None)
+    monkeypatch.setattr(stac, "prior_property", lambda *a, **k: None)
+    monkeypatch.setattr(stac, "attach_renders", lambda item: None)
+    monkeypatch.setattr(stac.styles, "warm", lambda: 0)
+    monkeypatch.setattr(stac, "write_item", written.append)
+    monkeypatch.setattr(stac, "write_collection", lambda c, children: written.append(c))
+    return ingest, written
+
+
+def _two_gems_pubs(monkeypatch, tmp_path, first: str, second: str):
+    store = _gems_store(monkeypatch, tmp_path, first)
+    store.update({k.replace(f"/{first}/", f"/{second}/"): v
+                  for k, v in list(store.items()) if f"/{first}/" in k})
+    return store
+
+
+def test_an_ingest_heals_a_pub_and_writes_items_that_carry_the_result(monkeypatch, tmp_path, capsys):
+    store = _gems_store(monkeypatch, tmp_path, "M-1DM")
+    ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}])
+
+    assert ingest.build_catalog(skip_refresh=True) == 1
+
+    assert vectors.pmtiles_object("M-1DM", "geo__Polys") in store
+    polys = next(d for d in written if d["id"] == "M-1DM__geo__Polys")
+    assert "pmtiles" in polys["assets"]                                   # tiled in this run
+    assert polys["assets"]["geo__DMU"]["roles"] == ["data", "related"]    # related in this run
+    assert "[pubs] Self-heal: 1 layers tiled, 1 pubs' relationships recorded" in capsys.readouterr().out
+
+
+def test_ingest_leaves_work_past_its_budget_for_the_next_refresh_without_failing(monkeypatch, tmp_path, capsys):
+    store = _gems_store(monkeypatch, tmp_path, "M-1DM")
+    ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}])
+    monkeypatch.setattr(ingest, "HEAL_BUDGET_S", 0)
+
+    assert ingest.build_catalog(skip_refresh=True) == 1  # no raise
+    assert ("1 layers and 1 pubs still pending, the next refresh continues"
+            in capsys.readouterr().out)
+    assert vectors.pmtiles_object("M-1DM", "geo__Polys") not in store
+    assert any(d["id"] == "M-1DM__geo__Polys" for d in written)  # written from the manifest as is
+
+
+def test_a_heal_failure_fails_the_ingest_like_a_publication(monkeypatch, tmp_path, capsys):
+    store = _gems_store(monkeypatch, tmp_path, "M-1DM")
+    ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}])
+
+    def boom(geojsonl, pmtiles, layer, **kw):
+        raise RuntimeError("tippecanoe exited 1")
+
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", boom)
+    with pytest.raises(RuntimeError, match=r"1 publication\(s\) failed: \['M-1DM'\]"):
+        ingest.build_catalog(skip_refresh=True)
+    err = capsys.readouterr().err
+    assert "[pubs] FAILED M-1DM: self-heal: 1 failed this run: M-1DM/geo__Polys: PMTiles not built" in err
+    assert any(d["id"] == "M-1DM__geo__Polys" for d in written)  # the pub is still written
+
+
+def test_an_ingest_limited_to_a_series_heals_only_that_series(monkeypatch, tmp_path):
+    store = _two_gems_pubs(monkeypatch, tmp_path, "M-1DM", "OFR-5")
+    ingest, _ = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"},
+                                             {"series_id": "OFR-5", "pub_year": "2020"}])
+
+    assert ingest.build_catalog(series="M", skip_refresh=True) == 1
+    assert vectors.pmtiles_object("M-1DM", "geo__Polys") in store
+    assert vectors.pmtiles_object("OFR-5", "geo__Polys") not in store
+

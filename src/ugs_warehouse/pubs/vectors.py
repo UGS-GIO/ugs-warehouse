@@ -774,17 +774,19 @@ TIME_BUDGET_S = float(os.environ.get("VECTORS_TIME_BUDGET_S", "2700"))
 @dataclass
 class Heal:
     """One self-heal pass: layers tiled, pubs whose relationships were recorded, an error per
-    layer or pub that failed this run, and the work left for the next run by the time budget."""
+    layer or pub that failed this run (also grouped by series id), and the work the time budget
+    left for the next run."""
     tiled: int = 0
     related: int = 0
     failed: list[str] = field(default_factory=list)
+    failed_by_series: dict[str, list[str]] = field(default_factory=dict)
     pending_layers: int = 0
     pending_pubs: int = 0
 
-    def summary(self) -> str:
+    def summary(self, next_step: str = "run") -> str:
         return (f"Self-heal: {self.tiled} layers tiled, {self.related} pubs' relationships recorded"
                 + (f"; {self.pending_layers} layers and {self.pending_pubs} pubs still pending, the "
-                   "next run continues" if self.pending_layers or self.pending_pubs else "")
+                   f"next {next_step} continues" if self.pending_layers or self.pending_pubs else "")
                 + (f"; {len(self.failed)} failed" if self.failed else ""))
 
 
@@ -805,18 +807,22 @@ def self_heal(manifests: dict[str, dict], *, deadline: float | None = None) -> H
             heal.pending_layers += len(missing_tiles(manifest))
             heal.pending_pubs += int(needs_relations(manifest))
             continue
+        errs: list[str] = []
         try:
             if missing_tiles(manifest):
-                built, errs = _tile_missing(sid)
+                built, tile_errs = _tile_missing(sid)
                 heal.tiled += built
-                heal.failed += errs
+                errs += tile_errs
             if needs_relations(manifest):
-                errs = _relations_series(sid)
-                heal.related += int(not errs)
-                heal.failed += errs
+                rel_errs = _relations_series(sid)
+                heal.related += int(not rel_errs)
+                errs += rel_errs
         except Exception as e:
-            heal.failed.append(f"{sid}: {_error(e)}")
+            errs.append(f"{sid}: {_error(e)}")
             print(f"{sid}: self-heal FAIL {_error(e)}", file=sys.stderr)
+        if errs:
+            heal.failed += errs
+            heal.failed_by_series[sid] = errs
     return heal
 
 

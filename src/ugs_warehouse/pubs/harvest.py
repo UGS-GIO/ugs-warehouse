@@ -482,14 +482,19 @@ def ensure_rgb(tif):
 def _embed_band_statistics(tif: str) -> None:
     """Store each band's exact statistics (alpha included) as STATISTICS_* band tags on `tif`, the
     8-bit raster a COG is made from; `cog_translate(forward_band_tags=True)` copies them into the
-    COG. GDAL leaves pixels the alpha band masks out of the color bands' statistics. Written to the
-    input, never the finished COG, since updating a COG in place breaks its layout."""
+    COG. GDAL leaves pixels the alpha band masks out of the color bands' statistics. Every band tag
+    is forwarded, so no older statistic may survive: GDAL's exact computation rewrites
+    STATISTICS_VALID_PERCENT and removes STATISTICS_APPROXIMATE, and a band still marked approximate
+    raises rather than reach the COG. Written to the input, never the finished COG, since updating a
+    COG in place breaks its layout."""
     import rasterio
 
     with rasterio.open(tif, "r+") as ds:
         for bidx, st in zip(ds.indexes, ds.stats(approx=False)):
             ds.update_tags(bidx, STATISTICS_MINIMUM=st.min, STATISTICS_MAXIMUM=st.max,
                            STATISTICS_MEAN=st.mean, STATISTICS_STDDEV=st.std)
+            if "STATISTICS_APPROXIMATE" in ds.tags(bidx):
+                raise RuntimeError(f"{tif} band {bidx}: a stale STATISTICS_APPROXIMATE tag survived")
 
 
 def _gdalinfo(path, *flags) -> dict:

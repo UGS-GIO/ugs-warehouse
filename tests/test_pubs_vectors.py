@@ -1670,6 +1670,43 @@ def test_an_old_units_file_is_upgraded_to_1_1_and_a_current_one_left_alone(monke
     assert "units upgraded: 1" in heal.summary()
 
 
+def test_a_footer_larger_than_the_first_range_is_read_again_in_full(monkeypatch, tmp_path):
+    store, _ = _units_store(monkeypatch, tmp_path, {"M-1": "1.0", "M-2": "1.1"})
+    reads = []
+    monkeypatch.setattr(vectors.gcs, "get_tail", lambda p, length: reads.append(length) or store[p][-length:])
+    monkeypatch.setattr(vectors, "FOOTER_PROBE_BYTES", 16)  # smaller than any footer
+
+    pfx = vectors.identity.UNITS_PREFIX
+    assert vectors.units_outdated(f"{pfx}/M-1/M-1.units.parquet") is True
+    assert vectors.units_outdated(f"{pfx}/M-2/M-2.units.parquet") is False
+    assert reads[0] == 16 and reads[1] > 16 and reads[2] == 16 and reads[3] > 16
+
+
+def test_an_old_units_file_with_a_plain_bbox_column_is_rewritten_with_a_correct_covering(
+        monkeypatch, tmp_path):
+    """A 1.0 file can carry a `bbox` struct column with no covering metadata; the writer replaces it
+    with bboxes computed from the geometry instead of keeping stale values."""
+    store, _ = _units_store(monkeypatch, tmp_path, {})
+    gdf = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf"]},
+                           geometry=[Point(-112.0, 40.0), Point(-112.1, 40.1)], crs="EPSG:4326")
+    gdf["bbox"] = [{"xmin": 0.0, "ymin": 0.0, "xmax": 0.0, "ymax": 0.0}] * 2  # stale
+    local = tmp_path / "old.parquet"
+    gdf.to_parquet(local, schema_version="1.0.0")
+    path = f"{vectors.identity.UNITS_PREFIX}/M-9/M-9.units.parquet"
+    store[path] = local.read_bytes()
+
+    heal = vectors.self_heal({}, units=vectors.units_objects())
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    table = pq.read_table(pa.BufferReader(store[path]))
+    assert heal.units_upgraded == 1 and table.column_names.count("bbox") == 1
+    assert sorted(b["xmin"] for b in table.column("bbox").to_pylist()) == [-112.1, -112.0]
+    geo = _geo(store[path])
+    assert geo["version"] == "1.1.0" and "bbox" in geo["columns"][geo["primary_column"]]["covering"]
+
+
 def test_units_files_past_the_budget_are_pending_not_failed(monkeypatch, tmp_path):
     store, uploads = _units_store(monkeypatch, tmp_path, {"M-1": "1.0", "M-2": "1.0"})
     heal = vectors.self_heal({}, units=vectors.units_objects(), deadline=0.0)

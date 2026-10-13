@@ -813,13 +813,17 @@ def units_objects(series_ids: set[str] | None = None) -> dict[str, str]:
     return out
 
 
+# The first range read for a Parquet footer; a footer larger than this is read again in full.
+FOOTER_PROBE_BYTES = 64 * 1024
+
+
 def units_outdated(path: str) -> bool:
     """True when a GeoParquet file is older than 1.1 or has no bbox covering, read from its Parquet
     footer alone (a range read)."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
-    footer = gcs.get_tail(path, 64 * 1024)
+    footer = gcs.get_tail(path, FOOTER_PROBE_BYTES)
     size = int.from_bytes(footer[-8:-4], "little") + 8
     if size > len(footer):
         footer = gcs.get_tail(path, size)

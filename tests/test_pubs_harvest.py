@@ -1100,6 +1100,31 @@ def test_units_only_extracts_the_units_and_picks_no_plate(monkeypatch, tmp_path)
 
 
 @pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
+def test_stale_statistics_on_the_input_never_reach_the_cog(tmp_path):
+    """Every input band tag is forwarded, so older statistics must not survive the recompute."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from ugs_warehouse.pubs import harvest
+
+    tif = str(tmp_path / "plate.tif")
+    with rasterio.open(tif, "w", driver="GTiff", width=10, height=10, count=1, dtype="uint8",
+                       crs="EPSG:3857", transform=from_origin(-12_400_000, 4_900_000, 30, 30)) as ds:
+        ds.write(np.full((1, 10, 10), 7, dtype="uint8"))
+        ds.update_tags(1, STATISTICS_APPROXIMATE="YES", STATISTICS_VALID_PERCENT="12",
+                       STATISTICS_MEAN="99", OTHER="kept")
+
+    harvest._embed_band_statistics(tif)
+
+    with rasterio.open(tif) as ds:
+        tags = ds.tags(1)
+    assert "STATISTICS_APPROXIMATE" not in tags
+    assert float(tags["STATISTICS_VALID_PERCENT"]) == 100 and float(tags["STATISTICS_MEAN"]) == 7
+    assert tags["OTHER"] == "kept"
+
+
+@pytest.mark.skipif(not HAS_RASTER_DEPS, reason="requires rio_cogeo and rasterio")
 def test_a_plate_cog_carries_band_statistics_with_the_web_mercator_tiling(tmp_path):
     """The real path on a tiny RGBA plate: statistics embedded on the input reach every COG band,
     the alpha band included, the COG validates, and `tms` tiles exactly as `web_optimized` did."""

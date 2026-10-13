@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.7.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.6.0...v1.7.0) (2026-10-13)
+
+
+### Features
+
+* **stac:** publish each serving-topic layer as its own collection beside its item ([#564](https://github.com/UGS-GIO/ugs-warehouse/issues/564)) ([053b382](https://github.com/UGS-GIO/ugs-warehouse/commit/053b38211db5790f3f7d23149366f40c6bc15ce6))
+
 ## [1.6.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.5.0...v1.6.0) (2026-10-12)
 
 

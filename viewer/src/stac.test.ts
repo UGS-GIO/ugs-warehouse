@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, catalogItemHref, citeLink, collectionAsItem, isServingTopic, plateHrefOf, stacDocQuery, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, catalogItemHref, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
 import { joinsRows, vectorSpecOf } from "./map/preview-spec";
 
@@ -513,5 +513,46 @@ describe("joinsRows", () => {
     expect(joinsRows({ kind: "vector", item, pmHref: "a.pmtiles", sourceLayer: "x" })).toBe(false);
     expect(joinsRows({ kind: "cog", item, href: "a.tif" })).toBe(false);
     expect(joinsRows(null)).toBe(false);
+  });
+});
+
+describe("a publication's relationships", () => {
+  const DMU = "https://x/OFR784DM__DescriptionOfMapUnits.parquet";
+  const asset = (extra: Record<string, unknown> = {}, how: Record<string, unknown> = {}) => ({
+    href: DMU, type: "application/vnd.apache.parquet", roles: ["data", "related"], title: "Description Of Map Units",
+    "ugs:foreign_keys": [{ fields: ["MapUnit"], reference: { resource: "OFR-784DM_MapUnitPolys", fields: ["MapUnit"] }, ...how }],
+    ...extra,
+  });
+
+  it("joins a clicked unit polygon to its DMU row by the MapUnit value", () => {
+    const [j] = relatedJoins({ assets: { OFR784DM__DescriptionOfMapUnits: asset({}, { "ugs:detected_by": "inferred", "ugs:confidence": 100 }) } });
+    expect(j).toEqual({ key: "OFR784DM__DescriptionOfMapUnits", title: "Description Of Map Units", href: DMU,
+                        childField: "MapUnit", parentField: "MapUnit", inferred: { confidence: 100 } });
+  });
+
+  it("tells inferred keys from declared ones", () => {
+    expect(inferredKey({ fields: ["a"], reference: { resource: "r", fields: ["b"] }, "ugs:detected_by": "declared" })).toBeUndefined();
+    expect(inferredKey({ fields: ["a"], reference: { resource: "r", fields: ["b"] } })).toBeUndefined();
+    expect(inferredKey({ fields: ["a"], reference: { resource: "r", fields: ["b"] }, "ugs:detected_by": "inferred" })).toEqual({});
+    expect(inferredTitle({ confidence: 88 })).toContain("confidence 88 of 100");
+    expect(relatedJoins({ assets: { d: asset({}, { "ugs:detected_by": "declared" }) } })[0].inferred).toBeUndefined();
+  });
+
+  it("marks a reference table by the producer's `reference` role or ugs:reference flag", () => {
+    expect(isReferenceAsset(asset({ roles: ["data", "related", "reference"] }))).toBe(true);
+    expect(isReferenceAsset(asset({ "ugs:reference": true }))).toBe(true);
+    expect(isReferenceAsset(asset())).toBe(false);
+    expect(relatedJoins({ assets: { d: asset({ roles: ["data", "related", "reference"] }) } })[0].reference).toBe(true);
+  });
+
+  it("reads each Item link's kind and source dataset off the Collection, where it has them", () => {
+    expect(collectionParts({ type: "Collection", links: [
+      { rel: "item", href: "./P_plate/P_plate.json", title: "Map plate" },
+      { rel: "item", href: "./P_MapUnitPolys/P_MapUnitPolys.json", title: "Map Unit Polys",
+        "ugs:layer_kind": "layer", "ugs:source_dataset": "OFR784DM Mills Junction" },
+    ] })).toEqual([
+      { id: "P_plate", title: "Map plate" },
+      { id: "P_MapUnitPolys", title: "Map Unit Polys", kind: "layer", source: "OFR784DM Mills Junction" },
+    ]);
   });
 });

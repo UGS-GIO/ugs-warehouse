@@ -7,7 +7,7 @@
 import type { ItemRef } from "./browse";
 import { validBbox } from "@/map/map-model";
 import {
-  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, isDrawableCog, isPlaceholderFootprint, KIND_RANK,
+  type Asset, type AssetKind, assetKind, cogAsset, cogRenderAsset, type CollectionPart, isDrawableCog, isPlaceholderFootprint, KIND_RANK,
   parquetAsset, pmtilesLink, rasterTilesAsset, type StacDoc, tableColumns, type TableColumn, zarrAsset,
 } from "@/stac";
 
@@ -166,6 +166,39 @@ export const categoryLabel = (key: string): string =>
 const FORMAT_LABEL: Partial<Record<ReturnType<typeof assetKind>, string>> = {
   cog: "COG", zarr: "Datacube", threeD: "3D", pdf: "PDF", image: "Image", parquet: "GeoParquet", text: "Text",
 };
+// ---- a publication's layers and tables, grouped ----
+// The publication page lists its Items: the plate, units and fence (no kind) first under "Map", then
+// by kind (Map layers, Tables, Supporting tables), and by source dataset first when there are several
+// (a publication of several quads). A group of more than PART_GROUP_OPEN entries starts collapsed. A
+// publication whose links carry no kind is one flat list.
+export type PartGroup = { label?: string; parts: CollectionPart[]; collapsed: boolean };
+export type PartSection = { label?: string; count: number; collapsed: boolean; groups: PartGroup[] };
+export const PART_GROUP_OPEN = 8;
+const KINDS: [string, string][] = [["layer", "Map layers"], ["table", "Tables"], ["supporting", "Supporting tables"]];
+
+const kindGroups = (parts: CollectionPart[]): PartGroup[] => {
+  const known = new Set(KINDS.map(([k]) => k));
+  const other = [...new Set(parts.map((p) => p.kind!).filter((k) => !known.has(k)))].sort();
+  return [...KINDS, ...other.map((k): [string, string] => [k, k])].flatMap(([kind, label]) => {
+    const of = parts.filter((p) => p.kind === kind);
+    return of.length ? [{ label, parts: of, collapsed: of.length > PART_GROUP_OPEN }] : [];
+  });
+};
+
+export const groupParts = (parts: CollectionPart[]): PartSection[] => {
+  const kinded = parts.filter((p) => p.kind);
+  if (!kinded.length) return parts.length ? [{ count: parts.length, collapsed: false, groups: [{ parts, collapsed: false }] }] : [];
+  const map = parts.filter((p) => !p.kind);
+  const sections: PartSection[] = map.length
+    ? [{ count: map.length, collapsed: false, groups: [{ label: "Map", parts: map, collapsed: false }] }] : [];
+  const sources = [...new Set(kinded.map((p) => p.source ?? ""))].sort((a, b) => a.localeCompare(b));
+  if (sources.length < 2) return [...sections, { count: kinded.length, collapsed: false, groups: kindGroups(kinded) }];
+  return [...sections, ...sources.map((s) => {
+    const of = kinded.filter((p) => (p.source ?? "") === s);
+    return { label: s || "Other", count: of.length, collapsed: of.length > PART_GROUP_OPEN, groups: kindGroups(of) };
+  })];
+};
+
 // ---- the item preview ----
 // Which preview an item gets: vector tiles (a serving topic, or a publication layer with its own
 // PMTiles) → the map plus its table; a raster mosaic → its tiles; anything else → the asset tabs.

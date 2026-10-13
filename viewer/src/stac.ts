@@ -114,20 +114,27 @@ export type Link = {
   "pmtiles:layers"?: string[];
   "ugs:item_count"?: number;
   "ugs:mappable_count"?: number;
+  "ugs:layer_kind"?: string;       // a publication's rel=item link: layer | table | supporting
+  "ugs:source_dataset"?: string;   // ... and the GIS dataset it came from
 };
 // ugs:foreign_keys — a UGS-prefixed custom field (FK join detail has no STAC extension). This
 // resource's `fields` reference `reference.resource`'s (a serving-topic stem) `reference.fields`.
 // Value shape mirrors Frictionless Table Schema. Emitted by the warehouse from the schema registry.
 // `href` is optional: topics reingest on their own schedule, so both shapes coexist until all cycle.
+// `ugs:detected_by` says how a publication's key was found: "declared" in the GIS data, or
+// "inferred" from it, with `ugs:confidence` the match score out of 100 (column names and values).
 export type ForeignKey = {
   fields: string[];
   reference: { resource: string; href?: string; fields: string[] };
+  "ugs:detected_by"?: string;
+  "ugs:confidence"?: number;
 };
 export type Asset = {
   href: string; title?: string; type?: string; roles?: string[];
   description?: string;   // one-line usage hint (display / query / download) stamped by core/stac (#280)
   "proj:code"?: string;   // per-asset CRS; overrides the item's (a reprojected COG carries its own)
   "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];
+  "ugs:reference"?: boolean;   // a related table most of the publication's layers point at
 };
 export type StacDoc = {
   id?: string;
@@ -203,10 +210,17 @@ export const collectionAsItem = (d: StacDoc): StacDoc => {
 };
 
 // A Collection's Items (its layers and tables), from the titled rel=item links: no fetch per item.
-export const collectionParts = (d: StacDoc | undefined): { id: string; title: string }[] =>
+// Each carries the link's `ugs:layer_kind` and `ugs:source_dataset` where the publication has them
+// (its layers and tables do; the plate, units and fence do not).
+export type CollectionPart = { id: string; title: string; kind?: string; source?: string };
+export const collectionParts = (d: StacDoc | undefined): CollectionPart[] =>
   d?.type !== "Collection" ? [] : (d.links ?? []).filter((l) => l.rel === "item").map((l) => {
     const id = idOf(l.href.split(/[?#]/)[0]);
-    return { id, title: l.title ?? id };
+    const kind = l["ugs:layer_kind"];
+    const source = l["ugs:source_dataset"];
+    return { id, title: l.title ?? id,
+             ...(typeof kind === "string" && kind ? { kind } : {}),
+             ...(typeof source === "string" && source ? { source } : {}) };
   });
 
 // A publication's map plate: the Item among its rel=item links whose id ends `_plate`, as an
@@ -253,13 +267,35 @@ export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
 // carrying an FK back to this layer, flattened to the single-column equality we can run — the
 // related row's childField = the clicked feature's parentField value. Composite (multi-column) keys
 // are skipped: a partial join would return wrong rows, so surface nothing rather than bad data.
-export type RelatedJoin = { key: string; title: string; href: string; childField: string; parentField: string };
+// `reference` marks a reference table (isReferenceAsset); `inferred` an inferred key's confidence.
+export type RelatedJoin = {
+  key: string; title: string; href: string; childField: string; parentField: string;
+  reference?: boolean; inferred?: { confidence?: number };
+};
 export const relatedJoins = (d: StacDoc | undefined): RelatedJoin[] =>
   relatedAssets(d).flatMap(({ key, asset }) =>
     (asset["ugs:foreign_keys"] ?? [])
       .filter((fk) => fk.fields.length === 1 && fk.reference.fields.length === 1)
       .map((fk) => ({ key, title: asset.title ?? key, href: asset.href,
-                      childField: fk.fields[0], parentField: fk.reference.fields[0] })));
+                      childField: fk.fields[0], parentField: fk.reference.fields[0],
+                      ...(isReferenceAsset(asset) ? { reference: true } : {}),
+                      ...(inferredKey(fk) ? { inferred: inferredKey(fk) } : {}) })));
+
+// A reference table: a related table that most of a publication's layers point at (its data
+// sources, say), listed after the layer's own joins. The producer marks it, either with the
+// `reference` role, which survives into the compact index, or `ugs:reference: true`.
+export const isReferenceAsset = (a: Asset | undefined): boolean =>
+  Boolean(a && (a.roles?.includes("reference") || a["ugs:reference"] === true));
+
+// An inferred key (`ugs:detected_by: "inferred"`) and its confidence; undefined for a declared one.
+export const inferredKey = (fk: ForeignKey | undefined): { confidence?: number } | undefined =>
+  fk?.["ugs:detected_by"] === "inferred"
+    ? (typeof fk["ugs:confidence"] === "number" ? { confidence: fk["ugs:confidence"] } : {})
+    : undefined;
+export const inferredTitle = (inf: { confidence?: number }): string =>
+  inf.confidence !== undefined
+    ? `Inferred from the data, not declared in it: confidence ${inf.confidence} of 100 (column names and values match)`
+    : "Inferred from the data, not declared in it";
 
 // Per-asset usage hint (STAC `description`) — the warehouse's "display vs query vs download"
 // guidance, stamped in core/stac so one item says which asset/endpoint to use (#280). Returns only

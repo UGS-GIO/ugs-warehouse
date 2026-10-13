@@ -16,17 +16,19 @@ import { FieldsPanel, Preview } from "./asset-viewer";
 import { AssetsPanel, EndpointsPanel, listedAssets } from "./endpoints-panel";
 import { CubeStepsPanel, CubeStepsProvider } from "@/zarr/cube-steps-context";
 import { DownloadsPanel } from "./downloads-panel";
-import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, kindLabel, type MetaRow, recordCountLabel } from "./item-view";
+import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, groupParts, kindLabel, type MetaRow, type PartGroup,
+  recordCountLabel } from "./item-view";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
-import { type Asset, catalogItemHref, citeLink, collectionParts, contentsOf, hasFootprint, IS_REVIEW, ownForeignKeys, relatedAssets,
-  pmtilesLink, relatedJoins, relatedLinks, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
+import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, hasFootprint, inferredKey,
+  inferredTitle, isReferenceAsset, IS_REVIEW, ownForeignKeys, relatedAssets,
+  pmtilesLink, relatedJoins, relatedLinks, type ForeignKey, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { C, humanize } from "@/ui/ui";
 import { Unavailable } from "@/offline/offline-notice";
 import { SaveLayerOffline } from "@/offline/save-layer-offline";
 
-function RelatedPanel({ item }: { item: StacDoc }) {
+export function RelatedPanel({ item }: { item: StacDoc }) {
   const links = relatedLinks(item);
   const tables = relatedAssets(item);
   const fks = ownForeignKeys(item);
@@ -53,6 +55,41 @@ function RelatedPanel({ item }: { item: StacDoc }) {
   const toggleTable = toggleIn(setOpenTables);
   const toggleGallery = toggleIn(setOpenGalleries);
   const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
+  const primary = tables.filter((t) => !isReferenceAsset(t.asset));
+  const refs = tables.filter((t) => isReferenceAsset(t.asset));
+  const tableRow = ({ key, asset }: { key: string; asset: Asset }) => (
+    <li key={key}>
+      <div className="flex flex-wrap items-center gap-2">
+        <span className="font-medium">{asset.title ?? key}</span>
+        <button className="text-primary hover:underline"
+          onClick={() => toggleTable(key)}>
+          {isOpen(key) ? "Hide" : "View"}
+        </button>
+        {isPhotos(key, asset) && (
+          <button className="text-primary hover:underline" onClick={() => toggleGallery(key)}>
+            {openGalleries.has(key) ? "Hide gallery" : "Gallery"}
+          </button>
+        )}
+        <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
+        {asset["ugs:foreign_keys"]?.map((fk, i) => (
+          <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)<InferredMark fk={fk} /></span>
+        ))}
+      </div>
+      {/* View the related parquet in the same DuckDB-wasm explorer (paged, virtualized,
+          range-read: never the whole file). No geometry → a plain data table. */}
+      {isOpen(key) && (() => {
+        const childField = relatedJoins(item).find((j) => j.key === key)?.childField;
+        const preset = featureRelated?.relatedKey === key && childField
+          ? { col: childField, kind: "exact" as const, value: featureRelated.value }
+          : undefined;
+        // Clearing the preset widens the table in place, so record it open BEFORE clearing
+        // the context: a table opened only by the click would otherwise close with it.
+        const onClearPreset = () => { setOpenTables((prev) => new Set(prev).add(key)); clearRelated(); };
+        return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={onClearPreset} />;
+      })()}
+      {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
+    </li>
+  );
   if (!links.length && !tables.length && !fks.length) return null;
   return (
     <section ref={sectionRef} className="mt-4 rounded-md border border-border p-3">
@@ -78,53 +115,38 @@ function RelatedPanel({ item }: { item: StacDoc }) {
                   ? <a href={fk.reference.href} className="font-medium text-primary hover:underline" download>{humanize(fk.reference.resource)}</a>
                   : <span className="font-medium">{humanize(fk.reference.resource)}</span>}
                 .<code>{fk.reference.fields.join(", ")}</code>
+                <InferredMark fk={fk} />
               </li>
             ))}
           </ul>
         </div>
       )}
-      {tables.length > 0 && (
+      {primary.length > 0 && (
         <div className="mt-2">
           <div className="text-xs uppercase tracking-wide text-muted-foreground">Related tables</div>
-          <ul className="mt-1 space-y-1 text-xs">
-            {tables.map(({ key, asset }) => (
-              <li key={key}>
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-medium">{asset.title ?? key}</span>
-                  <button className="text-primary hover:underline"
-                    onClick={() => toggleTable(key)}>
-                    {isOpen(key) ? "Hide" : "View"}
-                  </button>
-                  {isPhotos(key, asset) && (
-                    <button className="text-primary hover:underline" onClick={() => toggleGallery(key)}>
-                      {openGalleries.has(key) ? "Hide gallery" : "Gallery"}
-                    </button>
-                  )}
-                  <a href={asset.href} className="text-primary hover:underline" download>Parquet ↓</a>
-                  {asset["ugs:foreign_keys"]?.map((fk, i) => (
-                    <span key={i} className="text-muted-foreground">(<code>{fk.fields.join(", ")}</code> → this)</span>
-                  ))}
-                </div>
-                {/* View the related parquet in the same DuckDB-wasm explorer — paged/virtualized,
-                    range-read (never downloads the whole file). No geometry → a plain data table. */}
-                {isOpen(key) && (() => {
-                  const childField = relatedJoins(item).find((j) => j.key === key)?.childField;
-                  const preset = featureRelated?.relatedKey === key && childField
-                    ? { col: childField, kind: "exact" as const, value: featureRelated.value }
-                    : undefined;
-                  // Clearing the preset widens the table in place, so record it open BEFORE clearing
-                  // the context — a table opened only by the click would otherwise close with it.
-                  const onClearPreset = () => { setOpenTables((prev) => new Set(prev).add(key)); clearRelated(); };
-                  return <DataExplorer key={asset.href} href={asset.href} presetFilter={preset} onClearPreset={onClearPreset} />;
-                })()}
-                {openGalleries.has(key) && <PhotoGallery href={asset.href} />}
-              </li>
-            ))}
-          </ul>
+          <ul className="mt-1 space-y-1 text-xs">{primary.map(tableRow)}</ul>
         </div>
+      )}
+      {/* Reference tables (most of the publication's layers point at them) come after the layer's
+          own joins, collapsed unless one of them is open. */}
+      {refs.length > 0 && (
+        <details className="mt-2" open={refs.some((t) => isOpen(t.key))}>
+          <summary className="cursor-pointer text-xs uppercase tracking-wide text-muted-foreground">
+            Reference tables: <span className="normal-case">{refs.map((t) => t.asset.title ?? t.key).join(", ")}</span>
+          </summary>
+          <ul className="mt-1 space-y-1 text-xs">{refs.map(tableRow)}</ul>
+        </details>
       )}
     </section>
   );
+}
+
+// "inferred", subtly, on a key the producer inferred from the data; nothing on a declared one.
+function InferredMark({ fk }: { fk: ForeignKey | undefined }) {
+  const inf = inferredKey(fk);
+  return inf
+    ? <span title={inferredTitle(inf)} className="ml-1.5 cursor-help text-[10px] italic text-muted-foreground">inferred</span>
+    : null;
 }
 
 // "In this issue" — the Survey Notes table of contents (warehouse parses it from the PDF). Each
@@ -166,20 +188,43 @@ function EntryLink({ c, i, className, children }: { c: string; i: string; classN
 
 // A publication's layers and tables, one row per Item, titled from its rel=item links. Each opens
 // at `?c=<series>/<SID>&i=<item>`. A report-only publication has none, so nothing renders.
-function PublicationParts({ item, collectionId }: { item: StacDoc; collectionId: string }) {
+// Grouped by groupParts (item-view.ts); groups are native <details>, so they open without state.
+export function PublicationParts({ item, collectionId }: { item: StacDoc; collectionId: string }) {
   const parts = collectionParts(item);
   if (!parts.length || !collectionId || !item.id) return null;
   const c = `${collectionId}/${item.id}`;
+  const list = (ps: CollectionPart[]) => (
+    <ul className="mt-1 divide-y divide-border text-sm">
+      {ps.map((p) => (
+        <li key={p.id} className="py-1">
+          <EntryLink c={c} i={p.id} className="text-primary no-underline hover:underline">{p.title} ›</EntryLink>
+        </li>
+      ))}
+    </ul>
+  );
+  const group = (g: PartGroup, i: number) => g.label
+    ? (
+      <details key={g.label} open={!g.collapsed} className="mt-1.5">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {g.label} <span className="font-normal normal-case">· {g.parts.length}</span>
+        </summary>
+        {list(g.parts)}
+      </details>
+    )
+    : <div key={i}>{list(g.parts)}</div>;
   return (
     <section className="mt-4 rounded-md border border-border bg-card p-3">
       <h3 className="text-sm font-semibold">Layers and tables</h3>
-      <ul className="mt-1.5 divide-y divide-border text-sm">
-        {parts.map((p) => (
-          <li key={p.id} className="py-1">
-            <EntryLink c={c} i={p.id} className="text-primary no-underline hover:underline">{p.title} ›</EntryLink>
-          </li>
-        ))}
-      </ul>
+      {groupParts(parts).map((s, i) => s.label
+        ? (
+          <details key={s.label} open={!s.collapsed} className="mt-2 border-t border-border pt-2">
+            <summary className="cursor-pointer text-sm font-medium text-foreground">
+              {s.label} <span className="text-xs text-muted-foreground">· {s.count}</span>
+            </summary>
+            <div className="pl-3">{s.groups.map(group)}</div>
+          </details>
+        )
+        : <div key={i}>{s.groups.map(group)}</div>)}
     </section>
   );
 }

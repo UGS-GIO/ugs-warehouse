@@ -87,7 +87,7 @@ type PopupInfo = { lng: number; lat: number; title: string; href?: string };
 
 // The related tables a clicked layer offers — names + the full-item href to resolve joins on open.
 // Named from the compact index (cheap); the join columns are read from the full item only on open.
-export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string }[] };
+export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string; reference?: boolean }[] };
 // What "open a related table" hands back up to the map route (which renders it in the Info panel).
 export type OpenRelated = { itemHref: string; relatedKey: string; title: string; props: Record<string, unknown> };
 // A clicked data feature's detail, lifted to the route so it can be docked (no floating feature
@@ -568,18 +568,32 @@ function RelatedLinks({ info, props, onOpen }: {
   info?: RelatedTablesInfo; props: Record<string, unknown>; onOpen: (r: OpenRelated) => void;
 }) {
   if (!info?.tables.length) return null;
+  const button = (t: RelatedTablesInfo["tables"][number]) => (
+    <button key={t.key} type="button"
+      onClick={() => onOpen({ itemHref: info.itemHref, relatedKey: t.key, title: t.title, props })}
+      className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary">
+      {t.title} <span aria-hidden className="text-primary">→</span>
+    </button>
+  );
+  const primary = info.tables.filter((t) => !t.reference);
+  const refs = info.tables.filter((t) => t.reference);
   return (
     <div className="mt-3 border-t border-border pt-2.5">
-      <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
-      <div className="flex flex-wrap gap-1.5">
-        {info.tables.map((t) => (
-          <button key={t.key} type="button"
-            onClick={() => onOpen({ itemHref: info.itemHref, relatedKey: t.key, title: t.title, props })}
-            className="inline-flex items-center gap-1 rounded-md border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:border-primary/40 hover:bg-primary/5 hover:text-primary">
-            {t.title} <span aria-hidden className="text-primary">→</span>
-          </button>
-        ))}
-      </div>
+      {primary.length > 0 && (
+        <>
+          <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">Related tables</div>
+          <div className="flex flex-wrap gap-1.5">{primary.map(button)}</div>
+        </>
+      )}
+      {/* Reference tables (most of the publication's layers point at them) after the feature's own. */}
+      {refs.length > 0 && (
+        <details className={primary.length ? "mt-2" : ""}>
+          <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            References: <span className="normal-case">{refs.map((t) => t.title).join(", ")}</span>
+          </summary>
+          <div className="mt-1.5 flex flex-wrap gap-1.5">{refs.map(button)}</div>
+        </details>
+      )}
     </div>
   );
 }

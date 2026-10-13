@@ -3,7 +3,7 @@ import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatsOf, hasGeometry, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
-  assetEntries, plateEntry, previewKindOf, series, title, typeOf, year,
+  assetEntries, groupParts, PART_GROUP_OPEN, plateEntry, previewKindOf, series, title, typeOf, year,
 } from "./item-view";
 import { collectionAsItem, type StacDoc } from "@/stac";
 
@@ -314,5 +314,45 @@ describe("seriesLabel", () => {
   it("keeps an id carrying something the title does not say", () => {
     expect(seriesLabel(item("ugs-serving-topics/hazards", "qfaults_2024", { title: "Quaternary Faults" })))
       .toBe("qfaults_2024");
+  });
+});
+
+describe("groupParts (the publication page's layers and tables)", () => {
+  const map = [{ id: "P_plate", title: "Map plate" }, { id: "P_units", title: "Geologic unit polygons" }];
+  const of = (source: string, kind: string, n: number) =>
+    Array.from({ length: n }, (_, i) => ({ id: `${source}-${kind}-${i}`, title: `${kind} ${i}`, kind, source }));
+
+  it("is one flat list when the links carry no kind (older publications)", () => {
+    const parts = [...map, { id: "P_x", title: "X" }];
+    expect(groupParts(parts)).toEqual([{ count: 3, collapsed: false, groups: [{ parts, collapsed: false }] }]);
+    expect(groupParts([])).toEqual([]);
+  });
+
+  it("puts the plate, units and fence first under Map, then kinds in order, for one source", () => {
+    const parts = [...of("Mills", "supporting", 1), ...of("Mills", "table", 2), ...map, ...of("Mills", "layer", 3)];
+    const sections = groupParts(parts);
+    expect(sections.map((s) => s.label)).toEqual([undefined, undefined]);
+    expect(sections[0].groups.map((g) => [g.label, g.parts.map((p) => p.id)])).toEqual([["Map", ["P_plate", "P_units"]]]);
+    expect(sections[1].groups.map((g) => [g.label, g.parts.length])).toEqual(
+      [["Map layers", 3], ["Tables", 2], ["Supporting tables", 1]]);
+  });
+
+  it("groups by source dataset first when there are several (quads), then by kind", () => {
+    const sections = groupParts([...map, ...of("Quad B", "layer", 2), ...of("Quad A", "layer", 1), ...of("Quad A", "table", 1)]);
+    expect(sections.map((s) => [s.label, s.count])).toEqual([[undefined, 2], ["Quad A", 2], ["Quad B", 2]]);
+    expect(sections[1].groups.map((g) => g.label)).toEqual(["Map layers", "Tables"]);
+  });
+
+  it(`collapses a group of more than ${PART_GROUP_OPEN} entries, and keeps Map and small groups open`, () => {
+    const big = groupParts([...map, ...of("Mills", "layer", PART_GROUP_OPEN + 1), ...of("Mills", "table", 2)]);
+    expect(big[0].groups[0].collapsed).toBe(false);
+    expect(big[1].groups.map((g) => [g.label, g.collapsed])).toEqual([["Map layers", true], ["Tables", false]]);
+    const quads = groupParts([...of("Quad A", "layer", PART_GROUP_OPEN + 1), ...of("Quad B", "layer", 2)]);
+    expect(quads.map((s) => [s.label, s.collapsed])).toEqual([["Quad A", true], ["Quad B", false]]);
+  });
+
+  it("files an unknown kind after the known ones under its own name", () => {
+    expect(groupParts(of("Mills", "annotation", 1).concat(of("Mills", "layer", 1)))[0].groups.map((g) => g.label))
+      .toEqual(["Map layers", "annotation"]);
   });
 });

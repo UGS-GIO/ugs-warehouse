@@ -10,7 +10,7 @@ import { MapLegend } from "@/map/map-legend";
 import { RelatedTable } from "@/map/related-table";
 import { MapShell } from "@/map/map-shell";
 import { colorForId } from "@/map/map-model";
-import { relatedAssets } from "@/stac";
+import { isReferenceAsset, relatedAssets } from "@/stac";
 import { usePerItem } from "@/lib/use-per-item";
 import { BasemapDownload } from "@/offline/basemap-download";
 import { isSupported } from "@/offline/opfs";
@@ -52,7 +52,8 @@ function MapView() {
   // reads them from the full item (via `self`) only when one is opened.
   const relatedFor = (layerId: string): RelatedTablesInfo | undefined => {
     const rec = [...c.mapItems, ...c.allItems].find((r) => idOf(r.href) === layerId);
-    const tables = relatedAssets(rec?.data).map(({ key, asset }) => ({ key, title: asset.title ?? key }));
+    const tables = relatedAssets(rec?.data).map(({ key, asset }) =>
+      ({ key, title: asset.title ?? key, ...(isReferenceAsset(asset) ? { reference: true } : {}) }));
     return rec && tables.length ? { itemHref: rec.href, tables } : undefined;
   };
 

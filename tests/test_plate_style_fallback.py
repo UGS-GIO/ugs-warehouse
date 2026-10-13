@@ -55,6 +55,16 @@ def test_layer_items_get_no_fallback(monkeypatch):
         assert "ugs:renders" not in layer["properties"]
 
 
+def test_a_layer_whose_id_ends_in_plate_is_not_the_plate(monkeypatch):
+    # A layer labelled `geo__plate` is the Item `OFR-1_geo__plate`; its pub's plate is `OFR-1_plate`.
+    _manifest(monkeypatch, {**PUB_STYLE, "itemId": "OFR-1_geo_"})
+    layer = _pub_item("OFR-1_geo__plate")
+    assert stac.plate_base_id(layer) is None
+    stac.attach_renders(layer)
+    assert "ugs:renders" not in layer["properties"]
+    assert stac.plate_base_id(_pub_item("OFR-1_plate")) == "OFR-1"
+
+
 def test_a_plate_suffixed_id_outside_publications_gets_no_fallback(monkeypatch):
     _manifest(monkeypatch, {**PUB_STYLE, "itemId": "topic"})
     item = stac.build_item(item_id="topic_plate", collection="ugs-serving-topics", geometry=None,

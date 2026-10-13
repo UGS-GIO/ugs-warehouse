@@ -89,8 +89,7 @@ def report(*, collection: str = "ugs-serving-topics") -> int:
                 continue
             keys = set((item.get("assets") or {}).keys())
             renders, _ = stac.renders_for_item(item, keys)
-            is_plate = iid.endswith(stac.PLATE_SUFFIX) and "ugs:series_id" in (item.get("properties") or {})
-            plate_base = iid[: -len(stac.PLATE_SUFFIX)] if is_plate else None
+            plate_base = stac.plate_base_id(item)
             # A plate may be bound under its pub's id; report that id as in scope, not an orphan.
             if plate_base in man_ids:
                 scope_ids.add(plate_base)

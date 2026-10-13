@@ -402,12 +402,22 @@ def renders_for_item(item: dict, asset_keys: set[str] | None = None) -> tuple[di
     style of its own falls back to the style keyed by `<SID>`, the id it had as a whole-pub Item.
     Layer Items match only their own id."""
     keys = set((item.get("assets") or {}).keys()) if asset_keys is None else asset_keys
-    iid = item["id"]
-    result = styles.renders_for(iid, keys)
-    if result[0] or not iid.endswith(PLATE_SUFFIX) \
-            or "ugs:series_id" not in (item.get("properties") or {}):
+    result = styles.renders_for(item["id"], keys)
+    base = plate_base_id(item)
+    if result[0] or base is None:
         return result
-    return styles.renders_for(iid[: -len(PLATE_SUFFIX)], keys)
+    return styles.renders_for(base, keys)
+
+
+def plate_base_id(item: dict) -> str | None:
+    """The publication id a plate Item's style falls back to, or None when `item` is not its
+    publication's plate. A layer whose id also ends in `_plate` is not the plate."""
+    from ..pubs.sink_stac import plate_item_id  # pubs builds on core; imported at call time
+
+    sid = (item.get("properties") or {}).get("ugs:series_id")
+    if not isinstance(sid, str) or item.get("id") != plate_item_id(sid):
+        return None
+    return item["id"][: -len(PLATE_SUFFIX)]
 
 
 def attach_renders(item: dict) -> None:

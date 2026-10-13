@@ -589,3 +589,42 @@ def test_ids_of_renamed_layers_are_what_relationships_point_at(capsys):
     assert fk["reference"]["resource"] == "OFR-784DM_layer_plate"
     (back,) = [lk for lk in items["geo__DMU"]["links"] if lk["rel"] == "related"]
     assert back["href"].endswith("/OFR-784DM_layer_plate/OFR-784DM_layer_plate.json")
+
+
+def test_kind_comes_from_the_relationships_published_not_the_manifest(capsys):
+    # The table's only relationship is to a validation layer, which is never published.
+    rel = {**MUP_TO_DMU, "origin": "geo__T_1_PointErrors"}
+    _, items = _related(vector_layers=["geo__MapUnitPolys", "geo__T_1_PointErrors"], relationships=[rel])
+    assert items["geo__DMU"]["properties"]["ugs:layer_kind"] == "supporting"  # manifest said "table"
+    coll, _ = _related()
+    assert {lk.get("ugs:layer_kind") for lk in coll["links"]
+            if lk["rel"] == "item" and lk["href"].endswith("geo__DMU.json")} == {"table"}
+
+
+def _ofr784dm_publication():
+    from test_pubs_relations import ofr784dm_layers
+
+    from ugs_warehouse.pubs import relations
+
+    layers = ofr784dm_layers()
+    return _build(has_cog=False, relationships=relations.infer(layers),
+                  vector_layers=[lay.label for lay in layers if lay.spatial],
+                  companion_tables=[{"label": lay.label, "columns": None}
+                                    for lay in layers if not lay.spatial],
+                  layers={})
+
+
+def test_a_table_most_map_layers_point_at_is_a_reference(capsys):
+    _, items = _ofr784dm_publication()
+    roles = {(it["id"].removeprefix("OFR-784DM_"), key): a["roles"]
+             for it in items for key, a in it["assets"].items() if "related" in a["roles"]}
+    # Seven of the eleven published map layers cite DataSources; three use the DMU.
+    assert {k: r for k, r in roles.items() if k[1] == "DataSources"} == {
+        (lay, "DataSources"): ["data", "related", "reference"]
+        for lay in ("MapUnitPolys", "GeologicLines", "CartographicLines", "CartographicPoints",
+                    "ContactsAndFaults", "GeologicPoints", "MapUnitOverlays", "Glossary")}
+    assert {r == ["data", "related"] for k, r in roles.items() if k[1] != "DataSources"} == {True}
+    assert {k[1] for k in roles} == {"DataSources", "DescriptionOfMapUnits", "GeoMaterialDict"}
+    kinds = {it["id"].removeprefix("OFR-784DM_"): it["properties"].get("ugs:layer_kind") for it in items}
+    assert (kinds["DataSources"], kinds["Glossary"], kinds["MiscellaneousMapInformation"]) == (
+        "table", "table", "supporting")

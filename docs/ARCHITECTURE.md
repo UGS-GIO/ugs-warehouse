@@ -172,9 +172,13 @@ The pubs ingest publishes them in the serving topics' shape. A non-spatial desti
 its existing parquet, with `ugs:foreign_keys` flipped to destination → origin so the viewer's
 click-join filters the table by the clicked feature. A spatial destination is a `related` link, and
 every destination links back to its origin. The origin's `data` asset carries its own foreign keys.
-Each foreign key has `ugs:detected_by` and, when inferred, `ugs:confidence`. Layer and table Items
-carry `ugs:layer_kind` and `ugs:source_dataset`, and the Collection's `rel=item` links repeat both so
-the viewer groups a pub's items without fetching them.
+Each foreign key has `ugs:detected_by` and, when inferred, `ugs:confidence`. A table that at least
+max(3, half the pub's map layers) of those layers point at (DataSources on a GeMS map) is a shared
+lookup, and its related assets carry `roles: ["data", "related", "reference"]`. Layer and table
+Items carry `ugs:layer_kind` and `ugs:source_dataset`, and the Collection's `rel=item` links repeat
+both so the viewer groups a pub's items without fetching them. The kind is `layer` for a spatial
+layer, `table` for a non-spatial one in a relationship the ingest publishes (a relationship to an
+unpublished layer does not count) and `supporting` otherwise.
 
 For pubs extracted before relationships were recorded, `--relations-backfill [SID ...]` computes
 them from the GeoParquet already on GCS (only its string and integer columns), keeps any declared

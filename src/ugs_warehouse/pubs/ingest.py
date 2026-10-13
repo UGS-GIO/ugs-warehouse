@@ -140,14 +140,15 @@ def _unit_ids(bucket: str | None = None) -> set[str]:
 def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict], dict[str, str]]:
     """({SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
     "relationships": [...], "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2,
-    columns, pmtiles_layer, kind, source}}}} from
+    columns, pmtiles_layer, source}}}} from
     the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
     — the AUTHORITATIVE record of which extracted layers are spatial vs non-spatial GeMS companion
     tables, so build_publication doesn't have to guess a layer's kind from its name. `columns` holds each
     layer's recorded schema and `layers` its row count, bbox and CRS; manifests written before they
-    were recorded have none (empty maps / None values); `kind` and `source` are derived from the
-    label and relationships when the manifest predates them}, {SID: cause} for each manifest that
-    exists but could not be read or parsed). A series with no manifest appears in neither map."""
+    were recorded have none (empty maps / None values); `source` comes from the label when the
+    manifest predates it. A layer's kind is not read: build_publication derives it from the
+    relationships it publishes}, {SID: cause} for each manifest that exists but could not be read
+    or parsed). A series with no manifest appears in neither map."""
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
     out: dict[str, dict] = {}
     failed: dict[str, str] = {}
@@ -171,8 +172,6 @@ def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict]
                                                   "columns": lay.get("columns"),
                                                   "pmtiles_layer": (lay.get("pmtiles_layer")
                                                                     if lay.get("pmtiles") else None),
-                                                  "kind": lay.get("kind") or relations.layer_kind(
-                                                      bool(lay.get("spatial")), lay["label"], rels),
                                                   "source": lay.get("source")
                                                   or relations.source_of_label(lay["label"], sid)}
                                    for lay in layer_docs}}

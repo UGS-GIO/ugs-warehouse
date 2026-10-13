@@ -654,11 +654,11 @@ def test_vector_manifests_by_sid_carries_each_layers_rows_and_bbox():
         "rows": 12, "bbox": [-112.0, 40.0, -111.0, 41.0], "geometry_types": ["LineString"],
         "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]",
         "columns": [{"name": "geometry", "type": "geometry"}], "pmtiles_layer": None,
-        # A manifest written before kind/source were recorded gets them from the label.
-        "kind": "layer", "source": "geo"}}
+        # A manifest written before sources were recorded gets one from the label.
+        "source": "geo"}}
 
 
-def test_vector_manifests_by_sid_carries_relationships_and_each_layers_kind_and_source():
+def test_vector_manifests_by_sid_carries_relationships_and_each_layers_source():
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
@@ -678,9 +678,10 @@ def test_vector_manifests_by_sid_carries_relationships_and_each_layers_kind_and_
 
     assert out["M-100"]["relationships"] == [rel]
     layers = out["M-100"]["layers"]
-    assert (layers["geo__Polys"]["kind"], layers["geo__Polys"]["source"]) == ("layer", "Geo")
-    # Not recorded: derived from the relationships and the label.
-    assert (layers["geo__DMU"]["kind"], layers["geo__DMU"]["source"]) == ("table", "geo")
+    assert layers["geo__Polys"]["source"] == "Geo"
+    assert layers["geo__DMU"]["source"] == "geo"  # not recorded: from the label
+    # A recorded kind is not carried: build_publication derives it from what it publishes.
+    assert "kind" not in layers["geo__Polys"]
     # A malformed relationship fails its publication rather than publishing a broken join.
     assert "M-101" not in out and "malformed relationship" in failed["M-101"]
 

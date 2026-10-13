@@ -386,15 +386,15 @@ def build_publication(p: dict, attachments: list[dict], *,
     labels = [*(vector_layers or []), *(t["label"] for t in companion_tables or [])]
     ids = {label: layer_id(label) for label in labels}
     titles = layer_titles(labels)
-    rel_assets, rel_links, own_fks = _relationship_parts(
+    rel_assets, rel_links, own_fks, published = _relationship_parts(
         sid, coll_path, relationships or [], ids, titles,
-        {t["label"]: t.get("columns") for t in companion_tables or []})
+        {t["label"]: t.get("columns") for t in companion_tables or []}, set(vector_layers or []))
 
     def kind_props(label: str, spatial: bool) -> dict:
-        """The Item's `ugs:layer_kind` and humanised `ugs:source_dataset`."""
-        meta = layer_meta.get(label, {})
-        source = meta.get("source") or source_of_label(label, sid)
-        return {"ugs:layer_kind": meta.get("kind") or layer_kind(spatial, label, relationships or []),
+        """The Item's `ugs:layer_kind`, from the relationships published here, and humanised
+        `ugs:source_dataset`."""
+        source = layer_meta.get(label, {}).get("source") or source_of_label(label, sid)
+        return {"ugs:layer_kind": layer_kind(spatial, label, published),
                 "ugs:source_dataset": layer_title(source)[0]}
 
     def with_related(label: str, data: dict) -> tuple[dict, list[str]]:
@@ -605,21 +605,28 @@ def build_publication(p: dict, attachments: list[dict], *,
 
 # Item properties a publication's rel=item links repeat, so the viewer groups its items unfetched.
 ITEM_LINK_FIELDS = ("ugs:layer_kind", "ugs:source_dataset")
+# A related table that many of the pub's map layers point at (DataSources on a GeMS map) is a
+# lookup shared across the map rather than one layer's companion; its assets carry this role.
+REFERENCE_ROLE = "reference"
 
 
 def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids: dict[str, str],
                         titles: dict[str, tuple[str, str | None]],
-                        table_columns: dict[str, list | None]) -> tuple[dict, dict, dict]:
+                        table_columns: dict[str, list | None],
+                        spatial: set[str]) -> tuple[dict, dict, dict, list[dict]]:
     """The publication's relationships as STAC pieces, per label: ({origin: {destination label:
-    related-table asset}}, {label: [related links]}, {origin: [its own foreign keys]}).
+    related-table asset}}, {label: [related links]}, {origin: [its own foreign keys]}, [the
+    relationships published]).
 
     A non-spatial destination becomes a `roles: ["data", "related"]` asset on the origin pointing at
     the destination's parquet, its foreign key flipped to destination -> origin so the viewer's
     click-join filters the table by the clicked feature (vector/related.py `_inverted_rel`). A
     spatial destination is a `related` link instead. Every destination links back to its origin.
     Each foreign key records how it was found (`ugs:detected_by`, and `ugs:confidence` when
-    inferred). A relationship with an end that is not published is skipped."""
+    inferred). A relationship with an end that is not published is skipped. A table that at least
+    max(3, half the pub's map layers) of those layers point at gets REFERENCE_ROLE on its assets."""
     assets: dict[str, dict] = {}
+    published: list[dict] = []
     links: dict[str, list[dict]] = {}
     fks: dict[str, list[dict]] = {}
 
@@ -638,6 +645,7 @@ def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids
             print(f"[pubs] {item_id_for(sid)}: relationship {o} -> {d} skipped (an end is not "
                   "published)", file=sys.stderr)
             continue
+        published.append(r)
         how = {"ugs:detected_by": r.get("detected_by") or "declared",
                **({"ugs:confidence": r["confidence"]} if r.get("confidence") is not None else {})}
         fks.setdefault(o, []).append({"fields": list(r["origin_cols"]),
@@ -657,4 +665,13 @@ def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids
         else:
             link(o, d)
         link(d, o)
-    return assets, links, fks
+    by_layers: dict[str, set[str]] = {}
+    for r in published:
+        if r["origin"] in spatial:
+            by_layers.setdefault(r["destination"], set()).add(r["origin"])
+    shared = {d for d, origins in by_layers.items() if len(origins) >= max(3, math.ceil(len(spatial) / 2))}
+    for tables in assets.values():
+        for d, asset in tables.items():
+            if d in shared:
+                asset["roles"].append(REFERENCE_ROLE)
+    return assets, links, fks, published

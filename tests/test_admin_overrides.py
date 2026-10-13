@@ -37,8 +37,15 @@ def store(monkeypatch):
             raise FileNotFoundError(p)
         return objs[p]
 
+    def put_if_unchanged(b, p, version, **k):
+        if objs.get(p) != version["bytes"]:
+            raise gcs.Changed(p)
+        objs[p] = b
+
     monkeypatch.setattr(gcs, "put_bytes", lambda b, p, **k: objs.__setitem__(p, b))
     monkeypatch.setattr(gcs, "get_bytes", get)
+    monkeypatch.setattr(gcs, "get_bytes_versioned", lambda p: (get(p), {"bytes": get(p)}))
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", put_if_unchanged)
     monkeypatch.setattr(gcs, "exists", lambda p: p in objs)
     monkeypatch.setattr(gcs, "delete", lambda p: objs.pop(p, None))
     monkeypatch.setattr(gcs, "list_paths", lambda pre: [k for k in objs if k.startswith(pre)])
@@ -121,3 +128,37 @@ def test_an_override_that_is_not_an_object_fails_the_ingest(store):
     store[stac.override_object("OFR-1")] = b'["Hand text"]'
     with pytest.raises(ValueError, match="override .*OFR-1.json is not a JSON object"):
         ingest._overrides_by_sid()
+
+
+def test_a_collection_patch_rerenders_its_readme(store):
+    _put(store, COLL_OBJ, {"id": "OFR-1", "title": "Source title", "description": "Source citation.",
+                           "links": [{"rel": "item", "href": "./a/a.json"}]})
+
+    assert stac.patch_collection_fields(COLL_OBJ, {"title": "Hand title"}) is True
+
+    readme = store[f"{config.STAC_PREFIX}/{COLL_PATH}/README.md"].decode()
+    assert readme.startswith("# Hand title")
+
+
+def test_a_collection_patch_retries_once_when_the_collection_changes_under_it(store, monkeypatch):
+    _put(store, COLL_OBJ, {"id": "OFR-1", "title": "T", "description": "D"})
+    real = gcs.put_bytes_if_unchanged
+    calls = []
+
+    def racing(b, p, version, **k):
+        calls.append(p)
+        if len(calls) == 1:  # someone else writes between this read and write
+            _put(store, COLL_OBJ, {"id": "OFR-1", "title": "T", "description": "D", "keywords": ["x"]})
+        real(b, p, version, **k)
+
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", racing)
+    assert stac.patch_collection_fields(COLL_OBJ, {"title": "Hand title"}) is True
+    assert _get(store, COLL_OBJ) == {"id": "OFR-1", "title": "Hand title", "description": "D",
+                                     "keywords": ["x"]}
+
+    def always_changed(b, p, version, **k):
+        raise gcs.Changed(p)
+
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", always_changed)
+    with pytest.raises(gcs.Changed):
+        stac.patch_collection_fields(COLL_OBJ, {"title": "Other"})

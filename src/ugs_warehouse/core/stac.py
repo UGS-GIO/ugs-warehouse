@@ -318,14 +318,29 @@ def patch_item_properties(object_path: str, updates: dict) -> bool:
 
 def patch_collection_fields(object_path: str, updates: dict) -> bool:
     """Merge `updates` into a published collection.json's top-level fields in place (same instant
-    edit as `patch_item_properties`). Returns False when the collection isn't published yet; any
-    other read error raises."""
-    try:
-        doc = json.loads(gcs.get_bytes(object_path))
-    except FileNotFoundError:
-        return False
-    doc.update(updates)
-    _write_json(doc, object_path, compress=False)
+    edit as `patch_item_properties`) and re-render its README.md/AGENTS.md. The write is conditional
+    on the version read; a concurrent write is retried once on the new version, then raises
+    `gcs.Changed`. Returns False when the collection isn't published yet; any other read error
+    raises."""
+    for attempt in (1, 2):
+        try:
+            raw, version = gcs.get_bytes_versioned(object_path)
+        except FileNotFoundError:
+            return False
+        doc = {**json.loads(raw), **updates}
+        try:
+            gcs.put_bytes_if_unchanged(json.dumps(doc, indent=2).encode(), object_path, version,
+                                       content_type="application/json",
+                                       cache_control=gcs.CACHE_CATALOG)
+            break
+        except gcs.Changed:
+            if attempt == 2:
+                raise
+    path = object_path.removeprefix(f"{config.STAC_PREFIX}/").removesuffix("/collection.json")
+    _write_markdown(path, title=doc.get("title") or prettify(doc.get("id", path)),
+                    description=doc.get("description") or "", kind="collection",
+                    children=sum(1 for lk in doc.get("links") or [] if lk.get("rel") == "item"),
+                    extent=doc.get("extent"))
     return True
 
 

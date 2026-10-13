@@ -30,11 +30,7 @@ from . import identity, sink_stac, source
 
 MAX_ORPHAN_SHARE = 0.05
 
-PUB_GROUPS = (
-    identity.PUBLICATIONS_COLLECTION,
-    identity.MINING_DISTRICT_COLLECTION,
-    identity.EXTERNAL_COLLECTION,
-)
+PUB_GROUPS = identity.PUB_GROUPS
 
 
 def expected_pub_dirs(pubs: list[dict] | None = None) -> set[str]:

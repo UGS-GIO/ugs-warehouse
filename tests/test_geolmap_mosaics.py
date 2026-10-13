@@ -20,7 +20,10 @@ def test_mosaic_stamps_topic_and_links_members_by_real_collection(capsys):
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         # ORPHAN-9 has a COG but no pub record -> must be skipped (no item to link to)
         gm._write_item("24k", ["GQ-968", "BYU-1", "ORPHAN-9"], gm.mosaic_object("24k"), by_sid,
-                       bounds=[-112.0, 39.0, -111.5, 39.4], single_file_sids=set())
+                       bounds=[-112.0, 39.0, -111.5, 39.4], published=gm.PublishedPubs(
+                           plates=frozenset({"ugs-publications/GQ/GQ-968", "ugs-external/BYU/BYU-1"}),
+                           collections=frozenset({"ugs-publications/GQ/GQ-968",
+                                                  "ugs-external/BYU/BYU-1"})))
     item = captured["item"]
     assert item["bbox"] == [-112.0, 39.0, -111.5, 39.4]   # the mosaic's real footprint, not all of Utah
     assert item["geometry"]["coordinates"][0][0] == [-112.0, 39.0]
@@ -648,81 +651,53 @@ def test_mosaic_links_a_single_file_member_to_its_collection_and_others_to_the_p
     captured = {}
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         gm._write_item("24k", ["GQ-968", "GQ-852"], gm.mosaic_object("24k"), by_sid,
-                       bounds=[-112.0, 39.0, -111.5, 39.4], single_file_sids={"GQ-968"})
+                       bounds=[-112.0, 39.0, -111.5, 39.4], published=gm.PublishedPubs(
+                           plates=frozenset({"ugs-publications/GQ/GQ-852"}),
+                           collections=frozenset({"ugs-publications/GQ/GQ-968",
+                                                  "ugs-publications/GQ/GQ-852"})))
     hrefs = [lk["href"] for lk in captured["item"]["links"] if lk["rel"] == "derived_from"]
     assert any(h.endswith("/GQ/GQ-968/collection.json") for h in hrefs)
     assert any(h.endswith("/GQ/GQ-852/GQ-852_plate/GQ-852_plate.json") for h in hrefs)
     assert not any(h.endswith("GQ-968_plate.json") for h in hrefs)
 
 
-def _fake_bucket_listing(monkeypatch, per_bucket: dict[str, list[str]], seen: list):
-    def list_paths(prefix, *, bucket=None):
-        seen.append(bucket)
-        return [p for p in per_bucket.get(bucket or gm.config.BUCKET, []) if p.startswith(prefix)]
-
-    monkeypatch.setattr("ugs_warehouse.core.gcs.list_paths", list_paths)
-    monkeypatch.setattr("ugs_warehouse.core.gcs.get_bytes",
-                        lambda path, *, bucket=None: json.dumps({"spatial": [], "tables": []}).encode())
-
-
-def test_single_file_sids_raises_when_a_manifest_is_unreadable(monkeypatch):
-    from ugs_warehouse.pubs import ingest
-
-    monkeypatch.setattr(ingest, "_unit_ids", lambda bucket=None: set())
-    monkeypatch.setattr(ingest, "_ids_with_suffix", lambda *a, **k: set())
-    monkeypatch.setattr(ingest, "_vector_manifests_by_sid",
-                        lambda bucket=None: ({}, {"GQ-1": "unreadable"}))
-    with pytest.raises(RuntimeError, match="GQ-1"):
-        gm._single_file_sids(["GQ-1", "GQ-2"])
+def test_a_member_not_yet_in_the_collection_layout_links_to_its_old_item():
+    by_sid = {"GQ-1": {"series_id": "GQ-1", "pub_publisher": "USGS", "pub_name": "Old layout"}}
+    captured = {}
+    with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
+        gm._write_item("24k", ["GQ-1"], gm.mosaic_object("24k"), by_sid, bounds=[-112, 39, -111, 40],
+                       published=gm.PublishedPubs(frozenset(), frozenset()))
+    (link,) = [lk for lk in captured["item"]["links"] if lk["rel"] == "derived_from"]
+    assert link["href"].endswith("/ugs-publications/GQ/GQ-1/GQ-1.json")
+    assert link["type"] == "application/geo+json"
 
 
-def test_single_file_sids_reads_the_source_bucket_in_a_review_bake(monkeypatch):
+def test_published_pubs_reads_the_public_catalog_in_the_source_bucket(monkeypatch):
     monkeypatch.setattr(gm.config, "BUCKET", "review-bucket")
     monkeypatch.setattr(gm.config, "SOURCE_BUCKET", "public-bucket")
-    seen: list = []
-    units = f"{identity.UNITS_PREFIX.rstrip('/')}/GQ-1/GQ-1.units.parquet"
-    _fake_bucket_listing(monkeypatch, {"public-bucket": [units], "review-bucket": []}, seen)
-    assert gm._single_file_sids(["GQ-1", "GQ-2"]) == {"GQ-2"}  # GQ-1 has units in the PUBLIC bucket
-    assert seen and set(seen) == {"public-bucket"}
+    monkeypatch.setattr(gm.config, "STAC_PREFIX", "review/stac")  # a review bake
+    pfx = "warehouse/stac"  # the public catalog's prefix, from PUBLIC_CATALOG_URL
+    listing = [
+        f"{pfx}/ugs-publications/GQ/GQ-1/collection.json",
+        f"{pfx}/ugs-publications/GQ/GQ-1/GQ-1_plate/GQ-1_plate.json",
+        f"{pfx}/ugs-publications/GQ/GQ-1/GQ-1__geo__Faults/GQ-1__geo__Faults.json",
+        f"{pfx}/ugs-publications/GQ/GQ-2/collection.json",                 # single-file
+        f"{pfx}/ugs-publications/GQ/GQ-2/README.md",
+        f"{pfx}/ugs-publications/GQ/GQ-3/GQ-3.json",                        # old layout
+        f"{pfx}/ugs-publications/GQ/collection.json",                       # an old series collection
+        f"{pfx}/ugs-mining-district-files/MD/MD-5/MD-5_plate/MD-5_plate.json",
+        f"{pfx}/ugs-external/BYU/BYU-1/collection.json",
+    ]
+    seen = []
 
+    def list_paths(prefix, *, bucket=None):
+        seen.append((prefix, bucket))
+        return [p for p in listing if p.startswith(prefix)]
 
-def test_single_file_sids_reads_a_manifest_with_companion_tables(monkeypatch):
-    """A manifest's `tables` is a list of bare labels; a pub whose only extras are tables is not
-    single-file, and one whose only table is GeMS validation output still is."""
-    from ugs_warehouse.pubs import ingest
+    monkeypatch.setattr(gm.gcs, "list_paths", list_paths)
+    published = gm.published_pubs()
+    assert published.plates == {"ugs-publications/GQ/GQ-1", "ugs-mining-district-files/MD/MD-5"}
+    assert published.collections == {"ugs-publications/GQ/GQ-1", "ugs-publications/GQ/GQ-2",
+                                     "ugs-external/BYU/BYU-1"}
+    assert seen == [(f"{pfx}/{g}/", "public-bucket") for g in identity.PUB_GROUPS]
 
-    monkeypatch.setattr(ingest, "_unit_ids", lambda bucket=None: set())
-    monkeypatch.setattr(ingest, "_ids_with_suffix", lambda *a, **k: set())
-    monkeypatch.setattr(ingest, "_vector_manifests_by_sid", lambda bucket=None: ({
-        "GQ-1": {"spatial": [], "tables": ["geo__DMU"]},
-        "GQ-2": {"spatial": [], "tables": ["geo__T_1_PolyErrors"]},
-    }, {}))
-    assert gm._single_file_sids(["GQ-1", "GQ-2", "GQ-3"]) == {"GQ-2", "GQ-3"}
-
-
-def test_single_file_decision_matches_between_ingest_and_the_mosaic(monkeypatch):
-    from ugs_warehouse.pubs import ingest, sink_stac, vectors
-
-    monkeypatch.setattr(gm.config, "SOURCE_BUCKET", gm.config.BUCKET)
-    pfx = identity.UNITS_PREFIX.rstrip("/")
-    from ugs_warehouse.pubs import threed
-    listing = [f"{pfx}/GQ-1/GQ-1.units.parquet",
-               f"{vectors.VECTORS_PREFIX}/GQ-3/_manifest.json",
-               f"{identity.THREED_PREFIX}/GQ-4_{threed.POLY_NAME}"]
-    _fake_bucket_listing(monkeypatch, {gm.config.BUCKET: listing}, [])
-    monkeypatch.setattr("ugs_warehouse.core.gcs.get_bytes",
-                        lambda path, *, bucket=None: json.dumps(
-                            {"spatial": ["a"], "tables": []}).encode())
-    sids = ["GQ-1", "GQ-2", "GQ-3", "GQ-4"]
-    units, threed_ids = ingest._unit_ids(), ingest._ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}")
-    manifests, _ = ingest._vector_manifests_by_sid()
-    via_ingest = {s for s in sids if sink_stac.is_single_file(
-        has_cog=True, has_units=s in units, has_3d=s in threed_ids,
-        vector_layers=manifests.get(s, {}).get("spatial"),
-        companion_tables=manifests.get(s, {}).get("tables"))}
-    assert via_ingest == gm._single_file_sids(sids) == {"GQ-2"}
-
-
-def test_build_tier_refuses_to_write_a_stac_item_without_the_single_file_set():
-    with pytest.raises(ValueError, match="single_file_sids"):
-        gm.build_tier("24k", [], {}, write_stac_item=True)

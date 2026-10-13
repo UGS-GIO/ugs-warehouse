@@ -22,9 +22,8 @@ from ..core import config, gcs, stac
 from . import editions, identity, relations, sink_stac, source, threed, topic, vectors
 
 
-def _list(prefix: str, bucket: str | None) -> list[str]:
-    """Object paths under `prefix`; `bucket=None` is the warehouse bucket."""
-    return gcs.list_paths(prefix) if bucket is None else gcs.list_paths(prefix, bucket=bucket)
+def _list(prefix: str) -> list[str]:
+    return gcs.list_paths(prefix)
 
 
 def _names(prefix: str) -> list[str]:
@@ -35,8 +34,8 @@ def _ids(names: list[str], suffix: str) -> set[str]:
     return {name[: -len(suffix)].upper() for name in names if name.endswith(suffix)}
 
 
-def _ids_with_suffix(prefix: str, suffix: str, bucket: str | None = None) -> set[str]:
-    return _ids([path.rsplit("/", 1)[-1] for path in _list(prefix, bucket)], suffix)
+def _ids_with_suffix(prefix: str, suffix: str) -> set[str]:
+    return _ids([path.rsplit("/", 1)[-1] for path in _list(prefix)], suffix)
 
 
 def _image_ids() -> tuple[set[str], set[str]]:
@@ -123,13 +122,13 @@ def _mirrored_files() -> set[str]:
     return set(gcs.list_paths(identity.PUB_FILES_PREFIX))
 
 
-def _unit_ids(bucket: str | None = None) -> set[str]:
+def _unit_ids() -> set[str]:
     """Series ids that have a per-map units sidecar (geolmap/units/<series_id>/…). Only directory
     segments count — files sitting at the prefix root (the statewide units.pmtiles / units.parquet)
     are NOT series ids and must be skipped, or they'd register as bogus units."""
     pfx = identity.UNITS_PREFIX.rstrip("/") + "/"
     out: set[str] = set()
-    for path in _list(identity.UNITS_PREFIX, bucket):
+    for path in _list(identity.UNITS_PREFIX):
         rest = path[len(pfx):] if path.startswith(pfx) else path
         head, sep, _ = rest.partition("/")
         if sep and head:           # has a sub-path → it's a per-series directory, not a root file
@@ -137,7 +136,7 @@ def _unit_ids(bucket: str | None = None) -> set[str]:
     return out
 
 
-def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict], dict[str, str]]:
+def _vector_manifests_by_sid() -> tuple[dict[str, dict], dict[str, str]]:
     """({SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
     "relationships": [...], "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2,
     columns, pmtiles_layer, source}}}} from
@@ -152,14 +151,13 @@ def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict]
     pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
     out: dict[str, dict] = {}
     failed: dict[str, str] = {}
-    for path in _list(vectors.VECTORS_PREFIX, bucket):
+    for path in _list(vectors.VECTORS_PREFIX):
         if not path.endswith("/_manifest.json"):
             continue
         rest = path[len(pfx):] if path.startswith(pfx) else path
         sid = rest.split("/", 1)[0].upper()
         try:
-            raw = gcs.get_bytes(path) if bucket is None else gcs.get_bytes(path, bucket=bucket)
-            doc = json.loads(raw.decode())
+            doc = json.loads(gcs.get_bytes(path).decode())
             layer_docs = [lay for lay in doc.get("layers") or [] if lay.get("label")]
             rels = _relationships(doc.get("relationships") or [])
             out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or [],

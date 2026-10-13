@@ -249,12 +249,6 @@ def test_is_single_file_counts_every_kind_of_data_item():
     assert not sink_stac.is_single_file(**{**none, "has_cog": True, "has_units": True})
 
 
-def test_plate_object_points_at_the_collection_only_for_single_file():
-    assert sink_stac.plate_object(P, single_file=True).endswith("/OFR/OFR-784DM/collection.json")
-    assert sink_stac.plate_object(P, single_file=False).endswith(
-        "/OFR/OFR-784DM/OFR-784DM_plate/OFR-784DM_plate.json")
-
-
 def test_the_landing_page_is_an_alternate_html_link_not_a_via():
     coll, _ = _build()
     assert not [lk for lk in coll["links"] if lk["rel"] == "via"]

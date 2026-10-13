@@ -47,10 +47,12 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 import xml.etree.ElementTree as ET
 from array import array
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
+from typing import NamedTuple
 
 from pmtiles.convert import mbtiles_to_header_json
 from pmtiles.tile import tileid_to_zxy, zxy_to_tileid
@@ -60,6 +62,8 @@ from ..core import config, gcs, stac
 from . import editions, identity, scale, source
 from .scale import MOSAIC_TIER_LABEL as TIER_LABEL
 from .scale import MOSAIC_TIERS as TIERS
+
+GEOJSON = "application/geo+json"
 
 PMTILES_MIME = config.PMTILES_MIME
 # Each tier is one STAC item in this collection; the viewer toggles them like the old portal layers.
@@ -339,14 +343,12 @@ def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
 
 def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | None = None,
                 *, suffix: str = "", write_stac_item: bool = True,
-                single_file_sids: set[str] | None = None) -> bool:
+                published: PublishedPubs | None = None) -> bool:
     """Stitch one tier's COGs into a raster PMTiles and upload it. Returns False if the tier is
     empty. `suffix` (e.g. "-test-current") routes a scoped/--quads demo build to its own object,
     never the real tier — see `mosaic_object`. `write_stac_item=False` (the scoped/--quads path)
     uploads the scratch pmtiles for direct inspection but writes NO STAC item, see `build()`.
-    `single_file_sids` (see `_single_file_sids`) is required when a STAC item is written."""
-    if write_stac_item and single_file_sids is None:
-        raise ValueError("build_tier needs single_file_sids to link members when writing a STAC item")
+    `published` (see `published_pubs`) is read from the catalog when not given."""
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
@@ -412,7 +414,8 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         print(f"[mosaics] {tier}: uploading {size_mb} MB -> {obj}")
         gcs.upload(pmtiles, obj, content_type=PMTILES_MIME, cache_control=gcs.CACHE_MUTABLE)
         if write_stac_item:
-            _write_item(tier, sids, obj, by_sid, bounds=bounds, single_file_sids=single_file_sids)
+            _write_item(tier, sids, obj, by_sid, bounds=bounds,
+                        published=published if published is not None else published_pubs())
         else:
             print(f"[mosaics] {tier}: scoped build — no STAC item written (scratch); "
                   f"inspect tiles directly at {config.public_url(obj)}")
@@ -428,49 +431,65 @@ def _public_href(object_path: str) -> str:
     return f"{config.PUBLIC_CATALOG_URL.rsplit('/', 1)[0]}/{rel}"
 
 
-def _single_file_sids(sids: list[str]) -> set[str]:
-    """The members (UPPER ids, all with a COG) whose plate is their publication's only data file.
+class PublishedPubs(NamedTuple):
+    """Publication layout paths (`<group>/<SERIES>/<SID>`) in the published catalog."""
+    plates: frozenset[str]       # with a `<SID>_plate/` Item directory
+    collections: frozenset[str]  # with a collection.json
 
-    Uses the same inputs `ingest` hands `build_publication`, so the mosaic links to the Collection
-    exactly when that publication was written without a plate Item."""
-    # function-level: ingest pulls in the whole pub pipeline
-    from . import ingest, sink_stac, threed
 
-    bucket = config.SOURCE_BUCKET  # the published inputs, even when this bake writes to a review bucket
-    units = ingest._unit_ids(bucket)
-    threed_ids = ingest._ids_with_suffix(identity.THREED_PREFIX, f"_{threed.POLY_NAME}", bucket)
-    manifests, failed = ingest._vector_manifests_by_sid(bucket)
-    unreadable = {s: failed[s] for s in sids if s in failed}
-    if unreadable:
-        raise RuntimeError(f"cannot tell which publications are single-file: {unreadable}")
-    out: set[str] = set()
-    for sid in sids:
-        m = manifests.get(sid, {})
-        if sink_stac.is_single_file(
-                has_cog=True, has_units=sid in units, has_3d=sid in threed_ids,
-                vector_layers=m.get("spatial"), companion_tables=m.get("tables")):
-            out.add(sid)
-    return out
+def _public_stac_prefix() -> str:
+    """The public catalog's object prefix in the source bucket (the CDN preserves object paths)."""
+    return urllib.parse.urlparse(config.PUBLIC_CATALOG_URL).path.strip("/").rpartition("/")[0]
+
+
+def published_pubs() -> PublishedPubs:
+    """What the public catalog holds for each publication, from one listing of each publication
+    group in the source bucket, so a review bake reads the published catalog too."""
+    plates: set[str] = set()
+    collections: set[str] = set()
+    base = _public_stac_prefix()
+    for group in identity.PUB_GROUPS:
+        root = f"{base}/{group}/" if base else f"{group}/"
+        for path in gcs.list_paths(root, bucket=config.SOURCE_BUCKET):
+            parts = path[len(root):].split("/")
+            if len(parts) == 4 and parts[2] == f"{parts[1]}{stac.PLATE_SUFFIX}":
+                plates.add(f"{group}/{parts[0]}/{parts[1]}")
+            elif len(parts) == 3 and parts[2] == "collection.json":
+                collections.add(f"{group}/{parts[0]}/{parts[1]}")
+    return PublishedPubs(frozenset(plates), frozenset(collections))
+
+
+def _member_doc(p: dict, published: PublishedPubs) -> tuple[str, str]:
+    """(object path, media type) of the published document a member's mosaic link points at: its
+    plate Item, its Collection when the plate is its only data file (no plate Item), or, for a
+    publication not yet in the collection layout, its `<SID>/<SID>.json` Item."""
+    from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
+
+    coll = sink_stac.pub_collection_path(p)
+    if coll in published.plates:
+        return stac.item_object_path(coll, stac.plate_item_id(p.get("series_id") or "")), GEOJSON
+    if coll in published.collections:
+        return stac.collection_object_path(coll), "application/json"
+    series, _, pub_id = coll.rpartition("/")
+    return stac.item_object_path(series, pub_id), GEOJSON
 
 
 def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *,
-                bounds: list[float], single_file_sids: set[str]) -> None:
+                bounds: list[float], published: PublishedPubs) -> None:
     """STAC item for one mosaic tier, footprinted by the mosaic's real [W, S, E, N] `bounds`. The
     raster PMTiles is a `visual` pmtiles ASSET (a vector layer would be a web-map LINK instead) —
     that's how the viewer tells a raster mosaic from vector tiles.
 
     The mosaic is derived by stitching the member COGs, so each member gets a STAC
     `rel:"derived_from"` link — the spec's provenance relation ("a STAC Entity that was used as
-    input data in the creation of this Entity"), to its plate Item (or to its Collection when
-    the plate is the publication's only data file, `single_file_sids`), routed through
+    input data in the creation of this Entity"), to the document `_member_doc` finds for it in
+    the published catalog, routed through
     `sink_stac.pub_collection_path` rather than hardcoded to `ugs-publications` (a member can be
     foreign-published `ugs-external` or a Mining District File `ugs-mining-district-files`, and
     hardcoding would 404). A COG with no matching pub record has no item to link to and is skipped,
     but still counts toward `ugs:map_count` (it's physically stitched into the raster). The reverse
     map→mosaic direction is a generic `rel:"related"` on the pub side (sink_stac) — STAC defines no
     reverse of `derived_from`."""
-    from . import sink_stac  # function-level: sink_stac never imports geolmap_mosaics, no cycle
-
     label = TIER_LABEL.get(tier, tier)
     n_maps = len(sids)
     w, s, e, n = bounds
@@ -481,10 +500,11 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
             print(f"[mosaics] {tier}: COG {sid} has no pub record — stitched into the raster but not linked (orphan)", file=sys.stderr)
             continue                      # COG present but no pub record -> no STAC item exists to link
         real_sid = (p.get("series_id") or "").strip()
+        doc, media = _member_doc(p, published)
         derived_from.append({
             "rel": "derived_from",
-            "href": _public_href(sink_stac.plate_object(p, single_file=sid in single_file_sids)),
-            "type": "application/json" if sid in single_file_sids else "application/geo+json",
+            "href": _public_href(doc),
+            "type": media,
             "title": (p.get("pub_name") or "").strip() or stac.prettify(real_sid)})
 
     item = stac.build_item(
@@ -519,14 +539,13 @@ def build(scales: list[str], maxz: int | None = None,
         print(f"[mosaics] SCOPED build (--quads={quads!r}, --editions={edition_mode}) -> "
               f"writing '*{suffix}' items only, real tiers untouched")
     built = 0
-    single_file = _single_file_sids([s for tier in scales for s in groups.get(tier, [])]) \
-        if write_stac_item else None
+    published = published_pubs() if write_stac_item else None
     for tier in scales:
         # Statewide (full) builds cap at the tier's TIER_MAXZOOM to keep the tile count sane; a scoped
         # --quads build renders at native zoom (full detail on a few maps). An explicit --maxzoom wins.
         tier_maxz = maxz if maxz is not None else (None if quads else TIER_MAXZOOM.get(tier))
         if build_tier(tier, groups.get(tier, []), by_sid, maxz=tier_maxz,
-                      suffix=suffix, write_stac_item=write_stac_item, single_file_sids=single_file):
+                      suffix=suffix, write_stac_item=write_stac_item, published=published):
             built += 1
     if built and not quads:
         print("[mosaics] refreshing STAC catalog")

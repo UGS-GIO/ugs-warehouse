@@ -238,15 +238,6 @@ def is_single_file(*, has_cog: bool, has_units: bool, has_3d: bool,
     return (int(has_cog) + int(has_units) + int(has_3d) + len(layers) + len(tables)) == 1
 
 
-def plate_object(p: dict, *, single_file: bool) -> str:
-    """Object path of the document that holds a publication's plate: its Collection when the plate
-    is its only data file, else the `_plate` Item."""
-    coll_path = pub_collection_path(p)
-    if single_file:
-        return stac.collection_object_path(coll_path)
-    return stac.item_object_path(coll_path, plate_item_id((p.get("series_id") or "").strip()))
-
-
 def _source_asset(h: str, mirrored: set[str] | None, **rest) -> dict:
     """A source file served from our CDN when mirrored, with the publisher's URL as an alternate."""
     obj = identity.pub_file_object(h)

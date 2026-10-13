@@ -86,10 +86,16 @@ def test_mosaic_is_valid_and_derived_from_hrefs_match_member_item_locations():
     assert ugs_coll["_collection_path"].startswith(identity.PUBLICATIONS_COLLECTION)
     assert ext_coll["_collection_path"].startswith(identity.EXTERNAL_COLLECTION)
 
+    # The published catalog as these builds would leave it: each collection, and each plate Item.
+    published = gm.PublishedPubs(
+        plates=frozenset(c["_collection_path"] for c, items in ((ugs_coll, ugs_items), (ext_coll, ext_items))
+                         if any(i["id"].endswith("_plate") for i in items)),
+        collections=frozenset({ugs_coll["_collection_path"], ext_coll["_collection_path"]}))
     captured: dict = {}
     with patch.object(gm.stac, "write_item", side_effect=lambda it: captured.setdefault("item", it)):
         gm._write_item("24k", ["GQ-968", "BYU-1"], gm.mosaic_object("24k"),
-                       {"GQ-968": ugs, "BYU-1": ext}, bounds=[-114.0, 37.0, -109.0, 42.0], single_file_sids={"GQ-968"})
+                       {"GQ-968": ugs, "BYU-1": ext}, bounds=[-114.0, 37.0, -109.0, 42.0],
+                       published=published)
     mosaic = captured["item"]
 
     _validate(mosaic)  # derived_from is a plain link; the mosaic must still be spec-valid
@@ -97,8 +103,8 @@ def test_mosaic_is_valid_and_derived_from_hrefs_match_member_item_locations():
     derived = {lnk["href"] for lnk in mosaic["links"] if lnk["rel"] == "derived_from"}
     # Each link is exactly where its member's plate lives, so a foreign-published member routes to
     # ugs-external rather than ugs-publications.
-    expected = {gm._public_href(sink_stac.plate_object(p, single_file=not items))
-                for p, items in ((ugs, ugs_items), (ext, ext_items))}
+    expected = {gm._public_href(stac.collection_object_path(ugs_coll["_collection_path"])),
+                gm._public_href(stac.item_object_path(ext_coll["_collection_path"], "BYU-1_plate"))}
     assert derived == expected
     assert any(f"/{identity.EXTERNAL_COLLECTION}/BYU/BYU-1/BYU-1_plate/BYU-1_plate.json" in h
                for h in derived)

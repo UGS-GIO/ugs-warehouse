@@ -85,6 +85,7 @@ def pub_fulltext_object(series_id: str) -> str:
 PUBLICATIONS_COLLECTION = "ugs-publications"             # UGS/UGMS-authored + USGS Utah maps
 MINING_DISTRICT_COLLECTION = "ugs-mining-district-files"  # MD series — archived 3rd-party mine files
 EXTERNAL_COLLECTION = "ugs-external"                     # foreign publishers UGS only hosts
+PUB_GROUPS = (PUBLICATIONS_COLLECTION, MINING_DISTRICT_COLLECTION, EXTERNAL_COLLECTION)
 
 
 # Previews are WebP (#372). The harvest writes a map's catalog thumbnail and the sheet the 3D viewer

@@ -3,8 +3,11 @@
 // pulling in a layer while browsing keeps the ones already drawn, and flips to "✓ Added" (click to
 // remove) once it's on. The whole active set stays in the shareable URL.
 //
-// Renders nothing when the item isn't a resolvable map layer (not in the catalog's layer set), so
-// ?l= can never gain an id the Layers tray has no row for — every added layer stays manageable.
+// Renders nothing when the item isn't a resolvable map layer, so ?l= can never gain an id the Layers
+// tray has no row for and every added layer stays manageable. Resolvable means in the loaded layer
+// set, the open item drawing as one, or a passed `doc` drawing as one. The last two cover pages where
+// the root index is not loaded yet; their ids are root-index entries (a publication's plate is a
+// tagged one), so the tray gets their row once the Map loads it.
 import type { MouseEvent } from "react";
 
 import { idOf, useViewCtx } from "@/app";

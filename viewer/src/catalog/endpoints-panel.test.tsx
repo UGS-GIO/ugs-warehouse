@@ -20,6 +20,11 @@ describe("EndpointsPanel tile-service links", () => {
     expect(screen.getByText("ArcGIS vector tiles")).toBeDefined();
   });
 
+  it("offers none for any item without the ugs:dbt_schema stamp", () => {
+    const { container } = panel(withTiles({}));
+    expect(container.textContent).toBe("");
+  });
+
   it("offers none for a publication layer, which the tiles service does not serve", () => {
     const { container } = panel(withTiles({ "ugs:series_id": "M-246DM" }));
     expect(screen.queryByText("ArcGIS vector tiles")).toBeNull();

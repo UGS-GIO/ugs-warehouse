@@ -133,8 +133,8 @@ describe("formatsOf", () => {
   });
 });
 
-// Task P's shapes: a publication layer Item carries the serving-topic PMTiles asset and link, with no
-// `ugs:renders` style; a multi-item publication Collection links its plate Item.
+// A publication layer Item carries a `pmtiles` asset (role visual) and a `rel=pmtiles` link naming
+// its tile layer, as a serving topic does, with no `ugs:renders` style; a plate Item carries a COG.
 const COG = "image/tiff; application=geotiff; profile=cloud-optimized";
 const pubLayer: StacDoc = {
   type: "Feature", id: "M-246DM_UtahLandslideMaps__DebrisFlowPaths",

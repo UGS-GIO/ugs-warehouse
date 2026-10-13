@@ -7,8 +7,9 @@ import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
 import { FeatureCard } from "@/map/feature-card";
-import { footprintSpecOf, PreviewMapSlot, type PreviewSpec, usePreviewMap } from "@/map/preview-map";
-import { type Asset, type AssetKind, isDrawableCog, isServingTopic, parquetAsset, pmtilesLink, primaryKeyOf, rasterTilesAsset, type StacDoc,
+import { footprintSpecOf, PreviewMapSlot, usePreviewMap } from "@/map/preview-map";
+import { vectorSpecOf } from "@/map/preview-spec";
+import { type Asset, type AssetKind, isDrawableCog, parquetAsset, primaryKeyOf, rasterTilesAsset, type StacDoc,
   summaryFieldsOf, tableColumns, thumbnailAsset, usePlate } from "@/stac";
 import { C, toggle } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
@@ -75,12 +76,8 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
 // PreviewMapProvider (mounted once); this publishes the vector spec and wires the table↔map state.
 function VectorPreview({ item }: { item: StacDoc }) {
   const pq = parquetAsset(item);
-  const pm = pmtilesLink(item);
   const { setFocus, pick, mapMismatch } = usePreviewMap();
-  const spec: PreviewSpec = pm
-    ? { kind: "vector", item, pmHref: pm.href, sourceLayer: pm["pmtiles:layers"]?.[0] ?? String(item.id ?? ""),
-        rowIds: isServingTopic(item) }
-    : null;
+  const spec = vectorSpecOf(item);
   return (
     <>
       <PreviewMapSlot spec={spec} />

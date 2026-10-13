@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { assetUsages, catalogItemHref, citeLink, collectionAsItem, isServingTopic, plateHrefOf, stacDocQuery, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
-import { joinsRows } from "./map/preview-spec";
+import { joinsRows, vectorSpecOf } from "./map/preview-spec";
 
 const OURS = "https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json";
 
@@ -491,6 +491,17 @@ describe("isServingTopic", () => {
     expect(isServingTopic({ properties: { "ugs:dbt_schema": "hazards" } })).toBe(true);
     expect(isServingTopic({ properties: { "ugs:series_id": "M-246DM" } })).toBe(false);
     expect(isServingTopic(undefined)).toBe(false);
+  });
+});
+
+describe("an item with PMTiles but no ugs:dbt_schema stamp", () => {
+  const link = { rel: "pmtiles", href: "https://x/a.pmtiles", type: "application/vnd.pmtiles", "pmtiles:layers": ["a"] };
+  it("gets the safe default: its tile ids are not taken for table rows", () => {
+    const unstamped = vectorSpecOf({ id: "a", properties: {}, links: [link] });
+    expect(unstamped).toMatchObject({ kind: "vector", pmHref: "https://x/a.pmtiles", sourceLayer: "a", rowIds: false });
+    expect(joinsRows(unstamped)).toBe(false);
+    expect(joinsRows(vectorSpecOf({ id: "a", properties: { "ugs:dbt_schema": "hazards" }, links: [link] }))).toBe(true);
+    expect(vectorSpecOf({ id: "a", links: [] })).toBeNull();
   });
 });
 

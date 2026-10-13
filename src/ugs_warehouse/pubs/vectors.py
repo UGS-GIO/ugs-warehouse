@@ -15,6 +15,10 @@ keeps its GeoParquet and gets a `pmtiles_failed` warning. Every `--all` run list
 clean manifests show still without PMTiles and exits non-zero while any remain;
 `--pmtiles-backfill` builds them without a re-download.
 
+The manifest also lists the relationships between a bundle's layers and tables (`relations.py`):
+declared geodatabase relationship classes, and joins inferred within one source dataset. Each
+layer entry records its `source` dataset and its `kind` (`layer`, `table` or `supporting`).
+
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
 layer never looks like a pub that simply has none.
 
@@ -38,7 +42,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs
 from ..vector import sink_pmtiles
-from . import geoparquet, harvest, identity, source
+from . import geoparquet, harvest, identity, relations, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME
@@ -324,7 +328,7 @@ def _extract_and_upload(
     """Read every source in `srcs`, upload each non-empty layer/table as Parquet to
     `{VECTORS_PREFIX}/{series_id}/{label}.parquet`, and write the per-series manifest. Returns
     that manifest: {"spatial": [labels], "tables": [labels], "layers": [per-layer metadata],
-    "empty": [labels], "errors": [...], "warnings": [...]}.
+    "relationships": [...], "empty": [labels], "errors": [...], "warnings": [...]}.
 
     Spatial layers keep their geometry (GeoParquet via gpio, plus a bbox column) and are tiled to
     `{label}.pmtiles` beside it; a layer whose tiling fails keeps its GeoParquet and gets a
@@ -342,6 +346,7 @@ def _extract_and_upload(
 
     manifest: dict = {"spatial": [], "tables": [], "layers": [], "empty": [],
                       "errors": list(source_errors or []), "warnings": []}
+    profiles: list[relations.Layer] = []
     for path, layer, label, is_spatial in srcs:
         dst = os.path.join(work, f"{label}.parquet")
         try:
@@ -363,7 +368,8 @@ def _extract_and_upload(
                 continue
 
             columns, geo = _schema(dst)
-            entry = {"label": label, "spatial": is_spatial, "rows": rows, "columns": columns}
+            entry = {"label": label, "spatial": is_spatial, "rows": rows, "columns": columns,
+                     "source": _dataset_name(work, series_id, path, layer)}
             if is_spatial:
                 entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
             gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
@@ -375,13 +381,73 @@ def _extract_and_upload(
             manifest["errors"].append({"label": label, "error": _error(e)})
             print(f"  layer {label} failed: {e}", file=sys.stderr)
             continue
+        _profile_into(profiles, entry, gdf if is_spatial else df,
+                      layer or os.path.basename(path)[:-4],
+                      path if layer is not None else os.path.dirname(path), manifest)
         if is_spatial:
             _tile_into(entry, gdf, series_id, work, manifest)
 
     if manifest["spatial"] or manifest["tables"]:
+        declared = _declared_relationships(srcs, {e["label"] for e in manifest["layers"]}, manifest)
+        _set_relationships(manifest, relations.merge(declared, relations.infer(profiles)))
         _write_manifest(series_id, manifest)
 
     return manifest
+
+
+def _dataset_name(work: str, series_id: str, path: str, layer: str | None) -> str:
+    """The source dataset a layer came from: its geodatabase's stem, or its shapefile's folder
+    inside the bundle (the series id for the bundle's root)."""
+    if layer is not None:
+        return _safe(os.path.basename(path)[:-4])
+    folder, root = os.path.dirname(os.path.abspath(path)), os.path.abspath(work)
+    if folder == root:
+        return series_id
+    rel = os.path.relpath(folder, root) if folder.startswith(root + os.sep) else os.path.basename(folder)
+    return _safe(rel.replace(os.sep, "__"))
+
+
+def _profile_into(profiles: list, entry: dict, frame, name: str, group: str, manifest: dict) -> None:
+    """Keep what relationship inference needs of one layer read in memory. A layer that cannot be
+    profiled is left out of inference with a warning, and keeps its upload."""
+    try:
+        profiles.append(relations.Layer(entry["label"], name, group, relations.profile_frame(frame)))
+    except Exception as e:
+        manifest["warnings"].append({"label": entry["label"], "code": relations.PROFILE_FAILED,
+                                     "warning": f"left out of relationship inference: {_error(e)}"})
+        print(f"  layer {entry['label']}: not profiled for relationships: {e}", file=sys.stderr)
+
+
+def _declared_relationships(srcs: list[tuple[str, str | None, str, bool]], uploaded: set[str],
+                            manifest: dict) -> list[dict]:
+    """The relationship classes each geodatabase in `srcs` declares, between uploaded labels. A
+    geodatabase whose relationships cannot be read, and each one not published, gets a warning."""
+    out: list[dict] = []
+    for gdb in sorted({path for path, layer, _, _ in srcs if layer is not None}):
+        name = os.path.basename(gdb)
+        rels, why = relations.read_declared(gdb)
+        if rels is None:
+            manifest["warnings"].append({"source": name, "code": relations.RELATIONSHIPS_NOT_READ,
+                                         "warning": f"declared relationships not read: {why}"})
+            print(f"  {name}: declared relationships not read: {why}", file=sys.stderr)
+            continue
+        labels = {layer: label for path, layer, label, _ in srcs
+                  if path == gdb and layer is not None and label in uploaded}
+        for rel in rels:
+            oriented, why = relations.orient_declared(rel, labels)
+            if oriented:
+                out.append(oriented)
+            else:
+                manifest["warnings"].append({"source": name, "code": relations.RELATIONSHIP_SKIPPED,
+                                             "warning": f"relationship {rel.get('name')!r} {why}"})
+    return out
+
+
+def _set_relationships(manifest: dict, rels: list[dict]) -> None:
+    """Record `rels` and each layer's resulting `kind`."""
+    manifest["relationships"] = rels
+    for entry in manifest["layers"]:
+        entry["kind"] = relations.layer_kind(bool(entry.get("spatial")), entry["label"], rels)
 
 
 def _tile_into(entry: dict, gdf, series_id: str, tmp: str | None, manifest: dict) -> bool:

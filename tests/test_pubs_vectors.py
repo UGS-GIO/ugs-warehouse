@@ -25,9 +25,10 @@ def _fake_tippecanoe(geojsonl, pmtiles, layer, *, id_attr=None, what=None):
 def _mem_gcs(monkeypatch):
     """In-memory GCS double. `upload` reads the real local file's bytes (so a test can read back
     what `to_parquet` actually wrote); `put_bytes` stores the bytes directly. tippecanoe is
-    stubbed, so tests never need the binary."""
+    stubbed, so tests never need the binary, and so is `ogrinfo` (no declared relationships)."""
     store: dict[str, bytes] = {}
     monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", _fake_tippecanoe)
+    monkeypatch.setattr(vectors.relations, "read_declared", lambda gdb: ([], None))
 
     def _upload(local, path, **kwargs):
         with open(local, "rb") as fh:
@@ -217,6 +218,7 @@ def test_manifest_records_each_layers_rows_columns_crs_and_wgs84_bbox(monkeypatc
     assert table == {
         "label": "geo__DescriptionOfMapUnits", "spatial": False, "rows": 2,
         "columns": [{"name": "MapUnit", "type": "string"}, {"name": "Age", "type": "integer"}],
+        "source": "bundle", "kind": "supporting",
     }
 
 
@@ -1084,3 +1086,103 @@ def test_standing_tiling_failures_print_a_count_and_the_first_20(monkeypatch, tm
     assert line.startswith("25 layers still without PMTiles, run --pmtiles-backfill: M-1DM/l00, ")
     assert "M-1DM/l19" in line and "M-1DM/l20" not in line
     assert line.endswith(", ... (run --pmtiles-backfill for the rest)")
+
+
+# ---------------------------------------------------------------------------
+# Relationships: recorded at extraction, and by --relations-backfill from extracted GeoParquet
+# ---------------------------------------------------------------------------
+
+GDB = "OFR784DM_MillsJunction.gdb"
+
+
+def _gems_frames(monkeypatch):
+    """A GeMS-shaped bundle: map unit polygons, their description table and an unrelated glossary."""
+    polys = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf", "Qal"], "Notes": [None, None, None],
+                              "geometry": [Point(424000, 4512000)] * 3}, crs="EPSG:26912")
+    tables = {"DescriptionOfMapUnits": pd.DataFrame({"MapUnit": ["Qal", "Qaf", None],
+                                                     "Name": ["Alluvium", "Fan", "Heading"]}),
+              "Glossary": pd.DataFrame({"Term": ["certain", "questionable"]})}
+    monkeypatch.setattr("geopandas.read_file", lambda path, layer=None, engine=None: polys)
+    monkeypatch.setattr("pyogrio.read_dataframe",
+                        lambda path, layer=None, read_geometry=True: tables[layer])
+    stem = GDB[:-4]
+    return [(GDB, "MapUnitPolys", f"{stem}__MapUnitPolys", True),
+            (GDB, "DescriptionOfMapUnits", f"{stem}__DescriptionOfMapUnits", False),
+            (GDB, "Glossary", f"{stem}__Glossary", False)]
+
+
+def test_extraction_records_relationships_and_each_layers_kind_and_source(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    srcs = _gems_frames(monkeypatch)
+
+    manifest = vectors._extract_and_upload(str(tmp_path), "OFR-784DM", srcs)
+
+    stem = GDB[:-4]
+    assert manifest["relationships"] == [{
+        "origin": f"{stem}__MapUnitPolys", "origin_cols": ["MapUnit"],
+        "destination": f"{stem}__DescriptionOfMapUnits", "destination_cols": ["MapUnit"],
+        "cardinality": "many_to_one", "detected_by": "inferred", "confidence": 100, "overlap": 100.0}]
+    assert {e["label"]: (e["kind"], e["source"]) for e in manifest["layers"]} == {
+        f"{stem}__MapUnitPolys": ("layer", stem),
+        f"{stem}__DescriptionOfMapUnits": ("table", stem),
+        f"{stem}__Glossary": ("supporting", stem)}
+    assert manifest["warnings"] == []
+
+
+def test_unreadable_declared_relationships_warn_once_per_geodatabase_and_inference_still_runs(
+        monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    srcs = _gems_frames(monkeypatch)
+    monkeypatch.setattr(vectors.relations, "read_declared", lambda gdb: (None, "ogrinfo is not on PATH"))
+
+    manifest = vectors._extract_and_upload(str(tmp_path), "OFR-784DM", srcs)
+
+    assert manifest["warnings"] == [{"source": GDB, "code": vectors.relations.RELATIONSHIPS_NOT_READ,
+                                     "warning": "declared relationships not read: ogrinfo is not on PATH"}]
+    assert [r["detected_by"] for r in manifest["relationships"]] == ["inferred"]
+    assert manifest["errors"] == []  # a warning, not an error: the pub stays extracted
+
+
+def test_declared_relationships_replace_inferred_ones_and_unpublishable_ones_warn(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    srcs = _gems_frames(monkeypatch)
+    declared = {"name": "dmu_rel", "cardinality": "OneToMany",
+                "left_table_name": "DescriptionOfMapUnits", "right_table_name": "MapUnitPolys",
+                "left_table_fields": ["MapUnit"], "right_table_fields": ["MapUnit"]}
+    stations = {**declared, "name": "stations_rel", "left_table_name": "Stations"}
+    monkeypatch.setattr(vectors.relations, "read_declared", lambda gdb: ([declared, stations], None))
+
+    manifest = vectors._extract_and_upload(str(tmp_path), "OFR-784DM", srcs)
+
+    stem = GDB[:-4]
+    assert manifest["relationships"] == [{
+        "origin": f"{stem}__MapUnitPolys", "origin_cols": ["MapUnit"],
+        "destination": f"{stem}__DescriptionOfMapUnits", "destination_cols": ["MapUnit"],
+        "cardinality": "many_to_one", "detected_by": "declared"}]
+    [warning] = manifest["warnings"]
+    assert warning["code"] == vectors.relations.RELATIONSHIP_SKIPPED and "stations_rel" in warning["warning"]
+
+
+def test_a_layer_that_cannot_be_profiled_keeps_its_upload_and_warns(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    srcs = _gems_frames(monkeypatch)
+
+    def boom(frame):
+        raise TypeError("unhashable")
+
+    monkeypatch.setattr(vectors.relations, "profile_frame", boom)
+    manifest = vectors._extract_and_upload(str(tmp_path), "OFR-784DM", srcs)
+
+    assert len(manifest["layers"]) == 3 and manifest["errors"] == []
+    assert f"{vectors.VECTORS_PREFIX}/OFR-784DM/{srcs[0][2]}.parquet" in store
+    assert {w["code"] for w in manifest["warnings"]} == {vectors.relations.PROFILE_FAILED}
+    assert manifest["relationships"] == []
+
+
+def test_a_shapefiles_source_is_its_folder_in_the_bundle(tmp_path):
+    work = str(tmp_path)
+    assert vectors._dataset_name(work, "M-246DM", os.path.join(work, "faults.shp"), None) == "M-246DM"
+    assert vectors._dataset_name(work, "M-246DM", os.path.join(work, "Landslides", "a.shp"), None) \
+        == "Landslides"
+    assert vectors._dataset_name(work, "M-246DM", os.path.join(work, "x", "Geo.gdb"), "Faults") == "Geo"
+

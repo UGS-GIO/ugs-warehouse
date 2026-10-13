@@ -146,6 +146,20 @@ gcloud run jobs execute ugs-pubs-vectors --region=us-central1 \
 `--args` replaces the job's `-m,ugs_warehouse.pubs.vectors,--all` (its command is `python`), so
 the module path has to be given again.
 
+The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
+classes a geodatabase declares are read with `ogrinfo -json`; a geodatabase whose relationships
+cannot be read gets a `relationships_not_read` warning and inference still runs. Most GeMS
+databases declare none, so joins are also inferred within one source dataset (a geodatabase, or a
+folder of shapefiles) with ugs-ingest's FK scoring: a column-name score (`scoreNameMatch`, with
+singular/plural folded) plus the share of the column's distinct values (up to 5,000 sampled) found
+in another table's unique key, times 0.6. A join is kept when the name score is at least 25, the
+overlap at least 90% and the total at least 80, and only the best one per pair of tables. A key
+needs at least two distinct values, since a one-row table's columns are unique by accident. Each
+relationship runs from the table holding the foreign key (`origin`, e.g. MapUnitPolys) to the keyed
+table (`destination`, e.g. DescriptionOfMapUnits) and says whether it was `declared` or `inferred`
+(with its `confidence` and `overlap`). Each layer entry records its `source` dataset and `kind`:
+`layer` (spatial), `table` (non-spatial, in a relationship) or `supporting`.
+
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so
 the legacy URL's path *is* the object path. A mirrored file's asset serves from our CDN and keeps

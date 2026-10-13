@@ -118,6 +118,16 @@ written with geoparquet-io, and COG band metadata is read with rio-stac. A publi
 scan is a `source` asset, and a pub with no year gets a `start_datetime`/`end_datetime` interval
 flagged `ugs:date_unknown`.
 
+Each map layer extracted from a GIS zip is written as GeoParquet in its own CRS plus PMTiles in
+EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with the serving topics'
+tippecanoe flags and one tile layer named for the label. The series' `_manifest.json` records
+`pmtiles` and `pmtiles_layer` per layer, and a layer whose tiling fails keeps its GeoParquet and is
+listed under `errors`. A tiled layer's Item carries the same `pmtiles` asset and `rel=pmtiles`
+web-map link as a serving topic, so the viewer previews it and the Map page can add it.
+`python -m ugs_warehouse.pubs.vectors --pmtiles-backfill [SID ...]` tiles layers that have no
+PMTiles yet from their GeoParquet, without downloading the zip again (`--force` rebuilds them).
+The per-map units GeoParquet has no PMTiles.
+
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so
 the legacy URL's path *is* the object path. A mirrored file's asset serves from our CDN and keeps

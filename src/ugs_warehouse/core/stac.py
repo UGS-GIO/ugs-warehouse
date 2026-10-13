@@ -120,6 +120,12 @@ def pmtiles_link(href: str, layers: list[str] | None = None) -> dict:
     return link
 
 
+def pmtiles_asset(href: str) -> dict:
+    """The `pmtiles` asset beside a vector layer's `pmtiles_link`: the same archive as a download."""
+    return {"href": href, "type": config.PMTILES_MIME, "roles": ["visual"],
+            "title": "PMTiles vector tiles", "description": USAGE_PMTILES}
+
+
 def topic_thumbnail_asset(stem: str) -> dict:
     """A serving topic's styled-preview asset. The thumbs job and the vector ingest both stamp it,
     so both build it here."""

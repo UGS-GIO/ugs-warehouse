@@ -653,7 +653,25 @@ def test_vector_manifests_by_sid_carries_each_layers_rows_and_bbox():
     assert out["M-100"]["layers"] == {"geo__Faults": {
         "rows": 12, "bbox": [-112.0, 40.0, -111.0, 41.0], "geometry_types": ["LineString"],
         "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]",
-        "columns": [{"name": "geometry", "type": "geometry"}]}}
+        "columns": [{"name": "geometry", "type": "geometry"}], "pmtiles_layer": None}}
+
+
+def test_vector_manifests_by_sid_carries_a_layers_pmtiles_only_when_built():
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+
+    manifest = {"spatial": ["a", "b"], "tables": [],
+                "layers": [{"label": "a", "spatial": True, "rows": 1, "pmtiles": True, "pmtiles_layer": "a"},
+                           {"label": "b", "spatial": True, "rows": 1, "pmtiles_layer": "b"}]}
+    path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
+        out, _ = _vector_manifests_by_sid()
+
+    assert out["M-100"]["layers"]["a"]["pmtiles_layer"] == "a"
+    assert out["M-100"]["layers"]["b"]["pmtiles_layer"] is None
 
 
 def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):

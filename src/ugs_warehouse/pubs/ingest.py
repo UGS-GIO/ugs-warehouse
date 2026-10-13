@@ -136,7 +136,8 @@ def _unit_ids(bucket: str | None = None) -> set[str]:
 
 def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict], dict[str, str]]:
     """({SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
-    "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2, columns}}}} from
+    "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2, columns,
+    pmtiles_layer}}}} from
     the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
     — the AUTHORITATIVE record of which extracted layers are spatial vs non-spatial GeMS companion
     tables, so build_publication doesn't have to guess a layer's kind from its name. `columns` holds each
@@ -161,7 +162,9 @@ def _vector_manifests_by_sid(bucket: str | None = None) -> tuple[dict[str, dict]
                                                   "geometry_types": lay.get("geometry_types") or [],
                                                   "proj_code": lay.get("proj_code"),
                                                   "proj_wkt2": lay.get("proj_wkt2"),
-                                                  "columns": lay.get("columns")}
+                                                  "columns": lay.get("columns"),
+                                                  "pmtiles_layer": (lay.get("pmtiles_layer")
+                                                                    if lay.get("pmtiles") else None)}
                                    for lay in layer_docs}}
         except Exception as e:  # noqa: BLE001 (recorded per series; the caller fails that pub)
             failed[sid] = f"unreadable vector manifest {path}: {type(e).__name__}: {e}"

@@ -375,3 +375,87 @@ def test_same_named_layers_in_one_publication_get_distinct_titles():
     titles = {it["id"]: it["properties"]["title"] for it in items}
     assert sorted(titles.values()) == ["Contacts And Faults (gems)", "Contacts And Faults (x)"]
     assert sorted(lk["title"] for lk in coll["links"] if lk["rel"] == "item") == sorted(titles.values())
+
+
+# ---------------------------------------------------------------- layer PMTiles
+
+TILED = {"geo__Faults": {"rows": 12, "bbox": [-112.4, 40.6, -112.1, 40.9],
+                         "geometry_types": ["LineString"], "proj_code": "EPSG:26912",
+                         "pmtiles_layer": "geo__Faults"},
+         "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}}
+
+
+def _serving_topic_pmtiles(monkeypatch) -> tuple[dict, dict, list[str]]:
+    """The pmtiles asset, pmtiles link and extensions a serving-topic item is built with."""
+    from ugs_warehouse.vector import sink_stac as vec_sink
+    from ugs_warehouse.vector.topics import Topic
+
+    captured: dict = {}
+    monkeypatch.setattr(vec_sink, "_bbox", lambda c, v: [0, 1, 2, 3])
+    monkeypatch.setattr(vec_sink, "_row_count", lambda c, v: 5)
+    monkeypatch.setattr(vec_sink, "_table_columns", lambda c, v: [])
+    monkeypatch.setattr(vec_sink.stac, "manual_override", lambda iid: {})
+    monkeypatch.setattr(vec_sink.stac, "prior_file_fields", lambda cp, iid: {})
+    monkeypatch.setattr(vec_sink.gcs, "exists", lambda p: False)
+    monkeypatch.setattr(vec_sink.stac, "build_item", lambda **k: captured.update(k) or {"assets": k["assets"]})
+    monkeypatch.setattr(vec_sink.stac, "attach_renders", lambda i: None)
+    monkeypatch.setattr(vec_sink.stac, "attach_classification", lambda i: None)
+    monkeypatch.setattr(vec_sink.stac, "stamp_file_meta", lambda i: None)
+    monkeypatch.setattr(vec_sink.stac, "write_item", lambda i: "stac/path.json")
+    vec_sink.write(Topic(schema="hazards", layer="hazards_qfaults_current"), None, "v")
+    (link,) = [lk for lk in captured["extra_links"] if lk["rel"] == "pmtiles"]
+    return captured["assets"]["pmtiles"], link, captured["stac_extensions"]
+
+
+def test_a_tiled_layer_item_carries_the_same_pmtiles_shape_as_a_serving_topic(monkeypatch):
+    _, items = _build(layers=TILED)
+    # After the pub build: this stubs core.stac's builder, which both producers share.
+    topic_asset, topic_link, topic_exts = _serving_topic_pmtiles(monkeypatch)
+    faults = next(it for it in items if it["id"] == "OFR-784DM_geo__Faults")
+    (link,) = [lk for lk in faults["links"] if lk["rel"] == "pmtiles"]
+    asset = faults["assets"]["pmtiles"]
+
+    href = "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__Faults.pmtiles"
+    assert asset["href"] == link["href"] == href
+    assert {k: v for k, v in asset.items() if k != "href"} == \
+        {k: v for k, v in topic_asset.items() if k != "href"}
+    assert link["pmtiles:layers"] == ["geo__Faults"]
+    assert {k: v for k, v in link.items() if k not in ("href", "pmtiles:layers")} == \
+        {k: v for k, v in topic_link.items() if k not in ("href", "pmtiles:layers")}
+    assert stac.WEB_MAP_LINKS_EXT in topic_exts and stac.WEB_MAP_LINKS_EXT in faults["stac_extensions"]
+    # The GeoParquet stays the data asset; a table is never tiled.
+    assert faults["assets"]["data"]["href"].endswith("/geo__Faults.parquet")
+    dmu = next(it for it in items if it["id"] == "OFR-784DM_geo__DMU")
+    assert "pmtiles" not in dmu["assets"] and not any(lk["rel"] == "pmtiles" for lk in dmu["links"])
+
+
+def test_a_layer_without_pmtiles_carries_no_tiles():
+    _, items = _build()
+    faults = next(it for it in items if it["id"] == "OFR-784DM_geo__Faults")
+    assert "pmtiles" not in faults["assets"]
+    assert not any(lk["rel"] == "pmtiles" for lk in faults["links"])
+    assert stac.WEB_MAP_LINKS_EXT not in faults["stac_extensions"]
+
+
+def test_a_tiled_layers_index_entry_carries_its_web_map_link():
+    coll, items = _build(layers=TILED)
+    faults = next(it for it in items if it["id"] == "OFR-784DM_geo__Faults")
+    entry = stac._pub_item_index_entry(faults, coll, prefix="ugs-publications/OFR/OFR-784DM/")
+    (link,) = [lk for lk in entry["links"] if lk["rel"] == "pmtiles"]
+    assert link == {"rel": "pmtiles", "type": "application/vnd.pmtiles", "pmtiles:layers": ["geo__Faults"],
+                    "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__Faults.pmtiles"}
+    assert entry["assets"]["pmtiles"]["roles"] == ["visual"]
+    assert stac._is_mappable(faults)
+
+
+def test_a_lone_tiled_layer_moves_its_tiles_and_link_to_the_collection():
+    coll, items = _build(has_cog=False, companion_tables=[], layers=TILED)
+    assert items == []
+    assert coll["assets"]["data"]["proj:code"] == "EPSG:26912"
+    # The tiles are in EPSG:4326, so the layer's CRS and row count stay off them.
+    assert not any(k.startswith(("proj:", "table:")) for k in coll["assets"]["pmtiles"])
+    (link,) = [lk for lk in coll["links"] if lk["rel"] == "pmtiles"]
+    assert link["href"] == coll["assets"]["pmtiles"]["href"]
+    assert stac.WEB_MAP_LINKS_EXT in coll["stac_extensions"]
+    entry = stac._collection_index_entry(coll, prefix="ugs-publications/OFR/OFR-784DM/")
+    assert any(lk["rel"] == "pmtiles" for lk in entry["links"])

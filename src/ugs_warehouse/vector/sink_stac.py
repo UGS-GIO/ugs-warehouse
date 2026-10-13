@@ -25,7 +25,6 @@ from .topics import Topic
 # title is that name prettified; nothing else is authored for it (see core.stac).
 CATALOG = stac.SERVING_TOPICS_CATALOG
 PARQUET_MIME = config.PARQUET_MIME
-PMTILES_MIME = config.PMTILES_MIME
 
 
 def collection_path(schema: str) -> str:
@@ -188,9 +187,7 @@ def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str,
 
     assets = {
         "data": data_asset,
-        "pmtiles": {"href": pmtiles_url, "type": PMTILES_MIME,
-                    "roles": ["visual"], "title": "PMTiles vector tiles",
-                    "description": stac.USAGE_PMTILES},
+        "pmtiles": stac.pmtiles_asset(pmtiles_url),
         # Aspatial related tables (e.g. UCRC boxes/photos/attachments) materialised as Parquet,
         # each carrying its own `ugs:foreign_keys` (child → this topic) + `table:columns`.
         # Registry-driven (raw.schema_registry.relationships); absent for most topics.

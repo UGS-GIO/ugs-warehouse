@@ -21,7 +21,7 @@ from ..core.bbox import to_2d_bbox
 from . import counties, identity, topic
 from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
-from .vectors import VECTORS_PREFIX
+from .vectors import VECTORS_PREFIX, pmtiles_object
 
 UGSPUB = identity.UGSPUB
 LANDING = "https://geology.utah.gov/publication-details/?pub="
@@ -412,11 +412,19 @@ def build_publication(p: dict, attachments: list[dict], *,
         # The manifest's recorded schema rides the data asset, as on a companion table.
         if meta.get("columns"):
             data["table:columns"] = meta["columns"]
-        items.append(item(layer_id(label), ltitle, {"data": data},
+        assets, links, exts = {"data": data}, [], [stac.TABLE_EXT] if meta.get("columns") else []
+        # Tiles carry the same asset + web-map link as a serving topic's, so the viewer previews
+        # the layer and adds it to the map the same way.
+        if meta.get("pmtiles_layer"):
+            pm_url = config.public_url(pmtiles_object(sid.upper(), label))
+            assets["pmtiles"] = stac.pmtiles_asset(pm_url)
+            links = [stac.pmtiles_link(pm_url, [meta["pmtiles_layer"]])]
+            exts.append(stac.WEB_MAP_LINKS_EXT)
+        items.append(item(layer_id(label), ltitle, assets,
             geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
             footprint_source=LAYER_BBOX_SOURCE if lb else aoi_source,
             extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {})},
-            extensions=[stac.TABLE_EXT] if meta.get("columns") else None))
+            links=links, extensions=exts or None))
     for t in companion_tables or []:
         label, meta = t["label"], layer_meta.get(t["label"], {})
         ltitle, ldesc = titles[label]
@@ -456,17 +464,19 @@ def build_publication(p: dict, attachments: list[dict], *,
                    and it["properties"].get("ugs:footprint_source") != FOOTPRINT_FALLBACK]
     data_assets: dict = {}
     data_exts: list[str] = []
-    mosaic_links: list[dict] = []
+    moved_links: list[dict] = []
     if single:
         # The lone Item's data moves to the Collection; its item-level CRS, row count and class
-        # fields are only valid on an asset there, so they ride each asset.
+        # fields are only valid on an asset there, so they ride each data asset (not the tiles, which
+        # are in EPSG:4326). Its tiles' web-map link moves with it.
         only = items.pop()
         carried = {k: v for k, v in only["properties"].items()
                    if k.startswith(("proj:", "table:", "classification:"))}
-        data_assets = {k: {**a, **{ck: cv for ck, cv in carried.items() if ck not in a}}
+        data_assets = {k: {**a, **{ck: cv for ck, cv in carried.items()
+                                   if ck not in a and "data" in a.get("roles", [])}}
                        for k, a in only["assets"].items() if k != "thumbnail"}
         data_exts = [e for e in only.get("stac_extensions", []) if e != stac.SCI_EXT]
-        mosaic_links = mosaic
+        moved_links = [*mosaic, *(lk for lk in only["links"] if lk.get("rel") == "pmtiles")]
 
     assets: dict = {}
     main_pdf = href(p.get("pub_url"))
@@ -511,7 +521,7 @@ def build_publication(p: dict, attachments: list[dict], *,
     extent = {"spatial": {"bbox": [ext_bbox]},
               "temporal": {"interval": [[dt, dt] if dt else [EARLIEST_RECORD, now]]}}
     links = [{"rel": "alternate", "href": f"{LANDING}{quoted_sid}", "type": "text/html",
-              "title": "UGS publication landing page"}, *doi, *mosaic_links]
+              "title": "UGS publication landing page"}, *doi, *moved_links]
     for rel, key in (("predecessor-version", "predecessor_href"), ("successor-version", "successor_href"),
                      ("latest-version", "latest_href")):
         if ed.get(key):

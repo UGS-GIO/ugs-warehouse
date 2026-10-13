@@ -538,9 +538,8 @@ describe("a publication's relationships", () => {
     expect(relatedJoins({ assets: { d: asset({}, { "ugs:detected_by": "declared" }) } })[0].inferred).toBeUndefined();
   });
 
-  it("marks a reference table by the producer's `reference` role or ugs:reference flag", () => {
+  it("marks a reference table by the producer's `reference` role", () => {
     expect(isReferenceAsset(asset({ roles: ["data", "related", "reference"] }))).toBe(true);
-    expect(isReferenceAsset(asset({ "ugs:reference": true }))).toBe(true);
     expect(isReferenceAsset(asset())).toBe(false);
     expect(relatedJoins({ assets: { d: asset({ roles: ["data", "related", "reference"] }) } })[0].reference).toBe(true);
   });
@@ -549,10 +548,11 @@ describe("a publication's relationships", () => {
     expect(collectionParts({ type: "Collection", links: [
       { rel: "item", href: "./P_plate/P_plate.json", title: "Map plate" },
       { rel: "item", href: "./P_MapUnitPolys/P_MapUnitPolys.json", title: "Map Unit Polys",
-        "ugs:layer_kind": "layer", "ugs:source_dataset": "OFR784DM Mills Junction" },
+        "ugs:layer_kind": "layer", "ugs:source_dataset": "OFR784DM Mills Junction", "ugs:source_key": "OFR784DM_MillsJunction" },
     ] })).toEqual([
       { id: "P_plate", title: "Map plate" },
-      { id: "P_MapUnitPolys", title: "Map Unit Polys", kind: "layer", source: "OFR784DM Mills Junction" },
+      { id: "P_MapUnitPolys", title: "Map Unit Polys", kind: "layer", source: "OFR784DM Mills Junction",
+        sourceKey: "OFR784DM_MillsJunction" },
     ]);
   });
 });

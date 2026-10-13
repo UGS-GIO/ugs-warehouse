@@ -351,6 +351,18 @@ describe("groupParts (the publication page's layers and tables)", () => {
     expect(quads.map((s) => [s.label, s.collapsed])).toEqual([["Quad A", true], ["Quad B", false]]);
   });
 
+  it("keeps two raw sources apart when their titles read the same, and shows the title", () => {
+    const tag = (sourceKey: string) => (p: ReturnType<typeof of>[number]) => ({ ...p, id: `${sourceKey}-${p.id}`, sourceKey });
+    const sections = groupParts([...of("Mills Junction", "layer", 2).map(tag("MillsJunction")),
+                                 ...of("Mills Junction", "layer", 1).map(tag("Mills_Junction"))]);
+    expect(sections.map((s) => [s.label, s.count])).toEqual([["Mills Junction", 2], ["Mills Junction", 1]]);
+    expect(sections[1].groups[0].parts[0].id).toMatch(/^Mills_Junction-/);
+  });
+
+  it("groups by the title when the links carry no raw source key", () => {
+    expect(groupParts([...of("Quad A", "layer", 1), ...of("Quad B", "layer", 1)]).map((s) => s.label)).toEqual(["Quad A", "Quad B"]);
+  });
+
   it("files an unknown kind after the known ones under its own name", () => {
     expect(groupParts(of("Mills", "annotation", 1).concat(of("Mills", "layer", 1)))[0].groups.map((g) => g.label))
       .toEqual(["Map layers", "annotation"]);

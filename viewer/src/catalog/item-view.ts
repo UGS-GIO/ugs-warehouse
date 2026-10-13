@@ -169,7 +169,8 @@ const FORMAT_LABEL: Partial<Record<ReturnType<typeof assetKind>, string>> = {
 // ---- a publication's layers and tables, grouped ----
 // The publication page lists its Items: the plate, units and fence (no kind) first under "Map", then
 // by kind (Map layers, Tables, Supporting tables), and by source dataset first when there are several
-// (a publication of several quads). A group of more than PART_GROUP_OPEN entries starts collapsed. A
+// (a publication of several quads). A source groups by its raw key, so two whose titles read the same
+// stay apart, and shows its title. A group of more than PART_GROUP_OPEN entries starts collapsed. A
 // publication whose links carry no kind is one flat list.
 export type PartGroup = { label?: string; parts: CollectionPart[]; collapsed: boolean };
 export type PartSection = { label?: string; count: number; collapsed: boolean; groups: PartGroup[] };
@@ -178,7 +179,7 @@ const KINDS: [string, string][] = [["layer", "Map layers"], ["table", "Tables"],
 
 const kindGroups = (parts: CollectionPart[]): PartGroup[] => {
   const known = new Set(KINDS.map(([k]) => k));
-  const other = [...new Set(parts.map((p) => p.kind!).filter((k) => !known.has(k)))].sort();
+  const other = [...new Set(parts.flatMap((p) => (p.kind && !known.has(p.kind) ? [p.kind] : [])))].sort();
   return [...KINDS, ...other.map((k): [string, string] => [k, k])].flatMap(([kind, label]) => {
     const of = parts.filter((p) => p.kind === kind);
     return of.length ? [{ label, parts: of, collapsed: of.length > PART_GROUP_OPEN }] : [];
@@ -191,12 +192,14 @@ export const groupParts = (parts: CollectionPart[]): PartSection[] => {
   const map = parts.filter((p) => !p.kind);
   const sections: PartSection[] = map.length
     ? [{ count: map.length, collapsed: false, groups: [{ label: "Map", parts: map, collapsed: false }] }] : [];
-  const sources = [...new Set(kinded.map((p) => p.source ?? ""))].sort((a, b) => a.localeCompare(b));
-  if (sources.length < 2) return [...sections, { count: kinded.length, collapsed: false, groups: kindGroups(kinded) }];
-  return [...sections, ...sources.map((s) => {
-    const of = kinded.filter((p) => (p.source ?? "") === s);
-    return { label: s || "Other", count: of.length, collapsed: of.length > PART_GROUP_OPEN, groups: kindGroups(of) };
-  })];
+  const keyOf = (p: CollectionPart) => p.sourceKey ?? p.source ?? "";
+  const bySource = new Map<string, CollectionPart[]>();
+  for (const p of kinded) bySource.set(keyOf(p), [...(bySource.get(keyOf(p)) ?? []), p]);
+  if (bySource.size < 2) return [...sections, { count: kinded.length, collapsed: false, groups: kindGroups(kinded) }];
+  const labelled = [...bySource].map(([key, of]) => ({ key, of, label: of[0].source || key || "Other" }))
+    .sort((a, b) => a.label.localeCompare(b.label) || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0));
+  return [...sections, ...labelled.map(({ label, of }) =>
+    ({ label, count: of.length, collapsed: of.length > PART_GROUP_OPEN, groups: kindGroups(of) }))];
 };
 
 // ---- the item preview ----

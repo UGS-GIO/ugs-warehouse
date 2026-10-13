@@ -137,7 +137,7 @@ describe("formatsOf", () => {
 // its tile layer, as a serving topic does, with no `ugs:renders` style; a plate Item carries a COG.
 const COG = "image/tiff; application=geotiff; profile=cloud-optimized";
 const pubLayer: StacDoc = {
-  type: "Feature", id: "M-246DM_UtahLandslideMaps__DebrisFlowPaths",
+  type: "Feature", id: "M-246DM__UtahLandslideMaps__DebrisFlowPaths",
   properties: { title: "Debris Flow Paths", "ugs:series_id": "M-246DM" },
   assets: {
     data: { href: "https://x/vectors/M-246DM/UtahLandslideMaps__DebrisFlowPaths.parquet", type: "application/vnd.apache.parquet", roles: ["data"] },
@@ -323,7 +323,7 @@ describe("groupParts (the publication page's layers and tables)", () => {
     Array.from({ length: n }, (_, i) => ({ id: `${source}-${kind}-${i}`, title: `${kind} ${i}`, kind, source }));
 
   it("is one flat list when the links carry no kind (older publications)", () => {
-    const parts = [...map, { id: "P_x", title: "X" }];
+    const parts = [...map, { id: "P__x", title: "X" }];
     expect(groupParts(parts)).toEqual([{ count: 3, collapsed: false, groups: [{ parts, collapsed: false }] }]);
     expect(groupParts([])).toEqual([]);
   });

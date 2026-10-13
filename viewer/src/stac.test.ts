@@ -265,8 +265,8 @@ describe("pubHrefFor", () => {
     expect(pubHrefFor(series, "ugs-publications/OFR", "OFR-9")).toBe(`${dir}OFR-9/collection.json`);
   });
   it("builds an Item inside a publication from c = <series>/<SID>", () => {
-    expect(pubHrefFor(series, "ugs-publications/OFR/OFR-9", "OFR-9_geounits"))
-      .toBe(`${dir}OFR-9/OFR-9_geounits/OFR-9_geounits.json`);
+    expect(pubHrefFor(series, "ugs-publications/OFR/OFR-9", "OFR-9__geounits"))
+      .toBe(`${dir}OFR-9/OFR-9__geounits/OFR-9__geounits.json`);
     expect(pubSidIn(series.id, "ugs-publications/OFR/OFR-9")).toBe("OFR-9");
   });
   it("names nothing for another collection, a deeper path, or a collection-type series", () => {
@@ -278,7 +278,7 @@ describe("pubHrefFor", () => {
 });
 
 describe("publication layers in the root index", () => {
-  const tagged: StacDoc = { id: "OFR-9_flows", properties: {
+  const tagged: StacDoc = { id: "OFR-9__flows", properties: {
     title: "Debris Flow Paths", "ugs:in_publication": "OFR-9", "ugs:publication_title": "Geologic map of X" } };
   it("reads the publication a tagged entry belongs to, and labels the layer with it", () => {
     expect(pubOfEntry(tagged)).toEqual({ id: "OFR-9", title: "Geologic map of X" });
@@ -292,9 +292,9 @@ describe("publication layers in the root index", () => {
   });
   it("keeps a tagged entry as a ref the map resolves by its item id", () => {
     const [ref] = rootIndexItems({ items: [{ ...tagged,
-      links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/OFR-9_flows/OFR-9_flows.json" }] }] });
+      links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/OFR-9__flows/OFR-9__flows.json" }] }] });
     expect(ref.collId).toBe("ugs-publications/OFR/OFR-9");
-    expect(idOf(ref.href)).toBe("OFR-9_flows");
+    expect(idOf(ref.href)).toBe("OFR-9__flows");
   });
 });
 
@@ -473,7 +473,7 @@ describe("the publication's plate", () => {
   const coll = (links: StacDoc["links"], assets: StacDoc["assets"] = {}): StacDoc =>
     ({ type: "Collection", id: "M-246DM", links, assets });
   const items = [
-    { rel: "item", href: "./M-246DM_UtahLandslideMaps__DebrisFlowPaths/M-246DM_UtahLandslideMaps__DebrisFlowPaths.json" },
+    { rel: "item", href: "./M-246DM__UtahLandslideMaps__DebrisFlowPaths/M-246DM__UtahLandslideMaps__DebrisFlowPaths.json" },
     { rel: "item", href: "./M-246DM_plate/M-246DM_plate.json", title: "Map plate" },
   ];
 
@@ -531,7 +531,7 @@ describe("a publication's relationships", () => {
   const DMU = "https://x/OFR784DM__DescriptionOfMapUnits.parquet";
   const asset = (extra: Record<string, unknown> = {}, how: Record<string, unknown> = {}) => ({
     href: DMU, type: "application/vnd.apache.parquet", roles: ["data", "related"], title: "Description Of Map Units",
-    "ugs:foreign_keys": [{ fields: ["MapUnit"], reference: { resource: "OFR-784DM_MapUnitPolys", fields: ["MapUnit"] }, ...how }],
+    "ugs:foreign_keys": [{ fields: ["MapUnit"], reference: { resource: "OFR-784DM__MapUnitPolys", fields: ["MapUnit"] }, ...how }],
     ...extra,
   });
 
@@ -558,11 +558,11 @@ describe("a publication's relationships", () => {
   it("reads each Item link's kind and source dataset off the Collection, where it has them", () => {
     expect(collectionParts({ type: "Collection", links: [
       { rel: "item", href: "./P_plate/P_plate.json", title: "Map plate" },
-      { rel: "item", href: "./P_MapUnitPolys/P_MapUnitPolys.json", title: "Map Unit Polys",
+      { rel: "item", href: "./P__MapUnitPolys/P__MapUnitPolys.json", title: "Map Unit Polys",
         "ugs:layer_kind": "layer", "ugs:source_dataset": "OFR784DM Mills Junction", "ugs:source_key": "OFR784DM_MillsJunction" },
     ] })).toEqual([
       { id: "P_plate", title: "Map plate" },
-      { id: "P_MapUnitPolys", title: "Map Unit Polys", kind: "layer", source: "OFR784DM Mills Junction",
+      { id: "P__MapUnitPolys", title: "Map Unit Polys", kind: "layer", source: "OFR784DM Mills Junction",
         sourceKey: "OFR784DM_MillsJunction" },
     ]);
   });

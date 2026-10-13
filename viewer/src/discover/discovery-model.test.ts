@@ -197,11 +197,11 @@ describe("publication Collection entries", () => {
 
   it("leaves the publication's tagged layers and tables out of cards and facets", () => {
     const layer: ItemRef = rootIndexItems({ items: [{
-      id: "OFR-9_flows", bbox: [-112, 40, -111, 41],
+      id: "OFR-9__flows", bbox: [-112, 40, -111, 41],
       properties: { title: "Debris Flow Paths", "ugs:series_id": "OFR-9", "ugs:in_publication": "OFR-9",
                     "ugs:publication_title": "Geologic map of somewhere" },
       assets: { cog: { href: "https://x/f.cog.tif", type: "image/tiff; application=geotiff; profile=cloud-optimized" } },
-      links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/OFR-9_flows/OFR-9_flows.json" }],
+      links: [{ rel: "self", href: "./ugs-publications/OFR/OFR-9/OFR-9__flows/OFR-9__flows.json" }],
     }] })[0];
     const shown = discoverable([...pubs, layer]);
     expect(shown.map((it) => it.data!.id)).toEqual(["OFR-9", "OFR-1"]);

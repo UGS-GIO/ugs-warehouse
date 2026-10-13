@@ -19,18 +19,18 @@ const DMU = "https://x/vectors/OFR-784DM/OFR784DM__DescriptionOfMapUnits.parquet
 const SOURCES = "https://x/vectors/OFR-784DM/OFR784DM__DataSources.parquet";
 const ORIGIN = "https://x/vectors/OFR-784DM/OFR784DM__MapUnitPolys.parquet";
 const fk = (fields: string[], refFields: string[], how: Record<string, unknown> = {}) =>
-  ({ fields, reference: { resource: "OFR-784DM_OFR784DM__MapUnitPolys", href: ORIGIN, fields: refFields }, ...how });
+  ({ fields, reference: { resource: "OFR-784DM__OFR784DM__MapUnitPolys", href: ORIGIN, fields: refFields }, ...how });
 
 // A publication's MapUnitPolys layer: its related tables in the serving topics' flipped shape, with
 // how each key was found. DataSources is a reference table (most of the pub's layers point at it).
 const mapUnitPolys: StacDoc = {
-  type: "Feature", id: "OFR-784DM_OFR784DM__MapUnitPolys",
+  type: "Feature", id: "OFR-784DM__OFR784DM__MapUnitPolys",
   properties: { title: "Map Unit Polys", "ugs:layer_kind": "layer", "ugs:source_dataset": "OFR784DM Mills Junction" },
   assets: {
     data: { href: ORIGIN, type: "application/vnd.apache.parquet", roles: ["data"],
-            "ugs:foreign_keys": [{ fields: ["MapUnit"], reference: { resource: "OFR-784DM_OFR784DM__DescriptionOfMapUnits", href: DMU, fields: ["MapUnit"] },
+            "ugs:foreign_keys": [{ fields: ["MapUnit"], reference: { resource: "OFR-784DM__OFR784DM__DescriptionOfMapUnits", href: DMU, fields: ["MapUnit"] },
                                     "ugs:detected_by": "inferred", "ugs:confidence": 100 },
-                                  { fields: ["DataSourceID"], reference: { resource: "OFR-784DM_OFR784DM__DataSources", href: SOURCES, fields: ["DataSources_ID"] },
+                                  { fields: ["DataSourceID"], reference: { resource: "OFR-784DM__OFR784DM__DataSources", href: SOURCES, fields: ["DataSources_ID"] },
                                     "ugs:detected_by": "declared" }] },
     OFR784DM__DescriptionOfMapUnits: { href: DMU, type: "application/vnd.apache.parquet", roles: ["data", "related"],
       title: "Description Of Map Units", "ugs:foreign_keys": [fk(["MapUnit"], ["MapUnit"], { "ugs:detected_by": "inferred", "ugs:confidence": 100 })] },

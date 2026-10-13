@@ -88,7 +88,7 @@ describe("catalogTrail", () => {
 
   it("walks an Item inside a publication through its series and publication", () => {
     const trail = catalogTrail({
-      collectionId: "ugs-publications/OFR/OFR-9", itemUrl: "OFR-9_geounits", subCats: [pubs], leaf: ofr,
+      collectionId: "ugs-publications/OFR/OFR-9", itemUrl: "OFR-9__geounits", subCats: [pubs], leaf: ofr,
       pub: { sid: "OFR-9", title: "Geologic map of X" },
     });
     expect(trail).toEqual([
@@ -96,7 +96,7 @@ describe("catalogTrail", () => {
       { label: "Publications", to: { c: "ugs-publications" } },
       { label: "Open File Report", to: { c: "ugs-publications/OFR", keepSeries: true } },
       { label: "Geologic map of X", to: { c: "ugs-publications/OFR", i: "OFR-9" } },
-      { label: "OFR-9_geounits" },
+      { label: "OFR-9__geounits" },
     ]);
   });
 
@@ -128,7 +128,7 @@ describe("catalogTrail titles in a publication", () => {
       .toEqual(["Catalog", "Publications", "Map", "Landslide maps of Utah"]);
   });
   it("labels a layer page by publication and layer title", () => {
-    expect(catalogTrail({ collectionId: `${m.id}/M-246DM`, itemUrl: "M-246DM_UtahLandslideMaps__DebrisFlowPaths",
+    expect(catalogTrail({ collectionId: `${m.id}/M-246DM`, itemUrl: "M-246DM__UtahLandslideMaps__DebrisFlowPaths",
       subCats: [pubs], leaf: m, pub: { sid: "M-246DM", title: "Landslide maps of Utah" },
       itemTitle: "Debris Flow Paths" }).map((c) => c.label))
       .toEqual(["Catalog", "Publications", "Map", "Landslide maps of Utah", "Debris Flow Paths"]);
@@ -174,8 +174,8 @@ describe("layerRowsOf", () => {
     { collId: "ugs-serving-topics/hazards", href: "https://x/ugs-serving-topics/hazards/qf/qf.json",
       data: { id: "qf", properties: { title: "Faults" }, assets: cog } },
     // A publication's layer, tagged in the root index; its collection is the publication.
-    { collId: "ugs-publications/OFR/OFR-9", href: "https://x/ugs-publications/OFR/OFR-9/OFR-9_flows/OFR-9_flows.json",
-      data: { id: "OFR-9_flows", properties: { title: "Debris Flow Paths", "ugs:in_publication": "OFR-9",
+    { collId: "ugs-publications/OFR/OFR-9", href: "https://x/ugs-publications/OFR/OFR-9/OFR-9__flows/OFR-9__flows.json",
+      data: { id: "OFR-9__flows", properties: { title: "Debris Flow Paths", "ugs:in_publication": "OFR-9",
                                                 "ugs:publication_title": "Geologic map of X" }, assets: cog } },
     { collId: "ugs-publications/OFR", href: "https://x/ugs-publications/OFR/OFR-2/collection.json",
       data: { id: "OFR-2", properties: { title: "Report" } } },
@@ -188,7 +188,7 @@ describe("layerRowsOf", () => {
     });
     expect(rows).toEqual([
       { id: "qf", href: items[0].href, title: "Faults", group: "Hazards", layer: true },
-      { id: "OFR-9_flows", href: items[1].href, title: "Debris Flow Paths · Geologic map of X",
+      { id: "OFR-9__flows", href: items[1].href, title: "Debris Flow Paths · Geologic map of X",
         group: "Open File Report", layer: false },
     ]);
   });

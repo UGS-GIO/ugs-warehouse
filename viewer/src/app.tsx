@@ -16,9 +16,10 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, nonSpatialDimensions, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, itemLinks, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, collectionHrefOf, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
+import { type CubePicks, parseCubeParam, pickedRescale, VAR } from "./zarr/cube-picks";
 import { NotifBell } from "./review/notifications-inbox";
 import { DataSaverBadge } from "./shell/data-saver-badge";
 import { useDataSaver } from "./lib/data-saver";
@@ -43,7 +44,7 @@ export type Nav = { view: View; c?: string; i?: string; l?: string[]; s?: string
 
 // An ItemRef → map ActiveLayer, by asset precedence: vector PMTiles, COG, raster mosaic, datacube.
 // null when the item carries none of them — it isn't a layer.
-export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
+export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveLayer | null {
   if (!ref?.data) return null;
   const id = idOf(ref.href);
   const title = String(ref.data.properties?.title ?? id);
@@ -64,11 +65,18 @@ export function toLayer(ref: ItemRef | undefined): ActiveLayer | null {
   if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };
   const zarr = zarrAsset(ref.data);
   // No drawable variable → not a layer, rather than a row that can never render.
-  const variable = zarr && Object.keys(cubeVariables(ref.data))[0];
-  if (zarr && variable) {
+  const variables = Object.keys(cubeVariables(ref.data));
+  if (zarr && variables.length) {
+    const stepDims = cubeStepDims(ref.data);
+    const variable = cube[VAR] && variables.includes(cube[VAR]) ? cube[VAR] : variables[0];
     return {
       id, title, bbox: ref.data.bbox,
-      zarr: { href: zarr.href, variable, pinDims: nonSpatialDimensions(ref.data) },
+      zarr: {
+        href: zarr.href, variable, variables, stepDims,
+        selection: resolveSelection(stepDims, cube), rescale: pickedRescale(cube),
+        stacRescale: cubeRenderRescale(ref.data, variable),
+        collectionHref: collectionHrefOf(ref.data, ref.href),
+      },
     };
   }
   return null;
@@ -102,15 +110,13 @@ const tab = (on: boolean) =>
 
 // The IAP user as a Utah-header action item (top-right of the official banner). Display-only — IAP
 // already gated access; the username shows, the full email is the tooltip. Clicking signs out via
-// IAP's clear-login-cookie flow.
+// IAP's clear-login-cookie flow. The icon is an HTML string, not an element: the header renders each
+// item twice (desktop bar and mobile menu), and one element would be moved into the second.
 function userActionItem(email: string): ActionItem {
-  const icon = document.createElement("span");
-  icon.textContent = "👤";
-  icon.title = `Signed in as ${email}`;
   return {
     title: email.split("@")[0],
     showTitle: true,
-    icon,
+    icon: `<span title="Signed in as ${email.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`)}">👤</span>`,
     className: "ugs-user-badge",
     // click → IAP sign-out (clears the login cookie, forces re-auth).
     actionFunction: () => { window.location.href = "/?gcp-iap-mode=CLEAR_LOGIN_COOKIE"; },
@@ -504,7 +510,9 @@ function useViewState() {
   const byId = new Map([...mapItems, ...allItems].map((r) => [idOf(r.href), r]));
   if (item.data && itemUrl) byId.set(idOf(itemUrl), { collId: collectionId ?? "", href: itemHref ?? itemUrl, data: item.data });
   const idsForMap = layerIds ?? (itemUrl ? [idOf(itemUrl)] : []);
-  const activeLayers = idsForMap.map((id) => toLayer(byId.get(id))).filter((l): l is ActiveLayer => l !== null);
+  const cubePicks = parseCubeParam(sp.cube);
+  const activeLayers = idsForMap.map((id) => toLayer(byId.get(id), cubePicks[id]))
+    .filter((l): l is ActiveLayer => l !== null);
 
   // Coverage overlay data: every loaded item that has a bbox → a footprint rectangle. Lets the map
   // show WHAT IS MAPPED WHERE across the open collection, including items with no COG/PMTiles asset
@@ -572,7 +580,7 @@ export function AppLayout() {
     // boundary) so item navigation swaps sources instead of churning WebGL contexts. See PreviewMap.
     <PreviewMapProvider>
     <div className={lockedView
-      ? "grid h-full grid-cols-1 grid-rows-[auto_1fr] overflow-hidden bg-background text-sm text-foreground"
+      ? "grid h-full grid-cols-1 grid-rows-[auto_auto_1fr_auto] overflow-hidden bg-background text-sm text-foreground"
       : "flex h-full flex-col overflow-y-auto overflow-x-hidden bg-background text-sm text-foreground"}>
       <FetchBar pending={pending} />
       <header className={`flex flex-wrap items-center gap-x-3 gap-y-1 border-b border-border bg-background px-3 py-2 sm:px-4 ${lockedView ? "" : "sticky top-0 z-20"}`}>
@@ -609,7 +617,8 @@ export function AppLayout() {
         </div>
       </header>
 
-      {catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}
+      {/* Always mounted, empty when there is no error, so the locked grid keeps its rows. */}
+      <div>{catalog.error && <p className="p-4 text-destructive">{String(catalog.error)}</p>}</div>
 
       <Suspense fallback={<div className="flex items-center justify-center p-16 text-sm text-muted-foreground">Loading…</div>}>
       <ViewContext.Provider value={state}>
@@ -617,7 +626,8 @@ export function AppLayout() {
         <SavingNotice />
       </ViewContext.Provider>
       </Suspense>
-      {!lockedView && <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />}
+      {/* Every view, full-height ones included: it carries the state's required links. */}
+      <LegalFooter className="mt-auto" catalogUrl={CATALOG_URL} />
     </div>
     </PreviewMapProvider>
   );

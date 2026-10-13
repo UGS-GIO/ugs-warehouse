@@ -71,11 +71,14 @@ def _extent_line(extent: dict | None) -> str:
 def readme(*, title: str, description: str, kind: str, children: int,
            extent: dict | None = None, items: list[dict] | None = None,
            license_id: str | None = None) -> str:
-    """The human entry point. `kind` is "catalog" or "collection"; `children` counts what it holds."""
+    """The human entry point. `kind` is "catalog", "collection" or "layer" (a collection holding one
+    dataset as its own assets); `children` counts what it holds."""
     noun = "collections" if kind == "catalog" else "items"
+    doc_type = "catalog" if kind == "catalog" else "collection"
     lic = license_id or config.DATA_LICENSE
     out = [f"# {title}\n\n", f"{description}\n\n"]
-    out.append(f"- {children} {noun}\n")
+    if kind != "layer":  # a layer is one dataset: its files are assets, it holds nothing
+        out.append(f"- {children} {noun}\n")
     out.append(_extent_line(extent))
     # PTL-FIL-005 wants the license and the provenance in the README itself, not only in the JSON.
     out.append(f"- License: {lic} ({config.LICENSE_URL})\n")
@@ -84,7 +87,7 @@ def readme(*, title: str, description: str, kind: str, children: int,
     if formats:
         out.append("\n## Reading the data\n\n")
         out.extend(f"- **{name}** — {how}\n" for name, how in formats)
-    out.append(f"\nThe machine-readable description of this {kind} is `{'catalog' if kind == 'catalog' else 'collection'}.json` "
+    out.append(f"\nThe machine-readable description of this {doc_type} is `{doc_type}.json` "
                f"beside this file. `{AGENTS_NAME}` covers access patterns for programs.\n")
     return "".join(out)
 
@@ -123,6 +126,9 @@ def agents(*, title: str, kind: str, path: str, children: int,
         if not path:
             out.append("\nTo get every item at once, read `items.json` beside this file: one index "
                        "of the whole catalog, each entry with a `self` link to its full item.\n")
+    elif kind == "layer":
+        out.append(f"This collection is one dataset. Its files are the assets in `{doc}`; it has "
+                   "no items.\n")
     else:
         out.append(f"Follow the `rel:item` links in `{doc}`; each carries the item's title, so a "
                    "listing does not need to fetch every item.\n")
@@ -136,9 +142,11 @@ def agents(*, title: str, kind: str, path: str, children: int,
         # The endpoint that motivated #280: a consumer that loads the whole OGC API Features
         # collection to draw it OOMs the service. Name the query endpoint AND say what each thing is
         # for — filtered queries on the API, whole-layer/bulk on the GeoParquet asset.
-        out.append("\n## Querying\n\n"
-                   "These items are also served live via OGC API Features — each item carries a "
-                   "`rel:service` link to its own `/collections/<item id>` endpoint. Use it for "
+        served = ("This layer is also served live via OGC API Features; its `rel:service` link "
+                  "points at its `/collections/<id>` endpoint." if kind == "layer" else
+                  "These items are also served live via OGC API Features — each item carries a "
+                  "`rel:service` link to its own `/collections/<item id>` endpoint.")
+        out.append(f"\n## Querying\n\n{served} Use it for "
                    "attribute queries and server-side spatial filters that return a few features. "
                    "For a whole layer, or bulk or spatial analysis, read the GeoParquet `data` asset "
                    "directly (it is range-readable) instead of paging the API — that is the cheaper "

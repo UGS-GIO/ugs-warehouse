@@ -3,7 +3,7 @@
 // answers the table's range reads from the device and the table works with no connection.
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
-import { CheckIcon, DownloadIcon, TrashIcon } from "@/catalog/stac-url-chip";
+import { CheckIcon, DownloadIcon, TrashIcon } from "@/shell/icons";
 import { ENGINE_BYTES } from "./engine";
 import { jobProgress } from "./queue";
 import * as opfs from "./opfs";

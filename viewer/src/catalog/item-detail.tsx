@@ -13,6 +13,7 @@ import { PhotoGallery } from "./photo-gallery";
 import { DiffPanel } from "@/review/diff-panel";
 import { FieldsPanel, Preview } from "./asset-viewer";
 import { AssetsPanel, EndpointsPanel, listedAssets } from "./endpoints-panel";
+import { CubeStepsPanel, CubeStepsProvider } from "@/zarr/cube-steps-context";
 import { DownloadsPanel } from "./downloads-panel";
 import { aboutRows, bylineParts, categorize, curatedDerived, kindLabel, type MetaRow, recordCountLabel } from "./item-view";
 import { StacJson } from "./stac-json";
@@ -316,6 +317,7 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
         {/* min-w-0 on the grid CHILDREN, not a width on anything: a grid item defaults to
             min-width:auto, so the single mobile column sized itself to its widest descendant's
             max-content (861px inside a 360px phone) and everything below inherited that. */}
+        <CubeStepsProvider key={String(item.id)}>
         <div className="mt-5 grid gap-8 lg:grid-cols-3">
           <div className="min-w-0 space-y-6 lg:col-span-2">
             <Preview item={item} />
@@ -328,12 +330,14 @@ export function ItemDetail({ collectionId, item, error, onBack, onMap, onExplore
             {atAGlance}
             <div id="downloads" className="scroll-mt-24 space-y-6">
               <AssetsPanel item={item} />
+              <CubeStepsPanel />
               <DownloadsPanel key={String(item.id)} item={item} />
             </div>
             <EndpointsPanel item={item} />
             <StacJson item={item} title={`${item.id} — STAC JSON`} />
           </aside>
         </div>
+        </CubeStepsProvider>
       </>
     );
   }

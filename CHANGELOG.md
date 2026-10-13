@@ -1,5 +1,47 @@
 # Changelog
 
+## [1.7.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.6.0...v1.7.0) (2026-10-13)
+
+
+### Features
+
+* **stac:** publish each serving-topic layer as its own collection beside its item ([#564](https://github.com/UGS-GIO/ugs-warehouse/issues/564)) ([053b382](https://github.com/UGS-GIO/ugs-warehouse/commit/053b38211db5790f3f7d23149366f40c6bc15ce6))
+
+## [1.6.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.5.0...v1.6.0) (2026-10-12)
+
+
+### Features
+
+* **viewer:** link the repo from the footer and menu, labeled with the release version ([#562](https://github.com/UGS-GIO/ugs-warehouse/issues/562)) ([9559227](https://github.com/UGS-GIO/ugs-warehouse/commit/9559227dbf919a77969d46394b1aa4971d640ab0))
+
+
+### Bug Fixes
+
+* **thumbs:** make topic thumbnails on publish and restyle, with a nightly backstop [ALL-6020] ([#364](https://github.com/UGS-GIO/ugs-warehouse/issues/364)) ([c4b6df0](https://github.com/UGS-GIO/ugs-warehouse/commit/c4b6df0b3ddcea590a1a9bcc0f38c55a1ce16c13))
+
+## [1.5.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.4.0...v1.5.0) (2026-10-12)
+
+
+### Features
+
+* **harvest:** take a map's plate from its source raster and expand palettes before the warp [ALL-6149] ([#555](https://github.com/UGS-GIO/ugs-warehouse/issues/555)) ([a313f16](https://github.com/UGS-GIO/ugs-warehouse/commit/a313f16cfb9e06f4043a419a144bd5fc193e6a3f))
+
+## [1.4.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.3.0...v1.4.0) (2026-10-11)
+
+
+### Features
+
+* **logging:** write JSON log lines on Cloud Run, tagged by topic ([#553](https://github.com/UGS-GIO/ugs-warehouse/issues/553)) ([693af8d](https://github.com/UGS-GIO/ugs-warehouse/commit/693af8d93214a616e4f4702688c6de03912737bd))
+* **provision:** alert when the push handler cannot start the ingest job ([#547](https://github.com/UGS-GIO/ugs-warehouse/issues/547)) ([e7f08ce](https://github.com/UGS-GIO/ugs-warehouse/commit/e7f08cec37861a512acef1cb500244ab4ec18984))
+* **viewer:** pick a datacube's variable and time step, kept in the URL ([#530](https://github.com/UGS-GIO/ugs-warehouse/issues/530)) ([173873f](https://github.com/UGS-GIO/ugs-warehouse/commit/173873fd1c97cd666216c0e49b06876e9e5eab24))
+
+
+### Bug Fixes
+
+* **ingest:** run one ingest per topic at a time ([#549](https://github.com/UGS-GIO/ugs-warehouse/issues/549)) ([638c6e7](https://github.com/UGS-GIO/ugs-warehouse/commit/638c6e7608026597e9107d617f4d09cd5e2d3f87))
+* **source:** escape quotes in DSNs passed to ATTACH ([#546](https://github.com/UGS-GIO/ugs-warehouse/issues/546)) ([130ea6d](https://github.com/UGS-GIO/ugs-warehouse/commit/130ea6d6ff1e1dd21622bd7e37e0790890432605))
+* **source:** let libpq read PGPASSWORD instead of splicing it into the DSN ([#545](https://github.com/UGS-GIO/ugs-warehouse/issues/545)) ([e414bc6](https://github.com/UGS-GIO/ugs-warehouse/commit/e414bc67ae89bf7cbb1016e2a5f759b56af50e80))
+
 ## [1.3.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.2.0...v1.3.0) (2026-10-06)
 
 

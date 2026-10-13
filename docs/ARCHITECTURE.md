@@ -67,6 +67,8 @@ bronze → silver → gold — and publishes gold as Postgres serving tables.
 
 Every time dataELT promotes a `_current` table it publishes a `{schema, topic}` message; the
 warehouse reacts. No polling, no schedule. A topic whose schema isn't a known mart is acked + skipped.
+One topic ingests at a time: a run holds a lease object (`_locks/ingest/{topic}`), and a second
+publish for that topic waits for it.
 
 ### ③ Warehouse transform + four sinks 🟩
 
@@ -76,6 +78,9 @@ One DuckDB streaming pass turns a Postgres serving table into cloud-native artif
   bbox-prune well. (Unstamped SRID-0 geometry errors loudly rather than assuming 4326.)
 - **Four sinks per topic:** DuckLake table · GeoParquet (`latest` + dated, citable) · PMTiles
   (tippecanoe, `-r1`) · STAC item (the discovery + linking layer).
+- **Layer collections.** The catalog refresh also publishes each topic as its own collection,
+  `ugs-serving-topics/<schema>/<id>/collection.json`, beside its item. That is Portolan's grain; the
+  item stays until the viewers read the collection.
 - **Durable key.** A topic whose serving table carries `ugs_key` gets DuckLake delta-MERGEs keyed on
   it (instead of a full rewrite) and a `ugs:primary_key` STAC stamp, so a row comment resolves to the
   same feature across reingests. The feature **id** stays `feature_id` — promoting `ugs_key` to the

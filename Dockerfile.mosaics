@@ -18,10 +18,10 @@ RUN python3 -m venv "$VIRTUAL_ENV"
 
 WORKDIR /app
 # Full .[pubs] extra for parity with the harvest image; a slimmer mosaics-only extra is an ALL-5993 follow-up.
-COPY pyproject.toml ./
-RUN mkdir -p src/ugs_warehouse && touch src/ugs_warehouse/__init__.py \
-    && pip install --upgrade pip && pip install .[pubs] \
-    && rm -rf src
+COPY --from=ghcr.io/astral-sh/uv:0.12.12@sha256:73d2665b478d8fa2de1cf105c6841f8e9cb6b09e568fc7700440c09f8fcd7ac4 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock ./
+RUN uv export --frozen --no-emit-project --extra pubs -q -o /tmp/requirements.txt \
+    && pip install --upgrade pip && pip install -r /tmp/requirements.txt && rm /tmp/requirements.txt
 
 COPY src ./src
 RUN pip install --no-deps --force-reinstall .

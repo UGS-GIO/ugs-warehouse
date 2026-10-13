@@ -177,14 +177,18 @@ def _vsigs(sid: str) -> str:
 
 
 def _vrt_order(sids: list[str], by_sid: dict[str, dict]) -> list[str]:
-    """`sids` ordered ascending by `pub_year` (newest last). `gdalbuildvrt` gives the LAST source
-    priority on overlap, so this makes the newest edition draw on top for free — matters for
-    `--editions all` (every edition stacked) and the pub_year-tie case. An unparseable/missing year
-    sorts to 0 (bottom); ties (including two unparseable years) break on sid for a stable order."""
+    """`sids` with reissues first (see `_is_reissue`), then by `pub_year`, missing years lowest and ties
+    by sid. `gdalbuildvrt` draws the LAST source on top, so the newest original map wins an overlap."""
     def _yr(s: str) -> int:
         y = (by_sid.get(s, {}).get("pub_year") or "").strip()
         return int(y) if len(y) == 4 and y.isdigit() else 0
-    return sorted(sids, key=lambda s: (_yr(s), s))
+    return sorted(sids, key=lambda s: (not _is_reissue(by_sid.get(s, {})), _yr(s), s))
+
+
+def _is_reissue(pub: dict) -> bool:
+    """A GIS reproduction of an older map. Its pub_year is the reissue's, not the mapping's, so it
+    draws beneath every original map and shows only where no other map covers the ground."""
+    return "gis reproduction" in (pub.get("pub_name") or "").casefold()
 
 
 _WEBMERC_Z0_MPP = 156543.03392804097  # web-mercator m/px at zoom 0 (256 px tiles)

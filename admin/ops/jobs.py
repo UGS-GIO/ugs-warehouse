@@ -75,13 +75,10 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Runs as 5 parallel shards (each task strides 1/5 of the worklist).", danger=True, tasks=5),
     Job("vectors", "ugs-pubs-vectors", "Extract map layers",
         "Extract every layer and companion table from the GIS zip of each pub that has one, as "
-        "GeoParquet, and build PMTiles for each map layer. Skips pubs already extracted; then "
-        "Rebuild pubs STAC to bind them. Fails while any extracted layer has no PMTiles: run Build "
-        "map tiles (the PMTiles backfill) once after the deploy that adds them, and to retry a "
-        "layer whose tiling failed. Record relationships computes the joins between each pub's "
-        "layers and tables from its extracted GeoParquet; then Rebuild pubs STAC.",
-        modes=(("pmtiles-backfill", "Build map tiles (PMTiles backfill)"),
-               ("relations-backfill", "Record relationships (backfill)")), modes_label="Only:"),
+        "GeoParquet, and build PMTiles for each map layer. Skips pubs already extracted, then "
+        "fills in what already-extracted pubs are missing (map tiles, relationships between "
+        "layers and tables) within a time budget, and says how much is still pending. Run it "
+        "again until it reports 0 pending; then Rebuild pubs STAC to bind them."),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
         "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
@@ -205,13 +202,11 @@ def run_ingest(force: bool = False) -> dict:
 
 
 # A job's variants: args that replace its configured ones. ducklake-maintain's entrypoint runs
-# `python -m $RUN_MODULE "$@"`, so its modes are read-only CLI flags. restyle and vectors run
-# `python`, so their modes name the module too.
+# `python -m $RUN_MODULE "$@"`, so its modes are read-only CLI flags. restyle runs `python`, so its
+# mode names the module too.
 MODE_ARGS = {
     "ducklake-maintain": {"report": ["--report"], "dry-run": ["--dry-run"]},
     "restyle": {"refresh": ["-m", "scripts.refresh_stac"]},
-    "vectors": {"pmtiles-backfill": ["-m", "ugs_warehouse.pubs.vectors", "--pmtiles-backfill"],
-                "relations-backfill": ["-m", "ugs_warehouse.pubs.vectors", "--relations-backfill"]},
 }
 
 

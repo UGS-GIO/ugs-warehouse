@@ -41,18 +41,13 @@ def ops_jobs(monkeypatch):
     return mod
 
 
-def test_extract_map_layers_offers_the_pmtiles_and_relations_backfills(ops_jobs):
-    """The vectors job runs `python`, so the backfill's args name the module, as the deployed job's
-    `-m,ugs_warehouse.pubs.vectors,--all` does."""
+def test_extract_map_layers_has_no_backfill_buttons(ops_jobs):
+    """The regular run fills in tiles and relationships itself, so the job offers no backfill."""
     job = ops_jobs.JOBS["vectors"]
-    assert ("pmtiles-backfill", "Build map tiles (PMTiles backfill)") in job.modes
-    assert "PMTiles" in job.description
-    res = ops_jobs.run_mode("vectors", "pmtiles-backfill")
-    assert res["ok"] and res["dry_run"]
-    assert res["message"].endswith("ugs-pubs-vectors -m ugs_warehouse.pubs.vectors --pmtiles-backfill")
-    assert ("relations-backfill", "Record relationships (backfill)") in job.modes
-    res = ops_jobs.run_mode("vectors", "relations-backfill")
-    assert res["message"].endswith("ugs-pubs-vectors -m ugs_warehouse.pubs.vectors --relations-backfill")
+    assert not job.modes
+    assert "vectors" not in ops_jobs.MODE_ARGS
+    assert "pending" in job.description
+    assert not ops_jobs.run_mode("vectors", "pmtiles-backfill")["ok"]
 
 
 def _entry(id_, self_href, *, cog=False, pub=None):

@@ -1148,6 +1148,43 @@ def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(m
     assert vectors.pmtiles_object("M-11", "a") not in store
 
 
+def test_the_time_budget_stops_starting_extractions_and_lists_the_rest(monkeypatch, tmp_path, capsys):
+    _backfill_store(monkeypatch, tmp_path, {})
+    _batch_run(monkeypatch, ["M-30", "M-31", "M-32"])
+    started: list[str] = []
+
+    def extract(sid, **kw):
+        started.append(sid)
+        return "ok"
+
+    # The budget is spent once the first pub has extracted, however often the clock is read.
+    monkeypatch.setattr(vectors, "extract_one", extract)
+    monkeypatch.setattr(vectors.time, "monotonic", lambda: 9999.0 if started else 0.0)
+
+    assert vectors.main() == 0
+    assert started == ["M-30"]
+    assert ("Time budget used: 2 publications left to extract, the next run continues: M-31, M-32"
+            in capsys.readouterr().out)
+
+
+def test_a_targeted_run_extracts_every_pub_it_names_past_the_budget(monkeypatch, tmp_path):
+    import sys
+
+    _backfill_store(monkeypatch, tmp_path, {})
+    started: list[str] = []
+
+    def extract(sid, **kw):
+        started.append(sid)
+        return "ok"
+
+    monkeypatch.setattr(vectors, "extract_one", extract)
+    monkeypatch.setattr(vectors.time, "monotonic", lambda: 9999.0 if started else 0.0)
+    monkeypatch.setattr(sys, "argv", ["vectors", "M-40", "M-41"])
+
+    assert vectors.main() == 0
+    assert started == ["M-40", "M-41"]
+
+
 @pytest.mark.parametrize("step", ["_tile_missing", "_relations_series"])
 def test_a_series_that_raises_fails_the_run_and_the_next_series_still_heals(
         monkeypatch, tmp_path, capsys, step):

@@ -19,8 +19,8 @@ layer entry records its `source` dataset and its `kind` (`layer`, `table` or `su
 
 After extracting, a run self-heals the cleanly extracted pubs it covers (`self_heal`): it tiles
 layers that have no PMTiles and records relationships where the manifest has none or predates
-`relations.RELATIONS_VERSION`, from the GeoParquet already on GCS, within a time budget
-(`VECTORS_TIME_BUDGET_S`); what the budget leaves waits for the next run.
+`relations.RELATIONS_VERSION`, from the GeoParquet already on GCS. In an `--all` run, extraction
+and self-heal share one time budget (`VECTORS_TIME_BUDGET_S`); what it leaves waits for the next run.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
 layer never looks like a pub that simply has none.
@@ -766,8 +766,8 @@ def _relations_series(series_id: str) -> list[str]:
     return []
 
 
-# Self-heal stops starting series once the run has used this much time, leaving room to finish the
-# series in progress inside the job's 3600 s task timeout.
+# Extraction, then self-heal, stop starting pubs or series once the run has used this much time,
+# leaving room to finish the one in progress inside the job's 3600 s task timeout.
 TIME_BUDGET_S = float(os.environ.get("VECTORS_TIME_BUDGET_S", "2700"))
 
 
@@ -979,7 +979,16 @@ def main() -> int:
     failed: list[str] = []
     untiled: list[str] = []
     extracted: set[str] = set()
-    for sid in sids:
+    deadline = started + TIME_BUDGET_S
+    # Only a regular batch run picks up what it leaves, so targeted and forced runs extract all.
+    budgeted = args.all and not args.force
+    for i, sid in enumerate(sids):
+        if budgeted and time.monotonic() >= deadline:
+            left = sids[i:]
+            more = f", ... ({len(left) - 20} more)" if len(left) > 20 else ""
+            print(f"Time budget used: {len(left)} publications left to extract, the next run "
+                  f"continues: {', '.join(left[:20])}{more}")
+            break
         res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing,
                           untiled=untiled)
         if res != "skip":
@@ -1003,7 +1012,7 @@ def main() -> int:
               f"{len(units)} units files")
         heal = Heal()
     else:
-        heal = self_heal(manifests, deadline=started + TIME_BUDGET_S, units=units)
+        heal = self_heal(manifests, deadline=deadline, units=units)
         print(heal.summary())
     # Exit 1 only for work that failed in THIS run: a pub that failed to extract, a layer whose
     # tiling failed at extraction, or a layer or pub whose self-heal failed. Work the time budget

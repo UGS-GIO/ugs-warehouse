@@ -778,25 +778,82 @@ class Heal:
     left for the next run."""
     tiled: int = 0
     related: int = 0
+    units_upgraded: int = 0
     failed: list[str] = field(default_factory=list)
     failed_by_series: dict[str, list[str]] = field(default_factory=dict)
     pending_layers: int = 0
     pending_pubs: int = 0
+    pending_units: int = 0
 
     def summary(self, next_step: str = "run") -> str:
-        return (f"Self-heal: {self.tiled} layers tiled, {self.related} pubs' relationships recorded"
-                + (f"; {self.pending_layers} layers and {self.pending_pubs} pubs still pending, the "
-                   f"next {next_step} continues" if self.pending_layers or self.pending_pubs else "")
+        pending = self.pending_layers or self.pending_pubs or self.pending_units
+        return (f"Self-heal: {self.tiled} layers tiled, {self.related} pubs' relationships recorded, "
+                f"units upgraded: {self.units_upgraded}"
+                + (f"; {self.pending_layers} layers, {self.pending_pubs} pubs and {self.pending_units} "
+                   f"units files still pending, the next {next_step} continues" if pending else "")
                 + (f"; {len(self.failed)} failed" if self.failed else ""))
 
+    def fail(self, sid: str, errs: list[str]) -> None:
+        if errs:
+            self.failed += errs
+            self.failed_by_series.setdefault(sid, []).extend(errs)
 
-def self_heal(manifests: dict[str, dict], *, deadline: float | None = None) -> Heal:
+
+def units_objects(series_ids: set[str] | None = None) -> dict[str, str]:
+    """{series id: object path} of the per-pub units GeoParquet files
+    (`<UNITS_PREFIX>/<SID>/<SID>.units.parquet`), from one listing; `series_ids` (upper-case)
+    narrows them."""
+    pfx = identity.UNITS_PREFIX.rstrip("/") + "/"
+    out: dict[str, str] = {}
+    for path in gcs.list_paths(pfx):
+        parts = path[len(pfx):].split("/")
+        if (len(parts) == 2 and parts[1] == f"{parts[0]}.units.parquet"
+                and (series_ids is None or parts[0].upper() in series_ids)):
+            out[parts[0]] = path
+    return out
+
+
+def units_outdated(path: str) -> bool:
+    """True when a GeoParquet file is older than 1.1 or has no bbox covering, read from its Parquet
+    footer alone (a range read)."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    footer = gcs.get_tail(path, 64 * 1024)
+    size = int.from_bytes(footer[-8:-4], "little") + 8
+    if size > len(footer):
+        footer = gcs.get_tail(path, size)
+    meta = pq.read_metadata(pa.BufferReader(b"PAR1" + footer[-size:]))
+    geo = json.loads((meta.metadata or {}).get(b"geo") or b"{}")
+    version = tuple(int(n) for n in re.findall(r"\d+", str(geo.get("version") or ""))[:2])
+    column = (geo.get("columns") or {}).get(geo.get("primary_column")) or {}
+    return version < (1, 1) or "bbox" not in (column.get("covering") or {})
+
+
+def _upgrade_units(path: str) -> None:
+    """Rewrite a units GeoParquet through `geoparquet.write` (1.1, bbox covering) in place. The
+    upload is MUTABLE, since the path is now rewritten."""
+    import geopandas as gpd
+
+    with tempfile.TemporaryDirectory(prefix="units_") as work:
+        old, new = os.path.join(work, "old.parquet"), os.path.join(work, "new.parquet")
+        gcs.download(path, old)
+        gdf = gpd.read_parquet(old)
+        os.remove(old)
+        geoparquet.write(gdf, new)
+        del gdf
+        gcs.upload(new, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+
+
+def self_heal(manifests: dict[str, dict], *, deadline: float | None = None,
+              units: dict[str, str] | None = None) -> Heal:
     """Fill in the derivatives clean manifests are missing, from their GeoParquet on GCS and without
     downloading any zip: PMTiles for spatial layers that have none (`missing_tiles`), and
-    relationships for manifests that need them (`needs_relations`). Series with only a failed
-    layer to retry go last, as extraction orders retries last. No new series starts once
-    `time.monotonic()` passes `deadline`; the one in progress finishes, and what is left is counted
-    as pending, not failed."""
+    relationships for manifests that need them (`needs_relations`). Then upgrade each of the
+    `units` files ({series id: object path}) that `units_outdated` says is older than GeoParquet
+    1.1. Series with only a failed layer to retry go last, as extraction orders retries last. No new
+    series or units file starts once `time.monotonic()` passes `deadline`; the one in progress
+    finishes, and what is left is counted as pending, not failed."""
     heal = Heal()
     todo = [(sid, m) for sid, m in sorted(manifests.items())
             if missing_tiles(m) or needs_relations(m)]
@@ -820,10 +877,37 @@ def self_heal(manifests: dict[str, dict], *, deadline: float | None = None) -> H
         except Exception as e:
             errs.append(f"{sid}: {_error(e)}")
             print(f"{sid}: self-heal FAIL {_error(e)}", file=sys.stderr)
-        if errs:
-            heal.failed += errs
-            heal.failed_by_series[sid] = errs
+        heal.fail(sid, errs)
+    _heal_units(heal, units or {}, deadline)
     return heal
+
+
+def _heal_units(heal: Heal, units: dict[str, str], deadline: float | None) -> None:
+    """Upgrade the outdated units files into `heal`, within `deadline`. Footers are read in
+    parallel; a file whose footer or rewrite fails is a failure for its series."""
+    def check(item: tuple[str, str]) -> tuple[str, str, bool | str]:
+        sid, path = item
+        try:
+            return sid, path, units_outdated(path)
+        except Exception as e:
+            return sid, path, _error(e)
+
+    with ThreadPoolExecutor(max_workers=16) as ex:
+        checked = list(ex.map(check, sorted(units.items())))
+    for sid, path, outdated in checked:
+        if isinstance(outdated, str):
+            heal.fail(sid, [f"{path}: footer unreadable: {outdated}"])
+        elif not outdated:
+            continue
+        elif deadline is not None and time.monotonic() >= deadline:
+            heal.pending_units += 1
+        else:
+            try:
+                _upgrade_units(path)
+                heal.units_upgraded += 1
+            except Exception as e:
+                heal.fail(sid, [f"{path}: units not upgraded: {_error(e)}"])
+                print(f"{path}: units not upgraded: {_error(e)}", file=sys.stderr)
 
 
 def main() -> int:
@@ -840,6 +924,7 @@ def main() -> int:
         ap.error("give series ids or --all")
 
     sids = []
+    all_sids: list[str] = []
     existing = None
     manifests: dict[str, dict] = {}
     if args.all:
@@ -904,13 +989,17 @@ def main() -> int:
         manifests = {sid: m for s in sids
                      if (sid := identity.Pub.parse(s).series_id) not in extracted
                      and (m := _clean_manifest_of(sid))}
+    # Units files come from the plate harvest, not from extraction, so every covered pub is checked.
+    units = units_objects({identity.Pub.parse(s).series_id.upper()
+                           for s in (all_sids if args.all else args.series_id)})
     if args.dry_run:
         pending = sum(len(missing_tiles(m)) for m in manifests.values())
-        print(f"[dry-run] self-heal would tile {pending} layers and record relationships for "
-              f"{sum(needs_relations(m) for m in manifests.values())} pubs")
+        print(f"[dry-run] self-heal would tile {pending} layers, record relationships for "
+              f"{sum(needs_relations(m) for m in manifests.values())} pubs and check "
+              f"{len(units)} units files")
         heal = Heal()
     else:
-        heal = self_heal(manifests, deadline=started + TIME_BUDGET_S)
+        heal = self_heal(manifests, deadline=started + TIME_BUDGET_S, units=units)
         print(heal.summary())
     # Exit 1 only for work that failed in THIS run: a pub that failed to extract, a layer whose
     # tiling failed at extraction, or a layer or pub whose self-heal failed. Work the time budget

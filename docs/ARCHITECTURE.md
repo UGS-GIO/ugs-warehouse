@@ -187,12 +187,16 @@ are missing, from their GeoParquet on GCS and without downloading a zip:
   be read. Scopes come from the labels, as at extraction. When a label carries a folder prefix
   because its name was taken, the bundle has several folders and a bare shapefile label's folder is
   unknown: it is left out of inference with a `relationships_scope_unknown` warning until `--force`
-  re-extracts.
+  re-extracts;
+- each per-pub units file (`geolmap/units/<SID>/<SID>.units.parquet`) whose Parquet footer, read by
+  range, says GeoParquet older than 1.1 or no bbox covering is rewritten through
+  `pubs.geoparquet.write` to the same path, with a mutable cache header.
 
 Series whose only work is retrying a failed layer go last. The self-heal stops starting series once
 the run has used `VECTORS_TIME_BUDGET_S` (default 2700 s, inside the job's 3600 s timeout), finishes
-the one in progress, and prints `Self-heal: N layers tiled, M pubs' relationships recorded; K layers
-and J pubs still pending, the next run continues`. A forced run re-extracts everything instead.
+the one in progress, and prints `Self-heal: N layers tiled, M pubs' relationships recorded, units
+upgraded: U; K layers, J pubs and P units files still pending, the next run continues`. A forced run
+re-extracts everything instead.
 
 The run exits 1 only for work that failed in that run: a pub that failed to extract, a layer whose
 tiling failed at extraction, or a layer or pub whose self-heal failed (each is listed). Work the
@@ -201,7 +205,9 @@ time budget left pending is not a failure.
 The pubs ingest runs the same self-heal before it writes the items (stopping new series after
 600 s), so any refresh, Full refresh or **Rebuild pubs STAC**, catches these up and publishes them in
 the same run. Pubs extracted before PMTiles and relationships were recorded catch up this way:
-repeat a refresh until it reports 0 pending.
+repeat a refresh until it reports 0 pending. After the units files have caught up, purge the CDN
+cache for `geolmap/units/` once: the old files were served as immutable, so the edge keeps them until
+purged.
 
 Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so

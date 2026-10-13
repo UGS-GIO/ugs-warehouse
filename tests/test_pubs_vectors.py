@@ -515,7 +515,8 @@ def test_a_batch_run_visits_only_new_pubs_with_a_gis_zip(monkeypatch):
     vectors.main()
 
     assert downloads == ["https://x/m2-gis.zip"]
-    assert set(listings) == {f"{vectors.VECTORS_PREFIX}/"}  # listings only, no per-pub lookups
+    # Listings only, no per-pub lookups: the vectors prefix, and the units files the self-heal checks.
+    assert set(listings) == {f"{vectors.VECTORS_PREFIX}/", f"{vectors.identity.UNITS_PREFIX}/"}
 
 
 def test_a_batch_run_tries_new_pubs_before_retrying_failed_ones(monkeypatch):
@@ -1118,8 +1119,8 @@ def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(m
 
     assert vectors.main() == 0
     out = capsys.readouterr().out
-    assert ("Self-heal: 2 layers tiled, 0 pubs' relationships recorded; 4 layers and 0 pubs still "
-            "pending, the next run continues") in out
+    assert ("Self-heal: 2 layers tiled, 0 pubs' relationships recorded, units upgraded: 0; 4 layers, "
+            "0 pubs and 0 units files still pending, the next run continues") in out
     assert vectors.pmtiles_object("M-10", "a") in store  # the series in progress finished
     assert vectors.pmtiles_object("M-11", "a") not in store
 
@@ -1548,7 +1549,7 @@ def test_ingest_leaves_work_past_its_budget_for_the_next_refresh_without_failing
     monkeypatch.setattr(ingest, "HEAL_BUDGET_S", 0)
 
     assert ingest.build_catalog(skip_refresh=True) == 1  # no raise
-    assert ("1 layers and 1 pubs still pending, the next refresh continues"
+    assert ("1 layers, 1 pubs and 0 units files still pending, the next refresh continues"
             in capsys.readouterr().out)
     assert vectors.pmtiles_object("M-1DM", "geo__Polys") not in store
     assert any(d["id"] == "M-1DM__geo__Polys" for d in written)  # written from the manifest as is
@@ -1612,4 +1613,104 @@ def test_healed_tiles_carry_file_meta_in_the_same_run(monkeypatch, tmp_path):
     polys = next(d for d in written if d["id"] == "M-1DM__geo__Polys")
     assert polys["assets"]["pmtiles"]["file:size"] == len(pm)
     assert polys["assets"]["pmtiles"]["file:checksum"] == "1220" + hashlib.sha256(pm).hexdigest()
+
+
+# ---------------------------------------------------------------------------
+# Units files older than GeoParquet 1.1 are rewritten by the same self-heal
+# ---------------------------------------------------------------------------
+
+def _units_store(monkeypatch, tmp_path, files: dict[str, str]):
+    """An in-memory bucket of units files, {series id: "1.0" | "1.1"}, written by geopandas
+    (1.0, no covering) or the pubs writer (1.1 with a bbox covering). Records upload headers and
+    serves footers by range."""
+    store = _backfill_store(monkeypatch, tmp_path, {})
+    uploads: dict[str, str] = {}
+    real_upload = vectors.gcs.upload
+
+    def upload(local, path, **kw):
+        uploads[path] = kw.get("cache_control")
+        return real_upload(local, path, **kw)
+
+    monkeypatch.setattr(vectors.gcs, "upload", upload)
+    monkeypatch.setattr(vectors.gcs, "get_tail", lambda p, length: store[p][-length:])
+    units = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf"]},
+                             geometry=[Point(-112.0, 40.0), Point(-112.1, 40.1)], crs="EPSG:4326")
+    for sid, version in files.items():
+        local = tmp_path / f"{sid}.units.parquet"
+        if version == "1.0":
+            units.to_parquet(local, schema_version="1.0.0")
+        else:
+            vectors.geoparquet.write(units, local)
+        store[f"{vectors.identity.UNITS_PREFIX}/{sid}/{sid}.units.parquet"] = local.read_bytes()
+    return store, uploads
+
+
+def _geo(raw: bytes) -> dict:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    return json.loads(pq.read_metadata(pa.BufferReader(raw)).metadata[b"geo"])
+
+
+def test_an_old_units_file_is_upgraded_to_1_1_and_a_current_one_left_alone(monkeypatch, tmp_path, capsys):
+    store, uploads = _units_store(monkeypatch, tmp_path, {"M-1": "1.0", "M-2": "1.1"})
+    old, current = (f"{vectors.identity.UNITS_PREFIX}/{s}/{s}.units.parquet" for s in ("M-1", "M-2"))
+    before = store[current]
+
+    heal = vectors.self_heal({}, units=vectors.units_objects())
+
+    assert heal.units_upgraded == 1 and heal.failed == []
+    geo = _geo(store[old])
+    assert geo["version"] == "1.1.0" and "bbox" in geo["columns"][geo["primary_column"]]["covering"]
+    assert uploads == {old: vectors.gcs.CACHE_MUTABLE}  # rewritten in place, no longer immutable
+    assert store[current] == before
+    upgraded = gpd.read_parquet(BytesIO(store[old]))  # Hilbert-sorted, so compared as a set
+    # The writer records lon/lat WGS84 as GeoParquet's default, OGC:CRS84 (EPSG:4326 in x/y order).
+    assert sorted(upgraded["MapUnit"]) == ["Qaf", "Qal"] and upgraded.crs.to_string() == "OGC:CRS84"
+    assert "units upgraded: 1" in heal.summary()
+
+
+def test_units_files_past_the_budget_are_pending_not_failed(monkeypatch, tmp_path):
+    store, uploads = _units_store(monkeypatch, tmp_path, {"M-1": "1.0", "M-2": "1.0"})
+    heal = vectors.self_heal({}, units=vectors.units_objects(), deadline=0.0)
+    assert (heal.units_upgraded, heal.pending_units, heal.failed, uploads) == (0, 2, [], {})
+    assert "0 units files" not in heal.summary() and "2 units files still pending" in heal.summary()
+
+
+def test_a_units_file_that_cannot_be_read_or_rewritten_is_a_failure_for_its_pub(monkeypatch, tmp_path):
+    store, _ = _units_store(monkeypatch, tmp_path, {"M-1": "1.0", "M-2": "1.0"})
+    store[f"{vectors.identity.UNITS_PREFIX}/M-1/M-1.units.parquet"] = b"not parquet at all"
+    real_download = vectors.gcs.download
+
+    def download(path, dest, **kw):
+        if "/M-2/" in path:
+            raise PermissionError("403")
+        real_download(path, dest, **kw)
+
+    monkeypatch.setattr(vectors.gcs, "download", download)
+    heal = vectors.self_heal({}, units=vectors.units_objects())
+    assert set(heal.failed_by_series) == {"M-1", "M-2"}
+    assert "footer unreadable" in heal.failed_by_series["M-1"][0]
+    assert "units not upgraded: PermissionError: 403" in heal.failed_by_series["M-2"][0]
+
+
+def test_units_objects_lists_per_pub_files_only(monkeypatch, tmp_path):
+    store, _ = _units_store(monkeypatch, tmp_path, {"M-1": "1.1", "OFR-5": "1.1"})
+    pfx = vectors.identity.UNITS_PREFIX
+    store[f"{pfx}/units.parquet"] = b"statewide"
+    store[f"{pfx}/M-1/other.parquet"] = b"x"
+    assert vectors.units_objects() == {"M-1": f"{pfx}/M-1/M-1.units.parquet",
+                                       "OFR-5": f"{pfx}/OFR-5/OFR-5.units.parquet"}
+    assert vectors.units_objects({"OFR-5"}) == {"OFR-5": f"{pfx}/OFR-5/OFR-5.units.parquet"}
+
+
+def test_an_ingest_upgrades_the_units_files_of_the_pubs_it_covers(monkeypatch, tmp_path, capsys):
+    store, _ = _units_store(monkeypatch, tmp_path, {"M-1": "1.0", "OFR-5": "1.0"})
+    ingest, _ = _ingest(monkeypatch, store, [{"series_id": "M-1", "pub_year": "2020"},
+                                             {"series_id": "OFR-5", "pub_year": "2020"}])
+
+    assert ingest.build_catalog(series="M", skip_refresh=True) == 1
+    assert _geo(store[f"{vectors.identity.UNITS_PREFIX}/M-1/M-1.units.parquet"])["version"] == "1.1.0"
+    assert _geo(store[f"{vectors.identity.UNITS_PREFIX}/OFR-5/OFR-5.units.parquet"])["version"] == "1.0.0"
+    assert "units upgraded: 1" in capsys.readouterr().out
 

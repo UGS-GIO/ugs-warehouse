@@ -272,11 +272,12 @@ HEAL_BUDGET_S = 600
 
 
 def _self_heal(pubs: list[dict], deadline: float) -> vectors.Heal:
-    """`vectors.self_heal` over the clean vector manifests of `pubs`: the PMTiles and
-    relationships extracted layers are missing, from their GeoParquet, before the items are built."""
+    """`vectors.self_heal` over the clean vector manifests and units files of `pubs`: the PMTiles
+    and relationships extracted layers are missing, and units files older than GeoParquet 1.1,
+    before the items are built."""
     wanted = {(p.get("series_id") or "").strip().upper() for p in pubs}
     manifests = {sid: m for sid, m in vectors.clean_manifests().items() if sid.upper() in wanted}
-    heal = vectors.self_heal(manifests, deadline=deadline)
+    heal = vectors.self_heal(manifests, deadline=deadline, units=vectors.units_objects(wanted))
     print(f"[pubs] {heal.summary(next_step='refresh')}")
     return heal
 

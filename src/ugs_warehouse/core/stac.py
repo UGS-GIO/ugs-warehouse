@@ -313,6 +313,19 @@ def patch_item_properties(object_path: str, updates: dict) -> bool:
     return True
 
 
+def patch_collection_fields(object_path: str, updates: dict) -> bool:
+    """Merge `updates` into a published collection.json's top-level fields in place (same instant
+    edit as `patch_item_properties`). Returns False when the collection isn't published yet; any
+    other read error raises."""
+    try:
+        doc = json.loads(gcs.get_bytes(object_path))
+    except FileNotFoundError:
+        return False
+    doc.update(updates)
+    _write_json(doc, object_path, compress=False)
+    return True
+
+
 def manual_override(item_id: str) -> dict:
     """Hand-authored metadata overrides (e.g. {description, title, source:"manual"}) for an item, or
     {} if none. Ingest prefers these over source metadata — an operator sets a value the source can't

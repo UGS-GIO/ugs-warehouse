@@ -70,20 +70,29 @@ def search(q: str = "", limit: int = 50) -> list[dict]:
     return rows
 
 
-def _locate(item_id: str) -> str | None:
-    """GCS object path of the published item.json for an id (topic or pub), or None if not published.
-    Topics are flat under the collection; pubs are nested under their top-level group + series."""
+def _locate(item_id: str) -> tuple[str, bool] | None:
+    """`(object path, is_collection)` of the published document an id's override patches, or None if
+    not published. Topics are flat under the collection. A publication in a migrated series (its
+    series has a catalog.json, or it has a collection.json) is edited on its collection.json; an
+    old-layout publication on its `<SID>/<SID>.json` item."""
     from ugs_warehouse.core import config, gcs, stac
     from ugs_warehouse.pubs import sink_stac, source
 
     topic = f"{config.STAC_PREFIX}/{_TOPICS}/{item_id}/{item_id}.json"
     if gcs.exists(topic):
-        return topic
+        return topic, False
     for p in source.read_pubs():
         sid = (p.get("series_id") or "").strip()
-        if sid and sid.upper() == item_id.upper():
-            path = stac.item_object_path(f"{sink_stac.collection_group(p)}/{sink_stac.series_code(sid)}", sid)
-            return path if gcs.exists(path) else None
+        if not sid or sid.upper() != item_id.upper():
+            continue
+        coll_path = sink_stac.pub_collection_path(p)
+        coll = stac.collection_object_path(coll_path)
+        series = coll_path.rsplit("/", 1)[0]
+        has_coll = gcs.exists(coll)
+        if has_coll or gcs.exists(f"{config.STAC_PREFIX}/{series}/catalog.json"):
+            return (coll, True) if has_coll else None
+        path = stac.item_object_path(series, sink_stac.item_id_for(sid))
+        return (path, False) if gcs.exists(path) else None
     return None
 
 
@@ -111,8 +120,13 @@ def save(item_id: str, description: str = "", title: str = "") -> dict:
         return {"id": item_id, "cleared": True}
     gcs.put_bytes(json.dumps(doc, indent=2).encode(), obj,
                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-    # Instant apply: patch the published item now (best-effort; item may not be published yet).
+    # Instant apply: patch the published document now (it may not be published yet).
     updates = {k: v for k, v in doc.items() if k in ("title", "description")}
-    path = _locate(item_id)
-    applied = bool(path) and stac.patch_item_properties(path, updates)
+    target = _locate(item_id)
+    if target is None:
+        applied = False
+    elif target[1]:
+        applied = stac.patch_collection_fields(target[0], updates)
+    else:
+        applied = stac.patch_item_properties(target[0], updates)
     return {"id": item_id, "fields": [k for k in doc if k != "source"], "applied": applied}

@@ -82,10 +82,7 @@ def _overrides_by_sid() -> dict[str, dict]:
         if not path.endswith(".json"):
             continue
         sid = path.rsplit("/", 1)[-1][: -len(".json")].upper()
-        try:
-            out[sid] = json.loads(gcs.get_bytes(path).decode())
-        except Exception:  # noqa: BLE001
-            continue
+        out[sid] = json.loads(gcs.get_bytes(path).decode())
     return out
 
 

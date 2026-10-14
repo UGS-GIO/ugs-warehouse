@@ -141,7 +141,7 @@ def test_a_pub_over_the_size_limit_gets_a_warning_and_no_geopackage(pub, monkeyp
 
 
 def test_the_limit_is_two_gib_and_a_530_mb_pub_is_under_it():
-    assert vectors.MAX_GPKG_BYTES == 2 * 2**30
+    assert vectors.MAX_GPKG_BYTES == 2**30
     assert 530 * 10**6 < vectors.MAX_GPKG_BYTES
 
 

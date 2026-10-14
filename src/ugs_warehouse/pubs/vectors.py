@@ -80,8 +80,8 @@ GEOPACKAGE_STALE = "geopackage_stale"
 GEOPACKAGE_VERSION = 1
 GEOPACKAGE_MIME = "application/geopackage+sqlite3"
 # A pub whose layers' GeoParquet files total more than this gets no GeoPackage: it is built on the
-# job's RAM-backed disk, and a GeoPackage is several times the size of its GeoParquet.
-MAX_GPKG_BYTES = 2 * 2**30
+# job's RAM-backed disk, and a GeoPackage runs about 2.5 times the size of its GeoParquet.
+MAX_GPKG_BYTES = 2**30
 # Rows read from a GeoParquet and appended to the GeoPackage at a time.
 GPKG_BATCH_ROWS = 20_000
 # The GeoPackage table that lists the pub's relationships (the Related Tables Extension is not

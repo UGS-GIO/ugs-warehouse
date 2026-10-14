@@ -161,3 +161,108 @@ def test_utm_columns_are_used_only_when_the_sheet_names_a_zone_and_datum():
 
     assert sheets.points(bare, warnings) is None
     assert "names no zone and datum" in warnings[0] and "table only" in warnings[0]
+
+
+# ---- real header names, the open-once reader, the xls reader, CSV through Arrow, size cap ----
+
+@pytest.mark.parametrize("lat, lon", [
+    ("Latitude WGS846", "Longitude WGS846"),
+    ("Latitude (°N)", "Longitude (°W)"),
+    ("Surf Lat", "Surf Lon"),
+    ("LAT_DD", "LONG_DD"),
+    ("y_dd", "x_dd")])
+def test_real_latitude_and_longitude_header_names_are_recognised(lat, lon):
+    frame = pd.DataFrame({"Sample": ["a"], lat: [40.1], lon: [-111.2]})
+
+    gdf = sheets.points(frame, [])
+
+    assert gdf is not None and round(gdf.geometry.iloc[0].x, 1) == -111.2
+
+
+@pytest.mark.parametrize("east, north", [("UTM easting", "UTM northing"), ("Easting1(m)", "Northing1(m)")])
+def test_real_easting_northing_names_are_recognised_and_still_need_a_zone_and_datum(east, north):
+    bare = pd.DataFrame({east: [432000.0], north: [4430000.0]})
+    warnings: list[str] = []
+
+    assert sheets.points(bare, warnings) is None
+    assert east in warnings[0] and "names no zone and datum" in warnings[0]
+
+    named = bare.assign(Zone=12, Datum="NAD83")
+    gdf = sheets.points(named, [])
+    assert gdf is not None and round(gdf.geometry.iloc[0].y, 1) == 40.0
+
+
+def test_a_coordinate_looking_column_that_is_not_used_is_named_in_a_warning():
+    warnings: list[str] = []
+
+    assert sheets.points(pd.DataFrame({"Sample": ["a"], "Latitude (°N)": [40.1]}), warnings) is None
+    assert "Latitude" in warnings[0] and "no matching partner" in warnings[0]
+
+    warnings = []
+    assert sheets.points(pd.DataFrame({"Lat": [10.0], "Lon": [-111.0]}), warnings) is None
+    assert "Lat/Lon" in warnings[0] and "inside Utah" in warnings[0]
+
+
+def test_a_combined_lat_long_column_is_not_taken_for_either_axis():
+    assert sheets.points(pd.DataFrame({"Lat/Long": ["40.1,-111.2"], "Sample": ["a"]}), []) is None
+
+
+def test_a_row_of_text_under_the_header_is_data_unless_it_is_units():
+    f_rows = [["County", "Quad", "Note"], ["Juab", "Juab", "Juab"], ["Millard", "Delta", "y"]]
+    sheet = sheets.read(_xlsx_rows(f_rows), "Sheet1")
+
+    assert sheet.frame["County"].tolist() == ["Juab", "Millard"]
+    assert not any("one header" in w for w in sheet.warnings)
+
+
+def _xlsx_rows(rows):
+    import tempfile
+
+    path = tempfile.mkdtemp() + "/t.xlsx"
+    return _xlsx(path, rows)
+
+
+def test_an_xls_workbook_is_read_through_xlrd_with_dates_and_numbers_typed():
+    sheet = sheets.read("tests/fixtures/gravity.xls", "Gravity")
+
+    assert list(sheet.frame.columns) == ["Station", "Latitude", "Longitude", "Obs Gravity", "Date"]
+    assert sheet.frame["Obs Gravity"].tolist() == [979500.25, 979501.5]
+    assert str(sheet.frame["Date"].dtype).startswith("datetime64")
+    assert sheets.sheet_names("tests/fixtures/gravity.xls") == ["Gravity"]
+    assert sheets.points(sheet.frame, []) is not None
+
+
+def test_a_workbook_is_opened_once_for_all_of_its_sheets(tmp_path, monkeypatch):
+    f = _xlsx(tmp_path / "t.xlsx", [["A", "B"], [1, 2]], [["C", "D"], [3, 4]], names=["One", "Two"])
+    opened = []
+    real = openpyxl.load_workbook
+    monkeypatch.setattr(openpyxl, "load_workbook", lambda *a, **k: opened.append(k) or real(*a, **k))
+
+    with sheets.Workbook(f) as book:
+        first, second = (sheets.read(f, n, book) for n in book.names)
+
+    assert len(opened) == 1 and opened[0]["read_only"] is True
+    assert first.frame["A"].tolist() == [1] and second.frame["C"].tolist() == [3]
+
+
+def test_a_file_over_the_size_cap_is_an_error_naming_it(tmp_path, monkeypatch):
+    f = _xlsx(tmp_path / "big.xlsx", [["A"], [1]])
+    c = tmp_path / "big.csv"
+    c.write_text("A\n1\n")
+    monkeypatch.setattr(sheets, "MAX_SHEET_BYTES", 3)
+
+    for path, sheet in ((f, "Sheet1"), (str(c), None)):
+        with pytest.raises(ValueError, match=r"big\.(xlsx|csv) is .* limit"):
+            sheets.read(path, sheet)
+        with pytest.raises(ValueError, match="limit"):
+            sheets.sheet_names(path)
+
+
+def test_a_csv_with_a_ragged_row_leaves_it_out_with_a_warning(tmp_path):
+    p = tmp_path / "t.csv"
+    p.write_text("A,B\n1,2\n3,4,5\n6,7\n")
+
+    sheet = sheets.read(str(p), None)
+
+    assert sheet.frame["A"].tolist() == [1, 6]
+    assert "1 rows with a different number of fields" in sheet.warnings[0]

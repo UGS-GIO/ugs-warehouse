@@ -657,7 +657,29 @@ def test_read_vector_manifests_carries_each_layers_rows_and_bbox():
         "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]",
         "columns": [{"name": "geometry", "type": "geometry"}], "pmtiles_layer": None,
         # A manifest written before sources were recorded gets one from the label.
-        "source": "geo"}}
+        "source": "geo", "source_file": None}}
+
+
+def test_read_vector_manifests_carries_each_layers_source_file_and_rejects_a_malformed_one():
+    from unittest.mock import patch
+
+    from ugs_warehouse.pubs import vectors
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
+
+    file = {"key": "appendix_a_excel", "title": "Appendix A - Excel", "path": "t.xlsx"}
+    docs = {
+        "M-100": {"spatial": [], "tables": ["t"], "layers": [
+            {"label": "t", "spatial": False, "source_file": file}]},
+        "M-101": {"spatial": [], "tables": ["t"], "layers": [
+            {"label": "t", "spatial": False, "source_file": {"key": "k"}}]}}
+    paths = {f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json": doc for sid, doc in docs.items()}
+    with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=list(paths)), \
+         patch("ugs_warehouse.pubs.ingest.gcs.get_bytes",
+               side_effect=lambda p: json.dumps(paths[p]).encode()):
+        out, failed = _read_vector_manifests()[:2]
+
+    assert out["M-100"]["layers"]["t"]["source_file"] == file
+    assert "M-101" not in out and "malformed source_file" in failed["M-101"]
 
 
 def test_read_vector_manifests_carries_relationships_and_each_layers_source():

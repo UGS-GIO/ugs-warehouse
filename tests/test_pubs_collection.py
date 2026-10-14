@@ -685,3 +685,33 @@ def test_a_table_most_map_layers_point_at_is_a_reference(capsys):
     kinds = {it["id"].removeprefix("OFR-784DM__"): it["properties"].get("ugs:layer_kind") for it in items}
     assert (kinds["DataSources"], kinds["Glossary"], kinds["MiscellaneousMapInformation"]) == (
         "table", "table", "supporting")
+
+
+def test_a_layer_extracted_from_an_attachment_names_it_on_its_item_and_collection_link():
+    file = {"key": "gis_data_zip", "title": "GIS Data - Zip", "path": "shp/faults.shp"}
+    layers = {"geo__Faults": {"rows": 12, "bbox": [-112.4, 40.6, -112.1, 40.9],
+                              "geometry_types": ["LineString"], "source_file": file},
+              "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}}
+    coll, items = _build(layers=layers)
+
+    by_id = {it["id"]: it for it in items}
+    assert by_id["OFR-784DM__geo__Faults"]["properties"]["ugs:source_file"] == "GIS Data - Zip"
+    assert "ugs:source_file" not in by_id["OFR-784DM__geo__DMU"]["properties"]
+    links = {lk["href"]: lk for lk in coll["links"] if lk["rel"] == "item"}
+    faults = links["./OFR-784DM__geo__Faults/OFR-784DM__geo__Faults.json"]
+    assert faults["ugs:source_file"] == "GIS Data - Zip"
+    # The manifest's key is the attachment's asset on the Collection, from the same slug function.
+    assert file["key"] in coll["assets"]
+
+
+def test_the_attachment_key_is_the_one_the_collection_gives_its_asset():
+    from ugs_warehouse.pubs import identity
+
+    att = [{"pub_url": "https://ugspub.nr.utah.gov/publications/ofr/a.xlsx",
+            "extra_data": "Appendix A - Excel"}]
+    coll, _ = sink_stac.build_publication(
+        P, att, geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0], fp_source="cog", has_cog=False,
+        has_cover=False, vector_layers=[], companion_tables=[], layers={})
+
+    assert identity.attachment_key("Appendix A - Excel") == "appendix_a_excel"
+    assert "appendix_a_excel" in coll["assets"]

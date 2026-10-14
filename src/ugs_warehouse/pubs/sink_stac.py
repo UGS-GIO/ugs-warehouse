@@ -379,10 +379,12 @@ def build_publication(p: dict, attachments: list[dict], *,
 
     def kind_props(label: str, spatial: bool) -> dict:
         """The Item's `ugs:layer_kind` (from the relationships published here), its source dataset's
-        key and its humanised title."""
+        key and its humanised title, and the title of the attachment it was extracted from."""
         source = layer_meta.get(label, {}).get("source") or source_of_label(label, sid)
+        file = layer_meta.get(label, {}).get("source_file")
         return {"ugs:layer_kind": layer_kind(spatial, label, published),
-                "ugs:source_key": source, "ugs:source_dataset": source_title(source)}
+                "ugs:source_key": source, "ugs:source_dataset": source_title(source),
+                **({"ugs:source_file": file["title"]} if file else {})}
 
     def with_related(label: str, data: dict) -> tuple[dict, list[str]]:
         """The Item's assets: its data (carrying its own foreign keys), then its related tables
@@ -513,7 +515,7 @@ def build_publication(p: dict, attachments: list[dict], *,
         if not h:
             continue
         mtype = media_type(h)
-        key = re.sub(r"[^a-z0-9]+", "_", (a.get("extra_data") or "file").strip().lower()).strip("_") or "file"
+        key = identity.attachment_key(a.get("extra_data"))
         assets.setdefault(key, _source_asset(h, mirrored, type=mtype,
                                              title=(a.get("extra_data") or "").strip(), roles=_file_roles(mtype)))
     for key, asset in data_assets.items():
@@ -590,7 +592,7 @@ def build_publication(p: dict, attachments: list[dict], *,
 
 
 # Item properties a publication's rel=item links repeat, so the viewer groups its items unfetched.
-ITEM_LINK_FIELDS = ("ugs:layer_kind", "ugs:source_key", "ugs:source_dataset")
+ITEM_LINK_FIELDS = ("ugs:layer_kind", "ugs:source_key", "ugs:source_dataset", "ugs:source_file")
 # A related table that many of the pub's map layers point at (DataSources on a GeMS map) is a
 # lookup shared across the map rather than one layer's companion; its assets carry this role.
 REFERENCE_ROLE = "reference"

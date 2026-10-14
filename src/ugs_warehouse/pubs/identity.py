@@ -10,6 +10,7 @@ Object prefixes for pub artifacts (all under one bucket, served via the CDN):
 from __future__ import annotations
 
 import os
+import re
 from dataclasses import dataclass
 from urllib.parse import quote, unquote
 
@@ -104,6 +105,13 @@ PNG_COVER_SUFFIX = ".png"
 
 def pub_cover_object(series_id: str) -> str:
     return f"{PUB_THUMB_PREFIX}/{series_id.upper()}{COVER_SUFFIX}"
+
+
+def attachment_key(label: str | None) -> str:
+    """The Collection asset key of an attachment, from its label (`extra_data`): lowercase, runs of
+    other characters as `_`. The STAC Collection and the vectors manifest both use it, so a layer's
+    `source_file.key` names the asset its file is."""
+    return re.sub(r"[^a-z0-9]+", "_", (label or "file").strip().lower()).strip("_") or "file"
 
 
 @dataclass(frozen=True)

@@ -133,11 +133,24 @@ def _unit_ids() -> set[str]:
     return out
 
 
+def _source_file(layer: dict) -> dict | None:
+    """A manifest layer's `source_file` {key, title, path}, None when it records none (extracted
+    before attachments were tracked). A malformed one raises, so its publication fails instead of
+    publishing an Item that names no file."""
+    file = layer.get("source_file")
+    if file is None:
+        return None
+    if not (isinstance(file, dict) and all(isinstance(file.get(k), str) and file[k]
+                                           for k in ("key", "title", "path"))):
+        raise ValueError(f"layer {layer.get('label')!r}: malformed source_file {file!r}")
+    return file
+
+
 def _vector_manifest(sid: str, doc: dict) -> dict:
     """One series' manifest reduced to what the items are built from: {"spatial": [labels],
     "tables": [labels], "empty": [labels], "columns": {label: [{name, type}]}, "relationships":
     [...], "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2, columns,
-    pmtiles_layer, source}}}. `columns` holds each layer's recorded schema and `layers` its row
+    pmtiles_layer, source, source_file}}}. `columns` holds each layer's recorded schema and `layers` its row
     count, bbox and CRS; manifests written before they were recorded have none (empty maps / None
     values); `source` comes from the label when the manifest records none. A layer's kind is not
     read: build_publication derives it from the relationships it publishes."""
@@ -154,7 +167,8 @@ def _vector_manifest(sid: str, doc: dict) -> dict:
                                       "pmtiles_layer": (lay.get("pmtiles_layer")
                                                         if lay.get("pmtiles") else None),
                                       "source": lay.get("source")
-                                      or relations.source_of_label(lay["label"], sid)}
+                                      or relations.source_of_label(lay["label"], sid),
+                                      "source_file": _source_file(lay)}
                        for lay in layer_docs}}
 
 

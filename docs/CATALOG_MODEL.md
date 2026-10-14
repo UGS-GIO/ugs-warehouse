@@ -19,7 +19,7 @@ one field STAC has no standard for, the join columns of a relationship, is the n
 | Publications as Collections, with their plate, layers and tables as Items | Rolling out, one series at a time |
 | Relationships between a publication's layers and tables | Rolling out with publications |
 | Non-spatial serving-topic tables as their own Items | Planned |
-| Spreadsheet attachments (xls, xlsx, csv) as table Items | Planned; today they are publication assets |
+| Spreadsheet attachments (xls, xlsx, csv) as table Items, and as point layers when they hold latitude and longitude | Rolling out with publications |
 
 ## One Item per table
 
@@ -43,8 +43,8 @@ One Item per table means:
 
 A table with no geometry gets a real geometry for its area of interest, never a null geometry.
 For a table in a publication, the area of interest is the publication's footprint. For a serving
-table, it will be the extent of the spatial tables it relates to, falling back to a buffered Utah
-outline.
+table, it will be the bounding box of the spatial tables it relates to (a rectangle, not their
+merged shapes), falling back to a buffered Utah outline.
 
 Null geometry is valid STAC. The catalog avoids it for three reasons:
 
@@ -129,17 +129,19 @@ Portolan requires Collections to be leaves (PORTO-CORE-018), so a series is a Ca
 data itself.
 
 - **Files on the Collection.** The publication's own files are Collection assets: the PDF
-  (`publication`), the cover (`thumbnail`) and the original GIS and GeoTIFF zips (`source`). The
-  DOI is a `cite-as` link plus `sci:doi` and `sci:citation`, on the Collection and on each Item.
+  (`publication`), the cover (`thumbnail`) and the original zips (`source`). A `geopackage` asset
+  holds every layer and table in one file. The DOI is a `cite-as` link plus `sci:doi` and
+  `sci:citation`, on the Collection and on each Item.
 - **Data as Items.** The plate COG, the map units, any 3D fence diagram, and each layer and table
-  extracted from the GIS zip are Items. A layer is GeoParquet plus PMTiles. A table is Parquet,
-  with the publication footprint as its area of interest.
+  extracted from the publication's data zips and spreadsheets are Items. A layer is GeoParquet
+  plus PMTiles. A table is Parquet, with the publication footprint as its area of interest. A
+  spreadsheet with latitude and longitude columns is also a point layer.
 - **Item ids.** A layer or table Item's id is `<publication id>__<label>`. Publication ids never
   contain `__`, so the first `__` always ends the publication id, and no layer id can collide with
   another publication's id. The plate is `<publication id>_plate`.
 - **Kind and source.** Each Item records its kind (`ugs:layer_kind`: `layer`, `table` or
-  `supporting`) and the dataset it came from (`ugs:source_key`, `ugs:source_dataset`). The viewer
-  groups a publication's parts by these.
+  `supporting`), the file it came from (`ugs:source_file`) and its dataset within that file
+  (`ugs:source_key`, `ugs:source_dataset`). The viewer groups a publication's parts by these.
 - **Report-only publications.** A publication with no data is a Collection with its documents and
   no Items.
 - **Single-file publications.** A publication with exactly one data file keeps that file on the
@@ -149,6 +151,9 @@ data itself.
   publication's Collections. The viewer shows them as the publication's history.
 - **Mosaics.** A scale-tier mosaic's `derived_from` links point at each source plate Item, or at
   the publication Collection when the plate is its only data file.
+- **Geologic units under a raster.** A plate or mosaic Item whose maps have unit polygons carries a
+  `units` asset (PMTiles of unit code, name, age and description, from each map's own data). The
+  viewer reads it to show the unit at a clicked point.
 
 The tree is grouped by series because a series comes from the publication id and never changes.
 Quadrangle, county, scale and year are properties, offered as filters in the viewer, not folders.

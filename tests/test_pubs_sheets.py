@@ -266,3 +266,32 @@ def test_a_csv_with_a_ragged_row_leaves_it_out_with_a_warning(tmp_path):
 
     assert sheet.frame["A"].tolist() == [1, 6]
     assert "1 rows with a different number of fields" in sheet.warnings[0]
+
+
+def test_a_csv_with_a_multi_line_quoted_title_above_the_header_is_read_aligned(tmp_path):
+    p = tmp_path / "t.csv"
+    p.write_text('"Table 1.\nSamples"\n"Notes\nmore",,\nSample,Depth,Code\nA-1,12,x\nA-2,15,y\n')
+
+    sheet = sheets.read(str(p), None)
+
+    assert list(sheet.frame.columns) == ["Sample", "Depth", "Code"]
+    assert sheet.frame["Sample"].tolist() == ["A-1", "A-2"]
+    assert sheet.frame["Depth"].tolist() == [12, 15]
+
+
+def test_a_csv_header_cell_that_spans_two_lines_is_read_aligned(tmp_path):
+    p = tmp_path / "t.csv"
+    p.write_text('"Sample\nID",Depth\nA-1,12\nA-2,15\n')
+
+    sheet = sheets.read(str(p), None)
+
+    assert list(sheet.frame.columns) == ["Sample ID", "Depth"]
+    assert sheet.frame["Sample ID"].tolist() == ["A-1", "A-2"]
+
+
+def test_a_csv_whose_parsers_disagree_fails_naming_the_file():
+    import pyarrow as pa
+
+    table = pa.table({"c0": ["x"], "c1": ["y"]})
+    with pytest.raises(ValueError, match=r"t\.csv.*not extracted"):
+        sheets._check_aligned("/a/t.csv", table, [["A", "B"], ["1", "2"]], 0, [2, 2], 2)

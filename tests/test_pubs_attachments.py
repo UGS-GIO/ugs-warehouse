@@ -417,3 +417,28 @@ def test_the_fallback_zip_has_no_source_key_when_the_feed_lists_no_such_asset(mo
 
     (layer,) = _manifest(store, "M-320")["layers"]
     assert layer["source_file"] == {"title": "GIS", "path": "faults.shp"}
+
+
+def test_a_url_listed_under_two_labels_gets_the_same_title_whatever_the_feed_order(monkeypatch):
+    from ugs_warehouse.pubs import sink_stac
+
+    rows = [{"series_id": "OFR-745", "pub_url": "ofr-745/d.zip", "extra_data": label}
+            for label in ("Data - Zip", "Appendix")]
+    pub = {"series_id": "OFR-745", "pub_name": "A map", "pub_year": "2020",
+           "pub_url": "https://ugspub.nr.utah.gov/publications/ofr-745/ofr-745.pdf",
+           "series": "Open File Report", "pub_publisher": "Utah Geological Survey"}
+    foot = {"type": "Polygon", "coordinates": [[[-112.5, 40.5], [-112.0, 40.5], [-112.0, 41.0],
+                                                 [-112.5, 41.0], [-112.5, 40.5]]]}
+    seen = set()
+    for order in (rows, rows[::-1]):
+        _feed(monkeypatch, order)
+        coll, _ = sink_stac.build_publication(
+            pub, order, geom=foot, bbox=[-112.5, 40.5, -112.0, 41.0], fp_source="cog",
+            has_cog=False, has_cover=False, vector_layers=[], companion_tables=[], layers={})
+        (zip_asset,) = [(k, a["title"]) for k, a in coll["assets"].items()
+                        if a["href"].endswith(".zip")]
+        (file,) = harvest.data_files("OFR-745")
+        assert (file.key, file.title) == zip_asset
+        seen.add(zip_asset)
+    assert seen == {("appendix", "Appendix")}
+    harvest._attachments_cache.clear()

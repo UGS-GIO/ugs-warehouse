@@ -344,6 +344,21 @@ def _numeric(col):
     return col
 
 
+def _check_aligned(path: str, table, lead: list[list], end: int, fields: list[int],
+                   width: int) -> None:
+    """Raise if Arrow's first data row is not the first one the csv module saw after the header,
+    which means the two parsers split the file differently and the table would be garbled."""
+    first = next((i for i in range(end + 1, len(lead))
+                  if any(c is not None for c in lead[i])), None)
+    if first is None or fields[first] != width or table.num_rows == 0:
+        return
+    got = [(v if v is None or v.strip() else None)
+           for v in (table.column(i)[0].as_py() for i in range(width))]
+    if got != lead[first][:width]:
+        raise ValueError(f"{os.path.basename(path)}: the CSV parsers disagree on where the data "
+                         f"starts (expected {lead[first][:width]!r}, read {got!r}); not extracted")
+
+
 def _read_csv(path: str) -> Sheet:
     """A CSV as a typed table, parsed by Arrow: the first rows find the header, then the rest is
     read as text columns and each is made numeric when every value parses."""
@@ -354,6 +369,13 @@ def _read_csv(path: str) -> Sheet:
     _check_size(path)
     warnings: list[str] = []
     enc = _csv_encoding(path, warnings)
+    lines = [0]  # physical lines read so far; a record can span several (quoted line breaks)
+
+    def counted(fh):
+        for line in fh:
+            lines[0] += 1
+            yield line
+
     with open(path, newline="", encoding=enc) as fh:
         sample = fh.read(8192)
         try:
@@ -361,8 +383,10 @@ def _read_csv(path: str) -> Sheet:
         except csv.Error:
             dialect = csv.excel
         fh.seek(0)
-        lead = [[(c if c.strip() else None) for c in r]
-                for r in itertools.islice(csv.reader(fh, dialect), 200)]
+        lead, ends = [], []
+        for record in itertools.islice(csv.reader(counted(fh), dialect), 200):
+            lead.append([(c if c.strip() else None) for c in record])
+            ends.append(lines[0])  # csv reads no further than the record it yields
     fields = [len(r) for r in lead]
     width = max(fields, default=0)
     lead = [r + [None] * (width - len(r)) for r in lead]
@@ -376,12 +400,12 @@ def _read_csv(path: str) -> Sheet:
     skipped: list[int] = []
 
     def ragged(row):
-        skipped.append(row.number)
+        skipped.append(row.text[:60])
         return "skip"
 
     table = pacsv.read_csv(
         path,
-        read_options=pacsv.ReadOptions(skip_rows=end + 1, column_names=cols,
+        read_options=pacsv.ReadOptions(skip_rows=ends[end], column_names=cols,
                                        encoding="utf-8" if enc == "utf-8-sig" else enc),
         parse_options=pacsv.ParseOptions(delimiter=dialect.delimiter,
                                          quote_char=dialect.quotechar or '"',
@@ -390,7 +414,8 @@ def _read_csv(path: str) -> Sheet:
                                              strings_can_be_null=True, null_values=[""]))
     if skipped:
         warnings.append(f"{len(skipped)} rows with a different number of fields than the header "
-                        f"were left out (first at line {skipped[0]})")
+                        f"were left out (first: {skipped[0]!r})")
+    _check_aligned(path, table, lead, end, fields, width)
     keep = [i for i in range(width) if not _blank(header[i]) or table[cols[i]].null_count < len(table)]
     names, renames = dedupe_columns([_header_name(header[i], i) for i in keep])
     table = pa.table({n: _numeric(table[cols[i]]) for n, i in zip(names, keep)})

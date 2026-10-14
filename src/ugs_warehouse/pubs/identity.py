@@ -118,15 +118,22 @@ def attachment_key(label: str | None) -> str:
 FIXED_ASSET_KEYS = ("publication", "thumbnail", "overview")
 
 
+def attachment_labels(files: list[tuple[str, str | None]]) -> dict[str, str | None]:
+    """{url: label} with one label per URL: the smallest when the feed lists a URL under several, so
+    the key and the title come from the same row whatever order the feed returns."""
+    labels: dict[str, str | None] = {}
+    for url, label in files:
+        if url not in labels or (label or "") < (labels[url] or ""):
+            labels[url] = label
+    return labels
+
+
 def attachment_keys(files: list[tuple[str, str | None]]) -> dict[str, str]:
     """{url: Collection asset key} for a publication's attachments, from `(url, label)` pairs. A
     repeated URL has one key. Keys are numbered in (key, url) order, not feed order (the feed read
     has no ORDER BY), so the vectors job and the STAC ingest agree: a key taken ignoring case, or
     one of FIXED_ASSET_KEYS, gets `_2`, `_3`."""
-    labels: dict[str, str | None] = {}
-    for url, label in files:
-        if url not in labels or (label or "") < (labels[url] or ""):
-            labels[url] = label
+    labels = attachment_labels(files)
     taken = {k.casefold() for k in FIXED_ASSET_KEYS}
     out: dict[str, str] = {}
     for url, base in sorted(((u, attachment_key(lb)) for u, lb in labels.items()),

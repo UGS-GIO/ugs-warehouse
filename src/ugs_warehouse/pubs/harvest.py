@@ -351,14 +351,13 @@ def data_files(series_id: str) -> list[DataFile]:
     keep their labels; each group is in URL order, so a repeated layer name gets the same `_2`
     on every run."""
     from . import sheets, sink_stac
-    keys = _asset_keys(series_id)
+    pairs = [(h, a.get("extra_data")) for a in _attachments_of(series_id) or []
+             if (h := sink_stac.href(a.get("pub_url")))]
+    keys, labels = identity.attachment_keys(pairs), identity.attachment_labels(pairs)
     out: dict[str, tuple[bool, DataFile]] = {}
-    for a in _attachments_of(series_id) or []:
-        url = sink_stac.href(a.get("pub_url"))
-        if not url or url in out:
-            continue
+    for url, label in labels.items():
         low = url.lower()
-        desc = (a.get("extra_data") or "").strip()
+        desc = (label or "").strip()
         if not low.endswith((".zip", *sheets.SHEET_EXTS)):
             continue
         if low.endswith(".zip") and ("geotiff" in desc.lower() or "geotiff" in low):

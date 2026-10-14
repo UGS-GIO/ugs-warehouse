@@ -7,6 +7,7 @@ import utahLogo from "./assets/utah-logo.png";
 import { type CollectionSummary, type CoverRef, type ItemRef } from "./catalog/browse";
 import { catalogTrail, crumbNav, layerCollectionIds, layerRowsOf } from "./catalog/catalog";
 import { discoverable } from "./discover/discovery-model";
+import { unitsHrefOf } from "./map/identify";
 import { type ActiveLayer, type Footprint, layerParam, parseLayerParam, sheetParam } from "./map/map-model";
 import { flyTo, queueFocus, setPin } from "./map/camera";
 import type { Bounds } from "./map/place-locator";
@@ -17,7 +18,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasFootprint, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, collectionHrefOf, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasFootprint, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, pubOfEntry, type StacDoc, thumbnailAsset, collectionHrefOf, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { type CubePicks, parseCubeParam, pickedRescale, VAR } from "./zarr/cube-picks";
@@ -61,9 +62,10 @@ export function toLayer(ref: ItemRef | undefined, cube: CubePicks = {}): ActiveL
     };
   }
   const cog = cogRenderAsset(ref.data);
-  if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox };
+  const identify = { unitsHref: unitsHrefOf(ref.data), pubTitle: pubOfEntry(ref.data)?.title };
+  if (cog) return { id, title, cogHref: cog.href, bbox: ref.data.bbox, ...identify };
   const raster = rasterTilesAsset(ref.data);
-  if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox };
+  if (raster) return { id, title, rasterPmHref: raster.href, bbox: ref.data.bbox, ...identify };
   const zarr = zarrAsset(ref.data);
   // No drawable variable → not a layer, rather than a row that can never render.
   const variables = Object.keys(cubeVariables(ref.data));

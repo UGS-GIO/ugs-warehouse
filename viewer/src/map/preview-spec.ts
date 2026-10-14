@@ -7,8 +7,8 @@ import { hasFootprint, isServingTopic, pmtilesLink, rendersOf, type StacDoc } fr
 // table to its row. Off for tiles built without them (a publication layer).
 export type PreviewSpec =
   | { kind: "vector"; item: StacDoc; pmHref: string; sourceLayer: string; rowIds?: boolean }
-  | { kind: "cog"; item: StacDoc; href: string }
-  | { kind: "rasterpm"; item: StacDoc; href: string }
+  | { kind: "cog"; item: StacDoc; href: string; unitsHref?: string }
+  | { kind: "rasterpm"; item: StacDoc; href: string; unitsHref?: string }
   | { kind: "footprint"; item: StacDoc; geometry: GeoJSON.Geometry }
   | null;
 

@@ -124,6 +124,8 @@ export type ActiveLayer = {
   tableHref?: string;   // the layer's GeoParquet, for saving its table offline
   cogHref?: string;
   rasterPmHref?: string;
+  unitsHref?: string;   // a plate or mosaic's `units` PMTiles, loaded as an invisible identify layer
+  pubTitle?: string;    // the publication a plate belongs to, for the scan-only notice
   // Zarr datacube — one object, because the store is useless without the variable and the dims to
   // pin. Resolved from STAC once, so the layer list and the map agree on what is drawn.
   // `variable`/`selection` = what is drawn (the URL's pick, else the defaults); `variables` and
@@ -218,9 +220,12 @@ export const reorderLayers = (ids: string[], from: number, to: number): string[]
 // the map render and the reorder reconcile so their ids can't drift.
 export const slugOf = (id: string): string => id.replace(/[^a-zA-Z0-9_]/g, "_");
 
+// Source and layer ids of a raster's identify layer, keyed by the raster's slug.
+export const identifyIds = (slug: string) => ({ source: `idn-${slug}`, layer: `idn-${slug}-fill` });
+
 // The GL layer ids each active layer draws, in bottom→top draw order, matching what map.tsx renders:
 // a raster PMTiles mosaic → one `rpm-<slug>-raster`; a COG → one `cog-<slug>-raster` (only once its
-// protocol is ready); a vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
+// protocol is ready); either with a `units` asset also its `idn-<slug>-fill` identify layer; a vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
 // the unstyled fallback `pm-<slug>-fill/line/circle`; a zarr datacube → none (a deck.gl overlay draws
 // it, outside maplibre's layer stack). Flattened across `layers` in order, so the reorder reconcile
 // can walk the list and moveLayer each. Pure so it's unit-tested against the render.
@@ -231,8 +236,10 @@ export function orderedSublayerIds(
   return layers.flatMap((l) => {
     const s = slugOf(l.id);
     if (l.zarr) return [];
-    if (l.rasterPmHref) return [`rpm-${s}-raster`];
-    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`] : [];
+    // The identify layer sits just above its raster, so it leaves with it and orders with it.
+    const idn = l.unitsHref ? [identifyIds(s).layer] : [];
+    if (l.rasterPmHref) return [`rpm-${s}-raster`, ...idn];
+    if (l.cogHref) return opts.cogReady ? [`cog-${s}-raster`, ...idn] : [];
     const n = opts.styledCount(l.id);
     // map.tsx renders `styleLayers ? styleLayers.map(...) : fallback` — a resolved-but-empty style
     // ([]) is truthy there and draws nothing, so mirror it with `n != null` (0 → no ids), not `n > 0`.

@@ -15,8 +15,10 @@ import { ensureCogProtocol } from "./cog";
 import { DIRECT, protomapsStyle } from "./basemap-style";
 import { ensurePmtilesProtocol } from "./pmtiles-protocol";
 import { Legend } from "./legend";
+import { type IdentifyResult, identifyAt } from "./identify";
+import { IdentifyLayer } from "./identify-layer";
 import { boundsOf, type FocusSel, GEOM_FILTER, pickFeature, previewDefaultLayers, validBbox } from "./map-model";
-import { classificationEntries, defaultStyleUrl, useLiveLegend, useStyleLayers } from "@/stac";
+import { classificationEntries, defaultStyleUrl, pubOfEntry, useLiveLegend, useStyleLayers } from "@/stac";
 import { joinsRows, type PreviewSpec, type Renders, specItemId } from "./preview-spec";
 import { gateOf, gateZoom, useGateDir, ZoomGateNotice } from "./zoomgate";
 import { UiSelect } from "@/ui/select";
@@ -50,13 +52,14 @@ async function loadSpriteImages(map: maplibregl.Map, base: string): Promise<void
 }
 
 // ---- the single persistent map, portaled into the active slot (or a hidden keep-alive holder) ----
-export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection }: {
+export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMismatch, renders, sel, onSel, onFeatureSelect, onClearSelection, onIdentify }: {
   spec: PreviewSpec; slotEl: HTMLElement | null;
   focus: FocusSel | null; onFeatureClick: (id: number, props?: Record<string, unknown>) => void;
   onMismatch?: () => void;
   renders: Renders; sel: string; onSel: (r: string) => void;
   onFeatureSelect?: (props: Record<string, unknown>, fid: number | null, bbox?: FocusSel["bbox"]) => void;
   onClearSelection?: () => void;
+  onIdentify?: (r: IdentifyResult | null) => void;
 }) {
   const mapRef = useRef<MapRef>(null);
   // The map is portaled into ONE stable, detached container that NEVER changes identity, so the
@@ -212,6 +215,12 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
     [itemId, focusKey, mapLoaded]);
 
   const onMapClick = (e: MapLayerMouseEvent) => {
+    if (spec?.kind === "cog" || spec?.kind === "rasterpm") {
+      const slug = spec.kind === "cog" ? "cog" : "raster-mosaic";
+      onIdentify?.(identifyAt(e.target, e.point, e.lngLat,
+        [{ slug, hasUnits: !!spec.unitsHref, bbox: spec.item.bbox, pubTitle: pubOfEntry(spec.item)?.title }]));
+      return;
+    }
     if (!isVector) return;
     const f = pickFeature(e, layerIds);
     if (!f) { highlightFeature(null); onClearSelection?.(); return; }
@@ -318,6 +327,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
               <Layer id="raster-mosaic-layer" type="raster" />
             </Source>
           )}
+          {spec?.kind === "rasterpm" && spec.unitsHref && <IdentifyLayer slug="raster-mosaic" href={spec.unitsHref} />}
 
           {/* COG raster (once the cog:// protocol is registered) */}
           {spec?.kind === "cog" && cogReady && (
@@ -325,6 +335,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
               <Layer id="cog-raster" type="raster" />
             </Source>
           )}
+          {spec?.kind === "cog" && cogReady && spec.unitsHref && <IdentifyLayer slug="cog" href={spec.unitsHref} />}
 
           {/* Footprint outline */}
           {spec?.kind === "footprint" && (

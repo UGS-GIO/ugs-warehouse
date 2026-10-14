@@ -7,6 +7,8 @@ import { lazy, Suspense, useMemo, useRef, useState } from "react";
 import { useScrollOnNew } from "@/lib/use-scroll-on-new";
 import { DataExplorer } from "@/data/data-explorer";
 import { FeatureCard } from "@/map/feature-card";
+import { unitsHrefOf } from "@/map/identify";
+import { IdentifyCard } from "@/map/unit-card";
 import { footprintSpecOf, PreviewMapSlot, usePreviewMap } from "@/map/preview-map";
 import { vectorSpecOf } from "@/map/preview-spec";
 import { type Asset, type AssetKind, isDrawableCog, parquetAsset, primaryKeyOf, rasterTilesAsset, type StacDoc,
@@ -53,7 +55,12 @@ export function FieldsPanel({ item }: { item: StacDoc }) {
 // Raster mosaic (per-scale geologic-map tiles) preview — publishes a spec to the shared persistent map.
 function RasterMosaicPreview({ item }: { item: StacDoc }) {
   const asset = rasterTilesAsset(item);
-  return <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href } : null} />;
+  return (
+    <>
+      <PreviewMapSlot spec={asset ? { kind: "rasterpm", item, href: asset.href, unitsHref: unitsHrefOf(item) } : null} />
+      <IdentifyResultCard />
+    </>
+  );
 }
 
 // Directly under the preview map, above the fields/table, so a click's result is in view without
@@ -68,6 +75,12 @@ function SelectedFeatureCard({ item }: { item: StacDoc }) {
   // A new key each time, so a second Zoom to flies again after the user has panned away.
   const zoom = bbox && (() => setFocus({ bbox, featureId: fid ?? undefined, props, key: Date.now() }));
   return <div ref={ref}><FeatureCard item={item} props={props} onOpenRelated={openRelated} onClear={clearSelection} onZoom={zoom} /></div>;
+}
+
+// A click on a plate or mosaic preview: the unit under it, or the scan-only notice.
+function IdentifyResultCard() {
+  const { identify, clearIdentify } = usePreviewMap();
+  return identify ? <IdentifyCard result={identify} onClose={clearIdentify} /> : null;
 }
 
 // Vector asset preview: the item's PMTiles on the shared persistent map + full dataset explorer,
@@ -117,7 +130,7 @@ function AssetPane({ kind, asset, item }: { kind: AssetKind; asset: Asset; item:
       // A COG in the source projection has no preview here: the renderer cannot reproject, and
       // mounting it throws. Say so, and leave the download to the asset link.
       return isDrawableCog(asset, item)
-        ? <PreviewMapSlot spec={{ kind: "cog", item, href: asset.href }} />
+        ? <><PreviewMapSlot spec={{ kind: "cog", item, href: asset.href, unitsHref: unitsHrefOf(item) }} /><IdentifyResultCard /></>
         : (
           <p className="mt-2 rounded-md border border-border bg-muted px-3 py-2 text-xs text-muted-foreground">
             No preview: this is the source raster, in its own projection. The Web Mercator copy on

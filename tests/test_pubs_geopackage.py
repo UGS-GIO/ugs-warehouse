@@ -212,6 +212,45 @@ def test_a_layer_that_cannot_be_written_fails_loud_and_publishes_nothing(pub, mo
     assert vectors.needs_geopackage(manifest)  # the next heal tries again
 
 
+def test_validation_layers_and_their_relationships_are_left_out_like_the_catalog(pub, tmp_path):
+    manifest = pub.read_manifest()
+    bad = pd.DataFrame({"MapUnit": ["Qal"], "Error": ["x"]})
+    manifest["layers"].append(pub.put_parquet(tmp_path, "T_1_Errors", bad, False))
+    manifest["relationships"].append({**REL, "origin": "T_1_Errors"})
+    pub.manifest(manifest)
+
+    built, errors = vectors._geopackage_series(SID)
+
+    assert built and errors == []
+    path = tmp_path / "out.gpkg"
+    path.write_bytes(pub.store[f"{PREFIX}/{SID}.gpkg"])
+    assert {row[0] for row in pyogrio.list_layers(path)} == {
+        "geo__Polys", "geo__DMU", vectors.GPKG_RELATIONSHIPS}
+    rels = pyogrio.read_dataframe(path, layer=vectors.GPKG_RELATIONSHIPS, read_geometry=False)
+    assert rels["origin_table"].tolist() == ["geo__Polys"]
+
+
+def test_a_failed_rebuild_keeps_the_last_good_geopackage_and_warns(pub, monkeypatch, tmp_path):
+    vectors._geopackage_series(SID)
+    good = pub.read_manifest()["geopackage"]
+    first_file = pub.store[f"{PREFIX}/{SID}.gpkg"]
+    manifest = pub.read_manifest()
+    manifest["layers"][1] = pub.put_parquet(tmp_path, "geo__DMU", pd.DataFrame({"MapUnit": ["Z"]}), False)
+    pub.manifest(manifest)
+    monkeypatch.setattr(vectors, "_append_layer",
+                        lambda *a: (_ for _ in ()).throw(ValueError("boom")))
+
+    built, errors = vectors._geopackage_series(SID)
+
+    assert not built and len(errors) == 1 and "boom" in errors[0]
+    after = pub.read_manifest()
+    assert after["geopackage"] == good  # the asset stays
+    assert pub.store[f"{PREFIX}/{SID}.gpkg"] == first_file
+    [warning] = [w for w in after["warnings"] if w["code"] == vectors.GEOPACKAGE_STALE]
+    assert "boom" in warning["warning"]
+    assert vectors.needs_geopackage(after)  # and the next heal tries again
+
+
 def test_the_heal_packages_a_pub_and_the_ingest_heal_leaves_it_to_the_vectors_job(pub):
     needs = {SID: vectors.needs_of(pub.read_manifest())}
     assert needs[SID].geopackage

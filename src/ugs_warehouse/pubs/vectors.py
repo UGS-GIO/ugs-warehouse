@@ -74,6 +74,8 @@ ENCODING_FALLBACK = "encoding_fallback"
 # GeoPackage is published), and one whose GeoPackage could not be built (retried by the next heal).
 GEOPACKAGE_SKIPPED = "geopackage_skipped"
 GEOPACKAGE_FAILED = "geopackage_failed"
+# Warning code for a rebuild that failed while an earlier GeoPackage is still published.
+GEOPACKAGE_STALE = "geopackage_stale"
 # Bump when the GeoPackage layout changes; a manifest below it is packaged again by the heal.
 GEOPACKAGE_VERSION = 1
 GEOPACKAGE_MIME = "application/geopackage+sqlite3"
@@ -1153,14 +1155,25 @@ def _style_series(series_id: str) -> list[str]:
     return _update_manifest(series_id, style)
 
 
+def _packaged(manifest: dict) -> tuple[list[dict], list[dict]]:
+    """(layers, relationships) the GeoPackage holds: what the publication page lists, so GeMS
+    validation layers, and relationships to them, are left out as in the catalog."""
+    from .sink_stac import is_validation_layer  # sink_stac imports this module
+
+    layers = [e for e in manifest.get("layers") or [] if not is_validation_layer(e["label"])]
+    kept = {e["label"] for e in layers}
+    rels = [r for r in manifest.get("relationships") or []
+            if r["origin"] in kept and r["destination"] in kept]
+    return layers, rels
+
+
 def _geopackage_inputs(manifest: dict) -> str | None:
-    """A digest of everything the GeoPackage is built from: each layer's GeoParquet checksum and the
-    relationships. None when a layer has no recorded checksum yet."""
-    layers = manifest.get("layers") or []
+    """A digest of everything the GeoPackage is built from: each packaged layer's GeoParquet
+    checksum and the relationships. None when a layer has no recorded checksum yet."""
+    layers, rels = _packaged(manifest)
     if any(not e.get("checksum") for e in layers):
         return None
-    doc = {"layers": sorted((e["label"], e["checksum"]) for e in layers),
-           "relationships": manifest.get("relationships") or []}
+    doc = {"layers": sorted((e["label"], e["checksum"]) for e in layers), "relationships": rels}
     return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
 
 
@@ -1226,7 +1239,8 @@ def _write_geopackage(series_id: str, manifest: dict, out: str, work: str) -> No
     """Build the GeoPackage `out` from the manifest's layers, one GeoParquet downloaded, appended
     and deleted at a time, then the relationships table. Any layer that fails raises: a GeoPackage
     missing a layer would pass for the whole publication."""
-    for entry in manifest["layers"]:
+    layers, rels = _packaged(manifest)
+    for entry in layers:
         label = entry["label"]
         local = os.path.join(work, f"{label}.parquet")
         gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
@@ -1236,7 +1250,6 @@ def _write_geopackage(series_id: str, manifest: dict, out: str, work: str) -> No
             raise RuntimeError(f"layer {label}: {_error(e)}") from e
         finally:
             os.remove(local)
-    rels = manifest.get("relationships") or []
     if rels:
         import pandas as pd
         import pyogrio
@@ -1257,15 +1270,15 @@ def _geopackage_into(series_id: str, manifest: dict) -> list[str]:
     totals over `MAX_GPKG_BYTES` gets a GEOPACKAGE_SKIPPED warning and no file; a failed build gets
     GEOPACKAGE_FAILED and no record, so the next heal tries again. Returns an error for a failure."""
     skipped = [w for w in manifest.get("warnings") or [] if w.get("code") == GEOPACKAGE_SKIPPED]
-    manifest["warnings"] = [w for w in manifest.get("warnings") or []
-                            if w.get("code") not in (GEOPACKAGE_SKIPPED, GEOPACKAGE_FAILED)]
+    codes = (GEOPACKAGE_SKIPPED, GEOPACKAGE_FAILED, GEOPACKAGE_STALE)
+    manifest["warnings"] = [w for w in manifest.get("warnings") or [] if w.get("code") not in codes]
     if not needs_geopackage(manifest):
         manifest["warnings"] += skipped  # a skip stays on the manifest until its inputs change
         return []
-    manifest.pop("geopackage", None)
+    previous = manifest.pop("geopackage", None)
     try:
         _record_layer_files(series_id, manifest["layers"])
-        total = sum(e["bytes"] for e in manifest["layers"])
+        total = sum(e["bytes"] for e in _packaged(manifest)[0])
         inputs = _geopackage_inputs(manifest)
         if total > MAX_GPKG_BYTES:
             manifest["warnings"].append({
@@ -1283,8 +1296,15 @@ def _geopackage_into(series_id: str, manifest: dict) -> list[str]:
                                   "version": GEOPACKAGE_VERSION, "inputs": inputs}
         return []
     except Exception as e:
-        manifest["warnings"].append({"code": GEOPACKAGE_FAILED,
-                                     "warning": f"GeoPackage not built: {_error(e)}"})
+        if isinstance(previous, dict) and previous.get("bytes"):
+            # The last good file is still uploaded; its record stays so the Collection keeps the asset.
+            manifest["geopackage"] = previous
+            manifest["warnings"].append({
+                "code": GEOPACKAGE_STALE,
+                "warning": f"GeoPackage rebuild failed, the earlier file is kept: {_error(e)}"})
+        else:
+            manifest["warnings"].append({"code": GEOPACKAGE_FAILED,
+                                         "warning": f"GeoPackage not built: {_error(e)}"})
         print(f"  {series_id}: GeoPackage not built: {_error(e)}", file=sys.stderr)
         return [f"{series_id}: GeoPackage not built: {_error(e)}"]
 

@@ -259,8 +259,9 @@ The file is built on the job's RAM-backed disk and uploaded with
 (recorded per layer at upload, filled in for older manifests) and the relationships, so the file is
 rebuilt only when a layer file or a relationship changes, or `GEOPACKAGE_VERSION` is bumped. A pub whose
 GeoParquet totals over `MAX_GPKG_BYTES` (2 GiB, a module constant) gets a `geopackage_skipped`
-warning naming the size and no file; a failed build gets `geopackage_failed`, is listed, fails the
-run and is retried. The ingest adds a `geopackage` asset (`application/geopackage+sqlite3`, role
+warning naming the size and no file. GeMS validation layers (and relationships to them) are left out, as in
+the catalog. A failed first build gets `geopackage_failed` and no record; a failed rebuild keeps the
+previous file and record with a `geopackage_stale` warning. Either is listed, fails the run and is retried. The ingest adds a `geopackage` asset (`application/geopackage+sqlite3`, role
 `data`, `file:size`, `file:checksum`) to the pub's Collection, only when the manifest records one;
 the publication page links it as "Download all data". The ingest does not build it.
 

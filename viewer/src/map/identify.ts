@@ -21,8 +21,9 @@ export const unitsHrefOf = (d: StacDoc | undefined): string | undefined => {
   return a?.type?.includes("pmtiles") && a.href ? a.href : undefined;
 };
 
-// A fill that is queryable but draws nothing.
-export const IDENTIFY_PAINT = { "fill-color": "#000000", "fill-opacity": 0 } as const;
+// A fill that is queryable but draws nothing. Not exactly 0: a fully transparent fill is not
+// guaranteed to be returned by queryRenderedFeatures, and 0.001 is invisible.
+export const IDENTIFY_PAINT = { "fill-color": "#000000", "fill-opacity": 0.001 } as const;
 
 const text = (v: unknown): string | undefined => {
   const s = v == null ? "" : String(v).trim();
@@ -82,46 +83,52 @@ export function identifyAt(
   return on ? { kind: "scan-only", pubTitle: on.pubTitle } : null;
 }
 
-// Whether a map click is an identify click. A data layer's feature wins and keeps its own behavior;
-// the coverage rectangles do not, as they sit under the data and cover every raster in the collection.
+// What a map click identifies. A data layer's feature wins and keeps its own behavior. A coverage
+// rectangle covers every raster in the collection, so it only yields to a unit actually found; a
+// scan-only answer there falls through to its "Open item" popup.
 export function identifyClick(
   feature: { layer: { id: string } } | undefined, identify: () => IdentifyResult | null,
 ): IdentifyResult | null {
-  return feature && feature.layer.id !== COVERAGE_LAYER ? null : identify();
+  if (feature && feature.layer.id !== COVERAGE_LAYER) return null;
+  const hit = identify();
+  return feature && hit?.kind === "scan-only" ? null : hit;
 }
 export const COVERAGE_LAYER = "coverage-fill";
 
 type Entry = { href: string; data?: StacDoc };
 
-export type PubContext = { title: string; href?: string; dmuHref?: string };
+// An in-app catalog page: the `c` and `i` search params.
+export type PageRef = { c: string; i: string };
+export type PubContext = { title: string; page?: PageRef; dmu?: PageRef };
 
 const DMU_TITLE = /Description\s*Of\s*Map\s*Units/i;
 
-// App link to an entry's page, from its STAC self href.
-const pageHref = (stacHref: string): string | undefined => {
-  const q = catalogItemHref(stacHref);
-  return q.startsWith("?") ? `${import.meta.env.BASE_URL.replace(/\/$/, "")}/catalog${q}` : undefined;
+// The catalog page of an entry, from its STAC self href.
+const pageRef = (stacHref: string): PageRef | undefined => {
+  const q = new URLSearchParams(catalogItemHref(stacHref));
+  const c = q.get("c"), i = q.get("i");
+  return c && i ? { c, i } : undefined;
 };
 
 // A tile's `series_id` resolved against the root index: the publication's title and page, and its
 // Description of Map Units table Item when the index lists one. The id stands in for an unknown title.
 export function pubContext(seriesId: string, entries: readonly Entry[]): PubContext {
   let title = seriesId;
-  let href: string | undefined;
-  let dmuHref: string | undefined;
+  let page: PageRef | undefined;
+  let dmu: PageRef | undefined;
   for (const e of entries) {
     const d = e.data;
     const props = d?.properties as Record<string, unknown> | undefined;
     const pub = pubOfEntry(d);
     if (pub?.id === seriesId) {
       if (title === seriesId) title = pub.title;
-      if (!dmuHref && props?.["ugs:layer_kind"] === "table" && DMU_TITLE.test(String(props?.title ?? ""))) {
-        dmuHref = pageHref(e.href);
+      if (!dmu && props?.["ugs:layer_kind"] === "table" && DMU_TITLE.test(String(props?.title ?? ""))) {
+        dmu = pageRef(e.href);
       }
     } else if (d?.id === seriesId && /collection\.json/.test(e.href)) {
       title = String(props?.title ?? seriesId);
-      href = pageHref(e.href);
+      page = pageRef(e.href);
     }
   }
-  return { title, href, dmuHref };
+  return { title, page, dmu };
 }

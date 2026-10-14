@@ -325,7 +325,7 @@ export function ItemMap({ item, layers, footprints = [], onPickFootprint,
 
   // Rasters front-first. Scan-only applies to a raster that has unit data or is a publication's plate.
   const identifyTargets = layers.filter((l) => l.cogHref || l.rasterPmHref)
-    .filter((l) => l.unitsHref || l.pubTitle)
+    .filter((l) => (l.unitsHref || l.pubTitle) && !gatedOut[l.id])
     .map((l) => ({ slug: slugOf(l.id), hasUnits: !!l.unitsHref, bbox: effBox(l), pubTitle: l.pubTitle }));
 
   const onClick = (e: MapLayerMouseEvent) => {

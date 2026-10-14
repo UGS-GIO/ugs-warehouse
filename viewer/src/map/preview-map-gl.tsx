@@ -217,8 +217,12 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
   const onMapClick = (e: MapLayerMouseEvent) => {
     if (spec?.kind === "cog" || spec?.kind === "rasterpm") {
       const slug = spec.kind === "cog" ? "cog" : "raster-mosaic";
-      onIdentify?.(identifyAt(e.target, e.point, e.lngLat,
-        [{ slug, hasUnits: !!spec.unitsHref, bbox: spec.item.bbox, pubTitle: pubOfEntry(spec.item)?.title }]));
+      const pubTitle = pubOfEntry(spec.item)?.title;
+      // Only a geologic map answers a click: one with unit data, or a publication's plate.
+      if (spec.unitsHref || pubTitle) {
+        onIdentify?.(identifyAt(e.target, e.point, e.lngLat,
+          [{ slug, hasUnits: !!spec.unitsHref, bbox: spec.item.bbox, pubTitle }]));
+      }
       return;
     }
     if (!isVector) return;

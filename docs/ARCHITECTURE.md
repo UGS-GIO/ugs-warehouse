@@ -243,7 +243,7 @@ retried. The collection's `items.json` asset summary catches up at the next cata
 mosaic job reads the state from the source bucket and, for a review bake into another bucket, links
 the file by the public catalog's site.
 
-The viewer loads a plate or mosaic's `units` asset as an invisible fill layer (`fill-opacity: 0`)
+The viewer loads a plate or mosaic's `units` asset as an invisible fill layer (`fill-opacity: 0.001`)
 beside the raster, on the Map page and in the item preview. A click on the raster queries it and
 shows the feature with the highest `rank`, which is the one drawn on top where quads overlap. The
 card resolves `series_id` to the publication through the root index. A click on the raster's

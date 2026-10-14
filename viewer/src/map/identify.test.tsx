@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
+import { createMemoryHistory, createRootRoute, createRoute, createRouter, RouterProvider } from "@tanstack/react-router";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
@@ -37,7 +38,7 @@ describe("the identify layer follows the units asset", () => {
   it("draws as an invisible fill on the units tile layer", () => {
     render(<IdentifyLayer slug="a" href={UNITS.href} />);
     expect(screen.getByTestId("source").dataset).toMatchObject({ id: "idn-a", url: `pmtiles://${UNITS.href}` });
-    expect(screen.getByTestId("layer").dataset).toMatchObject({ id: "idn-a-fill", type: "fill", sourceLayer: "units", opacity: "0" });
+    expect(screen.getByTestId("layer").dataset).toMatchObject({ id: "idn-a-fill", type: "fill", sourceLayer: "units", opacity: "0.001" });
   });
 
   it("is ordered with its raster, and gone when the raster is", () => {
@@ -87,15 +88,20 @@ describe("identifyAt", () => {
 });
 
 describe("identifyClick", () => {
+  it("lets a coverage popup win over a scan-only answer, not over a unit", () => {
+    const cov = { layer: { id: "coverage-fill" } };
+    expect(identifyClick(cov, () => ({ kind: "scan-only" }))).toBeNull();
+    const unit = { kind: "unit", unit: { seriesId: "M-1", code: "Jm", rank: 1 } } as const;
+    expect(identifyClick(cov, () => unit)).toBe(unit);
+  });
   const scan = { kind: "scan-only" } as const;
   it("leaves a click on a vector feature alone", () => {
     const run = vi.fn(() => scan);
     expect(identifyClick({ layer: { id: "pm-x-fill" } }, run)).toBeNull();
     expect(run).not.toHaveBeenCalled();
   });
-  it("identifies on bare map and through coverage rectangles", () => {
+  it("identifies on the bare map", () => {
     expect(identifyClick(undefined, () => scan)).toBe(scan);
-    expect(identifyClick({ layer: { id: "coverage-fill" } }, () => scan)).toBe(scan);
   });
 });
 
@@ -113,52 +119,70 @@ describe("pubContext", () => {
   it("resolves the title, the page and the unit-descriptions table", () => {
     const c = pubContext("M-1", entries);
     expect(c.title).toBe("Geology of Somewhere");
-    expect(c.href).toMatch(/\/catalog\?c=.*M-1$/);
-    expect(c.dmuHref).toMatch(/\/catalog\?c=.*M-1&i=M-1__DMU$/);
+    expect(c.page).toEqual({ c: "ugs-publications/M", i: "M-1" });
+    expect(c.dmu).toEqual({ c: expect.stringContaining("M-1"), i: "M-1__DMU" });
   });
 
   it("matches the table title ignoring spaces and case, and only a table", () => {
-    expect(pubContext("M-2", entries).dmuHref).toContain("M-2__DMU");
-    expect(pubContext("M-3", entries).dmuHref).toBeUndefined();
+    expect(pubContext("M-2", entries).dmu?.i).toBe("M-2__DMU");
+    expect(pubContext("M-3", entries).dmu).toBeUndefined();
   });
 
   it("falls back to the series id", () => {
-    expect(pubContext("ZZ-9", entries)).toEqual({ title: "ZZ-9", href: undefined, dmuHref: undefined });
+    expect(pubContext("ZZ-9", entries)).toEqual({ title: "ZZ-9", page: undefined, dmu: undefined });
   });
 });
+
+// The card links with the router's <Link>, so it renders inside one.
+async function renderCard(ui: React.ReactElement) {
+  const root = createRootRoute({ component: () => ui });
+  const catalog = createRoute({ getParentRoute: () => root, path: "/catalog", component: () => null });
+  const router = createRouter({ routeTree: root.addChildren([catalog]), history: createMemoryHistory({ initialEntries: ["/"] }) });
+  await act(async () => { render(<RouterProvider router={router} />); });
+  return router;
+}
 
 describe("UnitCard", () => {
   const long = "x".repeat(300);
   const unit = { seriesId: "M-1", code: "Jm", name: "Morrison Formation", age: "Late Jurassic", description: long, rank: 1 };
 
   it("shows code, name, age, a clamped description, and the publication links", async () => {
-    render(<UnitCard result={{ kind: "unit", unit }} pub={pubContext("M-1", entries)} />);
+    await renderCard(<UnitCard result={{ kind: "unit", unit }} pub={pubContext("M-1", entries)} />);
     expect(screen.getByText("Jm").className).toContain("font-bold");
     expect(screen.getByText(/Morrison Formation/)).toBeTruthy();
     expect(screen.getByText(/Late Jurassic/)).toBeTruthy();
-    expect(screen.getByRole("link", { name: "Geology of Somewhere" }).getAttribute("href")).toMatch(/M-1$/);
-    expect(screen.getByRole("link", { name: "View unit descriptions →" }).getAttribute("href")).toContain("M-1__DMU");
+    expect(screen.getByRole("link", { name: "Geology of Somewhere" }).getAttribute("href")).toMatch(/^\/catalog\?c=.*&i=M-1$/);
+    expect(screen.getByRole("link", { name: "View unit descriptions →" }).getAttribute("href")).toContain("i=M-1__DMU");
     await userEvent.click(screen.getByRole("button", { name: "more" }));
     expect(screen.getByRole("button", { name: "less" })).toBeTruthy();
   });
 
-  it("names the series id when the publication is unknown, with no table link", () => {
-    render(<UnitCard result={{ kind: "unit", unit }} pub={pubContext("ZZ-9", entries)} />);
+  it("names the series id when the publication is unknown, with no table link", async () => {
+    await renderCard(<UnitCard result={{ kind: "unit", unit }} pub={pubContext("ZZ-9", entries)} />);
     expect(screen.getByText("ZZ-9")).toBeTruthy();
     expect(screen.queryByRole("link")).toBeNull();
   });
 
-  it("shows the scan-only notice with the covering publication", () => {
-    render(<UnitCard result={{ kind: "scan-only", pubTitle: "Geology of Somewhere" }} />);
+  it("shows the scan-only notice with the covering publication", async () => {
+    await renderCard(<UnitCard result={{ kind: "scan-only", pubTitle: "Geology of Somewhere" }} />);
     expect(screen.getByText("No unit data for this map (scan only)")).toBeTruthy();
     expect(screen.getByText("Geology of Somewhere")).toBeTruthy();
   });
 
-  it("is announced politely and Escape dismisses it", async () => {
+  it("moves focus to the heading when it opens, and Escape dismisses it", async () => {
     const onClose = vi.fn();
-    render(<UnitCard result={{ kind: "scan-only" }} onClose={onClose} />);
-    expect(screen.getByRole("status").getAttribute("aria-live")).toBe("polite");
+    await renderCard(<UnitCard result={{ kind: "scan-only" }} onClose={onClose} />);
+    expect(screen.getByRole("region", { name: "Geologic unit" })).toBeTruthy();
+    expect(document.activeElement).toBe(screen.getByText("Geologic unit"));
     await userEvent.keyboard("{Escape}");
     expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("ignores Escape typed into a field", async () => {
+    const onClose = vi.fn();
+    await renderCard(<><input aria-label="q" /><UnitCard result={{ kind: "scan-only" }} onClose={onClose} /></>);
+    await userEvent.click(screen.getByLabelText("q"));
+    await userEvent.keyboard("{Escape}");
+    expect(onClose).not.toHaveBeenCalled();
   });
 });

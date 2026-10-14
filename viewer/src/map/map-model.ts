@@ -225,7 +225,8 @@ export const identifyIds = (slug: string) => ({ source: `idn-${slug}`, layer: `i
 
 // The GL layer ids each active layer draws, in bottom→top draw order, matching what map.tsx renders:
 // a raster PMTiles mosaic → one `rpm-<slug>-raster`; a COG → one `cog-<slug>-raster` (only once its
-// protocol is ready); either with a `units` asset also its `idn-<slug>-fill` identify layer; a vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
+// protocol is ready); either with a `units` asset also its `idn-<slug>-fill` identify layer; a
+// vector layer → its resolved style layers `pm-<slug>-0..N` (styledCount), else
 // the unstyled fallback `pm-<slug>-fill/line/circle`; a zarr datacube → none (a deck.gl overlay draws
 // it, outside maplibre's layer stack). Flattened across `layers` in order, so the reorder reconcile
 // can walk the list and moveLayer each. Pure so it's unit-tested against the render.

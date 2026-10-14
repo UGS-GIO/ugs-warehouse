@@ -173,10 +173,19 @@ export const citeLink = (d: StacDoc | undefined): Link | undefined =>
 export const isPlaceholderFootprint = (d: StacDoc | undefined): boolean =>
   (d?.properties as Record<string, unknown> | undefined)?.["ugs:footprint_source"] === "utah-bbox";
 
+// A publication's table or supporting file: its geometry is the publication's area of interest, so
+// it is searchable but is not a place on the map.
+export const isNonMappableKind = (d: StacDoc | undefined): boolean => {
+  const kind = (d?.properties as Record<string, unknown> | undefined)?.["ugs:layer_kind"];
+  return kind === "table" || kind === "supporting";
+};
+
 // The one footprint check: whether a document has a real footprint to badge, draw or fly to. A
-// geometry or a valid lon/lat bbox; never the placeholder, nor a null (aspatial) geometry.
+// geometry or a valid lon/lat bbox; never the placeholder, a table or supporting file, nor a null
+// (aspatial) geometry.
 export const hasFootprint = (d: StacDoc | undefined): boolean =>
-  Boolean(d && !isPlaceholderFootprint(d) && d.geometry !== null && (d.geometry || validBbox(d.bbox)));
+  Boolean(d && !isPlaceholderFootprint(d) && !isNonMappableKind(d) && d.geometry !== null
+    && (d.geometry || validBbox(d.bbox)));
 
 // A publication Collection read as the item shape the detail page takes: its top-level metadata
 // becomes `properties`, its first extent box the `bbox` (unless that is the placeholder), and its

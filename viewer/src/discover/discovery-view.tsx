@@ -25,7 +25,7 @@ import { ArticleHit, useArticleSearch } from "./article-search";
 import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { catalogIndex, type Hit, searchCatalog } from "./search-index";
-import type { StacDoc } from "@/stac";
+import { hasFootprint, type StacDoc } from "@/stac";
 import type { Crumb } from "@/catalog/breadcrumb";
 import { ItemDetail, type PartOf } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
@@ -152,7 +152,7 @@ export function DiscoveryView({
   // href → bbox for O(1) highlight lookup on hover (rather than scanning withData each hover render).
   const bboxByHref = useMemo(() => {
     const m = new Map<string, number[] | undefined>();
-    for (const it of withData) m.set(it.href, it.data?.bbox);
+    for (const it of withData) if (hasFootprint(it.data)) m.set(it.href, it.data?.bbox);
     return m;
   }, [itemsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -188,6 +188,7 @@ export function DiscoveryView({
 
   // Every result's footprint → the map's coverage overlay (synced to the card set as filters narrow).
   const footprints = useMemo<Footprint[]>(() => results
+    .filter((it) => hasFootprint(it.data))
     .map((it) => ({ href: it.href, id: idOf(it.href), title: discoveryTitle(it), bbox: it.data?.bbox }))
     .filter((f): f is Footprint => Array.isArray(f.bbox) && f.bbox.length >= 4), [results]);
   const hoverBbox = hoverHref ? bboxByHref.get(hoverHref) : undefined;

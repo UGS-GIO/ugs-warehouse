@@ -17,7 +17,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, collectionHrefOf, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasFootprint, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, collectionHrefOf, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { type CubePicks, parseCubeParam, pickedRescale, VAR } from "./zarr/cube-picks";
@@ -557,6 +557,7 @@ function useViewState() {
   // (most of them) that otherwise draw nothing. Scoped to the loaded collection's index (cheap — the
   // bboxes are already fetched); a catalog-wide overlay would need loading every collection's index.
   const footprints: Footprint[] = allItems
+    .filter((r) => hasFootprint(r.data))
     .map((r) => ({ href: r.href, id: idOf(r.href),
                    title: String(r.data?.properties?.title ?? idOf(r.href)), bbox: r.data?.bbox }))
     .filter((f): f is Footprint => Array.isArray(f.bbox) && f.bbox.length >= 4);

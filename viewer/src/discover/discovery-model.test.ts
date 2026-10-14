@@ -53,6 +53,10 @@ describe("hasFootprint / typeOf", () => {
     expect(hasFootprint(items[0].data)).toBe(true);
     expect(hasFootprint(items[3].data)).toBe(false);
   });
+  it("keeps a table that has a geometry off the map count", () => {
+    const table = { bbox: [-112, 40, -111, 41], properties: { "ugs:layer_kind": "table" } };
+    expect(hasFootprint(table)).toBe(false);
+  });
   it("prefers pub_type, falling back to topic then series", () => {
     expect(typeOf(items[2])).toBe("Geologic Map");
     expect(typeOf(items[0])).toBe("hazards");

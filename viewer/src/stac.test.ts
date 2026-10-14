@@ -382,6 +382,12 @@ describe("placeholder footprints", () => {
     expect(hasFootprint({ bbox: [-112, 40, -111, 41], properties: { "ugs:footprint_source": "cog" } })).toBe(true);
     expect(hasFootprint(undefined)).toBe(false);
   });
+  it("is no footprint for a table or supporting file, which carries its publication's area", () => {
+    const bbox = [-112, 40, -111, 41];
+    expect(hasFootprint({ bbox, properties: { "ugs:footprint_source": "publication", "ugs:layer_kind": "table" } })).toBe(false);
+    expect(hasFootprint({ bbox, properties: { "ugs:layer_kind": "supporting" } })).toBe(false);
+    expect(hasFootprint({ bbox, properties: { "ugs:layer_kind": "layer" } })).toBe(true);
+  });
   it("needs a geometry or a valid lon/lat bbox, and never a null geometry", () => {
     expect(hasFootprint({ geometry: { type: "Point", coordinates: [-111, 39] } })).toBe(true);
     expect(hasFootprint({ bbox: [-114, 37, -109, 42] })).toBe(true);

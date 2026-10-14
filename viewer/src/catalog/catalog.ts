@@ -1,5 +1,5 @@
 // Pure catalog-tree helpers (no browser globals, so unit-testable in node).
-import { idOf, layerLabel, pubOfEntry, type StacDoc } from "@/stac";
+import { idOf, layerLabel, parentKeyOf, pubOfEntry, type StacDoc } from "@/stac";
 
 // Sub-catalogs whose children are map-layer collections rather than publication series. Vector
 // serving topics split into one collection per dbt mart schema, so their layers are nested a level
@@ -17,7 +17,7 @@ export const layerCollectionIds = (
 ];
 
 // One breadcrumb: `to` is where it navigates (`{}` = the catalog root), absent on the current page.
-export type Crumb = { label: string; to?: { c?: string; i?: string; keepSeries?: boolean } };
+export type TrailCrumb = { label: string; to?: { c?: string; i?: string; keepSeries?: boolean } };
 type TrailNode = { id: string; title?: string; parentId?: string };
 
 // Catalog [ / sub-catalog ] [ / series ] [ / publication ] [ / item ]. `leaf` is the open collection,
@@ -26,9 +26,9 @@ type TrailNode = { id: string; title?: string; parentId?: string };
 export const catalogTrail = (o: {
   collectionId?: string; itemUrl?: string; subCat?: TrailNode; subCats: TrailNode[]; leaf?: TrailNode;
   pub?: { sid: string; title?: string }; itemTitle?: string;
-}): Crumb[] => {
+}): TrailCrumb[] => {
   const { collectionId, itemUrl, subCat, subCats, leaf, pub, itemTitle } = o;
-  const crumbs: Crumb[] = [{ label: "Catalog", to: collectionId || itemUrl ? {} : undefined }];
+  const crumbs: TrailCrumb[] = [{ label: "Catalog", to: collectionId || itemUrl ? {} : undefined }];
   if (subCat) crumbs.push({ label: subCat.title ?? subCat.id, to: itemUrl ? { c: subCat.id } : undefined });
   const parent = leaf?.parentId ? subCats.find((s) => s.id === leaf.parentId) : undefined;
   if (parent) crumbs.push({ label: parent.title ?? parent.id, to: { c: parent.id } });
@@ -41,7 +41,7 @@ export const catalogTrail = (o: {
 // Where a crumb navigates from `view`. A publication crumb (it names an item, `i`) opens in place, so
 // the Discover drawer stays a drawer; a series, group or root crumb is a browse page, which only the
 // Catalog view shows.
-export const crumbNav = <V extends string>(to: NonNullable<Crumb["to"]>, view: V, seriesSel?: string[]):
+export const crumbNav = <V extends string>(to: NonNullable<TrailCrumb["to"]>, view: V, seriesSel?: string[]):
   { view: V | "catalog"; c?: string; i?: string; s?: string[] } =>
   ({ view: to.i ? view : "catalog", c: to.c, i: to.i, s: to.keepSeries ? seriesSel : undefined });
 
@@ -63,7 +63,7 @@ export const layerRowsOf = (
   .filter((r) => o.draws(r.data))
   .map((r) => {
     const id = idOf(r.href);
-    const groupId = pubOfEntry(r.data) ? r.collId.replace(/\/[^/]+$/, "") : r.collId;
+    const groupId = pubOfEntry(r.data) ? parentKeyOf(r.collId) : r.collId;
     return { id, href: r.href, title: layerLabel(r.data, id), group: o.collTitle(groupId), layer: o.isLayer(r) };
   })
   .sort((a, b) => Number(b.layer) - Number(a.layer)

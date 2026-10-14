@@ -17,7 +17,7 @@ import { OfflineBadge } from "./offline/offline-notice";
 import { type LayerRow } from "./map/layer-list";
 import { NavMenu } from "./shell/nav-menu";
 import { PreviewMapProvider } from "./map/preview-map";
-import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, collectionLink, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, collectionHrefOf, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
+import { CATALOG_URL, IS_REVIEW, collKeyOf, collectionAsItem, entryCollKeyOf, idOf, childLinks, cogRenderAsset, cubeVariables, indexItemRefs, isCatalogHref, isCollectionHref, itemHrefIn, itemLinks, itemMissing, pubHrefFor, pubSidIn, resolutionStatus, hasItemsIndex, parquetAsset, pmtilesLink, rootIndexItems, rasterTilesAsset, type StacDoc, thumbnailAsset, collectionHrefOf, cubeRenderRescale, cubeStepDims, resolveSelection, useDocs, useIndexes, useRootIndex, useStac, useStyleLayersFor, defaultStyleUrl, zarrAsset } from "./stac";
 import { useOffline } from "@/offline/store";
 import { StacUrlChip } from "./catalog/stac-url-chip";
 import { type CubePicks, parseCubeParam, pickedRescale, VAR } from "./zarr/cube-picks";
@@ -443,8 +443,7 @@ function useViewState() {
                                      resolving: resolution.resolving, failed: resolution.error != null });
 
   // "Part of <publication>" on an Item whose collection is a publication (listed under a series leaf).
-  const partOfHref = item.data && itemHref ? collectionLink(item.data)?.href : undefined;
-  const partOfAbs = partOfHref && itemHref ? new URL(partOfHref, itemHref).href : undefined;
+  const partOfAbs = item.data && itemHref ? collectionHrefOf(item.data, itemHref) : undefined;
   const partOfSeries = partOfAbs ? entryCollKeyOf(partOfAbs) : undefined;
   const partOfIsPub = Boolean(partOfAbs && isCollectionHref(partOfAbs) && item.data?.type !== "Collection"
     && leafColls.some((l) => l.id === partOfSeries && isCatalogHref(l.href)));

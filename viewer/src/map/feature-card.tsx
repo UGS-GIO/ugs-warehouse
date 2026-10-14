@@ -4,7 +4,8 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { CommentsPanel } from "@/review/comments-panel";
-import { IS_REVIEW, primaryKeyOf, relatedJoins, type RelatedJoin, summaryFieldsOf, type StacDoc } from "@/stac";
+import { ReferenceTables } from "./reference-tables";
+import { IS_REVIEW, partitionRelated, primaryKeyOf, relatedJoins, type RelatedJoin, summaryFieldsOf, type StacDoc } from "@/stac";
 
 // One related child table's peek for the clicked feature: 0 rows → hidden; 1 → the row inline
 // (description clamped); many → a hand-off button. Never a table — the full rows live in the panel/dock.
@@ -44,25 +45,6 @@ function PeekRow({ join, value, onOpen }: {
   );
 }
 
-// Reference tables (most of the publication's layers point at them, e.g. its data sources) after the
-// feature's own joins, collapsed unless they are all there is. Their rows are read only once opened,
-// so a click costs no extra reads for them.
-function ReferencePeeks({ joins, props, onOpen, defaultOpen = false }: {
-  joins: RelatedJoin[]; props: Record<string, unknown>; onOpen?: (relatedKey: string, value: string) => void;
-  defaultOpen?: boolean;   // open from the start when there are no primary joins above it
-}) {
-  const [open, setOpen] = useState(defaultOpen);
-  return (
-    <div className="mt-2 border-t border-border pt-2">
-      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open}
-        className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground">
-        <span aria-hidden>{open ? "▾" : "▸"}</span> References: <span className="normal-case">{[...new Set(joins.map((j) => j.title))].join(", ")}</span>
-      </button>
-      {open && joins.map((j) => <PeekRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpen} />)}
-    </div>
-  );
-}
-
 // Review-deploy-only comment action for the clicked feature, keyed on the item's stable primary-key
 // column. Self-contained so the map doesn't have to hold a second piece of selection state.
 function ReviewComment({ item, props }: { item: StacDoc; props: Record<string, unknown> }) {
@@ -94,8 +76,7 @@ export function FeatureCard({ item, props, onOpenRelated, onClear, onZoom }: {
   onZoom?: () => void;   // zoomed out, one lit line is too small to see, so offer to fly to it
 }) {
   const joins = relatedJoins(item);
-  const primary = joins.filter((j) => !j.reference);
-  const refs = joins.filter((j) => j.reference);
+  const { own: primary, reference: refs } = partitionRelated(joins, (j) => Boolean(j.reference));
   const summary = summaryFieldsOf(item);
   const idFields = (summary.length ? summary : Object.keys(props)).filter((k) => props[k] != null && props[k] !== "").slice(0, 5);
   const title = String(props[summary[0]] || props[idFields[0]] || item.properties?.title || "Feature");
@@ -125,7 +106,14 @@ export function FeatureCard({ item, props, onOpenRelated, onClear, onZoom }: {
           {primary.map((j) => <PeekRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpenRelated} />)}
         </div>
       )}
-      {refs.length > 0 && <ReferencePeeks joins={refs} props={props} onOpen={onOpenRelated} defaultOpen={!primary.length} />}
+      {refs.length > 0 && (
+        <ReferenceTables className="mt-2 border-t border-border pt-2" titles={refs.map((j) => j.title)}
+          defaultOpen={!primary.length}>
+          {/* Rows are read only once the section is open, so a click costs no extra reads for it. */}
+          {(open) => open && refs.map((j) => (
+            <PeekRow key={`${j.key}:${j.childField}`} join={j} value={props[j.parentField]} onOpen={onOpenRelated} />))}
+        </ReferenceTables>
+      )}
       {IS_REVIEW && <ReviewComment item={item} props={props} />}
     </section>
   );

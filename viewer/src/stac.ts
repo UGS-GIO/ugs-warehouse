@@ -56,8 +56,11 @@ export const isCollectionHref = (href: string) => docName(href) === "collection.
 export const entryCollKeyOf = (href?: string): string | undefined => {
   const key = collKeyOf(href);
   if (!href || !key || !isCollectionHref(href)) return key;
-  return key.includes("/") ? key.replace(/\/[^/]+$/, "") : undefined;
+  return key.includes("/") ? parentKeyOf(key) : undefined;
 };
+
+// A catalog key one level up: `<series>/<SID>` -> `<series>`.
+export const parentKeyOf = (key: string): string => key.replace(/\/[^/]+$/, "");
 
 // An item's .json beside a collection.json: `<collection>/<id>/<id>.json`.
 export const itemHrefIn = (collHref: string, id: string) =>
@@ -74,10 +77,9 @@ export const pubSidIn = (seriesId: string, c: string): string | undefined => {
 export const pubHrefFor = (series: { id: string; href: string }, c: string, i: string): string | undefined => {
   if (!isCatalogHref(series.href)) return undefined;
   const dir = series.href.replace(/catalog\.json(\?.*)?$/, "");
-  const id = encodeURIComponent(i);
-  if (c === series.id) return `${dir}${id}/collection.json`;
+  if (c === series.id) return `${dir}${encodeURIComponent(i)}/collection.json`;
   const sid = pubSidIn(series.id, c);
-  return sid ? `${dir}${encodeURIComponent(sid)}/${id}/${id}.json` : undefined;
+  return sid ? itemHrefIn(`${dir}${encodeURIComponent(sid)}/collection.json`, i) : undefined;
 };
 
 // A publication's layer or table as listed in the root index, tagged `ugs:in_publication` (the
@@ -176,10 +178,6 @@ export const isPlaceholderFootprint = (d: StacDoc | undefined): boolean =>
 export const hasFootprint = (d: StacDoc | undefined): boolean =>
   Boolean(d && !isPlaceholderFootprint(d) && d.geometry !== null && (d.geometry || validBbox(d.bbox)));
 
-// The collection an item belongs to (rel=collection, else rel=parent), as written (usually relative).
-export const collectionLink = (d: StacDoc | undefined): Link | undefined =>
-  (d?.links ?? []).find((l) => l.rel === "collection") ?? (d?.links ?? []).find((l) => l.rel === "parent");
-
 // A publication Collection read as the item shape the detail page takes: its top-level metadata
 // becomes `properties`, its first extent box the `bbox` (unless that is the placeholder), and its
 // extent start the `datetime` unless it is flagged `ugs:date_unknown`. Type, assets and links stay;
@@ -227,10 +225,11 @@ export const collectionParts = (d: StacDoc | undefined): CollectionPart[] =>
 // publication, or a single-file one, whose plate COG already sits on the Collection.
 export const plateHrefOf = (d: StacDoc | undefined, base?: string): string | undefined => {
   if (d?.type !== "Collection" || cogAsset(d)) return undefined;
-  const link = (d.links ?? []).find((l) => l.rel === "item" && idOf(l.href.split(/[?#]/)[0]).endsWith("_plate"));
   const from = base ?? fetchedFrom.get(d);
-  if (!link || !from) return undefined;
-  try { return new URL(link.href, from).href; } catch { return undefined; }
+  if (!from) return undefined;
+  try {
+    return itemLinks(d, from).find((l) => idOf(l.href.split(/[?#]/)[0]).endsWith("_plate"))?.href;
+  } catch { return undefined; }
 };
 
 /** The publication's plate Item (see plateHrefOf), fetched: `plate` is undefined while loading or
@@ -284,6 +283,13 @@ export const relatedJoins = (d: StacDoc | undefined): RelatedJoin[] =>
 // sources, say), listed after the layer's own joins. The producer marks it with the `reference`
 // role, which survives into the compact index.
 export const isReferenceAsset = (a: Asset | undefined): boolean => Boolean(a?.roles?.includes("reference"));
+
+// Splits related tables into the layer's own and its reference tables, in order. `isRef` reads a
+// row's reference flag: the asset's role on the item page, the `reference` field on a join.
+export const partitionRelated = <T,>(rows: T[], isRef: (row: T) => boolean): { own: T[]; reference: T[] } => ({
+  own: rows.filter((r) => !isRef(r)),
+  reference: rows.filter(isRef),
+});
 
 // An inferred key (`ugs:detected_by: "inferred"`) and its confidence; undefined for a declared one.
 export const inferredKey = (fk: ForeignKey | undefined): { confidence?: number } | undefined =>
@@ -676,9 +682,10 @@ export function useRootIndex(enabled: boolean) {
   });
 }
 
-const selfHref = (d: StacDoc, base: string): string | undefined => {
+// A doc's rel=self href: as written, or resolved against `base` when one is given.
+export const selfHrefOf = (d: StacDoc, base?: string): string | undefined => {
   const self = d.links?.find((l) => l.rel === "self")?.href;
-  return self ? new URL(self, base).href : undefined;
+  return self && base ? new URL(self, base).href : self;
 };
 
 // An entry without a self link cannot be opened, so it is dropped; the count is logged once per
@@ -694,7 +701,7 @@ const warnDropped = (idx: ItemsIndex, kept: number, where: string) => {
 
 export const rootIndexItems = (idx: ItemsIndex) => {
   const refs = idx.items.flatMap((d) => {
-    const href = selfHref(d, ROOT_INDEX_URL);
+    const href = selfHrefOf(d, ROOT_INDEX_URL);
     return href ? [{ collId: entryCollKeyOf(href) ?? "", href, data: d }] : [];
   });
   warnDropped(idx, refs.length, ROOT_INDEX_URL);
@@ -710,7 +717,7 @@ export const indexItemRefs = (r: { id: string; href: string; index?: ItemsIndex 
     return idx.items.map((d) => ({ collId: r.id, href: itemHrefIn(r.href, String(d.id)), data: d }));
   }
   const refs = idx.items.flatMap((d) => {
-    const href = idx.url ? selfHref(d, idx.url) : undefined;
+    const href = idx.url ? selfHrefOf(d, idx.url) : undefined;
     return href ? [{ collId: r.id, href, data: d }] : [];
   });
   warnDropped(idx, refs.length, idx.url ?? r.href);

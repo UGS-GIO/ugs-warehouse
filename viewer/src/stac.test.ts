@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, catalogItemHref, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionLink, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, catalogItemHref, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
 import { joinsRows, vectorSpecOf } from "./map/preview-spec";
 
@@ -461,10 +461,12 @@ describe("publication links", () => {
     expect(citeLink(pubCollection)?.href).toBe("https://doi.org/10.34191/OFR-9");
   });
   it("finds an Item's collection by rel=collection, else rel=parent", () => {
-    expect(collectionLink({ links: [{ rel: "parent", href: "../collection.json" }] })?.href).toBe("../collection.json");
-    expect(collectionLink({ links: [
+    const base = "https://cdn/stac/s/P/i/i.json";
+    expect(collectionHrefOf({ links: [{ rel: "parent", href: "../collection.json" }] }, base)).toBe("https://cdn/stac/s/P/collection.json");
+    expect(collectionHrefOf({ links: [
       { rel: "parent", href: "../p.json" }, { rel: "collection", href: "../collection.json" },
-    ] })?.href).toBe("../collection.json");
+    ] }, base)).toBe("https://cdn/stac/s/P/collection.json");
+    expect(collectionHrefOf({ links: [{ rel: "collection", href: "../collection.json" }] }, "not a url")).toBeUndefined();
   });
 });
 
@@ -565,5 +567,26 @@ describe("a publication's relationships", () => {
       { id: "P__MapUnitPolys", title: "Map Unit Polys", kind: "layer", source: "OFR784DM Mills Junction",
         sourceKey: "OFR784DM_MillsJunction" },
     ]);
+  });
+});
+
+describe("partitionRelated", () => {
+  it("splits own from reference tables, keeping order", () => {
+    const rows = [{ k: "a" }, { k: "b", ref: true }, { k: "c" }, { k: "d", ref: true }];
+    const { own, reference } = partitionRelated(rows, (r) => Boolean(r.ref));
+    expect(own.map((r) => r.k)).toEqual(["a", "c"]);
+    expect(reference.map((r) => r.k)).toEqual(["b", "d"]);
+  });
+  it("reads the reference role off an asset", () => {
+    const tables = [{ key: "x", asset: { href: "x", roles: ["data", "related"] } },
+                    { key: "y", asset: { href: "y", roles: ["data", "related", "reference"] } }];
+    const { own, reference } = partitionRelated(tables, (t) => isReferenceAsset(t.asset));
+    expect([own.map((t) => t.key), reference.map((t) => t.key)]).toEqual([["x"], ["y"]]);
+  });
+});
+
+describe("parentKeyOf", () => {
+  it("drops the last path segment of a catalog key", () => {
+    expect(parentKeyOf("ugs-publications/OFR/OFR-9")).toBe("ugs-publications/OFR");
   });
 });

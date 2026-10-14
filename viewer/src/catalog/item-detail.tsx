@@ -21,9 +21,10 @@ import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, gr
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, hasFootprint, inferredKey,
-  inferredTitle, isReferenceAsset, IS_REVIEW, ownForeignKeys, relatedAssets,
+  inferredTitle, isReferenceAsset, IS_REVIEW, partitionRelated, ownForeignKeys, relatedAssets,
   pmtilesLink, relatedJoins, relatedLinks, type ForeignKey, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
+import { ReferenceTables } from "@/map/reference-tables";
 import { C, humanize } from "@/ui/ui";
 import { Breadcrumb, type Crumb } from "./breadcrumb";
 import { Unavailable } from "@/offline/offline-notice";
@@ -56,14 +57,10 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
   const toggleTable = toggleIn(setOpenTables);
   const toggleGallery = toggleIn(setOpenGalleries);
   const isPhotos = (key: string, asset: Asset) => /photo/i.test(key) || /photo/i.test(asset.title ?? "");
-  const primary = tables.filter((t) => !isReferenceAsset(t.asset));
-  const refs = tables.filter((t) => isReferenceAsset(t.asset));
+  const { own: primary, reference: refs } = partitionRelated(tables, (t) => isReferenceAsset(t.asset));
   // The layer's own outgoing keys, less those a primary related table below already shows (a
   // publication's data asset carries both). A key to a collapsed reference table stays listed.
   const ownKeys = fks.filter((fk) => !primary.some((t) => t.asset.href === fk.reference.href));
-  // The reference tables' section: open from the start when they are all there is, or when one of
-  // them is open; after that the toggle (the user's, or that auto-open) is what it shows.
-  const [refsOpen, setRefsOpen] = useState<boolean>();
   // A key's target by the title of this item's related table or link at the same href, else its
   // resource id humanised.
   const refLabel = (fk: ForeignKey) =>
@@ -142,13 +139,10 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
       {/* Reference tables (most of the publication's layers point at them) come after the layer's
           own joins, collapsed unless they are all there is or one of them is open (refsOpen). */}
       {refs.length > 0 && (
-        <details className="mt-2" open={refsOpen ?? (!primary.length || refs.some((t) => isOpen(t.key)))}
-          onToggle={(e) => setRefsOpen(e.currentTarget.open)}>
-          <summary className="cursor-pointer text-xs uppercase tracking-wide text-muted-foreground">
-            Reference tables: <span className="normal-case">{refs.map((t) => t.asset.title ?? t.key).join(", ")}</span>
-          </summary>
-          <ul className="mt-1 space-y-1 text-xs">{refs.map(tableRow)}</ul>
-        </details>
+        <ReferenceTables className="mt-2" titles={refs.map((t) => t.asset.title ?? t.key)}
+          defaultOpen={!primary.length || refs.some((t) => isOpen(t.key))}>
+          {() => <ul className="mt-1 space-y-1 text-xs">{refs.map(tableRow)}</ul>}
+        </ReferenceTables>
       )}
     </section>
   );

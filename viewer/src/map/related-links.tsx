@@ -1,7 +1,9 @@
 // Related-table affordances under a clicked feature's props on the Map page. Names come straight
 // from the index (no fetch on click); the join columns, COUNT and rows load only when one is opened,
 // in the Info panel. Kept out of map.tsx so it renders without maplibre.
+import { partitionRelated } from "@/stac";
 import type { OpenRelated, RelatedTablesInfo } from "./map";
+import { ReferenceTables } from "./reference-tables";
 
 export function RelatedLinks({ info, props, onOpen }: {
   info?: RelatedTablesInfo; props: Record<string, unknown>; onOpen: (r: OpenRelated) => void;
@@ -14,8 +16,7 @@ export function RelatedLinks({ info, props, onOpen }: {
       {t.title} <span aria-hidden className="text-primary">→</span>
     </button>
   );
-  const primary = info.tables.filter((t) => !t.reference);
-  const refs = info.tables.filter((t) => t.reference);
+  const { own: primary, reference: refs } = partitionRelated(info.tables, (t) => Boolean(t.reference));
   return (
     <div className="mt-3 border-t border-border pt-2.5">
       {primary.length > 0 && (
@@ -24,15 +25,12 @@ export function RelatedLinks({ info, props, onOpen }: {
           <div className="flex flex-wrap gap-1.5">{primary.map(button)}</div>
         </>
       )}
-      {/* Reference tables (most of the publication's layers point at them) after the feature's own:
-          collapsed, unless they are all there is. `open` only sets the start; the user's toggle stays. */}
+      {/* Reference tables come after the feature's own, collapsed unless they are all there is. */}
       {refs.length > 0 && (
-        <details open={!primary.length} className={primary.length ? "mt-2" : ""}>
-          <summary className="cursor-pointer text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-            References: <span className="normal-case">{refs.map((t) => t.title).join(", ")}</span>
-          </summary>
-          <div className="mt-1.5 flex flex-wrap gap-1.5">{refs.map(button)}</div>
-        </details>
+        <ReferenceTables titles={refs.map((t) => t.title)} defaultOpen={!primary.length}
+          className={primary.length ? "mt-2" : ""}>
+          {() => <div className="mt-1.5 flex flex-wrap gap-1.5">{refs.map(button)}</div>}
+        </ReferenceTables>
       )}
     </div>
   );

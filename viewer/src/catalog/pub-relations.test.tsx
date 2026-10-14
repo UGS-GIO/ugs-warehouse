@@ -68,7 +68,7 @@ describe("a map click on a publication layer", () => {
       ? { total: 1, columns: ["DataSources_ID", "Source"], rows: [{ DataSources_ID: "DAS1", Source: "Field mapping" }] }
       : { total: 1, columns: ["MapUnit", "Name"], rows: [{ MapUnit: "Qal", Name: "Alluvium" }] }));
     wrap(<FeatureCard item={mapUnitPolys} props={props} />);
-    const toggle = screen.getByRole("button", { name: /References: Data Sources/ });
+    const toggle = screen.getByText(/Reference tables:/);
     await screen.findByText("Alluvium");
     expect(screen.queryByText("Field mapping")).toBeNull();
     expect(readMatching).not.toHaveBeenCalledWith(SOURCES, expect.anything(), expect.anything(), expect.anything());
@@ -85,7 +85,7 @@ describe("reference tables when there is no primary join", () => {
                                      rows: [{ DataSources_ID: "DAS1", Source: "Field mapping" }] });
     const { OFR784DM__DescriptionOfMapUnits: _dmu, ...assets } = mapUnitPolys.assets ?? {};
     wrap(<FeatureCard item={{ ...mapUnitPolys, assets }} props={props} />);
-    expect(screen.getByRole("button", { name: /References: Data Sources/ }).getAttribute("aria-expanded")).toBe("true");
+    expect((screen.getByText(/Reference tables:/).closest("details") as HTMLDetailsElement).open).toBe(true);
     expect(await screen.findByText("Field mapping")).toBeDefined();
     expect(screen.queryByText("Related")).toBeNull();
   });
@@ -101,7 +101,7 @@ describe("the Map page's related-table launchers", () => {
     expect(screen.getByText("Related tables")).toBeDefined();
     const refs = container.querySelector("details") as HTMLDetailsElement;
     expect(refs.open).toBe(false);
-    expect(refs.textContent).toContain("References: Data Sources");
+    expect(refs.textContent).toContain("Reference tables: Data Sources");
     expect(refs.contains(screen.getByRole("button", { name: /Description Of Map Units/ }))).toBe(false);
     await userEvent.click(refs.querySelector("summary") as HTMLElement);
     await userEvent.click(within(refs).getByRole("button", { name: /Data Sources/ }));

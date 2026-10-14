@@ -12,7 +12,9 @@ the layers that were empty, and every layer or geodatabase that could not be rea
 layer is also tiled to `<label>.pmtiles` (EPSG:4326, one tile layer named for the label) for map
 display, by DuckDB exporting its GeoParquet to GeoJSONSeq for tippecanoe; its manifest entry records
 `pmtiles` and `pmtiles_layer`. A layer whose tiling fails
-keeps its GeoParquet and gets a `pmtiles_failed` warning.
+keeps its GeoParquet and gets a `pmtiles_failed` warning. Each tiled layer also gets `<label>.style.json`
+beside its tiles (`layer_style.py`: unit colours from the DMU, the layer's own colour column, or the
+default look), recorded as `style` on its entry.
 
 Every data attachment is opened, not only the zip labelled GIS: zips of any label, and bare or
 zipped `.xlsx`/`.xls`/`.csv` files (`sheets.py`), whose sheets become tables and, with coordinates in
@@ -24,8 +26,9 @@ declared geodatabase relationship classes, and joins inferred within one source 
 layer entry records its `source` dataset and its `kind` (`layer`, `table` or `supporting`).
 
 After extracting, a run self-heals the cleanly extracted pubs it covers (`self_heal`): it tiles
-layers that have no PMTiles and records relationships where the manifest has none or predates
-`relations.RELATIONS_VERSION`, from the GeoParquet already on GCS. In an `--all` run, extraction
+layers that have no PMTiles, records relationships where the manifest has none or predates
+`relations.RELATIONS_VERSION`, and writes the layer styles where they are missing or predate
+`layer_style.STYLE_VERSION`, from the GeoParquet already on GCS. In an `--all` run, extraction
 and self-heal share one time budget (`VECTORS_TIME_BUDGET_S`); what it leaves waits for the next run.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
@@ -53,7 +56,7 @@ from urllib.parse import unquote, urlsplit
 
 from ..core import config, gcs, stac
 from ..vector import sink_pmtiles, transform
-from . import geoparquet, harvest, identity, relations, sheets, source
+from . import geoparquet, harvest, identity, layer_style, relations, sheets, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME
@@ -62,6 +65,10 @@ PARQUET_MIME = config.PARQUET_MIME
 PMTILES_FAILED = "pmtiles_failed"
 # Warning code for a layer with no geometry to tile. Not a failure: it never gets PMTiles.
 NO_GEOMETRY = "no_geometry"
+# Warning codes for a layer whose style file could not be built or written, and for a note the style
+# generator raised (an unreadable or conflicting unit colour). Neither makes the series unclean.
+STYLE_FAILED = "style_failed"
+STYLE_NOTE = "style_note"
 # Warning code for a shapefile whose attribute text was not UTF-8 and was read as cp1252.
 ENCODING_FALLBACK = "encoding_fallback"
 # The coverage of an extraction: 1 opened only the zip labelled GIS and read shapefiles and
@@ -308,6 +315,10 @@ def _spatial_meta(gdf, geo: dict | None, label: str, warnings: list[dict]) -> di
 
 def pmtiles_object(series_id: str, label: str) -> str:
     return f"{VECTORS_PREFIX}/{series_id}/{label}.pmtiles"
+
+
+def style_object(series_id: str, label: str) -> str:
+    return f"{VECTORS_PREFIX}/{series_id}/{label}.style.json"
 
 
 # DuckDB's memory cap for one tiling export. The export streams, so this bounds one wide row
@@ -595,6 +606,8 @@ def _extract_and_upload(
     if manifest["spatial"] or manifest["tables"]:
         declared = _declared_relationships(srcs, {e["label"] for e in manifest["layers"]}, manifest)
         _set_relationships(manifest, relations.merge(declared, relations.infer(profiles)))
+        for err in _style_into(series_id, manifest):
+            print(f"  {err}", file=sys.stderr)
         _write_manifest(series_id, manifest)
 
     return manifest
@@ -731,6 +744,50 @@ def _tile_into(entry: dict, parquet: str, series_id: str, tmp: str | None, manif
     return True
 
 
+def _style_into(series_id: str, manifest: dict) -> list[str]:
+    """Write `<label>.style.json` for each spatial layer of `manifest` that has PMTiles and record
+    `style` (the file name), `style_kind` and, for unit colours, `style_fallback_rows` on its entry,
+    reading the DMU and unit codes from the GeoParquet on GCS. Returns an error per layer whose style
+    could not be built or written; that layer keeps no `style` and a STYLE_FAILED warning, and
+    `style_version` is left unset so the next heal tries again. Earlier style warnings are replaced."""
+    import pyarrow.parquet as pq
+
+    manifest["warnings"] = [w for w in manifest.get("warnings") or []
+                            if w.get("code") not in (STYLE_FAILED, STYLE_NOTE)]
+    entries = {e["label"]: e for e in manifest["layers"]}
+    relationships = manifest.get("relationships") or []
+
+    def read(label: str, columns: list[str]):
+        with gcs.open_reader(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet") as f:
+            return pq.ParquetFile(f).read(columns=columns)
+
+    errors: list[str] = []
+    for entry in manifest["layers"]:
+        label = entry["label"]
+        if not (entry.get("spatial") and entry.get("pmtiles")):
+            continue
+        entry.pop("style", None)
+        entry.pop("style_kind", None)
+        entry.pop("style_fallback_rows", None)
+        try:
+            styled = layer_style.build(entry, entries, relationships, read)
+            gcs.put_bytes(json.dumps(styled.doc).encode(), style_object(series_id, label),
+                          content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+        except Exception as e:
+            errors.append(f"{series_id}/{label}: style not built: {_error(e)}")
+            manifest["warnings"].append({"label": label, "code": STYLE_FAILED,
+                                         "warning": f"style not built: {_error(e)}"})
+            continue
+        entry.update(style=f"{label}.style.json", style_kind=styled.kind)
+        if styled.fallback_rows is not None:
+            entry["style_fallback_rows"] = styled.fallback_rows
+        for note in styled.warnings:
+            manifest["warnings"].append({"label": label, "code": STYLE_NOTE, "warning": note})
+    if not errors:
+        manifest["style_version"] = layer_style.STYLE_VERSION
+    return errors
+
+
 def _warned(manifest: dict, code: str) -> set[str]:
     return {w.get("label") for w in manifest.get("warnings") or [] if w.get("code") == code}
 
@@ -751,19 +808,21 @@ def missing_tiles(manifest: dict) -> list[str]:
 class Needs(NamedTuple):
     """What a clean manifest still lacks, kept in place of the manifest: the spatial layers with no
     PMTiles, whether all of those failed tiling before (a retry, ordered after new work), and
-    whether its relationships are missing or outdated."""
+    whether its relationships are missing or outdated, and whether its layer styles are missing or
+    outdated."""
     tiles: tuple[str, ...]
     retry: bool
     relations: bool
+    styles: bool = False
 
     def __bool__(self) -> bool:
-        return bool(self.tiles) or self.relations
+        return bool(self.tiles) or self.relations or self.styles
 
 
 def needs_of(manifest: dict) -> Needs:
     missing = missing_tiles(manifest)
     return Needs(tuple(missing), set(missing) <= _warned(manifest, PMTILES_FAILED),
-                 needs_relations(manifest))
+                 needs_relations(manifest), needs_styles(manifest))
 
 
 def is_clean(doc: dict) -> bool:
@@ -1062,6 +1121,24 @@ def needs_relations(manifest: dict) -> bool:
     return (manifest.get("relations_version") or 0) < relations.RELATIONS_VERSION
 
 
+def needs_styles(manifest: dict) -> bool:
+    """True when a tiled layer has no recorded style, or the styles predate
+    `layer_style.STYLE_VERSION`. A layer still waiting for PMTiles is styled in the same heal that
+    tiles it."""
+    tiled = [e for e in manifest.get("layers") or [] if e.get("spatial") and e.get("pmtiles")]
+    return bool(tiled) and ((manifest.get("style_version") or 0) < layer_style.STYLE_VERSION
+                            or any(not e.get("style") for e in tiled))
+
+
+def _style_series(series_id: str) -> list[str]:
+    """Write the layer styles a series' manifest lacks, from the GeoParquet on GCS, and record them
+    in the manifest (`_style_into`). Returns an error per layer whose style failed."""
+    def style(manifest: dict) -> tuple[list[str], bool]:
+        return _style_into(series_id, manifest), True
+
+    return _update_manifest(series_id, style)
+
+
 def _relations_series(series_id: str) -> list[str]:
     """Record a series' relationships, layer kinds and sources in its manifest, from the string and
     integer columns of its GeoParquet on GCS, read with range requests so no geometry is fetched.
@@ -1133,6 +1210,7 @@ class Heal:
     left for the next run."""
     tiled: int = 0
     related: int = 0
+    styled: int = 0
     units_upgraded: int = 0
     failed: list[str] = field(default_factory=list)
     failed_by_series: dict[str, list[str]] = field(default_factory=dict)
@@ -1140,13 +1218,14 @@ class Heal:
     pending_pubs: int = 0
     pending_units: int = 0
     touched: set[str] = field(default_factory=set)  # series whose manifest the heal may have rewritten
-    tiles: bool = True  # False for a heal that leaves tiling to the vectors job
+    tiles: bool = True  # False for a heal that leaves tiling and styles to the vectors job
 
     def summary(self, next_step: str = "run") -> str:
         pending = self.pending_layers or self.pending_pubs or self.pending_units
         layers = f"{self.pending_layers} layers, " if self.tiles else ""
         return ("Self-heal: " + (f"{self.tiled} layers tiled, " if self.tiles else "")
                 + f"{self.related} pubs' relationships recorded, units upgraded: {self.units_upgraded}"
+                + (f", {self.styled} pubs' layer styles written" if self.tiles else "")
                 + (f"; {layers}{self.pending_pubs} pubs and {self.pending_units} "
                    f"units files still pending, the next {next_step} continues" if pending else "")
                 + (f"; {len(self.failed)} failed" if self.failed else ""))
@@ -1210,27 +1289,28 @@ def _upgrade_units(path: str) -> None:
 def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
               units: dict[str, str] | None = None, tiles: bool = True) -> Heal:
     """Fill in the derivatives clean manifests are missing, from their GeoParquet on GCS and without
-    downloading any zip: PMTiles for spatial layers that have none, and relationships for manifests
-    that need them. `needs` is `{series id: Needs}` (`needs_of`); each series' manifest is read again
+    downloading any zip: PMTiles for spatial layers that have none, relationships for manifests
+    that need them, then the layer styles (which read the relationships) for those that need them. `needs` is `{series id: Needs}` (`needs_of`); each series' manifest is read again
     only when it is healed. Then upgrade each of the `units` files ({series id: object path}) that
     `units_outdated` says is older than GeoParquet 1.1. Series with only a failed layer to retry go
     last, as extraction orders retries last. No new series or units file starts once
     `time.monotonic()` passes `deadline`; the one in progress finishes, and what is left is counted
-    as pending, not failed. With `tiles` False only relationships and units are healed: tiling is
-    the vectors job's, sized for it, and a caller with less memory leaves it alone."""
+    as pending, not failed. With `tiles` False only relationships and units are healed: tiling and
+    styling are the vectors job's, sized for it, and a caller with less memory leaves them alone."""
     heal = Heal(tiles=tiles)
     if not tiles:
-        needs = {sid: n._replace(tiles=(), retry=False) for sid, n in needs.items()}
+        needs = {sid: n._replace(tiles=(), retry=False, styles=False) for sid, n in needs.items()}
     todo = sorted(((sid, n) for sid, n in needs.items() if n), key=lambda sn: sn[0])
-    todo.sort(key=lambda sn: sn[1].retry and not sn[1].relations)
+    todo.sort(key=lambda sn: sn[1].retry and not sn[1].relations and not sn[1].styles)
     for sid, need in todo:
         if deadline is not None and time.monotonic() >= deadline:
             heal.pending_layers += len(need.tiles)
-            heal.pending_pubs += int(need.relations)
+            heal.pending_pubs += int(need.relations or need.styles)
             continue
         errs: list[str] = []
         heal.touched.add(sid)
         try:
+            built, rel_errs = 0, []
             if need.tiles:
                 built, tile_errs = _tile_missing(sid)
                 heal.tiled += built
@@ -1239,6 +1319,10 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
                 rel_errs = _relations_series(sid)
                 heal.related += int(not rel_errs)
                 errs += rel_errs
+            if (need.styles or built) and not (need.relations and rel_errs):  # styles read the joins
+                style_errs = _style_series(sid)
+                heal.styled += int(not style_errs)
+                errs += style_errs
         except Exception as e:
             errs.append(f"{sid}: {_error(e)}")
             print(f"{sid}: self-heal FAIL {_error(e)}", file=sys.stderr)

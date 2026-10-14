@@ -37,6 +37,7 @@ def _mem_gcs(monkeypatch):
 
     monkeypatch.setattr(vectors.gcs, "upload", _upload)
     monkeypatch.setattr(vectors.gcs, "put_bytes", lambda b, p, **kwargs: store.__setitem__(p, b))
+    monkeypatch.setattr(vectors.gcs, "open_reader", lambda path: BytesIO(store[path]))
     return store
 
 
@@ -113,8 +114,10 @@ def test_extract_and_upload_writes_spatial_and_table_parquet_and_manifest(monkey
     tiles_path = f"{vectors.VECTORS_PREFIX}/M-100/geo__ContactsAndFaults.pmtiles"
     table_path = f"{vectors.VECTORS_PREFIX}/M-100/geo__DescriptionOfMapUnits.parquet"
     manifest_path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
-    assert store.keys() == {spatial_path, tiles_path, table_path, manifest_path}
+    style_path = f"{vectors.VECTORS_PREFIX}/M-100/geo__ContactsAndFaults.style.json"
+    assert store.keys() == {spatial_path, tiles_path, style_path, table_path, manifest_path}
     assert json.loads(store[manifest_path]) == manifest
+    assert manifest["layers"][0]["style"] == "geo__ContactsAndFaults.style.json"
 
     # Raw schema preserved verbatim: no rename/coercion, no geometry injected into the table.
     got_table = pd.read_parquet(BytesIO(store[table_path]))
@@ -1278,7 +1281,8 @@ def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(m
 
     assert vectors.main() == 0
     out = capsys.readouterr().out
-    assert ("Self-heal: 2 layers tiled, 0 pubs' relationships recorded, units upgraded: 0; 4 layers, "
+    assert ("Self-heal: 2 layers tiled, 0 pubs' relationships recorded, units upgraded: 0, "
+            "1 pubs' layer styles written; 4 layers, "
             "0 pubs and 0 units files still pending, the next run continues") in out
     assert vectors.pmtiles_object("M-10", "a") in store  # the series in progress finished
     assert vectors.pmtiles_object("M-11", "a") not in store
@@ -2038,3 +2042,100 @@ def test_a_column_missing_from_the_tiles_is_a_warning_naming_it(monkeypatch, tmp
     (warning,) = manifest["warnings"]
     assert warning["code"] == vectors.TILE_COLUMNS_DROPPED and "Lost" in warning["warning"]
     assert entry["pmtiles"] is True and vectors.pmtiles_object("M-214", "w") in store
+
+
+# ---------------------------------------------------------------------------
+# Layer styles: written beside the tiles at extraction, and by the self-heal for pubs extracted before
+# ---------------------------------------------------------------------------
+
+def _styled_pub(monkeypatch, tmp_path, **layer_extra):
+    """A pub whose unit polygons join a DMU holding AreaFillRGB, tiled but not yet styled."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    cols = [{"name": "MapUnit", "type": "string"}]
+    doc = _manifest(
+        {"label": "geo__Polys", "spatial": True, "pmtiles": True, "pmtiles_layer": "geo__Polys",
+         "geometry_types": ["MultiPolygon"], "columns": cols, **layer_extra},
+        {"label": "geo__DMU", "spatial": False,
+         "columns": [*cols, {"name": "AreaFillRGB", "type": "string"}]})
+    doc["relationships"] = [{"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
+                             "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100}]
+    store = _backfill_store(monkeypatch, tmp_path, {"M-500": doc})
+    for label, table in (("geo__Polys", {"MapUnit": ["Qal", "Tv", "Zz"]}),
+                         ("geo__DMU", {"MapUnit": ["Qal", "Tv"], "AreaFillRGB": ["255;255;0", None]})):
+        sink = BytesIO()
+        pq.write_table(pa.table(table), sink)
+        store[f"{vectors.VECTORS_PREFIX}/M-500/{label}.parquet"] = sink.getvalue()
+    return store
+
+
+def _stored_manifest(store, sid="M-500"):
+    return json.loads(store[f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json"])
+
+
+def test_self_heal_styles_a_tiled_layer_from_its_dmu_and_records_it(monkeypatch, tmp_path, capsys):
+    store = _styled_pub(monkeypatch, tmp_path)
+
+    assert _heal(["M-500"]) == 0
+
+    style = json.loads(store[vectors.style_object("M-500", "geo__Polys")])
+    assert style["layers"][0]["paint"]["fill-color"] == [
+        "match", ["to-string", ["get", "MapUnit"]], "Qal", "#ffff00", vectors.layer_style.FALLBACK_FILL]
+    manifest = _stored_manifest(store)
+    layer = manifest["layers"][0]
+    assert (layer["style"], layer["style_kind"], layer["style_fallback_rows"]) == (
+        "geo__Polys.style.json", "units", 2)
+    assert manifest["style_version"] == vectors.layer_style.STYLE_VERSION
+    assert "1 pubs' layer styles written" in capsys.readouterr().out
+    assert not vectors.needs_of(manifest).styles  # nothing left for the next run
+
+
+def test_a_layer_style_that_cannot_be_built_fails_loud_and_is_retried(monkeypatch, tmp_path):
+    store = _styled_pub(monkeypatch, tmp_path)
+    del store[f"{vectors.VECTORS_PREFIX}/M-500/geo__DMU.parquet"]
+
+    heal = vectors.self_heal({"M-500": vectors.needs_of(vectors._clean_manifest_of("M-500"))})
+
+    assert len(heal.failed) == 1 and heal.failed[0].startswith("M-500/geo__Polys: style not built")
+
+    manifest = _stored_manifest(store)
+    assert "style" not in manifest["layers"][0] and "style_version" not in manifest
+    assert [w["code"] for w in manifest["warnings"]] == [vectors.STYLE_FAILED]
+    assert vectors.style_object("M-500", "geo__Polys") not in store
+    assert vectors.needs_of(manifest).styles
+
+
+def test_styles_are_rewritten_when_the_style_version_is_bumped(monkeypatch, tmp_path):
+    store = _styled_pub(monkeypatch, tmp_path, style="geo__Polys.style.json")
+    manifest = _stored_manifest(store)
+    manifest["style_version"] = vectors.layer_style.STYLE_VERSION
+    assert not vectors.needs_styles(manifest)
+
+    monkeypatch.setattr(vectors.layer_style, "STYLE_VERSION", vectors.layer_style.STYLE_VERSION + 1)
+    assert vectors.needs_styles(manifest)
+    assert _heal(["M-500"]) == 0
+    assert vectors.style_object("M-500", "geo__Polys") in store
+    assert _stored_manifest(store)["style_version"] == vectors.layer_style.STYLE_VERSION
+
+
+def test_a_layer_without_tiles_is_styled_in_the_heal_that_tiles_it(monkeypatch, tmp_path):
+    store = _backfill_store(monkeypatch, tmp_path, {"M-501": _manifest(
+        {"label": "todo", "spatial": True, "geometry_types": ["Point"]})})
+    assert not vectors.needs_styles(_stored_manifest(store, "M-501"))
+
+    assert _heal(["M-501"]) == 0
+
+    layer = _stored_manifest(store, "M-501")["layers"][0]
+    assert layer["style"] == "todo.style.json" and layer["style_kind"] == "default"
+    assert vectors.style_object("M-501", "todo") in store
+
+
+def test_the_ingest_heal_leaves_styles_to_the_vectors_job(monkeypatch, tmp_path):
+    store = _styled_pub(monkeypatch, tmp_path)
+    needs = {"M-500": vectors.needs_of(vectors._clean_manifest_of("M-500"))}
+    assert needs["M-500"].styles
+
+    heal = vectors.self_heal(needs, tiles=False)
+
+    assert heal.styled == 0 and vectors.style_object("M-500", "geo__Polys") not in store

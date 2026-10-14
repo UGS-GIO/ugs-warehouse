@@ -20,6 +20,8 @@ import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, gr
   recordCountLabel } from "./item-view";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
+import { CiteMenu } from "./cite-menu";
+import { citationFields } from "./citation";
 import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, hasFootprint, inferredKey,
   inferredTitle, isReferenceAsset, IS_REVIEW, partitionRelated, ownForeignKeys, relatedAssets,
   pmtilesLink, relatedJoins, relatedLinks, type ForeignKey, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
@@ -409,6 +411,7 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
           {onExplore && <button onClick={onExplore} className={SECONDARY}>Explore ⤢</button>}
           {via && <a href={via.href} target="_blank" rel="noopener" className={SECONDARY}>{via.title ?? "Publication page"} ↗</a>}
           {cite && <a href={cite.href} target="_blank" rel="noopener" className={SECONDARY}>Cite (DOI) ↗</a>}
+          {cite && <CiteMenu fields={citationFields(p, String(item.id ?? ""))} className={SECONDARY} />}
         </div>
       </div>
       {/* Same grid as the map below, so the description wraps at the map's width. */}

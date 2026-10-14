@@ -29,6 +29,28 @@ describe("Breadcrumb", () => {
     expect(up).toHaveBeenCalledTimes(2);
   });
 
+  it("makes a crumb a focusable button that Enter activates", async () => {
+    const onClick = vi.fn();
+    render(<Breadcrumb crumbs={[{ label: "Catalog", onClick }, { label: "Publications" }]} />);
+    await userEvent.tab();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Catalog" }));
+    await userEvent.keyboard("{Enter}");
+    expect(onClick).toHaveBeenCalledOnce();
+  });
+
+  it("leaves Alt+ArrowUp alone while typing in a field or over the map", async () => {
+    const up = vi.fn();
+    render(<div>
+      <Breadcrumb crumbs={[{ label: "Catalog", onClick: vi.fn() }, { label: "Publications", onClick: up }, { label: "OFR" }]} />
+      <input aria-label="q" /><textarea aria-label="t" /><div contentEditable suppressContentEditableWarning data-testid="ce" />
+      <div className="maplibregl-map"><canvas data-testid="map" /></div>
+    </div>);
+    for (const el of [screen.getByLabelText("q"), screen.getByLabelText("t"), screen.getByTestId("ce"), screen.getByTestId("map")]) {
+      el.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", altKey: true, bubbles: true, cancelable: true }));
+    }
+    expect(up).not.toHaveBeenCalled();
+  });
+
   it("has no up control at the root or when the parent is not a link", () => {
     render(<Breadcrumb crumbs={[{ label: "Catalog" }]} />);
     expect(screen.queryByRole("button")).toBeNull();

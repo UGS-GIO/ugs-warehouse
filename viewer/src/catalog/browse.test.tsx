@@ -87,7 +87,7 @@ describe("an item in the Discover drawer", () => {
         crumbs={[{ label: "Catalog", onClick: vi.fn() }, { label: "Hazards", onClick: onPub }, { label: "Quaternary Faults" }]}
         onBack={onBack} onMap={noop} />
     </PreviewMapProvider></QueryClientProvider>);
-    screen.getByText("Hazards").click();
+    screen.getByRole("button", { name: "Hazards" }).click();
     screen.getByRole("button", { name: "Up to Hazards" }).click();
     expect(onPub).toHaveBeenCalledTimes(2);
     expect(onBack).not.toHaveBeenCalled();

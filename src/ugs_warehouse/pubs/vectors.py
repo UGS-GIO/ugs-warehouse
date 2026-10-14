@@ -1271,8 +1271,8 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
               units: dict[str, str] | None = None, tiles: bool = True) -> Heal:
     """Fill in the derivatives clean manifests are missing, from their GeoParquet on GCS and without
     downloading any zip: PMTiles for spatial layers that have none, relationships for manifests
-    that need them, then the layer styles (which read the relationships) for those that need them. `needs` is `{series id: Needs}` (`needs_of`); each series' manifest is read again
-    only when it is healed. Then upgrade each of the `units` files ({series id: object path}) that
+    that need them, then the layer styles for those that need them. `needs` is `{series id: Needs}`
+    (`needs_of`); each series' manifest is read again only when it is healed. Then upgrade each of the `units` files ({series id: object path}) that
     `units_outdated` says is older than GeoParquet 1.1. Series with only a failed layer to retry go
     last, as extraction orders retries last. No new series or units file starts once
     `time.monotonic()` passes `deadline`; the one in progress finishes, and what is left is counted
@@ -1291,7 +1291,7 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
         errs: list[str] = []
         heal.touched.add(sid)
         try:
-            built, rel_errs = 0, []
+            built = 0
             if need.tiles:
                 built, tile_errs = _tile_missing(sid)
                 heal.tiled += built
@@ -1300,7 +1300,7 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
                 rel_errs = _relations_series(sid)
                 heal.related += int(not rel_errs)
                 errs += rel_errs
-            if (need.styles or built) and not rel_errs:  # a failed pass leaves the manifest as it was
+            if need.styles or built:
                 style_errs = _style_series(sid)
                 heal.styled += int(not style_errs)
                 errs += style_errs

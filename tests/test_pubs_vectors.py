@@ -1678,13 +1678,16 @@ def test_relations_backfill_scopes_bare_shapefiles_together_when_there_is_one_fo
     assert {e["source"] for e in doc["layers"]} == {"M-404"}
 
 
-def test_relations_backfill_writes_nothing_when_a_layer_cannot_be_read(monkeypatch, tmp_path, capsys):
+def test_relations_backfill_records_nothing_when_a_layer_cannot_be_read(monkeypatch, tmp_path, capsys):
     store = _relations_store(monkeypatch, tmp_path, "M-402", _gems_parquet())
     del store[f"{vectors.VECTORS_PREFIX}/M-402/geo__Glossary.parquet"]
-    before = store[f"{vectors.VECTORS_PREFIX}/M-402/_manifest.json"]
+    before = _stored_manifest(store, "M-402")
 
     assert _heal(["M-402"]) == 1
-    assert store[f"{vectors.VECTORS_PREFIX}/M-402/_manifest.json"] == before
+    after = _stored_manifest(store, "M-402")
+    for key in ("relationships", "relations_version"):  # styles are written; relationships are not
+        assert after.get(key) == before.get(key)
+    assert [lay.get("kind") for lay in after["layers"]] == [lay.get("kind") for lay in before["layers"]]
     assert "M-402/geo__Glossary: not read for relationships" in capsys.readouterr().err
 
 

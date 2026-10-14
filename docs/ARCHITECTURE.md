@@ -93,13 +93,16 @@ STAC emit, a matching style attaches a `renders` block (MapLibre GL style URL). 
 rebinds renders without a reingest.
 
 Publication layers have no ugs-styles style of their own. The vectors job generates one per layer
-(`<label>.style.json`, the viewer's default look; see ⑤) and records it in the manifest; the pubs ingest puts a pointer, `ugs:generated_style`, on the layer's
-Item. `attach_renders` then binds by precedence: the ugs-styles style for the Item's id, then (a plate only)
-the one for its publication's id, then the generated file. The generated one binds the same way as the
-others, a `ugs:renders` default (marked `generated`, so the viewer draws the layer in its own per-layer colour) plus a `roles:["style"]` `style` asset, so the `restyle` job rebinds it and an
-ugs-styles style added later replaces it without a reingest. A single-file publication has no layer Item: its
-one layer rides the Collection, so the pointer, `ugs:renders` and the `style` asset sit on the Collection
-(top-level members), which `restyle --collection all` rebinds too. The style is never written into the Item.
+(`<label>.style.json`, the viewer's default look; see ⑤) and records it in the manifest; the pubs
+ingest puts a pointer, `ugs:generated_style`, on the layer's Item. `attach_renders` then binds by
+precedence: the ugs-styles style for the Item's id, then (a plate only) the one for its
+publication's id, then the generated file. The generated one binds the same way as the others, a
+`ugs:renders` default (marked `generated`, so the viewer draws the layer in its own per-layer
+colour) plus a `roles:["style"]` `style` asset, so the `restyle` job rebinds it and an ugs-styles
+style added later replaces it without a reingest. A single-file publication has no layer Item: its
+one layer rides the Collection, so the pointer, `ugs:renders` and the `style` asset sit on the
+Collection (top-level members), which `restyle --collection all` rebinds too. The style is never
+written into the Item.
 
 ### ⑤ Publications 🟧
 
@@ -189,11 +192,12 @@ with `always_xy`, so coordinates stay lon/lat) and streams GeoJSONSeq to tippeca
 a `pmtiles_failed` warning instead of an error, so the pub stays extracted and is not downloaded
 again; the next run's self-heal retries it (below). A tiled layer's Item carries the same `pmtiles`
 asset and `rel=pmtiles` web-map link as a serving topic, so the viewer previews it and the Map page
-can add it. Beside the tiles each tiled layer gets `<label>.style.json` (`pubs/layer_style.py`), the viewer's default look
-(`defaultVectorLayers`) as a MapLibre style holding only `layers`, like the ugs-styles files; the viewer supplies
-the PMTiles source and `source-layer`. The manifest layer records `style` (the file name) and the manifest
-`style_version`. Matching unit polygons to the DMU's `AreaFillRGB` colours is not done, because the source data
-carries no colours. A pub's `_units` Item (`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own; the
+can add it. Beside the tiles each tiled layer gets `<label>.style.json` (`pubs/layer_style.py`), the viewer's
+default look (`defaultVectorLayers`) as a MapLibre style holding only `layers`, like the ugs-styles
+files; the viewer supplies the PMTiles source and `source-layer`. The manifest layer records `style`
+(the file name) and the manifest `style_version`. Matching unit polygons to the DMU's `AreaFillRGB`
+colours is not done, because the source data carries no colours. A pub's `_units` Item
+(`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own; the
 statewide `geolmap/units/units.pmtiles` from `pubs/units_pmtiles.py` is a separate artifact.
 
 The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
@@ -256,10 +260,10 @@ are missing, from their GeoParquet on GCS and without downloading a zip:
   because its name was taken, the bundle has several folders and a bare shapefile label's folder is
   unknown: it is left out of inference with a `relationships_scope_unknown` warning until `--force`
   re-extracts;
-- the style file of each tiled layer that has none, or of every layer when `style_version` is older than
-  `layer_style.STYLE_VERSION` (bump it when the generator changes what it writes). It runs after tiling and
-  relationships, and is skipped for a pub whose relationships failed in the same pass. A style that cannot be written is a `style_failed` warning and a listed failure, and
-  is tried again next run;
+- the style file of each tiled layer that has none, or of every layer when `style_version` is older
+  than `layer_style.STYLE_VERSION` (bump it when the generator changes what it writes). It runs
+  after tiling and relationships. A style that cannot be written is a `style_failed` warning and a
+  listed failure, and is tried again next run;
 - each per-pub units file (`geolmap/units/<SID>/<SID>.units.parquet`) whose Parquet footer, read by
   range, says GeoParquet older than 1.1 or no bbox covering is rewritten through
   `pubs.geoparquet.write` to the same path, with a mutable cache header.
@@ -271,9 +275,9 @@ the self-heal share one time budget, `VECTORS_TIME_BUDGET_S` (default 2700 s, in
 7200 s timeout). Extraction goes first: it stops starting pubs once the budget is spent and lists
 the pubs left for the next run, so the self-heal only runs once the backlog of new pubs is cleared.
 The self-heal stops starting series, finishes the one in progress, and prints `Self-heal: N layers
-tiled, M pubs' relationships recorded, units upgraded: U, S pubs' layer styles written; K layers, J pubs and P units files still
-pending, the next run continues`. Targeted and forced runs extract every pub they are given; a
-forced run re-extracts everything, so nothing is left to heal.
+tiled, M pubs' relationships recorded, units upgraded: U, S pubs' layer styles written; K layers,
+J pubs and P units files still pending, the next run continues`. Targeted and forced runs extract
+every pub they are given; a forced run re-extracts everything, so nothing is left to heal.
 
 The run exits 1 only for work that failed in that run: a pub that failed to extract, a layer whose
 tiling failed at extraction, or a layer or pub whose self-heal failed (each is listed). Work the
@@ -281,9 +285,9 @@ time budget left pending is not a failure.
 
 The pubs ingest (4Gi) heals relationships and units files before it writes the items (stopping new
 series after 600 s), so any refresh catches those up and publishes them in the same run. It does
-not tile or style: tiling reads whole layers and belongs to the vectors job, and so do the style files. **Rebuild pubs STAC** alone
-therefore does not build missing PMTiles; a **Full refresh** does, because it runs the vectors job
-before the ingest. The ingest reads each vector manifest once, on 16 threads, keeps the reduced
+not tile or style: tiling reads whole layers and belongs to the vectors job, and so do the style
+files. **Rebuild pubs STAC** alone therefore does not build missing PMTiles; a **Full refresh**
+does, because it runs the vectors job before the ingest. The ingest reads each vector manifest once, on 16 threads, keeps the reduced
 form the items are built from plus the small needs index, and reads again only the series the heal
 changed. Pubs extracted before PMTiles and relationships were recorded catch up this way: repeat a
 refresh until it reports 0 pending. After the units files have caught up, purge the CDN

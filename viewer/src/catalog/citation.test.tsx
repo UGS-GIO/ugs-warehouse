@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { collectionAsItem, type StacDoc } from "@/stac";
 import { CiteMenu } from "./cite-menu";
 import { bibEscape, bibtex, citationFields, plainCitation, ris, splitAuthors } from "./citation";
+import authorCases from "./fixtures/authors.json";
 import c140 from "./fixtures/C-140.collection.json";
 
 const fields = () => citationFields(collectionAsItem(c140 as unknown as StacDoc).properties, "C-140");
@@ -16,7 +17,18 @@ describe("C-140 export", () => {
   it("splits the feed's mixed author string", () => {
     expect(fields().authors).toEqual(
       ["Andrew Rupke", "Stephanie E. Mills", "Michael D. Vanden Berg", "Noah Christensen", "Taylor Boden"]);
-    expect(splitAuthors("Smith, John; Doe, Jane and Roe, Rick")).toEqual(["Smith, John", "Doe, Jane", "Roe, Rick"]);
+    expect(splitAuthors("Smith, John; Doe, Jane and Roe, Rick").names).toEqual(["Smith, John", "Doe, Jane", "Roe, Rick"]);
+  });
+
+  it.each(authorCases)("splits real feed authors: $raw", ({ raw, names, ambiguous }) => {
+    expect(splitAuthors(raw)).toEqual({ names, ambiguous });
+  });
+
+  it("keeps an ambiguous string as one braced BibTeX author and one RIS AU line", () => {
+    const f = citationFields({ title: "T", "ugs:series_id": "X-1", "ugs:author": "I.J. Witkind; assisted by H.T. Cantor, and G.R. Marshall" });
+    expect(f.authorsAmbiguous).toBe(true);
+    expect(bibtex(f)).toContain("author = {{I.J. Witkind; assisted by H.T. Cantor, and G.R. Marshall}}");
+    expect(ris(f).split("\r\n").filter((l) => l.startsWith("AU"))).toHaveLength(1);
   });
 
   it("builds BibTeX as a techreport", () => {
@@ -31,6 +43,7 @@ describe("C-140 export", () => {
     expect(b).toContain("doi = {10.34191/C-140}");
     expect(b).toContain("url = {https://doi.org/10.34191/C-140}");
     expect(b).not.toContain("pages");
+    expect(b).not.toContain("howpublished");
   });
 
   it("builds RIS as a report", () => {
@@ -55,12 +68,25 @@ describe("fallback and escaping", () => {
     expect(plainCitation(f)).toBe(
       "Doe, Jane, 1999, A Map: Utah Geological Survey Map M-1, https://doi.org/10.34191/M-1.");
     expect(bibtex(f)).toMatch(/^@misc\{UGS_M-1,/);
+    expect(bibtex(f)).toContain("howpublished = {Utah Geological Survey Map M-1}");
+    expect(bibtex(f)).not.toContain("institution");
     expect(ris(f)).toMatch(/^TY {2}- MAP/);
   });
 
   it("omits what the data lacks", () => {
     const f = citationFields({ title: "T", "ugs:series_id": "X-1", "ugs:date_unknown": true, datetime: "2000-01-01T00:00:00Z" });
     expect(plainCitation(f)).toBe("T: Utah Geological Survey X-1, https://doi.org/10.34191/X-1.");
+  });
+
+  it("leaves doi and url verbatim", () => {
+    const b = bibtex(citationFields({ title: "T", "ugs:series_id": "X-1", "sci:doi": "10.34191/X_1%2" }));
+    expect(b).toContain("doi = {10.34191/X_1%2}");
+    expect(b).toContain("url = {https://doi.org/10.34191/X_1%2}");
+  });
+
+  it("flattens line breaks and tabs in RIS values", () => {
+    const r = ris(citationFields({ title: "Line one\n  line\ttwo", "ugs:series_id": "X-1" }));
+    expect(r).toContain("TI  - Line one line two\r\n");
   });
 
   it("escapes BibTeX specials", () => {
@@ -77,6 +103,7 @@ describe("CiteMenu", () => {
     await user.click(await screen.findByRole("button", { name: "Copy citation" }));
     expect(writeText).toHaveBeenCalledWith(c140["sci:citation"]);
     expect(await screen.findByRole("button", { name: "Copied" })).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("Copied to clipboard");
     expect(screen.getByRole("button", { name: "Download RIS" })).toBeTruthy();
   });
 

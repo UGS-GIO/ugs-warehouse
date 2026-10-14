@@ -44,6 +44,9 @@ export function CiteMenu({ fields, className }: { fields: CitationFields; classN
               {label("bib", "Copy BibTeX")}
             </button>
             <button type="button" className={ROW} onClick={downloadRis}>Download RIS</button>
+            <p role="status" className="px-2 text-xs text-muted-foreground empty:hidden">
+              {status?.state === "copied" ? "Copied to clipboard" : ""}
+            </p>
             {status?.state === "error" && (
               <p role="alert" className="px-2 text-xs text-destructive">
                 Could not copy: {status.message || "clipboard unavailable"}

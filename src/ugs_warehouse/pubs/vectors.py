@@ -1271,7 +1271,9 @@ def _append_layer(src: str, out: str, entry: dict) -> None:
     # GeoParquet reads a missing CRS as lon/lat; extraction never writes a layer without one.
     crs = CRS.from_user_input(col["crs"]).to_wkt() if col.get("crs") else "EPSG:4326"
     covering = ((col.get("covering") or {}).get("bbox") or {}).get("xmin") or [None]
-    types = {str(t).replace(" ", "") for t in col.get("geometry_types") or []}
+    # GeoParquet names a 3D type "MultiPolygon Z", which OGR takes with its space; no-space
+    # "MultiPolygonZ" is rejected. Mixed or missing types fall back to Unknown (Z kept per feature).
+    types = {str(t).strip() for t in col.get("geometry_types") or []}
     kind = types.pop() if len(types) == 1 else "Unknown"
     keep = [n for n in pf.schema_arrow.names if n != covering[0]]
     for batch in pf.iter_batches(batch_size=GPKG_BATCH_ROWS, columns=keep):

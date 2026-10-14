@@ -379,7 +379,7 @@ def build_publication(p: dict, attachments: list[dict], *,
     rel_assets, rel_links, own_fks, published = _relationship_parts(
         sid, coll_path, relationships or [], ids, titles,
         {t["label"]: t.get("columns") for t in companion_tables or []}, set(vector_layers or []),
-        unpublished)
+        unpublished, {k: m["rows"] for k, m in layer_meta.items() if m.get("rows") is not None})
 
     def kind_props(label: str, spatial: bool) -> dict:
         """The Item's `ugs:layer_kind` (from the relationships published here), its source dataset's
@@ -388,7 +388,9 @@ def build_publication(p: dict, attachments: list[dict], *,
         file = layer_meta.get(label, {}).get("source_file")
         return {"ugs:layer_kind": layer_kind(spatial, label, published),
                 "ugs:source_key": source, "ugs:source_dataset": source_title(source),
-                **({"ugs:source_file": file["title"]} if file else {})}
+                **({"ugs:source_file": file["title"]} if file else {}),
+                **({"ugs:geometry_kind": gk} if spatial and (gk := geometry_kind(
+                    layer_meta.get(label, {}).get("geometry_types"))) else {})}
 
     def with_related(label: str, data: dict) -> tuple[dict, list[str]]:
         """The Item's assets: its data (carrying its own foreign keys), then its related tables
@@ -614,7 +616,22 @@ def build_publication(p: dict, attachments: list[dict], *,
 
 
 # Item properties a publication's rel=item links repeat, so the viewer groups its items unfetched.
-ITEM_LINK_FIELDS = ("ugs:layer_kind", "ugs:source_key", "ugs:source_dataset", "ugs:source_file")
+ITEM_LINK_FIELDS = ("ugs:layer_kind", "ugs:source_key", "ugs:source_dataset", "ugs:source_file",
+                    "ugs:geometry_kind", "table:row_count")
+_GEOMETRY_WORD = {"point": "points", "line": "lines", "polygon": "polygons"}
+
+
+def geometry_kind(types: list[str] | None) -> str | None:
+    """The plain word for a layer's manifest `geometry_types`: points, lines, polygons, or mixed
+    when they span several. None when the manifest records none or one this does not know."""
+    words = set()
+    for t in types or []:
+        base = re.sub(r"(ZM|Z|M)$", "", re.sub(r"\s+", "", str(t))).lower()
+        base = base.removeprefix("multi").replace("string", "")
+        if base not in _GEOMETRY_WORD:
+            return None
+        words.add(_GEOMETRY_WORD[base])
+    return None if not words else words.pop() if len(words) == 1 else "mixed"
 # A related table that many of the pub's map layers point at (DataSources on a GeMS map) is a
 # lookup shared across the map rather than one layer's companion; its assets carry this role.
 REFERENCE_ROLE = "reference"
@@ -623,7 +640,7 @@ REFERENCE_ROLE = "reference"
 def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids: dict[str, str],
                         titles: dict[str, tuple[str, str | None]],
                         table_columns: dict[str, list | None], spatial: set[str],
-                        unpublished: set[str]) -> tuple[dict, dict, dict, list[dict]]:
+                        unpublished: set[str], row_counts: dict[str, int] | None = None) -> tuple[dict, dict, dict, list[dict]]:
     """The relationships as STAC pieces, per label: ({origin: {destination: related-table asset}},
     {label: [related links]}, {origin: [own foreign keys]}, [relationships published]). A
     related-table asset's foreign key is flipped to destination -> origin, as vector/related.py
@@ -664,7 +681,9 @@ def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids
             else:
                 assets[o][d] = {"href": parquet(d), "type": PARQUET_MIME, "roles": ["data", "related"],
                                 "title": titles[d][0], "ugs:foreign_keys": [fk],
-                                **({"table:columns": table_columns[d]} if table_columns[d] else {})}
+                                **({"table:columns": table_columns[d]} if table_columns[d] else {}),
+                                **({"table:row_count": (row_counts or {})[d]}
+                                   if (row_counts or {}).get(d) is not None else {})}
         else:
             link(o, d)
         link(d, o)

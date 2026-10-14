@@ -129,7 +129,8 @@
           "title": "DMU",
           "ugs:layer_kind": "table",
           "ugs:source_key": "geo",
-          "ugs:source_dataset": "Geo"
+          "ugs:source_dataset": "Geo",
+          "table:row_count": 41
         },
         {
           "rel": "item",
@@ -138,7 +139,9 @@
           "title": "Faults",
           "ugs:layer_kind": "layer",
           "ugs:source_key": "geo",
-          "ugs:source_dataset": "Geo"
+          "ugs:source_dataset": "Geo",
+          "ugs:geometry_kind": "lines",
+          "table:row_count": 2
         },
         {
           "rel": "item",
@@ -147,7 +150,8 @@
           "title": "Glossary",
           "ugs:layer_kind": "supporting",
           "ugs:source_key": "geo",
-          "ugs:source_dataset": "Geo"
+          "ugs:source_dataset": "Geo",
+          "table:row_count": 9
         },
         {
           "rel": "item",
@@ -156,7 +160,9 @@
           "title": "Map Unit Polys",
           "ugs:layer_kind": "layer",
           "ugs:source_key": "geo",
-          "ugs:source_dataset": "Geo"
+          "ugs:source_dataset": "Geo",
+          "ugs:geometry_kind": "polygons",
+          "table:row_count": 3
         },
         {
           "rel": "item",
@@ -418,6 +424,7 @@
           "ugs:layer_kind": "layer",
           "ugs:source_key": "geo",
           "ugs:source_dataset": "Geo",
+          "ugs:geometry_kind": "polygons",
           "ugs:footprint_source": "layer"
         },
         "assets": {
@@ -478,7 +485,8 @@
                 "name": "Age",
                 "type": "string"
               }
-            ]
+            ],
+            "table:row_count": 41
           },
           "pmtiles": {
             "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__MapUnitPolys.pmtiles",
@@ -584,6 +592,7 @@
           "ugs:layer_kind": "layer",
           "ugs:source_key": "geo",
           "ugs:source_dataset": "Geo",
+          "ugs:geometry_kind": "lines",
           "ugs:footprint_source": "layer"
         },
         "assets": {

@@ -545,7 +545,7 @@ def test_a_layer_carries_its_related_table_in_the_serving_topic_shape():
                                             "href": f"{VEC}/geo__MapUnitPolys.parquet",
                                             "fields": ["MapUnit"]},
                               "ugs:detected_by": "inferred", "ugs:confidence": 100}],
-        "table:columns": DMU_COLS}
+        "table:columns": DMU_COLS, "table:row_count": 41}
     # The layer's own outgoing key sits on its data asset, as on a serving topic.
     assert mup["assets"]["data"]["ugs:foreign_keys"] == [{
         "fields": ["MapUnit"],
@@ -745,3 +745,35 @@ def test_the_attachment_key_is_the_one_the_collection_gives_its_asset():
 
     assert identity.attachment_key("Appendix A - Excel") == "appendix_a_excel"
     assert "appendix_a_excel" in coll["assets"]
+
+
+@pytest.mark.parametrize("types,want", [
+    (["Polygon"], "polygons"), (["MultiPolygon", "Polygon"], "polygons"),
+    (["Point", "MultiPoint"], "points"), (["Multi Point"], "points"),
+    (["LineString", "MultiLineString"], "lines"), (["Line String Z"], "lines"),
+    (["Polygon", "LineString"], "mixed"), ([], None), (None, None), (["GeometryCollection"], None)])
+def test_geometry_kind_is_a_plain_word_for_the_manifest_geometry_types(types, want):
+    from ugs_warehouse.pubs.sink_stac import geometry_kind
+
+    assert geometry_kind(types) == want
+
+
+def test_a_layers_geometry_and_row_count_ride_its_item_and_collection_link():
+    layers = {"geo__Faults": {"rows": 12, "bbox": [-112.4, 40.6, -112.1, 40.9],
+                              "geometry_types": ["LineString", "MultiLineString"]},
+              "geo__DMU": {"rows": 41, "bbox": None, "geometry_types": []}}
+    coll, items = _build(layers=layers)
+
+    by_id = {it["id"]: it for it in items}
+    assert by_id["OFR-784DM__geo__Faults"]["properties"]["ugs:geometry_kind"] == "lines"
+    assert "ugs:geometry_kind" not in by_id["OFR-784DM__geo__DMU"]["properties"]
+    links = {lk["href"]: lk for lk in coll["links"] if lk["rel"] == "item"}
+    faults = links["./OFR-784DM__geo__Faults/OFR-784DM__geo__Faults.json"]
+    dmu = links["./OFR-784DM__geo__DMU/OFR-784DM__geo__DMU.json"]
+    assert (faults["ugs:geometry_kind"], faults["table:row_count"]) == ("lines", 12)
+    assert ("ugs:geometry_kind" not in dmu, dmu["table:row_count"]) == (True, 41)
+
+
+def test_a_related_table_asset_carries_its_row_count():
+    _, items = _related()
+    assert items["geo__MapUnitPolys"]["assets"]["geo__DMU"]["table:row_count"] == 41

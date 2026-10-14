@@ -45,7 +45,7 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import NamedTuple
 
-from ..core import config, gcs
+from ..core import config, gcs, stac
 from ..vector import sink_pmtiles, transform
 from . import geoparquet, harvest, identity, relations, source
 
@@ -200,27 +200,6 @@ def _sources(work: str, nested_dirs: list[str] | tuple = ()
     return out, errors
 
 
-def _table_type(arrow_type) -> str:
-    """Arrow type → the STAC table extension type names the vector producer uses
-    (vector/sink_stac.py `_table_type`), so every schema in the catalog reads the same way."""
-    import pyarrow as pa
-
-    t = arrow_type.value_type if pa.types.is_dictionary(arrow_type) else arrow_type
-    if pa.types.is_integer(t):
-        return "integer"
-    if pa.types.is_floating(t) or pa.types.is_decimal(t):
-        return "number"
-    if pa.types.is_boolean(t):
-        return "boolean"
-    if pa.types.is_timestamp(t):
-        return "datetime"
-    if pa.types.is_date(t):
-        return "date"
-    if pa.types.is_string(t) or pa.types.is_large_string(t):
-        return "string"
-    return str(t)
-
-
 def _schema(source) -> tuple[list[dict], dict | None]:
     """The written file's columns in the STAC table extension's shape ([{name, type}]) and its
     GeoParquet `geo` metadata, if any. `source` is a path or file object. Reading both from the
@@ -234,7 +213,7 @@ def _columns_of(schema) -> tuple[list[dict], dict | None]:
     meta = schema.metadata or {}
     geo = json.loads(meta[b"geo"]) if b"geo" in meta else None
     geom_cols = set((geo or {}).get("columns", {}))
-    return [{"name": f.name, "type": "geometry" if f.name in geom_cols else _table_type(f.type)}
+    return [{"name": f.name, "type": "geometry" if f.name in geom_cols else stac.table_type(f.type)}
             for f in schema], geo
 
 

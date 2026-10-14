@@ -340,6 +340,48 @@ def build_collection(*, collection_id: str, collection_path: str, title: str, de
     return doc
 
 
+def _arrow_duck_name(t) -> str | None:
+    """The DuckDB type name a pyarrow type reads back as, or None for a type with no scalar
+    equivalent (nested, binary, time, duration). A dictionary column reads as its value type."""
+    import pyarrow as pa
+
+    if pa.types.is_dictionary(t):
+        return _arrow_duck_name(t.value_type)
+    for check, name in ((pa.types.is_integer, "BIGINT"), (pa.types.is_floating, "DOUBLE"),
+                        (pa.types.is_decimal, "DECIMAL"), (pa.types.is_boolean, "BOOLEAN"),
+                        (pa.types.is_timestamp, "TIMESTAMP"), (pa.types.is_date, "DATE"),
+                        (pa.types.is_string, "VARCHAR"), (pa.types.is_large_string, "VARCHAR")):
+        if check(t):
+            return name
+    return None
+
+
+def table_type(col_type) -> str:
+    """STAC Table extension type name for a DuckDB type string or a pyarrow type, so a column reads
+    the same in a serving topic and in a publication layer. An unmapped type keeps its own name."""
+    if not isinstance(col_type, str):
+        duck = _arrow_duck_name(col_type)
+        if duck is None:
+            return str(col_type)
+        col_type = duck
+    t = col_type.upper()
+    if t.startswith("GEOMETRY"):
+        return "geometry"
+    if "INT" in t or t == "HUGEINT":
+        return "integer"
+    if t in ("DOUBLE", "FLOAT", "REAL") or t.startswith("DECIMAL"):
+        return "number"
+    if t in ("BOOLEAN", "BOOL"):
+        return "boolean"
+    if t.startswith("TIMESTAMP"):
+        return "datetime"
+    if t == "DATE":
+        return "date"
+    if "CHAR" in t or t in ("VARCHAR", "TEXT", "STRING"):
+        return "string"
+    return col_type.lower()
+
+
 def override_object(item_id: str) -> str:
     """GCS path of an item's hand-authored metadata override (keyed by the exact STAC item id)."""
     return f"{config.OVERRIDES_PREFIX}/{item_id}.json"

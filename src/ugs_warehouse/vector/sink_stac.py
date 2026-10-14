@@ -45,29 +45,9 @@ def _row_count(con: duckdb.DuckDBPyConnection, view: str) -> int:
     return int(con.execute(f"SELECT count(*) FROM {view}").fetchone()[0])
 
 
-def _table_type(duck_type: str) -> str:
-    """DuckDB column type → STAC Table extension type string."""
-    t = duck_type.upper()
-    if t.startswith("GEOMETRY"):
-        return "geometry"
-    if "INT" in t or t == "HUGEINT":
-        return "integer"
-    if t in ("DOUBLE", "FLOAT", "REAL") or t.startswith("DECIMAL"):
-        return "number"
-    if t in ("BOOLEAN", "BOOL"):
-        return "boolean"
-    if t.startswith("TIMESTAMP"):
-        return "datetime"
-    if t == "DATE":
-        return "date"
-    if "CHAR" in t or t in ("VARCHAR", "TEXT", "STRING"):
-        return "string"
-    return duck_type.lower()
-
-
 def _table_columns(con: duckdb.DuckDBPyConnection, view: str) -> list[dict]:
     """`table:columns` describing the GeoParquet — the real materialized columns + their types."""
-    return [{"name": r[0], "type": _table_type(str(r[1]))}
+    return [{"name": r[0], "type": stac.table_type(str(r[1]))}
             for r in con.execute(f"DESCRIBE {view}").fetchall()]
 
 

@@ -244,6 +244,26 @@ relationship to a GeMS validation layer or an empty layer is skipped, since neit
 one naming any other label the manifest does not publish fails the pub. A relationship must say
 whether it was `declared` or `inferred` (with an integer `confidence`), or the pub fails.
 
+**GeoPackage.** Each pub with extracted layers also gets one `geolmap/vectors/<SID>/<SID>.gpkg`
+holding every layer in its own CRS, every table without geometry, and a `ugs_relationships` table
+(`origin_table`, `origin_columns`, `destination_table`, `destination_columns`, `detected_by`,
+`confidence`) listing the manifest's relationships. The Related Tables Extension
+(`gpkgext_relations`) is not written: the image's GDAL Python bindings are not installed and
+pyogrio has no relationship API, so the relationships ride in a plain attribute table. The vectors
+job builds it after extraction and in the self-heal, one layer at a time: each GeoParquet is
+downloaded, appended in 20,000-row record batches with pyogrio (`write_arrow` for layers, the
+bbox covering column dropped; `write_dataframe` for tables), and deleted, so no layer is held whole.
+The file is built on the job's RAM-backed disk and uploaded with
+`application/geopackage+sqlite3`, then deleted. The manifest records `geopackage`
+{`bytes`, `checksum`, `version`, `inputs`}; `inputs` digests every layer's GeoParquet checksum
+(recorded per layer at upload, filled in for older manifests) and the relationships, so the file is
+rebuilt only when a layer file or a relationship changes, or `GEOPACKAGE_VERSION` is bumped. A pub whose
+GeoParquet totals over `MAX_GPKG_BYTES` (2 GiB, a module constant) gets a `geopackage_skipped`
+warning naming the size and no file; a failed build gets `geopackage_failed`, is listed, fails the
+run and is retried. The ingest adds a `geopackage` asset (`application/geopackage+sqlite3`, role
+`data`, `file:size`, `file:checksum`) to the pub's Collection, only when the manifest records one;
+the publication page links it as "Download all data". The ingest does not build it.
+
 **Self-heal.** After extracting new pubs and retrying failed ones, every vectors run (`--all`, or
 `python -m ugs_warehouse.pubs.vectors SID ...` for those SIDs) fills in what cleanly extracted pubs
 are missing, from their GeoParquet on GCS and without downloading a zip:
@@ -260,6 +280,8 @@ are missing, from their GeoParquet on GCS and without downloading a zip:
   because its name was taken, the bundle has several folders and a bare shapefile label's folder is
   unknown: it is left out of inference with a `relationships_scope_unknown` warning until `--force`
   re-extracts;
+- the publication's GeoPackage (below), when it has none or its inputs changed. It runs last,
+  since the relationships are one of its inputs;
 - the style file of each tiled layer that has none, or of every layer when `style_version` is older
   than `layer_style.STYLE_VERSION` (bump it when the generator changes what it writes). It runs
   after tiling and relationships. A style that cannot be written is a `style_failed` warning and a
@@ -269,13 +291,13 @@ are missing, from their GeoParquet on GCS and without downloading a zip:
   `pubs.geoparquet.write` to the same path, with a mutable cache header.
 
 A run keeps only `{series id: what it lacks}` (the layers without tiles, and whether relationships
-or styles are missing) for the whole catalog, and reads a series' manifest again, with `put_bytes_if_unchanged`,
+or styles are missing, or the GeoPackage is stale) for the whole catalog, and reads a series' manifest again, with `put_bytes_if_unchanged`,
 only when it heals it. Series whose only work is retrying a failed layer go last. In a regular `--all` run, extraction and
 the self-heal share one time budget, `VECTORS_TIME_BUDGET_S` (default 2700 s, inside the job's
 7200 s timeout). Extraction goes first: it stops starting pubs once the budget is spent and lists
 the pubs left for the next run, so the self-heal only runs once the backlog of new pubs is cleared.
 The self-heal stops starting series, finishes the one in progress, and prints `Self-heal: N layers
-tiled, M pubs' relationships recorded, units upgraded: U, S pubs' layer styles written; K layers,
+tiled, M pubs' relationships recorded, units upgraded: U, S pubs' layer styles written, G GeoPackages built; K layers,
 J pubs and P units files still pending, the next run continues`. Targeted and forced runs extract
 every pub they are given; a forced run re-extracts everything, so nothing is left to heal.
 
@@ -285,8 +307,8 @@ time budget left pending is not a failure.
 
 The pubs ingest (4Gi) heals relationships and units files before it writes the items (stopping new
 series after 600 s), so any refresh catches those up and publishes them in the same run. It does
-not tile or style: tiling reads whole layers and belongs to the vectors job, and so do the style
-files. **Rebuild pubs STAC** alone therefore does not build missing PMTiles; a **Full refresh**
+not tile, style or package: tiling reads whole layers and belongs to the vectors job, and so do the
+style files and the GeoPackage. **Rebuild pubs STAC** alone therefore does not build missing PMTiles; a **Full refresh**
 does, because it runs the vectors job before the ingest. The ingest reads each vector manifest once, on 16 threads, keeps the reduced
 form the items are built from plus the small needs index, and reads again only the series the heal
 changed. Pubs extracted before PMTiles and relationships were recorded catch up this way: repeat a

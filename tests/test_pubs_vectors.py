@@ -17,6 +17,14 @@ pd = pytest.importorskip("pandas")
 Point = pytest.importorskip("shapely.geometry").Point
 
 
+@pytest.fixture(autouse=True)
+def _no_geopackage(monkeypatch):
+    """These tests use manifests without GeoParquet behind them; the GeoPackage build has its own
+    tests in test_pubs_geopackage.py."""
+    monkeypatch.setattr(vectors, "needs_geopackage", lambda manifest: False)
+    monkeypatch.setattr(vectors, "_geopackage_series", lambda series_id: (False, []))
+
+
 def _fake_tippecanoe(geojsonl, pmtiles, layer, *, id_attr=None, what=None):
     with open(pmtiles, "wb") as fh:
         fh.write(f"tiles:{layer}".encode())
@@ -218,6 +226,7 @@ def test_manifest_records_each_layers_rows_columns_crs_and_wgs84_bbox(monkeypatc
 
     # A table carries no geometry fields; its column types use the catalog's type names.
     table = layers["geo__DescriptionOfMapUnits"]
+    assert table.pop("bytes") > 0 and table.pop("checksum")  # the GeoParquet's size and hash
     assert table == {
         "label": "geo__DescriptionOfMapUnits", "spatial": False, "rows": 2,
         "columns": [{"name": "MapUnit", "type": "string"}, {"name": "Age", "type": "integer"}],
@@ -1282,7 +1291,7 @@ def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(m
     assert vectors.main() == 0
     out = capsys.readouterr().out
     assert ("Self-heal: 2 layers tiled, 0 pubs' relationships recorded, units upgraded: 0, "
-            "1 pubs' layer styles written; 4 layers, "
+            "1 pubs' layer styles written, 0 GeoPackages built; 4 layers, "
             "0 pubs and 0 units files still pending, the next run continues") in out
     assert vectors.pmtiles_object("M-10", "a") in store  # the series in progress finished
     assert vectors.pmtiles_object("M-11", "a") not in store

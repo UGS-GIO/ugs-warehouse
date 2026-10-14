@@ -39,6 +39,7 @@ layer never looks like a pub that simply has none.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -69,6 +70,21 @@ NO_GEOMETRY = "no_geometry"
 STYLE_FAILED = "style_failed"
 # Warning code for a shapefile whose attribute text was not UTF-8 and was read as cp1252.
 ENCODING_FALLBACK = "encoding_fallback"
+# Warning codes for the all-layers GeoPackage: a pub whose GeoParquet is too large to package (no
+# GeoPackage is published), and one whose GeoPackage could not be built (retried by the next heal).
+GEOPACKAGE_SKIPPED = "geopackage_skipped"
+GEOPACKAGE_FAILED = "geopackage_failed"
+# Bump when the GeoPackage layout changes; a manifest below it is packaged again by the heal.
+GEOPACKAGE_VERSION = 1
+GEOPACKAGE_MIME = "application/geopackage+sqlite3"
+# A pub whose layers' GeoParquet files total more than this gets no GeoPackage: it is built on the
+# job's RAM-backed disk, and a GeoPackage is several times the size of its GeoParquet.
+MAX_GPKG_BYTES = 2 * 2**30
+# Rows read from a GeoParquet and appended to the GeoPackage at a time.
+GPKG_BATCH_ROWS = 20_000
+# The GeoPackage table that lists the pub's relationships (the Related Tables Extension is not
+# written: the image's GDAL bindings are not installed, and pyogrio has no relationship API).
+GPKG_RELATIONSHIPS = "ugs_relationships"
 # The coverage of an extraction: 1 opened only the zip labelled GIS and read shapefiles and
 # geodatabases; 2 opens every data zip and reads spreadsheets and CSV. A clean manifest below this
 # is extracted again by the next regular run.
@@ -313,6 +329,10 @@ def _spatial_meta(gdf, geo: dict | None, label: str, warnings: list[dict]) -> di
 
 def pmtiles_object(series_id: str, label: str) -> str:
     return f"{VECTORS_PREFIX}/{series_id}/{label}.pmtiles"
+
+
+def geopackage_object(series_id: str) -> str:
+    return f"{VECTORS_PREFIX}/{series_id}/{series_id}.gpkg"
 
 
 def style_object(series_id: str, label: str) -> str:
@@ -577,7 +597,9 @@ def _extract_and_upload(
                 if is_spatial:
                     entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
                 gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
-                gcs.upload(dst, gcs_path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+                meta = gcs.upload(dst, gcs_path, content_type=PARQUET_MIME,
+                                  cache_control=gcs.CACHE_MUTABLE)
+                entry.update(bytes=meta.size, checksum=meta.checksum)
                 manifest["spatial" if is_spatial else "tables"].append(label)
                 manifest["layers"].append(entry)
                 if df is not None and _is_sheet(path):
@@ -789,21 +811,22 @@ def missing_tiles(manifest: dict) -> list[str]:
 class Needs(NamedTuple):
     """What a clean manifest still lacks, kept in place of the manifest: the spatial layers with no
     PMTiles, whether all of those failed tiling before (a retry, ordered after new work), and
-    whether its relationships are missing or outdated, and whether its layer styles are missing or
-    outdated."""
+    whether its relationships are missing or outdated, whether its layer styles are missing or
+    outdated, and whether its GeoPackage is missing or built from other inputs."""
     tiles: tuple[str, ...]
     retry: bool
     relations: bool
     styles: bool = False
+    geopackage: bool = False
 
     def __bool__(self) -> bool:
-        return bool(self.tiles) or self.relations or self.styles
+        return bool(self.tiles) or self.relations or self.styles or self.geopackage
 
 
 def needs_of(manifest: dict) -> Needs:
     missing = missing_tiles(manifest)
     return Needs(tuple(missing), set(missing) <= _warned(manifest, PMTILES_FAILED),
-                 needs_relations(manifest), needs_styles(manifest))
+                 needs_relations(manifest), needs_styles(manifest), needs_geopackage(manifest))
 
 
 def is_clean(doc: dict) -> bool:
@@ -953,9 +976,11 @@ def _fetch_all(work: str, files: list) -> tuple[list[tuple[str, str | None, str,
 
 
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
-                existing: set[str] | None = None, untiled: list[str] | None = None) -> str:
+                existing: set[str] | None = None, untiled: list[str] | None = None,
+                unpackaged: list[str] | None = None) -> str:
     """Extract and upload all vector layers and non-spatial companion tables for a given
-    series_id. Each layer whose tiling failed is appended to `untiled` as `SID/label`.
+    series_id. Each layer whose tiling failed is appended to `untiled` as `SID/label`, and a
+    GeoPackage that could not be built to `unpackaged`.
 
     Returns: 'ok', 'skip', 'unsupported' (only unreadable containers such as .mdb), or 'fail:*'.
     """
@@ -1028,6 +1053,14 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
             print(f"{series_id}: SKIP (every layer is empty)")
             _record_attempt(series_id, {"result": "skip", "warnings": manifest["warnings"]})
             return "skip"
+
+        try:
+            _, package_errors = _geopackage_series(series_id)
+        except Exception as e:
+            package_errors = [f"{series_id}: GeoPackage not built: {_error(e)}"]
+            print(package_errors[0], file=sys.stderr)
+        if unpackaged is not None:
+            unpackaged += package_errors
 
         print(f"{series_id}: OK ({n_spatial} vector layers + {n_tables} companion tables "
               f"uploaded to {VECTORS_PREFIX}/{series_id}/)")
@@ -1120,6 +1153,155 @@ def _style_series(series_id: str) -> list[str]:
     return _update_manifest(series_id, style)
 
 
+def _geopackage_inputs(manifest: dict) -> str | None:
+    """A digest of everything the GeoPackage is built from: each layer's GeoParquet checksum and the
+    relationships. None when a layer has no recorded checksum yet."""
+    layers = manifest.get("layers") or []
+    if any(not e.get("checksum") for e in layers):
+        return None
+    doc = {"layers": sorted((e["label"], e["checksum"]) for e in layers),
+           "relationships": manifest.get("relationships") or []}
+    return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()
+
+
+def needs_geopackage(manifest: dict) -> bool:
+    """True when a manifest with layers has no GeoPackage record, one below `GEOPACKAGE_VERSION`,
+    or one built from other layer files or relationships than it lists now. A pub skipped for size
+    keeps its record, so it is not tried again until its inputs change."""
+    if not manifest.get("layers"):
+        return False
+    made = manifest.get("geopackage")
+    return (not isinstance(made, dict) or (made.get("version") or 0) < GEOPACKAGE_VERSION
+            or made.get("inputs") != _geopackage_inputs(manifest))
+
+
+def _record_layer_files(series_id: str, layers: list[dict]) -> None:
+    """Fill in `bytes` and `checksum` for each layer extracted before they were recorded, from the
+    GeoParquet's stored metadata, hashing the object when it carries none."""
+    for entry in layers:
+        if entry.get("bytes") and entry.get("checksum"):
+            continue
+        path = f"{VECTORS_PREFIX}/{series_id}/{entry['label']}.parquet"
+        meta = gcs.get_file_meta(path)
+        if meta is None or not meta.checksum:
+            meta = gcs.hash_object(path)
+        entry.update(bytes=meta.size, checksum=meta.checksum)
+
+
+def _append_layer(src: str, out: str, entry: dict) -> None:
+    """Append the GeoParquet `src` to the GeoPackage `out` as the layer `entry["label"]`, in record
+    batches so a layer is never held whole. A spatial layer keeps its own CRS (from the file's
+    GeoParquet metadata) and loses only the bbox covering column; a table is written without
+    geometry."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import pyogrio
+    from pyogrio.raw import write_arrow
+    from pyproj import CRS
+
+    pf = pq.ParquetFile(src)
+    label = entry["label"]
+    if not entry.get("spatial"):
+        for batch in pf.iter_batches(batch_size=GPKG_BATCH_ROWS):
+            pyogrio.write_dataframe(batch.to_pandas(), out, layer=label, driver="GPKG",
+                                    append=os.path.exists(out))
+        return
+    geo = json.loads((pf.schema_arrow.metadata or {}).get(b"geo") or b"{}")
+    name = geo.get("primary_column")
+    col = (geo.get("columns") or {}).get(name)
+    if not col:
+        raise ValueError("no GeoParquet geometry metadata")
+    # GeoParquet reads a missing CRS as lon/lat; extraction never writes a layer without one.
+    crs = CRS.from_user_input(col["crs"]).to_wkt() if col.get("crs") else "EPSG:4326"
+    covering = ((col.get("covering") or {}).get("bbox") or {}).get("xmin") or [None]
+    types = {str(t).replace(" ", "") for t in col.get("geometry_types") or []}
+    kind = types.pop() if len(types) == 1 else "Unknown"
+    keep = [n for n in pf.schema_arrow.names if n != covering[0]]
+    for batch in pf.iter_batches(batch_size=GPKG_BATCH_ROWS, columns=keep):
+        write_arrow(pa.Table.from_batches([batch]), out, layer=label, driver="GPKG",
+                    geometry_name=name, geometry_type=kind, crs=crs, append=os.path.exists(out))
+
+
+def _write_geopackage(series_id: str, manifest: dict, out: str, work: str) -> None:
+    """Build the GeoPackage `out` from the manifest's layers, one GeoParquet downloaded, appended
+    and deleted at a time, then the relationships table. Any layer that fails raises: a GeoPackage
+    missing a layer would pass for the whole publication."""
+    for entry in manifest["layers"]:
+        label = entry["label"]
+        local = os.path.join(work, f"{label}.parquet")
+        gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
+        try:
+            _append_layer(local, out, entry)
+        except Exception as e:
+            raise RuntimeError(f"layer {label}: {_error(e)}") from e
+        finally:
+            os.remove(local)
+    rels = manifest.get("relationships") or []
+    if rels:
+        import pandas as pd
+        import pyogrio
+
+        frame = pd.DataFrame({
+            "origin_table": [r["origin"] for r in rels],
+            "origin_columns": [", ".join(r["origin_cols"]) for r in rels],
+            "destination_table": [r["destination"] for r in rels],
+            "destination_columns": [", ".join(r["destination_cols"]) for r in rels],
+            "detected_by": [r.get("detected_by") for r in rels],
+            "confidence": [r.get("confidence") for r in rels]})
+        pyogrio.write_dataframe(frame, out, layer=GPKG_RELATIONSHIPS, driver="GPKG", append=True)
+
+
+def _geopackage_into(series_id: str, manifest: dict) -> list[str]:
+    """Build and upload the pub's GeoPackage (`geopackage_object`) when `needs_geopackage`, and
+    record `geopackage` {bytes, checksum, version, inputs} in `manifest`. A pub whose GeoParquet
+    totals over `MAX_GPKG_BYTES` gets a GEOPACKAGE_SKIPPED warning and no file; a failed build gets
+    GEOPACKAGE_FAILED and no record, so the next heal tries again. Returns an error for a failure."""
+    skipped = [w for w in manifest.get("warnings") or [] if w.get("code") == GEOPACKAGE_SKIPPED]
+    manifest["warnings"] = [w for w in manifest.get("warnings") or []
+                            if w.get("code") not in (GEOPACKAGE_SKIPPED, GEOPACKAGE_FAILED)]
+    if not needs_geopackage(manifest):
+        manifest["warnings"] += skipped  # a skip stays on the manifest until its inputs change
+        return []
+    manifest.pop("geopackage", None)
+    try:
+        _record_layer_files(series_id, manifest["layers"])
+        total = sum(e["bytes"] for e in manifest["layers"])
+        inputs = _geopackage_inputs(manifest)
+        if total > MAX_GPKG_BYTES:
+            manifest["warnings"].append({
+                "code": GEOPACKAGE_SKIPPED,
+                "warning": f"no GeoPackage published: the layers' GeoParquet totals "
+                           f"{total / 2**30:.2f} GiB, over the {MAX_GPKG_BYTES / 2**30:g} GiB limit"})
+            manifest["geopackage"] = {"version": GEOPACKAGE_VERSION, "inputs": inputs}
+            return []
+        with tempfile.TemporaryDirectory(prefix=f"g_{series_id.replace('/', '_')}_") as work:
+            out = os.path.join(work, "pub.gpkg")
+            _write_geopackage(series_id, manifest, out, work)
+            meta = gcs.upload(out, geopackage_object(series_id), content_type=GEOPACKAGE_MIME,
+                              cache_control=gcs.CACHE_MUTABLE)
+        manifest["geopackage"] = {"bytes": meta.size, "checksum": meta.checksum,
+                                  "version": GEOPACKAGE_VERSION, "inputs": inputs}
+        return []
+    except Exception as e:
+        manifest["warnings"].append({"code": GEOPACKAGE_FAILED,
+                                     "warning": f"GeoPackage not built: {_error(e)}"})
+        print(f"  {series_id}: GeoPackage not built: {_error(e)}", file=sys.stderr)
+        return [f"{series_id}: GeoPackage not built: {_error(e)}"]
+
+
+def _geopackage_series(series_id: str) -> tuple[bool, list[str]]:
+    """Build the series' GeoPackage from the GeoParquet on GCS when it is missing or its inputs
+    changed (`_geopackage_into`) and record it in the manifest. Returns (built, errors)."""
+    def package(manifest: dict) -> tuple[tuple[bool, list[str]], bool]:
+        manifest.setdefault("warnings", [])
+        needed = needs_geopackage(manifest)
+        errors = _geopackage_into(series_id, manifest)
+        built = needed and not errors and bool((manifest.get("geopackage") or {}).get("bytes"))
+        return (built, errors), True
+
+    return _update_manifest(series_id, package)
+
+
 def _relations_series(series_id: str) -> list[str]:
     """Record a series' relationships, layer kinds and sources in its manifest, from the string and
     integer columns of its GeoParquet on GCS, read with range requests so no geometry is fetched.
@@ -1192,6 +1374,7 @@ class Heal:
     tiled: int = 0
     related: int = 0
     styled: int = 0
+    packaged: int = 0
     units_upgraded: int = 0
     failed: list[str] = field(default_factory=list)
     failed_by_series: dict[str, list[str]] = field(default_factory=dict)
@@ -1206,7 +1389,8 @@ class Heal:
         layers = f"{self.pending_layers} layers, " if self.tiles else ""
         return ("Self-heal: " + (f"{self.tiled} layers tiled, " if self.tiles else "")
                 + f"{self.related} pubs' relationships recorded, units upgraded: {self.units_upgraded}"
-                + (f", {self.styled} pubs' layer styles written" if self.tiles else "")
+                + (f", {self.styled} pubs' layer styles written, {self.packaged} GeoPackages built"
+                   if self.tiles else "")
                 + (f"; {layers}{self.pending_pubs} pubs and {self.pending_units} "
                    f"units files still pending, the next {next_step} continues" if pending else "")
                 + (f"; {len(self.failed)} failed" if self.failed else ""))
@@ -1271,7 +1455,8 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
               units: dict[str, str] | None = None, tiles: bool = True) -> Heal:
     """Fill in the derivatives clean manifests are missing, from their GeoParquet on GCS and without
     downloading any zip: PMTiles for spatial layers that have none, relationships for manifests
-    that need them, then the layer styles for those that need them. `needs` is `{series id: Needs}`
+    that need them, the layer styles for those that need them, then the GeoPackage of those
+    whose layers or relationships changed. `needs` is `{series id: Needs}`
     (`needs_of`); each series' manifest is read again only when it is healed. Then upgrade each of the `units` files ({series id: object path}) that
     `units_outdated` says is older than GeoParquet 1.1. Series with only a failed layer to retry go
     last, as extraction orders retries last. No new series or units file starts once
@@ -1280,13 +1465,14 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
     styling are the vectors job's, sized for it, and a caller with less memory leaves them alone."""
     heal = Heal(tiles=tiles)
     if not tiles:
-        needs = {sid: n._replace(tiles=(), retry=False, styles=False) for sid, n in needs.items()}
+        needs = {sid: n._replace(tiles=(), retry=False, styles=False, geopackage=False) for sid, n in needs.items()}
     todo = sorted(((sid, n) for sid, n in needs.items() if n), key=lambda sn: sn[0])
-    todo.sort(key=lambda sn: sn[1].retry and not sn[1].relations and not sn[1].styles)
+    todo.sort(key=lambda sn: sn[1].retry and not sn[1].relations and not sn[1].styles
+               and not sn[1].geopackage)
     for sid, need in todo:
         if deadline is not None and time.monotonic() >= deadline:
             heal.pending_layers += len(need.tiles)
-            heal.pending_pubs += int(need.relations or need.styles)
+            heal.pending_pubs += int(need.relations or need.styles or need.geopackage)
             continue
         errs: list[str] = []
         heal.touched.add(sid)
@@ -1304,6 +1490,13 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
                 style_errs = _style_series(sid)
                 heal.styled += int(not style_errs)
                 errs += style_errs
+            # Packaged last: the relationships are one of its inputs. A heal that left them
+            # unrecorded packages nothing, since the file would list the old ones.
+            if need.geopackage or need.relations:
+                if not (need.relations and rel_errs):
+                    packaged, pack_errs = _geopackage_series(sid)
+                    heal.packaged += int(packaged)
+                    errs += pack_errs
         except Exception as e:
             errs.append(f"{sid}: {_error(e)}")
             print(f"{sid}: self-heal FAIL {_error(e)}", file=sys.stderr)
@@ -1410,6 +1603,7 @@ def main() -> int:
 
     failed: list[str] = []
     untiled: list[str] = []
+    unpackaged: list[str] = []
     extracted: set[str] = set()
     deadline = started + TIME_BUDGET_S
     # Only a regular batch run picks up what it leaves, so targeted and forced runs extract all.
@@ -1422,7 +1616,7 @@ def main() -> int:
                   f"continues: {', '.join(left[:20])}{more}")
             break
         res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing,
-                          untiled=untiled)
+                          untiled=untiled, unpackaged=unpackaged)
         if res != "skip":
             extracted.add(identity.Pub.parse(sid).series_id)
         if res.startswith("fail"):
@@ -1452,6 +1646,9 @@ def main() -> int:
     if untiled:
         print(f"{len(untiled)} layers published without PMTiles (tiling failed this run; the next "
               f"run retries them): {', '.join(untiled)}", file=sys.stderr)
+    if unpackaged:
+        print(f"{len(unpackaged)} publications published without a GeoPackage (the build failed this "
+              f"run; the next run retries them): {'; '.join(unpackaged)}", file=sys.stderr)
     if heal.failed:
         more = f", ... ({len(heal.failed) - 20} more)" if len(heal.failed) > 20 else ""
         print(f"{len(heal.failed)} self-heal failures this run (the next run retries them): "
@@ -1459,7 +1656,7 @@ def main() -> int:
     if failed:
         print(f"{len(failed)} of {len(sids)} publications failed: {', '.join(failed)}",
               file=sys.stderr)
-    return 1 if failed or untiled or heal.failed else 0
+    return 1 if failed or untiled or unpackaged or heal.failed else 0
 
 
 if __name__ == "__main__":

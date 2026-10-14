@@ -1,0 +1,1210 @@
+{
+  "gems": {
+    "collection": {
+      "type": "Collection",
+      "stac_version": "1.1.0",
+      "stac_extensions": [
+        "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json",
+        "https://stac-extensions.github.io/scientific/v1.0.0/schema.json"
+      ],
+      "id": "OFR-784DM",
+      "title": "Interim Geologic Map of Mills Junction",
+      "description": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+      "license": "CC-BY-4.0",
+      "providers": [
+        {
+          "name": "Utah Geological Survey",
+          "roles": [
+            "producer",
+            "processor",
+            "licensor",
+            "host"
+          ],
+          "url": "https://geology.utah.gov"
+        }
+      ],
+      "extent": {
+        "spatial": {
+          "bbox": [
+            [
+              -112.5,
+              40.5,
+              -112.0,
+              41.0
+            ]
+          ]
+        },
+        "temporal": {
+          "interval": [
+            [
+              "2026-01-01T00:00:00Z",
+              "2026-01-01T00:00:00Z"
+            ]
+          ]
+        }
+      },
+      "ugs:series_id": "OFR-784DM",
+      "ugs:pub_type": "Open File Report",
+      "ugs:series": "Open File Report",
+      "ugs:scale": "1:24,000",
+      "ugs:topic": "geologic",
+      "ugs:topic_category": "geoscientificInformation",
+      "ugs:footprint_source": "cog",
+      "sci:doi": "10.34191/OFR-784DM",
+      "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+      "assets": {
+        "publication": {
+          "href": "https://ugspub.nr.utah.gov/publications/ofr/ofr-784dm.pdf",
+          "type": "application/pdf",
+          "title": "Publication",
+          "roles": [
+            "data"
+          ]
+        },
+        "gis_data_zip": {
+          "href": "https://ugspub.nr.utah.gov/publications/ofr/ofr-784dm.zip",
+          "type": "application/zip",
+          "title": "GIS Data - Zip",
+          "roles": [
+            "source"
+          ]
+        },
+        "thumbnail": {
+          "href": "https://maps-assets.geology.utah.gov/pubs/thumbs/OFR-784DM.webp",
+          "type": "image/webp",
+          "title": "Cover (PDF first page)",
+          "roles": [
+            "thumbnail"
+          ]
+        }
+      },
+      "links": [
+        {
+          "rel": "root",
+          "href": "../../../catalog.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "parent",
+          "href": "../catalog.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "self",
+          "href": "./collection.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "license",
+          "href": "https://creativecommons.org/licenses/by/4.0/",
+          "type": "text/html",
+          "title": "CC-BY-4.0"
+        },
+        {
+          "rel": "describedby",
+          "href": "./README.md",
+          "type": "text/markdown",
+          "title": "README"
+        },
+        {
+          "rel": "agents",
+          "href": "./AGENTS.md",
+          "type": "text/markdown",
+          "title": "AGENTS.md"
+        },
+        {
+          "rel": "alternate",
+          "href": "https://geology.utah.gov/publication-details/?pub=OFR-784DM",
+          "type": "text/html",
+          "title": "UGS publication landing page"
+        },
+        {
+          "rel": "cite-as",
+          "href": "https://doi.org/10.34191/OFR-784DM"
+        },
+        {
+          "rel": "item",
+          "href": "./OFR-784DM__geo__DMU/OFR-784DM__geo__DMU.json",
+          "type": "application/geo+json",
+          "title": "DMU",
+          "ugs:layer_kind": "table",
+          "ugs:source_key": "geo",
+          "ugs:source_dataset": "Geo"
+        },
+        {
+          "rel": "item",
+          "href": "./OFR-784DM__geo__Faults/OFR-784DM__geo__Faults.json",
+          "type": "application/geo+json",
+          "title": "Faults",
+          "ugs:layer_kind": "layer",
+          "ugs:source_key": "geo",
+          "ugs:source_dataset": "Geo"
+        },
+        {
+          "rel": "item",
+          "href": "./OFR-784DM__geo__Glossary/OFR-784DM__geo__Glossary.json",
+          "type": "application/geo+json",
+          "title": "Glossary",
+          "ugs:layer_kind": "supporting",
+          "ugs:source_key": "geo",
+          "ugs:source_dataset": "Geo"
+        },
+        {
+          "rel": "item",
+          "href": "./OFR-784DM__geo__MapUnitPolys/OFR-784DM__geo__MapUnitPolys.json",
+          "type": "application/geo+json",
+          "title": "Map Unit Polys",
+          "ugs:layer_kind": "layer",
+          "ugs:source_key": "geo",
+          "ugs:source_dataset": "Geo"
+        },
+        {
+          "rel": "item",
+          "href": "./OFR-784DM_plate/OFR-784DM_plate.json",
+          "type": "application/geo+json",
+          "title": "Map plate"
+        },
+        {
+          "rel": "item",
+          "href": "./OFR-784DM_units/OFR-784DM_units.json",
+          "type": "application/geo+json",
+          "title": "Geologic unit polygons"
+        }
+      ],
+      "_collection_path": "ugs-publications/OFR/OFR-784DM"
+    },
+    "items": {
+      "OFR-784DM_plate": {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": "OFR-784DM_plate",
+        "collection": "OFR-784DM",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -112.5,
+                40.5
+              ],
+              [
+                -112.0,
+                40.5
+              ],
+              [
+                -112.0,
+                41.0
+              ],
+              [
+                -112.5,
+                41.0
+              ],
+              [
+                -112.5,
+                40.5
+              ]
+            ]
+          ]
+        },
+        "bbox": [
+          -112.5,
+          40.5,
+          -112.0,
+          41.0
+        ],
+        "properties": {
+          "datetime": "2026-01-01T00:00:00Z",
+          "title": "Map plate",
+          "ugs:series_id": "OFR-784DM",
+          "sci:doi": "10.34191/OFR-784DM",
+          "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+          "ugs:footprint_source": "cog"
+        },
+        "assets": {
+          "cog": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/cogs/OFR-784DM.cog.tif",
+            "type": "image/tiff; application=geotiff; profile=cloud-optimized",
+            "title": "Cloud-Optimized GeoTIFF",
+            "roles": [
+              "data",
+              "cloud-optimized"
+            ],
+            "proj:code": "EPSG:3857"
+          },
+          "thumbnail": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/cogs/OFR-784DM.thumb.webp",
+            "type": "image/webp",
+            "title": "Thumbnail",
+            "roles": [
+              "thumbnail"
+            ]
+          }
+        },
+        "links": [
+          {
+            "rel": "root",
+            "href": "../../../../catalog.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "parent",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "collection",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "self",
+            "href": "./OFR-784DM_plate.json",
+            "type": "application/geo+json"
+          },
+          {
+            "rel": "cite-as",
+            "href": "https://doi.org/10.34191/OFR-784DM"
+          },
+          {
+            "rel": "related",
+            "href": "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-geologic-maps/geologic-maps-24k/geologic-maps-24k.json",
+            "type": "application/geo+json",
+            "title": "Utah geologic maps \u2014 1:24,000 seamless mosaic"
+          }
+        ],
+        "stac_extensions": [
+          "https://stac-extensions.github.io/projection/v2.0.0/schema.json",
+          "https://stac-extensions.github.io/scientific/v1.0.0/schema.json"
+        ],
+        "_collection_path": "ugs-publications/OFR/OFR-784DM"
+      },
+      "OFR-784DM_units": {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": "OFR-784DM_units",
+        "collection": "OFR-784DM",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -112.5,
+                40.5
+              ],
+              [
+                -112.0,
+                40.5
+              ],
+              [
+                -112.0,
+                41.0
+              ],
+              [
+                -112.5,
+                41.0
+              ],
+              [
+                -112.5,
+                40.5
+              ]
+            ]
+          ]
+        },
+        "bbox": [
+          -112.5,
+          40.5,
+          -112.0,
+          41.0
+        ],
+        "properties": {
+          "datetime": "2026-01-01T00:00:00Z",
+          "title": "Geologic unit polygons",
+          "ugs:series_id": "OFR-784DM",
+          "sci:doi": "10.34191/OFR-784DM",
+          "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+          "proj:code": "EPSG:4326",
+          "ugs:footprint_source": "cog"
+        },
+        "assets": {
+          "data": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/units/OFR-784DM/OFR-784DM.units.parquet",
+            "type": "application/vnd.apache.parquet",
+            "title": "Geologic unit polygons (GeoParquet)",
+            "roles": [
+              "data"
+            ]
+          }
+        },
+        "links": [
+          {
+            "rel": "root",
+            "href": "../../../../catalog.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "parent",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "collection",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "self",
+            "href": "./OFR-784DM_units.json",
+            "type": "application/geo+json"
+          },
+          {
+            "rel": "cite-as",
+            "href": "https://doi.org/10.34191/OFR-784DM"
+          }
+        ],
+        "stac_extensions": [
+          "https://stac-extensions.github.io/scientific/v1.0.0/schema.json",
+          "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
+        ],
+        "_collection_path": "ugs-publications/OFR/OFR-784DM"
+      },
+      "OFR-784DM__geo__MapUnitPolys": {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": "OFR-784DM__geo__MapUnitPolys",
+        "collection": "OFR-784DM",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -112.4,
+                40.6
+              ],
+              [
+                -112.1,
+                40.6
+              ],
+              [
+                -112.1,
+                40.9
+              ],
+              [
+                -112.4,
+                40.9
+              ],
+              [
+                -112.4,
+                40.6
+              ]
+            ]
+          ]
+        },
+        "bbox": [
+          -112.4,
+          40.6,
+          -112.1,
+          40.9
+        ],
+        "properties": {
+          "datetime": "2026-01-01T00:00:00Z",
+          "title": "Map Unit Polys",
+          "ugs:series_id": "OFR-784DM",
+          "sci:doi": "10.34191/OFR-784DM",
+          "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+          "proj:code": "EPSG:26912",
+          "table:row_count": 3,
+          "description": "From geo",
+          "ugs:layer_kind": "layer",
+          "ugs:source_key": "geo",
+          "ugs:source_dataset": "Geo",
+          "ugs:footprint_source": "layer"
+        },
+        "assets": {
+          "data": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__MapUnitPolys.parquet",
+            "type": "application/vnd.apache.parquet",
+            "title": "Map Unit Polys",
+            "roles": [
+              "data"
+            ],
+            "ugs:foreign_keys": [
+              {
+                "fields": [
+                  "MapUnit"
+                ],
+                "reference": {
+                  "resource": "OFR-784DM__geo__DMU",
+                  "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__DMU.parquet",
+                  "fields": [
+                    "MapUnit"
+                  ]
+                },
+                "ugs:detected_by": "inferred",
+                "ugs:confidence": 100
+              }
+            ]
+          },
+          "geo__DMU": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__DMU.parquet",
+            "type": "application/vnd.apache.parquet",
+            "roles": [
+              "data",
+              "related"
+            ],
+            "title": "DMU",
+            "ugs:foreign_keys": [
+              {
+                "fields": [
+                  "MapUnit"
+                ],
+                "reference": {
+                  "resource": "OFR-784DM__geo__MapUnitPolys",
+                  "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__MapUnitPolys.parquet",
+                  "fields": [
+                    "MapUnit"
+                  ]
+                },
+                "ugs:detected_by": "inferred",
+                "ugs:confidence": 100
+              }
+            ],
+            "table:columns": [
+              {
+                "name": "MapUnit",
+                "type": "string"
+              },
+              {
+                "name": "Age",
+                "type": "string"
+              }
+            ]
+          },
+          "pmtiles": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__MapUnitPolys.pmtiles",
+            "type": "application/vnd.pmtiles",
+            "roles": [
+              "visual"
+            ],
+            "title": "PMTiles vector tiles",
+            "description": "Vector tiles \u2014 web-map display",
+            "proj:code": "EPSG:4326"
+          }
+        },
+        "links": [
+          {
+            "rel": "root",
+            "href": "../../../../catalog.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "parent",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "collection",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "self",
+            "href": "./OFR-784DM__geo__MapUnitPolys.json",
+            "type": "application/geo+json"
+          },
+          {
+            "rel": "cite-as",
+            "href": "https://doi.org/10.34191/OFR-784DM"
+          },
+          {
+            "rel": "pmtiles",
+            "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__MapUnitPolys.pmtiles",
+            "type": "application/vnd.pmtiles",
+            "title": "Vector tiles \u2014 web-map display",
+            "pmtiles:layers": [
+              "geo__MapUnitPolys"
+            ]
+          }
+        ],
+        "stac_extensions": [
+          "https://stac-extensions.github.io/table/v1.2.0/schema.json",
+          "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json",
+          "https://stac-extensions.github.io/projection/v2.0.0/schema.json",
+          "https://stac-extensions.github.io/scientific/v1.0.0/schema.json"
+        ],
+        "_collection_path": "ugs-publications/OFR/OFR-784DM"
+      },
+      "OFR-784DM__geo__Faults": {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": "OFR-784DM__geo__Faults",
+        "collection": "OFR-784DM",
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -112.4,
+                40.6
+              ],
+              [
+                -112.1,
+                40.6
+              ],
+              [
+                -112.1,
+                40.9
+              ],
+              [
+                -112.4,
+                40.9
+              ],
+              [
+                -112.4,
+                40.6
+              ]
+            ]
+          ]
+        },
+        "bbox": [
+          -112.4,
+          40.6,
+          -112.1,
+          40.9
+        ],
+        "properties": {
+          "datetime": "2026-01-01T00:00:00Z",
+          "title": "Faults",
+          "ugs:series_id": "OFR-784DM",
+          "sci:doi": "10.34191/OFR-784DM",
+          "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+          "proj:wkt2": "PROJCRS[\"NAD83 / UTM zone 12N\"]",
+          "table:row_count": 2,
+          "description": "From geo",
+          "ugs:layer_kind": "layer",
+          "ugs:source_key": "geo",
+          "ugs:source_dataset": "Geo",
+          "ugs:footprint_source": "layer"
+        },
+        "assets": {
+          "data": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__Faults.parquet",
+            "type": "application/vnd.apache.parquet",
+            "title": "Faults",
+            "roles": [
+              "data"
+            ]
+          }
+        },
+        "links": [
+          {
+            "rel": "root",
+            "href": "../../../../catalog.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "parent",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "collection",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "self",
+            "href": "./OFR-784DM__geo__Faults.json",
+            "type": "application/geo+json"
+          },
+          {
+            "rel": "cite-as",
+            "href": "https://doi.org/10.34191/OFR-784DM"
+          }
+        ],
+        "stac_extensions": [
+          "https://stac-extensions.github.io/scientific/v1.0.0/schema.json",
+          "https://stac-extensions.github.io/projection/v2.0.0/schema.json",
+          "https://stac-extensions.github.io/table/v1.2.0/schema.json"
+        ],
+        "_collection_path": "ugs-publications/OFR/OFR-784DM"
+      },
+      "OFR-784DM__geo__DMU": {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": "OFR-784DM__geo__DMU",
+        "collection": "OFR-784DM",
+        "geometry": null,
+        "properties": {
+          "datetime": "2026-01-01T00:00:00Z",
+          "title": "DMU",
+          "ugs:series_id": "OFR-784DM",
+          "sci:doi": "10.34191/OFR-784DM",
+          "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+          "table:row_count": 41,
+          "description": "From geo",
+          "ugs:layer_kind": "table",
+          "ugs:source_key": "geo",
+          "ugs:source_dataset": "Geo"
+        },
+        "assets": {
+          "data": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__DMU.parquet",
+            "type": "application/vnd.apache.parquet",
+            "title": "DMU",
+            "roles": [
+              "data"
+            ],
+            "table:columns": [
+              {
+                "name": "MapUnit",
+                "type": "string"
+              },
+              {
+                "name": "Age",
+                "type": "string"
+              }
+            ]
+          }
+        },
+        "links": [
+          {
+            "rel": "root",
+            "href": "../../../../catalog.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "parent",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "collection",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "self",
+            "href": "./OFR-784DM__geo__DMU.json",
+            "type": "application/geo+json"
+          },
+          {
+            "rel": "cite-as",
+            "href": "https://doi.org/10.34191/OFR-784DM"
+          },
+          {
+            "rel": "related",
+            "href": "https://maps-assets.geology.utah.gov/warehouse/stac/ugs-publications/OFR/OFR-784DM/OFR-784DM__geo__MapUnitPolys/OFR-784DM__geo__MapUnitPolys.json",
+            "type": "application/geo+json",
+            "title": "Map Unit Polys"
+          }
+        ],
+        "stac_extensions": [
+          "https://stac-extensions.github.io/table/v1.2.0/schema.json",
+          "https://stac-extensions.github.io/scientific/v1.0.0/schema.json"
+        ],
+        "_collection_path": "ugs-publications/OFR/OFR-784DM"
+      },
+      "OFR-784DM__geo__Glossary": {
+        "type": "Feature",
+        "stac_version": "1.1.0",
+        "id": "OFR-784DM__geo__Glossary",
+        "collection": "OFR-784DM",
+        "geometry": null,
+        "properties": {
+          "datetime": "2026-01-01T00:00:00Z",
+          "title": "Glossary",
+          "ugs:series_id": "OFR-784DM",
+          "sci:doi": "10.34191/OFR-784DM",
+          "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+          "table:row_count": 9,
+          "description": "From geo",
+          "ugs:layer_kind": "supporting",
+          "ugs:source_key": "geo",
+          "ugs:source_dataset": "Geo"
+        },
+        "assets": {
+          "data": {
+            "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__Glossary.parquet",
+            "type": "application/vnd.apache.parquet",
+            "title": "Glossary",
+            "roles": [
+              "data"
+            ]
+          }
+        },
+        "links": [
+          {
+            "rel": "root",
+            "href": "../../../../catalog.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "parent",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "collection",
+            "href": "../collection.json",
+            "type": "application/json"
+          },
+          {
+            "rel": "self",
+            "href": "./OFR-784DM__geo__Glossary.json",
+            "type": "application/geo+json"
+          },
+          {
+            "rel": "cite-as",
+            "href": "https://doi.org/10.34191/OFR-784DM"
+          }
+        ],
+        "stac_extensions": [
+          "https://stac-extensions.github.io/scientific/v1.0.0/schema.json",
+          "https://stac-extensions.github.io/table/v1.2.0/schema.json"
+        ],
+        "_collection_path": "ugs-publications/OFR/OFR-784DM"
+      }
+    }
+  },
+  "single_file": {
+    "collection": {
+      "type": "Collection",
+      "stac_version": "1.1.0",
+      "stac_extensions": [
+        "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json",
+        "https://stac-extensions.github.io/scientific/v1.0.0/schema.json",
+        "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json",
+        "https://stac-extensions.github.io/projection/v2.0.0/schema.json",
+        "https://stac-extensions.github.io/table/v1.2.0/schema.json"
+      ],
+      "id": "OFR-784DM",
+      "title": "Interim Geologic Map of Mills Junction",
+      "description": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+      "license": "CC-BY-4.0",
+      "providers": [
+        {
+          "name": "Utah Geological Survey",
+          "roles": [
+            "producer",
+            "processor",
+            "licensor",
+            "host"
+          ],
+          "url": "https://geology.utah.gov"
+        }
+      ],
+      "extent": {
+        "spatial": {
+          "bbox": [
+            [
+              -112.5,
+              40.5,
+              -112.0,
+              41.0
+            ]
+          ]
+        },
+        "temporal": {
+          "interval": [
+            [
+              "2026-01-01T00:00:00Z",
+              "2026-01-01T00:00:00Z"
+            ]
+          ]
+        }
+      },
+      "ugs:series_id": "OFR-784DM",
+      "ugs:pub_type": "Open File Report",
+      "ugs:series": "Open File Report",
+      "ugs:scale": "1:24,000",
+      "ugs:topic": "geologic",
+      "ugs:topic_category": "geoscientificInformation",
+      "ugs:footprint_source": "cog",
+      "sci:doi": "10.34191/OFR-784DM",
+      "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+      "assets": {
+        "publication": {
+          "href": "https://ugspub.nr.utah.gov/publications/ofr/ofr-784dm.pdf",
+          "type": "application/pdf",
+          "title": "Publication",
+          "roles": [
+            "data"
+          ]
+        },
+        "gis_data_zip": {
+          "href": "https://ugspub.nr.utah.gov/publications/ofr/ofr-784dm.zip",
+          "type": "application/zip",
+          "title": "GIS Data - Zip",
+          "roles": [
+            "source"
+          ]
+        },
+        "data": {
+          "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/faults.parquet",
+          "type": "application/vnd.apache.parquet",
+          "title": "Faults",
+          "roles": [
+            "data"
+          ],
+          "proj:code": "EPSG:26912",
+          "table:row_count": 3
+        },
+        "pmtiles": {
+          "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/faults.pmtiles",
+          "type": "application/vnd.pmtiles",
+          "roles": [
+            "visual"
+          ],
+          "title": "PMTiles vector tiles",
+          "description": "Vector tiles \u2014 web-map display",
+          "proj:code": "EPSG:4326"
+        }
+      },
+      "links": [
+        {
+          "rel": "root",
+          "href": "../../../catalog.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "parent",
+          "href": "../catalog.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "self",
+          "href": "./collection.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "license",
+          "href": "https://creativecommons.org/licenses/by/4.0/",
+          "type": "text/html",
+          "title": "CC-BY-4.0"
+        },
+        {
+          "rel": "describedby",
+          "href": "./README.md",
+          "type": "text/markdown",
+          "title": "README"
+        },
+        {
+          "rel": "agents",
+          "href": "./AGENTS.md",
+          "type": "text/markdown",
+          "title": "AGENTS.md"
+        },
+        {
+          "rel": "alternate",
+          "href": "https://geology.utah.gov/publication-details/?pub=OFR-784DM",
+          "type": "text/html",
+          "title": "UGS publication landing page"
+        },
+        {
+          "rel": "cite-as",
+          "href": "https://doi.org/10.34191/OFR-784DM"
+        },
+        {
+          "rel": "pmtiles",
+          "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/faults.pmtiles",
+          "type": "application/vnd.pmtiles",
+          "title": "Vector tiles \u2014 web-map display",
+          "pmtiles:layers": [
+            "faults"
+          ]
+        }
+      ],
+      "_collection_path": "ugs-publications/OFR/OFR-784DM"
+    },
+    "items": {}
+  },
+  "plate": {
+    "collection": {
+      "type": "Collection",
+      "stac_version": "1.1.0",
+      "stac_extensions": [
+        "https://schemas.portolan-sdi.org/portolan/v0.2.0/schema.json",
+        "https://stac-extensions.github.io/scientific/v1.0.0/schema.json",
+        "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
+      ],
+      "id": "OFR-784DM",
+      "title": "Interim Geologic Map of Mills Junction",
+      "description": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+      "license": "CC-BY-4.0",
+      "providers": [
+        {
+          "name": "Utah Geological Survey",
+          "roles": [
+            "producer",
+            "processor",
+            "licensor",
+            "host"
+          ],
+          "url": "https://geology.utah.gov"
+        }
+      ],
+      "extent": {
+        "spatial": {
+          "bbox": [
+            [
+              -112.5,
+              40.5,
+              -112.0,
+              41.0
+            ]
+          ]
+        },
+        "temporal": {
+          "interval": [
+            [
+              "2026-01-01T00:00:00Z",
+              "2026-01-01T00:00:00Z"
+            ]
+          ]
+        }
+      },
+      "ugs:series_id": "OFR-784DM",
+      "ugs:pub_type": "Open File Report",
+      "ugs:series": "Open File Report",
+      "ugs:scale": "1:24,000",
+      "ugs:topic": "geologic",
+      "ugs:topic_category": "geoscientificInformation",
+      "ugs:footprint_source": "cog",
+      "sci:doi": "10.34191/OFR-784DM",
+      "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+      "assets": {
+        "publication": {
+          "href": "https://ugspub.nr.utah.gov/publications/ofr/ofr-784dm.pdf",
+          "type": "application/pdf",
+          "title": "Publication",
+          "roles": [
+            "data"
+          ]
+        },
+        "gis_data_zip": {
+          "href": "https://ugspub.nr.utah.gov/publications/ofr/ofr-784dm.zip",
+          "type": "application/zip",
+          "title": "GIS Data - Zip",
+          "roles": [
+            "source"
+          ]
+        },
+        "cog": {
+          "href": "https://maps-assets.geology.utah.gov/geolmap/cogs/OFR-784DM.cog.tif",
+          "type": "image/tiff; application=geotiff; profile=cloud-optimized",
+          "title": "Cloud-Optimized GeoTIFF",
+          "roles": [
+            "data",
+            "cloud-optimized"
+          ],
+          "proj:code": "EPSG:3857"
+        },
+        "thumbnail": {
+          "href": "https://maps-assets.geology.utah.gov/geolmap/cogs/OFR-784DM.thumb.webp",
+          "type": "image/webp",
+          "title": "Thumbnail",
+          "roles": [
+            "thumbnail"
+          ]
+        }
+      },
+      "links": [
+        {
+          "rel": "root",
+          "href": "../../../catalog.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "parent",
+          "href": "../catalog.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "self",
+          "href": "./collection.json",
+          "type": "application/json"
+        },
+        {
+          "rel": "license",
+          "href": "https://creativecommons.org/licenses/by/4.0/",
+          "type": "text/html",
+          "title": "CC-BY-4.0"
+        },
+        {
+          "rel": "describedby",
+          "href": "./README.md",
+          "type": "text/markdown",
+          "title": "README"
+        },
+        {
+          "rel": "agents",
+          "href": "./AGENTS.md",
+          "type": "text/markdown",
+          "title": "AGENTS.md"
+        },
+        {
+          "rel": "alternate",
+          "href": "https://geology.utah.gov/publication-details/?pub=OFR-784DM",
+          "type": "text/html",
+          "title": "UGS publication landing page"
+        },
+        {
+          "rel": "cite-as",
+          "href": "https://doi.org/10.34191/OFR-784DM"
+        }
+      ],
+      "_collection_path": "ugs-publications/OFR/OFR-784DM"
+    },
+    "items": {}
+  },
+  "serving_topic": {
+    "type": "Feature",
+    "stac_version": "1.1.0",
+    "id": "enmin_ucrc_wells",
+    "collection": "energy_mineral",
+    "geometry": {
+      "type": "Polygon",
+      "coordinates": [
+        [
+          [
+            0,
+            1
+          ],
+          [
+            2,
+            1
+          ],
+          [
+            2,
+            3
+          ],
+          [
+            0,
+            3
+          ],
+          [
+            0,
+            1
+          ]
+        ]
+      ]
+    },
+    "bbox": [
+      0,
+      1,
+      2,
+      3
+    ],
+    "properties": {
+      "datetime": "2026-01-02T03:04:05+00:00",
+      "title": "Enmin Ucrc Wells",
+      "ugs:dbt_schema": "energy_mineral",
+      "ugs:layer": "enmin_ucrc_wells_current",
+      "ugs:row_count": 5,
+      "proj:code": "EPSG:4326"
+    },
+    "assets": {
+      "data": {
+        "href": "https://maps-assets.geology.utah.gov/warehouse/geoparquet/enmin_ucrc_wells/enmin_ucrc_wells.parquet",
+        "type": "application/vnd.apache.parquet",
+        "roles": [
+          "data"
+        ],
+        "title": "GeoParquet archive (native geometry)",
+        "description": "GeoParquet \u2014 full dataset; download, or read in place with DuckDB for analysis",
+        "table:columns": [
+          {
+            "name": "uwi",
+            "type": "string"
+          }
+        ],
+        "ugs:foreign_keys": [
+          {
+            "fields": [
+              "quad"
+            ],
+            "reference": {
+              "resource": "mapping_quads_24k",
+              "href": "https://cdn.example/quads.parquet",
+              "fields": [
+                "quad_id"
+              ]
+            }
+          }
+        ]
+      },
+      "pmtiles": {
+        "href": "https://maps-assets.geology.utah.gov/warehouse/pmtiles/enmin_ucrc_wells/enmin_ucrc_wells.pmtiles",
+        "type": "application/vnd.pmtiles",
+        "roles": [
+          "visual"
+        ],
+        "title": "PMTiles vector tiles",
+        "description": "Vector tiles \u2014 web-map display"
+      },
+      "boxes": {
+        "href": "h",
+        "type": "application/vnd.apache.parquet",
+        "roles": [
+          "data",
+          "related"
+        ],
+        "title": "UCRC core boxes",
+        "table:columns": [
+          {
+            "name": "uwi"
+          }
+        ]
+      }
+    },
+    "links": [
+      {
+        "rel": "root",
+        "href": "../../../catalog.json",
+        "type": "application/json"
+      },
+      {
+        "rel": "parent",
+        "href": "../collection.json",
+        "type": "application/json"
+      },
+      {
+        "rel": "collection",
+        "href": "../collection.json",
+        "type": "application/json"
+      },
+      {
+        "rel": "self",
+        "href": "./enmin_ucrc_wells.json",
+        "type": "application/geo+json"
+      },
+      {
+        "rel": "pmtiles",
+        "href": "https://maps-assets.geology.utah.gov/warehouse/pmtiles/enmin_ucrc_wells/enmin_ucrc_wells.pmtiles",
+        "type": "application/vnd.pmtiles",
+        "title": "Vector tiles \u2014 web-map display",
+        "pmtiles:layers": [
+          "enmin_ucrc_wells"
+        ]
+      },
+      {
+        "rel": "service",
+        "href": "https://ugs-warehouse-features-xedvkyurga-uc.a.run.app/collections/enmin_ucrc_wells",
+        "type": "application/json",
+        "title": "OGC API Features \u2014 query features / attributes"
+      },
+      {
+        "rel": "related",
+        "href": "u",
+        "type": "application/geo+json",
+        "title": "quads"
+      }
+    ],
+    "stac_extensions": [
+      "https://stac-extensions.github.io/web-map-links/v1.3.0/schema.json",
+      "https://stac-extensions.github.io/table/v1.2.0/schema.json",
+      "https://stac-extensions.github.io/projection/v2.0.0/schema.json"
+    ],
+    "_collection_path": "ugs-serving-topics/energy_mineral"
+  }
+}

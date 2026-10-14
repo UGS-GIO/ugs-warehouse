@@ -14,11 +14,17 @@ from django.conf import settings
 
 log = logging.getLogger(__name__)
 
-PUB_COLLECTIONS = ["ugs-publications", "ugs-mining-district-files", "ugs-external"]
-
 # The small per-series summary `refresh_catalog` writes beside the catalog root. The panel reads it
 # instead of the root items.json, which lists every publication and every publication Item.
 COVERAGE_SUMMARY = "pub-coverage.json"
+
+
+def pub_collections() -> tuple[str, ...]:
+    """The publication groups, defined once in core.stac (imported lazily: ugs_warehouse is not on
+    the path during a local `manage.py check`)."""
+    from ugs_warehouse.core.stac import PUB_GROUPS
+
+    return PUB_GROUPS
 
 
 def _get(url: str):
@@ -106,7 +112,7 @@ def _cog_coverage() -> dict:
     base = settings.STAC_BASE
     out = {"collections": [], "total_items": 0, "total_cogs": 0}
     summary: dict | None = None
-    for coll in PUB_COLLECTIONS:
+    for coll in pub_collections():
         cat = _get(f"{base}/{coll}/catalog.json")
         if not cat:
             out["collections"].append({"id": coll, "items": 0, "cogs": 0, "cog_ids": [], "error": True})

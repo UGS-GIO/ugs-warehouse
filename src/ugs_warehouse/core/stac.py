@@ -743,7 +743,7 @@ def _collection_assets(path: str, items: list[dict], mirror: object | None = Non
     """
     mirror_asset = item_mirror.asset(path, mirror)
     top = path.split("/", 1)[0]
-    if top != RASTER_CATALOG and top not in PUB_SERIES_CATALOGS:
+    if top != RASTER_CATALOG and top not in PUB_GROUPS:
         return mirror_asset
     with_thumbs = [it for it in items if (it.get("assets") or {}).get("thumbnail", {}).get("href")]
     if not with_thumbs:
@@ -1045,7 +1045,24 @@ ROLLUP_INDEX_CATALOGS = {SERVING_TOPICS_CATALOG}
 # `ugs:pub_type`, because there the collection IS the pub type ("Open File Report" = the OFR series).
 # Anywhere else that field describes the source publication, not the group: a raster mosaic built
 # from OFR plates was titled "Open File Report" instead of naming the layer (#86).
-PUB_SERIES_CATALOGS = {"ugs-publications", "ugs-mining-district-files", "ugs-external"}
+PUBLICATIONS_COLLECTION = "ugs-publications"             # UGS/UGMS-authored + USGS Utah maps
+MINING_DISTRICT_COLLECTION = "ugs-mining-district-files"  # MD series: archived 3rd-party mine files
+EXTERNAL_COLLECTION = "ugs-external"                     # foreign publishers UGS only hosts
+PUB_GROUPS = (PUBLICATIONS_COLLECTION, MINING_DISTRICT_COLLECTION, EXTERNAL_COLLECTION)
+
+
+def pub_layout_of(path: str) -> tuple[str, str, str, str] | None:
+    """Split a path under the publication catalogs, relative to the catalog root, into
+    `(group, series, sid, rest)` for `<group>/<SERIES>/<SID>/<rest>`.
+
+    A file directly in a series directory gives `sid == ""` and `rest` the file name. None for a
+    path outside the publication groups or above series level."""
+    parts = path.split("/")
+    if len(parts) < 3 or parts[0] not in PUB_GROUPS:
+        return None
+    if len(parts) == 3:
+        return parts[0], parts[1], "", parts[2]
+    return parts[0], parts[1], parts[2], "/".join(parts[3:])
 
 # Item property an ingest can send to name its own collection ("24k Geologic Map Series" for the
 # geolmap_24k_series rasters). Inherited, not authored here — absent it, the group falls back to
@@ -1061,7 +1078,7 @@ def _group_title(catalog: str, items: list[dict]) -> str | None:
         title = (it.get("properties") or {}).get(COLLECTION_TITLE_PROP)
         if title:
             return title
-    if catalog in PUB_SERIES_CATALOGS:
+    if catalog in PUB_GROUPS:
         return next((it.get("properties", {}).get("ugs:pub_type") for it in items
                      if it.get("properties", {}).get("ugs:pub_type")), None)
     return None
@@ -1069,7 +1086,7 @@ def _group_title(catalog: str, items: list[dict]) -> str | None:
 
 def _is_pub_collection_path(path: str) -> bool:
     """True for a `<group>/<SERIES>/<SID>` path under a publication catalog."""
-    return path.split("/")[0] in PUB_SERIES_CATALOGS and path.count("/") == 2
+    return path.split("/")[0] in PUB_GROUPS and path.count("/") == 2
 
 
 def _pub_collection_paths(paths: list[str]) -> dict[str, int]:
@@ -1077,9 +1094,9 @@ def _pub_collection_paths(paths: list[str]) -> dict[str, int]:
     including collections with no items. The value becomes the item count during refresh."""
     out: dict[str, int] = {}
     for path in paths:
-        parts = path[len(config.STAC_PREFIX):].lstrip("/").split("/")
-        if len(parts) == 4 and parts[0] in PUB_SERIES_CATALOGS and parts[3] == "collection.json":
-            out["/".join(parts[:3])] = 0
+        layout = pub_layout_of(path[len(config.STAC_PREFIX):].lstrip("/"))
+        if layout and layout[2] and layout[3] == "collection.json":
+            out["/".join(layout[:3])] = 0
     return out
 
 
@@ -1090,7 +1107,7 @@ def _pub_series_layout(groups: dict[str, list[str]],
 
     A series switches as a whole, once every old-layout `<SID>/<SID>.json` in it has a
     collection.json beside it, so a partial reingest never hides a published publication."""
-    series = {g for g in groups if g.split("/")[0] in PUB_SERIES_CATALOGS and g.count("/") == 1}
+    series = {g for g in groups if g.split("/")[0] in PUB_GROUPS and g.count("/") == 1}
     series |= {p.rsplit("/", 1)[0] for p in [*groups, *pub_colls] if _is_pub_collection_path(p)}
     migrated: set[str] = set()
     pending: dict[str, list[str]] = {}
@@ -1335,7 +1352,7 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             mappable = sum(1 for it in items if _is_mappable(it))
             # Series blurbs are keyed by short codes (M, C, B…) — only look them up under a pub
             # catalog, or a raster layer that happened to be named `M` would inherit the Map series text.
-            desc = SERIES_DESC.get(cid) if top in PUB_SERIES_CATALOGS else None
+            desc = SERIES_DESC.get(cid) if top in PUB_GROUPS else None
             if nested and top in ROLLUP_INDEX_CATALOGS:
                 rollup.setdefault(top, []).extend(items)
             # From the fetched docs, so an item that failed to fetch just carries no title.

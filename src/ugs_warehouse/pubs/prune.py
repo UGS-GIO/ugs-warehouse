@@ -25,7 +25,7 @@ import argparse
 import json
 import sys
 
-from ..core import config, gcs
+from ..core import config, gcs, stac
 from . import identity, sink_stac, source
 
 MAX_ORPHAN_SHARE = 0.05
@@ -73,8 +73,8 @@ def renamed(orphan_dirs: set[str], files: set[str]) -> set[str]:
 def _layout_dir(path: str) -> str | None:
     """`<group>/<SERIES>/<SID>` of a full object path, or None for a series- or group-level file."""
     prefix = f"{config.STAC_PREFIX}/"
-    parts = path[len(prefix):].split("/") if path.startswith(prefix) else []
-    return "/".join(parts[:3]) if len(parts) >= 4 else None
+    layout = stac.pub_layout_of(path[len(prefix):]) if path.startswith(prefix) else None
+    return "/".join(layout[:3]) if layout and layout[2] else None
 
 
 def orphan_pub_paths(expected: set[str] | None = None, groups: tuple[str, ...] = PUB_GROUPS) -> list[str]:
@@ -107,13 +107,17 @@ def legacy_layout_paths(expected: set[str] | None = None, groups: tuple[str, ...
         root = f"{config.STAC_PREFIX}/{group}/"
         listing = set(gcs.list_paths(root))
         for path in sorted(listing):
-            parts = path[len(root):].split("/")
-            if f"{root}{parts[0]}/catalog.json" not in listing:
+            layout = stac.pub_layout_of(path.removeprefix(f"{config.STAC_PREFIX}/"))
+            if not layout:
                 continue
-            if len(parts) == 2 and parts[1] in _LEGACY_SERIES_FILES:
-                out.append(path)
-            elif (len(parts) == 3 and f"{group}/{parts[0]}/{parts[1]}" in expected
-                  and parts[2] == f"{parts[1]}.json" and f"{root}{parts[0]}/{parts[1]}/collection.json" in listing):
+            _, series, sid, rest = layout
+            if f"{root}{series}/catalog.json" not in listing:
+                continue
+            if not sid:
+                if rest in _LEGACY_SERIES_FILES:
+                    out.append(path)
+            elif (f"{group}/{series}/{sid}" in expected and rest == f"{sid}.json"
+                  and f"{root}{series}/{sid}/collection.json" in listing):
                 out.append(path)
     return out
 

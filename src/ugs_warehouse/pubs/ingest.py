@@ -224,9 +224,11 @@ def _published_items(pubs: list[dict]) -> dict[str, dict[str, list[str]]]:
     root = f"{config.STAC_PREFIX}/"
     for group in groups:
         for path in gcs.list_paths(f"{root}{group}/"):
-            parts = path[len(root):].split("/")
-            if len(parts) >= 5:  # <group>/<SERIES>/<SID>/<item dir>/<file>
-                out.setdefault("/".join(parts[:3]), {}).setdefault(parts[3], []).append(path)
+            layout = stac.pub_layout_of(path[len(root):])
+            if layout and layout[2] and "/" in layout[3]:  # <group>/<SERIES>/<SID>/<item dir>/<file>
+                _, series, sid, rest = layout
+                out.setdefault(f"{group}/{series}/{sid}", {}).setdefault(
+                    rest.split("/")[0], []).append(path)
     return out
 
 

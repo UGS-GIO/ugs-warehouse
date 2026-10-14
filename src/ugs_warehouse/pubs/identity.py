@@ -13,6 +13,15 @@ import os
 from dataclasses import dataclass
 from urllib.parse import quote, unquote
 
+# Top-level catalog routing (UGS hosts third-party material it didn't author): the group names live
+# in core.stac, which lays the catalog out; re-exported for the pubs modules.
+from ..core.stac import (  # noqa: F401
+    EXTERNAL_COLLECTION,
+    MINING_DISTRICT_COLLECTION,
+    PUB_GROUPS,
+    PUBLICATIONS_COLLECTION,
+)
+
 # Object prefixes for the pubs producer (override via env). STAC items go to the shared
 # core.config.STAC_PREFIX (the one catalog); these are the pub *data* artifacts.
 COG_PREFIX = os.environ.get("GEOLMAP_COG_PREFIX", "geolmap/cogs")
@@ -80,12 +89,6 @@ def pub_search_object(series_id: str) -> str:
 def pub_fulltext_object(series_id: str) -> str:
     return f"{PUB_FULLTEXT_PREFIX}/{series_id.upper()}.txt"
 
-# Top-level catalog routing. UGS hosts third-party material it didn't author; split it into
-# sibling collections so the UGS geologic catalog stays clean (nothing dropped, just grouped).
-PUBLICATIONS_COLLECTION = "ugs-publications"             # UGS/UGMS-authored + USGS Utah maps
-MINING_DISTRICT_COLLECTION = "ugs-mining-district-files"  # MD series — archived 3rd-party mine files
-EXTERNAL_COLLECTION = "ugs-external"                     # foreign publishers UGS only hosts
-PUB_GROUPS = (PUBLICATIONS_COLLECTION, MINING_DISTRICT_COLLECTION, EXTERNAL_COLLECTION)
 
 
 # Previews are WebP (#372). The harvest writes a map's catalog thumbnail and the sheet the 3D viewer

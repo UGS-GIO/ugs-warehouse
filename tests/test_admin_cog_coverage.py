@@ -74,7 +74,7 @@ def test_coverage_reads_collection_layout_series_from_the_refresh_summary(ops_st
     }
     fetched: list[str] = []
     monkeypatch.setattr(ops_stac, "_get", lambda url: fetched.append(url) or docs.get(url))
-    monkeypatch.setattr(ops_stac, "PUB_COLLECTIONS", ["ugs-publications"])
+    monkeypatch.setattr(ops_stac, "pub_collections", lambda: ("ugs-publications",))
 
     cov = ops_stac._cog_coverage()
 
@@ -90,7 +90,7 @@ def test_coverage_reads_collection_layout_series_from_the_refresh_summary(ops_st
 def test_coverage_flags_a_missing_summary(ops_stac, monkeypatch):
     docs = {f"{BASE}/ugs-publications/catalog.json": {"links": [{"rel": "child", "href": "./OFR/catalog.json"}]}}
     monkeypatch.setattr(ops_stac, "_get", lambda url: docs.get(url))
-    monkeypatch.setattr(ops_stac, "PUB_COLLECTIONS", ["ugs-publications"])
+    monkeypatch.setattr(ops_stac, "pub_collections", lambda: ("ugs-publications",))
 
     (row,) = ops_stac._cog_coverage()["collections"]
     assert row["error"] is True and row["items"] == 0
@@ -104,7 +104,7 @@ def test_coverage_flags_a_summary_older_than_a_series_migration(ops_stac, monkey
                                                    "items": 1, "cog_ids": ["OFR-1"]}),
     }
     monkeypatch.setattr(ops_stac, "_get", lambda url: docs.get(url))
-    monkeypatch.setattr(ops_stac, "PUB_COLLECTIONS", ["ugs-publications"])
+    monkeypatch.setattr(ops_stac, "pub_collections", lambda: ("ugs-publications",))
 
     (row,) = ops_stac._cog_coverage()["collections"]
     assert row["error"] is True
@@ -128,7 +128,7 @@ def test_coverage_row_says_why_the_summary_is_stale(ops_stac, monkeypatch, caplo
                                                    "items": 1, "cog_ids": ["OFR-1"]}),
     }
     monkeypatch.setattr(ops_stac, "_get", lambda url: docs.get(url))
-    monkeypatch.setattr(ops_stac, "PUB_COLLECTIONS", ["ugs-publications"])
+    monkeypatch.setattr(ops_stac, "pub_collections", lambda: ("ugs-publications",))
 
     with caplog.at_level("WARNING"):
         (row,) = ops_stac._cog_coverage()["collections"]

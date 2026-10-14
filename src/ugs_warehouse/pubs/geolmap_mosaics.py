@@ -448,14 +448,17 @@ def published_pubs() -> PublishedPubs:
     plates: set[str] = set()
     collections: set[str] = set()
     base = _public_stac_prefix()
+    strip = f"{base}/" if base else ""
     for group in identity.PUB_GROUPS:
-        root = f"{base}/{group}/" if base else f"{group}/"
-        for path in gcs.list_paths(root, bucket=config.SOURCE_BUCKET):
-            parts = path[len(root):].split("/")
-            if len(parts) == 4 and parts[2] == f"{parts[1]}{stac.PLATE_SUFFIX}":
-                plates.add(f"{group}/{parts[0]}/{parts[1]}")
-            elif len(parts) == 3 and parts[2] == "collection.json":
-                collections.add(f"{group}/{parts[0]}/{parts[1]}")
+        for path in gcs.list_paths(f"{strip}{group}/", bucket=config.SOURCE_BUCKET):
+            layout = stac.pub_layout_of(path.removeprefix(strip))
+            if not layout:
+                continue
+            _, series, sid, rest = layout
+            if rest == "collection.json" and sid:
+                collections.add(f"{group}/{series}/{sid}")
+            elif sid and rest.split("/")[0] == f"{sid}{stac.PLATE_SUFFIX}" and rest.count("/") == 1:
+                plates.add(f"{group}/{series}/{sid}")
     return PublishedPubs(frozenset(plates), frozenset(collections))
 
 

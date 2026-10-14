@@ -53,7 +53,9 @@ function MapView() {
   const relatedFor = (layerId: string): RelatedTablesInfo | undefined => {
     const rec = [...c.mapItems, ...c.allItems].find((r) => idOf(r.href) === layerId);
     const tables = relatedAssets(rec?.data).map(({ key, asset }) =>
-      ({ key, title: asset.title ?? key, ...(isReferenceAsset(asset) ? { reference: true } : {}) }));
+      ({ key, title: asset.title ?? key,
+        ...(typeof asset["table:row_count"] === "number" ? { rows: asset["table:row_count"] } : {}),
+        ...(isReferenceAsset(asset) ? { reference: true } : {}) }));
     return rec && tables.length ? { itemHref: rec.href, tables } : undefined;
   };
 

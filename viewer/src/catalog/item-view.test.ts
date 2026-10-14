@@ -3,7 +3,7 @@ import type { ItemRef } from "./browse";
 import {
   author, bylineParts, categorize, categoryLabel, collectionLabel, collectionRoot, curatedDerived, seriesLabel,
   dateOf, fmtDate, formatsOf, isSpatialData, itemKind, kindLabel, recordCountLabel, rowCount, scale,
-  assetEntries, groupParts, PART_GROUP_OPEN, plateEntry, previewKindOf, series, title, typeOf, year,
+  assetEntries, groupParts, groupPartsByFile, PART_GROUP_OPEN, plateEntry, previewKindOf, series, title, typeOf, year,
 } from "./item-view";
 import { collectionAsItem, hasFootprint, type StacDoc } from "@/stac";
 
@@ -366,5 +366,41 @@ describe("groupParts (the publication page's layers and tables)", () => {
   it("files an unknown kind after the known ones under its own name", () => {
     expect(groupParts(of("Mills", "annotation", 1).concat(of("Mills", "layer", 1)))[0].groups.map((g) => g.label))
       .toEqual(["Map layers", "annotation"]);
+  });
+});
+
+describe("groupPartsByFile (source file, then dataset, then kind)", () => {
+  const part = (id: string, kind: string, sourceFile?: string, source = "Geo") =>
+    ({ id, title: id, kind, source, ...(sourceFile ? { sourceFile } : {}) });
+  const plate = { id: "P_plate", title: "Map plate" };
+
+  it("groups by file, keeps the plate on top, and nests dataset then kind", () => {
+    const zip = "GIS Data - Zip";
+    const xl = "Appendix A - Excel";
+    const out = groupPartsByFile([plate, part("a", "layer", zip, "Quad A"), part("b", "table", zip, "Quad B"),
+      part("c", "table", xl), part("d", "layer", zip, "Quad A")]);
+    expect(out.map((f) => [f.label, f.count])).toEqual([[undefined, 1], [zip, 3], [xl, 1]]);
+    expect(out[0].sections[0].groups[0].label).toBe("Map");
+    // The zip holds two datasets; the Excel file has one, so its dataset level collapses.
+    expect(out[1].sections.map((s) => s.label)).toEqual(["Quad A", "Quad B"]);
+    expect(out[2].sections.map((s) => s.label)).toEqual([undefined]);
+    expect(out[2].sections[0].groups.map((g) => g.label)).toEqual(["Tables"]);
+  });
+
+  it("has no file level when every part came from one file", () => {
+    const out = groupPartsByFile([part("a", "layer", "GIS Data - Zip"), part("b", "table", "GIS Data - Zip")]);
+    expect(out.map((f) => f.label)).toEqual([undefined]);
+    expect(out[0].sections[0].groups.map((g) => g.label)).toEqual(["Map layers", "Tables"]);
+  });
+
+  it("files parts with no source file under Other files beside the named ones", () => {
+    const out = groupPartsByFile([part("a", "layer", "GIS Data - Zip"), part("b", "table")]);
+    expect(out.map((f) => f.label)).toEqual(["GIS Data - Zip", "Other files"]);
+  });
+
+  it("falls back to groupParts for parts that carry no source file (older catalogs)", () => {
+    const parts = [plate, part("a", "layer"), part("b", "table")];
+    expect(groupPartsByFile(parts)).toEqual([{ count: 3, collapsed: false, sections: groupParts(parts) }]);
+    expect(groupPartsByFile([])).toEqual([]);
   });
 });

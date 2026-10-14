@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { qk } from "@/query-keys";
 import { CommentsPanel } from "@/review/comments-panel";
 import { ReferenceTables } from "./reference-tables";
-import { IS_REVIEW, partitionRelated, primaryKeyOf, relatedJoins, type RelatedJoin, summaryFieldsOf, type StacDoc } from "@/stac";
+import { describeData, IS_REVIEW, partitionRelated, primaryKeyOf, relatedJoins, type RelatedJoin, summaryFieldsOf, type StacDoc } from "@/stac";
 
 // One related child table's peek for the clicked feature: 0 rows → hidden; 1 → the row inline
 // (description clamped); many → a hand-off button. Never a table — the full rows live in the panel/dock.
@@ -21,6 +21,8 @@ function PeekRow({ join, value, onOpen }: {
   });
   if (v === undefined) return null;
   const total = data?.total ?? 0;
+  const text = describeData({ table: true, rows: join.rows });
+  const descriptor = text && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{text}</span>;
   if (isFetching && !data) return <div className="py-0.5 text-xs text-muted-foreground">{join.title}…</div>;
   if (error) return <div className="py-0.5 text-xs text-destructive">{join.title}: couldn't load</div>;
   if (total === 0) return null;
@@ -28,7 +30,7 @@ function PeekRow({ join, value, onOpen }: {
     const row = data!.rows[0];
     return (
       <div className="py-1">
-        <div className="text-xs font-semibold">{join.title}</div>
+        <div className="text-xs font-semibold">{join.title}{descriptor}</div>
         {data!.columns.filter((k) => k !== join.childField && row[k] != null && row[k] !== "").slice(0, 6).map((k) => (
           <div key={k} className="text-xs" style={{ display: "-webkit-box", WebkitLineClamp: 3, WebkitBoxOrient: "vertical", overflow: "hidden" }}>
             <span className="text-muted-foreground">{k}:</span> {String(row[k])}
@@ -38,10 +40,13 @@ function PeekRow({ join, value, onOpen }: {
     );
   }
   return (
-    <button type="button" onClick={() => onOpen?.(join.key, v)}
-      className="block w-full text-left text-xs font-medium text-primary hover:underline">
-      {total} related in {join.title} →
-    </button>
+    <div className="flex flex-wrap items-baseline gap-x-2">
+      <button type="button" onClick={() => onOpen?.(join.key, v)}
+        className="text-left text-xs font-medium text-primary hover:underline">
+        {total} related in {join.title} →
+      </button>
+      {descriptor}
+    </div>
   );
 }
 

@@ -9,11 +9,16 @@ import { PreviewMapProvider } from "@/map/preview-map";
 import { RelatedLinks } from "@/map/related-links";
 import type { StacDoc } from "@/stac";
 import { humanize } from "@/ui/ui";
-import { RelatedPanel } from "./item-detail";
+import { PublicationParts, RelatedPanel } from "./item-detail";
 
 // The related-row read a click makes (hyparquet, an exact match on the key column).
 const { readMatching } = vi.hoisted(() => ({ readMatching: vi.fn() }));
 vi.mock("@/data/parquet-lite", () => ({ readMatching }));
+// The parts list links with the router's <Link>; a plain anchor is enough to render it.
+vi.mock("@tanstack/react-router", async (orig) => ({
+  ...(await orig<typeof import("@tanstack/react-router")>()),
+  Link: ({ children }: { children: React.ReactNode }) => <a href="#part">{children}</a>,
+}));
 
 const DMU = "https://x/vectors/OFR-784DM/OFR784DM__DescriptionOfMapUnits.parquet";
 const SOURCES = "https://x/vectors/OFR-784DM/OFR784DM__DataSources.parquet";
@@ -184,5 +189,49 @@ describe("RelatedPanel on a publication layer", () => {
     // The primary DMU table is listed outside the collapsed section.
     const primary = screen.getByText("Description Of Map Units");
     expect(refs.contains(primary)).toBe(false);
+  });
+});
+
+describe("the geometry and count line on related tables and parts", () => {
+  const withRows = { ...mapUnitPolys, assets: { ...mapUnitPolys.assets,
+    OFR784DM__DescriptionOfMapUnits: { ...mapUnitPolys.assets!.OFR784DM__DescriptionOfMapUnits, "table:row_count": 41 } } };
+
+  it("shows the row count beside a related table in the panel, with the same View link name", () => {
+    wrap(<RelatedPanel item={withRows} />);
+    expect(screen.getByText("table · 41 rows")).toBeDefined();
+    // One View per related table (the DMU and the collapsed reference table), unchanged.
+    expect(screen.getAllByRole("button", { name: "View" })).toHaveLength(2);
+  });
+
+  it("shows nothing extra for a related table with no recorded count", () => {
+    wrap(<RelatedPanel item={mapUnitPolys} />);
+    expect(screen.queryByText(/rows/)).toBeNull();
+  });
+
+  it("shows it beside the Map page launcher without changing the button's name", () => {
+    render(<RelatedLinks props={{}} onOpen={vi.fn()}
+      info={{ itemHref: "https://x/item.json", tables: [{ key: "dmu", title: "Description Of Map Units", rows: 41 }] }} />);
+    expect(screen.getByRole("button", { name: /^Description Of Map Units/ })).toBeDefined();
+    expect(screen.getByText("table · 41 rows")).toBeDefined();
+  });
+
+  it("shows it under the feature card's related line", async () => {
+    readMatching.mockResolvedValue({ total: 3, columns: ["MapUnit"], rows: [] });
+    wrap(<FeatureCard item={withRows} props={{ MapUnit: "Qal" }} />);
+    expect(await screen.findByText("table · 41 rows")).toBeDefined();
+    expect(screen.getByRole("button", { name: "3 related in Description Of Map Units →" })).toBeDefined();
+  });
+
+  it("describes each part of a publication, grouped by file", () => {
+    const link = (id: string, title: string, extra: Record<string, unknown>) =>
+      ({ rel: "item", href: `./${id}/${id}.json`, title, "ugs:source_dataset": "Geo", ...extra });
+    const pub: StacDoc = { type: "Collection", id: "OFR-784DM", links: [
+      link("polys", "Map Unit Polys", { "ugs:layer_kind": "layer", "ugs:source_file": "GIS Data - Zip", "ugs:geometry_kind": "polygons", "table:row_count": 367 }),
+      link("dmu", "Description of Map Units", { "ugs:layer_kind": "table", "ugs:source_file": "Appendix A - Excel", "table:row_count": 41 })] } as StacDoc;
+    wrap(<PublicationParts item={pub} collectionId="ugs-publications/OFR" />);
+    expect(screen.getByText("polygons · 367 features")).toBeDefined();
+    expect(screen.getByText("table · 41 rows")).toBeDefined();
+    expect(screen.getByText("GIS Data - Zip")).toBeDefined();
+    expect(screen.getByText("Appendix A - Excel")).toBeDefined();
   });
 });

@@ -88,7 +88,7 @@ type PopupInfo = { lng: number; lat: number; title: string; href?: string };
 
 // The related tables a clicked layer offers — names + the full-item href to resolve joins on open.
 // Named from the compact index (cheap); the join columns are read from the full item only on open.
-export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string; reference?: boolean }[] };
+export type RelatedTablesInfo = { itemHref: string; tables: { key: string; title: string; rows?: number; reference?: boolean }[] };
 // What "open a related table" hands back up to the map route (which renders it in the Info panel).
 export type OpenRelated = { itemHref: string; relatedKey: string; title: string; props: Record<string, unknown> };
 // A clicked data feature's detail, lifted to the route so it can be docked (no floating feature

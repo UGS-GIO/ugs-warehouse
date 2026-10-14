@@ -16,14 +16,14 @@ import { FieldsPanel, Preview } from "./asset-viewer";
 import { AssetsPanel, EndpointsPanel, listedAssets } from "./endpoints-panel";
 import { CubeStepsPanel, CubeStepsProvider } from "@/zarr/cube-steps-context";
 import { DownloadsPanel } from "./downloads-panel";
-import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, groupParts, kindLabel, type MetaRow, type PartGroup,
+import { aboutRows, bylineParts, categorize, collectionLabel, curatedDerived, groupPartsByFile, kindLabel, type MetaRow, type PartGroup, type PartSection,
   recordCountLabel } from "./item-view";
 import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { CiteMenu } from "./cite-menu";
 import { citationFields } from "./citation";
-import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, geopackageAsset, hasFootprint, inferredKey,
-  inferredTitle, isReferenceAsset, IS_REVIEW, partitionRelated, ownForeignKeys, relatedAssets,
+import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, describeData, geopackageAsset, hasFootprint, inferredKey,
+  inferredTitle, isReferenceAsset, isTableKind, IS_REVIEW, partitionRelated, ownForeignKeys, relatedAssets,
   pmtilesLink, relatedJoins, relatedLinks, type ForeignKey, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { ReferenceTables } from "@/map/reference-tables";
@@ -73,6 +73,7 @@ export function RelatedPanel({ item }: { item: StacDoc }) {
     <li key={key}>
       <div className="flex flex-wrap items-center gap-2">
         <span className="font-medium">{asset.title ?? key}</span>
+        <PartDescriptor text={describeData({ table: true, rows: asset["table:row_count"] })} />
         <button className="text-primary hover:underline"
           onClick={() => toggleTable(key)}>
           {isOpen(key) ? "Hide" : "View"}
@@ -220,6 +221,11 @@ export function PublicationData({ item, collectionId }: { item: StacDoc; collect
   );
 }
 
+// The geometry · count line beside a part or related table; nothing when the catalog has no data for it.
+function PartDescriptor({ text }: { text: string }) {
+  return text ? <span className="ml-2 text-xs text-muted-foreground">{text}</span> : null;
+}
+
 // A publication's layers and tables, one row per Item, titled from its rel=item links. Each opens
 // at `?c=<series>/<SID>&i=<item>`. A report-only publication has none, so nothing renders.
 // Grouped by groupParts (item-view.ts); groups are native <details>, so they open without state.
@@ -232,6 +238,7 @@ export function PublicationParts({ item, collectionId }: { item: StacDoc; collec
       {ps.map((p) => (
         <li key={p.id} className="py-1">
           <EntryLink c={c} i={p.id} className="text-primary no-underline hover:underline">{p.title} ›</EntryLink>
+          <PartDescriptor text={describeData({ geometry: p.geometry, table: isTableKind(p.kind), rows: p.rows })} />
         </li>
       ))}
     </ul>
@@ -246,19 +253,29 @@ export function PublicationParts({ item, collectionId }: { item: StacDoc; collec
       </details>
     )
     : <div key={i}>{list(g.parts)}</div>;
+  const section = (s: PartSection, i: number) => s.label
+    ? (
+      <details key={s.label} open={!s.collapsed} className="mt-2 border-t border-border pt-2">
+        <summary className="cursor-pointer text-sm font-medium text-foreground">
+          {s.label} <span className="text-xs text-muted-foreground">· {s.count}</span>
+        </summary>
+        <div className="pl-3">{s.groups.map(group)}</div>
+      </details>
+    )
+    : <div key={i}>{s.groups.map(group)}</div>;
   return (
     <section className="mt-4 rounded-md border border-border bg-card p-3">
       <h3 className="text-sm font-semibold">Layers and tables</h3>
-      {groupParts(parts).map((s, i) => s.label
+      {groupPartsByFile(parts).map((f, fi) => f.label
         ? (
-          <details key={s.label} open={!s.collapsed} className="mt-2 border-t border-border pt-2">
-            <summary className="cursor-pointer text-sm font-medium text-foreground">
-              {s.label} <span className="text-xs text-muted-foreground">· {s.count}</span>
+          <details key={f.label} open={!f.collapsed} className="mt-2 border-t border-border pt-2">
+            <summary className="cursor-pointer text-sm font-semibold text-foreground">
+              {f.label} <span className="text-xs font-normal text-muted-foreground">· {f.count}</span>
             </summary>
-            <div className="pl-3">{s.groups.map(group)}</div>
+            <div className="pl-3">{f.sections.map(section)}</div>
           </details>
         )
-        : <div key={i}>{s.groups.map(group)}</div>)}
+        : <div key={fi}>{f.sections.map(section)}</div>)}
     </section>
   );
 }

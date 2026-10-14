@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, expect, it, vi } from "vitest";
 
-import { assetUsages, catalogItemHref, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
+import { assetUsages, catalogItemHref, describeData, citeLink, collectionAsItem, inferredKey, inferredTitle, isReferenceAsset, isServingTopic, plateHrefOf, stacDocQuery, collectionHrefOf, partitionRelated, parentKeyOf, collectionParts, entryCollKeyOf, hasFootprint, HttpError, idOf, indexItemRefs, isCatalogHref, isCollectionHref, isPlaceholderFootprint, itemMissing, NoIndexError, resolutionStatus, layerLabel, pubHrefFor, pubOfEntry, pubSidIn, ROOT_INDEX_URL, rootIndexItems, cogAsset, cogRenderAsset, collKeyOf, isDrawableCog, hasItemsIndex, rasterTilesAsset, relatedJoins, viaLink } from "./stac";
 import type { StacDoc } from "./stac";
 import { joinsRows, vectorSpecOf } from "./map/preview-spec";
 
@@ -594,5 +594,29 @@ describe("partitionRelated", () => {
 describe("parentKeyOf", () => {
   it("drops the last path segment of a catalog key", () => {
     expect(parentKeyOf("ugs-publications/OFR/OFR-9")).toBe("ugs-publications/OFR");
+  });
+});
+
+describe("part descriptors", () => {
+  it("reads source file, geometry and row count off a rel=item link", () => {
+    const doc: StacDoc = { type: "Collection", links: [
+      { rel: "item", href: "./a/a.json", title: "Map Unit Polys", "ugs:layer_kind": "layer", "ugs:source_file": "GIS Data - Zip",
+        "ugs:geometry_kind": "polygons", "table:row_count": 367 }] };
+    expect(collectionParts(doc)).toEqual([{ id: "a", title: "Map Unit Polys", kind: "layer", sourceFile: "GIS Data - Zip",
+      geometry: "polygons", rows: 367 }]);
+  });
+  it("describes spatial and table parts, and nothing when there is no data", () => {
+    expect(describeData({ geometry: "polygons", rows: 367 })).toBe("polygons · 367 features");
+    expect(describeData({ geometry: "points", rows: 1 })).toBe("points · 1 feature");
+    expect(describeData({ geometry: "lines", rows: 12345 })).toBe("lines · 12,345 features");
+    expect(describeData({ table: true, rows: 41 })).toBe("table · 41 rows");
+    expect(describeData({ geometry: "mixed" })).toBe("mixed");
+    expect(describeData({ table: true })).toBe("");
+    expect(describeData({})).toBe("");
+  });
+  it("carries a related table's row count on its join", () => {
+    const joins = relatedJoins({ assets: { t: { href: "https://x/t.parquet", roles: ["data", "related"], "table:row_count": 41,
+      "ugs:foreign_keys": [{ fields: ["a"], reference: { resource: "r", fields: ["b"] } }] } } });
+    expect(joins[0].rows).toBe(41);
   });
 });

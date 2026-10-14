@@ -180,6 +180,26 @@ const kindGroups = (parts: CollectionPart[]): PartGroup[] => {
   });
 };
 
+// A publication's parts by the attachment they came from (`ugs:source_file`), each then grouped
+// by groupParts (source dataset, then kind). The plate, units and fence stay one "Map" entry on
+// top. One file, or parts that carry none (older catalogs), is groupParts alone, with no file level.
+export type FileGroup = { label?: string; count: number; collapsed: boolean; sections: PartSection[] };
+
+export const groupPartsByFile = (parts: CollectionPart[]): FileGroup[] => {
+  const kinded = parts.filter((p) => p.kind);
+  const files = [...new Set(kinded.flatMap((p) => (p.sourceFile ? [p.sourceFile] : [])))];
+  if (!files.length) return parts.length ? [{ count: parts.length, collapsed: false, sections: groupParts(parts) }] : [];
+  const map = parts.filter((p) => !p.kind);
+  const out: FileGroup[] = map.length ? [{ count: map.length, collapsed: false, sections: [
+    { count: map.length, collapsed: false, groups: [{ label: "Map", parts: map, collapsed: false }] }] }] : [];
+  const loose = kinded.filter((p) => !p.sourceFile);
+  const groups = [...files.map((f) => ({ label: f, of: kinded.filter((p) => p.sourceFile === f) })),
+                  ...(loose.length ? [{ label: "Other files", of: loose }] : [])];
+  if (groups.length === 1) return [...out, { count: kinded.length, collapsed: false, sections: groupParts(kinded) }];
+  return [...out, ...groups.map(({ label, of }) =>
+    ({ label, count: of.length, collapsed: of.length > PART_GROUP_OPEN, sections: groupParts(of) }))];
+};
+
 export const groupParts = (parts: CollectionPart[]): PartSection[] => {
   const kinded = parts.filter((p) => p.kind);
   if (!kinded.length) return parts.length ? [{ count: parts.length, collapsed: false, groups: [{ parts, collapsed: false }] }] : [];

@@ -120,6 +120,9 @@ export type Link = {
   "ugs:layer_kind"?: string;       // a publication's rel=item link: layer | table | supporting
   "ugs:source_dataset"?: string;   // ... and the GIS dataset it came from, as a title
   "ugs:source_key"?: string;       // ... and that dataset's raw name, which keys its group
+  "ugs:source_file"?: string;      // ... and the attachment it was extracted from ("GIS Data - Zip")
+  "ugs:geometry_kind"?: string;    // ... points | lines | polygons | mixed (spatial layers only)
+  "table:row_count"?: number;      // ... its feature or row count
 };
 // ugs:foreign_keys — a UGS-prefixed custom field (FK join detail has no STAC extension). This
 // resource's `fields` reference `reference.resource`'s (a serving-topic stem) `reference.fields`.
@@ -138,6 +141,7 @@ export type Asset = {
   description?: string;   // one-line usage hint (display / query / download) stamped by core/stac (#280)
   "proj:code"?: string;   // per-asset CRS; overrides the item's (a reprojected COG carries its own)
   "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];
+  "table:row_count"?: number;   // a related table's rows
   "file:size"?: number;   // bytes, from the file extension
 };
 export type StacDoc = {
@@ -217,7 +221,22 @@ export const collectionAsItem = (d: StacDoc): StacDoc => {
 // A Collection's Items (its layers and tables), from the titled rel=item links: no fetch per item.
 // Each carries the link's `ugs:layer_kind`, `ugs:source_dataset` (title) and `ugs:source_key` (raw
 // name) where the publication has them (its layers and tables do; the plate, units and fence do not).
-export type CollectionPart = { id: string; title: string; kind?: string; source?: string; sourceKey?: string };
+// `sourceFile` is the attachment it came from, `geometry` a plain word and `rows` its count.
+export type CollectionPart = { id: string; title: string; kind?: string; source?: string; sourceKey?: string;
+  sourceFile?: string; geometry?: string; rows?: number };
+
+// The quiet descriptor beside a part or related table: geometry (or "table") then a count, as
+// "polygons · 367 features" or "table · 41 rows". Empty when the link carries neither, so an older
+// catalog shows nothing rather than a bare "table".
+export const describeData = ({ geometry, table, rows }: { geometry?: string; table?: boolean; rows?: number }): string => {
+  if (!geometry && rows === undefined) return "";
+  const word = geometry ?? (table ? "table" : undefined);
+  const noun = table || !geometry ? "row" : "feature";
+  const count = rows === undefined ? undefined : `${rows.toLocaleString("en-US")} ${noun}${rows === 1 ? "" : "s"}`;
+  return [word, count].filter(Boolean).join(" · ");
+};
+// Whether a part's `ugs:layer_kind` is a non-spatial table (a table or a supporting table).
+export const isTableKind = (kind: string | undefined): boolean => kind === "table" || kind === "supporting";
 // A publication's all-layers GeoPackage, when the ingest found one (the `geopackage` Collection asset).
 export const geopackageAsset = (d: StacDoc | undefined): Asset | undefined => {
   const a = d?.assets?.geopackage;
@@ -230,7 +249,13 @@ export const collectionParts = (d: StacDoc | undefined): CollectionPart[] =>
     const kind = l["ugs:layer_kind"];
     const source = l["ugs:source_dataset"];
     const sourceKey = l["ugs:source_key"];
+    const file = l["ugs:source_file"];
+    const geometry = l["ugs:geometry_kind"];
+    const rows = l["table:row_count"];
     return { id, title: l.title ?? id,
+             ...(typeof file === "string" && file ? { sourceFile: file } : {}),
+             ...(typeof geometry === "string" && geometry ? { geometry } : {}),
+             ...(typeof rows === "number" ? { rows } : {}),
              ...(typeof kind === "string" && kind ? { kind } : {}),
              ...(typeof source === "string" && source ? { source } : {}),
              ...(typeof sourceKey === "string" && sourceKey ? { sourceKey } : {}) };
@@ -283,7 +308,7 @@ export const ownForeignKeys = (d: StacDoc | undefined): ForeignKey[] =>
 // are skipped: a partial join would return wrong rows, so surface nothing rather than bad data.
 // `reference` marks a reference table (isReferenceAsset); `inferred` an inferred key's confidence.
 export type RelatedJoin = {
-  key: string; title: string; href: string; childField: string; parentField: string;
+  key: string; title: string; href: string; childField: string; parentField: string; rows?: number;
   reference?: boolean; inferred?: { confidence?: number };
 };
 export const relatedJoins = (d: StacDoc | undefined): RelatedJoin[] =>
@@ -291,6 +316,7 @@ export const relatedJoins = (d: StacDoc | undefined): RelatedJoin[] =>
     (asset["ugs:foreign_keys"] ?? [])
       .filter((fk) => fk.fields.length === 1 && fk.reference.fields.length === 1)
       .map((fk) => ({ key, title: asset.title ?? key, href: asset.href,
+                      ...(typeof asset["table:row_count"] === "number" ? { rows: asset["table:row_count"] } : {}),
                       childField: fk.fields[0], parentField: fk.reference.fields[0],
                       ...(isReferenceAsset(asset) ? { reference: true } : {}),
                       ...(inferredKey(fk) ? { inferred: inferredKey(fk) } : {}) })));

@@ -9,7 +9,7 @@ import sys
 import zipfile
 
 import pytest
-from test_pubs_vectors import _gis_zips, _mem_gcs
+from test_pubs_vectors import _gis_zips, _mem_gcs, no_identify  # noqa: F401 (autouse fixture)
 
 from ugs_warehouse.pubs import harvest, identity, vectors
 

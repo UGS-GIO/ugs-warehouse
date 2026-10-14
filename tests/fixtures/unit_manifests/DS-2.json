@@ -1,0 +1,68 @@
+{
+ "layers": [
+  {
+   "label": "IBM_UT_DS-2__IBM_UT_GeologicUnits",
+   "spatial": true,
+   "rows": 266,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "IBM_UT_DS-2",
+   "columns": [
+    {
+     "name": "Unit_Symbol",
+     "type": "string"
+    },
+    {
+     "name": "Unit_Name",
+     "type": "string"
+    },
+    {
+     "name": "Age_Strat",
+     "type": "string"
+    },
+    {
+     "name": "Rock_Type",
+     "type": "string"
+    },
+    {
+     "name": "Composition",
+     "type": "string"
+    },
+    {
+     "name": "Description",
+     "type": "string"
+    },
+    {
+     "name": "Scale",
+     "type": "string"
+    },
+    {
+     "name": "Source",
+     "type": "string"
+    },
+    {
+     "name": "Entered_By",
+     "type": "string"
+    },
+    {
+     "name": "Updated_By",
+     "type": "string"
+    },
+    {
+     "name": "Updated_Date",
+     "type": "datetime"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

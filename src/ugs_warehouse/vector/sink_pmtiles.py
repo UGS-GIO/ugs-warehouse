@@ -53,6 +53,13 @@ TILE_OPTS = [
 ]
 
 
+# Added for the unit polygons under the maps (pubs/unit_polys.py, pubs/identify.py): a small unit
+# polygon stays a polygon at every zoom instead of being folded into its neighbours, since a click
+# at any zoom must find the unit under it. The TILE_OPTS above already lift tippecanoe's
+# per-tile feature and size limits and its drop rate, so no polygon is dropped.
+IDENTIFY_OPTS = ["--no-tiny-polygon-reduction"]
+
+
 def tiling_signature(has_ugs_key: bool) -> str:
     """Stable string of the tiling inputs (build version + whether ugs_key rides as a tile property
     + fixed flags + env opts). Folded into the content fingerprint so a change in HOW a topic is
@@ -81,9 +88,9 @@ def write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None
 
 
 def run_tippecanoe(geojsonl: str, pmtiles: str, layer: str, *, id_attr: str | None = None,
-                   what: str | None = None) -> None:
+                   what: str | None = None, extra_opts: list[str] | None = None) -> None:
     """tippecanoe over a GeoJSONSeq file into `pmtiles`, one tile layer named `layer`, with the fixed
-    TILE_OPTS + TIPPECANOE_OPTS. `id_attr` is promoted to the MVT feature id. Raises RuntimeError
+    TILE_OPTS + `extra_opts` + TIPPECANOE_OPTS. `id_attr` is promoted to the MVT feature id. Raises RuntimeError
     carrying tippecanoe's stderr, naming `what` (default `layer`)."""
     if not shutil.which(TIPPECANOE_BIN):
         raise RuntimeError(
@@ -94,6 +101,7 @@ def run_tippecanoe(geojsonl: str, pmtiles: str, layer: str, *, id_attr: str | No
         "-o", pmtiles,
         "-l", layer,
         *TILE_OPTS,
+        *(extra_opts or []),
         *([f"--use-attribute-for-id={id_attr}"] if id_attr else []),
         *EXTRA_OPTS,
         geojsonl,

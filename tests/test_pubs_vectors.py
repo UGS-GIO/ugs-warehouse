@@ -17,6 +17,13 @@ pd = pytest.importorskip("pandas")
 Point = pytest.importorskip("shapely.geometry").Point
 
 
+@pytest.fixture(autouse=True)
+def no_identify(monkeypatch):
+    """The identify layers read the mosaic membership and footprints; their tests are in
+    test_pubs_identify.py."""
+    monkeypatch.setattr(vectors.identify, "build_changed", lambda tiers=None: vectors.identify.Result())
+
+
 @pytest.fixture
 def no_geopackage(monkeypatch):
     """For tests that run extraction or the heal over manifests with no GeoParquet behind them: the
@@ -25,7 +32,7 @@ def no_geopackage(monkeypatch):
     monkeypatch.setattr(vectors, "_geopackage_series", lambda series_id: (False, []))
 
 
-def _fake_tippecanoe(geojsonl, pmtiles, layer, *, id_attr=None, what=None):
+def _fake_tippecanoe(geojsonl, pmtiles, layer, *, id_attr=None, what=None, extra_opts=None):
     with open(pmtiles, "wb") as fh:
         fh.write(f"tiles:{layer}".encode())
 
@@ -1073,11 +1080,13 @@ def _backfill_store(monkeypatch, tmp_path, manifests: dict[str, dict]):
 
 
 def _manifest(*layers, errors=None, warnings=None, relations_version=vectors.relations.RELATIONS_VERSION):
-    """A manifest whose relationships are current unless `relations_version` says otherwise."""
+    """A manifest whose relationships and unit product are current unless `relations_version`
+    says otherwise."""
     return {"spatial": [lay["label"] for lay in layers if lay["spatial"]],
             "tables": [lay["label"] for lay in layers if not lay["spatial"]],
             "layers": list(layers), "empty": [], "errors": errors or [], "warnings": warnings or [],
             "extract_version": vectors.EXTRACT_VERSION,
+            "unit_polys_version": vectors.unit_polys.UNIT_POLYS_VERSION,
             **({"relationships": [], "relations_version": relations_version}
                if relations_version is not None else {})}
 
@@ -1299,7 +1308,7 @@ def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(m
     assert vectors.main() == 0
     out = capsys.readouterr().out
     assert ("Self-heal: 2 layers tiled, 0 pubs' relationships recorded, units upgraded: 0, "
-            "1 pubs' layer styles written, 0 GeoPackages built; 4 layers, "
+            "1 pubs' layer styles written, 0 GeoPackages built, 0 pubs' unit polygons built; 4 layers, "
             "0 pubs and 0 units files still pending, the next run continues") in out
     assert vectors.pmtiles_object("M-10", "a") in store  # the series in progress finished
     assert vectors.pmtiles_object("M-11", "a") not in store

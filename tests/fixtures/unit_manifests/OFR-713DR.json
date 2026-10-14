@@ -1,0 +1,431 @@
+{
+ "layers": [
+  {
+   "label": "CedarMesa_BoundaryButte_GeologicUnits",
+   "spatial": true,
+   "rows": 655,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "Shapefiles",
+   "columns": [
+    {
+     "name": "OBJECTID",
+     "type": "integer"
+    },
+    {
+     "name": "UnitRank",
+     "type": "integer"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitLabel",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "string"
+    },
+    {
+     "name": "Age_Strat",
+     "type": "string"
+    },
+    {
+     "name": "Compositio",
+     "type": "string"
+    },
+    {
+     "name": "Genesis",
+     "type": "string"
+    },
+    {
+     "name": "Descriptio",
+     "type": "string"
+    },
+    {
+     "name": "Source",
+     "type": "integer"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "OFR-713DR_CedarMesa_BoundaryButte__CedarMesa_BoundaryButte_GeologicUnits_labels",
+   "spatial": true,
+   "rows": 460,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-713DR_CedarMesa_BoundaryButte",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "number"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "integer"
+    },
+    {
+     "name": "UnitLabel",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "OFR-713DR_CedarMesa_BoundaryButte__UtahStateBoundary",
+   "spatial": true,
+   "rows": 1,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-713DR_CedarMesa_BoundaryButte",
+   "columns": [
+    {
+     "name": "STATE",
+     "type": "string"
+    },
+    {
+     "name": "Shape_Leng",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "OFR-713DR_CedarMesa_BoundaryButte__CedarMesa_BoundaryButte_GeologicFeatures_labels",
+   "spatial": true,
+   "rows": 284,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-713DR_CedarMesa_BoundaryButte",
+   "columns": [
+    {
+     "name": "FeatureID",
+     "type": "number"
+    },
+    {
+     "name": "ZOrder",
+     "type": "number"
+    },
+    {
+     "name": "AnnotationClassID",
+     "type": "integer"
+    },
+    {
+     "name": "Element",
+     "type": "binary"
+    },
+    {
+     "name": "SymbolID",
+     "type": "integer"
+    },
+    {
+     "name": "Status",
+     "type": "integer"
+    },
+    {
+     "name": "TextString",
+     "type": "string"
+    },
+    {
+     "name": "FontName",
+     "type": "string"
+    },
+    {
+     "name": "FontSize",
+     "type": "number"
+    },
+    {
+     "name": "Bold",
+     "type": "integer"
+    },
+    {
+     "name": "Italic",
+     "type": "integer"
+    },
+    {
+     "name": "Underline",
+     "type": "integer"
+    },
+    {
+     "name": "VerticalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "HorizontalAlignment",
+     "type": "integer"
+    },
+    {
+     "name": "XOffset",
+     "type": "number"
+    },
+    {
+     "name": "YOffset",
+     "type": "number"
+    },
+    {
+     "name": "Angle",
+     "type": "number"
+    },
+    {
+     "name": "FontLeading",
+     "type": "number"
+    },
+    {
+     "name": "WordSpacing",
+     "type": "number"
+    },
+    {
+     "name": "CharacterWidth",
+     "type": "number"
+    },
+    {
+     "name": "CharacterSpacing",
+     "type": "number"
+    },
+    {
+     "name": "FlipAngle",
+     "type": "number"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    },
+    {
+     "name": "Quadrangle",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  },
+  {
+   "label": "OFR-713DR_CedarMesa_BoundaryButte__CedarMesa_BoundaryButte_GeologicUnits",
+   "spatial": true,
+   "rows": 655,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-713DR_CedarMesa_BoundaryButte",
+   "columns": [
+    {
+     "name": "UnitRank",
+     "type": "number"
+    },
+    {
+     "name": "UnitSymbol",
+     "type": "string"
+    },
+    {
+     "name": "UnitLabel",
+     "type": "string"
+    },
+    {
+     "name": "UnitName",
+     "type": "string"
+    },
+    {
+     "name": "Grouping",
+     "type": "string"
+    },
+    {
+     "name": "Age_Strat",
+     "type": "string"
+    },
+    {
+     "name": "Composition",
+     "type": "string"
+    },
+    {
+     "name": "Genesis",
+     "type": "string"
+    },
+    {
+     "name": "Description",
+     "type": "string"
+    },
+    {
+     "name": "Source",
+     "type": "integer"
+    },
+    {
+     "name": "Notes",
+     "type": "integer"
+    },
+    {
+     "name": "Shape_Length",
+     "type": "number"
+    },
+    {
+     "name": "Shape_Area",
+     "type": "number"
+    },
+    {
+     "name": "RuleID",
+     "type": "integer"
+    },
+    {
+     "name": "Override",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "OFR-713DR_CedarMesa_BoundaryButte__CedarMesa_BoundaryButte_ContourLabelMask",
+   "spatial": true,
+   "rows": 31,
+   "geometry_types": [
+    "MultiPolygon"
+   ],
+   "source": "OFR-713DR_CedarMesa_BoundaryButte",
+   "columns": [
+    {
+     "name": "FID_CM_BB_structureunits",
+     "type": "integer"
+    },
+    {
+     "name": "SHAPE_Length",
+     "type": "number"
+    },
+    {
+     "name": "SHAPE_Area",
+     "type": "number"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

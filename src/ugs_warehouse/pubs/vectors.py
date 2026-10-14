@@ -26,8 +26,10 @@ layer entry records its `source` dataset and its `kind` (`layer`, `table` or `su
 
 After extracting, a run self-heals the cleanly extracted pubs it covers (`self_heal`): it tiles
 layers that have no PMTiles, records relationships where the manifest has none or predates
-`relations.RELATIONS_VERSION`, and writes the layer styles where they are missing or predate
-`layer_style.STYLE_VERSION`. In an `--all` run, extraction
+`relations.RELATIONS_VERSION`, writes the layer styles where they are missing or predate
+`layer_style.STYLE_VERSION`, and builds the pub's `unit_polys` product where the manifest predates
+`unit_polys.UNIT_POLYS_VERSION`. An `--all` run then builds the identify layers under the mosaics
+(`identify.py`) for the tiers whose members' unit polygons changed. In an `--all` run, extraction
 and self-heal share one time budget (`VECTORS_TIME_BUDGET_S`); what it leaves waits for the next run.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
@@ -56,7 +58,17 @@ from urllib.parse import unquote, urlsplit
 
 from ..core import config, gcs, stac
 from ..vector import sink_pmtiles, transform
-from . import geoparquet, harvest, identity, layer_style, relations, sheets, source
+from . import (
+    geoparquet,
+    harvest,
+    identify,
+    identity,
+    layer_style,
+    relations,
+    sheets,
+    source,
+    unit_polys,
+)
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME
@@ -339,6 +351,14 @@ def geopackage_object(series_id: str) -> str:
 
 def style_object(series_id: str, label: str) -> str:
     return f"{VECTORS_PREFIX}/{series_id}/{label}.style.json"
+
+
+def unit_polys_object(series_id: str) -> str:
+    return f"{VECTORS_PREFIX}/{series_id}/unit_polys.parquet"
+
+
+def unit_polys_pmtiles_object(series_id: str) -> str:
+    return f"{VECTORS_PREFIX}/{series_id}/unit_polys.pmtiles"
 
 
 # DuckDB's memory cap for one tiling export. The export streams, so this bounds one wide row
@@ -819,21 +839,25 @@ class Needs(NamedTuple):
     """What a clean manifest still lacks, kept in place of the manifest: the spatial layers with no
     PMTiles, whether all of those failed tiling before (a retry, ordered after new work), and
     whether its relationships are missing or outdated, whether its layer styles are missing or
-    outdated, and whether its GeoPackage is missing or built from other inputs."""
+    outdated, whether its GeoPackage is missing or built from other inputs, and whether its unit
+    product is missing or outdated."""
     tiles: tuple[str, ...]
     retry: bool
     relations: bool
     styles: bool = False
     geopackage: bool = False
+    unit_polys: bool = False
 
     def __bool__(self) -> bool:
-        return bool(self.tiles) or self.relations or self.styles or self.geopackage
+        return (bool(self.tiles) or self.relations or self.styles or self.geopackage
+                or self.unit_polys)
 
 
 def needs_of(manifest: dict) -> Needs:
     missing = missing_tiles(manifest)
     return Needs(tuple(missing), set(missing) <= _warned(manifest, PMTILES_FAILED),
-                 needs_relations(manifest), needs_styles(manifest), needs_geopackage(manifest))
+                 needs_relations(manifest), needs_styles(manifest), needs_geopackage(manifest),
+                 needs_unit_polys(manifest))
 
 
 def is_clean(doc: dict) -> bool:
@@ -984,10 +1008,12 @@ def _fetch_all(work: str, files: list) -> tuple[list[tuple[str, str | None, str,
 
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
                 existing: set[str] | None = None, untiled: list[str] | None = None,
-                unpackaged: list[str] | None = None) -> str:
+                unpackaged: list[str] | None = None,
+                without_units: list[str] | None = None) -> str:
     """Extract and upload all vector layers and non-spatial companion tables for a given
-    series_id. Each layer whose tiling failed is appended to `untiled` as `SID/label`, and a
-    GeoPackage that could not be built to `unpackaged`.
+    series_id. Each layer whose tiling failed is appended to `untiled` as `SID/label`, a
+    GeoPackage that could not be built to `unpackaged`, and a unit product that could not be built
+    to `without_units`.
 
     Returns: 'ok', 'skip', 'unsupported' (only unreadable containers such as .mdb), or 'fail:*'.
     """
@@ -1068,6 +1094,13 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
             print(package_errors[0], file=sys.stderr)
         if unpackaged is not None:
             unpackaged += package_errors
+        try:
+            unit_errors = _unit_polys_series(series_id)
+        except Exception as e:
+            unit_errors = [f"{series_id}: unit polygons not built: {_error(e)}"]
+            print(unit_errors[0], file=sys.stderr)
+        if without_units is not None:
+            without_units += unit_errors
 
         print(f"{series_id}: OK ({n_spatial} vector layers + {n_tables} companion tables "
               f"uploaded to {VECTORS_PREFIX}/{series_id}/)")
@@ -1140,6 +1173,12 @@ def needs_relations(manifest: dict) -> bool:
     """True when a manifest's relationships predate the current inference rules, or were never
     recorded (`relations.RELATIONS_VERSION`)."""
     return (manifest.get("relations_version") or 0) < relations.RELATIONS_VERSION
+
+
+def needs_unit_polys(manifest: dict) -> bool:
+    """True when a manifest predates the current unit product (`unit_polys.UNIT_POLYS_VERSION`) or
+    never recorded one. A pub with no unit layer records the version too, so it is not tried again."""
+    return (manifest.get("unit_polys_version") or 0) < unit_polys.UNIT_POLYS_VERSION
 
 
 def needs_styles(manifest: dict) -> bool:
@@ -1327,6 +1366,28 @@ def _geopackage_series(series_id: str) -> tuple[bool, list[str]]:
     return _update_manifest(series_id, package)
 
 
+def _unit_polys_series(series_id: str) -> list[str]:
+    """Build the series' `unit_polys` GeoParquet and PMTiles from its extracted unit layer
+    (`unit_polys.build`) and record them in the manifest. Returns an error when the build failed;
+    the manifest then carries a UNIT_POLYS_FAILED warning and no version, so the next heal tries
+    again."""
+    def build(manifest: dict) -> tuple[list[str], bool]:
+        manifest.setdefault("warnings", [])
+        try:
+            unit_polys.build(series_id, manifest)
+        except Exception as e:
+            manifest["warnings"] = [w for w in manifest["warnings"]
+                                    if w.get("code") != unit_polys.UNIT_POLYS_FAILED]
+            manifest["warnings"].append({"code": unit_polys.UNIT_POLYS_FAILED,
+                                         "warning": f"unit polygons not built: {_error(e)}"})
+            manifest.pop("unit_polys_version", None)
+            print(f"  {series_id}: unit polygons not built: {_error(e)}", file=sys.stderr)
+            return [f"{series_id}: unit polygons not built: {_error(e)}"], True
+        return [], True
+
+    return _update_manifest(series_id, build)
+
+
 def _relations_series(series_id: str) -> list[str]:
     """Record a series' relationships, layer kinds and sources in its manifest, from the string and
     integer columns of its GeoParquet on GCS, read with range requests so no geometry is fetched.
@@ -1400,6 +1461,7 @@ class Heal:
     related: int = 0
     styled: int = 0
     packaged: int = 0
+    unit_built: int = 0
     units_upgraded: int = 0
     failed: list[str] = field(default_factory=list)
     failed_by_series: dict[str, list[str]] = field(default_factory=dict)
@@ -1414,8 +1476,8 @@ class Heal:
         layers = f"{self.pending_layers} layers, " if self.tiles else ""
         return ("Self-heal: " + (f"{self.tiled} layers tiled, " if self.tiles else "")
                 + f"{self.related} pubs' relationships recorded, units upgraded: {self.units_upgraded}"
-                + (f", {self.styled} pubs' layer styles written, {self.packaged} GeoPackages built"
-                   if self.tiles else "")
+                + (f", {self.styled} pubs' layer styles written, {self.packaged} GeoPackages built, "
+                   f"{self.unit_built} pubs' unit polygons built" if self.tiles else "")
                 + (f"; {layers}{self.pending_pubs} pubs and {self.pending_units} "
                    f"units files still pending, the next {next_step} continues" if pending else "")
                 + (f"; {len(self.failed)} failed" if self.failed else ""))
@@ -1481,23 +1543,26 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
     """Fill in the derivatives clean manifests are missing, from their GeoParquet on GCS and without
     downloading any zip: PMTiles for spatial layers that have none, relationships for manifests
     that need them, the layer styles for those that need them, then the GeoPackage of those
-    whose layers or relationships changed. `needs` is `{series id: Needs}`
+    whose layers or relationships changed, and the unit polygons of those without them. `needs` is `{series id: Needs}`
     (`needs_of`); each series' manifest is read again only when it is healed. Then upgrade each of the `units` files ({series id: object path}) that
     `units_outdated` says is older than GeoParquet 1.1. Series with only a failed layer to retry go
     last, as extraction orders retries last. No new series or units file starts once
     `time.monotonic()` passes `deadline`; the one in progress finishes, and what is left is counted
     as pending, not failed. With `tiles` False only relationships and units are healed: tiling and
-    styling are the vectors job's, sized for it, and a caller with less memory leaves them alone."""
+    styling, the GeoPackage and the unit polygons are the vectors job's, sized for it, and a caller
+    with less memory leaves them alone."""
     heal = Heal(tiles=tiles)
     if not tiles:
-        needs = {sid: n._replace(tiles=(), retry=False, styles=False, geopackage=False) for sid, n in needs.items()}
+        needs = {sid: n._replace(tiles=(), retry=False, styles=False, geopackage=False,
+                                 unit_polys=False) for sid, n in needs.items()}
     todo = sorted(((sid, n) for sid, n in needs.items() if n), key=lambda sn: sn[0])
     todo.sort(key=lambda sn: sn[1].retry and not sn[1].relations and not sn[1].styles
-               and not sn[1].geopackage)
+               and not sn[1].geopackage and not sn[1].unit_polys)
     for sid, need in todo:
         if deadline is not None and time.monotonic() >= deadline:
             heal.pending_layers += len(need.tiles)
-            heal.pending_pubs += int(need.relations or need.styles or need.geopackage)
+            heal.pending_pubs += int(need.relations or need.styles or need.geopackage
+                                     or need.unit_polys)
             continue
         errs: list[str] = []
         heal.touched.add(sid)
@@ -1522,6 +1587,11 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
                     packaged, pack_errs = _geopackage_series(sid)
                     heal.packaged += int(packaged)
                     errs += pack_errs
+            # After the relationships: a GeMS pub's names and ages join on the recorded one.
+            if need.unit_polys and not (need.relations and rel_errs):
+                unit_errs = _unit_polys_series(sid)
+                heal.unit_built += int(not unit_errs)
+                errs += unit_errs
         except Exception as e:
             errs.append(f"{sid}: {_error(e)}")
             print(f"{sid}: self-heal FAIL {_error(e)}", file=sys.stderr)
@@ -1629,6 +1699,7 @@ def main() -> int:
     failed: list[str] = []
     untiled: list[str] = []
     unpackaged: list[str] = []
+    without_units: list[str] = []
     extracted: set[str] = set()
     deadline = started + TIME_BUDGET_S
     # Only a regular batch run picks up what it leaves, so targeted and forced runs extract all.
@@ -1641,7 +1712,8 @@ def main() -> int:
                   f"continues: {', '.join(left[:20])}{more}")
             break
         res = extract_one(sid, dry_run=args.dry_run, force=args.force, existing=existing,
-                          untiled=untiled, unpackaged=unpackaged)
+                          untiled=untiled, unpackaged=unpackaged,
+                          without_units=without_units)
         if res != "skip":
             extracted.add(identity.Pub.parse(sid).series_id)
         if res.startswith("fail"):
@@ -1656,21 +1728,31 @@ def main() -> int:
     # Units files come from the plate harvest, not from extraction, so every covered pub is checked.
     units = units_objects({identity.Pub.parse(s).series_id.upper()
                            for s in (all_sids if args.all else args.series_id)})
+    identified = identify.Result()
     if args.dry_run:
         pending = sum(len(n.tiles) for n in needs.values())
         print(f"[dry-run] self-heal would tile {pending} layers, record relationships for "
-              f"{sum(n.relations for n in needs.values())} pubs and check "
-              f"{len(units)} units files")
+              f"{sum(n.relations for n in needs.values())} pubs, build unit polygons for "
+              f"{sum(n.unit_polys for n in needs.values())} pubs and check {len(units)} units files")
         heal = Heal()
     else:
         heal = self_heal(needs, deadline=deadline, units=units)
         print(heal.summary())
+        if args.all:
+            # After the heal, so the tiers see the unit polygons it just built. A run the time
+            # budget cut short leaves the rest to the next run, which sees their checksums change.
+            identified = identify.build_changed()
+            print(f"Identify layers: built {identified.built or 'none'}, unchanged "
+                  f"{identified.unchanged or 'none'}")
     # Exit 1 only for work that failed in THIS run: a pub that failed to extract, a layer whose
     # tiling failed at extraction, or a layer or pub whose self-heal failed. Work the time budget
     # left pending is not a failure; the next run continues it.
     if untiled:
         print(f"{len(untiled)} layers published without PMTiles (tiling failed this run; the next "
               f"run retries them): {', '.join(untiled)}", file=sys.stderr)
+    if without_units:
+        print(f"{len(without_units)} publications without unit polygons (the build failed this "
+              f"run; the next run retries them): {'; '.join(without_units)}", file=sys.stderr)
     if unpackaged:
         print(f"{len(unpackaged)} publications published without a GeoPackage (the build failed this "
               f"run; the next run retries them): {'; '.join(unpackaged)}", file=sys.stderr)
@@ -1678,10 +1760,14 @@ def main() -> int:
         more = f", ... ({len(heal.failed) - 20} more)" if len(heal.failed) > 20 else ""
         print(f"{len(heal.failed)} self-heal failures this run (the next run retries them): "
               f"{', '.join(heal.failed[:20])}{more}", file=sys.stderr)
+    if identified.errors:
+        print(f"{len(identified.errors)} identify failures this run (the next run retries them): "
+              f"{'; '.join(identified.errors)}", file=sys.stderr)
     if failed:
         print(f"{len(failed)} of {len(sids)} publications failed: {', '.join(failed)}",
               file=sys.stderr)
-    return 1 if failed or untiled or unpackaged or heal.failed else 0
+    return 1 if (failed or untiled or unpackaged or without_units or heal.failed
+                 or identified.errors) else 0
 
 
 if __name__ == "__main__":

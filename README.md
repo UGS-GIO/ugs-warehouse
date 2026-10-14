@@ -70,7 +70,7 @@ src/ugs_warehouse/
 │   ├── related.py   FK relationships → related links + ugs:foreign_keys + aspatial child tables
 │   └── ingest.py topics.py
 ├── pubs/        producer B: publications → COG/footprints/units/thumbs/STAC
-│   ├── harvest.py (zip→COG) footprints.py vectors.py sheets.py units_pmtiles.py thumbs.py
+│   ├── harvest.py (zip→COG) footprints.py vectors.py unit_polys.py identify.py sheets.py units_pmtiles.py thumbs.py
 │   ├── relations.py  joins between a pub's layers and tables (declared or inferred) → manifest
 │   └── source.py identity.py sink_stac.py topic.py ingest.py
 ├── raster/      standalone raster COGs → STAC (consume.py, sink_stac.py)

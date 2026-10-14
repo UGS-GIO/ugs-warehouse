@@ -1,0 +1,160 @@
+{
+ "layers": [
+  {
+   "label": "contours_anno",
+   "spatial": true,
+   "rows": 184,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "Moab__Map_180_DM___shapes__geologic",
+   "columns": [
+    {
+     "name": "ID",
+     "type": "integer"
+    },
+    {
+     "name": "LEVEL",
+     "type": "integer"
+    },
+    {
+     "name": "SYMBOL",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "faultsym",
+   "spatial": true,
+   "rows": 435,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "Moab__Map_180_DM___shapes__geologic",
+   "columns": [
+    {
+     "name": "ENTITY",
+     "type": "string"
+    },
+    {
+     "name": "LAYER",
+     "type": "string"
+    },
+    {
+     "name": "ELEVATION",
+     "type": "number"
+    },
+    {
+     "name": "THICKNESS",
+     "type": "number"
+    },
+    {
+     "name": "COLOR",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "foldsym1",
+   "spatial": true,
+   "rows": 108,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "Moab__Map_180_DM___shapes__geologic",
+   "columns": [
+    {
+     "name": "ENTITY",
+     "type": "string"
+    },
+    {
+     "name": "LAYER",
+     "type": "string"
+    },
+    {
+     "name": "ELEVATION",
+     "type": "number"
+    },
+    {
+     "name": "THICKNESS",
+     "type": "number"
+    },
+    {
+     "name": "COLOR",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "unit_anno",
+   "spatial": true,
+   "rows": 8167,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "Moab__Map_180_DM___shapes__geologic",
+   "columns": [
+    {
+     "name": "ID",
+     "type": "integer"
+    },
+    {
+     "name": "LEVEL",
+     "type": "integer"
+    },
+    {
+     "name": "SYMBOL",
+     "type": "integer"
+    }
+   ]
+  },
+  {
+   "label": "units",
+   "spatial": true,
+   "rows": 8166,
+   "geometry_types": [
+    "Polygon"
+   ],
+   "source": "Moab__Map_180_DM___shapes__geologic",
+   "columns": [
+    {
+     "name": "AREA",
+     "type": "number"
+    },
+    {
+     "name": "PERIMETER",
+     "type": "number"
+    },
+    {
+     "name": "CONTACTS_",
+     "type": "integer"
+    },
+    {
+     "name": "CONTACTS_I",
+     "type": "integer"
+    },
+    {
+     "name": "UNITSYMBOL",
+     "type": "string"
+    },
+    {
+     "name": "UNITNAME",
+     "type": "string"
+    },
+    {
+     "name": "AGE",
+     "type": "string"
+    },
+    {
+     "name": "NOTES",
+     "type": "string"
+    },
+    {
+     "name": "COLORNAME",
+     "type": "integer"
+    }
+   ]
+  }
+ ],
+ "relationships": []
+}

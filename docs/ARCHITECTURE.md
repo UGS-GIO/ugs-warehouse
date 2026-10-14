@@ -197,8 +197,40 @@ default look (`defaultVectorLayers`) as a MapLibre style holding only `layers`, 
 files; the viewer supplies the PMTiles source and `source-layer`. The manifest layer records `style`
 (the file name) and the manifest `style_version`. Matching unit polygons to the DMU's `AreaFillRGB`
 colours is not done, because the source data carries no colours. A pub's `_units` Item
-(`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own; the
-statewide `geolmap/units/units.pmtiles` from `pubs/units_pmtiles.py` is a separate artifact.
+(`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own. No statewide
+`geolmap/units/units.pmtiles` is published: `pubs/units_pmtiles.py` can write one, but it is a manual
+script outside the pipeline, and nothing here reads it. The units that sit under the maps come from
+the unit product and identify layers below.
+
+**Unit product and identify layers.** Publications carry their unit polygons in three attribute
+schemas: GeMS (`MapUnitPolys.MapUnit`, with name, age and description in `DescriptionOfMapUnits`),
+the 2010s template (`*GeologicUnits`: `UnitSymbol`, `UnitName`, `Age_Strat`, `Descriptio`) and the
+coverage era (`geounits`, `units`, `geology_poly(s)`: `UNITSYMBOL`, `UNITNAME`, `AGE`, `NOTES`).
+`pubs/unit_polys.py` picks the unit layer from the manifest by layer name (anchored at the end, so a
+quad name in the label never excludes it) and the schema's unit-code column; landslide, owner, glacial,
+vegetation and wetland polygon layers never match. Ties go to GeMS, then the template, then the
+coverage era, then the most rows, with a `unit_layer_ambiguous` warning. The manifest records
+`unit_layer` {label, schema, code_column}. For GeMS the DMU is joined on the recorded relationship
+(on `MapUnit` with a `unit_dmu_unrelated` warning when none is recorded). The product is
+`<SID>/unit_polys.parquet` (EPSG:4326; `series_id, unit_code, unit_name, age, description,
+source_label`, trimmed, blanks null) and `<SID>/unit_polys.pmtiles` (tile layer `units`), recorded as
+`unit_polys` {rows, bytes, checksum, pmtiles}. It is built at extraction and by the self-heal for
+manifests below `unit_polys.UNIT_POLYS_VERSION` (`unit_polys_version`); a pub with no unit layer
+records the version alone. The plate Item gets a `units` asset (`application/vnd.pmtiles`, role
+`data`, "Geologic units (identify)") pointing at that PMTiles, only when the pub has the product.
+
+After the self-heal an `--all` vectors run builds one identify layer per mosaic tier
+(`pubs/identify.py`): `<vectors prefix>/_identify/units-<tier>.pmtiles`, tile layer `units`, the same
+attributes. Members and their order are the mosaic bake's (`geolmap_mosaics._group_by_tier`,
+`_vrt_order`); each contributes its `unit_polys`, and a member without them contributes its polygons
+from the seamless `geolmap/units/units.parquet` (`unit_symbol`, `unit_name`, `age`; no description),
+filtered by `series_id`. The 24k layer is built although its mosaic is not published. Tiling uses
+the pub-layer flags (`sink_pmtiles.TILE_OPTS`: no feature or tile-size limit, no drop rate) plus
+`--no-tiny-polygon-reduction`, so no polygon is dropped. `_identify/<tier>.state.json` holds the
+membership, each member's `unit_polys` checksum and the seamless file's etag; a tier is built only
+when one changed. The mosaic Item's `units` asset is added by the mosaics job's item writer
+(`_write_item`) and, for a mosaic already published, patched in place by the vectors run that built
+the layer.
 
 The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
 classes a geodatabase declares are read with `ogrinfo -json`; a geodatabase whose relationships
@@ -295,6 +327,9 @@ are missing, from their GeoParquet on GCS and without downloading a zip:
   than `layer_style.STYLE_VERSION` (bump it when the generator changes what it writes). It runs
   after tiling and relationships. A style that cannot be written is a `style_failed` warning and a
   listed failure, and is tried again next run;
+- the unit product (above) for each manifest below `unit_polys.UNIT_POLYS_VERSION`, after the
+  relationships it joins on. The pubs ingest heal leaves it to the vectors job, which has the
+  memory for it;
 - each per-pub units file (`geolmap/units/<SID>/<SID>.units.parquet`) whose Parquet footer, read by
   range, says GeoParquet older than 1.1 or no bbox covering is rewritten through
   `pubs.geoparquet.write` to the same path, with a mutable cache header.
@@ -306,7 +341,7 @@ the self-heal share one time budget, `VECTORS_TIME_BUDGET_S` (default 2700 s, in
 7200 s timeout). Extraction goes first: it stops starting pubs once the budget is spent and lists
 the pubs left for the next run, so the self-heal only runs once the backlog of new pubs is cleared.
 The self-heal stops starting series, finishes the one in progress, and prints `Self-heal: N layers
-tiled, M pubs' relationships recorded, units upgraded: U, S pubs' layer styles written, G GeoPackages built; K layers,
+tiled, M pubs' relationships recorded, units upgraded: U, S pubs' layer styles written, G GeoPackages built, N pubs' unit polygons built; K layers,
 J pubs and P units files still pending, the next run continues`. Targeted and forced runs extract
 every pub they are given; a forced run re-extracts everything, so nothing is left to heal.
 

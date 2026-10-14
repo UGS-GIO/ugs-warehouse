@@ -1,4 +1,6 @@
 """Restyle (manifest → STAC render rebind) — hermetic, in-memory GCS + fake styles manifest."""
+import pytest
+
 from ugs_warehouse import restyle as R
 from ugs_warehouse.core import gcs, stac, styles
 
@@ -201,6 +203,15 @@ def test_restyle_verify_reports_drift_when_the_item_holds_an_older_legend(monkey
     store[obj] = json.dumps(item).encode()
 
     assert R._verify(R._scoped_groups("ugs-serving-topics")) == ["ugs-serving-topics/enmin_ucrc_wells"]
+
+
+def test_restyle_fails_the_run_when_written_renders_drift(monkeypatch):
+    """A drifted render fails the job, whatever number of items changed."""
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, _wells_item(store, [{"label": "Core", "color": "#5E3C99"}]))
+    monkeypatch.setattr(R, "_verify", lambda groups: ["ugs-serving-topics/enmin_ucrc_wells"])
+    with pytest.raises(RuntimeError, match="1 render"):
+        R.restyle()
 
 
 def _styled_wells(monkeypatch) -> list:

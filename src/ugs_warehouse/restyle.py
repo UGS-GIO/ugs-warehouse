@@ -208,8 +208,9 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
         for f in sorted(failures):
             print(f"    {f}", file=sys.stderr)
         raise RuntimeError(f"restyle could not read {len(failures)} object(s); first: {sorted(failures)[0]}")
-    if not dry_run and _verify(groups):
-        return 1  # a run that wrote stale renders must not exit 0 — see _verify
+    if not dry_run and (drifted := _verify(groups)):
+        # A run that wrote stale renders must not exit 0; see _verify.
+        raise RuntimeError(f"restyle wrote {len(drifted)} render(s) that don't match the manifest")
     return changed
 
 

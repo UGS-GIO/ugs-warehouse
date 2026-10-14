@@ -138,7 +138,7 @@ EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with t
 tippecanoe flags and one tile layer named for the label. DuckDB reads the layer's GeoParquet,
 drops rows with no geometry, reprojects from the CRS the manifest recorded (`ST_Transform`
 with `always_xy`, so coordinates stay lon/lat) and streams GeoJSONSeq to tippecanoe through
-`vector/sink_pmtiles.py`, so no layer is held in memory as a GeoDataFrame. The series' `_manifest.json` records
+`vector/sink_pmtiles.py`, so no layer is held in memory as a GeoDataFrame. TIME and zoned timestamp columns are cast to strings first (the GDAL writer would drop them or the zone); a column still missing from the tiles gets a `tile_columns_dropped` warning naming it. The series' `_manifest.json` records
 `pmtiles` and `pmtiles_layer` per layer. A layer whose tiling fails keeps its GeoParquet and gets
 a `pmtiles_failed` warning instead of an error, so the pub stays extracted and is not downloaded
 again; the next run's self-heal retries it (below). A tiled layer's Item carries the same `pmtiles`

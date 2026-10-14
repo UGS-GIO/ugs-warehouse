@@ -90,7 +90,8 @@ def cog_coverage() -> dict:
     return _cached("cog_coverage", _cog_coverage)
 
 
-def _publication_series_coverage(summary: dict, coll: str, series: set[str]) -> tuple[int, list[str]] | None:
+def _publication_series_coverage(summary: dict, coll: str,
+                                 series: set[str]) -> tuple[int, list[str]] | None:
     """Coverage of collection-layout series from the refresh's summary: (publication Items, ids
     of those with a COG; a single-file publication keeps its plate on the Collection and counts the
     same way). None when the summary has no entry for the group or one of its series."""
@@ -133,9 +134,12 @@ def _cog_coverage() -> dict:
             if covered:
                 total += covered[0]
                 cog_ids += covered[1]
+            else:
+                message = f"{COVERAGE_SUMMARY} missing or stale for {coll}; run Refresh catalog"
+                log.warning(message)
         cog_ids.sort()
         row = {"id": coll, "items": total, "cogs": len(cog_ids), "cog_ids": cog_ids}
-        out["collections"].append({**row, "error": True} if error else row)
+        out["collections"].append({**row, "error": True, "message": message} if error else row)
         out["total_items"] += total
         out["total_cogs"] += len(cog_ids)
     return out

@@ -219,3 +219,32 @@ def test_a_conditional_write_that_404s_is_a_change_too(mem, monkeypatch):
 def test_a_versioned_read_of_a_missing_object_is_a_404(mem):
     with pytest.raises(FileNotFoundError):
         gcs.get_bytes_versioned("stac/missing/missing.json")
+
+
+def test_open_reader_range_reads_parquet_columns_and_seeks(monkeypatch):
+    import io
+
+    import obstore as obs
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    from obstore.store import MemoryStore
+
+    table = pa.table({"a": list(range(1000)), "b": [str(i) for i in range(1000)],
+                      "c": [float(i) for i in range(1000)]})
+    buf = io.BytesIO()
+    pq.write_table(table, buf)
+    data = buf.getvalue()
+    store = MemoryStore()
+    obs.put(store, "x/t.parquet", data)
+    monkeypatch.setattr(gcs, "_store", lambda bucket=None: store)
+
+    reader = gcs.open_reader("x/t.parquet")
+    assert not reader.closed and reader.readable() and reader.seekable()
+    assert pq.ParquetFile(reader).read(columns=["a", "b"]).equals(table.select(["a", "b"]))
+
+    assert reader.seek(0) == 0 and reader.read(4) == b"PAR1" and reader.tell() == 4
+    assert reader.seek(-4, io.SEEK_END) == len(data) - 4
+    assert reader.read(100) == data[-4:]  # a short read at the end of the object
+    assert reader.read(10) == b""
+    reader.close()
+    assert reader.closed

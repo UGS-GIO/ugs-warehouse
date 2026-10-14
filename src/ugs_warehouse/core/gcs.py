@@ -313,6 +313,13 @@ class _ObjectReader(io.RawIOBase):
     def tell(self) -> int:
         return self._reader.tell()
 
+    def close(self) -> None:
+        # Not every obstore reader can be closed; those are released with the last reference.
+        closer = getattr(self._reader, "close", None)
+        if closer is not None:
+            closer()
+        super().close()
+
 
 def open_reader(object_path: str) -> io.RawIOBase:
     """A seekable file object over an object, read with range requests. `pq.ParquetFile` over it

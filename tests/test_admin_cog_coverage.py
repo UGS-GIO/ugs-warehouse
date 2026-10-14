@@ -118,3 +118,20 @@ def test_get_parses_the_body_without_a_decoded_copy(ops_stac, monkeypatch):
     body = gzip.compress(json.dumps({"ok": 1}).encode())
     monkeypatch.setattr(ops_stac.urllib.request, "urlopen", lambda url, timeout=0: io.BytesIO(body))
     assert ops_stac._get("https://x/a.json") == {"ok": 1}
+
+
+def test_coverage_row_says_why_the_summary_is_stale(ops_stac, monkeypatch, caplog):
+    docs = {
+        f"{BASE}/ugs-publications/catalog.json": {"links": [{"rel": "child", "href": "./OFR/catalog.json"},
+                                                            {"rel": "child", "href": "./M/catalog.json"}]},
+        f"{BASE}/pub-coverage.json": _summary(OFR={"publications": 1, "migrated": True, "pending": 0,
+                                                   "items": 1, "cog_ids": ["OFR-1"]}),
+    }
+    monkeypatch.setattr(ops_stac, "_get", lambda url: docs.get(url))
+    monkeypatch.setattr(ops_stac, "PUB_COLLECTIONS", ["ugs-publications"])
+
+    with caplog.at_level("WARNING"):
+        (row,) = ops_stac._cog_coverage()["collections"]
+
+    text = "pub-coverage.json missing or stale for ugs-publications; run Refresh catalog"
+    assert row["message"] == text and text in caplog.text

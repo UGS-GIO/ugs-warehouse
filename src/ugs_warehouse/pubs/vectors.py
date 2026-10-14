@@ -290,7 +290,14 @@ def pmtiles_object(series_id: str, label: str) -> str:
 
 # DuckDB's memory cap for one tiling export. The export streams, so this bounds one wide row
 # group, not the layer.
-TILE_DUCKDB_MEMORY = os.environ.get("VECTORS_TILE_DUCKDB_MEMORY", "1GB")
+TILE_DUCKDB_MEMORY = "1GB"
+
+# Warning code for a layer whose tiles lack some attribute columns the GeoParquet has.
+TILE_COLUMNS_DROPPED = "tile_columns_dropped"
+
+# Column types the GDAL GeoJSONSeq writer drops (TIME) or writes without the zone (timestamps
+# with a time zone); they are cast to ISO strings so the tiles keep the value.
+_STRING_CAST_TYPES = {"TIME", "TIME WITH TIME ZONE", "TIMESTAMP WITH TIME ZONE"}
 
 
 def _ident(name: str) -> str:
@@ -317,11 +324,12 @@ def _source_crs(entry: dict, geo: dict, geom_col: str) -> str:
     raise ValueError("no CRS recorded for the layer; cannot reproject it to EPSG:4326")
 
 
-def _write_wgs84(parquet: str, entry: dict, geojsonl: str) -> bool:
+def _write_wgs84(parquet: str, entry: dict, geojsonl: str, dropped: list[str] | None = None) -> bool:
     """Write the layer's GeoParquet as GeoJSONSeq in lon/lat, through DuckDB (the export streams, so
     the layer is never in memory). Rows with no geometry or an empty one are left out before
     reprojecting. `always_xy` keeps coordinates in lon/lat order whatever the source CRS's axis order.
-    Returns False, writing nothing, when no row has a geometry."""
+    Returns False, writing nothing, when no row has a geometry. Columns the first feature lacks
+    are appended to `dropped`, so the caller can warn instead of losing them silently."""
     import duckdb
 
     columns, geo = _schema(parquet)
@@ -332,7 +340,7 @@ def _write_wgs84(parquet: str, entry: dict, geojsonl: str) -> bool:
     # The bbox covering column is an index, not an attribute, so it does not go into the tiles.
     covering = ((geo.get("columns", {}).get(col) or {}).get("covering") or {}).get("bbox") or {}
     drop = {col, *(v[0] for v in covering.values() if isinstance(v, list) and v)}
-    props = [_ident(c["name"]) for c in columns if c["name"] not in drop]
+    kept = [c["name"] for c in columns if c["name"] not in drop]
     crs = _source_crs(entry, geo, col)
     geom = _ident(col)
     wgs84 = geom if crs.upper() == "EPSG:4326" else (
@@ -341,29 +349,47 @@ def _write_wgs84(parquet: str, entry: dict, geojsonl: str) -> bool:
     try:
         transform.setup(con)
         con.execute(f"SET max_memory={_literal(TILE_DUCKDB_MEMORY)}")
-        con.execute("SET preserve_insertion_order = false")
+        con.execute("SET TimeZone = 'UTC'")  # zoned timestamps are written in UTC, not the host's zone
+        types = {r[0]: r[1] for r in con.execute(
+            f"DESCRIBE SELECT * FROM read_parquet({_literal(parquet)})").fetchall()}
+        props = [f"CAST({_ident(c)} AS VARCHAR) AS {_ident(c)}" if types.get(c) in _STRING_CAST_TYPES
+                 else _ident(c) for c in kept]
         con.execute(
             f"CREATE TEMP VIEW tiles AS SELECT {', '.join([*props, f'{wgs84} AS __geom'])} "
             f"FROM read_parquet({_literal(parquet)}) "
             f"WHERE {geom} IS NOT NULL AND NOT ST_IsEmpty({geom})")
-        if not con.execute("SELECT count(*) FROM tiles").fetchone()[0]:
+        if con.execute("SELECT 1 FROM tiles LIMIT 1").fetchone() is None:
             return False
         sink_pmtiles.write_geojsonl(con, "tiles", geojsonl)
+        if dropped is not None:
+            dropped += _missing_attributes(geojsonl, kept, types)
     finally:
         con.close()
     return True
 
 
-def _tile_layer(parquet: str, entry: dict, series_id: str, tmp: str | None = None) -> bool:
+def _missing_attributes(geojsonl: str, columns: list[str], types: dict[str, str]) -> list[str]:
+    """The `columns` the first feature of the export has no property for. A struct is written as
+    `name.field` properties, so struct and map columns are matched by prefix."""
+    with open(geojsonl) as fh:
+        props = (json.loads(fh.readline()).get("properties") or {}).keys()
+    nested = ("STRUCT", "MAP", "UNION")
+    return [c for c in columns if c not in props and not (
+        (types.get(c) or "").startswith(nested) and any(k.startswith(f"{c}.") for k in props))]
+
+
+def _tile_layer(parquet: str, entry: dict, series_id: str, tmp: str | None = None,
+                dropped: list[str] | None = None) -> bool:
     """Tile the layer whose GeoParquet is the local file `parquet` as `<label>.pmtiles` beside its
     published GeoParquet: reprojected to EPSG:4326 (tippecanoe reads lon/lat), one tile layer named
     for the label, built with the serving topics' tippecanoe flags. `entry` is its manifest entry
-    (label, CRS). Returns False, writing nothing, when no row has a geometry. Temp files go under
-    `tmp` and are deleted before returning, since the job's disk is memory."""
+    (label, CRS). Returns False, writing nothing, when no row has a geometry. Attribute columns the
+    export lost are appended to `dropped`. Temp files go under `tmp` and are deleted before
+    returning, since the job's disk is memory."""
     label = entry["label"]
     with tempfile.TemporaryDirectory(dir=tmp) as d:
         geojsonl = os.path.join(d, f"{label}.geojsonl")
-        if not _write_wgs84(parquet, entry, geojsonl):
+        if not _write_wgs84(parquet, entry, geojsonl, dropped):
             return False
         pmtiles = os.path.join(d, f"{label}.pmtiles")
         sink_pmtiles.run_tippecanoe(geojsonl, pmtiles, label, what=f"{series_id}/{label}")
@@ -542,12 +568,15 @@ def _set_relationships(manifest: dict, rels: list[dict]) -> None:
 
 
 def _tile_into(entry: dict, parquet: str, series_id: str, tmp: str | None, manifest: dict) -> bool:
-    """Tile one layer from its local GeoParquet `parquet` and record the result: `pmtiles` and `pmtiles_layer` on its manifest `entry`
-    when built, else a warning in `manifest` (PMTILES_FAILED when tiling fails, NO_GEOMETRY when it
-    has no geometry). Returns whether the tiles were built."""
+    """Tile one layer from its local GeoParquet `parquet` and record the result: `pmtiles` and
+    `pmtiles_layer` on its manifest `entry` when built, else a warning in `manifest`
+    (PMTILES_FAILED when tiling fails, NO_GEOMETRY when it has no geometry). A built layer whose
+    tiles lack attribute columns also gets a TILE_COLUMNS_DROPPED warning naming them. Returns
+    whether the tiles were built."""
     label = entry["label"]
+    dropped: list[str] = []
     try:
-        built = _tile_layer(parquet, entry, series_id, tmp)
+        built = _tile_layer(parquet, entry, series_id, tmp, dropped)
     except Exception as e:
         manifest["warnings"].append({"label": label, "code": PMTILES_FAILED,
                                      "warning": f"PMTiles not built: {_error(e)}"})
@@ -558,6 +587,10 @@ def _tile_into(entry: dict, parquet: str, series_id: str, tmp: str | None, manif
                                      "warning": "every geometry is null or empty; no PMTiles built"})
         return False
     entry.update(pmtiles=True, pmtiles_layer=label)
+    if dropped:
+        manifest["warnings"].append({"label": label, "code": TILE_COLUMNS_DROPPED,
+                                     "warning": f"columns missing from the tiles: {', '.join(dropped)}"})
+        print(f"  layer {label}: columns missing from the tiles: {dropped}", file=sys.stderr)
     return True
 
 
@@ -826,7 +859,8 @@ def _tile_missing(series_id: str) -> tuple[int, list[str]]:
                     print(f"  {series_id}/{label}: GeoParquet unreadable: {e}", file=sys.stderr)
                     continue
                 manifest["warnings"] = [w for w in manifest["warnings"] if not (
-                    w.get("label") == label and w.get("code") in (PMTILES_FAILED, NO_GEOMETRY))]
+                    w.get("label") == label
+                    and w.get("code") in (PMTILES_FAILED, NO_GEOMETRY, TILE_COLUMNS_DROPPED))]
                 try:
                     built += int(_tile_into(entry, local, series_id, work, manifest))
                 finally:

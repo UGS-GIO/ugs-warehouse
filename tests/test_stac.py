@@ -584,7 +584,7 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
 
 
 def test_read_vector_manifests_reads_the_authoritative_split():
-    """_read_vector_manifests()[:2] must read pubs/vectors.py's per-series `_manifest.json` — the
+    """_read_vector_manifests()[:2] must read pubs/vectors.py's per-series `_manifest.json`, the
     AUTHORITATIVE spatial-vs-table split — rather than guess spatial/table from label names."""
     from unittest.mock import patch
 

@@ -67,8 +67,9 @@ STAGES = [
 # The triggerable warehouse jobs (Cloud Run job names from cloudbuild.yaml).
 JOBS: dict[str, Job] = {j.key: j for j in [
     Job("pubs-pipeline", "ugs-pubs-pipeline", "Full refresh (one click)",
-        "Orchestrator: loops Cover thumbnails to completion, then Rebuild pubs STAC — binds covers / "
-        "in-this-issue / volume + builds the search corpus. Runs server-side for as long as it takes "
+        "Orchestrator: loops Cover thumbnails to completion, then Extract map layers (which also builds "
+        "their tiles), then Rebuild pubs STAC — binds covers / in-this-issue / volume + builds the "
+        "search corpus. Runs server-side for as long as it takes "
         "(survives closing this tab). Use this instead of the 3-step dance.", danger=True),
     Job("harvest", "geolmap-harvest", "Harvest COGs",
         "Convert publication map plates → COGs (SKIP_EXISTING; safe to re-run). Heavy. "
@@ -80,7 +81,8 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "layers and tables) within a time budget, and says how much is still pending. Run it "
         "again until it reports 0 pending; then Rebuild pubs STAC to bind them."),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
-        "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items."),
+        "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items, and record layer "
+        "relationships. It does not build map-layer tiles: run Extract map layers (or Full refresh)."),
     Job("thumbs", "ugs-pubs-thumbs", "Cover thumbnails",
         "Render each pub's PDF first page → cover WebP (every pub incl. Survey Notes; SKIP_EXISTING; "
         "5 shards). Then Rebuild pubs STAC to bind the previews.", tasks=5),

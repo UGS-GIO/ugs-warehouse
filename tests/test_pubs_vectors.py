@@ -1980,3 +1980,43 @@ def test_an_ingest_upgrades_the_units_files_of_the_pubs_it_covers(monkeypatch, t
     assert _geo(store[f"{vectors.identity.UNITS_PREFIX}/OFR-5/OFR-5.units.parquet"])["version"] == "1.0.0"
     assert "units upgraded: 1" in capsys.readouterr().out
 
+
+def test_time_and_time_zone_columns_survive_into_the_tiles(monkeypatch, tmp_path):
+    """GDAL's GeoJSONSeq writer drops TIME columns and strips a timestamp's zone; they are cast to
+    ISO strings first."""
+    import datetime as dt
+
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    _mem_gcs(monkeypatch)
+    lines = _capture_geojsonl(monkeypatch)
+    src, work = _geoparquet(tmp_path, {"Type": ["a"]}, [Point(424000, 4512000)])
+    table = pq.read_table(src)
+    table = table.append_column("at", pa.array([dt.time(10, 11, 12)], pa.time64("us")))
+    table = table.append_column("stamp", pa.array([dt.datetime(2020, 1, 1, 10, tzinfo=dt.timezone.utc)],
+                                                  pa.timestamp("us", tz="UTC")))
+    pq.write_table(table.replace_schema_metadata(pq.read_schema(src).metadata), src)
+    dropped: list[str] = []
+
+    assert vectors._tile_layer(src, {"label": "t", "proj_code": "EPSG:26912"}, "M-213", work, dropped)
+
+    props = json.loads(lines[0])["properties"]
+    assert props["at"] == "10:11:12" and props["stamp"].startswith("2020-01-01 10:00:00")
+    assert dropped == []
+
+
+def test_a_column_missing_from_the_tiles_is_a_warning_naming_it(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    src, work = _geoparquet(tmp_path, {"Type": ["a"], "Name": ["n"]}, [Point(424000, 4512000)])
+    real = vectors._missing_attributes
+    monkeypatch.setattr(vectors, "_missing_attributes",
+                        lambda path, cols, types: real(path, [*cols, "Lost"], {**types}))
+    manifest = {"warnings": []}
+    entry = {"label": "w", "proj_code": "EPSG:26912"}
+
+    assert vectors._tile_into(entry, src, "M-214", work, manifest) is True
+
+    (warning,) = manifest["warnings"]
+    assert warning["code"] == vectors.TILE_COLUMNS_DROPPED and "Lost" in warning["warning"]
+    assert entry["pmtiles"] is True and vectors.pmtiles_object("M-214", "w") in store

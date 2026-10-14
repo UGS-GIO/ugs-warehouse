@@ -168,3 +168,13 @@ def test_the_tiles_cover_the_mosaics_zooms_and_tippecanoe_works_in_the_work_dir(
     assert all(f["-Z"] == str(geolmap_mosaics.MOSAIC_MINZOOM) for f in by_top.values())
     assert all(Path(f["-t"]).name.startswith("identify_") for f in by_top.values())
     assert "--no-tiny-polygon-reduction" in run.opts[0]
+
+
+def test_a_failed_membership_read_is_an_error_not_a_crash(monkeypatch):
+    """A COG header read failing inside membership is reported, so the run still prints its summary."""
+    def boom():
+        raise OSError("gdalinfo failed on /vsigs/x.cog.tif")
+
+    monkeypatch.setattr(identify, "membership", boom)
+    result = identify.build_changed()
+    assert result.built == [] and result.errors == ["identify membership: OSError: gdalinfo failed on /vsigs/x.cog.tif"]

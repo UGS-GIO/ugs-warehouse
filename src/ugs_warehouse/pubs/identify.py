@@ -297,8 +297,13 @@ def build_changed(tiers: list[str] | None = None) -> Result:
     fallback source changed since its state file, and put the `units` asset on its published mosaic
     Item. A tier that fails is an error in the result and the others still run."""
     result = Result()
-    groups = membership()
-    sums, errors = unit_checksums()
+    try:
+        groups = membership()
+        sums, errors = unit_checksums()
+    except Exception as e:  # noqa: BLE001 (returned; the run reports it and exits non-zero)
+        result.errors.append(f"identify membership: {type(e).__name__}: {e}")
+        print(f"[identify] FAIL membership: {type(e).__name__}: {e}", file=sys.stderr)
+        return result
     result.errors += errors
     etag = None
     for tier, order in sorted(groups.items()):

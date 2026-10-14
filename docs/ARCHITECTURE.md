@@ -92,6 +92,16 @@ Cartographers work in the `ugs-styles` repo; styles bind into the catalog **by S
 STAC emit, a matching style attaches a `renders` block (MapLibre GL style URL). A `restyle` job
 rebinds renders without a reingest.
 
+Publication layers have no ugs-styles style of their own. The vectors job generates one per layer
+(`<label>.style.json`, from the map's own `AreaFillRGB` colours, a colour column, or the default look;
+see ⑤) and records it in the manifest; the pubs ingest puts a pointer, `ugs:generated_style`, on the layer's
+Item. `attach_renders` then binds by precedence: the ugs-styles style for the Item's id, then (a plate only)
+the one for its publication's id, then the generated file. The generated one binds the same way as the
+others, a `ugs:renders` default plus a `roles:["style"]` `style` asset, so the `restyle` job rebinds it and an
+ugs-styles style added later replaces it without a reingest. A single-file publication has no layer Item: its
+one layer rides the Collection, so the pointer, `ugs:renders` and the `style` asset sit on the Collection
+(top-level members), which `restyle --collection all` rebinds too. The style is never written into the Item.
+
 ### ⑤ Publications 🟧
 
 Publications are a second producer into the same STAC catalog: scanned geologic maps become COGs +

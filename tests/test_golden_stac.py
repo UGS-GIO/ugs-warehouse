@@ -53,7 +53,8 @@ def _gems() -> dict:
                           {"label": "geo__Glossary", "columns": None}],
         layers={"geo__MapUnitPolys": {"rows": 3, "bbox": LAYER_BBOX, "kind": "layer",
                                       "geometry_types": ["Polygon"], "proj_code": "EPSG:26912",
-                                      "pmtiles_layer": "geo__MapUnitPolys"},
+                                      "pmtiles_layer": "geo__MapUnitPolys",
+                                      "style": "geo__MapUnitPolys.style.json"},
                 "geo__Faults": {"rows": 2, "bbox": LAYER_BBOX, "geometry_types": ["LineString"],
                                 "proj_wkt2": "PROJCRS[\"NAD83 / UTM zone 12N\"]"},
                 "geo__DMU": {"rows": 41, "kind": "table"},
@@ -65,7 +66,8 @@ def _single_file() -> dict:
     """A publication whose only data is one tiled layer, carried on the Collection."""
     return _pub(vector_layers=["faults"],
                 layers={"faults": {"rows": 3, "bbox": LAYER_BBOX, "geometry_types": ["LineString"],
-                                   "proj_code": "EPSG:26912", "pmtiles_layer": "faults"}})
+                                   "proj_code": "EPSG:26912", "pmtiles_layer": "faults",
+                                   "style": "faults.style.json"}})
 
 
 def _plate() -> dict:

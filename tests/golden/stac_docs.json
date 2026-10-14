@@ -414,6 +414,7 @@
           "proj:code": "EPSG:26912",
           "table:row_count": 3,
           "description": "From geo",
+          "ugs:generated_style": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__MapUnitPolys.style.json",
           "ugs:layer_kind": "layer",
           "ugs:source_key": "geo",
           "ugs:source_dataset": "Geo",
@@ -888,6 +889,7 @@
       "ugs:footprint_source": "cog",
       "sci:doi": "10.34191/OFR-784DM",
       "sci:citation": "Utah Geological Survey, 2026, Interim Geologic Map of Mills Junction: OFR-784DM.",
+      "ugs:generated_style": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/faults.style.json",
       "assets": {
         "publication": {
           "href": "https://ugspub.nr.utah.gov/publications/ofr/ofr-784dm.pdf",

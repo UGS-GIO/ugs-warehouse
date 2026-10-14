@@ -2139,3 +2139,23 @@ def test_the_ingest_heal_leaves_styles_to_the_vectors_job(monkeypatch, tmp_path)
     heal = vectors.self_heal(needs, tiles=False)
 
     assert heal.styled == 0 and vectors.style_object("M-500", "geo__Polys") not in store
+
+
+def test_an_ingest_binds_the_generated_style_to_a_single_file_collection(monkeypatch, tmp_path):
+    from ugs_warehouse.core import stac
+
+    bind = stac.attach_renders
+    doc = _manifest({"label": "faults", "spatial": True, "pmtiles": True, "pmtiles_layer": "faults",
+                     "style": "faults.style.json", "style_kind": "default"})
+    doc["style_version"] = vectors.layer_style.STYLE_VERSION
+    store = _backfill_store(monkeypatch, tmp_path, {"M-600": doc})
+    ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-600", "pub_year": "2020"}])
+    monkeypatch.setattr(stac, "attach_renders", bind)
+    monkeypatch.setattr(stac.styles, "_manifest", lambda: ())
+
+    assert ingest.build_catalog(skip_refresh=True) == 1
+
+    (coll,) = [d for d in written if d.get("type") == "Collection"]
+    style_url = f"/{vectors.VECTORS_PREFIX}/M-600/faults.style.json"
+    assert coll["ugs:renders"]["default"]["style_url"].endswith(style_url)
+    assert coll["assets"]["style"]["roles"] == ["style"] and "pmtiles" in coll["assets"]

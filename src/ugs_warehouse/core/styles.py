@@ -153,6 +153,17 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
     return renders, style_asset
 
 
+def generated_renders(style_url: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
+    """`(renders, style_asset)` for a publication layer's generated style file, the same shape as
+    `renders_for`. Empty when the doc has no `pmtiles` asset for it to draw."""
+    if asset_keys and "pmtiles" not in asset_keys:
+        return {}, None
+    block = {"title": "Publication layer style", "assets": ["pmtiles"], "style_url": style_url}
+    asset = {"href": style_url, "type": "application/json", "roles": ["style"],
+             "title": "MapLibre GL style (generated from the map's colours)"}
+    return {"default": block}, asset
+
+
 # ---------------------------------------------------------------- classification
 # Derive categorical classes (value/label + color) from the bound GL style fragment, so the catalog
 # carries machine-readable categories (classification extension) instead of clients reverse-

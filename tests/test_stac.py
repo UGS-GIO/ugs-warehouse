@@ -655,7 +655,7 @@ def test_read_vector_manifests_carries_each_layers_rows_and_bbox():
     assert out["M-100"]["layers"] == {"geo__Faults": {
         "rows": 12, "bbox": [-112.0, 40.0, -111.0, 41.0], "geometry_types": ["LineString"],
         "proj_code": "EPSG:26912", "proj_wkt2": "PROJCRS[...]",
-        "columns": [{"name": "geometry", "type": "geometry"}], "pmtiles_layer": None,
+        "columns": [{"name": "geometry", "type": "geometry"}], "pmtiles_layer": None, "style": None,
         # A manifest written before sources were recorded gets one from the label.
         "source": "geo", "source_file": None}}
 

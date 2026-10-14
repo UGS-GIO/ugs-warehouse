@@ -151,7 +151,7 @@ def _vector_manifest(sid: str, doc: dict) -> dict:
     """One series' manifest reduced to what the items are built from: {"spatial": [labels],
     "tables": [labels], "empty": [labels], "columns": {label: [{name, type}]}, "relationships":
     [...], "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2, columns,
-    pmtiles_layer, source, source_file}}}. `columns` holds each layer's recorded schema and `layers` its row
+    pmtiles_layer, style, source, source_file}}}. `columns` holds each layer's recorded schema and `layers` its row
     count, bbox and CRS; manifests written before they were recorded have none (empty maps / None
     values); `source` comes from the label when the manifest records none. A layer's kind is not
     read: build_publication derives it from the relationships it publishes."""
@@ -167,6 +167,7 @@ def _vector_manifest(sid: str, doc: dict) -> dict:
                                       "columns": lay.get("columns"),
                                       "pmtiles_layer": (lay.get("pmtiles_layer")
                                                         if lay.get("pmtiles") else None),
+                                      "style": lay.get("style") if lay.get("pmtiles") else None,
                                       "source": lay.get("source")
                                       or relations.source_of_label(lay["label"], sid),
                                       "source_file": _source_file(lay)}
@@ -431,9 +432,10 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             mosaic_tier=tier_by_sid.get(up),
         )
         for it in items:
-            stac.attach_renders(it)  # ugs-styles GL style -> render extension (graceful if none)
+            stac.attach_renders(it)  # ugs-styles GL style, else the layer's generated one
             stac.stamp_file_meta(it, file_meta)
             stac.write_item(it)
+        stac.attach_renders(coll)  # a single-file publication's layer rides the Collection
         stac.stamp_file_meta(coll, file_meta)
         stac.write_collection(coll, children=len(items))
         stale.update(_stale_items(coll["_collection_path"], {it["id"] for it in items}, published))

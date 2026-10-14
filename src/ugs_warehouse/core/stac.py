@@ -505,6 +505,14 @@ def write_collection(coll: dict, *, children: int) -> str:
     return obj
 
 
+def update_collection(doc: dict, collection_path: str) -> str:
+    """Rewrite a leaf collection.json read back from GCS, leaving the README.md/AGENTS.md beside it
+    as they are (`write_collection` rewrites those from the extent and item count)."""
+    obj = collection_object_path(collection_path)
+    _write_json({k: v for k, v in doc.items() if k != "_collection_path"}, obj, compress=False)
+    return obj
+
+
 PLATE_SUFFIX = "_plate"
 # Everything outside RFC 3986's unreserved set needs escaping in a path segment. See `item_id_for`.
 _UNSAFE_IN_PATH = re.compile(r"[^A-Za-z0-9._~-]+")
@@ -526,16 +534,30 @@ def plate_item_id(sid: str) -> str:
     return f"{item_id_for(sid)}{PLATE_SUFFIX}"
 
 
+# Property (a Collection's top-level member) naming a generated MapLibre style file for the doc's
+# PMTiles. It points at the file; the render binding is made by `attach_renders`.
+GENERATED_STYLE = "ugs:generated_style"
+
+
+def doc_fields(doc: dict) -> dict:
+    """Where a STAC doc keeps its `ugs:*` fields: the Collection itself, or an Item's properties."""
+    return doc if doc.get("type") == "Collection" else doc.setdefault("properties", {})
+
+
 def renders_for_item(item: dict, asset_keys: set[str] | None = None) -> tuple[dict, dict | None]:
-    """`styles.renders_for` for a STAC item. A publication's plate Item (`<SID>_plate`) with no
-    style of its own uses the style keyed by its publication's id. Layer Items match only their
-    own id."""
+    """`styles.renders_for` for a STAC item or Collection. A publication's plate Item (`<SID>_plate`)
+    with no style of its own uses the style keyed by its publication's id. Layer Items match only
+    their own id. With no ugs-styles style at all, a doc that names a generated style
+    (`GENERATED_STYLE`) uses that: an ugs-styles style always wins."""
     keys = set((item.get("assets") or {}).keys()) if asset_keys is None else asset_keys
     result = styles.renders_for(item["id"], keys)
     base = plate_base_id(item)
-    if result[0] or base is None:
-        return result
-    return styles.renders_for(base, keys)
+    if not result[0] and base is not None:
+        result = styles.renders_for(base, keys)
+    generated = doc_fields(item).get(GENERATED_STYLE)
+    if not result[0] and isinstance(generated, str):
+        result = styles.generated_renders(generated, keys)
+    return result
 
 
 def plate_base_id(item: dict) -> str | None:
@@ -551,7 +573,9 @@ def attach_renders(item: dict) -> None:
     """Attach a `ugs:renders` block (+ a vector `style` asset) by looking the item id up in the
     ugs-styles manifest. No-op when nothing matches (mutates item in place).
 
-    Call before `write_item`. Best-effort: styling never blocks an ingest (see `core.styles`).
+    Call before `write_item` (or `write_collection`, for a single-file publication's Collection, which
+    carries the block as a top-level member). Best-effort: styling never blocks an ingest (see
+    `core.styles`).
 
     NOT the STAC render extension: that extension is raster/titiler-oriented, and its v2.0.0 schema
     *requires* a `rel:"render"` image link whenever web-map-links is also present — but we render
@@ -562,7 +586,7 @@ def attach_renders(item: dict) -> None:
     renders, style_asset = renders_for_item(item)
     if not renders:
         return
-    item.setdefault("properties", {})["ugs:renders"] = renders
+    doc_fields(item)["ugs:renders"] = renders
     if style_asset:
         # A usage `description` alongside the standard `style` role, so the item alone says the
         # style asset is the "how to draw it" endpoint (#280). Preserve one the styles module set;

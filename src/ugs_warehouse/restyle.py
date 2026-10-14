@@ -12,6 +12,10 @@ transform, no PMTiles — seconds, not minutes. Meant to be triggered by the ugs
     python -m ugs_warehouse.restyle --dry-run          # report what would change, write nothing
     python -m ugs_warehouse.restyle --workers 16       # cap parallelism (default 32)
 
+A publication layer with no ugs-styles style binds the style file the vectors job generated for it
+(`ugs:generated_style`); an ugs-styles style for the same id wins. A single-file publication carries
+its layer on the Collection, so the Collection is rebound too.
+
 Renders live on the item.json (what the viewer reads for a layer's style_url), so a refresh of
 the items.json index isn't required for styling to take effect — it's offered only to keep the
 index's asset summaries exact (the `style` asset chip).
@@ -28,8 +32,8 @@ from .core import config, gcs, jobs, stac, styles
 
 def _clear_renders(item: dict) -> bool:
     """Strip any existing render binding so a re-attach is authoritative (a removed style must
-    drop out, not linger). Returns True if the item had a render binding."""
-    props = item.get("properties") or {}
+    drop out, not linger). Returns True if the item (or Collection) had a render binding."""
+    props = stac.doc_fields(item)
     had = "ugs:renders" in props or "renders" in props  # "renders" = pre-rename items, also strip
     props.pop("ugs:renders", None)
     props.pop("renders", None)
@@ -62,6 +66,24 @@ def _scoped_groups(collection: str) -> dict[str, list[str]]:
             if cp == collection or cp.startswith(collection + "/")
         }
     return groups
+
+
+def _single_file_collections(collection: str, groups: dict[str, list[str]]) -> list[str]:
+    """Collection paths in scope that hold no Items. A single-file publication carries its one layer
+    on its Collection, so its style binds there. Collections with Items (`groups`) are skipped."""
+    list_prefix = (
+        config.STAC_PREFIX if collection == "all" else f"{config.STAC_PREFIX}/{collection}/"
+    )
+    out = []
+    for path in gcs.list_paths(list_prefix):
+        rel = path[len(config.STAC_PREFIX):].lstrip("/")
+        if not rel.endswith("/collection.json"):
+            continue
+        coll_path = rel[: -len("/collection.json")]
+        if coll_path not in groups and (collection == "all" or coll_path == collection
+                                        or coll_path.startswith(collection + "/")):
+            out.append(coll_path)
+    return out
 
 
 def report(*, collection: str = "ugs-serving-topics") -> int:
@@ -126,29 +148,35 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
     n_entries = styles.refresh()
     print(f"[restyle] styles manifest: {n_entries} entries")
 
-    tasks = []
+    tasks: list[tuple[str, str | None]] = []
     for coll_path, item_ids in groups.items():
         for iid in sorted(item_ids):
             tasks.append((coll_path, iid))
+    # iid None = the Collection itself, for a single-file publication.
+    tasks += [(cp, None) for cp in sorted(_single_file_collections(collection, groups))]
 
-    def process_task(task: tuple[str, str]) -> bool:
+    def process_task(task: tuple[str, str | None]) -> bool:
         coll_path, iid = task
-        obj = stac.item_object_path(coll_path, iid)
+        obj = (stac.item_object_path(coll_path, iid) if iid
+               else stac.collection_object_path(coll_path))
         try:
             item = json.loads(gcs.get_bytes(obj).decode())
         except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the rebind
             return False
         had = _clear_renders(item)
         stac.attach_renders(item)  # re-match against the fresh manifest
-        now = "ugs:renders" in (item.get("properties") or {})
+        now = "ugs:renders" in stac.doc_fields(item)
         if not had and not now:
             return False  # never styled (e.g. a pub COG plate) — leave it untouched
         if dry_run:
-            print(f"  {'~' if had else '+'} {coll_path}/{iid}"
+            print(f"  {'~' if had else '+'} {coll_path}/{iid or ''}"
                   + ("" if now else "  (style removed)"))
             return True
-        item["_collection_path"] = coll_path  # preserve nested layout on write
-        stac.write_item(item)
+        if iid:
+            item["_collection_path"] = coll_path  # preserve nested layout on write
+            stac.write_item(item)
+        else:
+            stac.update_collection(item, coll_path)
         print(f"  {'~' if had else '+'} {config.public_url(obj)}")
         return True
 

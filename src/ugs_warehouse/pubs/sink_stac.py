@@ -427,6 +427,7 @@ def build_publication(p: dict, attachments: list[dict], *,
             geometry=aoi, item_bbox=aoi_bbox, footprint_source=aoi_source, extra={"proj:code": "EPSG:4326"}))
     for label in vector_layers or []:
         meta = layer_meta.get(label, {})
+        generated = None
         lb = meta.get("bbox")
         rows = {"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}
         ltitle, ldesc = titles[label]
@@ -445,10 +446,13 @@ def build_publication(p: dict, attachments: list[dict], *,
             assets["pmtiles"] = {**stac.pmtiles_asset(pm_url), "proj:code": "EPSG:4326"}
             links = [stac.pmtiles_link(pm_url, [meta["pmtiles_layer"]])]
             exts += [stac.WEB_MAP_LINKS_EXT, stac.PROJ_EXT]
+            if meta.get("style"):  # restyle binds this file; an ugs-styles style for the Item wins
+                generated = config.public_url(f"{VECTORS_PREFIX}/{sid.upper()}/{meta['style']}")
         items.append(item(ids[label], ltitle, assets,
             geometry=stac.bbox_polygon(lb) if lb else aoi, item_bbox=lb or aoi_bbox,
             footprint_source=LAYER_BBOX_SOURCE if lb else aoi_source,
             extra={**crs_of(meta), **rows, **({"description": ldesc} if ldesc else {}),
+                   **({stac.GENERATED_STYLE: generated} if generated else {}),
                    **kind_props(label, True)},
             links=[*links, *rel_links.get(label, [])], extensions=exts or None))
     for t in companion_tables or []:
@@ -492,6 +496,7 @@ def build_publication(p: dict, attachments: list[dict], *,
     item_bboxes = [to_2d_bbox(it["bbox"]) for it in items if it.get("bbox")
                    and it["properties"].get("ugs:footprint_source") != FOOTPRINT_FALLBACK]
     data_assets: dict = {}
+    style_fields: dict = {}
     data_exts: list[str] = []
     moved_links: list[dict] = []
     if single:
@@ -506,6 +511,8 @@ def build_publication(p: dict, attachments: list[dict], *,
                        for k, a in only["assets"].items() if k != "thumbnail"}
         data_exts = [e for e in only.get("stac_extensions", []) if e != stac.SCI_EXT]
         moved_links = [*mosaic, *(lk for lk in only["links"] if lk.get("rel") == "pmtiles")]
+        if only["properties"].get(stac.GENERATED_STYLE):
+            style_fields = {stac.GENERATED_STYLE: only["properties"][stac.GENERATED_STYLE]}
 
     assets: dict = {}
     main_pdf = href(p.get("pub_url"))
@@ -583,6 +590,7 @@ def build_publication(p: dict, attachments: list[dict], *,
         **({"ugs:volume": vol} if (vol := issue_volume(sid)) is not None else {}),
         **({"ugs:contents": contents} if contents else {}),
         **sci,
+        **style_fields,
     }
     coll_exts = list(dict.fromkeys([
         *([stac.SCI_EXT] if sci else []),

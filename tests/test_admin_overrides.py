@@ -134,7 +134,7 @@ def test_a_collection_patch_rerenders_its_readme(store):
     _put(store, COLL_OBJ, {"id": "OFR-1", "title": "Source title", "description": "Source citation.",
                            "links": [{"rel": "item", "href": "./a/a.json"}]})
 
-    assert stac.patch_collection_fields(COLL_OBJ, {"title": "Hand title"}) is True
+    assert stac.patch_published(COLL_OBJ, {"title": "Hand title"}, target="fields") is True
 
     readme = store[f"{config.STAC_PREFIX}/{COLL_PATH}/README.md"].decode()
     assert readme.startswith("# Hand title")
@@ -152,7 +152,7 @@ def test_a_collection_patch_retries_once_when_the_collection_changes_under_it(st
         real(b, p, version, **k)
 
     monkeypatch.setattr(gcs, "put_bytes_if_unchanged", racing)
-    assert stac.patch_collection_fields(COLL_OBJ, {"title": "Hand title"}) is True
+    assert stac.patch_published(COLL_OBJ, {"title": "Hand title"}, target="fields") is True
     assert _get(store, COLL_OBJ) == {"id": "OFR-1", "title": "Hand title", "description": "D",
                                      "keywords": ["x"]}
 
@@ -161,4 +161,59 @@ def test_a_collection_patch_retries_once_when_the_collection_changes_under_it(st
 
     monkeypatch.setattr(gcs, "put_bytes_if_unchanged", always_changed)
     with pytest.raises(gcs.Changed):
-        stac.patch_collection_fields(COLL_OBJ, {"title": "Other"})
+        stac.patch_published(COLL_OBJ, {"title": "Other"}, target="fields")
+
+
+def test_an_item_patch_merges_into_properties_and_keeps_the_rest(store):
+    _put(store, ITEM_OBJ, {"id": "OFR-1", "properties": {"title": "old", "ugs:scale": "24k"}, "links": []})
+
+    assert stac.patch_published(ITEM_OBJ, {"title": "new"}) is True
+
+    assert _get(store, ITEM_OBJ) == {"id": "OFR-1", "properties": {"title": "new", "ugs:scale": "24k"},
+                                     "links": []}
+
+
+def test_a_patch_of_something_unpublished_returns_false(store):
+    assert stac.patch_published(ITEM_OBJ, {"title": "new"}) is False
+    assert stac.patch_published(COLL_OBJ, {"title": "new"}, target="fields") is False
+
+
+def test_an_item_patch_is_conditional_and_raises_when_the_item_keeps_changing(store, monkeypatch):
+    _put(store, ITEM_OBJ, {"id": "OFR-1", "properties": {"title": "old"}})
+    seen = []
+
+    def always_changed(b, p, version, **k):
+        seen.append(k["content_type"])
+        raise gcs.Changed(p)
+
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", always_changed)
+    with pytest.raises(gcs.Changed):
+        stac.patch_published(ITEM_OBJ, {"title": "new"})
+    assert seen == ["application/geo+json"] * 2
+
+
+def test_a_read_error_other_than_missing_raises(store, monkeypatch):
+    def boom(p):
+        raise PermissionError(p)
+
+    monkeypatch.setattr(gcs, "get_bytes_versioned", boom)
+    with pytest.raises(PermissionError):
+        stac.patch_published(ITEM_OBJ, {"title": "new"})
+
+
+def test_an_unknown_patch_target_is_refused(store):
+    with pytest.raises(ValueError, match="unknown patch target"):
+        stac.patch_published(ITEM_OBJ, {"title": "new"}, target="links")
+
+
+def test_save_keeps_the_sidecar_and_reports_a_live_patch_that_failed(ov, store, monkeypatch):
+    _put(store, ITEM_OBJ, {"id": "OFR-1", "properties": {"title": "old"}})
+
+    def always_changed(b, p, version, **k):
+        raise gcs.Changed(p)
+
+    monkeypatch.setattr(gcs, "put_bytes_if_unchanged", always_changed)
+    res = ov.save("OFR-1", description="Hand text")
+
+    assert res["applied"] is False and res["apply_error"].startswith("Changed")
+    assert _get(store, stac.override_object("OFR-1"))["description"] == "Hand text"

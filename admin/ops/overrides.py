@@ -10,6 +10,9 @@ description the source doesn't carry. Changes land in STAC on the next ingest/re
 from __future__ import annotations
 
 import json
+import logging
+
+log = logging.getLogger(__name__)
 
 _TOPICS = "ugs-serving-topics"
 
@@ -122,11 +125,14 @@ def save(item_id: str, description: str = "", title: str = "") -> dict:
                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
     # Instant apply: patch the published document now (it may not be published yet).
     updates = {k: v for k, v in doc.items() if k in ("title", "description")}
-    target = _locate(item_id)
-    if target is None:
-        applied = False
-    elif target[1]:
-        applied = stac.patch_collection_fields(target[0], updates)
-    else:
-        applied = stac.patch_item_properties(target[0], updates)
-    return {"id": item_id, "fields": [k for k in doc if k != "source"], "applied": applied}
+    # The sidecar is already written, so a failed live patch is reported beside it, not raised over it.
+    result = {"id": item_id, "fields": [k for k in doc if k != "source"], "applied": False}
+    try:
+        target = _locate(item_id)
+        if target is not None:
+            result["applied"] = stac.patch_published(
+                target[0], updates, target="fields" if target[1] else "properties")
+    except Exception as e:  # noqa: BLE001
+        log.exception("override for %s saved but not applied live", item_id)
+        result["apply_error"] = f"{type(e).__name__}: {e}"
+    return result

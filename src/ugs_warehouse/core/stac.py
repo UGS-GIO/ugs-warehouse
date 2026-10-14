@@ -387,49 +387,45 @@ def override_object(item_id: str) -> str:
     return f"{config.OVERRIDES_PREFIX}/{item_id}.json"
 
 
-def patch_item_properties(object_path: str, updates: dict) -> bool:
-    """Merge `updates` into a published item's `properties` in place — an instant edit that shows
-    immediately, without a full reingest (the durable source stays the override sidecar; a later
-    reingest reapplies it). Best-effort: returns False if the item can't be read."""
-    try:
-        item = json.loads(gcs.get_bytes(object_path))
-    except Exception:  # noqa: BLE001 — item not published yet / unreadable
-        return False
-    item.setdefault("properties", {}).update(updates)
-    # Same cache policy as write_item so an edited item keeps a consistent header (not flipped to
-    # no-cache until the next reingest). Operator sees the edit at once (bucket read); public via
-    # the CDN within the short max-age.
-    # NOT gzipped — see write_item: a gzipped item breaks every obstore get_bytes read. (#341)
-    gcs.put_bytes(json.dumps(item, indent=2).encode(), object_path,
-                  content_type="application/geo+json", cache_control=gcs.CACHE_CATALOG)
-    return True
+def patch_published(object_path: str, updates: dict, *, target: str = "properties") -> bool:
+    """Merge `updates` into a published Item's `properties` (`target="properties"`) or a published
+    Collection's top-level fields (`target="fields"`) in place: an instant edit that shows without a
+    reingest (the durable source stays the override sidecar; a later reingest reapplies it). A
+    collection's README.md/AGENTS.md are re-rendered to match.
 
-
-def patch_collection_fields(object_path: str, updates: dict) -> bool:
-    """Merge `updates` into a published collection.json's top-level fields in place (same instant
-    edit as `patch_item_properties`) and re-render its README.md/AGENTS.md. The write is conditional
-    on the version read; a concurrent write is retried once on the new version, then raises
-    `gcs.Changed`. Returns False when the collection isn't published yet; any other read error
-    raises."""
+    The write is conditional on the version read; a concurrent write is retried once on the new
+    version, then raises `gcs.Changed`. Returns False when nothing is published at `object_path`;
+    any other read or write error raises. Not gzipped, as `write_item`: a gzipped item breaks every
+    obstore `get_bytes` read.
+    """
+    if target not in ("properties", "fields"):
+        raise ValueError(f"unknown patch target {target!r}")
     for attempt in (1, 2):
         try:
             raw, version = gcs.get_bytes_versioned(object_path)
         except FileNotFoundError:
             return False
-        doc = {**json.loads(raw), **updates}
+        doc = json.loads(raw)
+        if target == "properties":
+            doc.setdefault("properties", {}).update(updates)
+        else:
+            doc.update(updates)
         try:
-            gcs.put_bytes_if_unchanged(json.dumps(doc, indent=2).encode(), object_path, version,
-                                       content_type="application/json",
-                                       cache_control=gcs.CACHE_CATALOG)
+            # Same cache policy as write_item, so an edited document keeps a consistent header.
+            gcs.put_bytes_if_unchanged(
+                json.dumps(doc, indent=2).encode(), object_path, version,
+                content_type="application/geo+json" if target == "properties" else "application/json",
+                cache_control=gcs.CACHE_CATALOG)
             break
         except gcs.Changed:
             if attempt == 2:
                 raise
-    path = object_path.removeprefix(f"{config.STAC_PREFIX}/").removesuffix("/collection.json")
-    _write_markdown(path, title=doc.get("title") or prettify(doc.get("id", path)),
-                    description=doc.get("description") or "", kind="collection",
-                    children=sum(1 for lk in doc.get("links") or [] if lk.get("rel") == "item"),
-                    extent=doc.get("extent"))
+    if target == "fields":
+        path = object_path.removeprefix(f"{config.STAC_PREFIX}/").removesuffix("/collection.json")
+        _write_markdown(path, title=doc.get("title") or prettify(doc.get("id", path)),
+                        description=doc.get("description") or "", kind="collection",
+                        children=sum(1 for lk in doc.get("links") or [] if lk.get("rel") == "item"),
+                        extent=doc.get("extent"))
     return True
 
 

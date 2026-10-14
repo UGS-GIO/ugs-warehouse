@@ -613,6 +613,8 @@ describe("part descriptors", () => {
     expect(describeData({ geometry: "mixed" })).toBe("mixed");
     expect(describeData({ table: true })).toBe("");
     expect(describeData({})).toBe("");
+    expect(describeData({ table: true, rows: NaN })).toBe("");
+    expect(describeData({ geometry: "points", rows: Infinity })).toBe("points");
   });
   it("carries a related table's row count on its join", () => {
     const joins = relatedJoins({ assets: { t: { href: "https://x/t.parquet", roles: ["data", "related"], "table:row_count": 41,

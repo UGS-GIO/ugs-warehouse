@@ -626,7 +626,7 @@ def geometry_kind(types: list[str] | None) -> str | None:
     when they span several. None when the manifest records none or one this does not know."""
     words = set()
     for t in types or []:
-        base = re.sub(r"(ZM|Z|M)$", "", re.sub(r"\s+", "", str(t))).lower()
+        base = re.sub(r"(zm|z|m)$", "", re.sub(r"\s+", "", str(t)).lower())
         base = base.removeprefix("multi").replace("string", "")
         if base not in _GEOMETRY_WORD:
             return None
@@ -640,7 +640,8 @@ REFERENCE_ROLE = "reference"
 def _relationship_parts(sid: str, coll_path: str, relationships: list[dict], ids: dict[str, str],
                         titles: dict[str, tuple[str, str | None]],
                         table_columns: dict[str, list | None], spatial: set[str],
-                        unpublished: set[str], row_counts: dict[str, int] | None = None) -> tuple[dict, dict, dict, list[dict]]:
+                        unpublished: set[str], row_counts: dict[str, int] | None = None
+                        ) -> tuple[dict, dict, dict, list[dict]]:
     """The relationships as STAC pieces, per label: ({origin: {destination: related-table asset}},
     {label: [related links]}, {origin: [own foreign keys]}, [relationships published]). A
     related-table asset's foreign key is flipped to destination -> origin, as vector/related.py

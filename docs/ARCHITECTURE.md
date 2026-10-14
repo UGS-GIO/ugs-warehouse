@@ -235,8 +235,8 @@ Items carry `ugs:layer_kind`, `ugs:source_key` (the source dataset, the grouping
 `Shapefiles` or `GIS_Data` dropped). A layer Item also carries `ugs:geometry_kind` (points, lines,
 polygons or mixed, from the manifest's `geometry_types`) and every one `table:row_count`; the
 Collection's `rel=item` links repeat these with `ugs:source_file`, so the viewer groups and
-describes a pub's items without fetching them. A related-table asset carries `table:row_count`. The kind is `layer` for a spatial layer, `table`
-for a non-spatial one in a relationship the ingest publishes and `supporting` otherwise. A table or
+describes a pub's items without fetching them. A related-table asset carries `table:row_count`.
+The kind is `layer` for a spatial layer, `table` for a non-spatial one in a relationship the ingest publishes and `supporting` otherwise. A table or
 supporting Item has no geometry of its own, so it carries its publication's footprint (the Utah
 bbox when the pub has none) as geometry and bbox, with `ugs:footprint_source: "publication"`. It is
 an area of interest, not a place: the root index leaves their bbox out and the viewer's

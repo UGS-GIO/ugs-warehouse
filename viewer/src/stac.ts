@@ -229,10 +229,11 @@ export type CollectionPart = { id: string; title: string; kind?: string; source?
 // "polygons · 367 features" or "table · 41 rows". Empty when the link carries neither, so an older
 // catalog shows nothing rather than a bare "table".
 export const describeData = ({ geometry, table, rows }: { geometry?: string; table?: boolean; rows?: number }): string => {
-  if (!geometry && rows === undefined) return "";
+  const n = rows !== undefined && Number.isFinite(rows) ? rows : undefined;
+  if (!geometry && n === undefined) return "";
   const word = geometry ?? (table ? "table" : undefined);
   const noun = table || !geometry ? "row" : "feature";
-  const count = rows === undefined ? undefined : `${rows.toLocaleString("en-US")} ${noun}${rows === 1 ? "" : "s"}`;
+  const count = n === undefined ? undefined : `${n.toLocaleString("en-US")} ${noun}${n === 1 ? "" : "s"}`;
   return [word, count].filter(Boolean).join(" · ");
 };
 // Whether a part's `ugs:layer_kind` is a non-spatial table (a table or a supporting table).

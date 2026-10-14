@@ -23,6 +23,9 @@ function PeekRow({ join, value, onOpen }: {
   const total = data?.total ?? 0;
   const text = describeData({ table: true, rows: join.rows });
   const descriptor = text && <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">{text}</span>;
+  // Beside "N related", the table's size reads "of 41 rows" so it isn't taken for the per-feature count.
+  const tableSize = text && <span className="text-[11px] text-muted-foreground">
+    {text.replace(/^table · /, "of ")}</span>;
   if (isFetching && !data) return <div className="py-0.5 text-xs text-muted-foreground">{join.title}…</div>;
   if (error) return <div className="py-0.5 text-xs text-destructive">{join.title}: couldn't load</div>;
   if (total === 0) return null;
@@ -45,7 +48,7 @@ function PeekRow({ join, value, onOpen }: {
         className="text-left text-xs font-medium text-primary hover:underline">
         {total} related in {join.title} →
       </button>
-      {descriptor}
+      {tableSize}
     </div>
   );
 }

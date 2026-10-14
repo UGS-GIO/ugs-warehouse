@@ -218,7 +218,8 @@ describe("the geometry and count line on related tables and parts", () => {
   it("shows it under the feature card's related line", async () => {
     readMatching.mockResolvedValue({ total: 3, columns: ["MapUnit"], rows: [] });
     wrap(<FeatureCard item={withRows} props={{ MapUnit: "Qal" }} />);
-    expect(await screen.findByText("table · 41 rows")).toBeDefined();
+    expect(await screen.findByText("of 41 rows")).toBeDefined();
+    expect(screen.queryByText("table · 41 rows")).toBeNull();
     expect(screen.getByRole("button", { name: "3 related in Description Of Map Units →" })).toBeDefined();
   });
 

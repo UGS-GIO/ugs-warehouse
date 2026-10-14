@@ -751,6 +751,7 @@ def test_the_attachment_key_is_the_one_the_collection_gives_its_asset():
     (["Polygon"], "polygons"), (["MultiPolygon", "Polygon"], "polygons"),
     (["Point", "MultiPoint"], "points"), (["Multi Point"], "points"),
     (["LineString", "MultiLineString"], "lines"), (["Line String Z"], "lines"),
+    (["multipolygonz"], "polygons"), (["POINTZM"], "points"),
     (["Polygon", "LineString"], "mixed"), ([], None), (None, None), (["GeometryCollection"], None)])
 def test_geometry_kind_is_a_plain_word_for_the_manifest_geometry_types(types, want):
     from ugs_warehouse.pubs.sink_stac import geometry_kind

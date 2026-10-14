@@ -3,8 +3,8 @@
  * visible together. Mobile: full-bleed map under one draggable sheet (peek/half/full) whose tab bar
  * picks what's in it — the standard mobile-map pattern, one thumb-reachable surface.
  *
- * The map is passed in and rendered ONCE in both branches, so switching tabs slides a sheet over a
- * live map instead of tearing down its WebGL context.
+ * The map is passed in and rendered ONCE, in the same place on both layouts, so switching tabs
+ * slides a sheet over a live map and crossing the breakpoint never tears down its WebGL context.
  *
  * Adapted from the same shell in ugs-soil-water-model's viewer; the tabs differ because our third
  * surface is an item's metadata, not a chart.
@@ -26,36 +26,24 @@ const DOCK_KEY = "ugsw.mapDockH";
 const SIDEBAR = { initial: 320, min: 240, max: 560 };
 const DOCK = { initial: 240, min: 120, max: 640 };
 
-function DesktopShell({ map, layers, info, revealInfo }: ShellProps) {
-  const [dockOpen, setDockOpen] = useState(true);
-  const sidebar = useResizable(SIDEBAR_KEY, SIDEBAR, "x");
-  const dock = useResizable(DOCK_KEY, DOCK, "y");
-  revealInfo.current = () => setDockOpen(true);
+type DockState = { open: boolean; setOpen: (f: (o: boolean) => boolean) => void };
 
+function DesktopDock({ info, dock, resizable }: { info: ReactNode; dock: DockState; resizable: ReturnType<typeof useResizable> }) {
   return (
-    <div className="flex h-full min-h-0">
-      <aside style={{ width: sidebar.size }} className="flex shrink-0 flex-col overflow-y-auto border-r border-border p-3">
-        {layers}
-      </aside>
-      <ResizeHandle resizable={sidebar} label="Resize layer list" className="relative z-10 -mx-1.5 shrink-0" />
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
-        <div className="relative min-h-0 flex-1">{map}</div>
-        <section style={dockOpen ? { height: dock.size } : undefined} className="relative flex shrink-0 flex-col border-t border-border">
-          {dockOpen && (
-            <ResizeHandle resizable={dock} label="Resize detail panel" className="absolute inset-x-0 -top-1.5 z-10" />
-          )}
-          <button
-            type="button"
-            onClick={() => setDockOpen((o) => !o)}
-            aria-expanded={dockOpen}
-            className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
-          >
-            <span>{dockOpen ? "▾" : "▸"}</span> Item detail
-          </button>
-          {dockOpen && <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">{info}</div>}
-        </section>
-      </main>
-    </div>
+    <section style={dock.open ? { height: resizable.size } : undefined} className="relative flex shrink-0 flex-col border-t border-border">
+      {dock.open && (
+        <ResizeHandle resizable={resizable} label="Resize detail panel" className="absolute inset-x-0 -top-1.5 z-10" />
+      )}
+      <button
+        type="button"
+        onClick={() => dock.setOpen((o) => !o)}
+        aria-expanded={dock.open}
+        className="flex items-center gap-2 px-3 py-1.5 text-sm font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+      >
+        <span>{dock.open ? "▾" : "▸"}</span> Item detail
+      </button>
+      {dock.open && <div className="min-h-0 flex-1 overflow-auto px-3 pb-3">{info}</div>}
+    </section>
   );
 }
 
@@ -72,17 +60,16 @@ const TABS: { id: SheetTab; label: string; path: ReactNode }[] = [
   { id: "info", label: "Info", path: <><circle cx="12" cy="12" r="9" /><path d="M12 16v-5M12 8h.01" /></> },
 ];
 
-/** Mobile: full map + a draggable sheet anchored above a persistent tab bar, which picks what the
+/** Mobile: a draggable sheet over the map, anchored above a persistent tab bar, which picks what the
  * sheet holds. Detent 0 (a peek) is the map view; `tab` is only what's shown when it's raised.
  * Both live in the URL: a reload or a shared link keeps the sheet, and Back undoes a tap. */
-function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
+function PhoneSheet({ layers, info, revealInfo, areaRef }: Omit<ShellProps, "map"> & { areaRef: RefObject<HTMLDivElement | null> }) {
   const { tab, detent } = parseSheet(useSearch({ from: "__root__", select: (s) => s.sheet }));
   const navigate = useNavigate();
   // Taps push a history entry; drags and reveals replace, so Back doesn't replay every drag.
   const setSheet = (next: SheetState, push = false) =>
     navigate({ to: ".", replace: !push, search: (prev) => ({ ...prev, sheet: sheetParam(next) }) });
   const setDetent = (d: number) => setSheet({ tab, detent: d });
-  const areaRef = useRef<HTMLDivElement>(null);
   const swipedOff = useRef(false);
   const collapsed = detent === 0;
 
@@ -103,11 +90,7 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
   };
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <div ref={areaRef} className="relative min-h-0 flex-1">
-        <div style={{ "--peek": `${DETENTS[0] * 100}%` }}
-          className="phone-map absolute inset-0">{map}</div>
-      </div>
+    <>
       {/* Base UI's Drawer does the drag, flick and scroll handoff. It never closes: a swipe past the
           peek or Escape lands on the peek. Rendered after the area so the portal finds its ref. */}
       <Drawer.Root
@@ -180,12 +163,39 @@ function MobileShell({ map, layers, info, revealInfo }: ShellProps) {
           </button>
         ))}
       </nav>
-    </div>
+    </>
   );
 }
 
 type ShellProps = { map: ReactNode; layers: ReactNode; info: ReactNode; revealInfo: RevealRef };
 
-export function MapShell(props: ShellProps) {
-  return useIsDesktop() ? <DesktopShell {...props} /> : <MobileShell {...props} />;
+// Desktop and phone share one tree down to the map, with each layout's own pieces as siblings in
+// fixed slots, so crossing the breakpoint never remounts the map or its WebGL context.
+export function MapShell({ map, layers, info, revealInfo }: ShellProps) {
+  const isDesktop = useIsDesktop();
+  const [dockOpen, setDockOpen] = useState(true);
+  const sidebar = useResizable(SIDEBAR_KEY, SIDEBAR, "x");
+  const dock = useResizable(DOCK_KEY, DOCK, "y");
+  const areaRef = useRef<HTMLDivElement>(null);
+  if (isDesktop) revealInfo.current = () => setDockOpen(true);
+
+  return (
+    <div className={isDesktop ? "flex h-full min-h-0" : "flex h-full min-h-0 flex-col"}>
+      {isDesktop && (
+        <aside style={{ width: sidebar.size }} className="flex shrink-0 flex-col overflow-y-auto border-r border-border p-3">
+          {layers}
+        </aside>
+      )}
+      {isDesktop && <ResizeHandle resizable={sidebar} label="Resize layer list" className="relative z-10 -mx-1.5 shrink-0" />}
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <div ref={areaRef} className="relative min-h-0 flex-1">
+          <div style={isDesktop ? undefined : { "--peek": `${DETENTS[0] * 100}%` }}
+            className={isDesktop ? "absolute inset-0" : "phone-map absolute inset-0"}>{map}</div>
+        </div>
+        {isDesktop
+          ? <DesktopDock info={info} dock={{ open: dockOpen, setOpen: setDockOpen }} resizable={dock} />
+          : <PhoneSheet layers={layers} info={info} revealInfo={revealInfo} areaRef={areaRef} />}
+      </main>
+    </div>
+  );
 }

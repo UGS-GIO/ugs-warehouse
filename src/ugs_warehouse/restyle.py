@@ -49,16 +49,20 @@ def _clear_renders(item: dict) -> bool:
     return had
 
 
-def _scoped_groups(collection: str) -> dict[str, list[str]]:
-    """{collection_path: [item_id]} for the requested scope.
-
-    Lists only the collection's sub-prefix (not the whole catalog) so a 25-item
-    serving-topics rebind doesn't enumerate ~7k pub items first. `all` lists everything.
-    """
+def _scope_paths(collection: str) -> list[str]:
+    """Every object path in the requested scope: only the collection's sub-prefix (not the whole
+    catalog) so a 25-item serving-topics rebind doesn't enumerate ~7k pub items first. `all` lists
+    everything."""
     list_prefix = (
         config.STAC_PREFIX if collection == "all" else f"{config.STAC_PREFIX}/{collection}/"
     )
-    groups = stac._group_items(gcs.list_paths(list_prefix))
+    return gcs.list_paths(list_prefix)
+
+
+def _scoped_groups(collection: str, paths: list[str] | None = None) -> dict[str, list[str]]:
+    """{collection_path: [item_id]} for the requested scope, from `paths` (one `_scope_paths`
+    listing) or a fresh listing."""
+    groups = stac._group_items(_scope_paths(collection) if paths is None else paths)
     if collection != "all":
         groups = {
             cp: iids
@@ -68,14 +72,13 @@ def _scoped_groups(collection: str) -> dict[str, list[str]]:
     return groups
 
 
-def _single_file_collections(collection: str, groups: dict[str, list[str]]) -> list[str]:
-    """Collection paths in scope that hold no Items. A single-file publication carries its one layer
-    on its Collection, so its style binds there. Collections with Items (`groups`) are skipped."""
-    list_prefix = (
-        config.STAC_PREFIX if collection == "all" else f"{config.STAC_PREFIX}/{collection}/"
-    )
+def _single_file_collections(collection: str, groups: dict[str, list[str]],
+                             paths: list[str]) -> list[str]:
+    """Collection paths among `paths` (the scope's listing) that hold no Items. A single-file
+    publication carries its one layer on its Collection, so its style binds there. Collections with
+    Items (`groups`) are skipped."""
     out = []
-    for path in gcs.list_paths(list_prefix):
+    for path in paths:
         rel = path[len(config.STAC_PREFIX):].lstrip("/")
         if not rel.endswith("/collection.json"):
             continue
@@ -142,7 +145,8 @@ def report(*, collection: str = "ugs-serving-topics") -> int:
 
 def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
             dry_run: bool = False, workers: int = 32) -> int:
-    groups = _scoped_groups(collection)
+    paths = _scope_paths(collection)
+    groups = _scoped_groups(collection, paths)
     # refresh, not warm: this job is triggered seconds after a style publish, so it must re-read
     # the manifest rather than trust anything already cached in-process.
     n_entries = styles.refresh()
@@ -153,7 +157,9 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
         for iid in sorted(item_ids):
             tasks.append((coll_path, iid))
     # iid None = the Collection itself, for a single-file publication.
-    tasks += [(cp, None) for cp in sorted(_single_file_collections(collection, groups))]
+    tasks += [(cp, None) for cp in sorted(_single_file_collections(collection, groups, paths))]
+
+    failures: list[str] = []  # list.append is atomic, so the pool's threads share it
 
     def process_task(task: tuple[str, str | None]) -> bool:
         coll_path, iid = task
@@ -161,7 +167,8 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
                else stac.collection_object_path(coll_path))
         try:
             item = json.loads(gcs.get_bytes(obj).decode())
-        except Exception:  # noqa: BLE001 — a missing/corrupt item shouldn't sink the rebind
+        except Exception as e:  # noqa: BLE001 — recorded and raised after the pool, so the rest still rebind
+            failures.append(f"{obj}: {type(e).__name__}: {e}")
             return False
         had = _clear_renders(item)
         stac.attach_renders(item)  # re-match against the fresh manifest
@@ -196,6 +203,11 @@ def restyle(*, collection: str = "ugs-serving-topics", refresh: bool = False,
         jobs.start_topic_thumbs()
     print(f"[restyle] {'would rebind' if dry_run else 'rebound'} {changed} item(s)"
           + ("" if refresh or dry_run else " (run --refresh to refresh items.json asset summaries)"))
+    if failures:
+        print(f"[restyle] FAILED to read {len(failures)} object(s):", file=sys.stderr)
+        for f in sorted(failures):
+            print(f"    {f}", file=sys.stderr)
+        raise RuntimeError(f"restyle could not read {len(failures)} object(s); first: {sorted(failures)[0]}")
     if not dry_run and _verify(groups):
         return 1  # a run that wrote stale renders must not exit 0 — see _verify
     return changed

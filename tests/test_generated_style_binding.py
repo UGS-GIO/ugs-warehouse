@@ -172,3 +172,32 @@ def test_a_single_file_collection_gets_a_style_asset_so_portolan_sees_one(monkey
     stac.attach_renders(coll)
     assert coll["assets"]["style"]["roles"] == ["style"]
     assert coll["ugs:renders"]["default"]["assets"] == ["pmtiles"]
+
+
+def test_restyle_fails_loud_on_an_object_it_cannot_read_and_still_rebinds_the_rest(monkeypatch, capsys):
+    import pytest
+
+    store = _mem_gcs(monkeypatch)
+    _manifest(monkeypatch)
+    stac.write_item(_layer_item("OFR-2__units", coll_path="ugs-publications/OFR/OFR-2"))
+    bad = stac.item_object_path("ugs-publications/OFR/OFR-3", "OFR-3__units")
+    store[bad] = b"{not json"
+
+    with pytest.raises(RuntimeError, match=r"could not read 1 object"):
+        R.restyle(collection="all")
+
+    assert bad in capsys.readouterr().err
+    good = json.loads(store[stac.item_object_path("ugs-publications/OFR/OFR-2", "OFR-2__units")])
+    assert good["properties"]["ugs:renders"]["default"]["style_url"] == GEN
+
+
+def test_restyle_lists_the_scope_once(monkeypatch):
+    store = _mem_gcs(monkeypatch)
+    _manifest(monkeypatch)
+    stac.write_collection(_collection(), children=0)
+    listed: list[str] = []
+    monkeypatch.setattr(gcs, "list_paths", lambda pre: listed.append(pre) or list(store))
+
+    R.restyle(collection="all")
+
+    assert len(listed) == 1

@@ -19,7 +19,8 @@ its documents as assets and its plate, layers and tables as Items. A series move
 once every publication in it has been reingested; until then it stays one series collection over
 per-publication items. The root `items.json` lists one entry per publication in a migrated series
 (its layers and tables load when the publication opens) plus every non-publication item, and each
-migrated series catalog has its own `items.json` of its publications. Each collection the refresh
+migrated series catalog has its own `items.json` of its publications. The refresh also writes a
+small `pub-coverage.json` summary that the ops console reads. Each collection the refresh
 builds carries an `items.parquet` (stac-geoparquet) mirror of its items. An optional
 Django **ops console** (`admin/`) drives + observes the Cloud Run jobs.
 

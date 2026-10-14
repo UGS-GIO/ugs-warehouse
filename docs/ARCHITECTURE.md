@@ -109,6 +109,13 @@ has no Items. The pubs ingest writes the Collections and Items; `refresh_catalog
 and group catalogs over them. The ingest lists each group once before it writes, and after the
 pool deletes, in one batched call, the Item directories no publication's current build produces.
 
+The refresh reads each publication's `collection.json` once and keeps only its id, title, pub
+type, whether it is mappable and its index row, so memory does not grow with the single-file
+publications' `table:columns` and `proj:wkt2`; the restyle and retire jobs (2Gi) run it too. It
+also writes `pub-coverage.json` beside the catalog root: per group and series, the publications
+indexed, whether the series is `migrated`, how many publications are `pending`, and the Items and
+COG ids counted. The ops console's coverage panel reads that file, not the root `items.json`.
+
 A series switches to this layout as a whole, once every publication in it has a `collection.json`.
 Until then the refresh indexes it as before, one series `collection.json` over `<SID>/<SID>.json`
 items, ignores its new-layout objects, and prints the publications still pending. Publications the

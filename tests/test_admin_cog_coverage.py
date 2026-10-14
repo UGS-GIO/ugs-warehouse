@@ -50,37 +50,30 @@ def test_extract_map_layers_has_no_backfill_buttons(ops_jobs):
     assert not ops_jobs.run_mode("vectors", "pmtiles-backfill")["ok"]
 
 
-def _entry(id_, self_href, *, cog=False, pub=None):
-    props = {"ugs:in_publication": pub, "ugs:publication_title": "T"} if pub else {}
+def _entry(id_, self_href, *, cog=False):
     assets = {"cog": {"href": f"https://x/{id_}.cog.tif", "type": COG}} if cog else {}
-    return {"id": id_, "properties": props, "assets": assets,
+    return {"id": id_, "properties": {}, "assets": assets,
             "links": [{"rel": "self", "href": self_href}]}
 
 
-def test_coverage_reads_collection_layout_series_from_the_root_index(ops_stac, monkeypatch):
+def _summary(**series):
+    return {"type": "ugs-pub-coverage", "groups": {"ugs-publications": series}}
+
+
+def test_coverage_reads_collection_layout_series_from_the_refresh_summary(ops_stac, monkeypatch):
     docs = {
         f"{BASE}/ugs-publications/catalog.json": {"links": [
             {"rel": "child", "href": "./OFR/catalog.json"},        # collection layout
             {"rel": "child", "href": "./B/collection.json"},       # old layout
         ]},
-        # The series index lists publications, which carry no COG; it must not be scanned.
-        f"{BASE}/ugs-publications/OFR/items.json": {"items": [_entry("OFR-1", "./OFR-1/collection.json")]},
         f"{BASE}/ugs-publications/B/items.json": {"items": [
             _entry("B-1", "./B-1/B-1.json", cog=True), _entry("B-2", "./B-2/B-2.json")]},
-        f"{BASE}/items.json": {"items": [
-            _entry("OFR-1", "./ugs-publications/OFR/OFR-1/collection.json"),          # report entry
-            _entry("OFR-1_plate", "./ugs-publications/OFR/OFR-1/OFR-1_plate/OFR-1_plate.json",
-                   cog=True, pub="OFR-1"),
-            _entry("OFR-1_units", "./ugs-publications/OFR/OFR-1/OFR-1_units/OFR-1_units.json",
-                   pub="OFR-1"),
-            # A single-file publication keeps its plate on the Collection.
-            _entry("OFR-2", "./ugs-publications/OFR/OFR-2/collection.json", cog=True),
-            # Old-layout and other-collection entries are counted elsewhere or not at all.
-            _entry("B-1", "./ugs-publications/B/B-1/B-1.json", cog=True),
-            _entry("X-1_plate", "./ugs-external/OFR/X-1/X-1_plate/X-1_plate.json", cog=True, pub="X-1"),
-        ]},
+        f"{BASE}/pub-coverage.json": _summary(OFR={
+            "publications": 2, "migrated": True, "pending": 0, "items": 3,
+            "cog_ids": ["OFR-1_plate", "OFR-2"]}),
     }
-    monkeypatch.setattr(ops_stac, "_get", lambda url: docs.get(url))
+    fetched: list[str] = []
+    monkeypatch.setattr(ops_stac, "_get", lambda url: fetched.append(url) or docs.get(url))
     monkeypatch.setattr(ops_stac, "PUB_COLLECTIONS", ["ugs-publications"])
 
     cov = ops_stac._cog_coverage()
@@ -89,12 +82,39 @@ def test_coverage_reads_collection_layout_series_from_the_root_index(ops_stac, m
     assert row == {"id": "ugs-publications", "items": 5, "cogs": 3,
                    "cog_ids": ["B-1", "OFR-1_plate", "OFR-2"]}
     assert (cov["total_items"], cov["total_cogs"]) == (5, 3)
+    # The panel never fetches the root index, nor the migrated series' publication index.
+    assert f"{BASE}/items.json" not in fetched
+    assert f"{BASE}/ugs-publications/OFR/items.json" not in fetched
 
 
-def test_coverage_flags_a_missing_root_index(ops_stac, monkeypatch):
+def test_coverage_flags_a_missing_summary(ops_stac, monkeypatch):
     docs = {f"{BASE}/ugs-publications/catalog.json": {"links": [{"rel": "child", "href": "./OFR/catalog.json"}]}}
     monkeypatch.setattr(ops_stac, "_get", lambda url: docs.get(url))
     monkeypatch.setattr(ops_stac, "PUB_COLLECTIONS", ["ugs-publications"])
 
     (row,) = ops_stac._cog_coverage()["collections"]
     assert row["error"] is True and row["items"] == 0
+
+
+def test_coverage_flags_a_summary_older_than_a_series_migration(ops_stac, monkeypatch):
+    docs = {
+        f"{BASE}/ugs-publications/catalog.json": {"links": [{"rel": "child", "href": "./OFR/catalog.json"},
+                                                            {"rel": "child", "href": "./M/catalog.json"}]},
+        f"{BASE}/pub-coverage.json": _summary(OFR={"publications": 1, "migrated": True, "pending": 0,
+                                                   "items": 1, "cog_ids": ["OFR-1"]}),
+    }
+    monkeypatch.setattr(ops_stac, "_get", lambda url: docs.get(url))
+    monkeypatch.setattr(ops_stac, "PUB_COLLECTIONS", ["ugs-publications"])
+
+    (row,) = ops_stac._cog_coverage()["collections"]
+    assert row["error"] is True
+
+
+def test_get_parses_the_body_without_a_decoded_copy(ops_stac, monkeypatch):
+    import gzip
+    import io
+    import json
+
+    body = gzip.compress(json.dumps({"ok": 1}).encode())
+    monkeypatch.setattr(ops_stac.urllib.request, "urlopen", lambda url, timeout=0: io.BytesIO(body))
+    assert ops_stac._get("https://x/a.json") == {"ok": 1}

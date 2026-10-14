@@ -16,6 +16,10 @@ log = logging.getLogger(__name__)
 
 PUB_COLLECTIONS = ["ugs-publications", "ugs-mining-district-files", "ugs-external"]
 
+# The small per-series summary `refresh_catalog` writes beside the catalog root. The panel reads it
+# instead of the root items.json, which lists every publication and every publication Item.
+COVERAGE_SUMMARY = "pub-coverage.json"
+
 
 def _get(url: str):
     try:
@@ -29,7 +33,7 @@ def _get(url: str):
                 raw = gzip.decompress(raw)
             except OSError:
                 pass
-        return json.loads(raw.decode())
+        return json.loads(raw)
     except Exception:
         # The dashboard degrades to "unknown" rather than erroring, but a catalog that has moved
         # or stopped decoding must not do that silently.
@@ -86,29 +90,21 @@ def cog_coverage() -> dict:
     return _cached("cog_coverage", _cog_coverage)
 
 
-def _publication_series_coverage(root: dict, coll: str, series: set[str]) -> tuple[int, list[str]]:
-    """Coverage of collection-layout series from the root items.json: each publication Item
-    (tagged `ugs:in_publication`) counts, a COG being its cog asset; a single-file publication
-    keeps its plate on the Collection entry, which counts the same way under the SID."""
-    total, cog_ids = 0, []
-    for e in root.get("items", []):
-        self = next((lk.get("href", "") for lk in e.get("links", []) if lk.get("rel") == "self"), "")
-        parts = self.removeprefix("./").split("/")
-        if len(parts) < 4 or parts[0] != coll or parts[1] not in series:
-            continue
-        tagged = bool((e.get("properties") or {}).get("ugs:in_publication"))
-        if not tagged and not (parts[-1] == "collection.json" and _has_cog(e)):
-            continue
-        total += 1
-        if _has_cog(e):
-            cog_ids.append(e["id"])
-    return total, cog_ids
+def _publication_series_coverage(summary: dict, coll: str, series: set[str]) -> tuple[int, list[str]] | None:
+    """Coverage of collection-layout series from the refresh's summary: (publication Items, ids
+    of those with a COG; a single-file publication keeps its plate on the Collection and counts the
+    same way). None when the summary has no entry for the group or one of its series."""
+    rows = (summary.get("groups") or {}).get(coll) or {}
+    if not series <= rows.keys():
+        return None
+    return (sum(rows[s]["items"] for s in series),
+            [cid for s in sorted(series) for cid in rows[s]["cog_ids"]])
 
 
 def _cog_coverage() -> dict:
     base = settings.STAC_BASE
     out = {"collections": [], "total_items": 0, "total_cogs": 0}
-    root: dict | None = None
+    summary: dict | None = None
     for coll in PUB_COLLECTIONS:
         cat = _get(f"{base}/{coll}/catalog.json")
         if not cat:
@@ -131,11 +127,12 @@ def _cog_coverage() -> dict:
                 total += n
                 cog_ids += ids
         if migrated:
-            root = root if root is not None else (_get(f"{base}/items.json") or {})
-            error = not root.get("items")
-            n, ids = _publication_series_coverage(root, coll, migrated)
-            total += n
-            cog_ids += ids
+            summary = summary if summary is not None else (_get(f"{base}/{COVERAGE_SUMMARY}") or {})
+            covered = _publication_series_coverage(summary, coll, migrated)
+            error = covered is None  # no summary yet, or one older than the series' migration
+            if covered:
+                total += covered[0]
+                cog_ids += covered[1]
         cog_ids.sort()
         row = {"id": coll, "items": total, "cogs": len(cog_ids), "cog_ids": cog_ids}
         out["collections"].append({**row, "error": True} if error else row)

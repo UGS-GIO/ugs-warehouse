@@ -436,6 +436,72 @@ def test_refresh_keeps_index_rows_not_full_publication_items(monkeypatch):
     assert "table:columns" not in json.dumps(rows) and "proj:wkt2" not in json.dumps(rows)
 
 
+def test_refresh_keeps_only_the_index_fields_of_each_publication_collection(monkeypatch):
+    """A single-file publication's collection.json carries `table:columns` and `proj:wkt2`; once
+    read for the index, only its id, title, pub type, mappable flag and index row are kept."""
+    import gc
+
+    store = _memstore(monkeypatch)
+    for sid in ("M-1", "M-2"):
+        _pub(store, "ugs-publications", "M", sid, [],
+             assets={"data": {"href": f"https://x/{sid}.parquet", "type": config.PARQUET_MIME,
+                              "roles": ["data"], "table:columns": [{"name": "COLMARKER"}]}},
+             fields={"proj:wkt2": "PROJCRS[\"WKTMARKER\"]"})
+    real = stac._write_pub_series
+    captured: list = []
+    alive: list = []
+
+    def check(*a, **k):
+        result = real(*a, **k)
+        gc.collect()
+        captured.append(result)
+        alive.extend(o for o in gc.get_objects()  # plain dicts: other libraries' mappings vary
+                     if type(o) is dict and o.get("type") == "Collection"
+                     and "WKTMARKER" in str(o.get("proj:wkt2")))
+        return result
+
+    monkeypatch.setattr(stac, "_write_pub_series", check)
+    stac.refresh_catalog()
+
+    assert alive == []  # no full collection doc outlives its read
+    metas = captured[0][2]
+    assert sorted(metas) == ["ugs-publications/M/M-1", "ugs-publications/M/M-2"]
+    assert all(isinstance(m, stac._PubMeta) for m in metas.values())
+    assert "MARKER" not in repr(metas)
+    meta = metas["ugs-publications/M/M-1"]
+    assert (meta.id, meta.title, meta.pub_type, meta.mappable) == ("M-1", "Pub M-1", "Open File Report", False)
+    assert meta.row["links"][0]["href"] == "./ugs-publications/M/M-1/collection.json"
+    series = json.loads(store[f"{config.STAC_PREFIX}/ugs-publications/M/items.json"])["items"]
+    assert [e["links"][0]["href"] for e in series] == ["./M-1/collection.json", "./M-2/collection.json"]
+
+
+def _cog_item(sid: str, item_id: str, path: str):
+    cog = {"cog": {"href": f"https://x/{item_id}.cog.tif", "type": config.COG_MIME,
+                   "roles": ["data", "cloud-optimized"]}}
+    return stac.build_item(item_id=item_id, collection=sid, collection_path=path,
+                           geometry=stac.bbox_polygon(stac.UTAH_BBOX), bbox=stac.UTAH_BBOX,
+                           datetime_iso="2020-01-01T00:00:00Z", properties={"title": item_id}, assets=cog)
+
+
+def test_refresh_writes_a_coverage_summary_for_the_admin_panel(monkeypatch):
+    store = _memstore(monkeypatch)
+    cog = {"cog": {"href": "https://x/p.cog.tif", "type": config.COG_MIME, "roles": ["data", "cloud-optimized"]}}
+    _pub(store, "ugs-publications", "OFR", "OFR-1", ["OFR-1_layer"])
+    stac.write_item(_cog_item("OFR-1", "OFR-1_plate", "ugs-publications/OFR/OFR-1"))
+    _pub(store, "ugs-publications", "OFR", "OFR-2", [], assets=cog)        # plate on the collection
+    _pub(store, "ugs-publications", "OFR", "OFR-3", [])                    # report only
+    stac.write_item(_cog_item("DS-1", "DS-1", "ugs-publications/DS"))      # old layout, no collection
+
+    stac.refresh_catalog()
+
+    summary = json.loads(store[f"{config.STAC_PREFIX}/{stac.PUB_COVERAGE_FILE}"])
+    assert summary["groups"] == {"ugs-publications": {
+        "OFR": {"publications": 3, "migrated": True, "pending": 0, "items": 3,
+                "cog_ids": ["OFR-1_plate", "OFR-2"]},
+        "DS": {"publications": 0, "migrated": False, "pending": 1, "items": 0, "cog_ids": []}}}
+    assert len(json.dumps(summary)) < len(store[f"{config.STAC_PREFIX}/items.json"])
+
+
 def test_refresh_counts_a_single_file_plate_as_mappable(monkeypatch):
     store = _memstore(monkeypatch)
     cog = {"cog": {"href": "https://x/p.cog.tif", "type": config.COG_MIME, "roles": ["data", "cloud-optimized"]}}

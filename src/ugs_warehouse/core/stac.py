@@ -26,6 +26,7 @@ from __future__ import annotations
 import json
 import re
 import sys
+from typing import NamedTuple
 
 from . import catalog_docs, config, feature_service, gcs, item_mirror, styles
 from .bbox import to_2d_bbox
@@ -724,11 +725,16 @@ def _is_mappable(item: dict) -> bool:
     Utah placeholder) has nowhere to draw, so it is not mappable."""
     if _no_footprint(item, item.get("properties") or item):
         return False
+    return has_cog(item) or any(lnk.get("rel") in ("pmtiles", "cog") for lnk in (item.get("links") or []))
+
+
+def has_cog(item: dict) -> bool:
+    """True if the item (or an index entry) has a cloud-optimized GeoTIFF asset."""
     for a in (item.get("assets") or {}).values():
         t, h, roles = a.get("type") or "", a.get("href") or "", a.get("roles") or []
         if "cloud-optimized" in t or "cloud-optimized" in roles or h.endswith(".cog.tif"):
             return True
-    return any(lnk.get("rel") in ("pmtiles", "cog") for lnk in (item.get("links") or []))
+    return False
 
 
 def _child_link(href: str, title: str | None, count: int | None, mappable: int | None = None) -> dict:
@@ -855,15 +861,15 @@ def _web_map_links(doc: dict) -> list[dict]:
 
 def _pub_item_index_entry(item: dict, coll: dict, *, prefix: str) -> dict:
     """A publication Item's root-index entry: its `_index_entry`, tagged by `_tag_pub_entry`."""
-    return _tag_pub_entry(_index_entry(item, prefix=prefix), coll)
+    return _tag_pub_entry(_index_entry(item, prefix=prefix), coll["id"], coll.get("title"))
 
 
-def _tag_pub_entry(entry: dict, coll: dict) -> dict:
+def _tag_pub_entry(entry: dict, pub_id: str, title: str | None) -> dict:
     """Tag a publication Item's index entry with the publication's id and title
     (`ugs:in_publication`, `ugs:publication_title`). A list view drops tagged entries to keep one
     card per publication; a map layer list keeps them and names the publication."""
-    entry["properties"]["ugs:in_publication"] = coll["id"]
-    entry["properties"]["ugs:publication_title"] = coll.get("title") or coll["id"]
+    entry["properties"]["ugs:in_publication"] = pub_id
+    entry["properties"]["ugs:publication_title"] = title or pub_id
     return entry
 
 
@@ -1081,53 +1087,106 @@ def _index_defect(doc: object) -> str | None:
     return None
 
 
+class _PubMeta(NamedTuple):
+    """What the refresh keeps of one publication's collection.json once it has been read: the
+    rest (item links, assets, `ugs:contents`, the columns and WKT2 of a single-file publication)
+    is dropped, so memory does not grow with every publication."""
+    id: str
+    title: str | None
+    pub_type: str | None
+    mappable: bool
+    row: dict  # its index entry, with the self link relative to the catalog root
+
+
+def _with_self_href(row: dict, href: str) -> dict:
+    """`row` with its self link at `href`: the one part of an index entry that depends on the
+    index's directory."""
+    return {**row, "links": [{**row["links"][0], "href": href}, *row["links"][1:]]}
+
+
 def _write_pub_series(pub_colls: dict[str, int], has_mappable_item: set[str]
-                      ) -> tuple[dict[str, list[dict]], dict[str, str], dict[str, dict]]:
+                      ) -> tuple[dict[str, list[dict]], dict[str, str], dict[str, _PubMeta]]:
     """Write `<group>/<SERIES>/catalog.json` and an `items.json` of its publication entries over
     each migrated series' publication collections, with README/AGENTS beside each. Returns
-    `({group: [series child entries]}, {path: problem}, {path: collection doc})`; a publication
+    `({group: [series child entries]}, {path: problem}, {path: _PubMeta})`; a publication
     whose collection.json is unreadable or malformed for the index is left out of its series."""
     from concurrent.futures import ThreadPoolExecutor
 
-    def _meta(path: str) -> tuple[str, dict | str]:
+    def _meta(path: str) -> tuple[str, _PubMeta | str]:
+        # Reduced in the reading thread, so a full collection.json is dropped as soon as it is read.
         try:
             doc = json.loads(gcs.get_bytes(collection_object_path(path)).decode())
         except Exception as e:  # noqa: BLE001 (reported as a problem; the refresh carries on)
             return path, f"unreadable collection.json: {path}: {type(e).__name__}: {e}"
         defect = _index_defect(doc)
-        return path, doc if defect is None else f"malformed collection.json: {path}: {defect}"
+        if defect is not None:
+            return path, f"malformed collection.json: {path}: {defect}"
+        return path, _PubMeta(
+            doc["id"], doc.get("title"), doc.get("ugs:pub_type"), _is_mappable(doc),
+            _collection_index_entry(doc, prefix=f"{path}/", item_count=pub_colls[path]))
 
     with ThreadPoolExecutor(max_workers=64) as ex:
         docs = dict(ex.map(_meta, sorted(pub_colls)))
     skipped = {p: d for p, d in docs.items() if isinstance(d, str)}
     series: dict[str, list[str]] = {}
     for path, doc in docs.items():
-        if isinstance(doc, dict):
+        if isinstance(doc, _PubMeta):
             series.setdefault(path.rsplit("/", 1)[0], []).append(path)
     by_group: dict[str, list[dict]] = {}
     for spath, pubs in sorted(series.items()):
         group, code = spath.split("/")
         # A publication is mappable when one of its items is, or when its lone plate sits on the
         # collection itself.
-        kids = [{"id": p.rsplit("/", 1)[1], "title": docs[p].get("title") or prettify(p.rsplit("/", 1)[1]),
-                 "count": pub_colls[p], "mappable": int(p in has_mappable_item or _is_mappable(docs[p]))}
+        kids = [{"id": p.rsplit("/", 1)[1], "title": docs[p].title or prettify(p.rsplit("/", 1)[1]),
+                 "count": pub_colls[p], "mappable": int(p in has_mappable_item or docs[p].mappable)}
                 for p in pubs]
-        stitle = next((docs[p].get("ugs:pub_type") for p in pubs if docs[p].get("ugs:pub_type")),
-                      None) or prettify(code)
+        stitle = next((docs[p].pub_type for p in pubs if docs[p].pub_type), None) or prettify(code)
         desc = SERIES_DESC.get(code) or f"UGS warehouse - {stitle}."
         _write_json(_subcatalog_doc(code, kids, title=stitle, description=desc, depth=2,
                                     items_index=True),
                     f"{config.STAC_PREFIX}/{spath}/catalog.json")
         _write_json(_entries_doc(code, sorted(
-            (_collection_index_entry(docs[p], prefix=f"{p.rsplit('/', 1)[1]}/", item_count=pub_colls[p])
-             for p in pubs), key=lambda e: e["id"])),
+            (_with_self_href(docs[p].row, f"./{p.rsplit('/', 1)[1]}/collection.json") for p in pubs),
+            key=lambda e: e["id"])),
                     f"{config.STAC_PREFIX}/{spath}/items.json")
         _write_markdown(spath, title=stitle, description=desc, kind="catalog", children=len(kids),
                         publications=True)
         by_group.setdefault(group, []).append({"id": code, "title": stitle, "file": "catalog.json",
                                                "count": sum(k["count"] for k in kids),
                                                "mappable": sum(k["mappable"] for k in kids)})
-    return by_group, skipped, {p: d for p, d in docs.items() if isinstance(d, dict)}
+    return by_group, skipped, {p: d for p, d in docs.items() if isinstance(d, _PubMeta)}
+
+
+PUB_COVERAGE_FILE = "pub-coverage.json"
+
+
+def _pub_coverage(migrated: set[str], pending: dict[str, list[str]], metas: dict[str, _PubMeta],
+                  pub_rows: dict[str, list[dict]]) -> dict:
+    """The small summary the admin panel reads in place of the root `items.json`:
+    `{"groups": {group: {series: {publications, migrated, pending, items, cog_ids}}}}`. `items`
+    counts the publications' Items, plus a single-file publication whose plate COG sits on its
+    Collection; `cog_ids` lists the ids of those that carry a COG. A series still in the old layout
+    has `migrated` false and `pending` publications, and nothing else counted."""
+    groups: dict[str, dict[str, dict]] = {}
+    for spath in sorted(migrated | set(pending)):
+        group, code = spath.split("/")
+        groups.setdefault(group, {})[code] = {
+            "publications": 0, "migrated": spath in migrated, "pending": len(pending.get(spath, [])),
+            "items": 0, "cog_ids": []}
+    for path, meta in sorted(metas.items()):
+        group, code, _ = path.split("/")
+        entry = groups[group][code]
+        rows = pub_rows.get(path, [])
+        entry["publications"] += 1
+        entry["items"] += len(rows)
+        entry["cog_ids"] += [r["id"] for r in rows if has_cog(r)]
+        if has_cog(meta.row):
+            entry["items"] += 1
+            entry["cog_ids"].append(meta.row["id"])
+    for series in groups.values():
+        for entry in series.values():
+            entry["cog_ids"].sort()
+    return {"type": "ugs-pub-coverage", "groups": groups}
 
 
 def _write_layer_collection(item: dict, path: str) -> None:
@@ -1275,9 +1334,9 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
     problems += skipped.values()
     # One root entry per publication, plus each of its Items tagged with the publication so map
     # layer lists and searches still reach them. The series items.json lists publications only.
-    for path, doc in pub_docs.items():
-        everything.append(_collection_index_entry(doc, prefix=f"{path}/", item_count=pub_colls[path]))
-        everything.extend(_tag_pub_entry(row, doc) for row in pub_rows.get(path, []))
+    for path, meta in pub_docs.items():
+        everything.append(meta.row)
+        everything.extend(_tag_pub_entry(row, meta.id, meta.title) for row in pub_rows.get(path, []))
     tops: dict[str, list[str]] = {}
     for path in groups:
         if not _is_pub_collection_path(path):
@@ -1308,6 +1367,8 @@ def refresh_catalog(*, strict: bool = False) -> list[str]:
             root_children.append({"href": f"./{top}/collection.json",
                                   "title": leaf[top]["title"], "count": leaf[top]["count"],
                                   "mappable": leaf[top]["mappable"]})
+    _write_json(_pub_coverage(migrated, pending, pub_docs, pub_rows),
+                f"{config.STAC_PREFIX}/{PUB_COVERAGE_FILE}")
     _write_json(_root_doc(root_children), f"{config.STAC_PREFIX}/catalog.json")
     # Every item in one index, so a client that wants the whole catalog makes one request.
     _write_json({"type": "ugs-items-index", "collection": None, "count": len(everything),

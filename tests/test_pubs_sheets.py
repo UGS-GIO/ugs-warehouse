@@ -295,3 +295,49 @@ def test_a_csv_whose_parsers_disagree_fails_naming_the_file():
     table = pa.table({"c0": ["x"], "c1": ["y"]})
     with pytest.raises(ValueError, match=r"t\.csv.*not extracted"):
         sheets._check_aligned("/a/t.csv", table, [["A", "B"], ["1", "2"]], 0, [2, 2], 2)
+
+
+def test_a_column_named_west_with_positive_values_is_negated_into_points():
+    frame = pd.DataFrame({"LAT_NORTH": [40.1, 38.5], "LON_WEST": [111.2, 112.5]})
+    warnings: list[str] = []
+
+    gdf = sheets.points(frame, warnings)
+
+    assert [(round(p.x, 1), round(p.y, 1)) for p in gdf.geometry] == [(-111.2, 40.1), (-112.5, 38.5)]
+    assert any("west-positive and negated" in w for w in warnings)
+
+
+def test_all_positive_longitudes_that_fit_utah_when_negated_are_negated():
+    frame = pd.DataFrame({"Lat": [40.1, 38.5, 39.0], "Long": [111.2, None, 112.5]})
+    warnings: list[str] = []
+
+    gdf = sheets.points(frame, warnings)
+
+    assert [round(p.x, 1) for p in gdf.geometry] == [-111.2, -112.5]
+    assert any("Lat/Long read as west-positive and negated" in w for w in warnings)
+
+
+def test_positive_longitudes_that_do_not_fit_utah_when_negated_stay_a_table():
+    frame = pd.DataFrame({"Lat": [40.1, 38.5], "Long": [90.0, 112.5]})
+    warnings: list[str] = []
+
+    assert sheets.points(frame, warnings) is None
+    assert warnings == ["coordinate columns Lat/Long found but no row falls inside Utah; table only"]
+
+
+def test_swapped_latitude_and_longitude_are_reported_not_swapped():
+    frame = pd.DataFrame({"Lat": [-111.2, -112.0], "Long": [40.1, 38.5]})
+    warnings: list[str] = []
+
+    assert sheets.points(frame, warnings) is None
+    assert "look swapped, not changed" in warnings[0]
+
+
+def test_mixed_sign_longitudes_are_left_alone():
+    frame = pd.DataFrame({"Lat": [40.1, 38.5], "Long": [-111.2, 112.5]})
+    warnings: list[str] = []
+
+    gdf = sheets.points(frame, warnings)
+
+    assert [round(p.x, 1) for p in gdf.geometry] == [-111.2]
+    assert not any("negated" in w for w in warnings)

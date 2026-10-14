@@ -160,7 +160,7 @@ values stay typed, a column mixing numbers and text is kept as text and named in
 an empty sheet or one with no header row is a warning, not extracted. A sheet with a column named by the word `lat` or `latitude` and one by `lon`, `long` or `longitude`
 (`Latitude WGS846`, `Surf Lon`; digits and text in parentheses are ignored) also yields `<table>_points`, a point layer
 in EPSG:4326 (GeoParquet and PMTiles); rows whose coordinates are blank or outside Utah plus a
-1 degree margin are counted in a warning and left out, never moved. UTM easting/northing columns
+1 degree margin are counted in a warning and left out, never moved. Longitudes stored as positive west values (a column named with a `W`/`WEST` word, or every value positive and inside Utah once negated) are negated, with a warning; a sheet that looks lat/long swapped stays a table and says so. UTM easting/northing columns
 are used only when the sheet names both a zone and a datum (otherwise the sheet is a table and a
 warning says so); any coordinate-looking column left unused is named in a warning. A workbook is opened once (openpyxl read-only for `.xlsx`, xlrd for `.xls`) and a CSV is parsed by
 Arrow; a file over `MAX_SHEET_BYTES` (500 MB) is an error naming it. Column

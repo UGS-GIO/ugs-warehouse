@@ -36,6 +36,8 @@ _LAT_TOKENS = {"lat", "latitude"}
 _LON_TOKENS = {"lon", "long", "longitude"}
 _EAST_TOKENS = {"easting", "utme", "utmx"}
 _NORTH_TOKENS = {"northing", "utmn", "utmy"}
+# A longitude column named as west: a `W`/`WEST` word (`LON_WEST`, `Long W`, `Longitude (W)`, `°W`).
+_WEST = re.compile(r"(?:^|[^a-z0-9])w(?:est)?(?:$|[^a-z0-9])", re.I)
 _ZONE = re.compile(r"(?:^|_)(?:utm_?)?(?:zone|z)_?(\d{1,2})(?:_|$|[ns])")
 _DATUMS = {"nad83": 26900, "nad_83": 26900, "nad27": 26700, "nad_27": 26700,
            "wgs84": 32600, "wgs_84": 32600}
@@ -460,6 +462,21 @@ def _utm_crs(frame, east: str, north: str) -> tuple[str | None, str]:
     return f"EPSG:{_DATUMS[datum] + int(zone.group(1))}", ""
 
 
+def _west_positive(x, name: str, where: str, warnings: list[str]):
+    """`x` with its sign flipped when the sheet stores west longitudes as positive numbers: the
+    column is named as west and holds no negative value, or every value is positive and lands in
+    Utah once negated. Anything else is returned unchanged. A flip is reported as a warning."""
+    vals = x.dropna()
+    if vals.empty or (vals < 0).any():
+        return x
+    named = bool(_WEST.search(name) or "°w" in name.lower())
+    fits = bool(((-vals).between(*UTAH_LON)).all()) and bool((vals > 0).all())
+    if not (named or fits):
+        return x
+    warnings.append(f"longitudes in {where} read as west-positive and negated")
+    return -x
+
+
 def points(frame, warnings: list[str]):
     """A GeoDataFrame of the rows of `frame` with a coordinate inside Utah (plus a margin), in
     EPSG:4326, or None. Latitude/longitude columns are matched by word (`Latitude WGS846`,
@@ -499,12 +516,16 @@ def points(frame, warnings: list[str]):
             x[usable].to_numpy(), y[usable].to_numpy())
         x, y = x.copy(), y.copy()
         x[usable], y[usable] = tx, ty
+    where = f"{lat}/{lon}"
+    if crs == "EPSG:4326":
+        x = _west_positive(x, lon, where=where, warnings=warnings)
     blank = x.isna() | y.isna()
     inside = (~blank & x.between(*UTAH_LON) & y.between(*UTAH_LAT))
-    where = f"{lat}/{lon}"
     if not inside.any():
+        swapped = bool((~blank & x.between(*UTAH_LAT) & y.between(*UTAH_LON)).any())
         warnings.append(f"coordinate columns {where} found but no row falls inside Utah; "
-                        "table only")
+                        "table only" + ("; latitude and longitude look swapped, not changed"
+                                        if swapped else ""))
         return None
     skipped = len(frame) - int(inside.sum())
     if skipped:

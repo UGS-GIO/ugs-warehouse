@@ -39,6 +39,22 @@ uvicorn service.main:app --host 0.0.0.0 --port 8080
 - **Do NOT add httpfs for GCS.** Org policy blocks the HMAC keys httpfs needs. File sinks write a local temp file and upload with **obstore** (ADC). `sink_ducklake` on a `gs://` data path registers **obstore via fsspec** instead. A GCS 403 is fixed by the fsspec registration, never by httpfs. No gcsfuse, no GCS extension, no HMAC.
 - **PMTiles** come from the `tippecanoe` binary in the Docker image (DuckDB writes GeoJSONSeq to a temp file).
 
+## Use existing tooling
+
+Do not write code that a dependency or a helper in this repo already provides. Before you add a helper, search `core/` and the libraries below. If none fits, say why in the PR.
+
+- STAC: `pystac` (dev only), `rustac` (items.parquet mirror), `rio-stac` (COG asset fields), `stactools`. The catalog builders in `core/stac.py` are the only place that builds catalog JSON.
+- GeoParquet: `geoparquet-io` (gpio) to write and check. DuckDB `COPY` for the vector archive.
+- PMTiles: the tippecanoe step in `vector/sink_pmtiles.py` (`TILE_OPTS`). Do not add a second set of tippecanoe flags.
+- COGs: `rio-cogeo`, `rasterio`. GDAL CLIs read COGs in place over `/vsigs/`; do not download them first.
+- Object storage: `obstore` through `core/gcs.py`. One `obs.delete(store, paths)` call deletes a batch.
+- Stdlib first: `mimetypes`, `xml.etree`. For sizes, `pydantic.ByteSize` (already a dependency).
+- Viewer: react-query for data loading, minisearch, hyparquet, duckdb-wasm, `pmtiles`, `@turf/bbox`. Reuse the helpers in `viewer/src/stac.ts`, `viewer/src/map/map-model.ts` and `viewer/src/data/columns.ts`.
+
+Check these projects before you build something new: [portolan-sdi](https://github.com/portolan-sdi), [developmentseed](https://github.com/developmentseed), [stac-utils](https://github.com/stac-utils), [geoparquet-io](https://github.com/geoparquet/geoparquet-io). Agent skills for Portolan: [portolan-skills](https://github.com/portolan-sdi/portolan-skills).
+
+Performance matters. Jobs run on Cloud Run, where `/tmp` is RAM. Do not hold two copies of a dataset, `del` a frame when you are done with it, and stream instead of collecting every item.
+
 ## Environment variables
 
 The main ones. Every variable, by component: [docs/DEPLOY.md](docs/DEPLOY.md#environment-variables).

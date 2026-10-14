@@ -25,6 +25,7 @@ nav:
   - Using the data:
       - User Guide: USER_GUIDE.md
       - Architecture: ARCHITECTURE.md
+      - Catalog model: CATALOG_MODEL.md
       - Serving tier: SERVING.md
   - Internals:
       - Styling: STYLING.md

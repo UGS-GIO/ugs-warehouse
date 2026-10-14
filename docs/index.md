@@ -18,6 +18,11 @@ GeoTIFF, and a STAC catalog**, served from a CDN with (mostly) no running servic
     How data flows from the source databases, through the warehouse, to the maps and services people
     use — with the current build status of each layer.
 
+- :material-family-tree: **[Catalog model](CATALOG_MODEL.md)**
+
+    How the STAC catalog models tables with and without geometry, the relationships between them,
+    and publications.
+
 - :material-server-network: **[Serving tier](SERVING.md)**
 
     The access paths: static CDN artifacts vs the one scale-to-zero OGC API Features service.

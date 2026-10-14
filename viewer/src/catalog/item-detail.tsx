@@ -22,13 +22,14 @@ import { StacJson } from "./stac-json";
 import { LayerStatusControl, statusClass, statusLabel, useItemStatuses } from "@/review/review-status";
 import { CiteMenu } from "./cite-menu";
 import { citationFields } from "./citation";
-import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, hasFootprint, inferredKey,
+import { type Asset, catalogItemHref, citeLink, type CollectionPart, collectionParts, contentsOf, geopackageAsset, hasFootprint, inferredKey,
   inferredTitle, isReferenceAsset, IS_REVIEW, partitionRelated, ownForeignKeys, relatedAssets,
   pmtilesLink, relatedJoins, relatedLinks, type ForeignKey, type StacDoc, tableColumns, usePlate, viaLink } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { ReferenceTables } from "@/map/reference-tables";
 import { C, humanize } from "@/ui/ui";
 import { Breadcrumb, type Crumb } from "./breadcrumb";
+import { formatBytes } from "@/offline/opfs";
 import { Unavailable } from "@/offline/offline-notice";
 import { SaveLayerOffline } from "@/offline/save-layer-offline";
 
@@ -198,6 +199,19 @@ function EntryLink({ c, i, className, children }: { c: string; i: string; classN
 // A publication's layers and tables, one row per Item, titled from its rel=item links. Each opens
 // at `?c=<series>/<SID>&i=<item>`. A report-only publication has none, so nothing renders.
 // Grouped by groupParts (item-view.ts); groups are native <details>, so they open without state.
+// One file with every layer and table of the publication, each layer in its own CRS. Only when the
+// publication has one (a very large one is not packaged).
+export function GeopackageLink({ item }: { item: StacDoc }) {
+  const gpkg = geopackageAsset(item);
+  if (!gpkg) return null;
+  const size = gpkg["file:size"];
+  return (
+    <a className={C.chip} href={gpkg.href} download>
+      Download all data (GeoPackage{size ? `, ${formatBytes(size)}` : ""})
+    </a>
+  );
+}
+
 export function PublicationParts({ item, collectionId }: { item: StacDoc; collectionId: string }) {
   const parts = collectionParts(item);
   if (!parts.length || !collectionId || !item.id) return null;
@@ -224,6 +238,7 @@ export function PublicationParts({ item, collectionId }: { item: StacDoc; collec
   return (
     <section className="mt-4 rounded-md border border-border bg-card p-3">
       <h3 className="text-sm font-semibold">Layers and tables</h3>
+      <GeopackageLink item={item} />
       {groupParts(parts).map((s, i) => s.label
         ? (
           <details key={s.label} open={!s.collapsed} className="mt-2 border-t border-border pt-2">

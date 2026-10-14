@@ -138,6 +138,7 @@ export type Asset = {
   description?: string;   // one-line usage hint (display / query / download) stamped by core/stac (#280)
   "proj:code"?: string;   // per-asset CRS; overrides the item's (a reprojected COG carries its own)
   "ugs:foreign_keys"?: ForeignKey[]; "table:columns"?: TableColumn[];
+  "file:size"?: number;   // bytes, from the file extension
 };
 export type StacDoc = {
   id?: string;
@@ -217,6 +218,12 @@ export const collectionAsItem = (d: StacDoc): StacDoc => {
 // Each carries the link's `ugs:layer_kind`, `ugs:source_dataset` (title) and `ugs:source_key` (raw
 // name) where the publication has them (its layers and tables do; the plate, units and fence do not).
 export type CollectionPart = { id: string; title: string; kind?: string; source?: string; sourceKey?: string };
+// A publication's all-layers GeoPackage, when the ingest found one (the `geopackage` Collection asset).
+export const geopackageAsset = (d: StacDoc | undefined): Asset | undefined => {
+  const a = d?.assets?.geopackage;
+  return a?.type === "application/geopackage+sqlite3" ? a : undefined;
+};
+
 export const collectionParts = (d: StacDoc | undefined): CollectionPart[] =>
   d?.type !== "Collection" ? [] : (d.links ?? []).filter((l) => l.rel === "item").map((l) => {
     const id = idOf(l.href.split(/[?#]/)[0]);

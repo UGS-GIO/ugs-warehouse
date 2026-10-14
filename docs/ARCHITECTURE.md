@@ -137,28 +137,38 @@ The vectors job opens every data attachment of a publication: each zip that is n
 zip (the plate harvest's), whatever its label ("GIS", "Data", "Appendix A"), and each `.xlsx`,
 `.xls` and `.csv` file. The zip labelled GIS comes first, so the layers it held keep their labels.
 Each attachment is downloaded into its own folder in one work dir, and the 4 GiB unzip limit
-covers the whole publication. `__MACOSX/` and `._*` entries are skipped. Shapefiles and
+covers the whole publication. A URL the feed lists twice is one file, and attachments are taken in
+URL order (the GIS zip first), so a repeated layer name gets the same `_2` on every run.
+`__MACOSX/` and `._*` entries are skipped, inside nested zips too. Shapefiles and
 geodatabases become layers and tables. A sheet of a workbook with a header row becomes a table
 (`<workbook>__<sheet>`; a CSV is `<file>`), written as Parquet with `table:columns`. The header
 is the first of the first 10 rows that is mostly distinct, non-numeric text and about as wide as
-the sheet, and units or labels in the one or two text rows under it are folded into it. Cell
+the sheet, and units (`%`, `ppm`, `mg/L`) or labels in the one or two text rows under it are folded into it. Cell
 values stay typed, a column mixing numbers and text is kept as text and named in a warning, and
-an empty sheet or one with no header row is a warning, not extracted. A sheet with `lat`/`latitude`/
-`y_dd` and `lon`/`long`/`longitude`/`x_dd` columns also yields `<table>_points`, a point layer
+an empty sheet or one with no header row is a warning, not extracted. A sheet with a column named by the word `lat` or `latitude` and one by `lon`, `long` or `longitude`
+(`Latitude WGS846`, `Surf Lon`; digits and text in parentheses are ignored) also yields `<table>_points`, a point layer
 in EPSG:4326 (GeoParquet and PMTiles); rows whose coordinates are blank or outside Utah plus a
 1 degree margin are counted in a warning and left out, never moved. UTM easting/northing columns
 are used only when the sheet names both a zone and a datum (otherwise the sheet is a table and a
-warning says so). Excel files are read with pandas (openpyxl for `.xlsx`, xlrd for `.xls`). Column
+warning says so); any coordinate-looking column left unused is named in a warning. A workbook is opened once (openpyxl read-only for `.xlsx`, xlrd for `.xls`) and a CSV is parsed by
+Arrow; a file over `MAX_SHEET_BYTES` (500 MB) is an error naming it. Column
 names that repeat ignoring case are suffixed `_2`, `_3` with a warning naming the renames. A
 shapefile whose attribute text is not UTF-8 is read again as cp1252 with an `encoding_fallback`
 warning; any other read error still fails the layer. An attachment that cannot be fetched or
 unzipped is an error named for its label and the others still extract. Each manifest layer records
-`source_file` `{key, title, path}`: the attachment's Collection asset key and label, and the path
+`source_file` `{key, title, path}`: the attachment's Collection asset key (left out when the feed
+lists no such asset) and label, and the path
 inside the zip (the file name for a bare attachment). Its Item carries `ugs:source_file` (the
 title) beside `ugs:source_key`, and the Collection's `rel=item` link repeats it. The manifest's
 `extract_version` (2 now; 1 only opened the GIS zip and read no spreadsheets) is bumped like
 `relations_version`, but a clean manifest below it is extracted again by the next regular `--all`
-run rather than healed; those pubs go after the pubs never tried.
+run rather than healed; those pubs go after the pubs never tried. A pub that ends as `skip` keeps
+its warnings on `_attempt.json`.
+
+Collection asset keys for attachments (`identity.attachment_keys`) are unique: repeated URLs are
+one asset, and keys that collide ignoring case, or equal `publication`, `thumbnail` or `overview`,
+are numbered `_2`, `_3` in (key, URL) order, so the vectors job and the ingest agree whatever order
+the feed returns rows in.
 
 Each map layer extracted from a data attachment is written as GeoParquet in its own CRS plus PMTiles in
 EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with the serving topics'

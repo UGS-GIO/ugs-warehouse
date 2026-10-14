@@ -134,14 +134,15 @@ def _unit_ids() -> set[str]:
 
 
 def _source_file(layer: dict) -> dict | None:
-    """A manifest layer's `source_file` {key, title, path}, None when it records none (extracted
+    """A manifest layer's `source_file` {key?, title, path}, None when it records none (extracted
     before attachments were tracked). A malformed one raises, so its publication fails instead of
     publishing an Item that names no file."""
     file = layer.get("source_file")
     if file is None:
         return None
     if not (isinstance(file, dict) and all(isinstance(file.get(k), str) and file[k]
-                                           for k in ("key", "title", "path"))):
+                                           for k in ("title", "path"))
+            and (file.get("key") is None or isinstance(file["key"], str))):
         raise ValueError(f"layer {layer.get('label')!r}: malformed source_file {file!r}")
     return file
 

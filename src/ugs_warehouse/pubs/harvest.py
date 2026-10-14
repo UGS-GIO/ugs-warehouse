@@ -323,20 +323,40 @@ def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
 
 
 class DataFile(NamedTuple):
-    """A data attachment the vectors job extracts: its Collection asset key, its label and URL."""
-    key: str
+    """A data attachment the vectors job extracts: its Collection asset key (None when the
+    publication has no such asset), its label and its URL."""
+    key: str | None
     title: str
     url: str
 
 
+def _asset_keys(series_id: str) -> dict[str, str]:
+    """{url: Collection asset key} for every attachment of the publication, the keys the STAC ingest
+    gives its assets (`identity.attachment_keys`)."""
+    from . import sink_stac
+    return identity.attachment_keys([(h, a.get("extra_data"))
+                                     for a in _attachments_of(series_id) or []
+                                     if (h := sink_stac.href(a.get("pub_url")))])
+
+
+def asset_key_of(series_id: str, url: str) -> str | None:
+    """The Collection asset key of the attachment at `url`, None when the feed lists none."""
+    return _asset_keys(series_id).get(url)
+
+
 def data_files(series_id: str) -> list[DataFile]:
     """The publication's attachments that can hold tables or layers: every zip that is not a
-    GeoTIFF zip (the plate harvest's), whatever its label, and every .xlsx, .xls or .csv file.
-    The zip labelled GIS comes first, so the layers it held keep their labels."""
-    from . import sheets
-    out: list[tuple[bool, DataFile]] = []
+    GeoTIFF zip (the plate harvest's), whatever its label, and every .xlsx, .xls or .csv file. A
+    URL the feed lists twice is one file. The zip labelled GIS comes first, so the layers it held
+    keep their labels; each group is in URL order, so a repeated layer name gets the same `_2`
+    on every run."""
+    from . import sheets, sink_stac
+    keys = _asset_keys(series_id)
+    out: dict[str, tuple[bool, DataFile]] = {}
     for a in _attachments_of(series_id) or []:
-        url = _attachment_url(a)
+        url = sink_stac.href(a.get("pub_url"))
+        if not url or url in out:
+            continue
         low = url.lower()
         desc = (a.get("extra_data") or "").strip()
         if not low.endswith((".zip", *sheets.SHEET_EXTS)):
@@ -345,9 +365,8 @@ def data_files(series_id: str) -> list[DataFile]:
             continue
         gis = low.endswith(".zip") and ("gis" in desc.lower() or "gis" in low
                                         or "plates" in desc.lower())
-        out.append((not gis, DataFile(identity.attachment_key(desc), desc or low.rsplit("/", 1)[-1],
-                                      url)))
-    return [f for _, f in sorted(out, key=lambda t: t[0])]
+        out[url] = (not gis, DataFile(keys[url], desc or low.rsplit("/", 1)[-1], url))
+    return [f for _, f in sorted(out.values(), key=lambda t: (t[0], t[1].url))]
 
 
 def zip_urls(series_id: str) -> tuple[str | None, str | None]:

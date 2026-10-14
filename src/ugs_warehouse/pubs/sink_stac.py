@@ -510,14 +510,18 @@ def build_publication(p: dict, attachments: list[dict], *,
         mtype = media_type(main_pdf)
         assets["publication"] = _source_asset(main_pdf, mirrored, type=mtype, title="Publication",
                                               roles=_file_roles(mtype))
+    keys = identity.attachment_keys([(h, a.get("extra_data")) for a in attachments
+                                     if (h := href(a.get("pub_url")))])
+    done: set[str] = set()
     for a in attachments:
         h = href(a.get("pub_url"))
-        if not h:
+        if not h or h in done:
             continue
+        done.add(h)
         mtype = media_type(h)
-        key = identity.attachment_key(a.get("extra_data"))
-        assets.setdefault(key, _source_asset(h, mirrored, type=mtype,
-                                             title=(a.get("extra_data") or "").strip(), roles=_file_roles(mtype)))
+        assets[keys[h]] = _source_asset(h, mirrored, type=mtype,
+                                        title=(a.get("extra_data") or "").strip(),
+                                        roles=_file_roles(mtype))
     for key, asset in data_assets.items():
         new = key
         n = 1

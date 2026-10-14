@@ -263,8 +263,8 @@ def test_data_files_are_every_non_geotiff_zip_and_spreadsheet_with_the_gis_zip_f
     base = "https://ugspub.nr.utah.gov/publications/ds-5/"
     assert [(f.key, f.title, f.url) for f in files] == [
         ("gis_zip", "GIS - Zip", base + "ds-5_gis.zip"),
+        ("appendix_a_excel", "Appendix A - Excel", base + "appx.xlsx"),   # URL order after the GIS zip
         ("data_zip", "Data - Zip", base + "ds-5_data.zip"),
-        ("appendix_a_excel", "Appendix A - Excel", base + "appx.xlsx"),
         ("file", "old.xls", base + "old.xls")]
     harvest._attachments_cache.clear()
 
@@ -324,3 +324,96 @@ def test_a_nothing_to_extract_attempt_from_the_old_coverage_is_tried_again(monke
         "M-2DM": {**skip, "extract_version": vectors.EXTRACT_VERSION}})
 
     assert sorted(downloads) == ["https://x/M-1DM.zip", "https://x/M-3DM.zip"]
+
+
+# ---- repeated and colliding attachments ----
+
+def _feed(monkeypatch, rows):
+    harvest._attachments_cache.clear()
+    monkeypatch.setattr("ugs_warehouse.pubs.source.read_attachments", lambda: rows)
+
+
+def test_an_attachment_the_feed_lists_twice_is_one_file(monkeypatch):
+    row = {"series_id": "OFR-745", "pub_url": "ofr-745/ofr-745.zip", "extra_data": "Data - Zip"}
+    _feed(monkeypatch, [row, dict(row)])
+
+    assert len(harvest.data_files("OFR-745")) == 1
+    harvest._attachments_cache.clear()
+
+
+def test_attachment_keys_are_unique_stable_and_leave_the_fixed_keys_alone():
+    rows = [("https://x/b.zip", "GeoTIFF - Zip"), ("https://x/a.zip", "GeoTIFF - Zip"),
+            ("https://x/c.pdf", "Publication"), ("https://x/a.zip", "GeoTIFF - Zip"),
+            ("https://x/d.zip", "geotiff zip")]
+
+    keys = identity.attachment_keys(rows)
+
+    # numbered in (key, url) order, so the feed's row order cannot change them
+    assert keys == {"https://x/a.zip": "geotiff_zip", "https://x/b.zip": "geotiff_zip_2",
+                    "https://x/d.zip": "geotiff_zip_3", "https://x/c.pdf": "publication_2"}
+    assert identity.attachment_keys(list(reversed(rows))) == keys
+
+
+def test_every_same_labelled_attachment_gets_its_own_asset_and_the_vectors_key_matches(monkeypatch):
+    from ugs_warehouse.pubs import sink_stac
+
+    rows = [{"series_id": "CI-82", "pub_url": f"ci-82/{n}.zip", "extra_data": "GeoTIFF - Zip"}
+            for n in ("b", "a")] + [
+        {"series_id": "CI-82", "pub_url": "ci-82/x.zip", "extra_data": "Data"}]
+    _feed(monkeypatch, rows)
+    pub = {"series_id": "CI-82", "pub_name": "A map", "pub_year": "2020",
+           "pub_url": "https://ugspub.nr.utah.gov/publications/ci-82/ci-82.pdf",
+           "series": "Circular", "pub_publisher": "Utah Geological Survey"}
+    foot = {"type": "Polygon", "coordinates": [[[-112.5, 40.5], [-112.0, 40.5], [-112.0, 41.0],
+                                                 [-112.5, 41.0], [-112.5, 40.5]]]}
+    coll, _ = sink_stac.build_publication(
+        pub, rows, geom=foot, bbox=[-112.5, 40.5, -112.0, 41.0], fp_source="cog", has_cog=False,
+        has_cover=False, vector_layers=[], companion_tables=[], layers={})
+
+    zips = {k: a["href"].rsplit("/", 1)[-1] for k, a in coll["assets"].items()
+            if a["href"].endswith(".zip")}
+    assert zips == {"geotiff_zip": "a.zip", "geotiff_zip_2": "b.zip", "data": "x.zip"}
+    assert harvest.data_files("CI-82")[0].key == "data"
+    harvest._attachments_cache.clear()
+
+
+def test_a_mac_zip_of_a_geodatabase_still_unpacks_as_the_geodatabase(tmp_path):
+    inner = tmp_path / "Map.gdb.zip"
+    with zipfile.ZipFile(inner, "w") as z:
+        z.writestr("a00000001.gdbtable", b"x")
+        z.writestr("__MACOSX/._a00000001.gdbtable", b"junk")
+    work = tmp_path / "w"
+    work.mkdir()
+    shutil.copy(inner, work / "Map.gdb.zip")
+
+    errors, dirs = vectors._unzip_nested(str(work), remaining=2**20)
+
+    assert errors == [] and dirs == [str(work / "Map.gdb")]
+    assert (work / "Map.gdb" / "a00000001.gdbtable").exists()
+
+
+def test_a_pub_that_ends_as_skip_keeps_its_warnings_on_the_attempt_record(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    f = _workbook(tmp_path / "gravity.xlsx", [[1, 2], [3, 4]])
+    _serve(monkeypatch, ("Data", f))
+
+    assert vectors.extract_one("MP-13-2", force=True) == "skip"
+
+    attempt = json.loads(store[f"{PFX}/MP-13-2/_attempt.json"])
+    assert attempt["result"] == "skip"
+    assert "no header row" in attempt["warnings"][0]["warning"]
+
+
+def test_the_fallback_zip_has_no_source_key_when_the_feed_lists_no_such_asset(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    _shapefile(tmp_path / "src")
+    z = _zip(tmp_path / "gis.zip", tmp_path / "src")
+    monkeypatch.setattr(harvest, "data_files", lambda sid: [])
+    monkeypatch.setattr(harvest, "zip_urls", lambda sid: (None, "https://x/gis.zip"))
+    monkeypatch.setattr(harvest, "asset_key_of", lambda sid, url: None)
+    monkeypatch.setattr(harvest, "download", lambda url, dst: shutil.copy(z, dst))
+
+    assert vectors.extract_one("M-320", force=True) == "ok"
+
+    (layer,) = _manifest(store, "M-320")["layers"]
+    assert layer["source_file"] == {"title": "GIS", "path": "faults.shp"}

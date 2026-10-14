@@ -133,7 +133,7 @@ def _nested_dest(path: str) -> str:
     stem = os.path.splitext(path)[0]
     if stem.lower().endswith(".gdb") and not os.path.exists(stem):
         with zipfile.ZipFile(path) as z:
-            if not any("/" in n.rstrip("/") for n in z.namelist()):
+            if not any("/" in n.rstrip("/") for n in z.namelist() if not _junk_entry(n)):
                 return stem
     dest, n = f"{path}_unzipped", 2
     while os.path.exists(dest):
@@ -444,7 +444,7 @@ class Origin:
     """The attachment a layer came from: the folder it was extracted into (paths inside it are
     the layer's `source_file.path`), the Collection asset key of the attachment and its title."""
     root: str
-    key: str
+    key: str | None
     title: str
 
 
@@ -514,75 +514,83 @@ def _extract_and_upload(
     profiles: list[relations.Layer] = []
     pending = list(srcs)
     point_frames: dict[str, object] = {}
-    while pending:
-        path, layer, label, is_spatial = pending.pop(0)
-        dst = os.path.join(work, f"{label}.parquet")
-        gdf = df = None  # the previous layer is released before this one is read
-        origin = origins.get(label)
-        root = origin.root if origin else work
-        try:
-            if label in point_frames:
-                gdf = point_frames.pop(label)
-                rows = len(gdf)
-                geoparquet.write(gdf, dst)
-            elif is_spatial:
-                gdf = _read_spatial(path, layer, label, manifest)
-                _dedupe_columns(gdf, label, manifest)
-                rows = len(gdf)
-                if rows and gdf.crs is None:
-                    raise ValueError("no CRS (missing or unreadable .prj); not written, since "
-                                     "GeoParquet would read its coordinates as longitude/latitude")
-                if rows:
+    books: dict[str, sheets.Workbook] = {}  # each workbook is opened once, for all its sheets
+    try:
+        while pending:
+            path, layer, label, is_spatial = pending.pop(0)
+            dst = os.path.join(work, f"{label}.parquet")
+            gdf = df = None  # the previous layer is released before this one is read
+            origin = origins.get(label)
+            root = origin.root if origin else work
+            try:
+                if label in point_frames:
+                    gdf = point_frames.pop(label)
+                    rows = len(gdf)
                     geoparquet.write(gdf, dst)
-            elif _is_sheet(path):
-                sheet = sheets.read(path, layer)
-                manifest["warnings"] += [{"label": label, "warning": w} for w in sheet.warnings]
-                for w in sheet.warnings:
-                    print(f"  {label}: {w}", file=sys.stderr)
-                if sheet.frame is None:
-                    continue
-                df = sheet.frame
-                rows = len(df)
-                df.to_parquet(dst)
-            else:
-                df = pyogrio.read_dataframe(path, layer=layer, read_geometry=False)
-                _dedupe_columns(df, label, manifest)
-                rows = len(df)
-                if rows:
+                elif is_spatial:
+                    gdf = _read_spatial(path, layer, label, manifest)
+                    _dedupe_columns(gdf, label, manifest)
+                    rows = len(gdf)
+                    if rows and gdf.crs is None:
+                        raise ValueError("no CRS (missing or unreadable .prj); not written, since "
+                                         "GeoParquet would read its coordinates as longitude/latitude")
+                    if rows:
+                        geoparquet.write(gdf, dst)
+                elif _is_sheet(path):
+                    if layer is not None and path not in books:
+                        books[path] = sheets.Workbook(path)
+                    sheet = sheets.read(path, layer, books.get(path))
+                    manifest["warnings"] += [{"label": label, "warning": w} for w in sheet.warnings]
+                    for w in sheet.warnings:
+                        print(f"  {label}: {w}", file=sys.stderr)
+                    if sheet.frame is None:
+                        continue
+                    df = sheet.frame
+                    rows = len(df)
                     df.to_parquet(dst)
-            if not rows:
-                manifest["empty"].append(label)
-                continue
+                else:
+                    df = pyogrio.read_dataframe(path, layer=layer, read_geometry=False)
+                    _dedupe_columns(df, label, manifest)
+                    rows = len(df)
+                    if rows:
+                        df.to_parquet(dst)
+                if not rows:
+                    manifest["empty"].append(label)
+                    continue
 
-            columns, geo = _schema(dst)
-            entry = {"label": label, "spatial": is_spatial, "rows": rows, "columns": columns,
-                     "source": _dataset_name(root, series_id, path, layer, label)}
-            if origin:
-                entry["source_file"] = {"key": origin.key, "title": origin.title,
-                                        "path": _path_in(root, path)}
+                columns, geo = _schema(dst)
+                entry = {"label": label, "spatial": is_spatial, "rows": rows, "columns": columns,
+                         "source": _dataset_name(root, series_id, path, layer, label)}
+                if origin:
+                    entry["source_file"] = {
+                        **({"key": origin.key} if origin.key else {}), "title": origin.title,
+                        "path": _path_in(root, path)}
+                if is_spatial:
+                    entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
+                gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
+                gcs.upload(dst, gcs_path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+                manifest["spatial" if is_spatial else "tables"].append(label)
+                manifest["layers"].append(entry)
+                if df is not None and _is_sheet(path):
+                    _queue_points(df, label, path, layer, origin, pending, point_frames, origins,
+                                  manifest)
+            except Exception as e:
+                manifest["errors"].append({"label": label, "error": _error(e)})
+                print(f"  layer {label} failed: {e}", file=sys.stderr)
+                if os.path.exists(dst):
+                    os.remove(dst)
+                continue
+            _profile_into(profiles, entry, gdf if is_spatial else df,
+                          layer or os.path.basename(path)[:-4], manifest)
+            # The frame is released before tiling, which reads the file just written; the job's disk
+            # is memory, so the file goes as soon as the layer is done.
+            gdf = df = None
             if is_spatial:
-                entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
-            gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
-            gcs.upload(dst, gcs_path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
-            manifest["spatial" if is_spatial else "tables"].append(label)
-            manifest["layers"].append(entry)
-            if df is not None and _is_sheet(path):
-                _queue_points(df, label, path, layer, origin, pending, point_frames, origins,
-                              manifest)
-        except Exception as e:
-            manifest["errors"].append({"label": label, "error": _error(e)})
-            print(f"  layer {label} failed: {e}", file=sys.stderr)
-            if os.path.exists(dst):
-                os.remove(dst)
-            continue
-        _profile_into(profiles, entry, gdf if is_spatial else df,
-                      layer or os.path.basename(path)[:-4], manifest)
-        # The frame is released before tiling, which reads the file just written; the job's disk
-        # is memory, so the file goes as soon as the layer is done.
-        gdf = df = None
-        if is_spatial:
-            _tile_into(entry, dst, series_id, work, manifest)
-        os.remove(dst)
+                _tile_into(entry, dst, series_id, work, manifest)
+            os.remove(dst)
+    finally:
+        for book in books.values():
+            book.close()
 
     if manifest["spatial"] or manifest["tables"]:
         declared = _declared_relationships(srcs, {e["label"] for e in manifest["layers"]}, manifest)
@@ -880,7 +888,7 @@ def _fetch_all(work: str, files: list) -> tuple[list[tuple[str, str | None, str,
     origins: dict[str, Origin] = {}
     used: set[str] = set()
     for i, f in enumerate(files, 1):
-        sub = os.path.join(work, f"{i:02d}_{_safe(f.key)[:40]}")
+        sub = os.path.join(work, f"{i:02d}_{_safe(f.key or 'file')[:40]}")
         os.makedirs(sub)
         remaining = MAX_UNZIPPED_BYTES - _tree_bytes(work)
         try:
@@ -933,7 +941,8 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
     if not files:
         # No attachments row: the optional manifest CSV or the site's data.php may still name a zip.
         _, gis_url = harvest.zip_urls(series_id)
-        files = [harvest.DataFile("gis", "GIS", gis_url)] if gis_url else []
+        files = [harvest.DataFile(harvest.asset_key_of(series_id, gis_url), "GIS", gis_url)
+                 ] if gis_url else []
 
     if not files:
         print(f"{series_id}: SKIP (no data zip or spreadsheet attachments)")
@@ -977,7 +986,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
             return res
         if n_spatial + n_tables == 0:
             print(f"{series_id}: SKIP (every layer is empty)")
-            _record_attempt(series_id, {"result": "skip"})
+            _record_attempt(series_id, {"result": "skip", "warnings": manifest["warnings"]})
             return "skip"
 
         print(f"{series_id}: OK ({n_spatial} vector layers + {n_tables} companion tables "

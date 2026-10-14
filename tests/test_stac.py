@@ -583,6 +583,15 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          assert "WARNING" in err and "edition detection skipped" in err and "footprints missing" in err
 
 
+def test_the_reduced_vector_manifest_carries_a_built_geopackage_only():
+    from ugs_warehouse.pubs.ingest import _vector_manifest
+
+    made = {"bytes": 5, "checksum": "1220ab", "version": 1, "inputs": "x"}
+    assert _vector_manifest("M-1", {"layers": [], "geopackage": made})["geopackage"] == made
+    assert "geopackage" not in _vector_manifest("M-1", {"layers": [], "geopackage": {"version": 1}})
+    assert "geopackage" not in _vector_manifest("M-1", {"layers": []})
+
+
 def test_read_vector_manifests_reads_the_authoritative_split():
     """_read_vector_manifests()[:2] must read pubs/vectors.py's per-series `_manifest.json`, the
     AUTHORITATIVE spatial-vs-table split — rather than guess spatial/table from label names."""

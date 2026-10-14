@@ -16,14 +16,14 @@ import sys
 import urllib.parse
 from collections import Counter
 
-from ..core import config, stac
+from ..core import config, gcs, stac
 from ..core.bbox import to_2d_bbox
 from ..core.stac import item_id_for, plate_item_id  # noqa: F401 (re-exported)
 from . import counties, identity, topic
 from .relations import layer_kind, source_of_label
 from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
-from .vectors import VECTORS_PREFIX, pmtiles_object
+from .vectors import GEOPACKAGE_MIME, VECTORS_PREFIX, geopackage_object, pmtiles_object
 
 UGSPUB = identity.UGSPUB
 LANDING = "https://geology.utah.gov/publication-details/?pub="
@@ -289,7 +289,8 @@ def build_publication(p: dict, attachments: list[dict], *,
                       contents: list[dict] | None = None,
                       mirrored: set[str] | None = None,
                       edition: dict | None = None,
-                      mosaic_tier: str | None = None) -> tuple[dict, list[dict]]:
+                      mosaic_tier: str | None = None,
+                      geopackage: dict | None = None) -> tuple[dict, list[dict]]:
     """A publication as one STAC Collection plus its Items.
 
     The Collection carries the documents (PDF, cover, original zips) and the publication's
@@ -298,7 +299,8 @@ def build_publication(p: dict, attachments: list[dict], *,
     with no Items; a lone data file becomes a collection-level asset. `relationships` (the vector
     manifest's) become related-table assets, `ugs:foreign_keys` and `related` links on the layer
     and table Items, in the serving topics' shape. `empty_layers` are the manifest's layers with no
-    rows, which were never uploaded."""
+    rows, which were never uploaded. `geopackage` (the manifest's {bytes, checksum}) adds the
+    all-layers GeoPackage as a Collection asset."""
     sid = (p.get("series_id") or "").strip()
     pub_id = item_id_for(sid)
     coll_path = pub_collection_path(p)
@@ -542,6 +544,11 @@ def build_publication(p: dict, attachments: list[dict], *,
             print(f"[pubs] {pub_id}: data asset {key!r} renamed to {new!r} (collides with a document asset)",
                   file=sys.stderr)
         assets[new] = asset
+    if geopackage and geopackage.get("bytes"):
+        assets["geopackage"] = {
+            "href": config.public_url(geopackage_object(sid.upper())), "type": GEOPACKAGE_MIME,
+            "roles": ["data"], "title": "All data (GeoPackage)",
+            **stac.file_fields(gcs.FileMeta(geopackage["bytes"], geopackage.get("checksum")))}
     plate_preview = ({"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
                       "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}
                      if has_cog and has_thumb else None)

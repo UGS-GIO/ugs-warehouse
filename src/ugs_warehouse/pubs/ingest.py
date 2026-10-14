@@ -171,7 +171,8 @@ def _vector_manifest(sid: str, doc: dict) -> dict:
                                       "source": lay.get("source")
                                       or relations.source_of_label(lay["label"], sid),
                                       "source_file": _source_file(lay)}
-                       for lay in layer_docs}}
+                       for lay in layer_docs},
+            **({"geopackage": doc["geopackage"]} if (doc.get("geopackage") or {}).get("bytes") else {})}
 
 
 def _reduce_vector_manifest(sid: str, doc: dict) -> tuple[dict | None, str | None, vectors.Needs | None]:
@@ -430,6 +431,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             override=overrides_map.get(up), contents=toc.get(up), mirrored=mirrored,
             edition=edition_graph.get(sid),
             mosaic_tier=tier_by_sid.get(up),
+            geopackage=manifest.get("geopackage"),
         )
         for it in items:
             stac.attach_renders(it)  # ugs-styles GL style, else the layer's generated one

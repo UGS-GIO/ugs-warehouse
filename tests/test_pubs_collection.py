@@ -228,6 +228,30 @@ def test_layer_ids_cannot_collide_with_another_publications_id():
         "BYU_GS-V24_CO-OPCREEK")
 
 
+def test_the_geopackage_is_a_data_asset_on_the_collection():
+    made = {"bytes": 530_000_000, "checksum": "1220" + "ab" * 32, "version": 1, "inputs": "x"}
+    coll, _ = _build(geopackage=made)
+
+    asset = coll["assets"]["geopackage"]
+    assert asset["href"].endswith("/geolmap/vectors/OFR-784DM/OFR-784DM.gpkg")
+    assert asset["type"] == "application/geopackage+sqlite3" and asset["roles"] == ["data"]
+    assert asset["title"] == "All data (GeoPackage)"
+    assert asset["file:size"] == 530_000_000 and asset["file:checksum"] == "1220" + "ab" * 32
+
+
+def test_no_geopackage_record_or_a_skipped_one_adds_no_asset():
+    assert "geopackage" not in _build()[0]["assets"]
+    assert "geopackage" not in _build(geopackage={"version": 1, "inputs": "x"})[0]["assets"]
+
+
+def test_a_single_file_publication_still_gets_the_geopackage_asset():
+    coll, items = _build(has_cog=False, companion_tables=[],
+                         layers={"geo__Faults": {"rows": 12, "bbox": None, "geometry_types": ["LineString"]}},
+                         geopackage={"bytes": 10, "checksum": None, "version": 1, "inputs": "x"})
+    assert items == [] and "geopackage" in coll["assets"]
+    assert "file:checksum" not in coll["assets"]["geopackage"]
+
+
 def _plate_only(**kw):
     return _build(vector_layers=[], companion_tables=[], layers={}, **kw)
 

@@ -184,6 +184,17 @@ def stamp_file_meta(item: dict, index: dict[str, gcs.FileMeta] | None = None) ->
     return n
 
 
+def _declare_proj_table(exts: list[str], fields: dict) -> list[str]:
+    """`exts` plus the projection and table extensions when `fields` (an Item's properties or a
+    Collection's top-level members) carry a `proj:*` or `table:*` member, so a producer never
+    declares them by hand."""
+    if any(k.startswith("proj:") for k in fields) and PROJ_EXT not in exts:
+        exts.append(PROJ_EXT)
+    if any(k.startswith("table:") for k in fields) and TABLE_EXT not in exts:
+        exts.append(TABLE_EXT)
+    return exts
+
+
 def build_item(*, item_id: str, collection: str, geometry: dict | None,
                bbox: list[float] | None, datetime_iso: str | None,
                properties: dict, assets: dict,
@@ -209,7 +220,7 @@ def build_item(*, item_id: str, collection: str, geometry: dict | None,
         *(extra_links or []),
     ]
     props = {"datetime": datetime_iso, **properties}
-    exts = list(stac_extensions or [])
+    exts = _declare_proj_table(list(stac_extensions or []), props)
     # Declared from what the assets carry, not by the caller: every producer stamps file fields
     # through `file_fields`, and an asset with none (an off-warehouse href) must not force the ext.
     if any("file:size" in a or "file:checksum" in a for a in assets.values()) and FILE_EXT not in exts:
@@ -326,7 +337,7 @@ def build_collection(*, collection_id: str, collection_path: str, title: str, de
     fields to an item's rel=item link, so a client can group items without fetching them. An empty
     `item_titles` is a single-file collection: its data are the collection-level assets."""
     fields = dict(fields or {})
-    exts = [PORTOLAN_SCHEMA, *(stac_extensions or [])]
+    exts = _declare_proj_table([PORTOLAN_SCHEMA, *(stac_extensions or [])], fields)
     if ("version" in fields or "deprecated" in fields) and VERSION_EXT not in exts:
         exts.append(VERSION_EXT)
     doc = _collection_skeleton(

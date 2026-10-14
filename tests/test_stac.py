@@ -1380,3 +1380,39 @@ def test_feature_service_skips_an_item_without_our_geoparquet():
     elsewhere = {"data": {"href": "https://example.com/x.parquet", "type": config.PARQUET_MIME}}
     assert feature_service.collection({"id": "a", "assets": elsewhere}) is None
     assert feature_service.collection({"id": "b", "assets": {}}) is None
+
+
+# --- proj and table extensions follow what the properties carry ----------------------------------
+
+def _item(properties):
+    return stac.build_item(item_id="x", collection="c", geometry=None, bbox=None,
+                           datetime_iso="2026-01-01T00:00:00Z", properties=properties, assets={})
+
+
+def _collection(fields):
+    return stac.build_collection(collection_id="c", collection_path="g/S/c", title="C", description="d",
+                                 extent={}, assets={}, item_titles={}, fields=fields)
+
+
+def test_an_item_declares_the_projection_extension_from_its_proj_properties():
+    assert stac.PROJ_EXT in _item({"proj:code": "EPSG:26912"})["stac_extensions"]
+    assert stac.PROJ_EXT in _item({"proj:wkt2": "PROJCRS[]"})["stac_extensions"]
+    assert "stac_extensions" not in _item({"title": "t"})
+
+
+def test_an_item_declares_the_table_extension_from_its_table_properties():
+    assert stac.TABLE_EXT in _item({"table:row_count": 3})["stac_extensions"]
+
+
+def test_a_caller_declared_extension_is_not_repeated():
+    item = stac.build_item(item_id="x", collection="c", geometry=None, bbox=None,
+                           datetime_iso="2026-01-01T00:00:00Z", properties={"proj:code": "EPSG:4326"},
+                           assets={}, stac_extensions=[stac.PROJ_EXT], proj_epsg=4326)
+    assert item["stac_extensions"] == [stac.PROJ_EXT]
+
+
+def test_a_collection_declares_proj_and_table_extensions_from_its_fields():
+    exts = _collection({"proj:code": "EPSG:26912", "table:row_count": 3})["stac_extensions"]
+    assert stac.PROJ_EXT in exts and stac.TABLE_EXT in exts
+    exts = _collection({"title": "t"})["stac_extensions"]
+    assert stac.PROJ_EXT not in exts and stac.TABLE_EXT not in exts

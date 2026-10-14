@@ -343,10 +343,6 @@ def build_publication(p: dict, attachments: list[dict], *,
         exts = list(extensions or [])
         if sci:
             exts.append(stac.SCI_EXT)
-        if any(k.startswith("proj:") for k in props) and stac.PROJ_EXT not in exts:
-            exts.append(stac.PROJ_EXT)
-        if "table:row_count" in props and stac.TABLE_EXT not in exts:
-            exts.append(stac.TABLE_EXT)
         return stac.build_item(
             item_id=item_id, collection=pub_id, collection_path=coll_path,
             geometry=geometry, bbox=item_bbox, datetime_iso=dt, properties=props,

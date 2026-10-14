@@ -343,14 +343,25 @@ def test_a_forced_run_never_reads_the_existing_manifests(monkeypatch, tmp_path):
     assert vectors.extract_one("M-110", force=True) == "skip"  # empty bundle, no manifest reads
 
 
+def _gis_zips(monkeypatch, zips):
+    """The pubs a batch run lists: `zips(sid)` is `(None, gis_url)`, as `_get_attached_zips`
+    answered before attachments of any label were extracted."""
+    from ugs_warehouse.pubs import harvest
+
+    monkeypatch.setattr(harvest, "_get_attached_zips", zips)
+    monkeypatch.setattr(harvest, "data_files", lambda sid: (
+        [harvest.DataFile("gis", "GIS", url)] if (url := zips(sid)[1]) else []))
+
+
 def _stub_bundle(monkeypatch, tmp_path, srcs_and_errors):
     """extract_one with the download and unzip stubbed out and _sources returning a fixed answer."""
     from ugs_warehouse.pubs import harvest
 
+    monkeypatch.setattr(harvest, "data_files", lambda sid: [])
     monkeypatch.setattr(harvest, "zip_urls", lambda sid: (None, "https://x/gis.zip"))
     monkeypatch.setattr(harvest, "download", lambda url, dst: open(dst, "wb").close())
     monkeypatch.setattr(vectors.zipfile, "ZipFile", lambda p: _NoopZip())
-    monkeypatch.setattr(vectors, "_sources", lambda work, nested=(): srcs_and_errors)
+    monkeypatch.setattr(vectors, "_sources", lambda work, nested=(), used=None: srcs_and_errors)
     monkeypatch.setattr(vectors.gcs, "list_paths", lambda prefix: [])
 
 
@@ -364,7 +375,7 @@ class _NoopZip:
     def infolist(self):
         return []
 
-    def extractall(self, path):
+    def extractall(self, path, members=None):
         pass
 
 
@@ -408,6 +419,7 @@ def test_a_failed_attempt_never_replaces_a_published_manifest(monkeypatch, tmp_p
     store = _mem_gcs(monkeypatch)
     good = f"{vectors.VECTORS_PREFIX}/M-112/_manifest.json"
     store[good] = b'{"spatial": ["faults"], "tables": [], "layers": [], "errors": [{"label": "x"}]}'
+    monkeypatch.setattr(harvest, "data_files", lambda sid: [])
     monkeypatch.setattr(harvest, "zip_urls", lambda sid: (None, "https://x/gis.zip"))
 
     def _timeout(url, dst):
@@ -415,7 +427,7 @@ def test_a_failed_attempt_never_replaces_a_published_manifest(monkeypatch, tmp_p
 
     monkeypatch.setattr(harvest, "download", _timeout)
 
-    assert vectors.extract_one("M-112", force=True) == "fail:TimeoutError"
+    assert vectors.extract_one("M-112", force=True) == "fail:layers"
     assert json.loads(store[good])["spatial"] == ["faults"]
 
 
@@ -435,10 +447,11 @@ def test_a_batch_run_lists_unsupported_pubs_without_re_downloading_them(monkeypa
 
     pfx = vectors.VECTORS_PREFIX
     monkeypatch.setattr(source, "read_pubs", lambda: [{"series_id": "SS-161"}, {"series_id": "M-2DM"}])
-    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, f"https://x/{sid}.zip"))
+    _gis_zips(monkeypatch, lambda sid: (None, f"https://x/{sid}.zip"))
     monkeypatch.setattr(vectors.gcs, "list_paths", lambda prefix: [f"{pfx}/SS-161/_attempt.json"])
     monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: json.dumps(
-        {"result": "unsupported", "errors": [{"source": "Ferron.mpk", "error": "unsupported format"}]}).encode())
+        {"result": "unsupported", "extract_version": vectors.EXTRACT_VERSION,
+         "errors": [{"source": "Ferron.mpk", "error": "unsupported format"}]}).encode())
     monkeypatch.setattr(vectors.gcs, "put_bytes", lambda b, p, **kw: None)
     downloads: list[str] = []
     monkeypatch.setattr(harvest, "download", lambda url, dst: downloads.append(url) or 1 / 0)
@@ -468,9 +481,10 @@ def test_a_batch_run_lists_pubs_with_nothing_to_extract_without_re_downloading_t
 
     pfx = vectors.VECTORS_PREFIX
     monkeypatch.setattr(source, "read_pubs", lambda: [{"series_id": "M-1DM"}, {"series_id": "M-2DM"}])
-    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, f"https://x/{sid}.zip"))
+    _gis_zips(monkeypatch, lambda sid: (None, f"https://x/{sid}.zip"))
     monkeypatch.setattr(vectors.gcs, "list_paths", lambda prefix: [f"{pfx}/M-1DM/_attempt.json"])
-    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: b'{"result": "skip"}')
+    monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: json.dumps(
+        {"result": "skip", "extract_version": vectors.EXTRACT_VERSION}).encode())
     monkeypatch.setattr(vectors.gcs, "put_bytes", lambda b, p, **kw: None)
     downloads: list[str] = []
     monkeypatch.setattr(harvest, "download", lambda url, dst: downloads.append(url) or 1 / 0)
@@ -497,7 +511,7 @@ def test_a_batch_run_visits_only_new_pubs_with_a_gis_zip(monkeypatch):
     monkeypatch.setattr(source, "read_pubs", lambda: [
         {"series_id": "M-1DM"}, {"series_id": "M-2DM"}, {"series_id": "M-3"}])
     gis = {"M-1DM": "https://x/m1-gis.zip", "M-2DM": "https://x/m2-gis.zip"}
-    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, gis.get(sid)))
+    _gis_zips(monkeypatch, lambda sid: (None, gis.get(sid)))
     listings: list[str] = []
 
     def list_paths(prefix):
@@ -506,7 +520,8 @@ def test_a_batch_run_visits_only_new_pubs_with_a_gis_zip(monkeypatch):
 
     monkeypatch.setattr(vectors.gcs, "list_paths", list_paths)
     monkeypatch.setattr(vectors.gcs, "get_bytes",
-                        lambda p: b'{"spatial": ["a"], "layers": [], "errors": []}')
+                        lambda p: json.dumps({"spatial": ["a"], "layers": [], "errors": [],
+                                              "extract_version": vectors.EXTRACT_VERSION}).encode())
     monkeypatch.setattr(vectors.gcs, "put_bytes", lambda b, p, **kw: None)
     downloads: list[str] = []
     monkeypatch.setattr(harvest, "download", lambda url, dst: downloads.append(url) or 1 / 0)
@@ -529,7 +544,7 @@ def test_a_batch_run_tries_new_pubs_before_retrying_failed_ones(monkeypatch):
     pfx = vectors.VECTORS_PREFIX
     monkeypatch.setattr(source, "read_pubs", lambda: [
         {"series_id": "M-1DM"}, {"series_id": "M-2DM"}, {"series_id": "M-3DM"}])
-    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, f"https://x/{sid}.zip"))
+    _gis_zips(monkeypatch, lambda sid: (None, f"https://x/{sid}.zip"))
     monkeypatch.setattr(vectors.gcs, "list_paths", lambda prefix: [f"{pfx}/M-1DM/_manifest.json"])
     monkeypatch.setattr(vectors.gcs, "get_bytes",
                         lambda p: b'{"spatial": [], "layers": [], "errors": [{"source": "gis zip"}]}')
@@ -547,6 +562,7 @@ def test_a_failed_download_is_recorded_as_an_attempt(monkeypatch, tmp_path):
     from ugs_warehouse.pubs import harvest
 
     store = _mem_gcs(monkeypatch)
+    monkeypatch.setattr(harvest, "data_files", lambda sid: [])
     monkeypatch.setattr(harvest, "zip_urls", lambda sid: (None, "https://x/gis.zip"))
 
     def _timeout(url, dst):
@@ -554,10 +570,10 @@ def test_a_failed_download_is_recorded_as_an_attempt(monkeypatch, tmp_path):
 
     monkeypatch.setattr(harvest, "download", _timeout)
 
-    assert vectors.extract_one("M-111", force=True) == "fail:TimeoutError"
+    assert vectors.extract_one("M-111", force=True) == "fail:layers"
     doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-111/_attempt.json"])
-    assert doc["result"] == "fail:TimeoutError"
-    assert doc["errors"] == [{"source": "gis zip", "error": "TimeoutError: read timed out"}]
+    assert doc["result"] == "fail:layers"
+    assert doc["errors"] == [{"source": "GIS", "error": "TimeoutError: read timed out"}]
     assert f"{vectors.VECTORS_PREFIX}/M-111/_manifest.json" not in store
 
 
@@ -997,6 +1013,7 @@ def test_a_tiling_failure_keeps_the_pub_clean_and_is_listed_at_the_end_of_the_ru
     assert untiled == ["M-203/faults"]
     assert vectors._read_manifest(f"{vectors.VECTORS_PREFIX}/M-203/_manifest.json")
 
+    monkeypatch.setattr(harvest, "data_files", lambda sid: [])
     monkeypatch.setattr(harvest, "zip_urls", lambda sid: (None, "https://x/gis.zip"))
     monkeypatch.setattr(sys, "argv", ["vectors", "M-203", "M-204", "--force"])
     assert vectors.main() == 1
@@ -1048,6 +1065,7 @@ def _manifest(*layers, errors=None, warnings=None, relations_version=vectors.rel
     return {"spatial": [lay["label"] for lay in layers if lay["spatial"]],
             "tables": [lay["label"] for lay in layers if not lay["spatial"]],
             "layers": list(layers), "empty": [], "errors": errors or [], "warnings": warnings or [],
+            "extract_version": vectors.EXTRACT_VERSION,
             **({"relationships": [], "relations_version": relations_version}
                if relations_version is not None else {})}
 
@@ -1162,10 +1180,10 @@ def _batch_run(monkeypatch, sids: list[str]):
     """An `--all` run over `sids`, each listed with a GIS zip, nothing new to download."""
     import sys
 
-    from ugs_warehouse.pubs import harvest, source
+    from ugs_warehouse.pubs import source
 
     monkeypatch.setattr(source, "read_pubs", lambda: [{"series_id": s} for s in sids])
-    monkeypatch.setattr(harvest, "_get_attached_zips", lambda sid: (None, "https://x/gis.zip"))
+    _gis_zips(monkeypatch, lambda sid: (None, "https://x/gis.zip"))
     monkeypatch.setattr(sys, "argv", ["vectors", "--all"])
 
 

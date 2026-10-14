@@ -125,7 +125,7 @@ exists.
 
 Metadata comes from the publications app's live feed (`publications.pubs_feed_v1`); `PUBS_DB_URL`
 is required. The ops console's **Full refresh** runs the jobs in order: cover thumbnails, 3D,
-map layers from each new pub's GIS zip, a prune of items the feed no longer lists, the pubs
+map layers and tables from each new pub's data attachments, a prune of items the feed no longer lists, the pubs
 ingest, and the full-text search index. New map plates need **Harvest COGs** first. GeoParquet is
 written with geoparquet-io, and COG band metadata is read with rio-stac. A new plate COG embeds each
 band's statistics (`STATISTICS_MINIMUM/MAXIMUM/MEAN/STDDEV`, alpha included), computed over the
@@ -133,7 +133,34 @@ band's statistics (`STATISTICS_MINIMUM/MAXIMUM/MEAN/STDDEV`, alpha included), co
 scan is a `source` asset, and a pub with no year gets a `start_datetime`/`end_datetime` interval
 flagged `ugs:date_unknown`.
 
-Each map layer extracted from a GIS zip is written as GeoParquet in its own CRS plus PMTiles in
+The vectors job opens every data attachment of a publication: each zip that is not a GeoTIFF
+zip (the plate harvest's), whatever its label ("GIS", "Data", "Appendix A"), and each `.xlsx`,
+`.xls` and `.csv` file. The zip labelled GIS comes first, so the layers it held keep their labels.
+Each attachment is downloaded into its own folder in one work dir, and the 4 GiB unzip limit
+covers the whole publication. `__MACOSX/` and `._*` entries are skipped. Shapefiles and
+geodatabases become layers and tables. A sheet of a workbook with a header row becomes a table
+(`<workbook>__<sheet>`; a CSV is `<file>`), written as Parquet with `table:columns`. The header
+is the first of the first 10 rows that is mostly distinct, non-numeric text and about as wide as
+the sheet, and units or labels in the one or two text rows under it are folded into it. Cell
+values stay typed, a column mixing numbers and text is kept as text and named in a warning, and
+an empty sheet or one with no header row is a warning, not extracted. A sheet with `lat`/`latitude`/
+`y_dd` and `lon`/`long`/`longitude`/`x_dd` columns also yields `<table>_points`, a point layer
+in EPSG:4326 (GeoParquet and PMTiles); rows whose coordinates are blank or outside Utah plus a
+1 degree margin are counted in a warning and left out, never moved. UTM easting/northing columns
+are used only when the sheet names both a zone and a datum (otherwise the sheet is a table and a
+warning says so). Excel files are read with pandas (openpyxl for `.xlsx`, xlrd for `.xls`). Column
+names that repeat ignoring case are suffixed `_2`, `_3` with a warning naming the renames. A
+shapefile whose attribute text is not UTF-8 is read again as cp1252 with an `encoding_fallback`
+warning; any other read error still fails the layer. An attachment that cannot be fetched or
+unzipped is an error named for its label and the others still extract. Each manifest layer records
+`source_file` `{key, title, path}`: the attachment's Collection asset key and label, and the path
+inside the zip (the file name for a bare attachment). Its Item carries `ugs:source_file` (the
+title) beside `ugs:source_key`, and the Collection's `rel=item` link repeats it. The manifest's
+`extract_version` (2 now; 1 only opened the GIS zip and read no spreadsheets) is bumped like
+`relations_version`, but a clean manifest below it is extracted again by the next regular `--all`
+run rather than healed; those pubs go after the pubs never tried.
+
+Each map layer extracted from a data attachment is written as GeoParquet in its own CRS plus PMTiles in
 EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with the serving topics'
 tippecanoe flags and one tile layer named for the label. DuckDB reads the layer's GeoParquet,
 drops rows with no geometry, reprojects from the CRS the manifest recorded (`ST_Transform`
@@ -231,7 +258,7 @@ refresh until it reports 0 pending. After the units files have caught up, purge 
 cache for `geolmap/units/` once: the old files were served as immutable, so the edge keeps them until
 purged.
 
-Publication **files** (PDFs, plate/GIS zips, tables) are hosted on `ugspub.nr.utah.gov`, not by us.
+Publication **files** (PDFs, plate/GIS/data zips, spreadsheets) are hosted on `ugspub.nr.utah.gov`, not by us.
 `pubs/mirror.py` copies a selected slice into the bucket under `pubs/files/` — path-preserving, so
 the legacy URL's path *is* the object path. A mirrored file's asset serves from our CDN and keeps
 the publisher's URL as an `alternate`; unmirrored files stay linked to the publisher.

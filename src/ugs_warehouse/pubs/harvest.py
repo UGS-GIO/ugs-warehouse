@@ -25,6 +25,7 @@ import subprocess
 import sys
 import tempfile
 import zipfile
+from typing import NamedTuple
 from urllib.parse import quote, urlsplit, urlunsplit
 
 import requests
@@ -272,9 +273,9 @@ def manifest_urls(series_id):
 _attachments_cache: dict[str, list[dict]] = {}
 
 
-def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
-    """Resolve GeoTIFF and GIS zip URLs from local attachments database (high performance)."""
-    global _attachments_cache
+def _attachments_of(series_id: str) -> list[dict] | None:
+    """The publication's rows of the local attachments database, loaded once for all pubs (high
+    performance). None when the database cannot be read, which is logged."""
     from . import source
     if not _attachments_cache:
         try:
@@ -285,16 +286,28 @@ def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
             hlog(f"pre-loaded attachments for {len(_attachments_cache)} publications", step="startup")
         except Exception as e:
             hlog(f"WARN failed to load attachments: {e}", step="startup", level="WARNING")
-            return None, None
+            return None
+    return _attachments_cache.get(series_id.strip().upper(), [])
+
+
+def _attachment_url(a: dict) -> str:
+    url = (a.get("pub_url") or "").strip()
+    if url and not url.startswith(("http://", "https://")):
+        url = f"https://ugspub.nr.utah.gov/publications/{url}"
+    return url
+
+
+def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
+    """Resolve GeoTIFF and GIS zip URLs from local attachments database (high performance)."""
+    rows = _attachments_of(series_id)
+    if rows is None:
+        return None, None
 
     gt = gis = None
-    sid_upper = series_id.strip().upper()
-    for a in _attachments_cache.get(sid_upper, []):
-        url = (a.get("pub_url") or "").strip()
+    for a in rows:
+        url = _attachment_url(a)
         if not url.lower().endswith(".zip"):
             continue
-        if not url.startswith(("http://", "https://")):
-            url = f"https://ugspub.nr.utah.gov/publications/{url}"
 
         desc = (a.get("extra_data") or "").lower()
         if "geotiff" in desc or "geotiff" in url.lower():
@@ -307,6 +320,34 @@ def _get_attached_zips(series_id: str) -> tuple[str | None, str | None]:
             elif not gis:
                 gis = url
     return gt, gis
+
+
+class DataFile(NamedTuple):
+    """A data attachment the vectors job extracts: its Collection asset key, its label and URL."""
+    key: str
+    title: str
+    url: str
+
+
+def data_files(series_id: str) -> list[DataFile]:
+    """The publication's attachments that can hold tables or layers: every zip that is not a
+    GeoTIFF zip (the plate harvest's), whatever its label, and every .xlsx, .xls or .csv file.
+    The zip labelled GIS comes first, so the layers it held keep their labels."""
+    from . import sheets
+    out: list[tuple[bool, DataFile]] = []
+    for a in _attachments_of(series_id) or []:
+        url = _attachment_url(a)
+        low = url.lower()
+        desc = (a.get("extra_data") or "").strip()
+        if not low.endswith((".zip", *sheets.SHEET_EXTS)):
+            continue
+        if low.endswith(".zip") and ("geotiff" in desc.lower() or "geotiff" in low):
+            continue
+        gis = low.endswith(".zip") and ("gis" in desc.lower() or "gis" in low
+                                        or "plates" in desc.lower())
+        out.append((not gis, DataFile(identity.attachment_key(desc), desc or low.rsplit("/", 1)[-1],
+                                      url)))
+    return [f for _, f in sorted(out, key=lambda t: t[0])]
 
 
 def zip_urls(series_id: str) -> tuple[str | None, str | None]:

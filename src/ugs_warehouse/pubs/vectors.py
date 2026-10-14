@@ -14,6 +14,11 @@ display, by DuckDB exporting its GeoParquet to GeoJSONSeq for tippecanoe; its ma
 `pmtiles` and `pmtiles_layer`. A layer whose tiling fails
 keeps its GeoParquet and gets a `pmtiles_failed` warning.
 
+Every data attachment is opened, not only the zip labelled GIS: zips of any label, and bare or
+zipped `.xlsx`/`.xls`/`.csv` files (`sheets.py`), whose sheets become tables and, with coordinates in
+Utah, point layers. Each layer records its attachment as `source_file`, and the manifest records
+`extract_version`, so a pub extracted at an older coverage is extracted again.
+
 The manifest also lists the relationships between a bundle's layers and tables (`relations.py`):
 declared geodatabase relationship classes, and joins inferred within one source dataset. Each
 layer entry records its `source` dataset and its `kind` (`layer`, `table` or `supporting`).
@@ -44,10 +49,11 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import NamedTuple
+from urllib.parse import unquote, urlsplit
 
 from ..core import config, gcs, stac
 from ..vector import sink_pmtiles, transform
-from . import geoparquet, harvest, identity, relations, source
+from . import geoparquet, harvest, identity, relations, sheets, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
 PARQUET_MIME = config.PARQUET_MIME
@@ -56,6 +62,12 @@ PARQUET_MIME = config.PARQUET_MIME
 PMTILES_FAILED = "pmtiles_failed"
 # Warning code for a layer with no geometry to tile. Not a failure: it never gets PMTiles.
 NO_GEOMETRY = "no_geometry"
+# Warning code for a shapefile whose attribute text was not UTF-8 and was read as cp1252.
+ENCODING_FALLBACK = "encoding_fallback"
+# The coverage of an extraction: 1 opened only the zip labelled GIS and read shapefiles and
+# geodatabases; 2 opens every data zip and reads spreadsheets and CSV. A clean manifest below this
+# is extracted again by the next regular run.
+EXTRACT_VERSION = 2
 
 
 def _safe(name: str) -> str:
@@ -86,17 +98,32 @@ def _walk(work: str) -> list[tuple[str, str]]:
 MAX_UNZIPPED_BYTES = int(float(os.environ.get("VECTORS_MAX_UNZIPPED_GB", "4")) * 2**30)
 
 
+def _junk_entry(name: str) -> bool:
+    """True for the resource-fork entries macOS adds to a zip (`__MACOSX/...`, `._name`) and for
+    Excel lock files (`~$name.xlsx`); none is data, and the `._` copies of a shapefile are binary
+    junk with the real name."""
+    parts = name.replace("\\", "/").split("/")
+    return parts[0] == "__MACOSX" or any(p.startswith(("._", "~$")) for p in parts)
+
+
 def _extract_zip(path: str, dest: str, remaining: int) -> int:
-    """Extract `path` into `dest`, delete the zip, and return the bytes it unzipped to. Raises
-    without extracting when that would exceed `remaining`."""
+    """Extract `path` into `dest` without its junk entries (`_junk_entry`), delete the zip, and
+    return the bytes it unzipped to. Raises without extracting when that would exceed
+    `remaining`."""
     with zipfile.ZipFile(path) as z:
-        size = sum(i.file_size for i in z.infolist())
+        members = [i for i in z.infolist() if not _junk_entry(i.filename)]
+        size = sum(i.file_size for i in members)
         if size > remaining:
             raise ValueError(f"unzips to {size / 2**30:.1f} GiB, over the "
                              f"{MAX_UNZIPPED_BYTES / 2**30:g} GiB limit for the job's in-memory disk")
-        z.extractall(dest)
+        z.extractall(dest, members=members)
     os.remove(path)
     return size
+
+
+def _tree_bytes(root: str) -> int:
+    """Bytes of every file under `root`: what the attachments extracted so far occupy."""
+    return sum(os.path.getsize(os.path.join(d, n)) for d, _, names in os.walk(root) for n in names)
 
 
 def _nested_dest(path: str) -> str:
@@ -142,7 +169,7 @@ def _unzip_nested(work: str, remaining: int, depth: int = 2) -> tuple[list[dict]
     return errors, dirs
 
 
-def _sources(work: str, nested_dirs: list[str] | tuple = ()
+def _sources(work: str, nested_dirs: list[str] | tuple = (), used: set[str] | None = None
              ) -> tuple[list[tuple[str, str | None, str, bool]], list[dict]]:
     """Find all vector AND non-spatial table sources in the extracted bundle directory.
 
@@ -155,13 +182,16 @@ def _sources(work: str, nested_dirs: list[str] | tuple = ()
     shapefiles with the same name in different folders would otherwise overwrite one upload. The
     outer bundle is labelled before the contents of inner zips (`nested_dirs`), so adding an
     inner zip never renames a layer that is already published; a repeated name takes its folder
-    path inside the bundle as a prefix, or a numeric suffix at the bundle root.
+    path inside the bundle as a prefix, or a numeric suffix at the bundle root. Spreadsheets and CSV
+    files come after the shapefiles and geodatabases, so they never rename a published layer: each
+    sheet of a workbook is a table labelled `<workbook>__<sheet>`, and a CSV is `<file>`. `used`
+    holds the labels of the publication's earlier attachments and gains this bundle's.
     """
     import pyogrio
 
     out: list[tuple[str, str | None, str, bool]] = []
     errors: list[dict] = []
-    used: set[str] = set()
+    used = set() if used is None else used
 
     def unique(label: str, path: str) -> str:
         if label in used:
@@ -197,6 +227,19 @@ def _sources(work: str, nested_dirs: list[str] | tuple = ()
         elif ext in _UNSUPPORTED:
             errors.append({"source": name, "error": f"unsupported format: {_UNSUPPORTED[ext]}, not extracted"})
             print(f"  {name}: unsupported format, not extracted", file=sys.stderr)
+
+    for path, ext in entries:
+        name = os.path.basename(path)
+        if ext not in sheets.SHEET_EXTS or not os.path.isfile(path):
+            continue
+        stem = _safe(name[:-len(ext)])
+        try:
+            for sheet in sheets.sheet_names(path):
+                label = stem if sheet is None else f"{stem}__{_safe(sheet)}"
+                out.append((path, sheet, unique(label, path), False))
+        except Exception as e:
+            errors.append({"source": name, "error": _error(e)})
+            print(f"  spreadsheet {name} unreadable: {e}", file=sys.stderr)
     return out, errors
 
 
@@ -387,7 +430,8 @@ def _record_attempt(series_id: str, record: dict) -> None:
     """Write `_attempt.json`: when this pub was last tried and how it ended. It orders batch runs
     and records failures without touching `_manifest.json`, which ingest publishes from. A
     record that cannot be written is reported, not fatal."""
-    record = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), **record}
+    record = {"at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+              "extract_version": EXTRACT_VERSION, **record}
     try:
         gcs.put_bytes(json.dumps(record).encode(), f"{VECTORS_PREFIX}/{series_id}/_attempt.json",
                       content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
@@ -395,9 +439,50 @@ def _record_attempt(series_id: str, record: dict) -> None:
         print(f"{series_id}: could not record the attempt: {_error(e)}", file=sys.stderr)
 
 
+@dataclass(frozen=True)
+class Origin:
+    """The attachment a layer came from: the folder it was extracted into (paths inside it are
+    the layer's `source_file.path`), the Collection asset key of the attachment and its title."""
+    root: str
+    key: str
+    title: str
+
+
+def _is_sheet(path: str) -> bool:
+    return os.path.splitext(path)[1].lower() in sheets.SHEET_EXTS
+
+
+def _read_spatial(path: str, layer: str | None, label: str, manifest: dict):
+    """A spatial layer as a GeoDataFrame. A shapefile whose attribute text is not valid UTF-8 is
+    read again as cp1252 and gets an ENCODING_FALLBACK warning; any other read error propagates."""
+    import geopandas as gpd
+
+    try:
+        return gpd.read_file(path, layer=layer, engine="pyogrio")
+    except UnicodeDecodeError:
+        gdf = gpd.read_file(path, layer=layer, engine="pyogrio", encoding="cp1252")
+    manifest["warnings"].append({"label": label, "code": ENCODING_FALLBACK,
+                                 "warning": "attribute text is not valid UTF-8; read as cp1252"})
+    return gdf
+
+
+def _dedupe_columns(frame, label: str, manifest: dict) -> None:
+    """Rename `frame`'s columns that repeat another ignoring case (`Name`, `NAME`) to `_2`, `_3`,
+    and warn with the renames. The geometry column keeps its name."""
+    geom = getattr(frame, "_geometry_column_name", None)
+    names = [str(c) for c in frame.columns]
+    data = [n for n in names if n != geom]
+    new, renames = sheets.dedupe_columns(data, reserved=(geom,) if geom else ())
+    if not renames:
+        return
+    fresh = iter(new)
+    frame.columns = [n if n == geom else next(fresh) for n in names]
+    manifest["warnings"].append({"label": label, "warning": sheets.rename_warning(renames)})
+
+
 def _extract_and_upload(
     work: str, series_id: str, srcs: list[tuple[str, str | None, str, bool]],
-    source_errors: list[dict] | None = None,
+    source_errors: list[dict] | None = None, origins: dict[str, Origin] | None = None,
 ) -> dict:
     """Read every source in `srcs`, upload each non-empty layer/table as Parquet to
     `{VECTORS_PREFIX}/{series_id}/{label}.parquet`, and write the per-series manifest. Returns
@@ -414,27 +499,54 @@ def _extract_and_upload(
     never written: GeoParquet reads a missing CRS as longitude/latitude, so the file would
     mislabel its coordinates. The manifest is written only when at least one layer was
     uploaded, so a failed attempt never replaces a manifest that ingest is publishing from.
+
+    A spreadsheet or CSV source (`sheets.py`) is a table per sheet that has a header row; one with
+    latitude/longitude columns in Utah also yields `<label>_points`, a point layer. A sheet with
+    nothing to extract is a warning, not an error. `origins` maps a label to the attachment it came
+    from, recorded on its entry as `source_file` {key, title, path}.
     """
-    import geopandas as gpd
     import pyogrio
 
     manifest: dict = {"spatial": [], "tables": [], "layers": [], "empty": [],
-                      "errors": list(source_errors or []), "warnings": []}
+                      "errors": list(source_errors or []), "warnings": [],
+                      "extract_version": EXTRACT_VERSION}
+    origins = dict(origins or {})
     profiles: list[relations.Layer] = []
-    for path, layer, label, is_spatial in srcs:
+    pending = list(srcs)
+    point_frames: dict[str, object] = {}
+    while pending:
+        path, layer, label, is_spatial = pending.pop(0)
         dst = os.path.join(work, f"{label}.parquet")
         gdf = df = None  # the previous layer is released before this one is read
+        origin = origins.get(label)
+        root = origin.root if origin else work
         try:
-            if is_spatial:
-                gdf = gpd.read_file(path, layer=layer, engine="pyogrio")
+            if label in point_frames:
+                gdf = point_frames.pop(label)
+                rows = len(gdf)
+                geoparquet.write(gdf, dst)
+            elif is_spatial:
+                gdf = _read_spatial(path, layer, label, manifest)
+                _dedupe_columns(gdf, label, manifest)
                 rows = len(gdf)
                 if rows and gdf.crs is None:
                     raise ValueError("no CRS (missing or unreadable .prj); not written, since "
                                      "GeoParquet would read its coordinates as longitude/latitude")
                 if rows:
                     geoparquet.write(gdf, dst)
+            elif _is_sheet(path):
+                sheet = sheets.read(path, layer)
+                manifest["warnings"] += [{"label": label, "warning": w} for w in sheet.warnings]
+                for w in sheet.warnings:
+                    print(f"  {label}: {w}", file=sys.stderr)
+                if sheet.frame is None:
+                    continue
+                df = sheet.frame
+                rows = len(df)
+                df.to_parquet(dst)
             else:
                 df = pyogrio.read_dataframe(path, layer=layer, read_geometry=False)
+                _dedupe_columns(df, label, manifest)
                 rows = len(df)
                 if rows:
                     df.to_parquet(dst)
@@ -444,13 +556,19 @@ def _extract_and_upload(
 
             columns, geo = _schema(dst)
             entry = {"label": label, "spatial": is_spatial, "rows": rows, "columns": columns,
-                     "source": _dataset_name(work, series_id, path, layer, label)}
+                     "source": _dataset_name(root, series_id, path, layer, label)}
+            if origin:
+                entry["source_file"] = {"key": origin.key, "title": origin.title,
+                                        "path": _path_in(root, path)}
             if is_spatial:
                 entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
             gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
             gcs.upload(dst, gcs_path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
             manifest["spatial" if is_spatial else "tables"].append(label)
             manifest["layers"].append(entry)
+            if df is not None and _is_sheet(path):
+                _queue_points(df, label, path, layer, origin, pending, point_frames, origins,
+                              manifest)
         except Exception as e:
             manifest["errors"].append({"label": label, "error": _error(e)})
             print(f"  layer {label} failed: {e}", file=sys.stderr)
@@ -472,6 +590,37 @@ def _extract_and_upload(
         _write_manifest(series_id, manifest)
 
     return manifest
+
+
+def _path_in(root: str, path: str) -> str:
+    """`path` relative to `root` with `/` separators: where a layer's file sits inside its
+    attachment (just the file name for a bare attachment)."""
+    return os.path.relpath(path, root).replace(os.sep, "/")
+
+
+def _queue_points(df, label: str, path: str, layer: str | None, origin: Origin | None,
+                  pending: list, point_frames: dict, origins: dict[str, Origin],
+                  manifest: dict) -> None:
+    """If the sheet table `df` has coordinates (`sheets.points`), queue a `<label>_points` layer
+    next, with the frame kept in `point_frames` rather than read again. What the detection says
+    about the columns or the rows left out is recorded as warnings on the table's label."""
+    notes: list[str] = []
+    try:
+        pts = sheets.points(df, notes)
+    except Exception as e:
+        manifest["errors"].append({"label": f"{label}_points", "error": _error(e)})
+        print(f"  layer {label}_points failed: {e}", file=sys.stderr)
+        return
+    for note in notes:
+        manifest["warnings"].append({"label": label, "warning": note})
+        print(f"  {label}: {note}", file=sys.stderr)
+    if pts is None:
+        return
+    points_label = f"{label}_points"
+    point_frames[points_label] = pts
+    if origin:
+        origins[points_label] = origin
+    pending.insert(0, (path, layer, points_label, True))
 
 
 def _dataset_name(work: str, series_id: str, path: str, layer: str | None, label: str) -> str:
@@ -518,7 +667,8 @@ def _declared_relationships(srcs: list[tuple[str, str | None, str, bool]], uploa
     """The relationship classes each geodatabase in `srcs` declares, between uploaded labels. A
     geodatabase whose relationships cannot be read, and each one not published, gets a warning."""
     out: list[dict] = []
-    for gdb in sorted({path for path, layer, _, _ in srcs if layer is not None}):
+    for gdb in sorted({path for path, layer, _, _ in srcs
+                       if layer is not None and not _is_sheet(path)}):
         name = os.path.basename(gdb)
         rels, why = relations.read_declared(gdb)
         if rels is None:
@@ -613,6 +763,12 @@ def is_clean(doc: dict) -> bool:
     list predates that metadata, so ordinary resumable runs re-extract it instead of needing
     --force."""
     return "layers" in doc and not doc.get("errors")
+
+
+def is_current(doc: dict) -> bool:
+    """True for a clean manifest written at the current coverage (`EXTRACT_VERSION`). A clean one
+    below it is still published from, but the next regular run extracts the pub again."""
+    return is_clean(doc) and (doc.get("extract_version") or 0) >= EXTRACT_VERSION
 
 
 def _load_manifest(path: str) -> dict:
@@ -712,6 +868,42 @@ def extracted_series() -> set[str]:
     return set(clean_manifests(lambda sid, doc: None))
 
 
+def _fetch_all(work: str, files: list) -> tuple[list[tuple[str, str | None, str, bool]],
+                                               list[dict], dict[str, Origin]]:
+    """Download each attachment of `files` (`harvest.DataFile`) into its own folder under `work`,
+    unzip zips and the zips inside them, and list the sources of all of them. The unzip limit
+    covers the whole publication. Labels stay unique across attachments, and `origins` maps each to
+    the attachment it came from. An attachment that cannot be fetched or unzipped is one error
+    named for its title, and the others still extract."""
+    srcs: list[tuple[str, str | None, str, bool]] = []
+    errors: list[dict] = []
+    origins: dict[str, Origin] = {}
+    used: set[str] = set()
+    for i, f in enumerate(files, 1):
+        sub = os.path.join(work, f"{i:02d}_{_safe(f.key)[:40]}")
+        os.makedirs(sub)
+        remaining = MAX_UNZIPPED_BYTES - _tree_bytes(work)
+        try:
+            name = _safe(unquote(urlsplit(f.url).path.rsplit("/", 1)[-1])) or "attachment"
+            dest = os.path.join(sub, name)
+            harvest.download(harvest.encode_url(f.url), dest)
+            nested_errors: list[dict] = []
+            nested_dirs: list[str] = []
+            if name.lower().endswith(".zip"):
+                remaining -= _extract_zip(dest, sub, remaining)
+                nested_errors, nested_dirs = _unzip_nested(sub, remaining)
+            found, found_errors = _sources(sub, nested_dirs, used)
+        except Exception as e:
+            errors.append({"source": f.title, "error": _error(e)})
+            print(f"  attachment {f.title!r} failed: {e}", file=sys.stderr)
+            shutil.rmtree(sub, ignore_errors=True)
+            continue
+        errors += nested_errors + found_errors
+        srcs += found
+        origins.update({label: Origin(sub, f.key, f.title) for _, _, label, _ in found})
+    return srcs, errors, origins
+
+
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
                 existing: set[str] | None = None, untiled: list[str] | None = None) -> str:
     """Extract and upload all vector layers and non-spatial companion tables for a given
@@ -728,19 +920,28 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
 
     if not force and not dry_run:
         # `existing` is one listing for a batch run; a single pub reads only its own manifest.
-        done = series_id in existing if existing is not None else _clean_manifest_of(series_id) is not None
+        if existing is not None:
+            done = series_id in existing
+        else:
+            manifest = _clean_manifest_of(series_id)
+            done = manifest is not None and is_current(manifest)
         if done:
             print(f"{series_id}: SKIP (already extracted cleanly)")
             return "skip"
 
-    _, gis_url = harvest.zip_urls(series_id)
+    files = harvest.data_files(series_id)
+    if not files:
+        # No attachments row: the optional manifest CSV or the site's data.php may still name a zip.
+        _, gis_url = harvest.zip_urls(series_id)
+        files = [harvest.DataFile("gis", "GIS", gis_url)] if gis_url else []
 
-    if not gis_url:
-        print(f"{series_id}: SKIP (no GIS zip URL)")
+    if not files:
+        print(f"{series_id}: SKIP (no data zip or spreadsheet attachments)")
         return "skip"
 
     if dry_run:
-        print(f"[dry-run] {series_id}: would download {gis_url} and extract vector layers")
+        print(f"[dry-run] {series_id}: would download {', '.join(f.url for f in files)} "
+              "and extract vector layers and tables")
         return "ok"
 
     # Recorded before the download, so a run killed mid-pub (out of memory, job timeout) still
@@ -748,18 +949,13 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
     _record_attempt(series_id, {"result": "started"})
     work = tempfile.mkdtemp(prefix=f"v_{series_id.replace('/', '_')}_")
     try:
-        zp = os.path.join(work, "gis.zip")
-        harvest.download(harvest.encode_url(gis_url), zp)
-        remaining = MAX_UNZIPPED_BYTES - _extract_zip(zp, work, MAX_UNZIPPED_BYTES)
-        nested_errors, nested_dirs = _unzip_nested(work, remaining)
-        srcs, source_errors = _sources(work, nested_dirs)
-        source_errors = nested_errors + source_errors
+        srcs, source_errors, origins = _fetch_all(work, files)
         if not srcs and not source_errors:
             print(f"{series_id}: SKIP (no shapefiles, GDB layers, or tables found)")
             _record_attempt(series_id, {"result": "skip"})
             return "skip"
 
-        manifest = _extract_and_upload(work, series_id, srcs, source_errors)
+        manifest = _extract_and_upload(work, series_id, srcs, source_errors, origins)
         failed_tiles = tiling_failures(manifest)
         if failed_tiles:
             print(f"{series_id}: {len(failed_tiles)} layers have no PMTiles (tiling failed): "
@@ -1090,13 +1286,15 @@ def main() -> int:
     if args.all:
         print(f"Loading publications from source: {source.source_name()}")
         all_sids = [s for p in source.read_pubs() if (s := (p.get("series_id") or "").strip())]
-        # A batch run only visits pubs whose attachments list a GIS zip, and checks what is already
-        # extracted with one listing, so a weekly run costs about nothing when nothing is new.
-        sids = [s for s in all_sids if harvest._get_attached_zips(s)[1]]
-        # A forced run re-extracts every pub, so nothing is left to heal.
+        # A batch run only visits pubs with a data zip or spreadsheet attachment, and checks what
+        # is already extracted with one listing, so a weekly run costs about nothing when nothing
+        # is new.
+        sids = [s for s in all_sids if harvest.data_files(s)]
+        # A forced run re-extracts every pub, so nothing is left to heal. A clean manifest below
+        # EXTRACT_VERSION is extracted again, not healed.
         listed = set(sids)
-        needs = {} if args.force else {s: n for s, n in clean_manifests(
-            lambda sid, doc: needs_of(doc)).items() if s in listed}
+        needs = {} if args.force else {s: n for s, (n, ok) in clean_manifests(
+            lambda sid, doc: (needs_of(doc), is_current(doc))).items() if s in listed and ok}
         existing = None if args.force else set(needs)
         unsupported: list[str] = []
         nothing: list[str] = []
@@ -1105,9 +1303,12 @@ def main() -> int:
             attempted = _series_with("_attempt.json")
             # A pub whose last attempt failed only on unreadable containers, or finished cleanly
             # with nothing to extract, is listed, not re-downloaded; --force retries it (for
-            # example after the image gains a driver).
+            # example after the image gains a driver). An attempt made at an older
+            # EXTRACT_VERSION does not count: the pub is tried again at the current coverage.
             for s in [s for s in sids if s in attempted and s not in existing]:
                 last = _last_attempt(s)
+                if (last.get("extract_version") or 0) < EXTRACT_VERSION:
+                    continue
                 if last.get("result") == "unsupported":
                     kinds = ", ".join(sorted({e["source"] for e in last.get("errors", [])}))
                     unsupported.append(f"{s} ({kinds})")
@@ -1119,7 +1320,7 @@ def main() -> int:
             # that fails slowly every run cannot spend the job's timeout before new pubs are reached.
             sids = sorted(sids, key=lambda s: s in tried)
         print(f"Found {len(all_sids)} publications, "
-              f"{len(sids) + len(unsupported) + len(nothing)} with a GIS zip, "
+              f"{len(sids) + len(unsupported) + len(nothing)} with a data zip or spreadsheet, "
               f"{len(set(sids) & (existing or set()))} already extracted")
         if nothing:
             print(f"{len(nothing)} had no layers to extract last time, not retried (--force to "

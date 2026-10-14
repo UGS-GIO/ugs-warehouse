@@ -53,10 +53,10 @@ TILE_OPTS = [
 ]
 
 
-# Added for the unit polygons under the maps (pubs/unit_polys.py, pubs/identify.py): a small unit
-# polygon stays a polygon at every zoom instead of being folded into its neighbours, since a click
-# at any zoom must find the unit under it. The TILE_OPTS above already lift tippecanoe's
-# per-tile feature and size limits and its drop rate, so no polygon is dropped.
+# Extra flags for the unit polygons under the maps (pubs/unit_polys.py, pubs/identify.py): a small
+# unit polygon stays a polygon at every zoom instead of being folded into its neighbours, since a
+# click at any zoom must find the unit under it. TILE_OPTS already lift tippecanoe's per-tile
+# feature and size limits and its drop rate, so no polygon is dropped.
 IDENTIFY_OPTS = ["--no-tiny-polygon-reduction"]
 
 

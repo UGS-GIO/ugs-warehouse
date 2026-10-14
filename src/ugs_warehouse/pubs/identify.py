@@ -9,7 +9,8 @@ the mosaic's draw order:
 - for a member without one, its polygons in the seamless layer `geolmap/units/units.parquet`
   (unit_symbol, unit_name, age; no description), picked by series_id.
 
-Membership is the mosaic bake's (`geolmap_mosaics._group_by_tier`, `_vrt_order`), never derived here.
+Membership is the mosaic bake's (`geolmap_mosaics._group_by_tier`, then `tier_members`: the 8-bit
+COGs in draw order), never derived here. Each polygon carries `rank`, its member's draw-order index.
 `<vectors prefix>/_identify/<tier>.state.json` records the membership, each member's `unit_polys`
 checksum and the seamless file's etag the last build used; a tier is built again only when one of
 those changed. The vectors job runs `build_changed` after its self-heal, since it has tippecanoe and
@@ -24,6 +25,7 @@ import shutil
 import sys
 import tempfile
 import time
+import urllib.parse
 from dataclasses import dataclass, field
 
 from ..core import config, gcs, stac
@@ -53,10 +55,12 @@ def state_object(tier: str) -> str:
     return f"{identify_prefix()}/{tier}.state.json"
 
 
-def units_asset(object_path: str, meta: dict | None) -> dict:
+def units_asset(object_path: str, meta: dict | None, *, origin: str | None = None) -> dict:
     """The `units` asset of a plate or mosaic Item: the identify PMTiles at `object_path`, with the
-    recorded `meta` ({bytes, checksum}) as file fields."""
-    return {"href": config.public_url(object_path), "type": config.PMTILES_MIME, "roles": ["data"],
+    recorded `meta` ({bytes, checksum}) as file fields. `origin` is the public site the file is
+    served from when that is not this build's own CDN."""
+    href = f"{origin}/{object_path.lstrip('/')}" if origin else config.public_url(object_path)
+    return {"href": href, "type": config.PMTILES_MIME, "roles": ["data"],
             "title": UNITS_TITLE,
             **stac.file_fields(gcs.FileMeta(meta["bytes"], meta.get("checksum")) if meta else None)}
 
@@ -69,10 +73,11 @@ def plate_asset(series_id: str, unit_polys: dict | None) -> dict | None:
     return units_asset(vectors.unit_polys_pmtiles_object(series_id.upper()), unit_polys["pmtiles"])
 
 
-def read_state(tier: str) -> dict | None:
-    """The tier's state file, or None when it has none. An unreadable one raises."""
+def read_state(tier: str, *, bucket: str | None = None) -> dict | None:
+    """The tier's state file in `bucket` (default BUCKET), or None when it has none. An unreadable
+    one raises."""
     try:
-        doc = json.loads(gcs.get_bytes(state_object(tier), bucket=config.SOURCE_BUCKET).decode())
+        doc = json.loads(gcs.get_bytes(state_object(tier), bucket=bucket).decode())
     except FileNotFoundError:
         return None
     if not isinstance(doc, dict):
@@ -81,49 +86,73 @@ def read_state(tier: str) -> dict | None:
 
 
 def mosaic_asset(tier: str) -> dict | None:
-    """The mosaic Item's `units` asset for `tier`, or None while no identify layer has been built."""
-    state = read_state(tier)
+    """The mosaic Item's `units` asset for `tier`, or None while no identify layer has been built.
+    The vectors job writes the layer to the source bucket; a mosaic baked into another bucket (a
+    review bake) links it by the public catalog's site, as it links its member documents."""
+    state = read_state(tier, bucket=config.SOURCE_BUCKET)
     if not state or not state.get("pmtiles"):
         return None
-    return units_asset(tiles_object(tier), state["pmtiles"])
+    origin = None
+    if config.SOURCE_BUCKET != config.BUCKET:
+        parts = urllib.parse.urlsplit(config.PUBLIC_CATALOG_URL)
+        origin = f"{parts.scheme}://{parts.netloc}"
+    return units_asset(tiles_object(tier), state["pmtiles"], origin=origin)
 
 
 def attach_to_mosaic_item(tier: str, asset: dict) -> bool:
-    """Add `asset` as `units` to the published mosaic Item of `tier` in place, with a write
-    conditional on the version read. False when the mosaic has no Item yet; its next bake adds the
-    asset through `mosaic_asset`."""
+    """Make the published mosaic Item of `tier` carry `asset` as `units`, patching it in place when
+    it does not already. False when the mosaic has no Item yet; its next bake adds the asset
+    through `mosaic_asset`."""
     from . import geolmap_mosaics
 
     path = stac.item_object_path(geolmap_mosaics.COLLECTION, f"geologic-maps-{tier}")
-    for attempt in (1, 2):
-        try:
-            raw, version = gcs.get_bytes_versioned(path)
-        except FileNotFoundError:
-            return False
-        doc = json.loads(raw)
-        doc.setdefault("assets", {})["units"] = asset
-        if asset.get("file:size") or asset.get("file:checksum"):
-            exts = doc.setdefault("stac_extensions", [])
-            if stac.FILE_EXT not in exts:
-                exts.append(stac.FILE_EXT)
-        try:
-            gcs.put_bytes_if_unchanged(json.dumps(doc, indent=2).encode(), path, version,
-                                       content_type="application/geo+json",
-                                       cache_control=gcs.CACHE_CATALOG)
-            return True
-        except gcs.Changed:
-            if attempt == 2:
-                raise
-    return False
+    try:
+        item = json.loads(gcs.get_bytes(path).decode())
+    except FileNotFoundError:
+        return False
+    if (item.get("assets") or {}).get("units") == asset:
+        return True
+    return stac.patch_published(path, {"units": asset}, target="assets")
+
+
+def bands_object() -> str:
+    return f"{identify_prefix()}/cog_bands.json"
+
+
+def band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
+    """Each COG's band data types. The header reads are kept in `_identify/cog_bands.json`, keyed by
+    the COG's etag from one listing, so only a COG that is new or rewritten is read again."""
+    from . import geolmap_mosaics
+
+    etags = gcs.list_etags(identity.COG_PREFIX, bucket=config.SOURCE_BUCKET)
+    try:
+        cache = json.loads(gcs.get_bytes(bands_object()).decode())
+    except FileNotFoundError:
+        cache = {}
+    etag = {sid: etags.get(f"{identity.COG_PREFIX}/{sid}.cog.tif") for sid in sids}
+    stale = [sid for sid in sids if not etag[sid] or (cache.get(sid) or {}).get("etag") != etag[sid]]
+    if not stale:
+        return {sid: cache[sid]["types"] for sid in sids}
+    fresh = geolmap_mosaics._band_types(stale, env)
+    kept = {sid: cache[sid] for sid in sids if sid not in stale}
+    kept.update({sid: {"etag": etag[sid], "types": fresh[sid]} for sid in stale if etag[sid]})
+    gcs.put_bytes(json.dumps(kept).encode(), bands_object(), content_type="application/json",
+                  cache_control=gcs.CACHE_MUTABLE)
+    return {sid: fresh[sid] if sid in fresh else kept[sid]["types"] for sid in sids}
 
 
 def membership() -> dict[str, list[str]]:
-    """{tier: member series ids (upper-case) in the mosaic's draw order} for each tier with members,
-    from the mosaic bake's own grouping (current editions only)."""
+    """{tier: member series ids (upper-case) in the mosaic's draw order} for each tier with members:
+    the mosaic bake's own grouping, then `geolmap_mosaics.tier_members`, so a non-8-bit COG the bake
+    leaves out is left out here."""
     from . import geolmap_mosaics
 
     groups, by_sid = geolmap_mosaics._group_by_tier()
-    return {t: geolmap_mosaics._vrt_order(sids, by_sid) for t, sids in groups.items() if sids}
+    env = geolmap_mosaics.gdal_env()
+    types = band_types(sorted({sid for sids in groups.values() for sid in sids}), env)
+    out = {t: geolmap_mosaics.tier_members(t, sids, by_sid, env, {s: types[s] for s in sids})
+           for t, sids in groups.items() if sids}
+    return {t: order for t, order in out.items() if order}
 
 
 def unit_checksums() -> tuple[dict[str, str], list[str]]:
@@ -172,8 +201,9 @@ def _append(src: str, dest) -> None:
 
 def build_geojsonl(order: list[str], sums: dict[str, str], out: str, work: str) -> dict[str, int]:
     """Write the tier's polygons to the GeoJSONSeq file `out`, own `unit_polys` first in member order,
-    then the seamless fallback rows of the members without one, in member order. Returns
-    {"own": rows, "seamless": rows}."""
+    then the seamless fallback rows of the members without one, in member order. Each polygon
+    carries `rank`, its member's index in the draw order (the seamless fallback ranks like its
+    member), so a viewer takes the highest rank at a point. Returns {"own": rows, "seamless": rows}."""
     import duckdb
 
     from .vectors import _literal
@@ -191,7 +221,8 @@ def build_geojsonl(order: list[str], sums: dict[str, str], out: str, work: str) 
             for i, sid in enumerate(own):
                 local = os.path.join(work, f"own_{i}.parquet")
                 gcs.download(vectors.unit_polys_object(sid), local)
-                con.execute(f"CREATE OR REPLACE TEMP VIEW piece AS SELECT * FROM read_parquet({_literal(local)})")
+                con.execute(f"CREATE OR REPLACE TEMP VIEW piece AS SELECT *, {order.index(sid)} AS rank "
+                            f"FROM read_parquet({_literal(local)})")
                 chunk = os.path.join(work, f"own_{i}.geojsonl")
                 counts["own"] += _export(con, "piece", chunk)
                 con.execute("DROP VIEW piece")
@@ -202,15 +233,17 @@ def build_geojsonl(order: list[str], sums: dict[str, str], out: str, work: str) 
                 seamless = os.path.join(work, "seamless.parquet")
                 gcs.download(SEAMLESS_OBJECT, seamless)
                 ids = ", ".join(_literal(s) for s in fallback)
+                ranked = ", ".join(_literal(s) for s in order)
                 clean = lambda col: f"NULLIF(TRIM(CAST({col} AS VARCHAR)), '')"  # noqa: E731
                 con.execute(
                     f"CREATE OR REPLACE TEMP VIEW piece AS SELECT UPPER(series_id) AS series_id, "
                     f"{clean('unit_symbol')} AS unit_code, {clean('unit_name')} AS unit_name, "
                     f"{clean('age')} AS age, CAST(NULL AS VARCHAR) AS description, "
-                    f"{_literal(SEAMLESS_LABEL)} AS source_label, ST_Force2D(geometry) AS geom "
+                    f"{_literal(SEAMLESS_LABEL)} AS source_label, ST_Force2D(geometry) AS geom, "
+                    f"list_position([{ranked}], UPPER(series_id)) - 1 AS rank "
                     f"FROM read_parquet({_literal(seamless)}) "
                     f"WHERE UPPER(series_id) IN ({ids}) AND geometry IS NOT NULL "
-                    f"ORDER BY list_position([{ids}], UPPER(series_id))")
+                    f"ORDER BY rank")
                 chunk = os.path.join(work, "seamless.geojsonl")
                 counts["seamless"] = _export(con, "piece", chunk)
                 con.execute("DROP VIEW piece")
@@ -223,8 +256,13 @@ def build_geojsonl(order: list[str], sums: dict[str, str], out: str, work: str) 
 
 
 def build_tier(tier: str, order: list[str], sums: dict[str, str], sig: dict) -> dict | None:
-    """Build and upload the tier's identify PMTiles and state file. Returns the state, or None when
-    no member has any polygon (nothing is written)."""
+    """Build and upload the tier's identify PMTiles. Returns the state to record, or None when no
+    member has any polygon (nothing is written). The tiles cover the zooms the mosaic shows, up to
+    the tier's top zoom."""
+    from . import geolmap_mosaics
+
+    maxz = geolmap_mosaics.TIER_MAXZOOM[tier]
+    minz = min(geolmap_mosaics.MOSAIC_MINZOOM, maxz)
     with tempfile.TemporaryDirectory(prefix=f"identify_{tier}_") as work:
         geojsonl = os.path.join(work, "units.geojsonl")
         counts = build_geojsonl(order, sums, geojsonl, work)
@@ -232,15 +270,18 @@ def build_tier(tier: str, order: list[str], sums: dict[str, str], sig: dict) -> 
             return None
         pmtiles = os.path.join(work, f"units-{tier}.pmtiles")
         sink_pmtiles.run_tippecanoe(geojsonl, pmtiles, TILE_LAYER, what=f"identify/{tier}",
-                                    extra_opts=sink_pmtiles.IDENTIFY_OPTS)
+                                    extra_opts=["-Z", str(minz), "-z", str(maxz), "-t", work,
+                                                *sink_pmtiles.IDENTIFY_OPTS])
         os.remove(geojsonl)
         meta = gcs.upload(pmtiles, tiles_object(tier), content_type=config.PMTILES_MIME,
                           cache_control=gcs.CACHE_MUTABLE)
-    state = {**sig, "pmtiles": {"bytes": meta.size, "checksum": meta.checksum}, "features": counts,
-             "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+    return {**sig, "pmtiles": {"bytes": meta.size, "checksum": meta.checksum}, "features": counts,
+            "built_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())}
+
+
+def write_state(tier: str, state: dict) -> None:
     gcs.put_bytes(json.dumps(state).encode(), state_object(tier), content_type="application/json",
                   cache_control=gcs.CACHE_MUTABLE)
-    return state
 
 
 @dataclass
@@ -273,6 +314,8 @@ def build_changed(tiers: list[str] | None = None) -> Result:
             state = read_state(tier)
             current = state is not None and {k: state.get(k) for k in sig} == sig
             if current:
+                # A patch that failed last run left the Item without the asset: retry it.
+                attach_to_mosaic_item(tier, units_asset(tiles_object(tier), state["pmtiles"]))
                 result.unchanged.append(tier)
                 continue
             state = build_tier(tier, order, sums, sig)
@@ -280,7 +323,10 @@ def build_changed(tiers: list[str] | None = None) -> Result:
                 result.empty.append(tier)
                 print(f"[identify] {tier}: no member has unit polygons; nothing built", file=sys.stderr)
                 continue
+            # The state is recorded only once the Item carries the asset, so a failed patch rebuilds
+            # (and patches) at the next run instead of being taken for done.
             attach_to_mosaic_item(tier, units_asset(tiles_object(tier), state["pmtiles"]))
+            write_state(tier, state)
             result.built.append(tier)
             print(f"[identify] {tier}: built from {len(order)} members "
                   f"({state['features']['own']} own polygons, {state['features']['seamless']} seamless)")

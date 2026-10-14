@@ -315,18 +315,44 @@ def _band_types(sids: list[str], env: dict) -> dict[str, list[str]]:
         return dict(zip(sids, ex.map(one, sids)))
 
 
-def _byte_members(tier: str, sids: list[str], env: dict) -> list[str]:
+def _byte_members(tier: str, sids: list[str], env: dict,
+                  types: dict[str, list[str]] | None = None) -> list[str]:
     """`sids` minus any COG whose bands aren't all Byte, order kept. gdalbuildvrt keeps only sources
     matching the FIRST source's data type and just warns about the rest, so one 16-bit COG in the
     list would silently drop maps (or, listed first, nearly the whole tier). Excluded COGs are named
-    on stderr so the gap is visible."""
-    types = _band_types(sids, env)
+    on stderr so the gap is visible. `types` are the COGs' band types when the caller already has
+    them (the identify layers cache them); otherwise each header is read."""
+    types = _band_types(sids, env) if types is None else types
     bad = {s: t for s, t in types.items() if not t or any(bt != "Byte" for bt in t)}
     if bad:
         detail = ", ".join(f"{s} ({'/'.join(sorted(set(t)))})" for s, t in bad.items())
         print(f"[mosaics] WARNING {tier}: excluding {len(bad)} non-8-bit COG(s) that gdalbuildvrt "
               f"would silently drop or let displace the tier: {detail}", file=sys.stderr)
     return [s for s in sids if s not in bad]
+
+
+def tier_members(tier: str, sids: list[str], by_sid: dict[str, dict], env: dict,
+                 types: dict[str, list[str]] | None = None) -> list[str]:
+    """The maps a tier's mosaic is stitched from, in draw order: `sids` minus the non-8-bit COGs
+    (`_byte_members`), then `_vrt_order`. The bake and the identify layers both take their members
+    from here."""
+    return _vrt_order(_byte_members(tier, sids, env, types), by_sid)
+
+
+def gdal_env() -> dict:
+    """The GDAL environment for reading the COGs in place over /vsigs, tuned for speed."""
+    env = os.environ.copy()
+    env.update({
+        "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
+        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
+        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
+        "VSI_CACHE": "TRUE",
+        "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
+        "GDAL_HTTP_MAX_RETRY": "10",
+        "GDAL_HTTP_RETRY_DELAY": "1",
+    })
+    env.setdefault("GDAL_CACHEMAX", "4096")   # MB; the Batch VM sets its own
+    return env
 
 
 def _check_vrt_sources(vrt: str, expected: list[str]) -> None:
@@ -352,25 +378,14 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
     if not sids:
         print(f"[mosaics] {tier}: no COGs — skipping")
         return False
-    # Performance-tuned GDAL environment for reading the COGs in place over /vsigs.
-    gdal_env = os.environ.copy()
-    gdal_env.update({
-        "GDAL_NUM_THREADS": "ALL_CPUS",                  # within-GDAL threading (warp/compress)
-        "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",     # no redundant GCS directory scans
-        "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.vrt",
-        "VSI_CACHE": "TRUE",
-        "VSI_CACHE_SIZE": "536870912",                   # 512 MB chunk cache for remote files
-        "GDAL_HTTP_MAX_RETRY": "10",
-        "GDAL_HTTP_RETRY_DELAY": "1",
-    })
-    gdal_env.setdefault("GDAL_CACHEMAX", "4096")   # MB; the Batch VM sets its own
-    sids = _byte_members(tier, sids, gdal_env)
+    env = gdal_env()
+    sids = tier_members(tier, sids, by_sid, env)
     if not sids:
         print(f"[mosaics] {tier}: no 8-bit COGs left — skipping", file=sys.stderr)
         return False
     with tempfile.TemporaryDirectory(dir=MOSAIC_WORK_DIR) as tmp:
         listfile = os.path.join(tmp, "cogs.txt")
-        members = [_vsigs(s) for s in _vrt_order(sids, by_sid)]
+        members = [_vsigs(s) for s in sids]
         with open(listfile, "w") as fh:
             fh.write("\n".join(members) + "\n")
         vrt = os.path.join(tmp, f"{tier}.vrt")
@@ -383,13 +398,13 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
         # map beneath at a quad seam (last-wins + mask fallthrough — no custom compositing needed).
         print(f"[mosaics] {tier}: VRT over {len(sids)} COGs")
         subprocess.run(["gdalbuildvrt", "-q", "-resolution", "highest", "-addalpha",
-                        "-input_file_list", listfile, vrt], env=gdal_env, check=True)
+                        "-input_file_list", listfile, vrt], env=env, check=True)
         _check_vrt_sources(vrt, members)
 
         # `gdal raster tile` (GDAL 3.11+) tiles the VRT multithreaded and builds the overview pyramid in
         # one pass. nearest is a pixel-exact copy only when the source sits on the native zoom's grid
         # and the tier isn't capped below it; anything else is resampled with average.
-        native, aligned, bounds = _vrt_zoom_and_bounds(vrt, gdal_env)
+        native, aligned, bounds = _vrt_zoom_and_bounds(vrt, env)
         base_maxz = maxz if maxz is not None else native
         base_resampling = "nearest" if aligned and base_maxz >= native else "average"
         minz_arg = min(MOSAIC_MINZOOM, base_maxz)      # never emit --min-zoom > --max-zoom
@@ -401,7 +416,7 @@ def build_tier(tier: str, sids: list[str], by_sid: dict[str, dict], maxz: int | 
              "--overview-resampling", "average", "-f", "WEBP", "--co", f"QUALITY={TILE_QUALITY}",
              "--skip-blank", "--convention", "xyz", "--webviewer", "none",
              "--min-zoom", str(minz_arg), "--max-zoom", str(base_maxz),
-             vrt, tiledir], env=gdal_env, check=True)
+             vrt, tiledir], env=env, check=True)
 
         print(f"[mosaics] {tier}: writing tiles -> PMTiles")
         n_tiles, minz, maxz_built = _write_pmtiles(

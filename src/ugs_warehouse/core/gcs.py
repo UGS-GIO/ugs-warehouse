@@ -437,11 +437,11 @@ def lease(object_path: str, *, ttl_s: float, wait_s: float, poll_s: float = 15) 
             print(f"[gcs] lease release failed for {object_path}: {e}", file=sys.stderr)
 
 
-def list_etags(prefix: str) -> dict[str, str]:
-    """{path: etag} for every object under `prefix`. An etag changes whenever the object is
-    rewritten, so this fingerprints a prefix without reading any object."""
+def list_etags(prefix: str, *, bucket: str | None = None) -> dict[str, str]:
+    """{path: etag} for every object under `prefix` in `bucket` (default BUCKET). An etag changes
+    whenever the object is rewritten, so this fingerprints a prefix without reading any object."""
     out: dict[str, str] = {}
-    for batch in obs.list(_store(), prefix=prefix):
+    for batch in obs.list(_store(bucket), prefix=prefix):
         out.update((m["path"], m.get("e_tag") or "") for m in batch)
     return out
 

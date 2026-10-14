@@ -399,7 +399,8 @@ def override_object(item_id: str) -> str:
 
 
 def patch_published(object_path: str, updates: dict, *, target: str = "properties") -> bool:
-    """Merge `updates` into a published Item's `properties` (`target="properties"`) or a published
+    """Merge `updates` into a published Item's `properties` (`target="properties"`), its `assets`
+    (`target="assets"`, declaring the file extension when an asset carries file fields) or a published
     Collection's top-level fields (`target="fields"`) in place: an instant edit that shows without a
     reingest (the durable source stays the override sidecar; a later reingest reapplies it). A
     collection's README.md/AGENTS.md are re-rendered to match.
@@ -409,7 +410,7 @@ def patch_published(object_path: str, updates: dict, *, target: str = "propertie
     any other read or write error raises. Not gzipped, as `write_item`: a gzipped item breaks every
     obstore `get_bytes` read.
     """
-    if target not in ("properties", "fields"):
+    if target not in ("properties", "assets", "fields"):
         raise ValueError(f"unknown patch target {target!r}")
     for attempt in (1, 2):
         try:
@@ -419,13 +420,19 @@ def patch_published(object_path: str, updates: dict, *, target: str = "propertie
         doc = json.loads(raw)
         if target == "properties":
             doc.setdefault("properties", {}).update(updates)
+        elif target == "assets":
+            doc.setdefault("assets", {}).update(updates)
+            if any("file:size" in a or "file:checksum" in a for a in updates.values()):
+                exts = doc.setdefault("stac_extensions", [])
+                if FILE_EXT not in exts:
+                    exts.append(FILE_EXT)
         else:
             doc.update(updates)
         try:
             # Same cache policy as write_item, so an edited document keeps a consistent header.
             gcs.put_bytes_if_unchanged(
                 json.dumps(doc, indent=2).encode(), object_path, version,
-                content_type="application/geo+json" if target == "properties" else "application/json",
+                content_type="application/json" if target == "fields" else "application/geo+json",
                 cache_control=gcs.CACHE_CATALOG)
             break
         except gcs.Changed:

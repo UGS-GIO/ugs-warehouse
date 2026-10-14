@@ -208,8 +208,12 @@ the 2010s template (`*GeologicUnits`: `UnitSymbol`, `UnitName`, `Age_Strat`, `De
 coverage era (`geounits`, `units`, `geology_poly(s)`: `UNITSYMBOL`, `UNITNAME`, `AGE`, `NOTES`).
 `pubs/unit_polys.py` picks the unit layer from the manifest by layer name (anchored at the end, so a
 quad name in the label never excludes it) and the schema's unit-code column; landslide, owner, glacial,
-vegetation and wetland polygon layers never match. Ties go to GeMS, then the template, then the
-coverage era, then the most rows, with a `unit_layer_ambiguous` warning. The manifest records
+vegetation and wetland polygon layers never match. Columns match ignoring case and
+underscores, from candidate lists (code `UnitSymbol|UNITSYMBOL|Unit_Symbol|MapUnit`, name
+`UnitName|UNITNAME|Unit_Name`, age `Age_Strat|Age|AGE`, description
+`Descriptio|Description|NOTES|NOTE`). Ties go to GeMS, then the template, then the coverage era,
+then the most rows, then the copy with fewer 10-character column names (a shapefile copy truncates
+them, a geodatabase copy does not), with a `unit_layer_ambiguous` warning when the candidates differ. The manifest records
 `unit_layer` {label, schema, code_column}. For GeMS the DMU is joined on the recorded relationship
 (on `MapUnit` with a `unit_dmu_unrelated` warning when none is recorded). The product is
 `<SID>/unit_polys.parquet` (EPSG:4326; `series_id, unit_code, unit_name, age, description,
@@ -221,16 +225,23 @@ records the version alone. The plate Item gets a `units` asset (`application/vnd
 
 After the self-heal an `--all` vectors run builds one identify layer per mosaic tier
 (`pubs/identify.py`): `<vectors prefix>/_identify/units-<tier>.pmtiles`, tile layer `units`, the same
-attributes. Members and their order are the mosaic bake's (`geolmap_mosaics._group_by_tier`,
-`_vrt_order`); each contributes its `unit_polys`, and a member without them contributes its polygons
+attributes. Members and their order are the mosaic bake's (`geolmap_mosaics._group_by_tier`, then
+`tier_members`: the 8-bit COGs in draw order, which the bake uses too; band types are cached in
+`_identify/cog_bands.json` by COG etag). Each polygon carries `rank`, its member's draw-order index
+(the viewer takes the highest rank at a point). Each member contributes its `unit_polys`, and a member without them contributes its polygons
 from the seamless `geolmap/units/units.parquet` (`unit_symbol`, `unit_name`, `age`; no description),
 filtered by `series_id`. The 24k layer is built although its mosaic is not published. Tiling uses
 the pub-layer flags (`sink_pmtiles.TILE_OPTS`: no feature or tile-size limit, no drop rate) plus
-`--no-tiny-polygon-reduction`, so no polygon is dropped. `_identify/<tier>.state.json` holds the
+`--no-tiny-polygon-reduction`, so no polygon is dropped. Tiles run from the mosaics' minimum zoom
+(`MOSAIC_MINZOOM`) to the tier's top zoom (`TIER_MAXZOOM`). `_identify/<tier>.state.json` holds the
 membership, each member's `unit_polys` checksum and the seamless file's etag; a tier is built only
 when one changed. The mosaic Item's `units` asset is added by the mosaics job's item writer
-(`_write_item`) and, for a mosaic already published, patched in place by the vectors run that built
-the layer.
+(`_write_item`) and, for a mosaic already published, patched in place (`stac.patch_published`,
+`target="assets"`) by the vectors run that built the layer. The state file is written only after
+that patch, and a run that finds the state current checks the Item again, so a failed patch is
+retried. The collection's `items.json` asset summary catches up at the next catalog refresh. The
+mosaic job reads the state from the source bucket and, for a review bake into another bucket, links
+the file by the public catalog's site.
 
 The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
 classes a geodatabase declares are read with `ogrinfo -json`; a geodatabase whose relationships

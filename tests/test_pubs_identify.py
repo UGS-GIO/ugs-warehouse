@@ -51,13 +51,15 @@ def run(monkeypatch, tmp_path):
         members: dict[str, list[str]] = {}
         sums: dict[str, str] = {}
         inputs: list[list[dict]] = []
+        opts: list[list[str]] = []
 
     def tiler(geojsonl, pmtiles, layer, **kw):
+        Run.opts.append(kw.get("extra_opts") or [])
         Run.inputs.append([json.loads(line) for line in Path(geojsonl).read_text().splitlines()])
         assert layer == "units"
         Path(pmtiles).write_bytes(b"tiles")
 
-    Run.members, Run.sums, Run.inputs = {}, {}, []
+    Run.members, Run.sums, Run.inputs, Run.opts = {}, {}, [], []
     monkeypatch.setattr(identify.sink_pmtiles, "run_tippecanoe", tiler)
     monkeypatch.setattr(identify, "membership", lambda: Run.members)
     monkeypatch.setattr(identify, "unit_checksums", lambda: (dict(Run.sums), []))
@@ -86,8 +88,10 @@ def test_a_tier_takes_own_polygons_then_seamless_ones_for_members_without(run, t
     by_code = {f["properties"]["unit_code"]: f["properties"] for f in features[3:]}
     seamless = by_code["Tc"]
     assert seamless == {"series_id": "B-2", "unit_code": "Tc", "unit_name": "Claron", "age": "Tertiary",
-                        "description": None, "source_label": "seamless"}
+                        "description": None, "source_label": "seamless", "rank": 1}
     assert by_code["Tk"]["unit_name"] is None  # blank becomes null
+    # rank is the member's draw-order index; the seamless fallback ranks like its member.
+    assert [f["properties"]["rank"] for f in features] == [0, 0, 2, 1, 1]
     assert gcs.get_bytes(identify.tiles_object("100k")) == b"tiles"
     state = json.loads(gcs.get_bytes(identify.state_object("100k")))
     assert state["members"] == ["A-1", "B-2", "C-3"] and state["features"] == {"own": 3, "seamless": 2}
@@ -145,3 +149,22 @@ def test_a_tier_with_no_polygons_builds_nothing(run, tmp_path):
     assert result.empty == ["250k"] and result.built == []
     with pytest.raises(FileNotFoundError):
         gcs.get_bytes(identify.state_object("250k"))
+
+
+def test_the_tiles_cover_the_mosaics_zooms_and_tippecanoe_works_in_the_work_dir(run, tmp_path):
+    from ugs_warehouse.pubs import geolmap_mosaics
+
+    _own(tmp_path, "A-1", ["Qal"], -112.0)
+    run.members = {"24k": ["A-1"], "100k": ["A-1"]}
+    run.sums = {"A-1": "sumA"}
+
+    identify.build_changed()
+
+    by_top = {}
+    for opts in run.opts:
+        flags = dict(zip(opts[::2], opts[1::2], strict=False))
+        by_top[flags["-z"]] = flags
+    assert set(by_top) == {"14", "12"}  # the 24k and 100k mosaics' top zooms
+    assert all(f["-Z"] == str(geolmap_mosaics.MOSAIC_MINZOOM) for f in by_top.values())
+    assert all(Path(f["-t"]).name.startswith("identify_") for f in by_top.values())
+    assert "--no-tiny-polygon-reduction" in run.opts[0]

@@ -217,7 +217,12 @@ Items carry `ugs:layer_kind`, `ugs:source_key` (the source dataset, the grouping
 `ugs:source_dataset` (its title, read from the whole folder path with generic names such as
 `Shapefiles` or `GIS_Data` dropped), and the Collection's `rel=item` links repeat all three so the
 viewer groups a pub's items without fetching them. The kind is `layer` for a spatial layer, `table`
-for a non-spatial one in a relationship the ingest publishes and `supporting` otherwise. A
+for a non-spatial one in a relationship the ingest publishes and `supporting` otherwise. A table or
+supporting Item has no geometry of its own, so it carries its publication's footprint (the Utah
+bbox when the pub has none) as geometry and bbox, with `ugs:footprint_source: "publication"`. It is
+an area of interest, not a place: the root index leaves their bbox out and the viewer's
+`hasFootprint` returns false for them, so Discover's coverage overlay, "On the map" count and map
+footprints skip them, and they stay searchable. A
 relationship to a GeMS validation layer or an empty layer is skipped, since neither is published;
 one naming any other label the manifest does not publish fails the pub. A relationship must say
 whether it was `declared` or `inferred` (with an integer `confidence`), or the pub fails.

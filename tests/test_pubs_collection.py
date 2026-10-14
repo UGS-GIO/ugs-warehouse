@@ -52,11 +52,7 @@ def test_items_live_under_the_publication_collection():
         assert rels["collection"] == "../collection.json" and rels["root"] == "../../../../catalog.json"
         assert rels["cite-as"] == "https://doi.org/10.34191/OFR-784DM"
         assert it["properties"]["sci:doi"] == "10.34191/OFR-784DM" and stac.SCI_EXT in it["stac_extensions"]
-        # A table has no geometry, so no bbox; everything else is placed.
-        if it["id"].endswith("geo__DMU"):
-            assert it["geometry"] is None and "bbox" not in it
-        else:
-            assert it["geometry"] and it["bbox"]
+        assert it["geometry"] and it["bbox"]
     assert coll["sci:doi"] == "10.34191/OFR-784DM" and coll["sci:citation"]
     assert stac.SCI_EXT in coll["stac_extensions"]
 
@@ -86,15 +82,15 @@ def test_plate_carries_the_cog_and_the_mosaic_link():
     assert any(lk["rel"] == "related" and "geologic-maps-24k" in lk["href"] for lk in plate["links"])
 
 
-def test_layer_uses_its_own_bbox_and_table_has_no_geometry():
+def test_layer_uses_its_own_bbox_and_table_uses_the_publication_footprint():
     _, items = _build()
     by_id = {it["id"]: it for it in items}
     assert by_id["OFR-784DM__geo__Faults"]["bbox"] == [-112.4, 40.6, -112.1, 40.9]
     assert by_id["OFR-784DM__geo__Faults"]["properties"]["table:row_count"] == 12
     assert by_id["OFR-784DM__geo__DMU"]["properties"]["table:row_count"] == 41
     table = by_id["OFR-784DM__geo__DMU"]
-    assert table["geometry"] is None and "bbox" not in table
-    assert "ugs:footprint_source" not in table["properties"]
+    assert table["geometry"] == FOOT and table["bbox"] == [-112.5, 40.5, -112.0, 41.0]
+    assert table["properties"]["ugs:footprint_source"] == sink_stac.TABLE_FOOTPRINT_SOURCE
     assert table["assets"]["data"]["table:columns"] == [{"name": "MapUnit", "type": "string"}]
     assert stac.TABLE_EXT in table["stac_extensions"]
 
@@ -103,7 +99,7 @@ def test_items_label_where_their_footprint_came_from():
     _, items = _build()
     src = {it["id"]: it["properties"].get("ugs:footprint_source") for it in items}
     assert src == {"OFR-784DM_plate": "cog", "OFR-784DM__geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
-                   "OFR-784DM__geo__DMU": None}
+                   "OFR-784DM__geo__DMU": sink_stac.TABLE_FOOTPRINT_SOURCE}
 
 
 def test_items_without_a_footprint_carry_the_fallback_label():
@@ -111,7 +107,7 @@ def test_items_without_a_footprint_carry_the_fallback_label():
     src = {it["id"]: it["properties"].get("ugs:footprint_source") for it in items}
     assert src == {"OFR-784DM_plate": sink_stac.FOOTPRINT_FALLBACK,
                    "OFR-784DM__geo__Faults": sink_stac.LAYER_BBOX_SOURCE,
-                   "OFR-784DM__geo__DMU": None}
+                   "OFR-784DM__geo__DMU": sink_stac.FOOTPRINT_FALLBACK}
 
 
 def test_a_collection_on_the_utah_placeholder_says_so():
@@ -462,6 +458,16 @@ def test_a_tiled_layers_index_entry_carries_its_web_map_link():
                     "href": "https://maps-assets.geology.utah.gov/geolmap/vectors/OFR-784DM/geo__Faults.pmtiles"}
     assert entry["assets"]["pmtiles"]["roles"] == ["visual"]
     assert stac._is_mappable(faults)
+
+
+def test_a_tables_index_entry_is_not_mappable_but_keeps_its_kind_for_search():
+    coll, items = _build()
+    dmu = next(it for it in items if it["id"] == "OFR-784DM__geo__DMU")
+    entry = stac._pub_item_index_entry(dmu, coll, prefix="ugs-publications/OFR/OFR-784DM/")
+    assert "bbox" not in entry and entry["properties"]["ugs:layer_kind"] in stac.NON_MAPPABLE_KINDS
+    assert entry["properties"]["title"] and not stac._is_mappable(dmu)
+    faults = next(it for it in items if it["id"] == "OFR-784DM__geo__Faults")
+    assert stac._pub_item_index_entry(faults, coll, prefix="x/")["bbox"] == faults["bbox"]
 
 
 def test_a_lone_tiled_layer_moves_its_tiles_and_link_to_the_collection():

@@ -633,7 +633,39 @@
         "stac_version": "1.1.0",
         "id": "OFR-784DM__geo__DMU",
         "collection": "OFR-784DM",
-        "geometry": null,
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -112.5,
+                40.5
+              ],
+              [
+                -112.0,
+                40.5
+              ],
+              [
+                -112.0,
+                41.0
+              ],
+              [
+                -112.5,
+                41.0
+              ],
+              [
+                -112.5,
+                40.5
+              ]
+            ]
+          ]
+        },
+        "bbox": [
+          -112.5,
+          40.5,
+          -112.0,
+          41.0
+        ],
         "properties": {
           "datetime": "2026-01-01T00:00:00Z",
           "title": "DMU",
@@ -644,7 +676,8 @@
           "description": "From geo",
           "ugs:layer_kind": "table",
           "ugs:source_key": "geo",
-          "ugs:source_dataset": "Geo"
+          "ugs:source_dataset": "Geo",
+          "ugs:footprint_source": "publication"
         },
         "assets": {
           "data": {
@@ -709,7 +742,39 @@
         "stac_version": "1.1.0",
         "id": "OFR-784DM__geo__Glossary",
         "collection": "OFR-784DM",
-        "geometry": null,
+        "geometry": {
+          "type": "Polygon",
+          "coordinates": [
+            [
+              [
+                -112.5,
+                40.5
+              ],
+              [
+                -112.0,
+                40.5
+              ],
+              [
+                -112.0,
+                41.0
+              ],
+              [
+                -112.5,
+                41.0
+              ],
+              [
+                -112.5,
+                40.5
+              ]
+            ]
+          ]
+        },
+        "bbox": [
+          -112.5,
+          40.5,
+          -112.0,
+          41.0
+        ],
         "properties": {
           "datetime": "2026-01-01T00:00:00Z",
           "title": "Glossary",
@@ -720,7 +785,8 @@
           "description": "From geo",
           "ugs:layer_kind": "supporting",
           "ugs:source_key": "geo",
-          "ugs:source_dataset": "Geo"
+          "ugs:source_dataset": "Geo",
+          "ugs:footprint_source": "publication"
         },
         "assets": {
           "data": {

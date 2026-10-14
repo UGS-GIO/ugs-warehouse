@@ -842,7 +842,10 @@ def _subcatalog_doc(catalog_id: str, children: list[dict], *, title: str | None 
 # `description`/citation is intentionally omitted; it loads with the full item on open.
 _INDEX_PROP_KEYS = ("title", "datetime", "ugs:series_id", "ugs:series", "ugs:pub_type",
                     "ugs:topic", "ugs:scale", "ugs:author", "ugs:county", "ugs:dbt_schema",
-                    "ugs:layer", "ugs:row_count", "ugs:volume", "keywords")
+                    "ugs:layer", "ugs:layer_kind", "ugs:row_count", "ugs:volume", "keywords")
+# `ugs:layer_kind` values for Items whose geometry is their publication's area of interest, not a
+# place on the map. The index leaves their bbox out and the viewer keeps them off the map.
+NON_MAPPABLE_KINDS = ("table", "supporting")
 # The asset fields an index entry keeps. Public: the topic-thumbnail job compares against them.
 INDEX_ASSET_KEYS = ("href", "type", "roles", "title")
 # The vector ingest's content fingerprint property (vector/fingerprint.py); it changes exactly when a
@@ -859,7 +862,8 @@ PLACEHOLDER_FOOTPRINT = "utah-bbox"
 def _no_footprint(doc: dict, props: dict) -> bool:
     """True for a document whose geometry is null or whose extent is the Utah placeholder."""
     return ("geometry" in doc and doc["geometry"] is None) \
-        or props.get("ugs:footprint_source") == PLACEHOLDER_FOOTPRINT
+        or props.get("ugs:footprint_source") == PLACEHOLDER_FOOTPRINT \
+        or props.get("ugs:layer_kind") in NON_MAPPABLE_KINDS
 
 
 def _index_entry(item: dict, *, rollup: bool = False, prefix: str | None = None,

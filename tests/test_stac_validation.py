@@ -175,7 +175,7 @@ def test_a_publication_whose_series_id_has_a_space_validates():
 
 
 def test_a_publication_with_a_table_and_no_footprint_validates():
-    """A companion table has null geometry and no bbox; a Collection on the Utah placeholder keeps
+    """A companion table carries the Utah placeholder as geometry and bbox; a Collection on the Utah placeholder keeps
     its required extent and flags it with `ugs:footprint_source`."""
     from ugs_warehouse.pubs import sink_stac as pubs_sink
 
@@ -186,7 +186,8 @@ def test_a_publication_with_a_table_and_no_footprint_validates():
     assert coll["ugs:footprint_source"] == pubs_sink.FOOTPRINT_FALLBACK
     _validate(_drop_private(coll))
     table = next(it for it in items if it["id"].endswith("geo__DMU"))
-    assert table["geometry"] is None and "bbox" not in table
+    assert table["geometry"] == stac.bbox_polygon(stac.UTAH_BBOX) and table["bbox"] == stac.UTAH_BBOX
+    assert table["properties"]["ugs:footprint_source"] == pubs_sink.FOOTPRINT_FALLBACK
     for it in items:
         _validate(_drop_private(it))
 

@@ -49,6 +49,8 @@ COG_MIME = config.COG_MIME
 # bounding box standing in for a missing footprint, and a layer's bbox from its manifest.
 FOOTPRINT_FALLBACK = stac.PLACEHOLDER_FOOTPRINT
 LAYER_BBOX_SOURCE = "layer"
+# A table with no geometry of its own sits on its publication's footprint.
+TABLE_FOOTPRINT_SOURCE = "publication"
 PARQUET_MIME = config.PARQUET_MIME
 
 # series_id alpha prefix -> canonical pub type (the free-text `series` field is dirty).
@@ -458,7 +460,8 @@ def build_publication(p: dict, attachments: list[dict], *,
             asset["table:columns"] = t["columns"]
         assets, exts = with_related(label, asset)
         items.append(item(ids[label], ltitle, assets,
-                          geometry=None, item_bbox=None,
+                          geometry=aoi, item_bbox=aoi_bbox,
+                          footprint_source=TABLE_FOOTPRINT_SOURCE if geom else FOOTPRINT_FALLBACK,
                           extra={**({"table:row_count": meta["rows"]} if meta.get("rows") is not None else {}),
                                  **({"description": ldesc} if ldesc else {}),
                                  **kind_props(label, False)},

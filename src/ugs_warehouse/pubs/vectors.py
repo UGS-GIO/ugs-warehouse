@@ -549,6 +549,11 @@ def _extract_and_upload(
     try:
         while pending:
             path, layer, label, is_spatial = pending.pop(0)
+            if label.casefold() == GPKG_RELATIONSHIPS:
+                manifest["errors"].append({
+                    "label": label,
+                    "error": f"label is reserved for the GeoPackage's {GPKG_RELATIONSHIPS} table"})
+                continue
             dst = os.path.join(work, f"{label}.parquet")
             gdf = df = None  # the previous layer is released before this one is read
             origin = origins.get(label)

@@ -17,10 +17,10 @@ pd = pytest.importorskip("pandas")
 Point = pytest.importorskip("shapely.geometry").Point
 
 
-@pytest.fixture(autouse=True)
-def _no_geopackage(monkeypatch):
-    """These tests use manifests without GeoParquet behind them; the GeoPackage build has its own
-    tests in test_pubs_geopackage.py."""
+@pytest.fixture
+def no_geopackage(monkeypatch):
+    """For tests that run extraction or the heal over manifests with no GeoParquet behind them: the
+    GeoPackage build is out of the picture. Its own tests are in test_pubs_geopackage.py."""
     monkeypatch.setattr(vectors, "needs_geopackage", lambda manifest: False)
     monkeypatch.setattr(vectors, "_geopackage_series", lambda series_id: (False, []))
 
@@ -1091,6 +1091,7 @@ def _heal(sids: list[str] | None, deadline: float | None = None) -> int:
     return 1 if heal.failed else 0
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_self_heal_tiles_only_layers_without_pmtiles(monkeypatch, tmp_path, capsys):
     store = _backfill_store(monkeypatch, tmp_path, {"M-300": _manifest(
         {"label": "done", "spatial": True, "pmtiles": True, "pmtiles_layer": "done"},
@@ -1108,6 +1109,7 @@ def test_self_heal_tiles_only_layers_without_pmtiles(monkeypatch, tmp_path, caps
     assert "Self-heal: 1 layers tiled, 0 pubs' relationships recorded" in capsys.readouterr().out
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_self_heal_skips_a_layer_with_no_geometry_to_tile(monkeypatch, tmp_path, capsys):
     store = _backfill_store(monkeypatch, tmp_path, {"M-307": _manifest(
         {"label": "blank", "spatial": True},
@@ -1118,6 +1120,7 @@ def test_self_heal_skips_a_layer_with_no_geometry_to_tile(monkeypatch, tmp_path,
     assert store == before and "Self-heal: 0 layers tiled" in capsys.readouterr().out
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_self_heal_visits_only_clean_manifests(monkeypatch, tmp_path):
     store = _backfill_store(monkeypatch, tmp_path, {
         "M-302": _manifest({"label": "a", "spatial": True}),
@@ -1150,6 +1153,7 @@ def test_a_layer_that_fails_to_tile_again_fails_the_heal_and_keeps_the_rest(monk
     assert vectors.tiling_failures(stored) == ["bad"]  # the next run retries it
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_self_heal_retries_a_failed_layer_and_clears_its_warning(monkeypatch, tmp_path):
     other = {"label": "a", "warning": "bbox not computed: x"}
     store = _backfill_store(monkeypatch, tmp_path, {"M-305": _manifest(
@@ -1214,6 +1218,7 @@ def _gems_store(monkeypatch, tmp_path, sid: str, **manifest_kw):
     return store
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_batch_run_heals_a_clean_pub_missing_tiles_and_relationships(monkeypatch, tmp_path, capsys):
     store = _gems_store(monkeypatch, tmp_path, "M-1DM")
     _batch_run(monkeypatch, ["M-1DM"])
@@ -1230,6 +1235,7 @@ def test_a_batch_run_heals_a_clean_pub_missing_tiles_and_relationships(monkeypat
     assert "Self-heal: 0 layers tiled, 0 pubs' relationships recorded" in capsys.readouterr().out
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_targeted_run_heals_the_pubs_it_names(monkeypatch, tmp_path):
     import sys
 
@@ -1239,6 +1245,7 @@ def test_a_targeted_run_heals_the_pubs_it_names(monkeypatch, tmp_path):
     assert vectors.pmtiles_object("M-2DM", "geo__Polys") in store
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_batch_run_keeps_what_each_manifest_needs_not_the_manifest(monkeypatch, tmp_path):
     store = _gems_store(monkeypatch, tmp_path, "M-3DM")
     path = f"{vectors.VECTORS_PREFIX}/M-3DM/_manifest.json"
@@ -1272,6 +1279,7 @@ def test_the_tile_and_relations_heals_share_one_conditional_manifest_update(monk
     assert doc["layers"][0]["pmtiles"] is True and doc["relations_version"]
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(monkeypatch, tmp_path, capsys):
     store = _backfill_store(monkeypatch, tmp_path, {
         f"M-{n}": _manifest({"label": "a", "spatial": True}, {"label": "b", "spatial": True})
@@ -1335,6 +1343,7 @@ def test_a_targeted_run_extracts_every_pub_it_names_past_the_budget(monkeypatch,
 
 
 @pytest.mark.parametrize("step", ["_tile_missing", "_relations_series"])
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_series_that_raises_fails_the_run_and_the_next_series_still_heals(
         monkeypatch, tmp_path, capsys, step):
     store = _gems_store(monkeypatch, tmp_path, "M-20")
@@ -1357,6 +1366,7 @@ def test_a_series_that_raises_fails_the_run_and_the_next_series_still_heals(
     assert vectors.pmtiles_object("M-21", "geo__Polys") in store
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_self_heal_records_a_raising_series_in_failed(monkeypatch, tmp_path):
     _backfill_store(monkeypatch, tmp_path, {"M-1": _manifest({"label": "a", "spatial": True}),
                                             "M-2": _manifest({"label": "b", "spatial": True})})
@@ -1395,6 +1405,7 @@ def test_a_targeted_run_does_not_heal_a_pub_it_just_extracted(monkeypatch, tmp_p
     assert vectors._clean_manifest_of("M-205")  # clean, so only the exclusion kept it out
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_retried_tiling_failure_fails_the_run(monkeypatch, tmp_path, capsys):
     _backfill_store(monkeypatch, tmp_path, {"M-1DM": _manifest(
         {"label": "failed", "spatial": True},
@@ -1409,6 +1420,7 @@ def test_a_retried_tiling_failure_fails_the_run(monkeypatch, tmp_path, capsys):
     assert "1 self-heal failures this run (the next run retries them): M-1DM/failed" in capsys.readouterr().err
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_series_with_only_a_failed_layer_to_retry_goes_last(monkeypatch, tmp_path):
     _backfill_store(monkeypatch, tmp_path, {
         "M-1": _manifest({"label": "failed", "spatial": True}, warnings=[
@@ -1420,6 +1432,7 @@ def test_a_series_with_only_a_failed_layer_to_retry_goes_last(monkeypatch, tmp_p
     assert order == ["M-2", "M-1"]
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_relations_version_bump_recomputes_relationships(monkeypatch, tmp_path, capsys):
     store = _gems_store(monkeypatch, tmp_path, "M-3DM")
     assert _heal(["M-3DM"]) == 0
@@ -1593,6 +1606,7 @@ def _gems_parquet():
             "geo__Glossary": pd.DataFrame({"Term": ["certain", "questionable"]})}
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_relations_backfill_records_them_from_the_extracted_geoparquet(monkeypatch, tmp_path, capsys):
     import pyarrow.parquet as pq
 
@@ -1618,6 +1632,7 @@ def test_relations_backfill_records_them_from_the_extracted_geoparquet(monkeypat
     assert "1 pubs' relationships recorded" in capsys.readouterr().out
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_relations_backfill_keeps_declared_relationships_and_is_idempotent(monkeypatch, tmp_path):
     declared = {"origin": "geo__Glossary", "origin_cols": ["Term"],
                 "destination": "geo__DescriptionOfMapUnits", "destination_cols": ["MapUnit"],
@@ -1652,6 +1667,7 @@ def test_extraction_and_backfill_scope_collided_geodatabases_the_same_way(monkey
         (f"sub__{stem}__MapUnitPolys", f"sub__{stem}__DescriptionOfMapUnits")]
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_relations_backfill_leaves_shapefiles_of_unknown_folder_out(monkeypatch, tmp_path):
     polys = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf"], "geometry": [Point(424000, 4512000)] * 2},
                              crs="EPSG:26912")
@@ -1676,6 +1692,7 @@ def test_relations_backfill_leaves_shapefiles_of_unknown_folder_out(monkeypatch,
     assert store[f"{vectors.VECTORS_PREFIX}/M-403/_manifest.json"] == before
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_relations_backfill_scopes_bare_shapefiles_together_when_there_is_one_folder(monkeypatch, tmp_path):
     polys = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf"], "geometry": [Point(424000, 4512000)] * 2},
                              crs="EPSG:26912")
@@ -1754,6 +1771,7 @@ def _no_tiling(monkeypatch):
     monkeypatch.setattr(vectors, "_tile_layer", boom)
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_an_ingest_heals_relationships_but_never_tiles(monkeypatch, tmp_path, capsys):
     store = _gems_store(monkeypatch, tmp_path, "M-1DM")
     ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}])
@@ -1793,6 +1811,7 @@ def test_a_heal_failure_fails_the_ingest_like_a_publication(monkeypatch, tmp_pat
     assert any(d["id"] == "M-1DM__geo__Polys" for d in written)  # the pub is still written
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_an_ingest_limited_to_a_series_heals_only_that_series(monkeypatch, tmp_path):
     store = _two_gems_pubs(monkeypatch, tmp_path, "M-1DM", "OFR-5")
     ingest, _ = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"},
@@ -1820,6 +1839,7 @@ def test_a_pub_whose_heal_and_write_both_fail_counts_once(monkeypatch, tmp_path,
     assert "FAILED M-1DM: self-heal" in err and "FAILED M-1DM: ValueError: bad publication" in err
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_the_ingest_reads_each_manifest_once_and_rereads_only_what_the_heal_changed(monkeypatch, tmp_path):
     store = _two_gems_pubs(monkeypatch, tmp_path, "M-1DM", "OFR-5")
     # OFR-5 is already current; only M-1DM needs relationships.
@@ -1846,6 +1866,7 @@ def test_the_ingest_reads_each_manifest_once_and_rereads_only_what_the_heal_chan
     assert sorted(reads) == ["M-1DM", "M-1DM", "OFR-5"]  # the healed one twice, the rest once
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_the_needs_index_holds_labels_not_manifest_content(monkeypatch, tmp_path):
     """The ingest keeps a small index for the heal; the columns and WKT2 live only in the reduced
     manifests the items are built from."""
@@ -1867,6 +1888,7 @@ def test_a_clean_manifests_reducer_runs_in_the_reading_thread_and_keeps_only_its
     assert kept == {"M-6": ("M-6", 1)} and store
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_healed_relationships_reach_the_items_in_the_same_run(monkeypatch, tmp_path):
     store = _gems_store(monkeypatch, tmp_path, "M-1DM")
     ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}],
@@ -2071,6 +2093,7 @@ def _stored_manifest(store, sid="M-500"):
     return json.loads(store[f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json"])
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_self_heal_styles_a_tiled_layer_with_the_default_look_and_records_it(monkeypatch, tmp_path, capsys):
     store = _styled_pub(monkeypatch, tmp_path)
 
@@ -2085,6 +2108,7 @@ def test_self_heal_styles_a_tiled_layer_with_the_default_look_and_records_it(mon
     assert not vectors.needs_of(manifest).styles  # nothing left for the next run
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_layer_style_that_cannot_be_written_fails_loud_and_is_retried(monkeypatch, tmp_path):
     store = _styled_pub(monkeypatch, tmp_path)
     put = vectors.gcs.put_bytes
@@ -2105,6 +2129,7 @@ def test_a_layer_style_that_cannot_be_written_fails_loud_and_is_retried(monkeypa
     assert vectors.needs_of(manifest).styles
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_styles_are_rewritten_when_the_style_version_is_bumped(monkeypatch, tmp_path):
     store = _styled_pub(monkeypatch, tmp_path, style="geo__Polys.style.json")
     manifest = _stored_manifest(store)
@@ -2118,6 +2143,7 @@ def test_styles_are_rewritten_when_the_style_version_is_bumped(monkeypatch, tmp_
     assert _stored_manifest(store)["style_version"] == vectors.layer_style.STYLE_VERSION
 
 
+@pytest.mark.usefixtures("no_geopackage")
 def test_a_layer_without_tiles_is_styled_in_the_heal_that_tiles_it(monkeypatch, tmp_path):
     store = _backfill_store(monkeypatch, tmp_path, {"M-501": _manifest(
         {"label": "todo", "spatial": True, "geometry_types": ["Point"]})})
@@ -2158,3 +2184,27 @@ def test_an_ingest_binds_the_generated_style_to_a_single_file_collection(monkeyp
     style_url = f"/{vectors.VECTORS_PREFIX}/M-600/faults.style.json"
     assert coll["ugs:renders"]["default"]["style_url"].endswith(style_url)
     assert coll["assets"]["style"]["roles"] == ["style"] and "pmtiles" in coll["assets"]
+
+
+def test_a_clean_manifest_without_a_geopackage_needs_one_from_the_heal():
+    manifest = {"layers": [{"label": "geo__DMU", "spatial": False, "rows": 1, "checksum": "1220ab"}],
+                "relations_version": vectors.relations.RELATIONS_VERSION}
+
+    assert vectors.needs_of(manifest).geopackage
+    manifest["geopackage"] = {"version": vectors.GEOPACKAGE_VERSION,
+                              "inputs": vectors._geopackage_inputs(manifest), "bytes": 1}
+    assert not vectors.needs_of(manifest).geopackage
+
+
+@pytest.mark.usefixtures("no_geopackage")
+def test_a_layer_named_like_the_geopackage_relationships_table_is_an_error(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    table_df = pd.DataFrame({"a": [1]})
+    monkeypatch.setattr("pyogrio.read_dataframe", lambda path, layer=None, read_geometry=True: table_df)
+
+    manifest = vectors._extract_and_upload(
+        str(tmp_path), "M-110", [("b.gdb", "x", "Ugs_Relationships", False)])
+
+    assert manifest["tables"] == []
+    assert manifest["errors"] == [{"label": "Ugs_Relationships",
+                                   "error": "label is reserved for the GeoPackage's ugs_relationships table"}]

@@ -88,7 +88,7 @@ Open <https://data.geology.utah.gov/>.
 
 On a publication's page, **Download all data (GeoPackage)** gives every layer and table of the
 publication in one file, each layer in its own coordinate system. A table of the publication's
-relationships (`ugs_relationships`) is included. Publications with very large data (over 2 GB of
+relationships (`ugs_relationships`) is included. Publications with very large data (over 1 GiB of
 GeoParquet) do not have this file; download their layers one at a time.
 
 Use the viewer to look at data, download a layer once, or share a link. For work that you repeat,

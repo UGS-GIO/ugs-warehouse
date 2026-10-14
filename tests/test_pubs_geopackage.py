@@ -140,9 +140,19 @@ def test_a_pub_over_the_size_limit_gets_a_warning_and_no_geopackage(pub, monkeyp
     assert not vectors.needs_geopackage(manifest)  # and it is not tried again every run
 
 
-def test_the_limit_is_two_gib_and_a_530_mb_pub_is_under_it():
-    assert vectors.MAX_GPKG_BYTES == 2**30
-    assert 530 * 10**6 < vectors.MAX_GPKG_BYTES
+@pytest.mark.parametrize("over, built", [(1, False), (0, True), (-1, True)])
+def test_the_cap_is_judged_at_the_real_boundary(pub, monkeypatch, over, built):
+    """A GeoParquet total just over MAX_GPKG_BYTES is skipped with the warning; at it or under
+    it builds. Sizes are the manifest's, so no big files are made."""
+    manifest = pub.read_manifest()
+    manifest["layers"][0]["bytes"] = vectors.MAX_GPKG_BYTES + over - manifest["layers"][1]["bytes"]
+    pub.manifest(manifest)
+
+    vectors._geopackage_series(SID)
+
+    assert (f"{PREFIX}/{SID}.gpkg" in pub.store) is built
+    codes = [w["code"] for w in pub.read_manifest()["warnings"]]
+    assert (vectors.GEOPACKAGE_SKIPPED in codes) is (not built)
 
 
 def test_it_rebuilds_only_when_a_layer_file_or_a_relationship_changes(pub, tmp_path):

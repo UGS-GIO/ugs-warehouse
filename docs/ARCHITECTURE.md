@@ -247,23 +247,29 @@ whether it was `declared` or `inferred` (with an integer `confidence`), or the p
 **GeoPackage.** Each pub with extracted layers also gets one `geolmap/vectors/<SID>/<SID>.gpkg`
 holding every layer in its own CRS, every table without geometry, and a `ugs_relationships` table
 (`origin_table`, `origin_columns`, `destination_table`, `destination_columns`, `detected_by`,
-`confidence`) listing the manifest's relationships. The Related Tables Extension
+`confidence`) listing the manifest's relationships. A layer labelled `ugs_relationships` is an
+extraction error, since it would collide with that table. The Related Tables Extension
 (`gpkgext_relations`) is not written: the image's GDAL Python bindings are not installed and
 pyogrio has no relationship API, so the relationships ride in a plain attribute table. The vectors
 job builds it after extraction and in the self-heal, one layer at a time: each GeoParquet is
-downloaded, appended in 20,000-row record batches with pyogrio (`write_arrow` for layers, the
-bbox covering column dropped; `write_dataframe` for tables), and deleted, so no layer is held whole.
-The file is built on the job's RAM-backed disk and uploaded with
-`application/geopackage+sqlite3`, then deleted. The manifest records `geopackage`
-{`bytes`, `checksum`, `version`, `inputs`}; `inputs` digests every layer's GeoParquet checksum
-(recorded per layer at upload, filled in for older manifests) and the relationships, so the file is
-rebuilt only when a layer file or a relationship changes, or `GEOPACKAGE_VERSION` is bumped. A pub whose
-GeoParquet totals over `MAX_GPKG_BYTES` (1 GiB, a module constant) gets a `geopackage_skipped`
-warning naming the size and no file. GeMS validation layers (and relationships to them) are left out, as in
-the catalog. A failed first build gets `geopackage_failed` and no record; a failed rebuild keeps the
-previous file and record with a `geopackage_stale` warning. Either is listed, fails the run and is retried. The ingest adds a `geopackage` asset (`application/geopackage+sqlite3`, role
-`data`, `file:size`, `file:checksum`) to the pub's Collection, only when the manifest records one;
-the publication page links it as "Download all data". The ingest does not build it.
+downloaded, appended in 20,000-row record batches with pyogrio (`write_arrow` for layers, the bbox
+covering column dropped; `write_dataframe` for tables), and deleted, so no layer is held whole. The
+file is built on the job's RAM-backed disk, uploaded with `application/geopackage+sqlite3`, then
+deleted.
+
+The manifest records `geopackage` {`bytes`, `checksum`, `version`, `inputs`}. `inputs` digests every
+layer's GeoParquet checksum (recorded per layer at upload, filled in for older manifests) and the
+relationships, so the file is rebuilt only when a layer file or a relationship changes, or
+`GEOPACKAGE_VERSION` is bumped. A pub whose GeoParquet totals over `MAX_GPKG_BYTES` (1 GiB, a module
+constant) gets a `geopackage_skipped` warning naming the size and no file. A pub that grows over the
+cap loses the asset, and its old `.gpkg` stays in the bucket until a prune. GeMS validation layers
+(and relationships to them) are left out, as in the catalog. A failed first build gets
+`geopackage_failed` and no record; a failed rebuild keeps the previous file and record with a
+`geopackage_stale` warning. Either is listed, fails the run and is retried.
+
+The ingest adds a `geopackage` asset (`application/geopackage+sqlite3`, role `data`, `file:size`,
+`file:checksum`) to the pub's Collection, only when the manifest records one, single-file pubs
+included. The publication page links it as "Download all data". The ingest does not build it.
 
 **Self-heal.** After extracting new pubs and retrying failed ones, every vectors run (`--all`, or
 `python -m ugs_warehouse.pubs.vectors SID ...` for those SIDs) fills in what cleanly extracted pubs

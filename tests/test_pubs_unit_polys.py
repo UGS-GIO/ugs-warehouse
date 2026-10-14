@@ -21,7 +21,7 @@ def _codes(warnings: list[dict]) -> set[str]:
 
 # Real manifests from the rehearsal run: (series id, schema, chosen layer, code column).
 CHOSEN = [
-    ("OFR-774DM", "gems", "OFR-774DM_NorthOgden__MapUnitPolys", "MapUnit"),
+    ("OFR-774DM", "gems", "NorthOgden__MapUnitPolys", "MapUnit"),
     ("M-127DR", "template", "AntelopeIsland_GeologicUnits", "UnitSymbol"),
     ("M-180DM", "coverage", None, "UNITSYMBOL"),
     ("M-210", "coverage", "geology_poly", "UNITSYMBOL"),
@@ -34,13 +34,13 @@ def test_each_schema_is_picked_with_its_code_column(sid, schema, label, code):
 
     assert sel is not None and sel.schema == schema and sel.code_column == code
     if label:
-        assert sel.label == label
+        assert sel.label.endswith(label)
 
 
 def test_a_quad_name_in_the_label_does_not_exclude_a_unit_layer():
     sel, _ = unit_polys.select(_manifest("OFR-713DR"))
 
-    assert sel is not None and sel.label == "CedarMesa_BoundaryButte_GeologicUnits"
+    assert sel is not None and sel.label.endswith("CedarMesa_BoundaryButte_GeologicUnits")
 
 
 @pytest.mark.parametrize("sid", ["M-246DM", "M-226DM", "MP-09-4DM", "OFR-776", "SS-152", "RI-287",
@@ -52,9 +52,37 @@ def test_landslide_owner_glacial_wetland_and_bedrock_potential_layers_are_never_
 
 
 def test_a_layer_named_like_a_unit_layer_without_its_code_column_is_reported_not_picked():
-    sel, warnings = unit_polys.select(_manifest("DS-2"))
+    manifest = {"layers": [_layer("Quad_GeologicUnits", 5, ["Label", "Name"])]}
+
+    sel, warnings = unit_polys.select(manifest)
 
     assert sel is None and _codes(warnings) == {unit_polys.UNIT_LAYER_UNUSABLE}
+
+
+def test_columns_match_ignoring_case_and_underscores():
+    sel, _ = unit_polys.select(_manifest("DS-2"))  # Unit_Symbol, Unit_Name, Age_Strat, Description
+
+    assert sel.label.endswith("IBM_UT_GeologicUnits") and sel.schema == "template"
+    assert (sel.code_column, sel.name_column, sel.age_column, sel.description_column) == (
+        "Unit_Symbol", "Unit_Name", "Age_Strat", "Description")
+
+
+@pytest.mark.parametrize(("columns", "expected"), [
+    (["UnitSymbol", "UnitName", "Age", "Description"], ("Age", "Description")),
+    (["UNITSYMBOL", "UNITNAME", "AGE", "NOTES"], ("AGE", "NOTES")),
+    (["UnitSymbol", "Unit_Name", "Age_Strat", "Age", "NOTE"], ("Age_Strat", "NOTE")),
+    (["UnitSymbol", "Descriptio", "Description"], (None, "Descriptio"))])
+def test_age_and_description_take_the_first_candidate_the_layer_has(columns, expected):
+    sel, _ = unit_polys.select({"layers": [_layer("Quad_GeologicUnits", 5, columns)]})
+
+    assert (sel.age_column, sel.description_column) == expected
+
+
+def test_a_shapefile_and_a_geodatabase_copy_of_one_layer_prefer_the_untruncated_columns():
+    sel, warnings = unit_polys.select(_manifest("M-249DM"))
+
+    assert sel.label == "ThompsonPoint_M-249DM__ThompsonPoint_GeologicUnits"
+    assert unit_polys.UNIT_LAYER_AMBIGUOUS in _codes(warnings)  # A_Units and B_Units are other candidates
 
 
 def test_gems_joins_the_description_table_on_the_recorded_relationship():

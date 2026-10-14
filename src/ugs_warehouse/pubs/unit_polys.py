@@ -50,22 +50,31 @@ class Schema:
     at its end so a quad name in the prefix never matters) and the columns that hold each field."""
     name: str
     pattern: re.Pattern
-    code: str
-    unit_name: str
-    age: str
-    description: str
+    code: tuple[str, ...]
+    unit_name: tuple[str, ...]
+    age: tuple[str, ...]
+    description: tuple[str, ...]
 
+
+# Column candidates in priority order. A column matches ignoring case and underscores, so
+# `UnitSymbol`, `UNITSYMBOL` and `Unit_Symbol` are one candidate. `Descriptio` is the 10-character
+# truncation a shapefile gives `Description`.
+CODE = ("UnitSymbol", "UNITSYMBOL", "Unit_Symbol", "MapUnit")
+NAME = ("UnitName", "UNITNAME", "Unit_Name")
+AGE = ("Age_Strat", "Age", "AGE")
+DESCRIPTION = ("Descriptio", "Description", "NOTES", "NOTE")
 
 # Ranked: GeMS wins a tie, then the template, then the coverage era.
-GEMS = Schema("gems", re.compile(r"mapunitpolys$"), "MapUnit", "Name", "Age", "Description")
+GEMS = Schema("gems", re.compile(r"mapunitpolys$"), ("MapUnit",), ("Name",), ("Age",), ("Description",))
 TEMPLATE = Schema("template", re.compile(r"geologicunits?(?:_nad\d{2}|_\d{8})?$"),
-                  "UnitSymbol", "UnitName", "Age_Strat", "Descriptio")
+                  CODE, NAME, AGE, DESCRIPTION)
 COVERAGE = Schema("coverage", re.compile(r"(?:^|[_-])(?:geounits?|units?|geology_?polys?)$"),
-                  "UNITSYMBOL", "UNITNAME", "AGE", "NOTES")
+                  CODE, NAME, AGE, DESCRIPTION)
 SCHEMAS = (GEMS, TEMPLATE, COVERAGE)
 
 DMU_NAME = "descriptionofmapunits"
-FULL_NAME = "FullName"
+FULL_NAME = ("FullName",)
+TRUNCATED_LENGTH = 10   # a shapefile column name is cut at 10 characters
 
 
 @dataclass(frozen=True)
@@ -88,9 +97,18 @@ class Selection:
         return {"label": self.label, "schema": self.schema, "code_column": self.code_column}
 
 
-def _column(columns: list[str], wanted: str) -> str | None:
-    """The layer's spelling of the column `wanted`, ignoring case."""
-    return next((c for c in columns if c.casefold() == wanted.casefold()), None)
+def _norm(name: str) -> str:
+    return name.replace("_", "").casefold()
+
+
+def _column(columns: list[str], wanted: tuple[str, ...] | str) -> str | None:
+    """The layer's spelling of the first of the `wanted` candidates it has, ignoring case and
+    underscores."""
+    for want in (wanted,) if isinstance(wanted, str) else wanted:
+        hit = next((c for c in columns if _norm(c) == _norm(want)), None)
+        if hit:
+            return hit
+    return None
 
 
 def _has_polygons(entry: dict) -> bool:
@@ -140,11 +158,12 @@ def _dmu_join(manifest: dict, unit: dict, unit_code: str) -> tuple[dict | None, 
 def select(manifest: dict) -> tuple[Selection | None, list[dict]]:
     """(the unit layer, warnings) for a manifest. A layer qualifies when it has polygon rows, a
     name matching one schema (`SCHEMAS`) and that schema's unit-code column. Among several, the
-    schema rank decides (GeMS, template, coverage), then the most rows, then the label; the
+    schema rank decides (GeMS, template, coverage), then the most rows, then the fewest 10-character
+    column names (a shapefile copy truncates them, a geodatabase copy does not), then the label; the
     others are named in a UNIT_LAYER_AMBIGUOUS warning. A layer that matches a name but lacks
     the code column is named in a UNIT_LAYER_UNUSABLE warning when nothing qualifies."""
     warnings: list[dict] = []
-    found: list[tuple[int, int, str, Schema, dict, str]] = []
+    found: list[tuple[int, int, int, str, Schema, dict, str]] = []
     unusable: list[str] = []
     for entry in manifest.get("layers") or []:
         if not _has_polygons(entry):
@@ -155,7 +174,8 @@ def select(manifest: dict) -> tuple[Selection | None, list[dict]]:
                 continue
             code = _column(_names(entry), schema.code)
             if code:
-                found.append((rank, -entry["rows"], entry["label"], schema, entry, code))
+                cut = sum(len(c) == TRUNCATED_LENGTH for c in _names(entry))
+                found.append((rank, -entry["rows"], cut, entry["label"], schema, entry, code))
             else:
                 unusable.append(entry["label"])
             break
@@ -165,14 +185,14 @@ def select(manifest: dict) -> tuple[Selection | None, list[dict]]:
                                      f"polygon layers named like unit layers lack a unit-code "
                                      f"column: {', '.join(sorted(unusable))}"))
         return None, warnings
-    found.sort(key=lambda f: f[:3])
-    _, _, label, schema, entry, code = found[0]
+    found.sort(key=lambda f: f[:4])
+    _, _, _, label, schema, entry, code = found[0]
     # The same layer listed under a bare and a folder-prefixed label has equal rows and is not a choice.
     if any(f[:2] != found[0][:2] for f in found[1:]):
         warnings.append(_warning(
             UNIT_LAYER_AMBIGUOUS, label,
             f"{len(found)} candidate unit layers; chose {label} ({schema.name}), left out "
-            f"{', '.join(f[2] for f in found[1:])}"))
+            f"{', '.join(f[3] for f in found[1:])}"))
     if schema is GEMS:
         dmu, join, warn = _dmu_join(manifest, entry, code)
         if warn:
@@ -303,7 +323,7 @@ def build(series_id: str, manifest: dict) -> None:
             con.close()
         pmtiles = os.path.join(work, "unit_polys.pmtiles")
         sink_pmtiles.run_tippecanoe(geojsonl, pmtiles, TILE_LAYER, what=f"{series_id}/unit_polys",
-                                    extra_opts=sink_pmtiles.IDENTIFY_OPTS)
+                                    extra_opts=["-t", work, *sink_pmtiles.IDENTIFY_OPTS])
         os.remove(geojsonl)
         pq_meta = gcs.upload(parquet, vectors.unit_polys_object(series_id),
                              content_type=config.PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)

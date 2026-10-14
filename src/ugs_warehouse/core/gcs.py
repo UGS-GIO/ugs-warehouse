@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import io
 import sys
 import time
 from collections.abc import Iterator
@@ -286,6 +287,38 @@ def download(object_path: str, dest: str, *, bucket: str | None = None) -> None:
     with open(dest, "wb") as f:
         for chunk in res.stream(min_chunk_size=_HASH_CHUNK):
             f.write(chunk)
+
+
+class _ObjectReader(io.RawIOBase):
+    """A seekable file object over an obstore reader, which pyarrow needs (`closed`, `readable`)."""
+
+    def __init__(self, reader) -> None:
+        super().__init__()
+        self._reader = reader
+
+    def readable(self) -> bool:
+        return True
+
+    def seekable(self) -> bool:
+        return True
+
+    def readinto(self, buf) -> int:
+        data = self._reader.read(len(buf))
+        buf[: len(data)] = data
+        return len(data)
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
+        return self._reader.seek(offset, whence)
+
+    def tell(self) -> int:
+        return self._reader.tell()
+
+
+def open_reader(object_path: str) -> io.RawIOBase:
+    """A seekable file object over an object, read with range requests. `pq.ParquetFile` over it
+    fetches the footer and only the column chunks asked for, so a few columns of a large file are
+    read without downloading it."""
+    return _ObjectReader(obs.open_reader(_store(), object_path))
 
 
 def get_tail(object_path: str, length: int) -> bytes:

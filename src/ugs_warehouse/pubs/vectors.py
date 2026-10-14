@@ -10,7 +10,8 @@ layers (contacts, faults, folds, etc.) and their companion tables to GCS and STA
 ingest) doesn't have to guess from names, plus each layer's rows, columns, CRS and WGS84 bbox,
 the layers that were empty, and every layer or geodatabase that could not be read. Each spatial
 layer is also tiled to `<label>.pmtiles` (EPSG:4326, one tile layer named for the label) for map
-display; its manifest entry records `pmtiles` and `pmtiles_layer`. A layer whose tiling fails
+display, by DuckDB exporting its GeoParquet to GeoJSONSeq for tippecanoe; its manifest entry records
+`pmtiles` and `pmtiles_layer`. A layer whose tiling fails
 keeps its GeoParquet and gets a `pmtiles_failed` warning.
 
 The manifest also lists the relationships between a bundle's layers and tables (`relations.py`):
@@ -42,9 +43,10 @@ import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
+from typing import NamedTuple
 
 from ..core import config, gcs
-from ..vector import sink_pmtiles
+from ..vector import sink_pmtiles, transform
 from . import geoparquet, harvest, identity, relations, source
 
 VECTORS_PREFIX = os.environ.get("GEOLMAP_VECTORS_PREFIX", "geolmap/vectors")
@@ -219,12 +221,16 @@ def _table_type(arrow_type) -> str:
     return str(t)
 
 
-def _schema(parquet_path: str) -> tuple[list[dict], dict | None]:
+def _schema(source) -> tuple[list[dict], dict | None]:
     """The written file's columns in the STAC table extension's shape ([{name, type}]) and its
-    GeoParquet `geo` metadata, if any. Reading both from the file keeps it the single source."""
+    GeoParquet `geo` metadata, if any. `source` is a path or file object. Reading both from the
+    file keeps it the single source."""
     import pyarrow.parquet as pq
 
-    schema = pq.read_schema(parquet_path)
+    return _columns_of(pq.read_schema(source))
+
+
+def _columns_of(schema) -> tuple[list[dict], dict | None]:
     meta = schema.metadata or {}
     geo = json.loads(meta[b"geo"]) if b"geo" in meta else None
     geom_cols = set((geo or {}).get("columns", {}))
@@ -282,23 +288,83 @@ def pmtiles_object(series_id: str, label: str) -> str:
     return f"{VECTORS_PREFIX}/{series_id}/{label}.pmtiles"
 
 
-def _tile_layer(gdf, series_id: str, label: str, tmp: str | None = None) -> bool:
-    """Tile `gdf` as `<label>.pmtiles` beside its GeoParquet: reprojected to EPSG:4326 (tippecanoe
-    reads lon/lat), one tile layer named `label`, built with the serving topics' tippecanoe flags.
-    Returns False, writing nothing, when no row has a geometry. Temp files go under `tmp` and are
-    deleted before returning, since the job's disk is memory. Reprojects `gdf` in place, since the
-    callers are done with it, so the most it holds is `gdf` plus, when some rows have no geometry,
-    a copy without them."""
-    blank = (gdf.geometry.isna() | gdf.geometry.is_empty).to_numpy()
-    if blank.all():
-        return False
+# DuckDB's memory cap for one tiling export. The export streams, so this bounds one wide row
+# group, not the layer.
+TILE_DUCKDB_MEMORY = os.environ.get("VECTORS_TILE_DUCKDB_MEMORY", "1GB")
+
+
+def _ident(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _literal(text: str) -> str:
+    return "'" + text.replace("'", "''") + "'"
+
+
+def _source_crs(entry: dict, geo: dict, geom_col: str) -> str:
+    """The CRS the layer's coordinates are in, for DuckDB's ST_Transform: the manifest's EPSG code
+    when it recorded one, else its WKT2, else the GeoParquet's own CRS. Raises when there is none,
+    since reprojecting from a guessed CRS would put the tiles in the wrong place."""
+    if entry.get("proj_code"):
+        return entry["proj_code"]
+    if entry.get("proj_wkt2"):
+        return entry["proj_wkt2"]
+    projjson = (geo.get("columns", {}).get(geom_col) or {}).get("crs")
+    if projjson:
+        from pyproj import CRS
+
+        return CRS.from_user_input(projjson).to_wkt()
+    raise ValueError("no CRS recorded for the layer; cannot reproject it to EPSG:4326")
+
+
+def _write_wgs84(parquet: str, entry: dict, geojsonl: str) -> bool:
+    """Write the layer's GeoParquet as GeoJSONSeq in lon/lat, through DuckDB (the export streams, so
+    the layer is never in memory). Rows with no geometry or an empty one are left out before
+    reprojecting. `always_xy` keeps coordinates in lon/lat order whatever the source CRS's axis order.
+    Returns False, writing nothing, when no row has a geometry."""
+    import duckdb
+
+    columns, geo = _schema(parquet)
+    geo = geo or {}
+    col = geo.get("primary_column")
+    if not col:
+        raise ValueError("the GeoParquet has no geometry column in its metadata")
+    # The bbox covering column is an index, not an attribute, so it does not go into the tiles.
+    covering = ((geo.get("columns", {}).get(col) or {}).get("covering") or {}).get("bbox") or {}
+    drop = {col, *(v[0] for v in covering.values() if isinstance(v, list) and v)}
+    props = [_ident(c["name"]) for c in columns if c["name"] not in drop]
+    crs = _source_crs(entry, geo, col)
+    geom = _ident(col)
+    wgs84 = geom if crs.upper() == "EPSG:4326" else (
+        f"ST_Transform({geom}, {_literal(crs)}, 'EPSG:4326', always_xy := true)")
+    con = duckdb.connect()
+    try:
+        transform.setup(con)
+        con.execute(f"SET max_memory={_literal(TILE_DUCKDB_MEMORY)}")
+        con.execute("SET preserve_insertion_order = false")
+        con.execute(
+            f"CREATE TEMP VIEW tiles AS SELECT {', '.join([*props, f'{wgs84} AS __geom'])} "
+            f"FROM read_parquet({_literal(parquet)}) "
+            f"WHERE {geom} IS NOT NULL AND NOT ST_IsEmpty({geom})")
+        if not con.execute("SELECT count(*) FROM tiles").fetchone()[0]:
+            return False
+        sink_pmtiles.write_geojsonl(con, "tiles", geojsonl)
+    finally:
+        con.close()
+    return True
+
+
+def _tile_layer(parquet: str, entry: dict, series_id: str, tmp: str | None = None) -> bool:
+    """Tile the layer whose GeoParquet is the local file `parquet` as `<label>.pmtiles` beside its
+    published GeoParquet: reprojected to EPSG:4326 (tippecanoe reads lon/lat), one tile layer named
+    for the label, built with the serving topics' tippecanoe flags. `entry` is its manifest entry
+    (label, CRS). Returns False, writing nothing, when no row has a geometry. Temp files go under
+    `tmp` and are deleted before returning, since the job's disk is memory."""
+    label = entry["label"]
     with tempfile.TemporaryDirectory(dir=tmp) as d:
         geojsonl = os.path.join(d, f"{label}.geojsonl")
-        wgs84 = gdf[~blank] if blank.any() else gdf
-        del blank
-        wgs84.to_crs(4326, inplace=True)
-        wgs84.to_file(geojsonl, driver="GeoJSONSeq", engine="pyogrio")
-        del wgs84
+        if not _write_wgs84(parquet, entry, geojsonl):
+            return False
         pmtiles = os.path.join(d, f"{label}.pmtiles")
         sink_pmtiles.run_tippecanoe(geojsonl, pmtiles, label, what=f"{series_id}/{label}")
         os.remove(geojsonl)
@@ -378,18 +444,22 @@ def _extract_and_upload(
                 entry.update(_spatial_meta(gdf, geo, label, manifest["warnings"]))
             gcs_path = f"{VECTORS_PREFIX}/{series_id}/{label}.parquet"
             gcs.upload(dst, gcs_path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
-            os.remove(dst)  # the job's disk is memory; keep only the layer being written
             manifest["spatial" if is_spatial else "tables"].append(label)
             manifest["layers"].append(entry)
         except Exception as e:
             manifest["errors"].append({"label": label, "error": _error(e)})
             print(f"  layer {label} failed: {e}", file=sys.stderr)
+            if os.path.exists(dst):
+                os.remove(dst)
             continue
         _profile_into(profiles, entry, gdf if is_spatial else df,
                       layer or os.path.basename(path)[:-4], manifest)
+        # The frame is released before tiling, which reads the file just written; the job's disk
+        # is memory, so the file goes as soon as the layer is done.
+        gdf = df = None
         if is_spatial:
-            _tile_into(entry, gdf, series_id, work, manifest)
-        del gdf, df
+            _tile_into(entry, dst, series_id, work, manifest)
+        os.remove(dst)
 
     if manifest["spatial"] or manifest["tables"]:
         declared = _declared_relationships(srcs, {e["label"] for e in manifest["layers"]}, manifest)
@@ -471,13 +541,13 @@ def _set_relationships(manifest: dict, rels: list[dict]) -> None:
         entry["kind"] = relations.layer_kind(bool(entry.get("spatial")), entry["label"], rels)
 
 
-def _tile_into(entry: dict, gdf, series_id: str, tmp: str | None, manifest: dict) -> bool:
-    """Tile one layer and record the result: `pmtiles` and `pmtiles_layer` on its manifest `entry`
+def _tile_into(entry: dict, parquet: str, series_id: str, tmp: str | None, manifest: dict) -> bool:
+    """Tile one layer from its local GeoParquet `parquet` and record the result: `pmtiles` and `pmtiles_layer` on its manifest `entry`
     when built, else a warning in `manifest` (PMTILES_FAILED when tiling fails, NO_GEOMETRY when it
     has no geometry). Returns whether the tiles were built."""
     label = entry["label"]
     try:
-        built = _tile_layer(gdf, series_id, label, tmp)
+        built = _tile_layer(parquet, entry, series_id, tmp)
     except Exception as e:
         manifest["warnings"].append({"label": label, "code": PMTILES_FAILED,
                                      "warning": f"PMTiles not built: {_error(e)}"})
@@ -508,19 +578,47 @@ def missing_tiles(manifest: dict) -> list[str]:
         e["label"] in failed or not (e.get("pmtiles") or e["label"] in blank))]
 
 
+class Needs(NamedTuple):
+    """What a clean manifest still lacks, kept in place of the manifest: the spatial layers with no
+    PMTiles, whether all of those failed tiling before (a retry, ordered after new work), and
+    whether its relationships are missing or outdated."""
+    tiles: tuple[str, ...]
+    retry: bool
+    relations: bool
+
+    def __bool__(self) -> bool:
+        return bool(self.tiles) or self.relations
+
+
+def needs_of(manifest: dict) -> Needs:
+    missing = missing_tiles(manifest)
+    return Needs(tuple(missing), set(missing) <= _warned(manifest, PMTILES_FAILED),
+                 needs_relations(manifest))
+
+
+def is_clean(doc: dict) -> bool:
+    """True for a manifest that records per-layer metadata and no errors. One with no `layers`
+    list predates that metadata, so ordinary resumable runs re-extract it instead of needing
+    --force."""
+    return "layers" in doc and not doc.get("errors")
+
+
+def _load_manifest(path: str) -> dict:
+    doc = json.loads(gcs.get_bytes(path).decode())
+    if not isinstance(doc, dict):
+        raise ValueError("not a JSON object")
+    return doc
+
+
 def _read_manifest(path: str) -> dict | None:
-    """The manifest at `path` when it reads as an object that records per-layer metadata and no
-    errors, else None. An unreadable manifest is reported and counts as not done, and so does one
-    with no `layers` list, so ordinary resumable runs re-extract it instead of needing --force."""
+    """The manifest at `path` when it is clean (`is_clean`), else None. An unreadable manifest is
+    reported and counts as not done."""
     try:
-        doc = json.loads(gcs.get_bytes(path).decode())
+        doc = _load_manifest(path)
     except Exception as e:
         print(f"  unreadable manifest {path}, re-extracting: {_error(e)}", file=sys.stderr)
         return None
-    if not isinstance(doc, dict):
-        print(f"  manifest {path} is not an object, re-extracting", file=sys.stderr)
-        return None
-    return doc if "layers" in doc and not doc.get("errors") else None
+    return doc if is_clean(doc) else None
 
 
 def _clean_manifest_of(series_id: str) -> dict | None:
@@ -548,20 +646,58 @@ def _last_attempt(series_id: str) -> dict:
     return doc if isinstance(doc, dict) else {}
 
 
-def clean_manifests() -> dict[str, dict]:
-    """{series id: manifest} for each series extracted cleanly: a readable `_manifest.json` that
-    lists no errors, from one listing of the vectors prefix. A series with errors, or with layers
-    but no manifest, is left out, so every run retries it and reports it again instead of the
-    failure going quiet."""
+def manifest_paths() -> list[str]:
+    """Every series' `_manifest.json`, from one listing of the vectors prefix."""
     pfx = VECTORS_PREFIX.rstrip("/") + "/"
-    paths = [p for p in gcs.list_paths(pfx) if p.endswith("/_manifest.json")]
+    return [p for p in gcs.list_paths(pfx) if p.endswith("/_manifest.json")]
+
+
+def manifest_series(path: str) -> str:
+    return path.removeprefix(VECTORS_PREFIX.rstrip("/") + "/").split("/", 1)[0]
+
+
+@dataclass(frozen=True)
+class Scanned:
+    """One manifest after `scan_manifests`: what `reduce` kept of it, whether it is clean, and why
+    it could not be read, if it could not."""
+    path: str
+    value: object = None
+    clean: bool = False
+    error: str | None = None
+
+
+def scan_manifests(reduce, paths: list[str] | None = None) -> dict[str, Scanned]:
+    """{series id: Scanned} for each manifest in `paths` (every one by default), read once on 16
+    threads. `reduce(series_id, doc)` runs in the reading thread and keeps only what the caller
+    needs, so a whole catalog of full manifests is never in memory at once."""
+    def one(path: str) -> Scanned:
+        try:
+            doc = _load_manifest(path)
+            return Scanned(path, reduce(manifest_series(path), doc), is_clean(doc))
+        except Exception as e:  # noqa: BLE001 (returned per series; the caller reports it)
+            return Scanned(path, error=_error(e))
+
+    paths = manifest_paths() if paths is None else paths
     with ThreadPoolExecutor(max_workers=16) as ex:
-        docs = list(ex.map(_read_manifest, paths))
-    return {p.removeprefix(pfx).split("/", 1)[0]: d for p, d in zip(paths, docs) if d is not None}
+        return {manifest_series(p): sc for p, sc in zip(paths, ex.map(one, paths))}
+
+
+def clean_manifests(reduce=lambda series_id, doc: doc) -> dict[str, object]:
+    """{series id: reduce(series id, manifest)} for each series extracted cleanly: a readable
+    `_manifest.json` that lists no errors. A series with errors, or with layers but no manifest, is
+    left out, so every run retries it and reports it again instead of the failure going quiet. An
+    unreadable manifest is reported and counts as not done."""
+    out: dict[str, object] = {}
+    for sid, sc in scan_manifests(reduce).items():
+        if sc.error:
+            print(f"  unreadable manifest {sc.path}, re-extracting: {sc.error}", file=sys.stderr)
+        elif sc.clean:
+            out[sid] = sc.value
+    return out
 
 
 def extracted_series() -> set[str]:
-    return set(clean_manifests())
+    return set(clean_manifests(lambda sid, doc: None))
 
 
 def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
@@ -650,49 +786,56 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
 
 
 
-def _tile_missing(series_id: str) -> tuple[int, list[str]]:
-    """Build the PMTiles a series' manifest does not record yet (including layers with a
-    PMTILES_FAILED warning), from the GeoParquet already on GCS, and record them in the manifest.
-    Returns (layers built, an error per layer that failed). A layer's tiling warnings are replaced
-    by this attempt's outcome."""
-    import geopandas as gpd
-
+def _update_manifest(series_id: str, change) -> object:
+    """Read a series' manifest, let `change(manifest)` edit it in place, and write it back with
+    `put_bytes_if_unchanged`, so a manifest rewritten meanwhile raises `gcs.Changed` instead of
+    being overwritten. `change` returns a (result, keep) pair; nothing is written unless `keep` and
+    the manifest differs. Returns `result`."""
     path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
     raw, version = gcs.get_bytes_versioned(path)
     manifest = json.loads(raw.decode())
     if not isinstance(manifest, dict) or not isinstance(manifest.get("layers"), list):
         raise ValueError(f"{path} records no per-layer metadata; re-extract with --force")
-    manifest.setdefault("warnings", [])
     before = json.dumps(manifest)
-    missing = set(missing_tiles(manifest))
-    todo = [e for e in manifest["layers"] if e.get("spatial") and e["label"] in missing]
-    built, errors = 0, []
-    # The same per-series work dir extraction uses; it holds one layer's files at a time.
-    with tempfile.TemporaryDirectory(prefix=f"v_{series_id.replace('/', '_')}_") as work:
-        for entry in todo:
-            label = entry["label"]
-            local = os.path.join(work, f"{label}.parquet")
-            try:
-                gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
-                gdf = gpd.read_parquet(local)
-            except Exception as e:
-                errors.append(f"{series_id}/{label}: {_error(e)}")
-                print(f"  {series_id}/{label}: GeoParquet unreadable: {e}", file=sys.stderr)
-                continue
-            finally:
-                if os.path.exists(local):
-                    os.remove(local)
-            manifest["warnings"] = [w for w in manifest["warnings"] if not (
-                w.get("label") == label and w.get("code") in (PMTILES_FAILED, NO_GEOMETRY))]
-            if _tile_into(entry, gdf, series_id, work, manifest):
-                built += 1
-            del gdf
-            errors += [f"{series_id}/{label}: {w['warning']}" for w in manifest["warnings"]
-                       if w.get("label") == label and w.get("code") == PMTILES_FAILED]
-    if json.dumps(manifest) != before:
+    result, keep = change(manifest)
+    if keep and json.dumps(manifest) != before:
         gcs.put_bytes_if_unchanged(json.dumps(manifest).encode(), path, version,
                                    content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-    return built, errors
+    return result
+
+
+def _tile_missing(series_id: str) -> tuple[int, list[str]]:
+    """Build the PMTiles a series' manifest does not record yet (including layers with a
+    PMTILES_FAILED warning), from the GeoParquet already on GCS, and record them in the manifest.
+    Returns (layers built, an error per layer that failed). A layer's tiling warnings are replaced
+    by this attempt's outcome."""
+    def tile(manifest: dict) -> tuple[tuple[int, list[str]], bool]:
+        manifest.setdefault("warnings", [])
+        missing = set(missing_tiles(manifest))
+        todo = [e for e in manifest["layers"] if e.get("spatial") and e["label"] in missing]
+        built, errors = 0, []
+        # The same per-series work dir extraction uses; it holds one layer's files at a time.
+        with tempfile.TemporaryDirectory(prefix=f"v_{series_id.replace('/', '_')}_") as work:
+            for entry in todo:
+                label = entry["label"]
+                local = os.path.join(work, f"{label}.parquet")
+                try:
+                    gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
+                except Exception as e:
+                    errors.append(f"{series_id}/{label}: {_error(e)}")
+                    print(f"  {series_id}/{label}: GeoParquet unreadable: {e}", file=sys.stderr)
+                    continue
+                manifest["warnings"] = [w for w in manifest["warnings"] if not (
+                    w.get("label") == label and w.get("code") in (PMTILES_FAILED, NO_GEOMETRY))]
+                try:
+                    built += int(_tile_into(entry, local, series_id, work, manifest))
+                finally:
+                    os.remove(local)
+                errors += [f"{series_id}/{label}: {w['warning']}" for w in manifest["warnings"]
+                           if w.get("label") == label and w.get("code") == PMTILES_FAILED]
+        return (built, errors), True
+
+    return _update_manifest(series_id, tile)
 
 
 def needs_relations(manifest: dict) -> bool:
@@ -703,67 +846,61 @@ def needs_relations(manifest: dict) -> bool:
 
 def _relations_series(series_id: str) -> list[str]:
     """Record a series' relationships, layer kinds and sources in its manifest, from the string and
-    integer columns of its GeoParquet on GCS. Declared relationships already recorded are kept: the
-    geodatabase is not at hand to read them again. Returns an error per layer that could not be
-    read; then nothing is written, since joins inferred without it could be wrong."""
+    integer columns of its GeoParquet on GCS, read with range requests so no geometry is fetched.
+    Declared relationships already recorded are kept: the geodatabase is not at hand to read them
+    again. Returns an error per layer that could not be read; then nothing is written, since joins
+    inferred without it could be wrong."""
     import pyarrow.parquet as pq
 
-    path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
-    raw, version = gcs.get_bytes_versioned(path)
-    manifest = json.loads(raw.decode())
-    if not isinstance(manifest, dict) or not isinstance(manifest.get("layers"), list):
-        raise ValueError(f"{path} records no per-layer metadata; re-extract with --force")
-    before = json.dumps(manifest)
-    manifest["warnings"] = [w for w in manifest.get("warnings") or [] if w.get("code") not in (
-        relations.PROFILE_FAILED, relations.SCOPE_UNKNOWN)]
-    if "relationships" not in manifest:
-        manifest["warnings"].append({
-            "code": relations.RELATIONSHIPS_NOT_READ,
-            "warning": "declared relationships not read: computed from the extracted GeoParquet, "
-                       "without the geodatabase; re-extract with --force to read them"})
-    known = {e["label"] for e in manifest["layers"]} | set(manifest.get("empty") or []) \
-        | {e["label"] for e in manifest.get("errors") or [] if e.get("label")}
-    several_folders = relations.collided(known)
-    unscoped = [e["label"] for e in manifest["layers"]
-                if several_folders and "source" not in e and "__" not in e["label"]]
-    if unscoped:
-        manifest["warnings"].append({
-            "code": relations.SCOPE_UNKNOWN,
-            "warning": f"left out of relationship inference, folder unknown: {', '.join(unscoped)}; "
-                       "re-extract with --force to record it"})
-    profiles: list[relations.Layer] = []
-    errors: list[str] = []
-    with tempfile.TemporaryDirectory(prefix=f"v_{series_id.replace('/', '_')}_") as work:
+    def record(manifest: dict) -> tuple[list[str], bool]:
+        manifest["warnings"] = [w for w in manifest.get("warnings") or [] if w.get("code") not in (
+            relations.PROFILE_FAILED, relations.SCOPE_UNKNOWN)]
+        if "relationships" not in manifest:
+            manifest["warnings"].append({
+                "code": relations.RELATIONSHIPS_NOT_READ,
+                "warning": "declared relationships not read: computed from the extracted "
+                           "GeoParquet, without the geodatabase; re-extract with --force to read "
+                           "them"})
+        known = {e["label"] for e in manifest["layers"]} | set(manifest.get("empty") or []) \
+            | {e["label"] for e in manifest.get("errors") or [] if e.get("label")}
+        several_folders = relations.collided(known)
+        unscoped = [e["label"] for e in manifest["layers"]
+                    if several_folders and "source" not in e and "__" not in e["label"]]
+        if unscoped:
+            manifest["warnings"].append({
+                "code": relations.SCOPE_UNKNOWN,
+                "warning": f"left out of relationship inference, folder unknown: "
+                           f"{', '.join(unscoped)}; re-extract with --force to record it"})
+        profiles: list[relations.Layer] = []
+        errors: list[str] = []
         for entry in manifest["layers"]:
             label = entry["label"]
             if label in unscoped:  # no source recorded, so a later run still knows it
                 continue
             entry.setdefault("source", relations.source_of_label(label, series_id))
-            local = os.path.join(work, f"{label}.parquet")
             try:
-                gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
-                columns, _ = _schema(local)
-                keyed = [c["name"] for c in columns if c["type"] in ("string", "integer")]
+                with gcs.open_reader(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet") as f:
+                    pf = pq.ParquetFile(f)
+                    columns, _ = _columns_of(pf.schema_arrow)
+                    keyed = [c["name"] for c in columns if c["type"] in ("string", "integer")]
+                    table = pf.read(columns=keyed)
                 spatial = bool(entry.get("spatial"))
-                profiled, failed = relations.profile_table(pq.read_table(local, columns=keyed),
-                                                           keys=not spatial)
+                profiled, failed = relations.profile_table(table, keys=not spatial)
+                del table
                 profiles.append(relations.Layer(label, relations.layer_name(label), entry["source"],
                                                 profiled, spatial))
                 _warn_unprofiled(manifest, label, failed)
             except Exception as e:
                 errors.append(f"{series_id}/{label}: {_error(e)}")
                 print(f"  {series_id}/{label}: not read for relationships: {e}", file=sys.stderr)
-            finally:
-                if os.path.exists(local):
-                    os.remove(local)
-    if errors:
-        return errors
-    declared = [r for r in manifest.get("relationships") or [] if r.get("detected_by") == "declared"]
-    _set_relationships(manifest, relations.merge(declared, relations.infer(profiles)))
-    if json.dumps(manifest) != before:
-        gcs.put_bytes_if_unchanged(json.dumps(manifest).encode(), path, version,
-                                   content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
-    return []
+        if errors:
+            return errors, False
+        declared = [r for r in manifest.get("relationships") or []
+                    if r.get("detected_by") == "declared"]
+        _set_relationships(manifest, relations.merge(declared, relations.infer(profiles)))
+        return [], True
+
+    return _update_manifest(series_id, record)
 
 
 # Extraction, then self-heal, stop starting pubs or series once the run has used this much time,
@@ -784,12 +921,15 @@ class Heal:
     pending_layers: int = 0
     pending_pubs: int = 0
     pending_units: int = 0
+    touched: set[str] = field(default_factory=set)  # series whose manifest the heal may have rewritten
+    tiles: bool = True  # False for a heal that leaves tiling to the vectors job
 
     def summary(self, next_step: str = "run") -> str:
         pending = self.pending_layers or self.pending_pubs or self.pending_units
-        return (f"Self-heal: {self.tiled} layers tiled, {self.related} pubs' relationships recorded, "
-                f"units upgraded: {self.units_upgraded}"
-                + (f"; {self.pending_layers} layers, {self.pending_pubs} pubs and {self.pending_units} "
+        layers = f"{self.pending_layers} layers, " if self.tiles else ""
+        return ("Self-heal: " + (f"{self.tiled} layers tiled, " if self.tiles else "")
+                + f"{self.related} pubs' relationships recorded, units upgraded: {self.units_upgraded}"
+                + (f"; {layers}{self.pending_pubs} pubs and {self.pending_units} "
                    f"units files still pending, the next {next_step} continues" if pending else "")
                 + (f"; {len(self.failed)} failed" if self.failed else ""))
 
@@ -849,32 +989,35 @@ def _upgrade_units(path: str) -> None:
         gcs.upload(new, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
 
 
-def self_heal(manifests: dict[str, dict], *, deadline: float | None = None,
-              units: dict[str, str] | None = None) -> Heal:
+def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
+              units: dict[str, str] | None = None, tiles: bool = True) -> Heal:
     """Fill in the derivatives clean manifests are missing, from their GeoParquet on GCS and without
-    downloading any zip: PMTiles for spatial layers that have none (`missing_tiles`), and
-    relationships for manifests that need them (`needs_relations`). Then upgrade each of the
-    `units` files ({series id: object path}) that `units_outdated` says is older than GeoParquet
-    1.1. Series with only a failed layer to retry go last, as extraction orders retries last. No new
-    series or units file starts once `time.monotonic()` passes `deadline`; the one in progress
-    finishes, and what is left is counted as pending, not failed."""
-    heal = Heal()
-    todo = [(sid, m) for sid, m in sorted(manifests.items())
-            if missing_tiles(m) or needs_relations(m)]
-    todo.sort(key=lambda sm: set(missing_tiles(sm[1])) <= _warned(sm[1], PMTILES_FAILED)
-              and not needs_relations(sm[1]))
-    for sid, manifest in todo:
+    downloading any zip: PMTiles for spatial layers that have none, and relationships for manifests
+    that need them. `needs` is `{series id: Needs}` (`needs_of`); each series' manifest is read again
+    only when it is healed. Then upgrade each of the `units` files ({series id: object path}) that
+    `units_outdated` says is older than GeoParquet 1.1. Series with only a failed layer to retry go
+    last, as extraction orders retries last. No new series or units file starts once
+    `time.monotonic()` passes `deadline`; the one in progress finishes, and what is left is counted
+    as pending, not failed. With `tiles` False only relationships and units are healed: tiling is
+    the vectors job's, sized for it, and a caller with less memory leaves it alone."""
+    heal = Heal(tiles=tiles)
+    if not tiles:
+        needs = {sid: n._replace(tiles=(), retry=False) for sid, n in needs.items()}
+    todo = sorted(((sid, n) for sid, n in needs.items() if n), key=lambda sn: sn[0])
+    todo.sort(key=lambda sn: sn[1].retry and not sn[1].relations)
+    for sid, need in todo:
         if deadline is not None and time.monotonic() >= deadline:
-            heal.pending_layers += len(missing_tiles(manifest))
-            heal.pending_pubs += int(needs_relations(manifest))
+            heal.pending_layers += len(need.tiles)
+            heal.pending_pubs += int(need.relations)
             continue
         errs: list[str] = []
+        heal.touched.add(sid)
         try:
-            if missing_tiles(manifest):
+            if need.tiles:
                 built, tile_errs = _tile_missing(sid)
                 heal.tiled += built
                 errs += tile_errs
-            if needs_relations(manifest):
+            if need.relations:
                 rel_errs = _relations_series(sid)
                 heal.related += int(not rel_errs)
                 errs += rel_errs
@@ -930,7 +1073,7 @@ def main() -> int:
     sids = []
     all_sids: list[str] = []
     existing = None
-    manifests: dict[str, dict] = {}
+    needs: dict[str, Needs] = {}
     if args.all:
         print(f"Loading publications from source: {source.source_name()}")
         all_sids = [s for p in source.read_pubs() if (s := (p.get("series_id") or "").strip())]
@@ -939,8 +1082,9 @@ def main() -> int:
         sids = [s for s in all_sids if harvest._get_attached_zips(s)[1]]
         # A forced run re-extracts every pub, so nothing is left to heal.
         listed = set(sids)
-        manifests = {} if args.force else {s: m for s, m in clean_manifests().items() if s in listed}
-        existing = None if args.force else set(manifests)
+        needs = {} if args.force else {s: n for s, n in clean_manifests(
+            lambda sid, doc: needs_of(doc)).items() if s in listed}
+        existing = None if args.force else set(needs)
         unsupported: list[str] = []
         nothing: list[str] = []
         if existing is not None:
@@ -999,20 +1143,20 @@ def main() -> int:
         # A targeted run heals the named pubs it did not extract this run, as `--all` heals only
         # the pubs already clean when it started: a layer whose tiling just failed is reported
         # once, by extraction, and retried by the next run.
-        manifests = {sid: m for s in sids
-                     if (sid := identity.Pub.parse(s).series_id) not in extracted
-                     and (m := _clean_manifest_of(sid))}
+        needs = {sid: needs_of(m) for s in sids
+                 if (sid := identity.Pub.parse(s).series_id) not in extracted
+                 and (m := _clean_manifest_of(sid))}
     # Units files come from the plate harvest, not from extraction, so every covered pub is checked.
     units = units_objects({identity.Pub.parse(s).series_id.upper()
                            for s in (all_sids if args.all else args.series_id)})
     if args.dry_run:
-        pending = sum(len(missing_tiles(m)) for m in manifests.values())
+        pending = sum(len(n.tiles) for n in needs.values())
         print(f"[dry-run] self-heal would tile {pending} layers, record relationships for "
-              f"{sum(needs_relations(m) for m in manifests.values())} pubs and check "
+              f"{sum(n.relations for n in needs.values())} pubs and check "
               f"{len(units)} units files")
         heal = Heal()
     else:
-        heal = self_heal(manifests, deadline=deadline, units=units)
+        heal = self_heal(needs, deadline=deadline, units=units)
         print(heal.summary())
     # Exit 1 only for work that failed in THIS run: a pub that failed to extract, a layer whose
     # tiling failed at extraction, or a layer or pub whose self-heal failed. Work the time budget

@@ -736,9 +736,10 @@ def test_layer_tiling_reuses_the_serving_topic_tippecanoe_call(monkeypatch, tmp_
 
     monkeypatch.setattr(sink_pmtiles.shutil, "which", lambda b: f"/bin/{b}")
     monkeypatch.setattr(sink_pmtiles.subprocess, "run", fake_run)
-    gdf = gpd.GeoDataFrame({"Type": ["fault"], "geometry": [Point(424000, 4512000)]}, crs="EPSG:26912")
+    src, work = _geoparquet(tmp_path, {"Type": ["fault"]}, [Point(424000, 4512000)])
+    entry = {"label": "geo__Faults", "proj_code": "EPSG:26912"}
 
-    assert vectors._tile_layer(gdf, "M-200", "geo__Faults", str(tmp_path)) is True
+    assert vectors._tile_layer(src, entry, "M-200", work) is True
 
     cmd = seen["cmd"]
     assert cmd[0] == sink_pmtiles.TIPPECANOE_BIN
@@ -746,11 +747,88 @@ def test_layer_tiling_reuses_the_serving_topic_tippecanoe_call(monkeypatch, tmp_
     assert cmd[cmd.index("-l") + 2:-1] == [*sink_pmtiles.TILE_OPTS, *sink_pmtiles.EXTRA_OPTS]
     assert not any(c.startswith("--use-attribute-for-id") for c in cmd)
     lon, lat = seen["feature"]["geometry"]["coordinates"]
-    assert -112 < lon < -111.8 and 40.7 < lat < 40.8
-    assert seen["feature"]["properties"] == {"Type": "fault"}
+    assert -112 < lon < -111.8 and 40.7 < lat < 40.8  # lon first, whatever the CRS's axis order
+    assert seen["feature"]["properties"] == {"Type": "fault"}  # the bbox column is not an attribute
     assert store == {vectors.pmtiles_object("M-200", "geo__Faults"): b"tiles"}
-    assert os.listdir(tmp_path) == []  # temp files deleted: the job's disk is memory
-    assert gdf.crs.to_epsg() == 4326  # reprojected in place: no second full copy
+    assert os.listdir(work) == []  # temp files deleted: the job's disk is memory
+
+
+def _geoparquet(tmp_path, props: dict, geoms: list, crs="EPSG:26912", index=None):
+    """A GeoParquet written the way extraction writes one, in its own dir, and an empty work dir."""
+    src, work = tmp_path / "src", tmp_path / "work"
+    src.mkdir(exist_ok=True), work.mkdir(exist_ok=True)
+    gdf = gpd.GeoDataFrame(props, geometry=geoms, crs=crs, index=index)
+    vectors.geoparquet.write(gdf, src / "layer.parquet")
+    return str(src / "layer.parquet"), str(work)
+
+
+def _no_geopandas(monkeypatch):
+    """Tiling must not hand the layer to geopandas: any of its read/reproject/write calls fails."""
+    def boom(*a, **k):
+        raise AssertionError("geopandas used while tiling")
+
+    monkeypatch.setattr(gpd, "read_parquet", boom)
+    monkeypatch.setattr(gpd, "read_file", boom)
+    monkeypatch.setattr(gpd.GeoDataFrame, "to_crs", boom)
+    monkeypatch.setattr(gpd.GeoDataFrame, "to_file", boom)
+
+
+def _capture_geojsonl(monkeypatch) -> list[str]:
+    """Stub tippecanoe, collecting the GeoJSONSeq lines it is handed."""
+    lines: list[str] = []
+
+    def tiler(geojsonl, pmtiles, layer, **kw):
+        with open(geojsonl) as fh:
+            lines.extend(fh)
+        _fake_tippecanoe(geojsonl, pmtiles, layer)
+
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", tiler)
+    return lines
+
+
+def test_tiling_makes_no_geopandas_call_and_puts_a_utm_point_at_the_right_lon_lat(monkeypatch, tmp_path):
+    """The export is DuckDB's, from the manifest's WKT2 here (no EPSG code recorded). EPSG:26912
+    northing/easting order must not swap the result."""
+    from pyproj import CRS
+
+    _mem_gcs(monkeypatch)
+    lines = _capture_geojsonl(monkeypatch)
+    src, work = _geoparquet(tmp_path, {"Type": ["fault"]}, [Point(424000, 4512000)])
+    _no_geopandas(monkeypatch)
+    entry = {"label": "wkt", "proj_code": None, "proj_wkt2": CRS.from_epsg(26912).to_wkt()}
+
+    assert vectors._tile_layer(src, entry, "M-201", work) is True
+
+    lon, lat = json.loads(lines[0])["geometry"]["coordinates"]
+    assert (round(lon, 4), round(lat, 4)) == (-111.9003, 40.7554)
+
+
+def test_a_layer_already_in_lon_lat_is_not_reprojected(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    lines = _capture_geojsonl(monkeypatch)
+    src, work = _geoparquet(tmp_path, {"Type": ["a"]}, [Point(-111.9, 40.75)], crs="EPSG:4326")
+
+    assert vectors._tile_layer(src, {"label": "ll", "proj_code": "EPSG:4326"}, "M-202", work)
+    assert json.loads(lines[0])["geometry"]["coordinates"] == [-111.9, 40.75]
+
+
+def test_tiling_falls_back_to_the_geoparquets_own_crs(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    lines = _capture_geojsonl(monkeypatch)
+    src, work = _geoparquet(tmp_path, {"Type": ["a"]}, [Point(424000, 4512000)])
+
+    assert vectors._tile_layer(src, {"label": "meta"}, "M-203", work) is True
+    lon, lat = json.loads(lines[0])["geometry"]["coordinates"]
+    assert -112 < lon < -111.8 and 40.7 < lat < 40.8
+
+
+def test_tiling_a_layer_with_no_recorded_crs_raises_instead_of_guessing(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    src, work = _geoparquet(tmp_path, {"Type": ["a"]}, [Point(424000, 4512000)], crs=None)
+
+    with pytest.raises(ValueError, match="no CRS recorded"):
+        vectors._tile_layer(src, {"label": "nocrs"}, "M-204", work)
+    assert store == {}
 
 
 def test_extraction_releases_each_layer_before_reading_the_next(monkeypatch, tmp_path):
@@ -809,14 +887,20 @@ def test_rows_without_geometry_are_left_out_of_the_tiles(monkeypatch, tmp_path):
         _fake_tippecanoe(geojsonl, pmtiles, layer)
 
     monkeypatch.setattr(sink_pmtiles, "run_tippecanoe", tiler)
-    gdf = gpd.GeoDataFrame({"Type": ["a", "b", "c"],
-                            "geometry": [Point(424000, 4512000), None, Point()]},
-                           index=[0, 0, 1], crs="EPSG:26912")  # a repeated index label too
+    src, work = _geoparquet(tmp_path, {"Type": ["a", "b", "c"]},
+                            [Point(424000, 4512000), None, Point()], index=[0, 0, 1])
 
-    assert vectors._tile_layer(gdf, "M-209", "pts", str(tmp_path)) is True
+    assert vectors._tile_layer(src, {"label": "pts", "proj_code": "EPSG:26912"}, "M-209", work) is True
     assert [json.loads(ln)["properties"]["Type"] for ln in lines] == ["a"]
     assert vectors.pmtiles_object("M-209", "pts") in store
-    assert len(gdf) == 3  # the caller's frame is untouched
+
+
+def test_a_layer_with_no_geometry_writes_nothing(monkeypatch, tmp_path):
+    store = _mem_gcs(monkeypatch)
+    src, work = _geoparquet(tmp_path, {"Type": ["a", "b"]}, [None, Point()])
+
+    assert vectors._tile_layer(src, {"label": "blank", "proj_code": "EPSG:26912"}, "M-212", work) is False
+    assert store == {} and os.listdir(work) == []
 
 
 def test_a_tippecanoe_failure_raises_with_its_stderr(monkeypatch):
@@ -950,6 +1034,7 @@ def _backfill_store(monkeypatch, tmp_path, manifests: dict[str, dict]):
         store[path] = data
 
     monkeypatch.setattr(vectors.gcs, "download", download)
+    monkeypatch.setattr(vectors.gcs, "open_reader", lambda path: BytesIO(store[path]))
     monkeypatch.setattr(vectors.gcs, "get_bytes_versioned", lambda p: (store[p], {"version": p}))
     monkeypatch.setattr(vectors.gcs, "put_bytes_if_unchanged", put_if_unchanged)
     monkeypatch.setattr(vectors.gcs, "get_bytes", lambda p: store[p])
@@ -969,8 +1054,8 @@ def _manifest(*layers, errors=None, warnings=None, relations_version=vectors.rel
 
 def _heal(sids: list[str] | None, deadline: float | None = None) -> int:
     """Self-heal the given series (every clean one for None) as a run does: 1 when anything failed."""
-    manifests = (vectors.clean_manifests() if sids is None
-                 else {s: m for s in sids if (m := vectors._clean_manifest_of(s))})
+    manifests = (vectors.clean_manifests(lambda sid, doc: vectors.needs_of(doc)) if sids is None
+                 else {s: vectors.needs_of(m) for s in sids if (m := vectors._clean_manifest_of(s))})
     heal = vectors.self_heal(manifests, deadline=deadline)
     print(heal.summary())
     return 1 if heal.failed else 0
@@ -1124,6 +1209,39 @@ def test_a_targeted_run_heals_the_pubs_it_names(monkeypatch, tmp_path):
     assert vectors.pmtiles_object("M-2DM", "geo__Polys") in store
 
 
+def test_a_batch_run_keeps_what_each_manifest_needs_not_the_manifest(monkeypatch, tmp_path):
+    store = _gems_store(monkeypatch, tmp_path, "M-3DM")
+    path = f"{vectors.VECTORS_PREFIX}/M-3DM/_manifest.json"
+    doc = json.loads(store[path])
+    doc["layers"][0].update(columns=[{"name": "MapUnit", "type": "string"}], proj_wkt2="W" * 5000,
+                            proj_code="EPSG:26912")
+    store[path] = json.dumps(doc).encode()
+    _batch_run(monkeypatch, ["M-3DM"])
+    seen: dict = {}
+    real = vectors.self_heal
+    monkeypatch.setattr(vectors, "self_heal", lambda needs, **kw: seen.update(needs) or real(needs, **kw))
+
+    assert vectors.main() == 0
+
+    assert seen == {"M-3DM": vectors.Needs(("geo__Polys",), False, True)}
+    assert "WWWW" not in repr(seen) and "MapUnit" not in repr(seen)
+
+
+def test_the_tile_and_relations_heals_share_one_conditional_manifest_update(monkeypatch, tmp_path):
+    store = _gems_store(monkeypatch, tmp_path, "M-4DM")
+    updates: list[str] = []
+    real = vectors._update_manifest
+    monkeypatch.setattr(vectors, "_update_manifest",
+                        lambda sid, change: updates.append(sid) or real(sid, change))
+
+    built, errs = vectors._tile_missing("M-4DM")
+    assert (built, errs) == (1, []) and vectors._relations_series("M-4DM") == []
+
+    assert updates == ["M-4DM", "M-4DM"]
+    doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-4DM/_manifest.json"])
+    assert doc["layers"][0]["pmtiles"] is True and doc["relations_version"]
+
+
 def test_the_time_budget_stops_starting_series_and_leftovers_are_not_a_failure(monkeypatch, tmp_path, capsys):
     store = _backfill_store(monkeypatch, tmp_path, {
         f"M-{n}": _manifest({"label": "a", "spatial": True}, {"label": "b", "spatial": True})
@@ -1214,7 +1332,7 @@ def test_self_heal_records_a_raising_series_in_failed(monkeypatch, tmp_path):
     real = vectors._tile_missing
     monkeypatch.setattr(vectors, "_tile_missing",
                         lambda sid: (_ for _ in ()).throw(OSError("boom")) if sid == "M-1" else real(sid))
-    heal = vectors.self_heal(vectors.clean_manifests())
+    heal = vectors.self_heal(vectors.clean_manifests(lambda sid, doc: vectors.needs_of(doc)))
     assert heal.failed == ["M-1: OSError: boom"] and heal.tiled == 1
 
 
@@ -1267,7 +1385,7 @@ def test_a_series_with_only_a_failed_layer_to_retry_goes_last(monkeypatch, tmp_p
         "M-2": _manifest({"label": "never", "spatial": True})})
     order = []
     monkeypatch.setattr(vectors, "_tile_missing", lambda sid: order.append(sid) or (1, []))
-    vectors.self_heal(vectors.clean_manifests())
+    vectors.self_heal(vectors.clean_manifests(lambda sid, doc: vectors.needs_of(doc)))
     assert order == ["M-2", "M-1"]
 
 
@@ -1449,9 +1567,11 @@ def test_relations_backfill_records_them_from_the_extracted_geoparquet(monkeypat
 
     store = _relations_store(monkeypatch, tmp_path, "M-400", _gems_parquet())
     read = []
-    real = pq.read_table
-    monkeypatch.setattr(pq, "read_table", lambda p, columns=None, **kw: read.append(columns)
-                        or real(p, columns=columns, **kw))
+    real = pq.ParquetFile.read
+    monkeypatch.setattr(pq.ParquetFile, "read", lambda self, columns=None, **kw: read.append(columns)
+                        or real(self, columns=columns, **kw))
+    # The key columns are range-read from the object; the file is never downloaded whole.
+    monkeypatch.setattr(vectors.gcs, "download", lambda *a, **k: pytest.fail("downloaded the file"))
 
     assert _heal(["M-400"]) == 0
 
@@ -1590,17 +1710,30 @@ def _two_gems_pubs(monkeypatch, tmp_path, first: str, second: str):
     return store
 
 
-def test_an_ingest_heals_a_pub_and_writes_items_that_carry_the_result(monkeypatch, tmp_path, capsys):
+def _no_tiling(monkeypatch):
+    """Fail the test if anything tiles: the ingest job (4Gi) must leave tiling to the vectors job."""
+    def boom(*a, **k):
+        raise AssertionError("ingest tiled a layer")
+
+    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", boom)
+    monkeypatch.setattr(vectors, "_tile_missing", boom)
+    monkeypatch.setattr(vectors, "_tile_layer", boom)
+
+
+def test_an_ingest_heals_relationships_but_never_tiles(monkeypatch, tmp_path, capsys):
     store = _gems_store(monkeypatch, tmp_path, "M-1DM")
     ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}])
+    _no_tiling(monkeypatch)
 
     assert ingest.build_catalog(skip_refresh=True) == 1
 
-    assert vectors.pmtiles_object("M-1DM", "geo__Polys") in store
+    assert vectors.pmtiles_object("M-1DM", "geo__Polys") not in store     # the vectors job tiles
     polys = next(d for d in written if d["id"] == "M-1DM__geo__Polys")
-    assert "pmtiles" in polys["assets"]                                   # tiled in this run
+    assert "pmtiles" not in polys["assets"]
     assert polys["assets"]["geo__DMU"]["roles"] == ["data", "related"]    # related in this run
-    assert "[pubs] Self-heal: 1 layers tiled, 1 pubs' relationships recorded" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "[pubs] Self-heal: 1 pubs' relationships recorded, units upgraded: 0" in out
+    assert "tiled" not in out
 
 
 def test_ingest_leaves_work_past_its_budget_for_the_next_refresh_without_failing(monkeypatch, tmp_path, capsys):
@@ -1609,24 +1742,20 @@ def test_ingest_leaves_work_past_its_budget_for_the_next_refresh_without_failing
     monkeypatch.setattr(ingest, "HEAL_BUDGET_S", 0)
 
     assert ingest.build_catalog(skip_refresh=True) == 1  # no raise
-    assert ("1 layers, 1 pubs and 0 units files still pending, the next refresh continues"
+    assert ("1 pubs and 0 units files still pending, the next refresh continues"
             in capsys.readouterr().out)
-    assert vectors.pmtiles_object("M-1DM", "geo__Polys") not in store
     assert any(d["id"] == "M-1DM__geo__Polys" for d in written)  # written from the manifest as is
 
 
 def test_a_heal_failure_fails_the_ingest_like_a_publication(monkeypatch, tmp_path, capsys):
     store = _gems_store(monkeypatch, tmp_path, "M-1DM")
     ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}])
+    del store[f"{vectors.VECTORS_PREFIX}/M-1DM/geo__DMU.parquet"]  # its keys cannot be read
 
-    def boom(geojsonl, pmtiles, layer, **kw):
-        raise RuntimeError("tippecanoe exited 1")
-
-    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", boom)
     with pytest.raises(RuntimeError, match=r"1 publication\(s\) failed: \['M-1DM'\]"):
         ingest.build_catalog(skip_refresh=True)
     err = capsys.readouterr().err
-    assert "[pubs] FAILED M-1DM: self-heal: 1 failed this run: M-1DM/geo__Polys: PMTiles not built" in err
+    assert "[pubs] FAILED M-1DM: self-heal: 1 failed this run: M-1DM/geo__DMU: " in err
     assert any(d["id"] == "M-1DM__geo__Polys" for d in written)  # the pub is still written
 
 
@@ -1636,8 +1765,8 @@ def test_an_ingest_limited_to_a_series_heals_only_that_series(monkeypatch, tmp_p
                                              {"series_id": "OFR-5", "pub_year": "2020"}])
 
     assert ingest.build_catalog(series="M", skip_refresh=True) == 1
-    assert vectors.pmtiles_object("M-1DM", "geo__Polys") in store
-    assert vectors.pmtiles_object("OFR-5", "geo__Polys") not in store
+    assert json.loads(store[f"{vectors.VECTORS_PREFIX}/M-1DM/_manifest.json"])["relationships"]
+    assert "relationships" not in json.loads(store[f"{vectors.VECTORS_PREFIX}/OFR-5/_manifest.json"])
 
 
 def test_a_pub_whose_heal_and_write_both_fail_counts_once(monkeypatch, tmp_path, capsys):
@@ -1645,14 +1774,11 @@ def test_a_pub_whose_heal_and_write_both_fail_counts_once(monkeypatch, tmp_path,
 
     store = _gems_store(monkeypatch, tmp_path, "M-1DM")
     ingest, _ = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}])
-
-    def boom(geojsonl, pmtiles, layer, **kw):
-        raise RuntimeError("tippecanoe exited 1")
+    del store[f"{vectors.VECTORS_PREFIX}/M-1DM/geo__DMU.parquet"]
 
     def unwritable(*a, **k):
         raise ValueError("bad publication")
 
-    monkeypatch.setattr(vectors.sink_pmtiles, "run_tippecanoe", boom)
     monkeypatch.setattr(sink_stac, "build_publication", unwritable)
     with pytest.raises(RuntimeError, match=r"^1 publication\(s\) failed: \['M-1DM'\]$"):
         ingest.build_catalog(skip_refresh=True)
@@ -1660,19 +1786,62 @@ def test_a_pub_whose_heal_and_write_both_fail_counts_once(monkeypatch, tmp_path,
     assert "FAILED M-1DM: self-heal" in err and "FAILED M-1DM: ValueError: bad publication" in err
 
 
-def test_healed_tiles_carry_file_meta_in_the_same_run(monkeypatch, tmp_path):
-    import hashlib
+def test_the_ingest_reads_each_manifest_once_and_rereads_only_what_the_heal_changed(monkeypatch, tmp_path):
+    store = _two_gems_pubs(monkeypatch, tmp_path, "M-1DM", "OFR-5")
+    # OFR-5 is already current; only M-1DM needs relationships.
+    ofr = f"{vectors.VECTORS_PREFIX}/OFR-5/_manifest.json"
+    doc = json.loads(store[ofr])
+    doc.update(relationships=[], relations_version=vectors.relations.RELATIONS_VERSION)
+    doc["layers"][0].update(pmtiles=True, pmtiles_layer="geo__Polys")
+    store[ofr] = json.dumps(doc).encode()
+    ingest, _ = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"},
+                                             {"series_id": "OFR-5", "pub_year": "2020"}])
+    reads: list[str] = []
+    real = vectors.gcs.get_bytes
 
+    def counting(path, **kw):
+        if path.endswith("_manifest.json"):
+            reads.append(path.split("/")[-2])
+        return real(path, **kw)
+
+    monkeypatch.setattr(vectors.gcs, "get_bytes", counting)
+    monkeypatch.setattr(ingest.gcs, "get_bytes", counting)
+
+    assert ingest.build_catalog(skip_refresh=True) == 2
+
+    assert sorted(reads) == ["M-1DM", "M-1DM", "OFR-5"]  # the healed one twice, the rest once
+
+
+def test_the_needs_index_holds_labels_not_manifest_content(monkeypatch, tmp_path):
+    """The ingest keeps a small index for the heal; the columns and WKT2 live only in the reduced
+    manifests the items are built from."""
+    store = _gems_store(monkeypatch, tmp_path, "M-1DM")
+    doc = json.loads(store[f"{vectors.VECTORS_PREFIX}/M-1DM/_manifest.json"])
+    doc["layers"][0].update(columns=[{"name": "MapUnit", "type": "string"}], proj_wkt2="W" * 5000)
+    store[f"{vectors.VECTORS_PREFIX}/M-1DM/_manifest.json"] = json.dumps(doc).encode()
+    from ugs_warehouse.pubs import ingest
+
+    _, _, needs = ingest._read_vector_manifests()
+
+    assert needs == {"M-1DM": vectors.Needs(("geo__Polys",), False, True)}
+    assert "WWWW" not in repr(needs) and "MapUnit" not in repr(needs)
+
+
+def test_a_clean_manifests_reducer_runs_in_the_reading_thread_and_keeps_only_its_result(monkeypatch, tmp_path):
+    store = _backfill_store(monkeypatch, tmp_path, {"M-6": _manifest({"label": "a", "spatial": True})})
+    kept = vectors.clean_manifests(lambda sid, doc: (sid, len(doc["layers"])))
+    assert kept == {"M-6": ("M-6", 1)} and store
+
+
+def test_healed_relationships_reach_the_items_in_the_same_run(monkeypatch, tmp_path):
     store = _gems_store(monkeypatch, tmp_path, "M-1DM")
     ingest, written = _ingest(monkeypatch, store, [{"series_id": "M-1DM", "pub_year": "2020"}],
                               file_meta=True)
 
     assert ingest.build_catalog(skip_refresh=True) == 1
-
-    pm = store[vectors.pmtiles_object("M-1DM", "geo__Polys")]
-    polys = next(d for d in written if d["id"] == "M-1DM__geo__Polys")
-    assert polys["assets"]["pmtiles"]["file:size"] == len(pm)
-    assert polys["assets"]["pmtiles"]["file:checksum"] == "1220" + hashlib.sha256(pm).hexdigest()
+    dmu = next(d for d in written if d["id"] == "M-1DM__geo__DMU")
+    assert dmu["assets"]["data"]["file:size"] == len(
+        store[f"{vectors.VECTORS_PREFIX}/M-1DM/geo__DMU.parquet"])
 
 
 # ---------------------------------------------------------------------------

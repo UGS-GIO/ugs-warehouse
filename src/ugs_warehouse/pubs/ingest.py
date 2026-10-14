@@ -133,48 +133,66 @@ def _unit_ids() -> set[str]:
     return out
 
 
-def _vector_manifests_by_sid() -> tuple[dict[str, dict], dict[str, str]]:
-    """({SID: {"spatial": [labels], "tables": [labels], "columns": {label: [{name, type}]},
-    "relationships": [...], "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2,
-    columns, pmtiles_layer, source}}}} from
-    the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/_manifest.json`)
-    — the AUTHORITATIVE record of which extracted layers are spatial vs non-spatial GeMS companion
-    tables, so build_publication doesn't have to guess a layer's kind from its name. `columns` holds each
-    layer's recorded schema and `layers` its row count, bbox and CRS; manifests written before they
-    were recorded have none (empty maps / None values); `source` comes from the label when the
-    manifest records none. A layer's kind is not read: build_publication derives it from the
-    relationships it publishes}, {SID: cause} for each manifest that exists but could not be read
-    or parsed). A series with no manifest appears in neither map."""
-    pfx = vectors.VECTORS_PREFIX.rstrip("/") + "/"
+def _vector_manifest(sid: str, doc: dict) -> dict:
+    """One series' manifest reduced to what the items are built from: {"spatial": [labels],
+    "tables": [labels], "empty": [labels], "columns": {label: [{name, type}]}, "relationships":
+    [...], "layers": {label: {rows, bbox, geometry_types, proj_code, proj_wkt2, columns,
+    pmtiles_layer, source}}}. `columns` holds each layer's recorded schema and `layers` its row
+    count, bbox and CRS; manifests written before they were recorded have none (empty maps / None
+    values); `source` comes from the label when the manifest records none. A layer's kind is not
+    read: build_publication derives it from the relationships it publishes."""
+    layer_docs = [lay for lay in doc.get("layers") or [] if lay.get("label")]
+    return {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or [],
+            "empty": doc.get("empty") or [],
+            "columns": {lay["label"]: lay["columns"] for lay in layer_docs if lay.get("columns")},
+            "relationships": _relationships(doc.get("relationships") or []),
+            "layers": {lay["label"]: {"rows": lay.get("rows"), "bbox": lay.get("bbox"),
+                                      "geometry_types": lay.get("geometry_types") or [],
+                                      "proj_code": lay.get("proj_code"),
+                                      "proj_wkt2": lay.get("proj_wkt2"),
+                                      "columns": lay.get("columns"),
+                                      "pmtiles_layer": (lay.get("pmtiles_layer")
+                                                        if lay.get("pmtiles") else None),
+                                      "source": lay.get("source")
+                                      or relations.source_of_label(lay["label"], sid)}
+                       for lay in layer_docs}}
+
+
+def _reduce_vector_manifest(sid: str, doc: dict) -> tuple[dict | None, str | None, vectors.Needs | None]:
+    """(the reduced manifest, why it is malformed, what the self-heal would do) for one series, in
+    the thread that read it, so the full document is dropped as soon as this returns."""
+    needs = vectors.needs_of(doc) if vectors.is_clean(doc) else None
+    try:
+        return _vector_manifest(sid.upper(), doc), None, needs
+    except Exception as e:  # noqa: BLE001 (recorded per series; the caller fails that pub)
+        return None, f"{type(e).__name__}: {e}", needs
+
+
+def _read_vector_manifests(paths: list[str] | None = None
+                           ) -> tuple[dict[str, dict], dict[str, str], dict[str, vectors.Needs]]:
+    """Read the per-series manifests pubs/vectors.py writes (`{VECTORS_PREFIX}/<series_id>/
+    _manifest.json`), once, on `vectors.scan_manifests`'s threads. They are the AUTHORITATIVE
+    record of which extracted layers are spatial vs non-spatial GeMS companion tables, so
+    build_publication doesn't have to guess a layer's kind from its name. Returns ({SID:
+    `_vector_manifest`}, {SID: cause} for each manifest that exists but could not be read or
+    parsed, {series id: Needs} for each clean one). A series with no manifest appears in none of
+    them. `paths` narrows the read to those manifests."""
     out: dict[str, dict] = {}
     failed: dict[str, str] = {}
-    for path in gcs.list_paths(vectors.VECTORS_PREFIX):
-        if not path.endswith("/_manifest.json"):
-            continue
-        rest = path[len(pfx):] if path.startswith(pfx) else path
-        sid = rest.split("/", 1)[0].upper()
-        try:
-            doc = json.loads(gcs.get_bytes(path).decode())
-            layer_docs = [lay for lay in doc.get("layers") or [] if lay.get("label")]
-            rels = _relationships(doc.get("relationships") or [])
-            out[sid] = {"spatial": doc.get("spatial") or [], "tables": doc.get("tables") or [],
-                        "empty": doc.get("empty") or [],
-                        "columns": {lay["label"]: lay["columns"] for lay in layer_docs if lay.get("columns")},
-                        "relationships": rels,
-                        "layers": {lay["label"]: {"rows": lay.get("rows"), "bbox": lay.get("bbox"),
-                                                  "geometry_types": lay.get("geometry_types") or [],
-                                                  "proj_code": lay.get("proj_code"),
-                                                  "proj_wkt2": lay.get("proj_wkt2"),
-                                                  "columns": lay.get("columns"),
-                                                  "pmtiles_layer": (lay.get("pmtiles_layer")
-                                                                    if lay.get("pmtiles") else None),
-                                                  "source": lay.get("source")
-                                                  or relations.source_of_label(lay["label"], sid)}
-                                   for lay in layer_docs}}
-        except Exception as e:  # noqa: BLE001 (recorded per series; the caller fails that pub)
-            failed[sid] = f"unreadable vector manifest {path}: {type(e).__name__}: {e}"
-            print(f"[pubs] {failed[sid]}", file=sys.stderr)
-    return out, failed
+    needs: dict[str, vectors.Needs] = {}
+    for sid, scanned in vectors.scan_manifests(_reduce_vector_manifest, paths).items():
+        if scanned.error:
+            cause = scanned.error
+        else:
+            reduced, cause, need = scanned.value
+            if need is not None:
+                needs[sid] = need
+            if reduced is not None:
+                out[sid.upper()] = reduced
+        if cause:
+            failed[sid.upper()] = f"unreadable vector manifest {scanned.path}: {cause}"
+            print(f"[pubs] {failed[sid.upper()]}", file=sys.stderr)
+    return out, failed, needs
 
 
 def _relationships(rels: list) -> list[dict]:
@@ -271,13 +289,15 @@ def _file_meta_index() -> dict[str, gcs.FileMeta]:
 HEAL_BUDGET_S = 600
 
 
-def _self_heal(pubs: list[dict], deadline: float) -> vectors.Heal:
-    """`vectors.self_heal` over the clean vector manifests and units files of `pubs`: the PMTiles
-    and relationships extracted layers are missing, and units files older than GeoParquet 1.1,
-    before the items are built."""
+def _self_heal(pubs: list[dict], needs: dict[str, vectors.Needs], deadline: float) -> vectors.Heal:
+    """`vectors.self_heal` over the clean vector manifests and units files of `pubs`: the
+    relationships extracted layers are missing, and units files older than GeoParquet 1.1, before
+    the items are built. PMTiles are not built here: tiling reads whole layers, which the vectors
+    job is sized for and this one (4Gi) is not, so a layer without tiles is tiled by the next
+    vectors run."""
     wanted = {(p.get("series_id") or "").strip().upper() for p in pubs}
-    manifests = {sid: m for sid, m in vectors.clean_manifests().items() if sid.upper() in wanted}
-    heal = vectors.self_heal(manifests, deadline=deadline, units=vectors.units_objects(wanted))
+    mine = {sid: n for sid, n in needs.items() if sid.upper() in wanted}
+    heal = vectors.self_heal(mine, deadline=deadline, units=vectors.units_objects(wanted), tiles=False)
     print(f"[pubs] {heal.summary(next_step='refresh')}")
     return heal
 
@@ -325,10 +345,17 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     units = _unit_ids()
     heads = _cog_headers(cogs)  # footprints + COG asset fields from OUR COGs (no external service)
     mirrored = _mirrored_files()  # source files served from our CDN instead of the publisher's host
-    vector_manifests, manifest_failures = _vector_manifests_by_sid()  # spatial/table split extracted by pubs/vectors.py
-    healed = _self_heal(pubs, started + HEAL_BUDGET_S)
-    if healed.tiled or healed.related:  # build the items from the healed manifests
-        vector_manifests, manifest_failures = _vector_manifests_by_sid()
+    vector_manifests, manifest_failures, needs = _read_vector_manifests()  # spatial/table split extracted by pubs/vectors.py
+    healed = _self_heal(pubs, needs, started + HEAL_BUDGET_S)
+    del needs
+    if healed.touched:  # build the items from the healed manifests, re-reading only those
+        fresh, fresh_failed, _ = _read_vector_manifests(
+            [f"{vectors.VECTORS_PREFIX}/{sid}/_manifest.json" for sid in sorted(healed.touched)])
+        for sid in healed.touched:
+            vector_manifests.pop(sid.upper(), None)
+            manifest_failures.pop(sid.upper(), None)
+        vector_manifests.update(fresh)
+        manifest_failures.update(fresh_failed)
     file_meta = _file_meta_index()  # file:size/checksum for the assets in our bucket
     n_foot = sum(1 for f, _ in heads.values() if f)
     print(f"[pubs] harvested: {len(cogs)} cogs, {len(covers)} covers, {len(toc)} contents, "

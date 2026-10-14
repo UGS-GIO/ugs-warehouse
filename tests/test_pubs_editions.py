@@ -142,8 +142,7 @@ def test_build_catalog_wires_edition_into_build_publication():
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=({}, {})), \
-         patch("ugs_warehouse.pubs.vectors.clean_manifests", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._read_vector_manifests", return_value=({}, {}, {})), \
          patch("ugs_warehouse.pubs.vectors.units_objects", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[
              ("M-1", "", "geomaps_24k", ""), ("M-2", "", "geomaps_24k", "7_5_Quads")]), \

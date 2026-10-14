@@ -510,8 +510,7 @@ def test_build_catalog_series_filter():
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=({}, {})), \
-         patch("ugs_warehouse.pubs.vectors.clean_manifests", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._read_vector_manifests", return_value=({}, {}, {})), \
          patch("ugs_warehouse.pubs.vectors.units_objects", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows", return_value=[]), \
          patch("ugs_warehouse.pubs.sink_stac.build_publication",
@@ -555,8 +554,7 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          patch("ugs_warehouse.pubs.ingest._unit_ids", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._mirrored_files", return_value=set()), \
          patch("ugs_warehouse.pubs.ingest._cog_headers", return_value={}), \
-         patch("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", return_value=({}, {})), \
-         patch("ugs_warehouse.pubs.vectors.clean_manifests", return_value={}), \
+         patch("ugs_warehouse.pubs.ingest._read_vector_manifests", return_value=({}, {}, {})), \
          patch("ugs_warehouse.pubs.vectors.units_objects", return_value={}), \
          patch("ugs_warehouse.pubs.editions.footprint_rows",
                side_effect=RuntimeError("footprints missing")), \
@@ -585,13 +583,13 @@ def test_build_catalog_degrades_loudly_when_footprints_parquet_is_missing(capsys
          assert "WARNING" in err and "edition detection skipped" in err and "footprints missing" in err
 
 
-def test_vector_manifests_by_sid_reads_the_authoritative_split():
-    """_vector_manifests_by_sid() must read pubs/vectors.py's per-series `_manifest.json` — the
+def test_read_vector_manifests_reads_the_authoritative_split():
+    """_read_vector_manifests()[:2] must read pubs/vectors.py's per-series `_manifest.json` — the
     AUTHORITATIVE spatial-vs-table split — rather than guess spatial/table from label names."""
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
-    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
 
     manifest = {"spatial": ["geo__ContactsAndFaults"], "tables": ["geo__DescriptionOfMapUnits"]}
     paths = [
@@ -609,7 +607,7 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
 
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=get_bytes):
-        out, failed = _vector_manifests_by_sid()
+        out, failed = _read_vector_manifests()[:2]
 
     # keyed by uppercased series_id, matching the other discovery maps
     assert out["M-100"] == {**manifest, "empty": [], "columns": {}, "relationships": [], "layers": {}}
@@ -617,13 +615,13 @@ def test_vector_manifests_by_sid_reads_the_authoritative_split():
     assert "DS-2" in failed and "FileNotFoundError" in failed["DS-2"]
 
 
-def test_vector_manifests_by_sid_carries_each_tables_recorded_columns():
+def test_read_vector_manifests_carries_each_tables_recorded_columns():
     """A manifest's per-layer `columns` (written by pubs/vectors.py) reach build_item, so a
     companion table's asset gets `table:columns` instead of none."""
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
-    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
 
     cols = [{"name": "MapUnit", "type": "string"}]
     manifest = {"spatial": [], "tables": ["geo__DescriptionOfMapUnits"],
@@ -633,16 +631,16 @@ def test_vector_manifests_by_sid_carries_each_tables_recorded_columns():
 
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
-        out, failed = _vector_manifests_by_sid()
+        out, failed = _read_vector_manifests()[:2]
 
     assert out["M-100"]["columns"] == {"geo__DescriptionOfMapUnits": cols}
 
 
-def test_vector_manifests_by_sid_carries_each_layers_rows_and_bbox():
+def test_read_vector_manifests_carries_each_layers_rows_and_bbox():
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
-    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
 
     manifest = {"spatial": ["geo__Faults"], "tables": [],
                 "layers": [{"label": "geo__Faults", "spatial": True, "rows": 12,
@@ -652,7 +650,7 @@ def test_vector_manifests_by_sid_carries_each_layers_rows_and_bbox():
     path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
-        out, failed = _vector_manifests_by_sid()
+        out, failed = _read_vector_manifests()[:2]
 
     assert out["M-100"]["layers"] == {"geo__Faults": {
         "rows": 12, "bbox": [-112.0, 40.0, -111.0, 41.0], "geometry_types": ["LineString"],
@@ -662,11 +660,11 @@ def test_vector_manifests_by_sid_carries_each_layers_rows_and_bbox():
         "source": "geo"}}
 
 
-def test_vector_manifests_by_sid_carries_relationships_and_each_layers_source():
+def test_read_vector_manifests_carries_relationships_and_each_layers_source():
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
-    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
 
     rel = {"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
            "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100}
@@ -682,7 +680,7 @@ def test_vector_manifests_by_sid_carries_relationships_and_each_layers_source():
               f"{vectors.VECTORS_PREFIX}/M-103/_manifest.json": json.dumps(no_confidence).encode()}
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=list(bodies)), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
-        out, failed = _vector_manifests_by_sid()
+        out, failed = _read_vector_manifests()[:2]
 
     assert out["M-100"]["relationships"] == [rel]
     layers = out["M-100"]["layers"]
@@ -696,11 +694,11 @@ def test_vector_manifests_by_sid_carries_relationships_and_each_layers_source():
     assert {"M-102", "M-103"} <= set(failed) and not {"M-102", "M-103"} & set(out)
 
 
-def test_vector_manifests_by_sid_carries_a_layers_pmtiles_only_when_built():
+def test_read_vector_manifests_carries_a_layers_pmtiles_only_when_built():
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
-    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
 
     manifest = {"spatial": ["a", "b"], "tables": [],
                 "layers": [{"label": "a", "spatial": True, "rows": 1, "pmtiles": True, "pmtiles_layer": "a"},
@@ -708,13 +706,13 @@ def test_vector_manifests_by_sid_carries_a_layers_pmtiles_only_when_built():
     path = f"{vectors.VECTORS_PREFIX}/M-100/_manifest.json"
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=[path]), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", return_value=json.dumps(manifest).encode()):
-        out, _ = _vector_manifests_by_sid()
+        out, _ = _read_vector_manifests()[:2]
 
     assert out["M-100"]["layers"]["a"]["pmtiles_layer"] == "a"
     assert out["M-100"]["layers"]["b"]["pmtiles_layer"] is None
 
 
-def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
+def test_read_vector_manifests_skips_a_non_object_manifest(capsys):
     """A manifest that is valid JSON but not an object (`null`, a list, a bare string — a partial
     or corrupt write) must not crash discovery for every other pub. `.get()` on a non-dict raises
     AttributeError; that has to land inside the same try/except as the read, or one bad manifest
@@ -726,7 +724,7 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
     from unittest.mock import patch
 
     from ugs_warehouse.pubs import vectors
-    from ugs_warehouse.pubs.ingest import _vector_manifests_by_sid
+    from ugs_warehouse.pubs.ingest import _read_vector_manifests
 
     good = {"spatial": ["geo__ContactsAndFaults"], "tables": []}
     bad_path = f"{vectors.VECTORS_PREFIX}/DS-9/_manifest.json"
@@ -738,7 +736,7 @@ def test_vector_manifests_by_sid_skips_a_non_object_manifest(capsys):
 
     with patch("ugs_warehouse.pubs.ingest.gcs.list_paths", return_value=paths), \
          patch("ugs_warehouse.pubs.ingest.gcs.get_bytes", side_effect=lambda p: bodies[p]):
-        out, failed = _vector_manifests_by_sid()  # must return, not raise
+        out, failed = _read_vector_manifests()[:2]  # must return, not raise
 
     assert out["M-100"] == {**good, "empty": [], "columns": {}, "relationships": [],
                             "layers": {}}  # unaffected by the sibling's bad manifest
@@ -761,8 +759,7 @@ def _build_catalog_patches(stack, manifests, pubs, written_items, written_colls,
         ("ugs_warehouse.pubs.ingest._unit_ids", {"return_value": {"DS-8"}}),
         ("ugs_warehouse.pubs.ingest._mirrored_files", {"return_value": set()}),
         ("ugs_warehouse.pubs.ingest._cog_headers", {"return_value": {}}),
-        ("ugs_warehouse.pubs.ingest._vector_manifests_by_sid", {"return_value": (manifests, failed or {})}),
-        ("ugs_warehouse.pubs.vectors.clean_manifests", {"return_value": {}}),
+        ("ugs_warehouse.pubs.ingest._read_vector_manifests", {"return_value": (manifests, failed or {}, {})}),
         ("ugs_warehouse.pubs.vectors.units_objects", {"return_value": {}}),
         ("ugs_warehouse.pubs.editions.footprint_rows", {"return_value": []}),
         ("ugs_warehouse.core.stac.prior_collection_field", {"return_value": None}),

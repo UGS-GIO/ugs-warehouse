@@ -127,7 +127,10 @@ flagged `ugs:date_unknown`.
 
 Each map layer extracted from a GIS zip is written as GeoParquet in its own CRS plus PMTiles in
 EPSG:4326 (`geolmap/vectors/<SID>/<label>.parquet` and `.pmtiles`), tiled with the serving topics'
-tippecanoe flags and one tile layer named for the label. The series' `_manifest.json` records
+tippecanoe flags and one tile layer named for the label. DuckDB reads the layer's GeoParquet,
+drops rows with no geometry, reprojects from the CRS the manifest recorded (`ST_Transform`
+with `always_xy`, so coordinates stay lon/lat) and streams GeoJSONSeq to tippecanoe through
+`vector/sink_pmtiles.py`, so no layer is held in memory as a GeoDataFrame. The series' `_manifest.json` records
 `pmtiles` and `pmtiles_layer` per layer. A layer whose tiling fails keeps its GeoParquet and gets
 a `pmtiles_failed` warning instead of an error, so the pub stays extracted and is not downloaded
 again; the next run's self-heal retries it (below). A tiled layer's Item carries the same `pmtiles`
@@ -179,9 +182,11 @@ whether it was `declared` or `inferred` (with an integer `confidence`), or the p
 are missing, from their GeoParquet on GCS and without downloading a zip:
 
 - PMTiles for each spatial layer with none that is not `no_geometry`, including layers with a
-  `pmtiles_failed` warning (the warning clears once the layer tiles);
+  `pmtiles_failed` warning (the warning clears once the layer tiles). The GeoParquet is downloaded
+  to the job's disk and tiled the same way as at extraction;
 - relationships for each manifest with no `relations_version`, or one older than
-  `relations.RELATIONS_VERSION`. Bumping that number with a change to the inference rules makes the
+  `relations.RELATIONS_VERSION`. Only the string and integer columns are range-read from GCS,
+  never the geometry. Bumping that number with a change to the inference rules makes the
   next runs recompute every pub's relationships. Declared relationships already recorded are kept,
   since the geodatabase is not at hand, and nothing is written for a pub with a layer that cannot
   be read. Scopes come from the labels, as at extraction. When a label carries a folder prefix
@@ -192,7 +197,9 @@ are missing, from their GeoParquet on GCS and without downloading a zip:
   range, says GeoParquet older than 1.1 or no bbox covering is rewritten through
   `pubs.geoparquet.write` to the same path, with a mutable cache header.
 
-Series whose only work is retrying a failed layer go last. In a regular `--all` run, extraction and
+A run keeps only `{series id: what it lacks}` (the layers without tiles, and whether relationships
+are missing) for the whole catalog, and reads a series' manifest again, with `put_bytes_if_unchanged`,
+only when it heals it. Series whose only work is retrying a failed layer go last. In a regular `--all` run, extraction and
 the self-heal share one time budget, `VECTORS_TIME_BUDGET_S` (default 2700 s, inside the job's
 7200 s timeout). Extraction goes first: it stops starting pubs once the budget is spent and lists
 the pubs left for the next run, so the self-heal only runs once the backlog of new pubs is cleared.
@@ -205,10 +212,14 @@ The run exits 1 only for work that failed in that run: a pub that failed to extr
 tiling failed at extraction, or a layer or pub whose self-heal failed (each is listed). Work the
 time budget left pending is not a failure.
 
-The pubs ingest runs the same self-heal before it writes the items (stopping new series after
-600 s), so any refresh, Full refresh or **Rebuild pubs STAC**, catches these up and publishes them in
-the same run. Pubs extracted before PMTiles and relationships were recorded catch up this way:
-repeat a refresh until it reports 0 pending. After the units files have caught up, purge the CDN
+The pubs ingest (4Gi) heals relationships and units files before it writes the items (stopping new
+series after 600 s), so any refresh catches those up and publishes them in the same run. It does
+not tile: tiling reads whole layers and belongs to the vectors job. **Rebuild pubs STAC** alone
+therefore does not build missing PMTiles; a **Full refresh** does, because it runs the vectors job
+before the ingest. The ingest reads each vector manifest once, on 16 threads, keeps the reduced
+form the items are built from plus the small needs index, and reads again only the series the heal
+changed. Pubs extracted before PMTiles and relationships were recorded catch up this way: repeat a
+refresh until it reports 0 pending. After the units files have caught up, purge the CDN
 cache for `geolmap/units/` once: the old files were served as immutable, so the edge keeps them until
 purged.
 

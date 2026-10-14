@@ -74,8 +74,9 @@ def tiling_signature(has_ugs_key: bool) -> str:
     return "|".join([f"v{PMTILES_BUILD_VERSION}", f"ugskey={int(has_ugs_key)}", *opts])
 
 
-def _write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
-    """COPY the transformed `view` to a GeoJSONSeq file (DuckDB streams it)."""
+def write_geojsonl(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
+    """COPY `view` (its geometry column a DuckDB GEOMETRY in lon/lat) to a GeoJSONSeq file. DuckDB
+    streams the export; the pubs producer calls this too."""
     con.execute(f"COPY (SELECT * FROM {view}) TO '{path}' (FORMAT GDAL, DRIVER 'GeoJSONSeq')")
 
 
@@ -128,6 +129,6 @@ def build(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMe
     tippecanoe streams its input → bounded memory regardless of table size."""
     with tempfile.TemporaryDirectory() as tmp:
         geojsonl = os.path.join(tmp, f"{topic.stem}.geojsonl")
-        _write_geojsonl(con, view, geojsonl)
+        write_geojsonl(con, view, geojsonl)
         # MVT id is always feature_id (viewer map→table join); ugs_key rides along as a property.
         return _tile_and_upload(topic, geojsonl, introspect.FEATURE_ID)

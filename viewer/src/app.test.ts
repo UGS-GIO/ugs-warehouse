@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { toLayer } from "./app";
 import { rootIndexItems } from "./stac";
 import { layerRowsOf } from "./catalog/catalog";
+import { colorForId, mapDefaultLayers } from "./map/map-model";
 
 // What `?l=`, the Map page's Add and the map search resolve a publication's layer and plate from:
 // their root-index entries, tagged with their publication. The layer carries a `pmtiles` asset and a
@@ -44,5 +45,22 @@ describe("a publication's plate and layer in the Layers tray", () => {
     expect(rows.map((r) => r.id).sort()).toEqual(["M-246DM__UtahLandslideMaps__DebrisFlowPaths", "M-246DM_plate"]);
     expect(rows.find((r) => r.id === "M-246DM_plate")).toMatchObject({
       title: "Map plate · Landslide maps of Utah", group: "ugs-publications/M" });
+  });
+});
+
+describe("toLayer on a bound style", () => {
+  const withRender = (render: Record<string, unknown>) => ({
+    ...layer, data: { ...layer.data, properties: { ...layer.data?.properties, "ugs:renders": { default: render } } } });
+  const id = "M-246DM__UtahLandslideMaps__DebrisFlowPaths";
+
+  it("draws a generated default in the layer's swatch colour, as an unstyled layer", () => {
+    const l = toLayer(withRender({ style_url: "https://x/f.style.json", generated: true }) as typeof layer);
+    expect(l?.styleUrl).toBeUndefined();
+    expect(mapDefaultLayers(id)[0].paint["fill-color"]).toBe(colorForId(id));
+  });
+
+  it("applies an explicit ugs-styles style as is", () => {
+    const l = toLayer(withRender({ style_url: "https://x/styles/default.json" }) as typeof layer);
+    expect(l?.styleUrl).toBe("https://x/styles/default.json");
   });
 });

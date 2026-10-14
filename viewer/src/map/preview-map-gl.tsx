@@ -80,7 +80,7 @@ export default function PreviewMap({ spec, slotEl, focus, onFeatureClick, onMism
   // ---- vector-specific state (`renders`/`sel` are owned by the provider) ----
   const renderKeys = Object.keys(renders);
   const active = renders[sel];
-  const styleUrl = isVector && item ? (active?.style_url ?? defaultStyleUrl(item)) : undefined;
+  const styleUrl = isVector && item ? (active?.generated ? undefined : active?.style_url ?? defaultStyleUrl(item)) : undefined;
   const sprite = active?.sprite;
   const styleLayers = useStyleLayers(styleUrl);  // null while loading/error → NEUTRAL_LAYERS
   // Icon renders bake their colours into the sprite, so the legend can't be derived from the paint.

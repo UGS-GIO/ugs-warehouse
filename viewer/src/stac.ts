@@ -473,6 +473,9 @@ export const classificationColors = (d: StacDoc | undefined): Record<string, str
 // One entry of the STAC render extension (a named way to draw the layer).
 export type RenderBlock = {
   title?: string; assets?: string[]; style_url?: string; sprite?: string;
+  // The style is the viewer's own default look, generated for a publication layer: the layer is drawn
+  // by the viewer (its per-layer colour), not from the file.
+  generated?: boolean;
   legend?: { label: string; color: string }[];   // explicit legend for icon renders (no paint)
 };
 
@@ -482,11 +485,13 @@ export const rendersOf = (d?: StacDoc): Record<string, RenderBlock> =>
   (d?.properties as { "ugs:renders"?: Record<string, RenderBlock> } | undefined)?.["ugs:renders"] ?? {};
 
 // Default MapLibre GL style_url from the `ugs:renders` block (ugs-styles bridge), if bound.
-// Falls back to the first render. Undefined when the item carries no `ugs:renders`.
+// Falls back to the first render. Undefined when the item carries no `ugs:renders`, or when the
+// default render is a generated default look: the viewer then draws the layer itself.
 export const defaultStyleUrl = (d: StacDoc | undefined): string | undefined => {
-  const renders = (d?.properties as { "ugs:renders"?: Record<string, { style_url?: string }> } | undefined)?.["ugs:renders"];
+  const renders = (d?.properties as { "ugs:renders"?: Record<string, RenderBlock> } | undefined)?.["ugs:renders"];
   if (!renders) return undefined;
-  return (renders.default ?? Object.values(renders)[0])?.style_url;
+  const block = renders.default ?? Object.values(renders)[0];
+  return block?.generated ? undefined : block?.style_url;
 };
 
 // A non-2xx response, keeping its status so a caller can tell "not there" from "failed".

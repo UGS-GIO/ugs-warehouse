@@ -19,7 +19,7 @@ from collections import Counter
 from ..core import config, gcs, stac
 from ..core.bbox import to_2d_bbox
 from ..core.stac import item_id_for, plate_item_id  # noqa: F401 (re-exported)
-from . import counties, identity, topic
+from . import counties, identify, identity, topic
 from .relations import layer_kind, source_of_label
 from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
@@ -290,7 +290,8 @@ def build_publication(p: dict, attachments: list[dict], *,
                       mirrored: set[str] | None = None,
                       edition: dict | None = None,
                       mosaic_tier: str | None = None,
-                      geopackage: dict | None = None) -> tuple[dict, list[dict]]:
+                      geopackage: dict | None = None,
+                      unit_polys: dict | None = None) -> tuple[dict, list[dict]]:
     """A publication as one STAC Collection plus its Items.
 
     The Collection carries the documents (PDF, cover, original zips) and the publication's
@@ -300,7 +301,8 @@ def build_publication(p: dict, attachments: list[dict], *,
     manifest's) become related-table assets, `ugs:foreign_keys` and `related` links on the layer
     and table Items, in the serving topics' shape. `empty_layers` are the manifest's layers with no
     rows, which were never uploaded. `geopackage` (the manifest's {bytes, checksum}) adds the
-    all-layers GeoPackage as a Collection asset."""
+    all-layers GeoPackage as a Collection asset. `unit_polys` (the manifest's record of the normalized
+    unit polygons) adds the plate Item's `units` asset, the identify tiles for clicks on the plate."""
     sid = (p.get("series_id") or "").strip()
     pub_id = item_id_for(sid)
     coll_path = pub_collection_path(p)
@@ -417,6 +419,9 @@ def build_publication(p: dict, attachments: list[dict], *,
         plate_assets = {"cog": {"href": config.public_url(identity.Pub(sid.upper()).cog_object),
                                 "type": COG_MIME, "title": "Cloud-Optimized GeoTIFF",
                                 "roles": ["data", "cloud-optimized"], **(cog_fields or {})}}
+        units_asset = identify.plate_asset(sid, unit_polys)
+        if units_asset:
+            plate_assets["units"] = units_asset
         if has_thumb:
             plate_assets["thumbnail"] = {"href": config.public_url(identity.Pub(sid.upper()).thumb_object),
                                          "type": config.WEBP_MIME, "title": "Thumbnail", "roles": ["thumbnail"]}

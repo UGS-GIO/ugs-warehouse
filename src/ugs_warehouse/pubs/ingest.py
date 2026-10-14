@@ -172,7 +172,8 @@ def _vector_manifest(sid: str, doc: dict) -> dict:
                                       or relations.source_of_label(lay["label"], sid),
                                       "source_file": _source_file(lay)}
                        for lay in layer_docs},
-            **({"geopackage": doc["geopackage"]} if (doc.get("geopackage") or {}).get("bytes") else {})}
+            **({"geopackage": doc["geopackage"]} if (doc.get("geopackage") or {}).get("bytes") else {}),
+            **({"unit_polys": doc["unit_polys"]} if (doc.get("unit_polys") or {}).get("pmtiles") else {})}
 
 
 def _reduce_vector_manifest(sid: str, doc: dict) -> tuple[dict | None, str | None, vectors.Needs | None]:
@@ -432,6 +433,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             edition=edition_graph.get(sid),
             mosaic_tier=tier_by_sid.get(up),
             geopackage=manifest.get("geopackage"),
+            unit_polys=manifest.get("unit_polys"),
         )
         for it in items:
             stac.attach_renders(it)  # ugs-styles GL style, else the layer's generated one

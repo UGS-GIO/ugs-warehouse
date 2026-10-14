@@ -493,9 +493,12 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
     but still counts toward `ugs:map_count` (it's physically stitched into the raster). The reverse
     map→mosaic direction is a generic `rel:"related"` on the pub side (sink_stac) — STAC defines no
     reverse of `derived_from`."""
+    from . import identify  # function-level: it imports vectors
+
     label = TIER_LABEL.get(tier, tier)
     n_maps = len(sids)
     w, s, e, n = bounds
+    units = identify.mosaic_asset(tier)
     derived_from: list[dict] = []
     for sid in sids:                      # sids are UPPER (from _cog_sids)
         p = by_sid.get(sid)
@@ -521,7 +524,8 @@ def _write_item(tier: str, sids: list[str], obj: str, by_sid: dict[str, dict], *
                     "ugs:scale": tier, "ugs:map_count": n_maps, "ugs:topic": "geologic"},
         assets={"tiles": {"href": config.public_url(obj), "type": PMTILES_MIME,
                           "roles": ["visual"], "ugs:render": "raster",
-                          "title": f"Raster PMTiles ({label})"}},
+                          "title": f"Raster PMTiles ({label})"},
+                **({"units": units} if units else {})},
         extra_links=derived_from,
         proj_epsg=4326,
     )

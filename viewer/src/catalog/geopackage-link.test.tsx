@@ -4,7 +4,7 @@ import type { ReactNode } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import type { StacDoc } from "@/stac";
-import { GeopackageLink, PublicationParts } from "./item-detail";
+import { GeopackageLink, PublicationData } from "./item-detail";
 
 // The parts list links with the router's <Link>; a plain anchor is enough to render it.
 vi.mock("@tanstack/react-router", async (orig) => ({
@@ -38,10 +38,17 @@ describe("the GeoPackage download on a publication page", () => {
     expect(screen.queryByRole("link")).toBeNull();
   });
 
-  it("sits under the Layers and tables heading", () => {
-    render(<PublicationParts item={pub({ geopackage: gpkg })} collectionId="ugs-publications/M" />);
+  it("sits above the Layers and tables section", () => {
+    render(<PublicationData item={pub({ geopackage: gpkg })} collectionId="ugs-publications/M" />);
     const heading = screen.getByRole("heading", { name: "Layers and tables" });
     const link = screen.getByRole("link", { name: /Download all data/ });
-    expect(heading.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(link.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("shows on a single-file publication that has no parts", () => {
+    const single = { ...pub({ geopackage: gpkg }), links: [] };
+    render(<PublicationData item={single} collectionId="ugs-publications/M" />);
+    expect(screen.getByRole("link", { name: /Download all data/ })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Layers and tables" })).toBeNull();
   });
 });

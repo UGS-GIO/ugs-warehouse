@@ -196,9 +196,6 @@ function EntryLink({ c, i, className, children }: { c: string; i: string; classN
   );
 }
 
-// A publication's layers and tables, one row per Item, titled from its rel=item links. Each opens
-// at `?c=<series>/<SID>&i=<item>`. A report-only publication has none, so nothing renders.
-// Grouped by groupParts (item-view.ts); groups are native <details>, so they open without state.
 // One file with every layer and table of the publication, each layer in its own CRS. Only when the
 // publication has one (a very large one is not packaged).
 export function GeopackageLink({ item }: { item: StacDoc }) {
@@ -212,6 +209,20 @@ export function GeopackageLink({ item }: { item: StacDoc }) {
   );
 }
 
+// The publication's data: the all-layers download (also on a single-file publication, which has no
+// parts) above its layers and tables.
+export function PublicationData({ item, collectionId }: { item: StacDoc; collectionId: string }) {
+  return (
+    <>
+      {geopackageAsset(item) && <div><GeopackageLink item={item} /></div>}
+      <PublicationParts item={item} collectionId={collectionId} />
+    </>
+  );
+}
+
+// A publication's layers and tables, one row per Item, titled from its rel=item links. Each opens
+// at `?c=<series>/<SID>&i=<item>`. A report-only publication has none, so nothing renders.
+// Grouped by groupParts (item-view.ts); groups are native <details>, so they open without state.
 export function PublicationParts({ item, collectionId }: { item: StacDoc; collectionId: string }) {
   const parts = collectionParts(item);
   if (!parts.length || !collectionId || !item.id) return null;
@@ -238,7 +249,6 @@ export function PublicationParts({ item, collectionId }: { item: StacDoc; collec
   return (
     <section className="mt-4 rounded-md border border-border bg-card p-3">
       <h3 className="text-sm font-semibold">Layers and tables</h3>
-      <GeopackageLink item={item} />
       {groupParts(parts).map((s, i) => s.label
         ? (
           <details key={s.label} open={!s.collapsed} className="mt-2 border-t border-border pt-2">
@@ -453,7 +463,7 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
           <div className="min-w-0 space-y-6 lg:col-span-2">
             <Preview item={item} />
             <IssueContents item={item} />
-            <PublicationParts item={item} collectionId={collectionId} />
+            <PublicationData item={item} collectionId={collectionId} />
             {!fieldsUnderMap && <FieldsPanel item={item} />}
             <RelatedPanel item={item} />
             {IS_REVIEW && <CatalogReview item={item} />}
@@ -480,7 +490,7 @@ export function ItemDetail({ collectionId, item, raw, error, missing, partOf, cr
       {head}
       <Preview item={item} />
       <IssueContents item={item} />
-      <PublicationParts item={item} collectionId={collectionId} />
+      <PublicationData item={item} collectionId={collectionId} />
       {atAGlance}
       {IS_REVIEW && <CatalogReview item={item} />}
     </div>

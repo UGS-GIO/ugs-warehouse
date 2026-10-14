@@ -1052,10 +1052,7 @@ SERIES_DESC = {
 # without walking N sub-collections. Deliberately NOT pubs: thousands of items in one document.
 ROLLUP_INDEX_CATALOGS = {SERVING_TOPICS_CATALOG}
 
-# Catalogs whose children are publication SERIES — the only place a group's title is the items'
-# `ugs:pub_type`, because there the collection IS the pub type ("Open File Report" = the OFR series).
-# Anywhere else that field describes the source publication, not the group: a raster mosaic built
-# from OFR plates was titled "Open File Report" instead of naming the layer (#86).
+# The publication groups, each a Catalog of series Catalogs holding publication Collections.
 PUBLICATIONS_COLLECTION = "ugs-publications"             # UGS/UGMS-authored + USGS Utah maps
 MINING_DISTRICT_COLLECTION = "ugs-mining-district-files"  # MD series: archived 3rd-party mine files
 EXTERNAL_COLLECTION = "ugs-external"                     # foreign publishers UGS only hosts
@@ -1069,7 +1066,7 @@ def pub_layout_of(path: str) -> tuple[str, str, str, str] | None:
     A file directly in a series directory gives `sid == ""` and `rest` the file name. None for a
     path outside the publication groups or above series level."""
     parts = path.split("/")
-    if len(parts) < 3 or parts[0] not in PUB_GROUPS:
+    if len(parts) < 3 or parts[0] not in PUB_GROUPS or not all(parts[1:]):
         return None
     if len(parts) == 3:
         return parts[0], parts[1], "", parts[2]

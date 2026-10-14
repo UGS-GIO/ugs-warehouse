@@ -90,7 +90,6 @@ def pub_fulltext_object(series_id: str) -> str:
     return f"{PUB_FULLTEXT_PREFIX}/{series_id.upper()}.txt"
 
 
-
 # Previews are WebP (#372). The harvest writes a map's catalog thumbnail and the sheet the 3D viewer
 # drapes next to its COG; the cover job writes a cover for every pub. The ingest finds them by these
 # suffixes, so producers and catalog share one spelling.

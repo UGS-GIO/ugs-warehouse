@@ -14,6 +14,8 @@ from ugs_warehouse.pubs import identity, prune
     ("ugs-publications/catalog.json", None),
     ("ugs-publications", None),
     ("ugs-serving-topics/hazards/qfaults/qfaults.json", None),
+    ("ugs-publications/OFR/OFR-1/", None),
+    ("ugs-publications//OFR-1/collection.json", None),
     ("", None)])
 def test_pub_layout_of(path, expected):
     assert stac.pub_layout_of(path) == expected

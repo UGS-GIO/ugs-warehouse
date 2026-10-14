@@ -23,6 +23,7 @@ return <DiscoveryView
   selectedPartOf={c.partOf}
   selectedMissing={c.itemNotFound ? c.itemUrl : undefined}
   selectedCollectionId={c.collectionId}
+  selectedCrumbs={c.crumbs}
   onCloseItem={() => c.go({ view: "discover" })}
   onViewOnMap={() => c.go({ view: "map", c: c.collectionUrl, i: c.itemUrl, l: c.itemUrl ? [idOf(c.itemUrl)] : c.layerIds })}
   onExplore={() => c.go({ view: "preview", c: c.collectionUrl, i: c.itemUrl })}

@@ -29,7 +29,7 @@ export const catalogTrail = (o: {
 }): Crumb[] => {
   const { collectionId, itemUrl, subCat, subCats, leaf, pub, itemTitle } = o;
   const crumbs: Crumb[] = [{ label: "Catalog", to: collectionId || itemUrl ? {} : undefined }];
-  if (subCat) crumbs.push({ label: subCat.title ?? subCat.id });
+  if (subCat) crumbs.push({ label: subCat.title ?? subCat.id, to: itemUrl ? { c: subCat.id } : undefined });
   const parent = leaf?.parentId ? subCats.find((s) => s.id === leaf.parentId) : undefined;
   if (parent) crumbs.push({ label: parent.title ?? parent.id, to: { c: parent.id } });
   if (leaf) crumbs.push({ label: leaf.title ?? leaf.id, to: itemUrl ? { c: leaf.id, keepSeries: true } : undefined });
@@ -37,6 +37,13 @@ export const catalogTrail = (o: {
   if (itemUrl) crumbs.push({ label: itemTitle || itemUrl });
   return crumbs;
 };
+
+// Where a crumb navigates from `view`. A publication crumb (it names an item, `i`) opens in place, so
+// the Discover drawer stays a drawer; a series, group or root crumb is a browse page, which only the
+// Catalog view shows.
+export const crumbNav = <V extends string>(to: NonNullable<Crumb["to"]>, view: V, seriesSel?: string[]):
+  { view: V | "catalog"; c?: string; i?: string; s?: string[] } =>
+  ({ view: to.i ? view : "catalog", c: to.c, i: to.i, s: to.keepSeries ? seriesSel : undefined });
 
 // Where Back goes from an item page: an Item inside a publication returns to the publication,
 // anything else to its collection's list with the series filter kept.

@@ -26,6 +26,7 @@ import { searchPubs } from "./ftsearch";
 import { baseTerms, isEmptyQuery, matchesQuery, parseQuery, type SearchDoc } from "@/data/query";
 import { catalogIndex, type Hit, searchCatalog } from "./search-index";
 import type { StacDoc } from "@/stac";
+import type { Crumb } from "@/catalog/breadcrumb";
 import { ItemDetail, type PartOf } from "@/catalog/item-detail";
 import { UiSegmented } from "@/ui/segmented";
 import { UiSelect } from "@/ui/select";
@@ -53,7 +54,7 @@ const escAttr = (s: string) => s.replace(/["\\]/g, "\\$&");
 
 export function DiscoveryView({
   items, searchItems, itemsKey, loading = false, onOpenItem, onOpenPub, itemSelected, selectedItem, selectedItemError,
-  selectedMissing, selectedPartOf, selectedCollectionId, onCloseItem, onViewOnMap, onExplore,
+  selectedMissing, selectedPartOf, selectedCollectionId, selectedCrumbs, onCloseItem, onViewOnMap, onExplore,
   renderSearch,
 }: {
   items: ItemRef[];
@@ -68,6 +69,7 @@ export function DiscoveryView({
   selectedPartOf?: PartOf;             // the publication the selected Item belongs to
   selectedMissing?: string;            // the selected id when this catalog has no such item
   selectedCollectionId?: string;
+  selectedCrumbs?: Crumb[];            // the selected item's trail; a crumb never closes the drawer
   onCloseItem: () => void;             // clears ?i=
   onViewOnMap: () => void;             // opens the selected item on the Map view
   onExplore?: () => void;              // opens the selected item full-screen in the Preview view
@@ -510,7 +512,7 @@ export function DiscoveryView({
               </div>
             </div>
             <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} error={selectedItemError} missing={selectedMissing} partOf={selectedPartOf} layout="drawer"
+              <ItemDetail collectionId={selectedCollectionId ?? ""} item={selectedItem} error={selectedItemError} missing={selectedMissing} partOf={selectedPartOf} crumbs={selectedCrumbs} layout="drawer"
                 onBack={onCloseItem} onMap={onViewOnMap} onExplore={onExplore} />
             </div>
           </aside>

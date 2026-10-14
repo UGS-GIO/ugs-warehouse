@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { catalogTrail, featureEndpoints, itemBackTarget, layerCollectionIds, layerRowsOf, rootGroupOf, serviceUrlOf } from "./catalog";
+import { catalogTrail, crumbNav, featureEndpoints, itemBackTarget, layerCollectionIds, layerRowsOf, rootGroupOf, serviceUrlOf } from "./catalog";
 import type { StacDoc } from "@/stac";
 
 describe("layerCollectionIds", () => {
@@ -191,5 +191,57 @@ describe("layerRowsOf", () => {
       { id: "OFR-9__flows", href: items[1].href, title: "Debris Flow Paths · Geologic map of X",
         group: "Open File Report", layer: false },
     ]);
+  });
+});
+
+describe("crumbNav", () => {
+  it("opens a publication crumb in the current view, so a Discover drawer stays a drawer", () => {
+    const to = { c: "ugs-publications/OFR", i: "OFR-9" };
+    expect(crumbNav(to, "discover")).toEqual({ view: "discover", c: to.c, i: "OFR-9", s: undefined });
+    expect(crumbNav(to, "catalog").view).toBe("catalog");
+  });
+  it("sends a series, group or root crumb to the Catalog view", () => {
+    expect(crumbNav({ c: "ugs-publications/OFR", keepSeries: true }, "discover", ["a"]))
+      .toEqual({ view: "catalog", c: "ugs-publications/OFR", i: undefined, s: ["a"] });
+    expect(crumbNav({ c: "ugs-publications" }, "discover").view).toBe("catalog");
+    expect(crumbNav({}, "map")).toEqual({ view: "catalog", c: undefined, i: undefined, s: undefined });
+  });
+});
+
+describe("the parent crumb (up) at each level", () => {
+  const pubs = { id: "ugs-publications", title: "Publications" };
+  const ofr = { id: "ugs-publications/OFR", title: "Open File Report", parentId: "ugs-publications" };
+  const upOf = (t: ReturnType<typeof catalogTrail>) => t.at(-2);
+
+  it("goes item -> publication -> series -> group -> root", () => {
+    const item = catalogTrail({ collectionId: "ugs-publications/OFR/OFR-9", itemUrl: "OFR-9_plate", subCats: [pubs],
+      leaf: ofr, pub: { sid: "OFR-9", title: "Map X" }, itemTitle: "Plate" });
+    expect(upOf(item)).toEqual({ label: "Map X", to: { c: "ugs-publications/OFR", i: "OFR-9" } });
+    const pub = catalogTrail({ collectionId: "ugs-publications/OFR", itemUrl: "OFR-9", subCats: [pubs], leaf: ofr,
+      itemTitle: "Map X" });
+    expect(upOf(pub)?.to).toEqual({ c: "ugs-publications/OFR", keepSeries: true });
+    const series = catalogTrail({ collectionId: "ugs-publications/OFR", subCats: [pubs], leaf: ofr });
+    expect(upOf(series)?.to).toEqual({ c: "ugs-publications" });
+    const group = catalogTrail({ collectionId: "ugs-publications", subCats: [pubs], subCat: pubs });
+    expect(upOf(group)?.to).toEqual({});
+  });
+
+  it("goes serving-topic item -> schema collection -> ugs-serving-topics -> root, by title", () => {
+    const topics = { id: "ugs-serving-topics", title: "Serving Topics" };
+    const hazards = { id: "ugs-serving-topics/hazards", title: "Hazards", parentId: topics.id };
+    const item = catalogTrail({ collectionId: hazards.id, itemUrl: "hazards_qfaults", subCats: [topics],
+      leaf: hazards, itemTitle: "Quaternary Faults" });
+    expect(item.map((c) => c.label)).toEqual(["Catalog", "Serving Topics", "Hazards", "Quaternary Faults"]);
+    expect(upOf(item)?.to).toEqual({ c: hazards.id, keepSeries: true });
+    const schema = catalogTrail({ collectionId: hazards.id, subCats: [topics], leaf: hazards });
+    expect(upOf(schema)).toEqual({ label: "Serving Topics", to: { c: topics.id } });
+    expect(upOf(catalogTrail({ collectionId: topics.id, subCats: [topics], subCat: topics }))?.to).toEqual({});
+  });
+
+  it("reaches the group from an item deep-linked into a sub-catalog", () => {
+    const topics = { id: "ugs-serving-topics", title: "Serving Topics" };
+    const t = catalogTrail({ collectionId: topics.id, itemUrl: "hazards_qfaults", subCats: [topics], subCat: topics,
+      itemTitle: "Quaternary Faults" });
+    expect(upOf(t)).toEqual({ label: "Serving Topics", to: { c: topics.id } });
   });
 });

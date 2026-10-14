@@ -2,8 +2,13 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { PreviewMapProvider } from "@/map/preview-map";
 import { CollectionItems, CollectionsGrid, type CollectionSummary } from "./browse";
 import { ItemDetail } from "./item-detail";
+
+// The drawer's Add-to-map button reads the app's view context, which a bare render does not have.
+vi.mock("@/map/add-to-map-button", () => ({ AddToMapButton: () => null }));
 
 const card = (id: string, title: string): CollectionSummary =>
   ({ id, title, href: `https://cdn.example/stac/${id}/collection.json`, count: 1 });
@@ -69,6 +74,23 @@ describe("an item that is not in the catalog", () => {
       layout="page" onBack={noop} onMap={noop} />);
     expect(screen.getByText("Could not load this item.")).toBeDefined();
     expect(screen.queryByText(/Not found/)).toBeNull();
+  });
+});
+
+describe("an item in the Discover drawer", () => {
+  it("keeps the drawer open when a crumb is clicked: the crumb navigates, never goes back", () => {
+    const onBack = vi.fn();
+    const onPub = vi.fn();
+    const item = { type: "Feature", id: "hazards_qfaults", properties: { title: "Quaternary Faults" }, assets: {}, links: [] };
+    render(<QueryClientProvider client={new QueryClient()}><PreviewMapProvider>
+      <ItemDetail collectionId="ugs-serving-topics/hazards" item={item as never} layout="drawer"
+        crumbs={[{ label: "Catalog", onClick: vi.fn() }, { label: "Hazards", onClick: onPub }, { label: "Quaternary Faults" }]}
+        onBack={onBack} onMap={noop} />
+    </PreviewMapProvider></QueryClientProvider>);
+    screen.getByText("Hazards").click();
+    screen.getByRole("button", { name: "Up to Hazards" }).click();
+    expect(onPub).toHaveBeenCalledTimes(2);
+    expect(onBack).not.toHaveBeenCalled();
   });
 });
 

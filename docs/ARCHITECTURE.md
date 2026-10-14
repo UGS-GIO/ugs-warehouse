@@ -106,7 +106,8 @@ the documents (PDF, cover, original zips) as assets and the DOI as `cite-as` +
 for each layer and table (the double underscore keeps a layer id off another publication's id,
 since publication ids can hold `_`). A publication with one data file keeps it on the Collection and
 has no Items. The pubs ingest writes the Collections and Items; `refresh_catalog` writes the series
-and group catalogs over them.
+and group catalogs over them. The ingest lists each group once before it writes, and after the
+pool deletes, in one batched call, the Item directories no publication's current build produces.
 
 A series switches to this layout as a whole, once every publication in it has a `collection.json`.
 Until then the refresh indexes it as before, one series `collection.json` over `<SID>/<SID>.json`

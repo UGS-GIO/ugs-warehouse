@@ -217,6 +217,13 @@ def test_the_scan_never_leaves_the_publication_prefixes():
     assert not any("serving-topics" in p or "ugs-rasters" in p for p in seen)
 
 
+def _prune(ingest, coll_path: str, keep: set[str]) -> None:
+    """What a build does for one publication: list once, find its stale items, delete them."""
+    pub = {"series_id": coll_path.rsplit("/", 1)[1]}
+    published = ingest._published_items([pub])
+    ingest._delete_stale_items(ingest._stale_items(coll_path, keep, published))
+
+
 def test_stale_item_dirs_are_removed_and_the_collection_files_kept(monkeypatch, capsys):
     from ugs_warehouse.pubs import ingest
 
@@ -224,11 +231,11 @@ def test_stale_item_dirs_are_removed_and_the_collection_files_kept(monkeypatch, 
     listing = [f"{base}/collection.json", f"{base}/README.md", f"{base}/AGENTS.md", f"{base}/OFR-1.iso.xml",
                f"{base}/OFR-1_plate/OFR-1_plate.json", f"{base}/OFR-1_x/OFR-1_x.json"]
     deleted = _live_store(monkeypatch, ingest, listing)
-    ingest._prune_stale_items("ugs-publications/OFR/OFR-1", {"OFR-1_x"})
+    _prune(ingest, "ugs-publications/OFR/OFR-1", {"OFR-1_x"})
     assert deleted == [f"{base}/OFR-1_plate/OFR-1_plate.json"]
     assert "removed stale item ugs-publications/OFR/OFR-1/OFR-1_plate" in capsys.readouterr().err
     deleted.clear()
-    ingest._prune_stale_items("ugs-publications/OFR/OFR-1", set())  # now single-file: no item dirs at all
+    _prune(ingest, "ugs-publications/OFR/OFR-1", set())  # now single-file: no item dirs at all
     assert deleted == [f"{base}/OFR-1_x/OFR-1_x.json"]  # the plate is already gone from the store
 
 
@@ -240,7 +247,7 @@ def test_a_reingest_removes_layer_items_left_under_the_old_single_underscore_ids
                f"{base}/OFR-1_geo__Faults/OFR-1_geo__Faults.json",
                f"{base}/OFR-1__geo__Faults/OFR-1__geo__Faults.json"]
     deleted = _live_store(monkeypatch, ingest, listing)
-    ingest._prune_stale_items("ugs-publications/OFR/OFR-1", {"OFR-1_plate", "OFR-1__geo__Faults"})
+    _prune(ingest, "ugs-publications/OFR/OFR-1", {"OFR-1_plate", "OFR-1__geo__Faults"})
     assert deleted == [f"{base}/OFR-1_geo__Faults/OFR-1_geo__Faults.json"]
 
 
@@ -251,8 +258,38 @@ def test_a_delete_that_fails_raises_and_reports_no_removal(monkeypatch, capsys):
     listing = [f"{base}/collection.json", f"{base}/OFR-1_plate/OFR-1_plate.json"]
     _live_store(monkeypatch, ingest, listing, works=False)
     with pytest.raises(RuntimeError, match="OFR-1_plate.json"):
-        ingest._prune_stale_items("ugs-publications/OFR/OFR-1", set())
+        _prune(ingest, "ugs-publications/OFR/OFR-1", set())
     assert "removed stale item" not in capsys.readouterr().err
+
+
+def test_the_stale_listing_is_one_per_group_and_the_delete_one_call_for_every_publication(monkeypatch):
+    """Thousands of publications used to mean thousands of listings and a delete call each."""
+    from ugs_warehouse.pubs import ingest
+
+    def dirs(sid: str, *heads: str) -> list[str]:
+        base = f"{PFX}/ugs-publications/OFR/{sid}"
+        return [f"{base}/collection.json", *(f"{base}/{h}/{h}.json" for h in heads)]
+
+    live = [*dirs("OFR-1", "OFR-1_plate", "OFR-1_old"), *dirs("OFR-2", "OFR-2_old"),
+            *dirs("OFR-3", "OFR-3_plate")]
+    listed: list[str] = []
+    batches: list[list[str]] = []
+    monkeypatch.setattr(ingest.gcs, "list_paths", lambda root: listed.append(root) or [
+        p for p in live if p.startswith(root)])
+    monkeypatch.setattr(ingest.gcs, "delete_many", lambda batch, *, strict=True: batches.append(list(batch)))
+    pubs = [{"series_id": f"OFR-{n}"} for n in (1, 2, 3)]
+
+    published = ingest._published_items(pubs)
+    stale: dict[str, list[str]] = {}
+    for coll, keep in (("OFR-1", {"OFR-1_plate"}), ("OFR-2", set()), ("OFR-3", {"OFR-3_plate"})):
+        path = f"ugs-publications/OFR/{coll}"
+        stale.update(ingest._stale_items(path, keep, published))
+    ingest._delete_stale_items(stale)
+
+    assert listed == [f"{PFX}/ugs-publications/"]
+    assert len(batches) == 1 and sorted(batches[0]) == sorted([
+        f"{PFX}/ugs-publications/OFR/OFR-1/OFR-1_old/OFR-1_old.json",
+        f"{PFX}/ugs-publications/OFR/OFR-2/OFR-2_old/OFR-2_old.json"])
 
 
 def test_prune_apply_raises_when_a_delete_does_not_take(monkeypatch):

@@ -1693,7 +1693,7 @@ def _ingest(monkeypatch, store, pubs: list[dict], *, file_meta: bool = False):
         monkeypatch.setattr(ingest, "_file_meta_index", lambda: {})
     monkeypatch.setattr(ingest, "_cog_headers", lambda cogs: {})
     monkeypatch.setattr(ingest, "_build_search_corpus", lambda: None)
-    monkeypatch.setattr(ingest, "_prune_stale_items", lambda path, keep: None)
+    monkeypatch.setattr(ingest, "_published_items", lambda pubs: {})
     monkeypatch.setattr(stac, "prior_collection_field", lambda *a, **k: None)
     monkeypatch.setattr(stac, "prior_property", lambda *a, **k: None)
     monkeypatch.setattr(stac, "attach_renders", lambda item: None)

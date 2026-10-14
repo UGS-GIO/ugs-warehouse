@@ -213,21 +213,37 @@ def _relationships(rels: list) -> list[dict]:
     return rels
 
 
-def _prune_stale_items(coll_path: str, keep: set[str]) -> None:
-    """Delete item directories under a publication that its current build no longer produces.
+def _published_items(pubs: list[dict]) -> dict[str, dict[str, list[str]]]:
+    """{collection path: {item dir: [object paths]}} for every publication already in the catalog,
+    from one listing per group (not one per publication) taken before the pool writes anything.
+    Files directly in a publication directory (collection.json, README.md, AGENTS.md) are not
+    item directories and are left out."""
+    groups = sorted({sink_stac.pub_collection_path(p).split("/")[0]
+                     for p in pubs if (p.get("series_id") or "").strip()})
+    out: dict[str, dict[str, list[str]]] = {}
+    root = f"{config.STAC_PREFIX}/"
+    for group in groups:
+        for path in gcs.list_paths(f"{root}{group}/"):
+            parts = path[len(root):].split("/")
+            if len(parts) >= 5:  # <group>/<SERIES>/<SID>/<item dir>/<file>
+                out.setdefault("/".join(parts[:3]), {}).setdefault(parts[3], []).append(path)
+    return out
 
-    A publication that gained or lost data files (a plate moving to the Collection, a layer
-    dropped) would otherwise keep serving its old Items. Files directly in the publication
-    directory (collection.json, README.md, AGENTS.md) are never touched."""
-    root = f"{config.STAC_PREFIX}/{coll_path}/"
-    stale: dict[str, list[str]] = {}
-    for path in gcs.list_paths(root):
-        head, sep, _ = path[len(root):].partition("/")
-        if sep and head not in keep:
-            stale.setdefault(head, []).append(path)
+
+def _stale_items(coll_path: str, keep: set[str], published: dict[str, dict[str, list[str]]]
+                 ) -> dict[str, list[str]]:
+    """{item path: its objects} for the item directories under a publication that its current build
+    no longer produces. A publication that gained or lost data files (a plate moving to the
+    Collection, a layer dropped) would otherwise keep serving its old Items."""
+    return {f"{coll_path}/{head}": paths for head, paths in published.get(coll_path, {}).items()
+            if head not in keep}
+
+
+def _delete_stale_items(stale: dict[str, list[str]]) -> None:
+    """Delete the objects of every stale item in one batched call, raising if any delete fails."""
     gcs.delete_many([p for paths in stale.values() for p in paths])
-    for head, paths in sorted(stale.items()):
-        print(f"[pubs] removed stale item {coll_path}/{head} ({len(paths)} objects)", file=sys.stderr)
+    for item, paths in sorted(stale.items()):
+        print(f"[pubs] removed stale item {item} ({len(paths)} objects)", file=sys.stderr)
 
 
 def _cog_headers(cog_ids: set[str]) -> dict[str, tuple[tuple | None, dict]]:
@@ -403,14 +419,22 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             stac.write_item(it)
         stac.stamp_file_meta(coll, file_meta)
         stac.write_collection(coll, children=len(items))
-        _prune_stale_items(coll["_collection_path"], {it["id"] for it in items})
+        stale.update(_stale_items(coll["_collection_path"], {it["id"] for it in items}, published))
         return True
 
     stac.styles.warm()  # prime the styles manifest once before the pool (64 threads share it)
+    published = _published_items(pubs)
+    stale: dict[str, list[str]] = {}  # item path -> objects, from the publications that wrote cleanly
     print("[pubs] writing STAC items in parallel...")
     with ThreadPoolExecutor(max_workers=64) as executor:
         results = list(executor.map(process_pub, pubs))
     n = sum(1 for r in results if r)
+    prune_error: Exception | None = None
+    try:
+        _delete_stale_items(stale)
+    except Exception as e:  # noqa: BLE001 (raised below together with the failed publications)
+        prune_error = e
+        print(f"[pubs] stale items not removed: {type(e).__name__}: {e}", file=sys.stderr)
 
     _build_search_corpus()
 
@@ -426,12 +450,13 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         print(f"[pubs] wrote {n} publications -> {config.public_url(config.STAC_PREFIX + '/catalog.json')}")
     else:
         print(f"[pubs] wrote {n} publications (catalog refresh skipped)")
-    if errors or refresh_error:
+    if errors or refresh_error or prune_error:
         # A pub whose heal and write both failed has two errors but counts once.
         failed_sids = sorted({sid for sid, _ in errors})
         failed = [f"{len(failed_sids)} publication(s) failed: {failed_sids}"] if errors else []
+        pruned = [f"stale items: {type(prune_error).__name__}: {prune_error}"] if prune_error else []
         refresh = [f"catalog refresh: {type(refresh_error).__name__}: {refresh_error}"] if refresh_error else []
-        raise RuntimeError("; ".join(failed + refresh)) from refresh_error
+        raise RuntimeError("; ".join(failed + pruned + refresh)) from (refresh_error or prune_error)
     return n
 
 

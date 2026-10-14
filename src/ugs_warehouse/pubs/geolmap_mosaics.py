@@ -66,8 +66,8 @@ PMTILES_MIME = config.PMTILES_MIME
 COLLECTION = "ugs-geologic-maps"
 # Statewide extent (the mosaics are clipped to Utah). [W, S, E, N] in EPSG:4326.
 UTAH_BBOX = [-114.053, 36.998, -109.041, 42.002]
-# Max zoom per tier for a STATEWIDE build. 24k and 100k bake on Cloud Batch (submit_mosaics_batch.sh
-# passes 24k's z17); 100k's z15 is ~4 GB of tiles. A scoped --quads build renders at native zoom.
+# Max zoom per tier for a STATEWIDE build. 24k and 100k bake on Cloud Batch, where
+# submit_mosaics_batch.sh passes z17 and z15; a --quads build without --maxzoom renders native.
 TIER_MAXZOOM = {"24k": 14, "100k": 15, "250k": 12, "500k": 12}
 # Lowest zoom to build overviews down to (off the base tiles). A statewide extent is ~1 tile at low
 # zoom, so a full pyramid to MOSAIC_MINZOOM is cheap and lets the layer draw when zoomed out.

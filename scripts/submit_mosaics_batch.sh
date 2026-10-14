@@ -56,9 +56,10 @@ if [ "$statewide" = 1 ] && [ "$quads_set" = 1 ]; then
   echo "--statewide and --quads conflict: pick the live statewide run or a scoped scratch run" >&2; exit 2
 fi
 
-# 24k passes its z17 here; 100k takes its cap from TIER_MAXZOOM in the bake.
-args=(python -m ugs_warehouse.pubs.geolmap_mosaics --scale "$scale" --editions "$editions")
-[ "$scale" = 24k ] && args+=(--maxzoom 17)
+# Pass the zoom explicitly so the run doesn't depend on the image's TIER_MAXZOOM (`latest` only
+# moves on a main deploy).
+case "$scale" in 24k) maxzoom=17 ;; 100k) maxzoom=15 ;; esac
+args=(python -m ugs_warehouse.pubs.geolmap_mosaics --scale "$scale" --maxzoom "$maxzoom" --editions "$editions")
 if [ "$statewide" = 1 ]; then
   run=full
   timeout=43200s

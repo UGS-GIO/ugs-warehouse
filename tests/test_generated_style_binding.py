@@ -47,7 +47,8 @@ def test_a_generated_style_binds_as_the_default_render_and_a_style_asset(monkeyp
     item = _layer_item()
     stac.attach_renders(item)
     assert item["properties"]["ugs:renders"]["default"] == {
-        "title": "Publication layer style", "assets": ["pmtiles"], "style_url": GEN}
+        "title": "Publication layer style", "assets": ["pmtiles"], "style_url": GEN,
+        "generated": True}
     style = item["assets"]["style"]
     assert style["href"] == GEN and style["roles"] == ["style"] and style["type"] == "application/json"
 

@@ -13,8 +13,7 @@ layer is also tiled to `<label>.pmtiles` (EPSG:4326, one tile layer named for th
 display, by DuckDB exporting its GeoParquet to GeoJSONSeq for tippecanoe; its manifest entry records
 `pmtiles` and `pmtiles_layer`. A layer whose tiling fails
 keeps its GeoParquet and gets a `pmtiles_failed` warning. Each tiled layer also gets `<label>.style.json`
-beside its tiles (`layer_style.py`: unit colours from the DMU, the layer's own colour column, or the
-default look), recorded as `style` on its entry.
+beside its tiles (`layer_style.py`, the viewer's default look), recorded as `style` on its entry.
 
 Every data attachment is opened, not only the zip labelled GIS: zips of any label, and bare or
 zipped `.xlsx`/`.xls`/`.csv` files (`sheets.py`), whose sheets become tables and, with coordinates in
@@ -28,7 +27,7 @@ layer entry records its `source` dataset and its `kind` (`layer`, `table` or `su
 After extracting, a run self-heals the cleanly extracted pubs it covers (`self_heal`): it tiles
 layers that have no PMTiles, records relationships where the manifest has none or predates
 `relations.RELATIONS_VERSION`, and writes the layer styles where they are missing or predate
-`layer_style.STYLE_VERSION`, from the GeoParquet already on GCS. In an `--all` run, extraction
+`layer_style.STYLE_VERSION`. In an `--all` run, extraction
 and self-heal share one time budget (`VECTORS_TIME_BUDGET_S`); what it leaves waits for the next run.
 
 A pub with any unreadable layer returns `fail:layers` and the run exits non-zero, so a missing
@@ -65,10 +64,9 @@ PARQUET_MIME = config.PARQUET_MIME
 PMTILES_FAILED = "pmtiles_failed"
 # Warning code for a layer with no geometry to tile. Not a failure: it never gets PMTiles.
 NO_GEOMETRY = "no_geometry"
-# Warning codes for a layer whose style file could not be built or written, and for a note the style
-# generator raised (an unreadable or conflicting unit colour). Neither makes the series unclean.
+# Warning code for a layer whose style file could not be written. A warning, not an error, so the
+# series stays clean.
 STYLE_FAILED = "style_failed"
-STYLE_NOTE = "style_note"
 # Warning code for a shapefile whose attribute text was not UTF-8 and was read as cp1252.
 ENCODING_FALLBACK = "encoding_fallback"
 # The coverage of an extraction: 1 opened only the zip labelled GIS and read shapefiles and
@@ -746,43 +744,26 @@ def _tile_into(entry: dict, parquet: str, series_id: str, tmp: str | None, manif
 
 def _style_into(series_id: str, manifest: dict) -> list[str]:
     """Write `<label>.style.json` for each spatial layer of `manifest` that has PMTiles and record
-    `style` (the file name), `style_kind` and, for unit colours, `style_fallback_rows` on its entry,
-    reading the DMU and unit codes from the GeoParquet on GCS. Returns an error per layer whose style
-    could not be built or written; that layer keeps no `style` and a STYLE_FAILED warning, and
-    `style_version` is left unset so the next heal tries again. Earlier style warnings are replaced."""
-    import pyarrow.parquet as pq
-
-    manifest["warnings"] = [w for w in manifest.get("warnings") or []
-                            if w.get("code") not in (STYLE_FAILED, STYLE_NOTE)]
-    entries = {e["label"]: e for e in manifest["layers"]}
-    relationships = manifest.get("relationships") or []
-
-    def read(label: str, columns: list[str]):
-        with gcs.open_reader(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet") as f:
-            return pq.ParquetFile(f).read(columns=columns)
-
+    `style` (the file name) on its entry. Returns an error per layer whose style could not be
+    written; that layer keeps no `style` and gets a STYLE_FAILED warning, and `style_version` is left
+    unset so the next heal tries again. Earlier style warnings are replaced."""
+    manifest["warnings"] = [w for w in manifest.get("warnings") or [] if w.get("code") != STYLE_FAILED]
     errors: list[str] = []
     for entry in manifest["layers"]:
         label = entry["label"]
         if not (entry.get("spatial") and entry.get("pmtiles")):
             continue
         entry.pop("style", None)
-        entry.pop("style_kind", None)
-        entry.pop("style_fallback_rows", None)
         try:
-            styled = layer_style.build(entry, entries, relationships, read)
-            gcs.put_bytes(json.dumps(styled.doc).encode(), style_object(series_id, label),
-                          content_type="application/json", cache_control=gcs.CACHE_MUTABLE)
+            gcs.put_bytes(json.dumps(layer_style.default_style(label)).encode(),
+                          style_object(series_id, label), content_type="application/json",
+                          cache_control=gcs.CACHE_MUTABLE)
         except Exception as e:
-            errors.append(f"{series_id}/{label}: style not built: {_error(e)}")
+            errors.append(f"{series_id}/{label}: style not written: {_error(e)}")
             manifest["warnings"].append({"label": label, "code": STYLE_FAILED,
-                                         "warning": f"style not built: {_error(e)}"})
+                                         "warning": f"style not written: {_error(e)}"})
             continue
-        entry.update(style=f"{label}.style.json", style_kind=styled.kind)
-        if styled.fallback_rows is not None:
-            entry["style_fallback_rows"] = styled.fallback_rows
-        for note in styled.warnings:
-            manifest["warnings"].append({"label": label, "code": STYLE_NOTE, "warning": note})
+        entry["style"] = f"{label}.style.json"
     if not errors:
         manifest["style_version"] = layer_style.STYLE_VERSION
     return errors
@@ -1319,7 +1300,7 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
                 rel_errs = _relations_series(sid)
                 heal.related += int(not rel_errs)
                 errs += rel_errs
-            if (need.styles or built) and not (need.relations and rel_errs):  # styles read the joins
+            if (need.styles or built) and not rel_errs:  # a failed pass leaves the manifest as it was
                 style_errs = _style_series(sid)
                 heal.styled += int(not style_errs)
                 errs += style_errs

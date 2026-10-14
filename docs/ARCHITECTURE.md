@@ -93,11 +93,10 @@ STAC emit, a matching style attaches a `renders` block (MapLibre GL style URL). 
 rebinds renders without a reingest.
 
 Publication layers have no ugs-styles style of their own. The vectors job generates one per layer
-(`<label>.style.json`, from the map's own `AreaFillRGB` colours, a colour column, or the default look;
-see ⑤) and records it in the manifest; the pubs ingest puts a pointer, `ugs:generated_style`, on the layer's
+(`<label>.style.json`, the viewer's default look; see ⑤) and records it in the manifest; the pubs ingest puts a pointer, `ugs:generated_style`, on the layer's
 Item. `attach_renders` then binds by precedence: the ugs-styles style for the Item's id, then (a plate only)
 the one for its publication's id, then the generated file. The generated one binds the same way as the
-others, a `ugs:renders` default plus a `roles:["style"]` `style` asset, so the `restyle` job rebinds it and an
+others, a `ugs:renders` default (marked `generated`, so the viewer draws the layer in its own per-layer colour) plus a `roles:["style"]` `style` asset, so the `restyle` job rebinds it and an
 ugs-styles style added later replaces it without a reingest. A single-file publication has no layer Item: its
 one layer rides the Collection, so the pointer, `ugs:renders` and the `style` asset sit on the Collection
 (top-level members), which `restyle --collection all` rebinds too. The style is never written into the Item.
@@ -190,16 +189,11 @@ with `always_xy`, so coordinates stay lon/lat) and streams GeoJSONSeq to tippeca
 a `pmtiles_failed` warning instead of an error, so the pub stays extracted and is not downloaded
 again; the next run's self-heal retries it (below). A tiled layer's Item carries the same `pmtiles`
 asset and `rel=pmtiles` web-map link as a serving topic, so the viewer previews it and the Map page
-can add it. Beside the tiles each tiled layer gets `<label>.style.json` (`pubs/layer_style.py`), a
-MapLibre style holding only `layers`, like the ugs-styles files; the viewer supplies the PMTiles source and
-`source-layer`. A polygon layer that joins a table with `AreaFillRGB` through a recorded relationship (a GeMS
-map's unit polygons and its DescriptionOfMapUnits) gets a `match` on the unit-code column with the DMU's
-"R;G;B" colours, a thin outline, and a neutral fill for codes the DMU does not list; rows with no unit code
-or no colour are skipped. A polygon layer with its own string column named `AreaFillRGB`, `RGB`, `COLOR` or `COLOUR` is
-coloured from that column's values. Every other layer gets the viewer's default look (`defaultVectorLayers`,
-neutral colour). The manifest layer records `style` (the file name), `style_kind` (`units`, `column` or
-`default`) and, for `units`, `style_fallback_rows`, the polygons drawn in the fallback fill; the manifest
-records `style_version`. A pub that leaves `AreaFillRGB` empty gets the default. A pub's `_units` Item (`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own; the
+can add it. Beside the tiles each tiled layer gets `<label>.style.json` (`pubs/layer_style.py`), the viewer's default look
+(`defaultVectorLayers`) as a MapLibre style holding only `layers`, like the ugs-styles files; the viewer supplies
+the PMTiles source and `source-layer`. The manifest layer records `style` (the file name) and the manifest
+`style_version`. Matching unit polygons to the DMU's `AreaFillRGB` colours is not done, because the source data
+carries no colours. A pub's `_units` Item (`geolmap/units/<SID>/<SID>.units.parquet`) has no PMTiles of its own; the
 statewide `geolmap/units/units.pmtiles` from `pubs/units_pmtiles.py` is a separate artifact.
 
 The manifest also records how a pub's layers and tables relate (`pubs/relations.py`). Relationship
@@ -264,9 +258,8 @@ are missing, from their GeoParquet on GCS and without downloading a zip:
   re-extracts;
 - the style file of each tiled layer that has none, or of every layer when `style_version` is older than
   `layer_style.STYLE_VERSION` (bump it when the generator changes what it writes). It runs after tiling and
-  relationships, reads only the unit-code, DMU and colour columns, and is skipped for a pub whose relationships
-  failed in the same pass. A style that cannot be built is a `style_failed` warning and a listed failure, and
-  is tried again next run; an unreadable or conflicting colour is a `style_note` warning;
+  relationships, and is skipped for a pub whose relationships failed in the same pass. A style that cannot be written is a `style_failed` warning and a listed failure, and
+  is tried again next run;
 - each per-pub units file (`geolmap/units/<SID>/<SID>.units.parquet`) whose Parquet footer, read by
   range, says GeoParquet older than 1.1 or no bbox covering is rewritten through
   `pubs.geoparquet.write` to the same path, with a mutable cache header.

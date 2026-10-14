@@ -107,7 +107,9 @@ The default scope is `ugs-serving-topics` only (pubs skipped unless `--collectio
 fire from the `ugs-styles` publish (after the CDN rsync) so a style edit reaches the viewers hands-free.
 
 **Generated publication-layer styles.** A publication layer with no ugs-styles style binds the file the
-vectors job generated for it (`ugs:generated_style` on the Item, bound as the same `ugs:renders` default and
-`style` asset); an ugs-styles style for the same id always wins, and replaces the generated one on the next
+vectors job generated for it, the viewer's default look (`ugs:generated_style` on the Item, bound as the same `ugs:renders` default and
+`style` asset, the render marked `generated` so the viewer keeps its per-layer colour); an ugs-styles style for the same id always wins, and replaces the generated one on the next
 restyle. A single-file publication carries its one layer on the Collection, so `--collection all` also
 rebinds Collections that name a generated style.
+
+Unit polygons are not coloured from the DMU's `AreaFillRGB`: the source data carries no colours.

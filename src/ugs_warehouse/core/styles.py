@@ -155,12 +155,15 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
 
 def generated_renders(style_url: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
     """`(renders, style_asset)` for a publication layer's generated style file, the same shape as
-    `renders_for`. Empty when the doc has no `pmtiles` asset for it to draw."""
+    `renders_for`. Empty when the doc has no `pmtiles` asset for it to draw. The block is marked
+    `generated`: the file is the viewer's own default look, so the viewer draws the layer in its
+    per-layer colour rather than the file's neutral one."""
     if asset_keys and "pmtiles" not in asset_keys:
         return {}, None
-    block = {"title": "Publication layer style", "assets": ["pmtiles"], "style_url": style_url}
+    block = {"title": "Publication layer style", "assets": ["pmtiles"], "style_url": style_url,
+             "generated": True}
     asset = {"href": style_url, "type": "application/json", "roles": ["style"],
-             "title": "MapLibre GL style (generated from the map's colours)"}
+             "title": "MapLibre GL style (default look)"}
     return {"default": block}, asset
 
 

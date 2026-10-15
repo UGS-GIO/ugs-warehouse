@@ -2290,7 +2290,8 @@ def shard_run(monkeypatch):
     monkeypatch.setattr(vectors, "_series_with", lambda *names: set())
     monkeypatch.setattr(vectors, "healable_manifests", lambda reduce=None: {
         s: (vectors.Needs((), False, True), True, True) for s in SHARD_SIDS[:5]})
-    monkeypatch.setattr(vectors, "extract_one", lambda sid, **kw: seen["extract"].append(sid) or "ok")
+    monkeypatch.setattr(vectors, "extract_one", lambda sid, **kw: seen["extract"].append(sid)
+                        or ("skip" if sid in SHARD_SIDS[:5] else "ok"))
     monkeypatch.setattr(vectors, "units_objects",
                         lambda ids=None: {s: f"u/{s}" for s in SHARD_SIDS
                                           if ids is None or s.upper() in ids})
@@ -2372,10 +2373,22 @@ def test_identify_runs_only_in_task_zero(monkeypatch, shard_run):
     assert [_run_task(monkeypatch, shard_run, i, 3)[2] for i in range(3)] == [1, 0, 0]
 
 
-def test_a_targeted_run_is_not_sharded(monkeypatch, shard_run):
-    monkeypatch.setattr("sys.argv", ["vectors", "M-1", "M-2", "M-3"])
+def test_each_named_pub_in_a_targeted_run_is_handled_by_exactly_one_task(monkeypatch, shard_run):
+    named = ["M-1", "M-2", "M-3", "M-4"]
+    monkeypatch.setattr("sys.argv", ["vectors", *named])
     monkeypatch.setattr(vectors, "_clean_manifest_of", lambda sid: None)
-    extracted, heals, identify_runs = _run_task(monkeypatch, shard_run, 1, 3)
-    assert extracted == ["M-1", "M-2", "M-3"]
-    assert heals[0][1] == ["M-1", "M-2", "M-3"]
-    assert identify_runs == 0
+    out = [_run_task(monkeypatch, shard_run, i, 3) for i in range(3)]
+    for i, (extracted, heals, identify_runs) in enumerate(out):
+        assert all(jobs_owner(s) == i for s in [*extracted, *heals[0][1]])
+        assert identify_runs == 0
+    assert sorted(s for o in out for s in o[0]) == named
+    assert sorted(s for o in out for s in o[1][0][1]) == named
+
+
+def test_a_task_owning_none_of_the_named_pubs_exits_cleanly(monkeypatch, shard_run, capsys):
+    monkeypatch.setattr("sys.argv", ["vectors", "M-1"])
+    monkeypatch.setattr(vectors, "_clean_manifest_of", lambda sid: None)
+    extracted, _, _ = _run_task(monkeypatch, shard_run, (jobs_owner("M-1") + 1) % 3, 3)
+    assert extracted == []
+    assert "none of the named publications belong to this task" in capsys.readouterr().out
+

@@ -1764,12 +1764,16 @@ def main() -> int:
 
     # `--tasks=N`: each task extracts and heals only the pubs it owns by series id, so the split
     # holds even though tasks list the bucket at slightly different times. The ordered list keeps
-    # new pubs first within each task. Targeted runs are not sharded. `--limit` applies per task.
+    # new pubs first within each task. A targeted run is split the same way, so each named pub is
+    # handled by one task. `--limit` applies per task.
     task_index, task_count = jobs.task()
-    sharded = args.all and task_count > 1
+    sharded = task_count > 1
     if sharded:
         sids = [s for s in sids if jobs.owns(identity.Pub.parse(s).series_id)]
         print(f"shard {task_index + 1}/{task_count}: {len(sids)} publications")
+        if not args.all and not sids:
+            print(f"shard {task_index + 1}/{task_count}: none of the named publications belong "
+                  f"to this task")
 
     if args.limit:
         sids = sids[:args.limit]

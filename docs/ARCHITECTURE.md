@@ -224,10 +224,12 @@ records the version alone. The plate Item gets a `units` asset (`application/vnd
 `data`, "Geologic units (identify)") pointing at that PMTiles, only when the pub has the product.
 
 The vectors job runs as `--tasks=5`. Each task owns the series ids whose stable hash falls to it,
-and extracts and heals only those (manifests and units files), so no two tasks touch one series even
-though each lists the bucket at its own moment. Within a task, never-tried pubs still go first. Time budget, summary and exit code are per task. The identify build
-below is catalog-wide, so only task 0 runs it, from what is extracted so far; the next run picks up
-the rest.
+and extracts and heals only those (manifests and units files), so no two tasks touch one series
+even though each lists the bucket at its own moment. A targeted run is split the same way: each
+named pub is handled by its owning task, and a task that owns none of them exits 0. Within a task,
+never-tried pubs still go first. Time budget, summary and exit code are per task. The identify
+build below is catalog-wide, so only task 0 runs it, from what is extracted so far; the next run
+picks up the rest.
 
 After the self-heal an `--all` vectors run builds one identify layer per mosaic tier
 (`pubs/identify.py`): `<vectors prefix>/_identify/units-<tier>.pmtiles`, tile layer `units`, the same

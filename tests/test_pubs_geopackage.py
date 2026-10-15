@@ -330,3 +330,30 @@ def test_a_table_over_the_sqlite_column_limit_is_left_out_with_a_warning(pub, tm
     [warning] = [w for w in pub.read_manifest()["warnings"]
                  if w["code"] == vectors.GEOPACKAGE_TABLE_SKIPPED]
     assert "geo__Wide" in warning["warning"] and "2100 columns" in warning["warning"]
+
+
+def test_relationships_to_a_skipped_table_are_left_out_and_counted(pub, tmp_path):
+    wide = pd.DataFrame({f"c{i}": [i] for i in range(2100)})
+    entry = pub.put_parquet(tmp_path, "geo__Wide", wide, False)
+    entry["columns"] = [{"name": c, "type": "int64"} for c in wide.columns]
+    manifest = pub.read_manifest()
+    manifest["layers"].append(entry)
+    manifest["relationships"] = [
+        {"origin": "geo__Polys", "origin_cols": ["a"], "destination": "geo__Wide",
+         "destination_cols": ["c0"]},
+        {"origin": "geo__Wide", "origin_cols": ["c1"], "destination": "geo__DMU",
+         "destination_cols": ["b"]},
+        {"origin": "geo__Polys", "origin_cols": ["a"], "destination": "geo__DMU",
+         "destination_cols": ["b"]}]
+    pub.manifest(manifest)
+
+    built, errors = vectors._geopackage_series(SID)
+
+    assert built and errors == []
+    path = tmp_path / "out.gpkg"
+    path.write_bytes(pub.store[f"{PREFIX}/{SID}.gpkg"])
+    rels = pyogrio.read_dataframe(path, layer=vectors.GPKG_RELATIONSHIPS, read_geometry=False)
+    assert rels[["origin_table", "destination_table"]].values.tolist() == [["geo__Polys", "geo__DMU"]]
+    [warning] = [w for w in pub.read_manifest()["warnings"]
+                 if w["code"] == vectors.GEOPACKAGE_TABLE_SKIPPED]
+    assert "2 relationships to it left out" in warning["warning"]

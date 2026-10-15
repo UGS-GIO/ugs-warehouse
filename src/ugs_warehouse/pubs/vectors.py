@@ -1343,12 +1343,17 @@ def _write_geopackage(series_id: str, manifest: dict, out: str, work: str) -> No
     and deleted at a time, then the relationships table. Any layer that fails raises: a GeoPackage
     missing a layer would pass for the whole publication."""
     layers, rels = _packaged(manifest)
+    wide = {e["label"]: len(e.get("columns") or []) for e in layers
+            if len(e.get("columns") or []) >= GPKG_MAX_COLUMNS}
+    # A relationship to a table that is not in the file would point at nothing.
+    dropped = {label: sum(label in (r["origin"], r["destination"]) for r in rels) for label in wide}
+    rels = [r for r in rels if r["origin"] not in wide and r["destination"] not in wide]
     for entry in layers:
         label = entry["label"]
-        width = len(entry.get("columns") or [])
-        if width >= GPKG_MAX_COLUMNS:
+        width = wide.get(label, 0)
+        if label in wide:
             msg = (f"{label} left out of the GeoPackage: {width} columns, over SQLite's limit of "
-                   f"{GPKG_MAX_COLUMNS}")
+                   f"{GPKG_MAX_COLUMNS}; {dropped[label]} relationships to it left out too")
             manifest["warnings"].append({"label": label, "code": GEOPACKAGE_TABLE_SKIPPED,
                                          "warning": msg})
             print(f"  {series_id}: {msg}", file=sys.stderr)

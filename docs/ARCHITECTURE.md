@@ -113,7 +113,10 @@ footprints, routed into three groups (`ugs-publications`, `ugs-mining-district-f
 Each group is a Catalog of series Catalogs (`<group>/<SERIES>/catalog.json`), and each publication
 is a Collection under its series (`<group>/<SERIES>/<SID>/collection.json`). The Collection holds
 the documents (PDF, cover, original zips) as assets and the DOI as `cite-as` +
-`sci:doi`; the plate COG, units, extracted layers and tables, and the 3D fence are its Items at
+`sci:doi`, written only when `10.34191/<id>` is registered. The ingest fetches the registered set
+from Crossref once per run (`pubs/dois.py`), keeps a snapshot at `pubs/doi-registry.json`, and
+falls back to it with a warning when Crossref cannot be reached (it fails only when there is no
+snapshot). The plate COG, units, extracted layers and tables, and the 3D fence are its Items at
 `<SID>/<ITEM_ID>/<ITEM_ID>.json`: `<SID>_plate`, `<SID>_units`, `<SID>_fence`, and `<SID>__<label>`
 for each layer and table (the double underscore keeps a layer id off another publication's id,
 since publication ids can hold `_`). A publication with one data file keeps it on the Collection and

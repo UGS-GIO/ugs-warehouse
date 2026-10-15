@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 
 from ..core import config, gcs, stac
-from . import editions, identity, relations, sink_stac, source, threed, topic, vectors
+from . import dois, editions, identity, relations, sink_stac, source, threed, topic, vectors
 
 
 def _names(prefix: str) -> list[str]:
@@ -368,6 +368,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     if limit:
         pubs = pubs[:limit]
     pubs, collisions = _split_shared_collection_paths(pubs)
+    registered_dois = dois.registered()  # the DOIs Crossref lists; a pub gets one only if registered
     att: dict[str, list[dict]] = {}
     for a in source.read_attachments():
         att.setdefault((a.get("series_id") or "").strip().upper(), []).append(a)
@@ -435,6 +436,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
             mosaic_tier=tier_by_sid.get(up),
             geopackage=manifest.get("geopackage"),
             unit_polys=manifest.get("unit_polys"),
+            registered_dois=registered_dois,
         )
         for it in items:
             stac.attach_renders(it)  # ugs-styles GL style, else the layer's generated one

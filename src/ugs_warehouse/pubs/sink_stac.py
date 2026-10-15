@@ -19,7 +19,7 @@ from collections import Counter
 from ..core import config, gcs, stac
 from ..core.bbox import to_2d_bbox
 from ..core.stac import item_id_for, plate_item_id  # noqa: F401 (re-exported)
-from . import counties, identify, identity, topic
+from . import counties, dois, identify, identity, topic
 from .relations import layer_kind, source_of_label
 from .scale import MOSAIC_TIER_LABEL
 from .threed import LINE_NAME, MESH_NAME, POLY_NAME, threed_object
@@ -128,12 +128,6 @@ def href(u: str | None) -> str | None:
     return u if u.startswith("http") else UGSPUB + u.lstrip("/")
 
 
-def has_ugs_doi(publisher: str | None) -> bool:
-    """UGS mints 10.34191 DOIs — for UGS/UGMS (incl. co-pubs) and blank publisher; not pure-USGS."""
-    tokens = {t.strip().upper() for t in re.split(r"[,;/&]", publisher or "") if t.strip()}
-    return (not tokens) or bool(tokens & UGS_NAMES)
-
-
 # USGS authored the Utah geologic-quad maps (GQ etc.) UGS publishes — kept in the main catalog.
 CATALOG_PUBLISHERS = UGS_NAMES | {"USGS"}
 
@@ -142,7 +136,7 @@ def collection_group(p: dict) -> str:
     """Top-level STAC collection for a pub. UGS hosts third-party material it didn't author:
     Mining District Files (scanned mine docs, ~4.2k) and foreign-published pubs. Route those to
     sibling collections so the UGS geologic catalog (UGS/UGMS-authored + USGS Utah maps) stays
-    clean — nothing dropped, just grouped. Blank publisher = treated as UGS (matches has_ugs_doi)."""
+    clean — nothing dropped, just grouped. Blank publisher = treated as UGS."""
     if series_code(p.get("series_id")) == "MD":
         return identity.MINING_DISTRICT_COLLECTION
     tokens = {t.strip().upper() for t in re.split(r"[,;/&]", p.get("pub_publisher") or "") if t.strip()}
@@ -291,7 +285,8 @@ def build_publication(p: dict, attachments: list[dict], *,
                       edition: dict | None = None,
                       mosaic_tier: str | None = None,
                       geopackage: dict | None = None,
-                      unit_polys: dict | None = None) -> tuple[dict, list[dict]]:
+                      unit_polys: dict | None = None,
+                      registered_dois: frozenset[str] = frozenset()) -> tuple[dict, list[dict]]:
     """A publication as one STAC Collection plus its Items.
 
     The Collection carries the documents (PDF, cover, original zips) and the publication's
@@ -302,7 +297,9 @@ def build_publication(p: dict, attachments: list[dict], *,
     and table Items, in the serving topics' shape. `empty_layers` are the manifest's layers with no
     rows, which were never uploaded. `geopackage` (the manifest's {bytes, checksum}) adds the
     all-layers GeoPackage as a Collection asset. `unit_polys` (the manifest's record of the normalized
-    unit polygons) adds the plate Item's `units` asset, the identify tiles for clicks on the plate."""
+    unit polygons) adds the plate Item's `units` asset, the identify tiles for clicks on the plate.
+    `registered_dois` (`dois.registered`) decides the DOI: `sci:doi` and the `cite-as` link are
+    written only for a publication whose DOI is in it."""
     sid = (p.get("series_id") or "").strip()
     pub_id = item_id_for(sid)
     coll_path = pub_collection_path(p)
@@ -323,7 +320,7 @@ def build_publication(p: dict, attachments: list[dict], *,
     ov = override or {}
     quoted_sid = urllib.parse.quote(sid, safe="")
     # The scientific extension's DOI pattern forbids whitespace, so a spaced id carries no DOI.
-    has_doi = has_ugs_doi(p.get("pub_publisher")) and not re.search(r"\s", sid)
+    has_doi = dois.doi_of(sid) in registered_dois and not re.search(r"\s", sid)
     doi = [{"rel": "cite-as", "href": f"https://doi.org/10.34191/{quoted_sid}"}] if has_doi else []
     citation = (p.get("full_citation") or "").strip()
     sci = ({"sci:doi": f"10.34191/{sid}", **({"sci:citation": citation} if citation else {})}

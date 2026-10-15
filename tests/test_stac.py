@@ -954,6 +954,20 @@ def _catalog_run(pubs):
     return n, err, [c["id"] for c, _ in colls]
 
 
+def test_build_catalog_gives_a_doi_only_to_the_registered_publications():
+    from contextlib import ExitStack
+
+    from ugs_warehouse.pubs.ingest import build_catalog
+
+    items, colls = [], []
+    with ExitStack() as stack:  # the Crossref stub (conftest) lists only OFR-784DM
+        _build_catalog_patches(stack, {}, [{"series_id": "OFR-784DM"}, {"series_id": "MD-71"}], items, colls)
+        build_catalog(skip_refresh=True)
+    by_id = {c["id"]: c for c, _ in colls}
+    assert by_id["OFR-784DM"]["sci:doi"] == "10.34191/OFR-784DM"
+    assert "sci:doi" not in by_id["MD-71"]
+
+
 def test_build_catalog_writes_a_row_repeated_verbatim_once():
     n, err, written = _catalog_run([{"series_id": "C-1"}, {"series_id": "C-1"}])
     assert err is None and n == 1 and written == ["C-1"]

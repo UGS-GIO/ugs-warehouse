@@ -29,6 +29,17 @@ def _in_memory_gcs(monkeypatch):
     monkeypatch.setattr(gcs, "get_file_meta", lambda _path: None)
 
 
+@pytest.fixture(autouse=True)
+def _crossref_registry(monkeypatch):
+    """Serve the DOI registry from one fixed page, so an ingest never reaches Crossref. A test of
+    pubs.dois replaces `dois.requests.get`."""
+    from ugs_warehouse.pubs import dois
+
+    page = {"message": {"items": [{"DOI": "10.34191/ofr-784dm"}], "next-cursor": None}}
+    monkeypatch.setattr(dois.requests, "get", lambda *a, **k: SimpleNamespace(
+        raise_for_status=lambda: None, json=lambda: page, text=""))
+
+
 class FakeIap:
     """Mints ES256 tokens shaped like IAP's and serves the matching public key, so the verifiers run
     their real signature/audience/issuer checks against a key the test controls."""

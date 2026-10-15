@@ -167,7 +167,7 @@ def test_a_publication_whose_series_id_has_a_space_validates():
     coll, items = pubs_sink.build_publication(
         {"series_id": "557.92 UT1CO", "pub_year": "1990", "pub_name": "Utah coal",
          "full_citation": "Someone, 1990, Utah coal."}, [], override={}, has_units=True,
-        vector_layers=["a"])
+        vector_layers=["a"], registered_dois=frozenset({"10.34191/557.92 ut1co"}))
     assert items
     _validate(_drop_private(coll))
     for it in items:

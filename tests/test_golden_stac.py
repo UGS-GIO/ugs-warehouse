@@ -39,7 +39,8 @@ def _offline(monkeypatch):
 
 
 def _pub(**kw) -> dict:
-    coll, items = pub_sink.build_publication(P, ATT, geom=FOOT, bbox=BBOX, fp_source="cog", **kw)
+    coll, items = pub_sink.build_publication(P, ATT, geom=FOOT, bbox=BBOX, fp_source="cog",
+                                             registered_dois=frozenset({"10.34191/ofr-784dm"}), **kw)
     return {"collection": coll, "items": {it["id"]: it for it in items}}
 
 

@@ -56,6 +56,10 @@ UGSPUB = "https://ugspub.nr.utah.gov/publications/"
 # `ingest` can list this prefix once and know exactly which assets it holds a copy of (#120).
 PUB_FILES_PREFIX = os.environ.get("PUB_FILES_PREFIX", "pubs/files")
 
+# Snapshot of the DOIs Crossref lists for UGS (pubs/dois.py), beside the mirrored files so a
+# sandbox that moves PUB_FILES_PREFIX moves it too.
+PUB_DOI_REGISTRY_OBJECT = f"{os.path.dirname(PUB_FILES_PREFIX) or 'pubs'}/doi-registry.json"
+
 
 def pub_file_object(url: str) -> str | None:
     """Object path for the warehouse copy of a legacy-hosted pub file — None if we don't mirror it.

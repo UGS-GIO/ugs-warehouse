@@ -98,6 +98,18 @@ def test_a_tier_takes_own_polygons_then_seamless_ones_for_members_without(run, t
     assert state["sources"] == {"A-1": "sumA", "B-2": None, "C-3": "sumC"}
 
 
+def test_a_polygon_carries_the_product_columns_and_no_bbox_covering(run, tmp_path):
+    _own(tmp_path, "A-1", ["Qal"], -112.0)
+    run.members = {"100k": ["A-1"]}
+    run.sums = {"A-1": "sumA"}
+
+    identify.build_changed()
+
+    [feature] = run.inputs[0]
+    assert set(feature["properties"]) == {"series_id", "unit_code", "unit_name", "age", "description",
+                                          "source_label", "rank"}
+
+
 def test_an_unchanged_tier_is_not_built_again_and_a_changed_checksum_or_membership_is(run, tmp_path):
     _own(tmp_path, "A-1", ["Qal"], -112.0)
     _own(tmp_path, "C-3", ["Jn"], -111.0)

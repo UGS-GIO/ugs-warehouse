@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 from ..core import config, gcs, stac
 from ..vector import sink_pmtiles, transform
 from . import identity, vectors
+from .unit_polys import COLUMNS as UNIT_COLUMNS
 from .unit_polys import TILE_LAYER
 
 # Bump to build every tier again at the next vectors run.
@@ -221,8 +222,10 @@ def build_geojsonl(order: list[str], sums: dict[str, str], out: str, work: str) 
             for i, sid in enumerate(own):
                 local = os.path.join(work, f"own_{i}.parquet")
                 gcs.download(vectors.unit_polys_object(sid), local)
-                con.execute(f"CREATE OR REPLACE TEMP VIEW piece AS SELECT *, {order.index(sid)} AS rank "
-                            f"FROM read_parquet({_literal(local)})")
+                # The product's columns only: the file also holds a `bbox` covering struct, which
+                # would be tiled as bbox.xmin and the rest on every polygon.
+                con.execute(f"CREATE OR REPLACE TEMP VIEW piece AS SELECT {', '.join(UNIT_COLUMNS)}, "
+                            f"geom, {order.index(sid)} AS rank FROM read_parquet({_literal(local)})")
                 chunk = os.path.join(work, f"own_{i}.geojsonl")
                 counts["own"] += _export(con, "piece", chunk)
                 con.execute("DROP VIEW piece")

@@ -489,6 +489,12 @@ describe("the publication's plate", () => {
     expect(plateHrefOf(coll(items), url)).toBe("https://cdn/stac/ugs-publications/M/M-246DM/M-246DM_plate/M-246DM_plate.json");
   });
 
+  it("is the exact <pub id>_plate Item, not a layer whose label ends _plate", () => {
+    const layer = { rel: "item", href: "./M-246DM__geologic_plate/M-246DM__geologic_plate.json" };
+    expect(plateHrefOf(coll([layer, ...items]), url)).toBe("https://cdn/stac/ugs-publications/M/M-246DM/M-246DM_plate/M-246DM_plate.json");
+    expect(plateHrefOf(coll([layer]), url)).toBeUndefined();
+  });
+
   it("is none for a report-only pub, a single-file pub (COG already on the Collection), or an Item", () => {
     expect(plateHrefOf(coll([]), url)).toBeUndefined();
     expect(plateHrefOf(coll(items.slice(0, 1)), url)).toBeUndefined();

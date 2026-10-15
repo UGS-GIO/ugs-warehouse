@@ -262,15 +262,17 @@ export const collectionParts = (d: StacDoc | undefined): CollectionPart[] =>
              ...(typeof sourceKey === "string" && sourceKey ? { sourceKey } : {}) };
   });
 
-// A publication's map plate: the Item among its rel=item links whose id ends `_plate`, as an
-// absolute URL (against `base`, else the URL the Collection was fetched from). None for a report-only
-// publication, or a single-file one, whose plate COG already sits on the Collection.
+// A publication's map plate: the Item among its rel=item links whose id is `<pub id>_plate` (a
+// layer such as `<pub id>__geologic_plate` is not it), as an absolute URL (against `base`, else
+// the URL the Collection was fetched from). None for a report-only publication, or a single-file
+// one, whose plate COG already sits on the Collection.
 export const plateHrefOf = (d: StacDoc | undefined, base?: string): string | undefined => {
   if (d?.type !== "Collection" || cogAsset(d)) return undefined;
   const from = base ?? fetchedFrom.get(d);
   if (!from) return undefined;
   try {
-    return itemLinks(d, from).find((l) => idOf(l.href.split(/[?#]/)[0]).endsWith("_plate"))?.href;
+    const plateId = `${d.id}_plate`;
+    return itemLinks(d, from).find((l) => idOf(l.href.split(/[?#]/)[0]) === plateId)?.href;
   } catch { return undefined; }
 };
 

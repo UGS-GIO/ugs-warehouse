@@ -409,11 +409,10 @@ def build_publication(p: dict, attachments: list[dict], *,
         exts = [stac.TABLE_EXT] if any("table:columns" in a for a in assets.values()) else []
         return assets, exts
 
-    mosaic = ([{"rel": "related",
-                "href": config.public_url(stac.item_object_path("ugs-geologic-maps", f"geologic-maps-{mosaic_tier}")),
-                "type": "application/geo+json",
-                "title": f"Utah geologic maps — {MOSAIC_TIER_LABEL.get(mosaic_tier, mosaic_tier)} seamless mosaic"}]
-              if has_cog and mosaic_tier and not ed.get("deprecated") else [])
+    mosaic = ([stac.related_link(
+        "ugs-geologic-maps", f"geologic-maps-{mosaic_tier}",
+        f"Utah geologic maps — {MOSAIC_TIER_LABEL.get(mosaic_tier, mosaic_tier)} seamless mosaic")]
+        if has_cog and mosaic_tier and not ed.get("deprecated") else [])
     items: list[dict] = []
     if has_cog:
         plate_assets = {"cog": {"href": config.public_url(identity.Pub(sid.upper()).cog_object),

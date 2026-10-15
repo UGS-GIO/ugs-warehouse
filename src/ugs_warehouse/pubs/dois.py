@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import sys
 
 import requests
@@ -30,9 +31,11 @@ def doi_of(series_id: str) -> str:
 
 def _fetch() -> frozenset[str]:
     """Every DOI under UGS's prefix, paging with Crossref's cursor. Raises on an HTTP error, an
-    unexpected body, or an empty registry."""
+    unexpected body, an empty registry, or fewer DOIs than the first page's `total-results`."""
     dois: set[str] = set()
     cursor = "*"
+    total: int | None = None
+    pages = 0
     while True:
         r = requests.get(CROSSREF_WORKS_URL, timeout=TIMEOUT_S, headers={"User-Agent": USER_AGENT},
                          params={"rows": PAGE_ROWS, "select": "DOI", "cursor": cursor})
@@ -41,15 +44,24 @@ def _fetch() -> frozenset[str]:
         items = message.get("items") if isinstance(message, dict) else None
         if not isinstance(items, list):
             raise ValueError(f"Crossref response has no message.items: {str(r.text)[:200]}")
+        if total is None:
+            total = message.get("total-results")
+            if not isinstance(total, int):
+                raise ValueError("Crossref response has no integer message.total-results")
         for it in items:
             if not isinstance(it, dict) or not isinstance(it.get("DOI"), str):
                 raise ValueError(f"Crossref item without a DOI: {it!r}")
             dois.add(it["DOI"].strip().lower())
+        pages += 1
         cursor = message.get("next-cursor")
         if not items or not cursor:
             break
+        if pages > math.ceil(total / PAGE_ROWS) + 2:
+            raise ValueError(f"Crossref paging did not end after {pages} pages for {total} results")
     if not dois:
         raise ValueError("Crossref lists no DOIs under the UGS prefix")
+    if len(dois) < total:
+        raise ValueError(f"Crossref returned {len(dois)} DOIs of {total} total-results")
     return frozenset(dois)
 
 

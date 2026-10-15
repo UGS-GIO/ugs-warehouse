@@ -31,13 +31,11 @@ def _in_memory_gcs(monkeypatch):
 
 @pytest.fixture(autouse=True)
 def _crossref_registry(monkeypatch):
-    """Serve the DOI registry from one fixed page, so an ingest never reaches Crossref. A test of
-    pubs.dois replaces `dois.requests.get`."""
+    """Serve a fixed DOI registry, so an ingest never reaches Crossref. A test of pubs.dois
+    restores the real `_fetch` and stubs the HTTP call itself."""
     from ugs_warehouse.pubs import dois
 
-    page = {"message": {"items": [{"DOI": "10.34191/ofr-784dm"}], "next-cursor": None}}
-    monkeypatch.setattr(dois.requests, "get", lambda *a, **k: SimpleNamespace(
-        raise_for_status=lambda: None, json=lambda: page, text=""))
+    monkeypatch.setattr(dois, "_fetch", lambda: frozenset({"10.34191/ofr-784dm"}))
 
 
 class FakeIap:

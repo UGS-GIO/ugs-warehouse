@@ -10,15 +10,18 @@ import requests
 from ugs_warehouse.core import gcs
 from ugs_warehouse.pubs import dois, identity, sink_stac
 
+REAL_FETCH = dois._fetch  # conftest stubs it for every test
 REGISTRY = frozenset({"10.34191/m-234", "10.34191/ofr-1"})
 
 
-def _page(dois_in_page, cursor=None):
-    return {"message": {"items": [{"DOI": d} for d in dois_in_page], "next-cursor": cursor}}
+def _page(dois_in_page, cursor=None, total=None):
+    return {"message": {"items": [{"DOI": d} for d in dois_in_page], "next-cursor": cursor,
+                        "total-results": len(dois_in_page) if total is None else total}}
 
 
 def _serve(monkeypatch, *pages):
     """Answer each Crossref request with the next page; return the recorded calls."""
+    monkeypatch.setattr(dois, "_fetch", REAL_FETCH)
     calls: list[dict] = []
     queue = list(pages)
 
@@ -67,8 +70,8 @@ def test_an_odd_id_inside_a_doi_series_gets_no_doi():
 
 
 def test_a_fetch_follows_the_cursor_and_lowercases(monkeypatch):
-    calls = _serve(monkeypatch, _page(["10.34191/M-234"], "c1"), _page(["10.34191/ofr-1"], "c2"),
-                   _page([], "c3"))
+    calls = _serve(monkeypatch, _page(["10.34191/M-234"], "c1", total=2),
+                   _page(["10.34191/ofr-1"], "c2", total=2), _page([], "c3", total=2))
     assert dois.registered() == REGISTRY
     assert [c["params"]["cursor"] for c in calls] == ["*", "c1", "c2"]
     assert calls[0]["url"] == dois.CROSSREF_WORKS_URL
@@ -107,3 +110,24 @@ def test_an_empty_or_malformed_response_is_a_failed_fetch(monkeypatch):
     _serve(monkeypatch, {"message": {"nope": 1}})
     with pytest.raises(RuntimeError, match="no message.items"):
         dois.registered()
+
+
+def test_a_partial_fetch_is_a_failed_fetch_and_keeps_the_snapshot(monkeypatch, capsys):
+    _serve(monkeypatch, _page(["10.34191/m-234", "10.34191/ofr-1"]))
+    dois.registered()
+    _serve(monkeypatch, _page(["10.34191/m-234"], total=2))
+
+    assert dois.registered() == REGISTRY  # the snapshot, not the partial list
+    assert "1 DOIs of 2 total-results" in capsys.readouterr().err
+    assert json.loads(gcs.get_bytes(identity.PUB_DOI_REGISTRY_OBJECT))["dois"] == sorted(REGISTRY)
+
+
+def test_paging_that_never_ends_is_capped(monkeypatch):
+    forever = [_page(["10.34191/a"], "c", total=1) for _ in range(10)]
+    _serve(monkeypatch, *forever)
+    with pytest.raises(RuntimeError, match="paging did not end"):
+        dois.registered()
+
+
+def test_the_suite_stub_does_not_replace_requests_get_for_other_code():
+    assert requests.get.__module__ == "requests.api"

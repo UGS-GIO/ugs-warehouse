@@ -153,6 +153,9 @@ def renders_for(item_id: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
     return renders, style_asset
 
 
+GENERATED_STYLE_MIME = "application/vnd.mapbox.style+json"  # serving-topic style assets stay application/json
+
+
 def generated_renders(style_url: str, asset_keys: set[str]) -> tuple[dict, dict | None]:
     """`(renders, style_asset)` for a publication layer's generated style file, the same shape as
     `renders_for`. Empty when the doc has no `pmtiles` asset for it to draw. The block is marked
@@ -162,7 +165,7 @@ def generated_renders(style_url: str, asset_keys: set[str]) -> tuple[dict, dict 
         return {}, None
     block = {"title": "Publication layer style", "assets": ["pmtiles"], "style_url": style_url,
              "generated": True}
-    asset = {"href": style_url, "type": "application/json", "roles": ["style"],
+    asset = {"href": style_url, "type": GENERATED_STYLE_MIME, "roles": ["style"],
              "title": "MapLibre GL style (default look)"}
     return {"default": block}, asset
 

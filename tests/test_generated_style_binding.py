@@ -50,7 +50,7 @@ def test_a_generated_style_binds_as_the_default_render_and_a_style_asset(monkeyp
         "title": "Publication layer style", "assets": ["pmtiles"], "style_url": GEN,
         "generated": True}
     style = item["assets"]["style"]
-    assert style["href"] == GEN and style["roles"] == ["style"] and style["type"] == "application/json"
+    assert style["href"] == GEN and style["roles"] == ["style"] and style["type"] == "application/vnd.mapbox.style+json"
 
 
 def test_an_ugs_styles_style_wins_over_the_generated_one(monkeypatch):
@@ -74,6 +74,7 @@ def test_a_collection_carries_the_binding_as_top_level_members(monkeypatch):
     stac.attach_renders(coll)
     assert coll["ugs:renders"]["default"]["style_url"] == GEN
     assert coll["assets"]["style"]["roles"] == ["style"]
+    assert coll["assets"]["style"]["type"] == "application/vnd.mapbox.style+json"
     assert "properties" not in coll
 
 

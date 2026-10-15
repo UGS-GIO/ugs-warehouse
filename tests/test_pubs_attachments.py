@@ -317,6 +317,17 @@ def test_a_stale_manifest_is_not_healed_it_waits_for_re_extraction(monkeypatch):
     assert healed == []
 
 
+def test_a_manifest_with_errors_is_healed_and_its_failed_layers_still_retried(monkeypatch):
+    healed: list[str] = []
+    monkeypatch.setattr(vectors, "self_heal", lambda needs, **kw: healed.extend(needs) or vectors.Heal())
+    partial = _clean(extract_version=vectors.EXTRACT_VERSION, errors=[{"label": "b", "error": "x"}])
+
+    downloads = _all_run(monkeypatch, {"M-1DM": partial})
+
+    assert healed == ["M-1DM"]
+    assert "https://x/M-1DM.zip" in downloads
+
+
 def test_a_nothing_to_extract_attempt_from_the_old_coverage_is_tried_again(monkeypatch):
     skip = {"result": "skip"}
     downloads = _all_run(monkeypatch, {}, {

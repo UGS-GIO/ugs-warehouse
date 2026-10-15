@@ -179,7 +179,7 @@ def _vector_manifest(sid: str, doc: dict) -> dict:
 def _reduce_vector_manifest(sid: str, doc: dict) -> tuple[dict | None, str | None, vectors.Needs | None]:
     """(the reduced manifest, why it is malformed, what the self-heal would do) for one series, in
     the thread that read it, so the full document is dropped as soon as this returns."""
-    needs = vectors.needs_of(doc) if vectors.is_clean(doc) else None
+    needs = vectors.needs_of(doc) if vectors.has_layers(doc) else None
     try:
         return _vector_manifest(sid.upper(), doc), None, needs
     except Exception as e:  # noqa: BLE001 (recorded per series; the caller fails that pub)
@@ -193,7 +193,7 @@ def _read_vector_manifests(paths: list[str] | None = None
     record of which extracted layers are spatial vs non-spatial GeMS companion tables, so
     build_publication doesn't have to guess a layer's kind from its name. Returns ({SID:
     `_vector_manifest`}, {SID: cause} for each manifest that exists but could not be read or
-    parsed, {series id: Needs} for each clean one). A series with no manifest appears in none of
+    parsed, {series id: Needs} for each one with extracted layers). A series with no manifest appears in none of
     them. `paths` narrows the read to those manifests."""
     out: dict[str, dict] = {}
     failed: dict[str, str] = {}
@@ -326,7 +326,7 @@ HEAL_BUDGET_S = 600
 
 
 def _self_heal(pubs: list[dict], needs: dict[str, vectors.Needs], deadline: float) -> vectors.Heal:
-    """`vectors.self_heal` over the clean vector manifests and units files of `pubs`: the
+    """`vectors.self_heal` over the vector manifests that list extracted layers and units files of `pubs`: the
     relationships extracted layers are missing, and units files older than GeoParquet 1.1, before
     the items are built. PMTiles are not built here: tiling reads whole layers, which the vectors
     job is sized for and this one (4Gi) is not, so a layer without tiles is tiled by the next

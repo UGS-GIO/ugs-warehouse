@@ -873,6 +873,13 @@ def is_clean(doc: dict) -> bool:
     return "layers" in doc and not doc.get("errors")
 
 
+def has_layers(doc: dict) -> bool:
+    """True for a manifest that records per-layer metadata, whatever its errors. The derived
+    products (tiles, styles, relationships, GeoPackage, unit polygons) are built from the layers
+    that extracted even when others of the pub failed."""
+    return isinstance(doc.get("layers"), list)
+
+
 def is_current(doc: dict) -> bool:
     """True for a clean manifest written at the current coverage (`EXTRACT_VERSION`). A clean one
     below it is still published from, but the next regular run extracts the pub again."""
@@ -895,6 +902,20 @@ def _read_manifest(path: str) -> dict | None:
         print(f"  unreadable manifest {path}, re-extracting: {_error(e)}", file=sys.stderr)
         return None
     return doc if is_clean(doc) else None
+
+
+def _healable_manifest_of(series_id: str) -> dict | None:
+    """A series' manifest when it exists, is readable and records layers (`has_layers`),
+    errors or not, from its own listing."""
+    path = f"{VECTORS_PREFIX}/{series_id}/_manifest.json"
+    if path not in gcs.list_paths(f"{VECTORS_PREFIX}/{series_id}/"):
+        return None
+    try:
+        doc = _load_manifest(path)
+    except Exception as e:
+        print(f"  unreadable manifest {path}, re-extracting: {_error(e)}", file=sys.stderr)
+        return None
+    return doc if has_layers(doc) else None
 
 
 def _clean_manifest_of(series_id: str) -> dict | None:
@@ -969,6 +990,20 @@ def clean_manifests(reduce=lambda series_id, doc: doc) -> dict[str, object]:
             print(f"  unreadable manifest {sc.path}, re-extracting: {sc.error}", file=sys.stderr)
         elif sc.clean:
             out[sid] = sc.value
+    return out
+
+
+def healable_manifests(reduce=lambda series_id, doc: doc) -> dict[str, object]:
+    """Like `clean_manifests`, but for every readable manifest that records layers
+    (`has_layers`), with or without errors. These are the series the self-heal builds products for;
+    the series with errors are still extracted again (they are not clean), so their failures are
+    reported and retried."""
+    out: dict[str, object] = {}
+    for sid, sc in scan_manifests(lambda sid, doc: (has_layers(doc), reduce(sid, doc))).items():
+        if sc.error:
+            print(f"  unreadable manifest {sc.path}, re-extracting: {sc.error}", file=sys.stderr)
+        elif sc.value[0]:
+            out[sid] = sc.value[1]
     return out
 
 
@@ -1077,6 +1112,7 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
                 untiled += [f"{series_id}/{lb}" for lb in failed_tiles]
         n_spatial, n_tables = len(manifest["spatial"]), len(manifest["tables"])
         errors = manifest["errors"]
+        res = "ok"
         if errors:
             unreadable = ", ".join(e.get("label") or e["source"] for e in errors)
             # Only unreadable containers (.mdb, .mpk): a known gap, re-reported by later runs
@@ -1087,8 +1123,9 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
                   f"({n_spatial} vector layers + {n_tables} companion tables uploaded, "
                   f"{len(errors)} failed: {unreadable})", file=sys.stderr)
             _record_attempt(series_id, {"result": res, "errors": errors})
-            return res
-        if n_spatial + n_tables == 0:
+            if n_spatial + n_tables == 0:
+                return res
+        elif n_spatial + n_tables == 0:
             print(f"{series_id}: SKIP (every layer is empty)")
             _record_attempt(series_id, {"result": "skip", "warnings": manifest["warnings"]})
             return "skip"
@@ -1108,10 +1145,11 @@ def extract_one(series_id: str, dry_run: bool = False, force: bool = False,
         if without_units is not None:
             without_units += unit_errors
 
-        print(f"{series_id}: OK ({n_spatial} vector layers + {n_tables} companion tables "
-              f"uploaded to {VECTORS_PREFIX}/{series_id}/)")
-        _record_attempt(series_id, {"result": "ok"})
-        return "ok"
+        if res == "ok":
+            print(f"{series_id}: OK ({n_spatial} vector layers + {n_tables} companion tables "
+                  f"uploaded to {VECTORS_PREFIX}/{series_id}/)")
+            _record_attempt(series_id, {"result": "ok"})
+        return res
     except Exception as e:
         print(f"{series_id}: FAIL {e}", file=sys.stderr)
         _record_attempt(series_id, {"result": f"fail:{type(e).__name__}",
@@ -1660,12 +1698,15 @@ def main() -> int:
         # is already extracted with one listing, so a weekly run costs about nothing when nothing
         # is new.
         sids = [s for s in all_sids if harvest.data_files(s)]
-        # A forced run re-extracts every pub, so nothing is left to heal. A clean manifest below
-        # EXTRACT_VERSION is extracted again, not healed.
+        # A forced run re-extracts every pub, so nothing is left to heal. A manifest below
+        # EXTRACT_VERSION is extracted again, not healed. A current one with errors is healed too,
+        # so its extracted layers get their products, but only a clean one counts as extracted.
         listed = set(sids)
-        needs = {} if args.force else {s: n for s, (n, ok) in clean_manifests(
-            lambda sid, doc: (needs_of(doc), is_current(doc))).items() if s in listed and ok}
-        existing = None if args.force else set(needs)
+        found = {} if args.force else healable_manifests(
+            lambda sid, doc: (needs_of(doc), (doc.get("extract_version") or 0) >= EXTRACT_VERSION,
+                              is_current(doc)))
+        needs = {s: n for s, (n, current, _) in found.items() if s in listed and current}
+        existing = None if args.force else {s for s in needs if found[s][2]}
         unsupported: list[str] = []
         nothing: list[str] = []
         if existing is not None:
@@ -1741,7 +1782,8 @@ def main() -> int:
         # once, by extraction, and retried by the next run.
         needs = {sid: needs_of(m) for s in sids
                  if (sid := identity.Pub.parse(s).series_id) not in extracted
-                 and (m := _clean_manifest_of(sid))}
+                 and (m := _healable_manifest_of(sid))}
+
     # Units files come from the plate harvest, not from extraction, so every covered pub is checked.
     units = units_objects({identity.Pub.parse(s).series_id.upper()
                            for s in (all_sids if args.all else args.series_id)})

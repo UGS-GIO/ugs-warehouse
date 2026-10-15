@@ -156,10 +156,10 @@ def membership() -> dict[str, list[str]]:
 
 
 def unit_checksums() -> tuple[dict[str, str], list[str]]:
-    """({SID: unit_polys checksum} for each clean manifest that has the product, an error per
+    """({SID: unit_polys checksum} for each manifest that has the product, an error per
     manifest that could not be read), read once on the manifest scan's threads."""
     def reduce(_sid: str, doc: dict) -> str | None:
-        return (doc.get("unit_polys") or {}).get("checksum") if vectors.is_clean(doc) else None
+        return (doc.get("unit_polys") or {}).get("checksum") if vectors.has_layers(doc) else None
 
     sums: dict[str, str] = {}
     errors: list[str] = []

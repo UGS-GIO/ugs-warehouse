@@ -417,6 +417,22 @@ def test_extract_one_fails_when_any_layer_fails_but_keeps_the_rest(monkeypatch, 
     assert f"{vectors.VECTORS_PREFIX}/M-105/geo__DescriptionOfMapUnits.parquet" in store
 
 
+def test_extract_one_builds_the_products_of_a_pub_that_has_errors(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    table_df = pd.DataFrame({"MapUnit": ["Qal"]})
+    monkeypatch.setattr("pyogrio.read_dataframe",
+                        lambda path, layer=None, read_geometry=True: table_df)
+    built: list[str] = []
+    monkeypatch.setattr(vectors, "_geopackage_series", lambda sid: built.append(f"gpkg {sid}") or (True, []))
+    monkeypatch.setattr(vectors, "_unit_polys_series", lambda sid: built.append(f"units {sid}") or [])
+    _stub_bundle(monkeypatch, tmp_path, (
+        [("b.gdb", "DescriptionOfMapUnits", "geo__DescriptionOfMapUnits", False)],
+        [{"source": "Story.mpk", "error": "unsupported format: map package (.mpk), not extracted"}]))
+
+    assert vectors.extract_one("M-114", force=True) == "unsupported"
+    assert built == ["gpkg M-114", "units M-114"]
+
+
 def test_extract_one_fails_when_a_gdb_cannot_be_listed_and_nothing_else_exists(monkeypatch, tmp_path):
     store = _mem_gcs(monkeypatch)
     _stub_bundle(monkeypatch, tmp_path, ([], [{"source": "Broken.gdb", "error": "RuntimeError: x"}]))
@@ -1127,8 +1143,8 @@ def _manifest(*layers, errors=None, warnings=None, relations_version=vectors.rel
 
 def _heal(sids: list[str] | None, deadline: float | None = None) -> int:
     """Self-heal the given series (every clean one for None) as a run does: 1 when anything failed."""
-    manifests = (vectors.clean_manifests(lambda sid, doc: vectors.needs_of(doc)) if sids is None
-                 else {s: vectors.needs_of(m) for s in sids if (m := vectors._clean_manifest_of(s))})
+    manifests = (vectors.healable_manifests(lambda sid, doc: vectors.needs_of(doc)) if sids is None
+                 else {s: vectors.needs_of(m) for s in sids if (m := vectors._healable_manifest_of(s))})
     heal = vectors.self_heal(manifests, deadline=deadline)
     print(heal.summary())
     return 1 if heal.failed else 0
@@ -1164,7 +1180,7 @@ def test_self_heal_skips_a_layer_with_no_geometry_to_tile(monkeypatch, tmp_path,
 
 
 @pytest.mark.usefixtures("no_geopackage")
-def test_self_heal_visits_only_clean_manifests(monkeypatch, tmp_path):
+def test_self_heal_also_visits_manifests_with_errors(monkeypatch, tmp_path):
     store = _backfill_store(monkeypatch, tmp_path, {
         "M-302": _manifest({"label": "a", "spatial": True}),
         "M-303": _manifest({"label": "b", "spatial": True},
@@ -1172,7 +1188,9 @@ def test_self_heal_visits_only_clean_manifests(monkeypatch, tmp_path):
 
     assert _heal(None) == 0
     assert vectors.pmtiles_object("M-302", "a") in store
-    assert vectors.pmtiles_object("M-303", "b") not in store  # not clean: extraction retries it
+    assert vectors.pmtiles_object("M-303", "b") in store
+    assert json.loads(store[f"{vectors.VECTORS_PREFIX}/M-303/_manifest.json"])["errors"] == [
+        {"label": "x", "error": "RuntimeError: unreadable"}]
 
 
 def test_a_layer_that_fails_to_tile_again_fails_the_heal_and_keeps_the_rest(monkeypatch, tmp_path, capsys):
@@ -2270,8 +2288,8 @@ def shard_run(monkeypatch):
     monkeypatch.setattr(source, "read_pubs", lambda: [{"series_id": s} for s in SHARD_SIDS])
     monkeypatch.setattr(vectors.harvest, "data_files", lambda sid: [("Data", "https://x/gis.zip")])
     monkeypatch.setattr(vectors, "_series_with", lambda *names: set())
-    monkeypatch.setattr(vectors, "clean_manifests", lambda reduce=None: {
-        s: (vectors.Needs((), False, True), True) for s in SHARD_SIDS[:5]})
+    monkeypatch.setattr(vectors, "healable_manifests", lambda reduce=None: {
+        s: (vectors.Needs((), False, True), True, True) for s in SHARD_SIDS[:5]})
     monkeypatch.setattr(vectors, "extract_one", lambda sid, **kw: seen["extract"].append(sid) or "ok")
     monkeypatch.setattr(vectors, "units_objects",
                         lambda ids=None: {s: f"u/{s}" for s in SHARD_SIDS

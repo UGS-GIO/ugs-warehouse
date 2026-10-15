@@ -330,8 +330,10 @@ The ingest adds a `geopackage` asset (`application/geopackage+sqlite3`, role `da
 included. The publication page links it as "Download all data". The ingest does not build it.
 
 **Self-heal.** After extracting new pubs and retrying failed ones, every vectors run (`--all`, or
-`python -m ugs_warehouse.pubs.vectors SID ...` for those SIDs) fills in what cleanly extracted pubs
-are missing, from their GeoParquet on GCS and without downloading a zip:
+`python -m ugs_warehouse.pubs.vectors SID ...` for those SIDs) fills in what extracted pubs
+are missing, from their GeoParquet on GCS and without downloading a zip. A pub with errors (a failed
+layer, an unreadable `.mpk`/`.mdb`) gets its products from the layers that did extract, at extraction and
+here; its errors stay in the manifest and the run summary, and the failed layers are retried:
 
 - PMTiles for each spatial layer with none that is not `no_geometry`, including layers with a
   `pmtiles_failed` warning (the warning clears once the layer tiles). The GeoParquet is downloaded

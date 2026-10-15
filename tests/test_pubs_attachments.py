@@ -328,6 +328,19 @@ def test_a_manifest_with_errors_is_extracted_again_and_not_healed_from_its_stale
     assert "https://x/M-1DM.zip" in downloads
 
 
+def test_an_unsupported_pub_is_healed_from_its_readable_layers_without_a_download(monkeypatch):
+    healed: list[str] = []
+    monkeypatch.setattr(vectors, "self_heal", lambda needs, **kw: healed.extend(needs) or vectors.Heal())
+    errors = [{"source": "x.mpk", "error": "unsupported format"}]
+    partial = _clean(extract_version=vectors.EXTRACT_VERSION, errors=errors)
+    unsupported = {"result": "unsupported", "extract_version": vectors.EXTRACT_VERSION, "errors": errors}
+
+    downloads = _all_run(monkeypatch, {"M-1DM": partial}, {"M-1DM": unsupported})
+
+    assert healed == ["M-1DM"]
+    assert "https://x/M-1DM.zip" not in downloads
+
+
 def test_a_nothing_to_extract_attempt_from_the_old_coverage_is_tried_again(monkeypatch):
     skip = {"result": "skip"}
     downloads = _all_run(monkeypatch, {}, {

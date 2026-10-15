@@ -939,18 +939,30 @@ def test_build_catalog_prints_failed_pubs_before_the_refresh_reports_their_orpha
     assert "publication items with no collection.json: ugs-publications/DS/DS-8" in str(exc.value)
 
 
-def test_build_catalog_refuses_publications_that_share_a_collection_path():
+def _catalog_run(pubs):
     from contextlib import ExitStack
 
     from ugs_warehouse.pubs.ingest import build_catalog
 
-    written_items, written_colls = [], []
+    items, colls = [], []
     with ExitStack() as stack:
-        _build_catalog_patches(stack, {}, [{"series_id": "A B"}, {"series_id": "A-B"}, {"series_id": "C-1"}],
-                               written_items, written_colls)
-        with pytest.raises(RuntimeError, match=r"ugs-publications/A/A-B.*'A B'.*'A-B'"):
-            build_catalog(skip_refresh=True)
-    assert written_items == [] and written_colls == []
+        _build_catalog_patches(stack, {}, pubs, items, colls)
+        try:
+            n, err = build_catalog(skip_refresh=True), None
+        except RuntimeError as e:
+            n, err = None, e
+    return n, err, [c["id"] for c, _ in colls]
+
+
+def test_build_catalog_writes_a_row_repeated_verbatim_once():
+    n, err, written = _catalog_run([{"series_id": "C-1"}, {"series_id": "C-1"}])
+    assert err is None and n == 1 and written == ["C-1"]
+
+
+def test_build_catalog_skips_only_the_pubs_that_share_a_collection_path_and_fails_the_run():
+    n, err, written = _catalog_run([{"series_id": "A B"}, {"series_id": "A-B"}, {"series_id": "C-1"}])
+    assert written == ["C-1"]  # the others still land
+    assert n is None and "2 publication(s) failed: ['A B', 'A-B']" in str(err)
 
 
 def test_list_series(capsys):

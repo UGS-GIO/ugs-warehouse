@@ -367,7 +367,7 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
         print(f"[pubs] filtered to series {series_upper}: {len(pubs)} publications")
     if limit:
         pubs = pubs[:limit]
-    _refuse_shared_collection_paths(pubs)
+    pubs, collisions = _split_shared_collection_paths(pubs)
     att: dict[str, list[dict]] = {}
     for a in source.read_attachments():
         att.setdefault((a.get("series_id") or "").strip().upper(), []).append(a)
@@ -398,8 +398,9 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
           f"{len(units)} unit sets, {n_foot} footprints, {len(threed_ids)} 3D, "
           f"{len(mirrored)} mirrored source files, {len(vector_manifests)} vector manifests")
 
-    errors: list[tuple[str, str]] = [(sid, f"self-heal: {len(errs)} failed this run: {'; '.join(errs)}")
-                                     for sid, errs in sorted(healed.failed_by_series.items())]
+    errors: list[tuple[str, str]] = collisions + [
+        (sid, f"self-heal: {len(errs)} failed this run: {'; '.join(errs)}")
+        for sid, errs in sorted(healed.failed_by_series.items())]
 
     def process_pub(p: dict) -> bool:
         """Write one publication; a failure is collected so the other publications still land."""
@@ -483,18 +484,30 @@ def build_catalog(limit: int | None = None, series: str | None = None, skip_refr
     return n
 
 
-def _refuse_shared_collection_paths(pubs: list[dict]) -> None:
-    """Raise when two publications map to one collection directory (`A B` and `A-B` both become
-    `A-B`), since their parallel writes would overwrite each other."""
-    by_path: dict[str, list[str]] = {}
+def _split_shared_collection_paths(pubs: list[dict]) -> tuple[list[dict], list[tuple[str, str]]]:
+    """`(pubs to write, errors)`. A row repeated verbatim is kept once. Rows that differ but map to
+    one collection directory (`A B` and `A-B` both become `A-B`) would overwrite each other in the
+    parallel writes, so none of them is written: each gets an error naming every series id that
+    shares the path, and the other pubs go on."""
+    unique: list[dict] = []
     for p in pubs:
-        sid = (p.get("series_id") or "").strip()
-        if sid:
-            by_path.setdefault(sink_stac.pub_collection_path(p), []).append(sid)
-    shared = {path: sids for path, sids in sorted(by_path.items()) if len(sids) > 1}
-    if shared:
-        raise RuntimeError(f"{len(shared)} publication collection path(s) claimed by more than one "
-                           f"publication: {'; '.join(f'{path} <- {sids}' for path, sids in shared.items())}")
+        if p not in unique:
+            unique.append(p)
+    by_path: dict[str, list[dict]] = {}
+    for p in unique:
+        if (p.get("series_id") or "").strip():
+            by_path.setdefault(sink_stac.pub_collection_path(p), []).append(p)
+    skipped: set[int] = set()
+    errors: list[tuple[str, str]] = []
+    for path, rows in sorted(by_path.items()):
+        if len(rows) < 2:
+            continue
+        sids = [(r.get("series_id") or "").strip() for r in rows]
+        for r, sid in zip(rows, sids):
+            skipped.add(id(r))
+            errors.append((sid, f"collection path {path} is claimed by more than one publication "
+                                f"({' and '.join(sids)}); none of them is written"))
+    return [p for p in unique if id(p) not in skipped], errors
 
 
 def _build_search_corpus() -> None:

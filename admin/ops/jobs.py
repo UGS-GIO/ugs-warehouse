@@ -78,8 +78,9 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         "Extract every layer and companion table from the GIS zip of each pub that has one, as "
         "GeoParquet, and build PMTiles for each map layer. Skips pubs already extracted, then "
         "fills in what already-extracted pubs are missing (map tiles, relationships between "
-        "layers and tables) within a time budget, and says how much is still pending. Run it "
-        "again until it reports 0 pending; then Rebuild pubs STAC to bind them."),
+        "layers and tables) within a time budget. Runs as 5 parallel tasks, each owning a fifth of "
+        "the pubs and printing its own summary with how much is still pending. Run it again "
+        "until every task reports 0 pending; then Rebuild pubs STAC to bind them."),
     Job("pubs-ingest", "ugs-pubs-ingest", "Rebuild pubs STAC",
         "Re-read pub metadata + attach harvested COGs/thumbnails to the STAC items, and record layer "
         "relationships. It does not build map-layer tiles: run Extract map layers (or Full refresh)."),

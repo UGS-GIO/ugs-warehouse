@@ -71,3 +71,11 @@ def test_console_cannot_rebuild_the_24k_mosaic_on_cloud_run():
     assert {t for t, _ in jobs.JOBS["mosaics"].tiers} == {"100k", "500k"}
     res = jobs.rebuild_mosaic("24k")
     assert res["ok"] is False and "unknown mosaic tier" in res["message"]
+
+
+@pytest.mark.skipif(not HAS_DJANGO, reason="Django not installed in this environment")
+def test_the_vectors_job_says_it_runs_as_five_tasks_each_with_its_own_summary():
+    from ops import jobs
+
+    text = jobs.JOBS["vectors"].description
+    assert "5 parallel tasks" in text and "every task reports 0 pending" in text

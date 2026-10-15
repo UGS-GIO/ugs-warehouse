@@ -11,7 +11,7 @@ import { unitsHrefOf } from "@/map/identify";
 import { IdentifyCard } from "@/map/unit-card";
 import { footprintSpecOf, PreviewMapSlot, usePreviewMap } from "@/map/preview-map";
 import { vectorSpecOf } from "@/map/preview-spec";
-import { type Asset, type AssetKind, isDrawableCog, parquetAsset, primaryKeyOf, rasterTilesAsset, type StacDoc,
+import { type Asset, type AssetKind, geopackageAsset, isDrawableCog, parquetAsset, primaryKeyOf, rasterTilesAsset, type StacDoc,
   summaryFieldsOf, tableColumns, thumbnailAsset, usePlate } from "@/stac";
 import { C, toggle } from "@/ui/ui";
 import { useDataSaver } from "@/lib/data-saver";
@@ -202,7 +202,9 @@ function PdfPreview({ asset, item }: { asset: Asset; item: StacDoc }) {
 function AssetViewer({ item, extra }: { item: StacDoc; extra?: AssetEntry }) {
   const entries = useMemo(() => assetEntries(item, extra), [item, extra]);
   const tabs = entries.filter((e) => e.kind !== "other");
-  const others = entries.filter((e) => e.kind === "other");
+  // The GeoPackage has its own "Download all data" link on the publication page.
+  const gpkg = geopackageAsset(item);
+  const others = entries.filter((e) => e.kind === "other" && e.asset !== gpkg);
   // No reset-on-item-change effect: `active` below falls back to the first tab whenever the
   // remembered key isn't in this item's tabs.
   const [activeKey, setActiveKey] = useState<string | undefined>(tabs[0]?.key);

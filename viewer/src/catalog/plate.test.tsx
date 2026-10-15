@@ -86,3 +86,19 @@ describe("the plate on a publication page", () => {
     expect(screen.queryByRole("button", { name: /Map\s*Map plate/ })).toBeNull();
   });
 });
+
+describe("the publication's other files", () => {
+  it("leave out the GeoPackage, which has its own download link", async () => {
+    const item = await loadPublication();
+    item.assets = {
+      ...item.assets,
+      gis_zip: { href: "https://x/gis.zip", type: "application/zip", title: "GIS Data - Zip", roles: ["source"] },
+      geopackage: { href: "https://x/M-246DM.gpkg", type: "application/geopackage+sqlite3",
+                    title: "All data (GeoPackage)", roles: ["data"] },
+    };
+    renderPage(item);
+    const other = await screen.findByText(/Other files:/);
+    expect(other.textContent).toContain("GIS Data - Zip");
+    expect(other.textContent).not.toContain("GeoPackage");
+  });
+});

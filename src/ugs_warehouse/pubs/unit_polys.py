@@ -22,8 +22,8 @@ import tempfile
 from dataclasses import dataclass
 
 from ..core import config, gcs
-from ..vector import sink_archive, sink_pmtiles, transform
-from . import relations
+from ..vector import sink_pmtiles, transform
+from . import geoparquet, relations
 
 # Bump to build `unit_polys` again for every pub the next vectors run visits.
 UNIT_POLYS_VERSION = 1
@@ -310,13 +310,17 @@ def build(series_id: str, manifest: dict) -> None:
                 manifest["unit_polys_version"] = UNIT_POLYS_VERSION
                 return
             parquet = os.path.join(work, "unit_polys.parquet")
-            geo_json = sink_archive._geo_metadata(con, "units")
-            con.execute(
-                f"COPY (SELECT * REPLACE (ST_AsWKB(geom) AS geom), "
-                f"{{'xmin': ST_XMin(geom), 'ymin': ST_YMin(geom), 'xmax': ST_XMax(geom), "
-                f"'ymax': ST_YMax(geom)}} AS bbox FROM units) TO {vectors._literal(parquet)} "
-                f"(FORMAT PARQUET, COMPRESSION ZSTD, GEOPARQUET_VERSION 'NONE', "
-                f"KV_METADATA {{geo: {vectors._literal(geo_json)}}})")
+            import geopandas as gpd
+
+            rows_df = con.execute(
+                f"SELECT {', '.join(COLUMNS)}, ST_AsWKB(geom) AS geom FROM units").df()
+            frame = gpd.GeoDataFrame(
+                rows_df.drop(columns="geom"),
+                geometry=gpd.GeoSeries.from_wkb(rows_df["geom"].map(bytes), crs="EPSG:4326"),
+            ).rename_geometry("geom")
+            del rows_df
+            geoparquet.write(frame, parquet)
+            del frame
             geojsonl = os.path.join(work, "unit_polys.geojsonl")
             sink_pmtiles.write_geojsonl(con, "units", geojsonl)
         finally:

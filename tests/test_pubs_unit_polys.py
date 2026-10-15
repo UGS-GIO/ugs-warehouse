@@ -211,6 +211,39 @@ def _read(path_bytes, tmp_path):
                       f"FROM read_parquet('{local}') ORDER BY unit_code NULLS LAST, 1").fetchall()
 
 
+def test_the_product_is_geoparquet_1_1_with_a_bbox_covering_in_4326(pub, tmp_path, monkeypatch):
+    import json
+
+    import pyarrow.parquet as pq
+
+    written = []
+    real = vectors.geoparquet.write
+    monkeypatch.setattr(vectors.geoparquet, "write", lambda frame, path: (written.append(frame), real(frame, path)))
+    put, uploads = pub
+    polys = gpd.GeoDataFrame({"MapUnit": ["Qal", "Qaf"]},
+                             geometry=[_square(424000, 4512000), _square(424200, 4512000)], crs="EPSG:26912")
+    put("M-9DM", "g__MapUnitPolys", polys)
+    put("M-9DM", "g__DescriptionOfMapUnits", pd.DataFrame({
+        "MapUnit": ["Qal", "Qaf"], "Name": ["A", "B"], "FullName": ["A", "B"], "Age": ["Q", "Q"],
+        "Description": ["d", "e"]}))
+
+    unit_polys.build("M-9DM", _gems_manifest())
+
+    out = tmp_path / "units.parquet"
+    out.write_bytes(uploads[vectors.unit_polys_object("M-9DM")])
+    meta = json.loads(pq.read_metadata(out).metadata[b"geo"])
+    column = meta["columns"]["geom"]
+    assert meta["version"] == "1.1.0" and meta["primary_column"] == "geom"
+    assert column["covering"]["bbox"]["xmin"] == ["bbox", "xmin"]
+    # No crs member means the spec default, lon/lat OGC:CRS84.
+    assert "crs" not in column or column["crs"]["id"]["code"] in (4326, "CRS84")
+    table = pq.read_table(out)
+    assert set(table.column_names) == {*unit_polys.COLUMNS, "geom", "bbox"}
+    assert table.num_rows == 2
+    products = [f for f in written if "unit_code" in f.columns]  # `put` writes the inputs the same way
+    assert len(products) == 1 and list(products[0].columns) == [*unit_polys.COLUMNS, "geom"]
+
+
 def test_gems_attributes_are_joined_trimmed_and_blanks_become_null(pub, tmp_path):
     put, uploads = pub
     polys = gpd.GeoDataFrame(

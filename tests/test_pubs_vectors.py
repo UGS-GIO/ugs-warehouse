@@ -930,6 +930,40 @@ def test_rows_without_geometry_are_left_out_of_the_tiles(monkeypatch, tmp_path):
     assert vectors.pmtiles_object("M-209", "pts") in store
 
 
+def test_rows_with_non_finite_coordinates_are_left_out_of_the_tiles(monkeypatch, tmp_path):
+    from ugs_warehouse.vector import sink_pmtiles
+
+    _mem_gcs(monkeypatch)
+    lines: list[str] = []
+
+    def tiler(geojsonl, pmtiles, layer, **kw):
+        with open(geojsonl) as fh:
+            lines.extend(fh)
+        _fake_tippecanoe(geojsonl, pmtiles, layer)
+
+    monkeypatch.setattr(sink_pmtiles, "run_tippecanoe", tiler)
+    inf = float("inf")
+    src, work = _geoparquet(tmp_path, {"Type": ["a", "b", "c"]},
+                            [Point(424000, 4512000), Point(-inf, -inf), Point(float("nan"), 4512000)])
+
+    assert vectors._tile_layer(src, {"label": "pts", "proj_code": "EPSG:26912"}, "M-214", work) is True
+    assert [json.loads(ln)["properties"]["Type"] for ln in lines] == ["a"]
+
+
+def test_extraction_keeps_a_layer_with_an_infinite_coordinate(monkeypatch, tmp_path):
+    _mem_gcs(monkeypatch)
+    inf = float("inf")
+    gdf = gpd.GeoDataFrame({"Type": ["a", "b"]}, geometry=[Point(424000, 4512000), Point(-inf, -inf)],
+                           crs="EPSG:26912")
+    monkeypatch.setattr("geopandas.read_file", lambda path, layer=None, engine=None: gdf)
+
+    manifest = vectors._extract_and_upload(str(tmp_path), "M-215", [("b.gdb", "L", "b__L", True)])
+
+    assert manifest["errors"] == [] and manifest["spatial"] == ["b__L"]
+    assert manifest["layers"][0]["rows"] == 2 and manifest["layers"][0]["bbox"] is not None
+    assert any("non-finite" in w["warning"] for w in manifest["warnings"])
+
+
 def test_a_layer_with_no_geometry_writes_nothing(monkeypatch, tmp_path):
     store = _mem_gcs(monkeypatch)
     src, work = _geoparquet(tmp_path, {"Type": ["a", "b"]}, [None, Point()])

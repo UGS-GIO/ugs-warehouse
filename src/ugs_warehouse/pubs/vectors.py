@@ -590,6 +590,12 @@ def _extract_and_upload(
                     if rows and gdf.crs is None:
                         raise ValueError("no CRS (missing or unreadable .prj); not written, since "
                                          "GeoParquet would read its coordinates as longitude/latitude")
+                    blanked = geoparquet.blank_non_finite(gdf)
+                    if blanked:
+                        manifest["warnings"].append({
+                            "label": label,
+                            "warning": f"{blanked} geometries with a non-finite coordinate were "
+                                       "written as null"})
                     if rows:
                         geoparquet.write(gdf, dst)
                 elif _is_sheet(path):

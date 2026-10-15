@@ -72,14 +72,22 @@ def test_migrated_pub_override_patches_the_collection(ov, store):
     assert _get(store, stac.override_object("OFR-1"))["description"] == "Hand text"
 
 
-def test_pub_with_a_collection_is_migrated_even_without_a_series_catalog(ov, store):
+def test_pending_series_pub_with_a_collection_is_patched_on_the_item_the_catalog_serves(ov, store):
     _put(store, COLL_OBJ, {"id": "OFR-1", "title": "T", "description": "D"})
     _put(store, ITEM_OBJ, {"id": "OFR-1", "properties": {"title": "old"}})
 
     assert ov.save("ofr-1", description="Hand text")["applied"] is True
 
+    assert _get(store, ITEM_OBJ)["properties"]["description"] == "Hand text"
+    assert "Hand text" not in json.dumps(_get(store, COLL_OBJ))
+
+
+def test_pending_series_pub_with_only_a_collection_is_patched_on_the_collection(ov, store):
+    _put(store, COLL_OBJ, {"id": "OFR-1", "title": "T", "description": "D"})
+
+    assert ov.save("ofr-1", description="Hand text")["applied"] is True
+
     assert _get(store, COLL_OBJ)["description"] == "Hand text"
-    assert "description" not in _get(store, ITEM_OBJ)["properties"]
 
 
 def test_migrated_series_pub_without_a_collection_saves_the_sidecar_only(ov, store):

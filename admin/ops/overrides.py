@@ -75,9 +75,11 @@ def search(q: str = "", limit: int = 50) -> list[dict]:
 
 def _locate(item_id: str) -> tuple[str, bool] | None:
     """`(object path, is_collection)` of the published document an id's override patches, or None if
-    not published. Topics are flat under the collection. A publication in a migrated series (its
-    series has a catalog.json, or it has a collection.json) is edited on its collection.json; an
-    old-layout publication on its `<SID>/<SID>.json` item."""
+    not published. Topics are flat under the collection. A publication is patched where its
+    series index points: on its collection.json once the series has a catalog.json (the refresh
+    writes it when every pub in the series has migrated), else on its old `<SID>/<SID>.json` item,
+    which a pending series is still indexed from. A pending series with no old item for the pub
+    falls back to its collection.json."""
     from ugs_warehouse.core import config, gcs, stac
     from ugs_warehouse.pubs import sink_stac, source
 
@@ -91,11 +93,12 @@ def _locate(item_id: str) -> tuple[str, bool] | None:
         coll_path = sink_stac.pub_collection_path(p)
         coll = stac.collection_object_path(coll_path)
         series = coll_path.rsplit("/", 1)[0]
-        has_coll = gcs.exists(coll)
-        if has_coll or gcs.exists(f"{config.STAC_PREFIX}/{series}/catalog.json"):
-            return (coll, True) if has_coll else None
+        if gcs.exists(f"{config.STAC_PREFIX}/{series}/catalog.json"):
+            return (coll, True) if gcs.exists(coll) else None
         path = stac.item_object_path(series, sink_stac.item_id_for(sid))
-        return (path, False) if gcs.exists(path) else None
+        if gcs.exists(path):
+            return path, False
+        return (coll, True) if gcs.exists(coll) else None
     return None
 
 

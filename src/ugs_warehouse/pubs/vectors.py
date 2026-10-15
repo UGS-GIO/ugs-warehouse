@@ -56,7 +56,7 @@ from dataclasses import dataclass, field
 from typing import NamedTuple
 from urllib.parse import unquote, urlsplit
 
-from ..core import config, gcs, stac
+from ..core import config, gcs, jobs, stac
 from ..vector import sink_pmtiles, transform
 from . import (
     geoparquet,
@@ -1695,6 +1695,14 @@ def main() -> int:
     else:
         sids = args.series_id
 
+    # `--tasks=N`: each task extracts a disjoint stride of the ordered list, so every shard gets its
+    # new pubs first. Targeted runs are not sharded. `--limit` then applies per shard.
+    task_index, task_count = jobs.task()
+    sharded = args.all and task_count > 1
+    if sharded:
+        sids = jobs.shard(sids)
+        print(f"shard {task_index + 1}/{task_count}: {len(sids)} publications")
+
     if args.limit:
         sids = sids[:args.limit]
 
@@ -1730,6 +1738,10 @@ def main() -> int:
     # Units files come from the plate harvest, not from extraction, so every covered pub is checked.
     units = units_objects({identity.Pub.parse(s).series_id.upper()
                            for s in (all_sids if args.all else args.series_id)})
+    if sharded:
+        # The same stride over sorted series ids, so no two tasks heal one manifest or units file.
+        needs = {sid: needs[sid] for sid in jobs.shard(sorted(needs))}
+        units = {sid: units[sid] for sid in jobs.shard(sorted(units))}
     identified = identify.Result()
     if args.dry_run:
         pending = sum(len(n.tiles) for n in needs.values())
@@ -1740,9 +1752,11 @@ def main() -> int:
     else:
         heal = self_heal(needs, deadline=deadline, units=units)
         print(heal.summary())
-        if args.all:
+        if args.all and task_index == 0:
             # After the heal, so the tiers see the unit polygons it just built. A run the time
             # budget cut short leaves the rest to the next run, which sees their checksums change.
+            # Catalog-wide (tier files, band cache, mosaic Items), so task 0 alone writes it, from
+            # what is extracted so far.
             identified = identify.build_changed()
             print(f"Identify layers: built {identified.built or 'none'}, unchanged "
                   f"{identified.unchanged or 'none'}")

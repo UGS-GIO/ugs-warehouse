@@ -721,6 +721,7 @@ steps:
       - --max-retries=0
       - --cpu=4
       - --memory=16Gi
+      - --tasks=5
 
   # Prune pub STAC items the source no longer lists, before the ingest's catalog refresh. Refuses
   # when the orphans exceed 5% of the source, so an empty feed cannot wipe the catalog.

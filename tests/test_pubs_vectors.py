@@ -2217,3 +2217,96 @@ def test_a_layer_named_like_the_geopackage_relationships_table_is_an_error(monke
     assert manifest["tables"] == []
     assert manifest["errors"] == [{"label": "Ugs_Relationships",
                                    "error": "label is reserved for the GeoPackage's ugs_relationships table"}]
+
+
+# ---------------------------------------------------------------------------
+# Task sharding (`--tasks=N`)
+# ---------------------------------------------------------------------------
+
+SHARD_SIDS = [f"M-{n}" for n in range(1, 8)]
+
+
+@pytest.fixture
+def shard_run(monkeypatch):
+    """An `--all` run over SHARD_SIDS where the first five are clean but need a heal, with
+    extraction, the heal, the units listing and identify recorded instead of run."""
+    from ugs_warehouse.pubs import source
+
+    seen = {"extract": [], "heal": [], "identify": 0}
+    monkeypatch.setattr(source, "read_pubs", lambda: [{"series_id": s} for s in SHARD_SIDS])
+    monkeypatch.setattr(vectors.harvest, "data_files", lambda sid: [("Data", "https://x/gis.zip")])
+    monkeypatch.setattr(vectors, "_series_with", lambda *names: set())
+    monkeypatch.setattr(vectors, "clean_manifests", lambda reduce=None: {
+        s: (vectors.Needs((), False, True), True) for s in SHARD_SIDS[:5]})
+    monkeypatch.setattr(vectors, "extract_one", lambda sid, **kw: seen["extract"].append(sid) or "ok")
+    monkeypatch.setattr(vectors, "units_objects",
+                        lambda ids=None: {s: f"u/{s}" for s in SHARD_SIDS
+                                          if ids is None or s.upper() in ids})
+    monkeypatch.setattr(vectors, "self_heal", lambda needs, **kw: seen["heal"].append(
+        (sorted(needs), sorted(kw["units"]))) or vectors.Heal())
+
+    def identify_run(tiers=None):
+        seen["identify"] += 1
+        return vectors.identify.Result()
+
+    monkeypatch.setattr(vectors.identify, "build_changed", identify_run)
+    monkeypatch.setattr("sys.argv", ["vectors", "--all"])
+    monkeypatch.delenv("CLOUD_RUN_TASK_COUNT", raising=False)
+    monkeypatch.delenv("CLOUD_RUN_TASK_INDEX", raising=False)
+    return seen
+
+
+def _run_task(monkeypatch, seen, index: int, count: int):
+    monkeypatch.setenv("CLOUD_RUN_TASK_INDEX", str(index))
+    monkeypatch.setenv("CLOUD_RUN_TASK_COUNT", str(count))
+    seen["extract"].clear()
+    seen["heal"].clear()
+    seen["identify"] = 0
+    assert vectors.main() == 0
+    return list(seen["extract"]), list(seen["heal"]), seen["identify"]
+
+
+def test_shard_helper_is_a_disjoint_stride_that_keeps_order(monkeypatch):
+    from ugs_warehouse.core import jobs
+
+    items = list("abcdefg")
+    shards = []
+    monkeypatch.setenv("CLOUD_RUN_TASK_COUNT", "3")
+    for i in range(3):
+        monkeypatch.setenv("CLOUD_RUN_TASK_INDEX", str(i))
+        shards.append(jobs.shard(items))
+    assert shards == [list("adg"), list("be"), list("cf")]
+    assert sorted(x for s in shards for x in s) == items
+    monkeypatch.setenv("CLOUD_RUN_TASK_COUNT", "1")
+    monkeypatch.setenv("CLOUD_RUN_TASK_INDEX", "0")
+    assert jobs.shard(items) is items
+
+
+def test_an_unsharded_run_extracts_and_heals_everything(monkeypatch, shard_run):
+    extracted, heals, identify_runs = _run_task(monkeypatch, shard_run, 0, 1)
+    assert extracted == SHARD_SIDS
+    assert heals == [(SHARD_SIDS[:5], SHARD_SIDS)]
+    assert identify_runs == 1
+
+
+def test_sharded_tasks_extract_and_heal_disjoint_strides(monkeypatch, shard_run, capsys):
+    out = [_run_task(monkeypatch, shard_run, i, 3) for i in range(3)]
+    assert [o[0] for o in out] == [SHARD_SIDS[0::3], SHARD_SIDS[1::3], SHARD_SIDS[2::3]]
+    assert [o[1][0][0] for o in out] == [["M-1", "M-4"], ["M-2", "M-5"], ["M-3"]]
+    units = [o[1][0][1] for o in out]
+    assert sorted(x for s in units for x in s) == sorted(SHARD_SIDS)
+    assert len({x for s in units for x in s}) == len(SHARD_SIDS)
+    assert "shard 3/3: 2 publications" in capsys.readouterr().out
+
+
+def test_identify_runs_only_in_task_zero(monkeypatch, shard_run):
+    assert [_run_task(monkeypatch, shard_run, i, 3)[2] for i in range(3)] == [1, 0, 0]
+
+
+def test_a_targeted_run_is_not_sharded(monkeypatch, shard_run):
+    monkeypatch.setattr("sys.argv", ["vectors", "M-1", "M-2", "M-3"])
+    monkeypatch.setattr(vectors, "_clean_manifest_of", lambda sid: None)
+    extracted, heals, identify_runs = _run_task(monkeypatch, shard_run, 1, 3)
+    assert extracted == ["M-1", "M-2", "M-3"]
+    assert heals[0][1] == ["M-1", "M-2", "M-3"]
+    assert identify_runs == 0

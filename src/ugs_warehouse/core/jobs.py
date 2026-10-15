@@ -8,10 +8,25 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import TypeVar
+
+T = TypeVar("T")
 
 # The client's default is no timeout; a stalled call would hold the caller's task until its own
 # timeout and then fail it, after the layer was already published.
 RUN_TIMEOUT_SECONDS = 30
+
+
+def task() -> tuple[int, int]:
+    """(index, count) of this Cloud Run task; (0, 1) outside a sharded job."""
+    return int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0")), int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
+
+
+def shard(items: list[T]) -> list[T]:
+    """This task's disjoint stride of `items` (`--tasks=N`). Every task must see the same ordered
+    list; a count of 1 returns it unchanged."""
+    i, n = task()
+    return items[i::n] if n > 1 else items
 
 
 def start_topic_thumbs(item_ids: list[str] | None = None) -> None:

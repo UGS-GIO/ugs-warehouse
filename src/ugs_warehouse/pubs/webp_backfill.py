@@ -19,7 +19,7 @@ import sys
 import tempfile
 from concurrent.futures import ThreadPoolExecutor
 
-from ..core import config, gcs
+from ..core import config, gcs, jobs
 from . import identity, webp
 
 Targets = list[tuple[str, int | None]]  # (WebP object, fit)
@@ -83,11 +83,7 @@ def main() -> int:
 
     # Sharded by source PNG, so a plate's two images come from one download, and over every PNG
     # rather than what's left, so a shard's share doesn't shift as the others finish.
-    srcs = sorted(targets)
-    n = int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
-    i = int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0"))
-    if n > 1:
-        srcs = srcs[i::n]
+    srcs = jobs.shard(sorted(targets))
     srcs = [s for s in srcs if s in todo]
     print(f"[webp] {len(srcs)} PNG(s) → {sum(len(todo[s]) for s in srcs)} WebP(s)"
           + ("" if args.apply else " (dry run; --apply writes them)"))

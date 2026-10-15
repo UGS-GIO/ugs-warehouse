@@ -223,6 +223,12 @@ manifests below `unit_polys.UNIT_POLYS_VERSION` (`unit_polys_version`); a pub wi
 records the version alone. The plate Item gets a `units` asset (`application/vnd.pmtiles`, role
 `data`, "Geologic units (identify)") pointing at that PMTiles, only when the pub has the product.
 
+The vectors job runs as `--tasks=5`. Each task extracts a disjoint stride of the ordered worklist
+(never-tried pubs first) and heals a stride of the sorted series ids (manifests and units files), so
+no two tasks touch one series. Time budget, summary and exit code are per task. The identify build
+below is catalog-wide, so only task 0 runs it, from what is extracted so far; the next run picks up
+the rest.
+
 After the self-heal an `--all` vectors run builds one identify layer per mosaic tier
 (`pubs/identify.py`): `<vectors prefix>/_identify/units-<tier>.pmtiles`, tile layer `units`, the same
 attributes. Members and their order are the mosaic bake's (`geolmap_mosaics._group_by_tier`, then

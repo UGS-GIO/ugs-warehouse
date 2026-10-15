@@ -357,3 +357,16 @@ def test_relationships_to_a_skipped_table_are_left_out_and_counted(pub, tmp_path
     [warning] = [w for w in pub.read_manifest()["warnings"]
                  if w["code"] == vectors.GEOPACKAGE_TABLE_SKIPPED]
     assert "2 relationships to it left out" in warning["warning"]
+
+
+def test_the_ingest_heal_builds_no_geopackage_after_a_relations_change(pub, monkeypatch):
+    built: list[str] = []
+    monkeypatch.setattr(vectors, "_relations_series", lambda sid: [])
+    monkeypatch.setattr(vectors, "_geopackage_series", lambda sid: built.append(sid) or (True, []))
+    needs = {SID: vectors.Needs((), False, True, False, False, False)}
+
+    vectors.self_heal(needs, tiles=False)
+    assert built == []
+
+    vectors.self_heal(needs)  # the vectors job packages once the relationships are recorded
+    assert built == [SID]

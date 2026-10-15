@@ -1654,8 +1654,9 @@ def self_heal(needs: dict[str, Needs], *, deadline: float | None = None,
                 heal.styled += int(not style_errs)
                 errs += style_errs
             # Packaged last: the relationships are one of its inputs. A heal that left them
-            # unrecorded packages nothing, since the file would list the old ones.
-            if need.geopackage or need.relations:
+            # unrecorded packages nothing, since the file would list the old ones. Only the
+            # vectors job packages: a relations change in ingest leaves the file to its next run.
+            if need.geopackage or (need.relations and heal.tiles):
                 if not (need.relations and rel_errs):
                     packaged, pack_errs = _geopackage_series(sid)
                     heal.packaged += int(packaged)

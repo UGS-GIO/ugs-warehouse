@@ -492,8 +492,11 @@ def _split_shared_collection_paths(pubs: list[dict]) -> tuple[list[dict], list[t
     parallel writes, so none of them is written: each gets an error naming every series id that
     shares the path, and the other pubs go on."""
     unique: list[dict] = []
+    seen: set[str] = set()
     for p in pubs:
-        if p not in unique:
+        key = json.dumps(p, sort_keys=True, default=str)
+        if key not in seen:
+            seen.add(key)
             unique.append(p)
     by_path: dict[str, list[dict]] = {}
     for p in unique:

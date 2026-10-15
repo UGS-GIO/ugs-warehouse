@@ -61,7 +61,7 @@ def test_a_published_mosaic_item_is_patched_in_place_and_an_unpublished_one_is_l
 def _plate(unit_polys_record):
     p = {"series_id": "M-1DM", "pub_name": "Map", "pub_publisher": "UGS"}
     _, items = sink_stac.build_publication(p, [], has_cog=True, has_units=True,
-                                         unit_polys=unit_polys_record)
+                                         unit_polys=unit_polys_record, registered_dois=frozenset())
     return next(it for it in items if it["id"].endswith("_plate"))
 
 

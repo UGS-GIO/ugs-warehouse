@@ -38,7 +38,7 @@ def test_both_producers_build_links_and_foreign_keys_through_core_stac(monkeypat
         vector_layers=["geo__Polys"], layers={"geo__Polys": {"rows": 2}, "geo__DMU": {"rows": 2}},
         companion_tables=[{"label": "geo__DMU", "columns": None}],
         relationships=[{"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
-                        "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100}])
+                        "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100}], registered_dois=frozenset())
     by_id = {it["id"]: it for it in items}
     polys, dmu = by_id["OFR-1__geo__Polys"], by_id["OFR-1__geo__DMU"]
     assert polys["assets"]["data"]["ugs:foreign_keys"][0] is built["foreign_key"][0]

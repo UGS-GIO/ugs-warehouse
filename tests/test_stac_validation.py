@@ -147,7 +147,7 @@ def test_an_undated_publication_has_a_valid_flagged_interval():
     coll, items = pubs_sink.build_publication(
         {"series_id": "MD-134-6", "series": "MD", "pub_year": "",
          "pub_name": "List of Beaver County Properties"}, [], override={}, has_units=True,
-        vector_layers=["a"])
+        vector_layers=["a"], registered_dois=frozenset())
     start, end = coll["extent"]["temporal"]["interval"][0]
     assert start == pubs_sink.EARLIEST_RECORD and end > start
     assert coll["ugs:date_unknown"] is True
@@ -182,7 +182,7 @@ def test_a_publication_with_a_table_and_no_footprint_validates():
     coll, items = pubs_sink.build_publication(
         {"series_id": "OFR-1", "pub_year": "2020", "pub_name": "A map"}, [], override={},
         has_units=True, layers={"geo__DMU": {"rows": 2}},
-        companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}])
+        companion_tables=[{"label": "geo__DMU", "columns": [{"name": "MapUnit", "type": "string"}]}], registered_dois=frozenset())
     assert coll["ugs:footprint_source"] == pubs_sink.FOOTPRINT_FALLBACK
     _validate(_drop_private(coll))
     table = next(it for it in items if it["id"].endswith("geo__DMU"))
@@ -206,7 +206,7 @@ def test_publication_items_joined_by_a_relationship_validate():
             {"origin": "geo__Polys", "origin_cols": ["MapUnit"], "destination": "geo__DMU",
              "destination_cols": ["MapUnit"], "detected_by": "inferred", "confidence": 100},
             {"origin": "geo__Faults", "origin_cols": ["PolyID"], "destination": "geo__Polys",
-             "destination_cols": ["Polys_ID"], "detected_by": "declared"}])
+             "destination_cols": ["Polys_ID"], "detected_by": "declared"}], registered_dois=frozenset())
     _validate(_drop_private(coll))
     for it in items:
         _validate(_drop_private(it))

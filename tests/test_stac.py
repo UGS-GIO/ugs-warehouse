@@ -13,7 +13,7 @@ from ugs_warehouse.pubs.sink_stac import collection_group
 def _publication(p, **kw):
     """A publication's (collection, items), offline."""
     with patch("ugs_warehouse.core.stac.prior_collection_field", return_value=None):
-        return pubs_sink.build_publication(p, [], **kw)
+        return pubs_sink.build_publication(p, [], **{"registered_dois": frozenset(), **kw})
 
 
 def test_pub_collections_author_a_topic_category():
@@ -1473,3 +1473,27 @@ def test_a_collection_declares_proj_and_table_extensions_from_its_fields():
     assert stac.PROJ_EXT in exts and stac.TABLE_EXT in exts
     exts = _collection({"title": "t"})["stac_extensions"]
     assert stac.PROJ_EXT not in exts and stac.TABLE_EXT not in exts
+
+
+def test_dedupe_of_feed_rows_does_not_compare_every_pair():
+    from ugs_warehouse.pubs.ingest import _split_shared_collection_paths
+
+    compared = []
+
+    class Row(dict):
+        def __eq__(self, other):
+            compared.append(1)
+            return dict.__eq__(self, other)
+
+        __hash__ = None
+
+    rows = [Row(series_id=f"OFR-{i}") for i in range(200)]
+    kept, errors = _split_shared_collection_paths(rows)
+    assert len(kept) == 200 and errors == [] and len(compared) < 200
+
+
+def test_build_publication_requires_registered_dois():
+    from ugs_warehouse.pubs import sink_stac
+
+    with pytest.raises(TypeError, match="registered_dois"):
+        sink_stac.build_publication({"series_id": "OFR-1"}, [])

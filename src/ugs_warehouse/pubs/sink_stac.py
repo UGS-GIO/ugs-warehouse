@@ -286,7 +286,7 @@ def build_publication(p: dict, attachments: list[dict], *,
                       mosaic_tier: str | None = None,
                       geopackage: dict | None = None,
                       unit_polys: dict | None = None,
-                      registered_dois: frozenset[str] = frozenset()) -> tuple[dict, list[dict]]:
+                      registered_dois: frozenset[str]) -> tuple[dict, list[dict]]:
     """A publication as one STAC Collection plus its Items.
 
     The Collection carries the documents (PDF, cover, original zips) and the publication's

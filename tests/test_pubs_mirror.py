@@ -71,8 +71,7 @@ def _item(mirrored):
          "pub_url": "open_file_reports/OFR-593/OFR-593.pdf"},
         [{"series_id": "OFR-593", "extra_data": "GeoTIFF zip",
           "pub_url": "geotifs/100k/RushValley.zip"}],
-        mirrored=mirrored,
-    )[0]
+        mirrored=mirrored, registered_dois=frozenset(),)[0]
 
 
 def test_mirrored_asset_serves_from_the_cdn_and_keeps_the_publisher_copy():

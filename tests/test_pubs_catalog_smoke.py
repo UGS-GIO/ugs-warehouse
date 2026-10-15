@@ -32,7 +32,7 @@ def _validate(item: dict) -> None:
 def _build_pub(p: dict, **kw) -> tuple[dict, list[dict]]:
     with patch("ugs_warehouse.core.stac.prior_collection_field", return_value=None), \
          patch("ugs_warehouse.core.stac.manual_override", return_value={}):
-        return sink_stac.build_publication(p, [], **kw)
+        return sink_stac.build_publication(p, [], **{"registered_dois": frozenset(), **kw})
 
 
 def test_fully_loaded_publication_is_spec_valid():

@@ -121,7 +121,7 @@ def test_ingest_applies_the_override_to_the_collection(store):
                                                  "title": "Hand title"})
     overrides = ingest._overrides_by_sid()
 
-    coll, _ = sink_stac.build_publication(P, [], override=overrides.get("OFR-1"))
+    coll, _ = sink_stac.build_publication(P, [], override=overrides.get("OFR-1"), registered_dois=frozenset())
 
     assert coll["title"] == "Hand title" and coll["description"] == "Hand text"
 

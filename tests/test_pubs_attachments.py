@@ -392,7 +392,7 @@ def test_every_same_labelled_attachment_gets_its_own_asset_and_the_vectors_key_m
                                                  [-112.5, 41.0], [-112.5, 40.5]]]}
     coll, _ = sink_stac.build_publication(
         pub, rows, geom=foot, bbox=[-112.5, 40.5, -112.0, 41.0], fp_source="cog", has_cog=False,
-        has_cover=False, vector_layers=[], companion_tables=[], layers={})
+        has_cover=False, vector_layers=[], companion_tables=[], layers={}, registered_dois=frozenset())
 
     zips = {k: a["href"].rsplit("/", 1)[-1] for k, a in coll["assets"].items()
             if a["href"].endswith(".zip")}
@@ -458,7 +458,7 @@ def test_a_url_listed_under_two_labels_gets_the_same_title_whatever_the_feed_ord
         _feed(monkeypatch, order)
         coll, _ = sink_stac.build_publication(
             pub, order, geom=foot, bbox=[-112.5, 40.5, -112.0, 41.0], fp_source="cog",
-            has_cog=False, has_cover=False, vector_layers=[], companion_tables=[], layers={})
+            has_cog=False, has_cover=False, vector_layers=[], companion_tables=[], layers={}, registered_dois=frozenset())
         (zip_asset,) = [(k, a["title"]) for k, a in coll["assets"].items()
                         if a["href"].endswith(".zip")]
         (file,) = harvest.data_files("OFR-745")

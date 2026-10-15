@@ -69,7 +69,7 @@ def _transitional(finding) -> bool:
 
 def _write_pub(p: dict, attachments: list[dict], **kw) -> None:
     """Write a publication's collection and items through the real builders."""
-    coll, items = pubs_sink.build_publication(p, attachments, **kw)
+    coll, items = pubs_sink.build_publication(p, attachments, **{"registered_dois": frozenset(), **kw})
     for it in items:
         stac.write_item(it)
     stac.write_collection(coll, children=len(items))

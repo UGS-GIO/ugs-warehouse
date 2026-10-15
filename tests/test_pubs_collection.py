@@ -112,7 +112,7 @@ def test_items_without_a_footprint_carry_the_fallback_label():
 
 def test_a_collection_on_the_utah_placeholder_says_so():
     coll, _ = sink_stac.build_publication(
-        {**P, "series_id": "C-139", "pub_name": "Utah mining 2024"}, [], has_cover=True)
+        {**P, "series_id": "C-139", "pub_name": "Utah mining 2024"}, [], has_cover=True, registered_dois=frozenset())
     assert coll["extent"]["spatial"]["bbox"] == [stac.UTAH_BBOX]
     assert coll["ugs:footprint_source"] == sink_stac.FOOTPRINT_FALLBACK
     # Placeholder-placed items and tables add no extent, so it stays the placeholder.
@@ -150,7 +150,7 @@ def test_gems_validation_layers_are_not_published(capsys):
 
 def test_a_report_with_no_data_is_a_collection_with_no_items():
     coll, items = sink_stac.build_publication(
-        {**P, "series_id": "C-139", "pub_name": "Utah mining 2024"}, [], has_cover=True)
+        {**P, "series_id": "C-139", "pub_name": "Utah mining 2024"}, [], has_cover=True, registered_dois=frozenset())
     assert items == [] and "publication" in coll["assets"]
     assert not [lk for lk in coll["links"] if lk["rel"] == "item"]
     assert coll["extent"]["spatial"]["bbox"] == [stac.UTAH_BBOX]
@@ -166,7 +166,7 @@ def test_a_layer_without_a_bbox_in_a_pub_without_a_footprint_gets_the_utah_aoi()
 
 def test_an_undated_publication_carries_the_undated_interval_everywhere():
     coll, items = sink_stac.build_publication(
-        {**P, "pub_year": ""}, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0], has_cog=True)
+        {**P, "pub_year": ""}, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0], has_cog=True, registered_dois=frozenset())
     assert coll["ugs:date_unknown"] is True
     assert coll["extent"]["temporal"]["interval"][0][0] == sink_stac.EARLIEST_RECORD
     for it in items:
@@ -176,7 +176,7 @@ def test_an_undated_publication_carries_the_undated_interval_everywhere():
 
 def test_ids_from_a_series_id_with_a_space_are_path_safe():
     coll, items = sink_stac.build_publication(
-        {**P, "series_id": "MP 08-3DM"}, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0], has_cog=True)
+        {**P, "series_id": "MP 08-3DM"}, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0], has_cog=True, registered_dois=frozenset())
     assert " " not in coll["_collection_path"] and coll["_collection_path"].count("/") == 2
     for value in [coll["id"], *(it["id"] for it in items)]:
         assert " " not in value and "/" not in value
@@ -315,7 +315,7 @@ def test_a_lone_plate_keeps_its_preview_as_overview_when_the_cover_takes_thumbna
 def test_a_data_asset_that_collides_with_a_document_asset_is_renamed(capsys):
     att = [{"pub_url": "https://ugspub.nr.utah.gov/publications/ofr/x.xlsx", "extra_data": "data"}]
     coll, _ = sink_stac.build_publication(
-        P, att, vector_layers=["geo__Faults"], layers={"geo__Faults": {"rows": 1}})
+        P, att, vector_layers=["geo__Faults"], layers={"geo__Faults": {"rows": 1}}, registered_dois=frozenset())
     assert coll["assets"]["data"]["roles"] == ["data"] and "data_2" in coll["assets"]
     assert coll["assets"]["data_2"]["href"].endswith("geo__Faults.parquet")
     assert "renamed to 'data_2'" in capsys.readouterr().err
@@ -363,7 +363,7 @@ def test_layer_and_table_items_carry_readable_titles_and_the_source_dir():
         P, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0],
         vector_layers=["Maps__DebrisFlowPaths"],
         companion_tables=[{"label": "geounits", "columns": [{"name": "a"}]}],
-        layers={"Maps__DebrisFlowPaths": {"rows": 1, "bbox": None}, "geounits": {"rows": 1}})
+        layers={"Maps__DebrisFlowPaths": {"rows": 1, "bbox": None}, "geounits": {"rows": 1}}, registered_dois=frozenset())
     by_id = {it["id"]: it for it in items}
     layer = next(i for k, i in by_id.items() if k.endswith("Maps__DebrisFlowPaths"))
     assert layer["properties"]["title"] == "Debris Flow Paths"
@@ -404,7 +404,7 @@ def test_same_named_layers_in_one_publication_get_distinct_titles():
     coll, items = sink_stac.build_publication(
         P, [], geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0], vector_layers=labels[:1],
         companion_tables=[{"label": labels[1]}],
-        layers={lb: {"rows": 1, "bbox": None} for lb in labels})
+        layers={lb: {"rows": 1, "bbox": None} for lb in labels}, registered_dois=frozenset())
     titles = {it["id"]: it["properties"]["title"] for it in items}
     assert sorted(titles.values()) == ["Contacts And Faults (gems)", "Contacts And Faults (x)"]
     assert sorted(lk["title"] for lk in coll["links"] if lk["rel"] == "item") == sorted(titles.values())
@@ -741,7 +741,7 @@ def test_the_attachment_key_is_the_one_the_collection_gives_its_asset():
             "extra_data": "Appendix A - Excel"}]
     coll, _ = sink_stac.build_publication(
         P, att, geom=FOOT, bbox=[-112.5, 40.5, -112.0, 41.0], fp_source="cog", has_cog=False,
-        has_cover=False, vector_layers=[], companion_tables=[], layers={})
+        has_cover=False, vector_layers=[], companion_tables=[], layers={}, registered_dois=frozenset())
 
     assert identity.attachment_key("Appendix A - Excel") == "appendix_a_excel"
     assert "appendix_a_excel" in coll["assets"]

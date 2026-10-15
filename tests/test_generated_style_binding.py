@@ -144,7 +144,7 @@ def test_the_default_scope_does_not_rewrite_publication_collections(monkeypatch)
 def _build(layers):
     return sink_stac.build_publication(
         {"series_id": "OFR-1", "pub_name": "x", "pub_year": "2026"}, [], geom=None, bbox=None,
-        vector_layers=["units"], layers={"units": {"rows": 1, "bbox": None, **layers}})
+        vector_layers=["units"], layers={"units": {"rows": 1, "bbox": None, **layers}}, registered_dois=frozenset())
 
 
 def test_a_layer_item_names_its_generated_style_only_when_it_is_tiled_and_styled():
@@ -152,7 +152,7 @@ def test_a_layer_item_names_its_generated_style_only_when_it_is_tiled_and_styled
         {"series_id": "OFR-1", "pub_name": "x", "pub_year": "2026"}, [], geom=None, bbox=None,
         vector_layers=["units", "faults"], layers={
             "units": {"rows": 1, "bbox": None, "pmtiles_layer": "units", "style": "units.style.json"},
-            "faults": {"rows": 1, "bbox": None, "pmtiles_layer": "faults"}})
+            "faults": {"rows": 1, "bbox": None, "pmtiles_layer": "faults"}}, registered_dois=frozenset())
     by_id = {it["id"]: it for it in items}
     assert by_id["OFR-1__units"]["properties"][stac.GENERATED_STYLE].endswith(
         "geolmap/vectors/OFR-1/units.style.json")

@@ -74,15 +74,17 @@ def _scoped_groups(collection: str, paths: list[str] | None = None) -> dict[str,
 
 def _single_file_collections(collection: str, groups: dict[str, list[str]],
                              paths: list[str]) -> list[str]:
-    """Collection paths among `paths` (the scope's listing) that hold no Items. A single-file
-    publication carries its one layer on its Collection, so its style binds there. Collections with
-    Items (`groups`) are skipped."""
+    """Publication Collection paths (`<group>/<SERIES>/<SID>`) among `paths` (the scope's listing)
+    that hold no Items. A single-file publication carries its one layer on its Collection, so its
+    style binds there. Collections with Items (`groups`) are skipped, and so is every collection
+    outside the publication groups (a serving-topic layer's, for one)."""
     out = []
     for path in paths:
         rel = path[len(config.STAC_PREFIX):].lstrip("/")
-        if not rel.endswith("/collection.json"):
+        layout = stac.pub_layout_of(rel)
+        if not layout or not layout[2] or layout[3] != "collection.json":
             continue
-        coll_path = rel[: -len("/collection.json")]
+        coll_path = "/".join(layout[:3])
         if coll_path not in groups and (collection == "all" or coll_path == collection
                                         or coll_path.startswith(collection + "/")):
             out.append(coll_path)

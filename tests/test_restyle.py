@@ -2,7 +2,7 @@
 import pytest
 
 from ugs_warehouse import restyle as R
-from ugs_warehouse.core import gcs, stac, styles
+from ugs_warehouse.core import config, gcs, stac, styles
 
 
 def _mem_gcs(monkeypatch):
@@ -273,3 +273,25 @@ def test_a_restyle_with_nothing_styled_starts_nothing(monkeypatch):
     monkeypatch.setattr(R.jobs, "start_topic_thumbs", lambda item_ids=None: kicked.append(item_ids))
     R.restyle()
     assert kicked == []
+
+
+def test_restyle_rebinds_a_publication_collection_but_not_a_serving_topic_layer_collection(monkeypatch):
+    import json
+
+    store = _mem_gcs(monkeypatch)
+    _fake_manifest(monkeypatch, [{"itemId": "OFR-1", "render": "default", "kind": "vector",
+                                  "assets": ["pmtiles"], "path": "styles/ofr1/default.json"}])
+    prefix = config.STAC_PREFIX
+    pub = f"{prefix}/ugs-publications/OFR/OFR-1/collection.json"
+    topic = f"{prefix}/ugs-serving-topics/hazards/hazards_qfaults/collection.json"
+    store[pub] = json.dumps({"type": "Collection", "id": "OFR-1", "links": [],
+                             "assets": {"pmtiles": {"href": "h", "type": "application/vnd.pmtiles"}}}).encode()
+    topic_doc = json.dumps({"type": "Collection", "id": "hazards_qfaults", "links": [],
+                            "ugs:renders": {"default": {"style_url": "gone"}}}).encode()
+    store[topic] = topic_doc
+
+    assert R.restyle(collection="all") == 1
+
+    assert "default" in json.loads(store[pub])["ugs:renders"]
+    assert store[topic] == topic_doc
+    assert R._single_file_collections("all", {}, [pub, topic]) == ["ugs-publications/OFR/OFR-1"]

@@ -972,6 +972,8 @@ def _collection_index_entry(coll: dict, *, prefix: str, item_count: int | None =
         start = (((coll.get("extent") or {}).get("temporal") or {}).get("interval") or [[None]])[0][0]
         if start:
             props["datetime"] = start
+    if coll.get("ugs:renders"):  # a single-file publication binds its style on the Collection
+        props["ugs:renders"] = coll["ugs:renders"]
     props["ugs:item_count"] = (item_count if item_count is not None
                                else sum(1 for lnk in coll.get("links") or [] if lnk.get("rel") == "item"))
     bboxes = ((coll.get("extent") or {}).get("spatial") or {}).get("bbox") or [None]

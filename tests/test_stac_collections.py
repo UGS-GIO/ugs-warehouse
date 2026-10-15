@@ -316,6 +316,15 @@ def test_an_undated_publication_entry_carries_the_marker_not_a_datetime():
     assert props["ugs:date_unknown"] is True and "datetime" not in props
 
 
+def test_a_collection_entry_carries_its_bound_style_like_an_item_entry():
+    renders = {"default": {"style_url": "https://cdn/styles/p.json"}}
+    coll = {"id": "OFR-0", "title": "T", "ugs:renders": renders, "links": [],
+            "extent": {"spatial": {"bbox": [[-112, 40, -111, 41]]}, "temporal": {"interval": [[None, None]]}}}
+    assert stac._collection_index_entry(coll, prefix="OFR-0/")["properties"]["ugs:renders"] == renders
+    plain = {k: v for k, v in coll.items() if k != "ugs:renders"}
+    assert "ugs:renders" not in stac._collection_index_entry(plain, prefix="OFR-0/")["properties"]
+
+
 def test_a_series_catalog_publishes_an_items_index_of_its_publications(monkeypatch):
     store = _memstore(monkeypatch)
     _pub(store, "ugs-publications", "OFR", "OFR-1", ["OFR-1_plate"])

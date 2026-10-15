@@ -966,7 +966,7 @@ def test_rows_with_non_finite_coordinates_are_left_out_of_the_tiles(monkeypatch,
     assert [json.loads(ln)["properties"]["Type"] for ln in lines] == ["a"]
 
 
-def test_extraction_keeps_a_layer_with_an_infinite_coordinate(monkeypatch, tmp_path):
+def test_extraction_keeps_a_layer_with_an_infinite_coordinate(monkeypatch, tmp_path, capsys):
     _mem_gcs(monkeypatch)
     inf = float("inf")
     gdf = gpd.GeoDataFrame({"Type": ["a", "b"]}, geometry=[Point(424000, 4512000), Point(-inf, -inf)],
@@ -978,6 +978,8 @@ def test_extraction_keeps_a_layer_with_an_infinite_coordinate(monkeypatch, tmp_p
     assert manifest["errors"] == [] and manifest["spatial"] == ["b__L"]
     assert manifest["layers"][0]["rows"] == 2 and manifest["layers"][0]["bbox"] is not None
     assert any("non-finite" in w["warning"] for w in manifest["warnings"])
+    assert [w["code"] for w in manifest["warnings"]] == [vectors.NON_FINITE_GEOMETRY]
+    assert "b__L: 1 geometries with a non-finite coordinate" in capsys.readouterr().err
 
 
 def test_a_layer_with_no_geometry_writes_nothing(monkeypatch, tmp_path):

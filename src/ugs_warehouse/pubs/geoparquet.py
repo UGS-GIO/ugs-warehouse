@@ -1,6 +1,8 @@
 """GeoParquet writes for the pubs producers, through geoparquet-io (gpio)."""
 from __future__ import annotations
 
+import sys
+
 ROW_GROUP_MB = 32  # matches the viewer's range reads; gpio's default is ~300 MB
 
 
@@ -29,7 +31,10 @@ def write(src, path) -> None:
     else:
         import pyarrow as pa
 
-        blank_non_finite(src)
+        blanked = blank_non_finite(src)
+        if blanked:
+            print(f"  {path}: {blanked} geometries with a non-finite coordinate written as null",
+                  file=sys.stderr)
         crs = src.crs.to_json_dict() if src.crs else None
         arrow = pa.table(src.to_arrow(index=False, geometry_encoding="WKB"))
         table = gpio.Table(arrow, geometry_column=src.geometry.name, crs=crs)

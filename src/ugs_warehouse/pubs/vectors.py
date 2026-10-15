@@ -75,6 +75,7 @@ PARQUET_MIME = config.PARQUET_MIME
 # Warning code for a layer whose GeoParquet published but whose tiles did not. A warning, not an
 # error, so the series stays clean and the batch run does not download its zip again.
 PMTILES_FAILED = "pmtiles_failed"
+NON_FINITE_GEOMETRY = "non_finite_geometry"
 # Warning code for a layer with no geometry to tile. Not a failure: it never gets PMTiles.
 NO_GEOMETRY = "no_geometry"
 # Warning code for a layer whose style file could not be written. A warning, not an error, so the
@@ -599,10 +600,11 @@ def _extract_and_upload(
                                          "GeoParquet would read its coordinates as longitude/latitude")
                     blanked = geoparquet.blank_non_finite(gdf)
                     if blanked:
-                        manifest["warnings"].append({
-                            "label": label,
-                            "warning": f"{blanked} geometries with a non-finite coordinate were "
-                                       "written as null"})
+                        text = (f"{blanked} geometries with a non-finite coordinate were "
+                                "written as null")
+                        manifest["warnings"].append({"label": label, "code": NON_FINITE_GEOMETRY,
+                                                     "warning": text})
+                        print(f"  {label}: {text}", file=sys.stderr)
                     if rows:
                         geoparquet.write(gdf, dst)
                 elif _is_sheet(path):

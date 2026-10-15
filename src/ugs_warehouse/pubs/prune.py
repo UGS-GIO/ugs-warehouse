@@ -90,7 +90,7 @@ def orphan_pub_paths(expected: set[str] | None = None, groups: tuple[str, ...] =
     return orphans
 
 
-_LEGACY_SERIES_FILES = ("collection.json", "items.json", "items.parquet")
+_LEGACY_SERIES_FILES = ("collection.json", "items.parquet")
 
 
 def legacy_layout_paths(expected: set[str] | None = None, groups: tuple[str, ...] = PUB_GROUPS) -> list[str]:
@@ -98,7 +98,8 @@ def legacy_layout_paths(expected: set[str] | None = None, groups: tuple[str, ...
 
     Only series with a `catalog.json`, which the refresh writes once every pub in the series has
     migrated, are touched: a pending series is still indexed from its old files. Within one, a
-    pub's old Item `<SID>.json` is listed only beside its new `collection.json`.
+    pub's old Item `<SID>.json` is listed only beside its new `collection.json`. The series
+    `items.json` is never listed: on a migrated series it is the live series index.
     """
     if expected is None:
         expected = expected_pub_dirs()

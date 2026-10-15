@@ -47,8 +47,8 @@ def test_legacy_layout_files_inside_expected_pubs_and_series(monkeypatch):
     legacy = P.legacy_layout_paths(expected={"ugs-publications/OFR/OFR-1"}, groups=("ugs-publications",))
     # Only the old Item and series files are legacy; other files in the pub dir are left alone.
     assert sorted(legacy) == sorted([f"{PFX}/ugs-publications/OFR/OFR-1/OFR-1.json",
-                                     f"{PFX}/ugs-publications/OFR/collection.json",
-                                     f"{PFX}/ugs-publications/OFR/items.json"])
+                                     f"{PFX}/ugs-publications/OFR/collection.json"])
+    assert f"{PFX}/ugs-publications/OFR/items.json" not in legacy
 
 
 def test_legacy_keeps_an_old_item_with_no_new_collection(monkeypatch):

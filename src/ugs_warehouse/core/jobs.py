@@ -20,7 +20,8 @@ RUN_TIMEOUT_SECONDS = 30
 
 def task() -> tuple[int, int]:
     """(index, count) of this Cloud Run task; (0, 1) outside a sharded job."""
-    return int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0")), int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1"))
+    return (int(os.environ.get("CLOUD_RUN_TASK_INDEX", "0")),
+            int(os.environ.get("CLOUD_RUN_TASK_COUNT", "1")))
 
 
 def shard(items: list[T]) -> list[T]:
@@ -31,9 +32,9 @@ def shard(items: list[T]) -> list[T]:
 
 
 def owns(key: str) -> bool:
-    """Whether this task owns `key` (`--tasks=N`), by a stable hash of the key alone. Unlike `shard`,
-    it never depends on list order or on state another task may change mid-run. Always True for a
-    count of 1."""
+    """Whether this task owns `key` (`--tasks=N`), by a stable hash of the key alone. Unlike
+    `shard`, it never depends on list order or on state another task may change mid-run. Always
+    True for a count of 1."""
     i, n = task()
     return n <= 1 or zlib.crc32(key.upper().encode()) % n == i
 

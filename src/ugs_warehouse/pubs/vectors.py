@@ -1800,6 +1800,10 @@ def main() -> int:
             extracted.add(identity.Pub.parse(sid).series_id)
         if res.startswith("fail"):
             failed.append(f"{sid} ({res})")
+    if args.all:
+        # A pub with errors is both healable and extracted again; the extraction's result stands,
+        # as in a targeted run. Pubs the time budget skipped stay in `needs` and still heal.
+        needs = {s: n for s, n in needs.items() if s not in extracted}
     if not args.all and not args.force:
         # A targeted run heals the named pubs it did not extract this run, as `--all` heals only
         # the pubs already clean when it started: a layer whose tiling just failed is reported

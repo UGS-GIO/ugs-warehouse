@@ -2392,3 +2392,19 @@ def test_a_task_owning_none_of_the_named_pubs_exits_cleanly(monkeypatch, shard_r
     assert extracted == []
     assert "none of the named publications belong to this task" in capsys.readouterr().out
 
+
+def test_a_re_extracted_pub_is_not_healed_again_and_a_budget_skipped_one_still_is(
+        monkeypatch, shard_run):
+    clock = [0.0]
+    monkeypatch.setattr(vectors.time, "monotonic", lambda: clock[0])
+
+    def extract(sid, **kw):
+        # M-1 has errors, so it is in `needs` and extracted again; that uses up the budget.
+        clock[0] += vectors.TIME_BUDGET_S + 1
+        return "ok"
+
+    monkeypatch.setattr(vectors, "extract_one", extract)
+    _, heals, _ = _run_task(monkeypatch, shard_run, 0, 1)
+    healed = heals[0][0]
+    assert "M-1" not in healed
+    assert healed == ["M-2", "M-3", "M-4", "M-5"]

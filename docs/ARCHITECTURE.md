@@ -223,9 +223,9 @@ manifests below `unit_polys.UNIT_POLYS_VERSION` (`unit_polys_version`); a pub wi
 records the version alone. The plate Item gets a `units` asset (`application/vnd.pmtiles`, role
 `data`, "Geologic units (identify)") pointing at that PMTiles, only when the pub has the product.
 
-The vectors job runs as `--tasks=5`. Each task extracts a disjoint stride of the ordered worklist
-(never-tried pubs first) and heals a stride of the sorted series ids (manifests and units files), so
-no two tasks touch one series. Time budget, summary and exit code are per task. The identify build
+The vectors job runs as `--tasks=5`. Each task owns the series ids whose stable hash falls to it,
+and extracts and heals only those (manifests and units files), so no two tasks touch one series even
+though each lists the bucket at its own moment. Within a task, never-tried pubs still go first. Time budget, summary and exit code are per task. The identify build
 below is catalog-wide, so only task 0 runs it, from what is extracted so far; the next run picks up
 the rest.
 

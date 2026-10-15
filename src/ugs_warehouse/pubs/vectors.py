@@ -1695,12 +1695,13 @@ def main() -> int:
     else:
         sids = args.series_id
 
-    # `--tasks=N`: each task extracts a disjoint stride of the ordered list, so every shard gets its
-    # new pubs first. Targeted runs are not sharded. `--limit` then applies per shard.
+    # `--tasks=N`: each task extracts and heals only the pubs it owns by series id, so the split
+    # holds even though tasks list the bucket at slightly different times. The ordered list keeps
+    # new pubs first within each task. Targeted runs are not sharded. `--limit` applies per task.
     task_index, task_count = jobs.task()
     sharded = args.all and task_count > 1
     if sharded:
-        sids = jobs.shard(sids)
+        sids = [s for s in sids if jobs.owns(identity.Pub.parse(s).series_id)]
         print(f"shard {task_index + 1}/{task_count}: {len(sids)} publications")
 
     if args.limit:
@@ -1739,9 +1740,9 @@ def main() -> int:
     units = units_objects({identity.Pub.parse(s).series_id.upper()
                            for s in (all_sids if args.all else args.series_id)})
     if sharded:
-        # The same stride over sorted series ids, so no two tasks heal one manifest or units file.
-        needs = {sid: needs[sid] for sid in jobs.shard(sorted(needs))}
-        units = {sid: units[sid] for sid in jobs.shard(sorted(units))}
+        # The task that owns a pub also heals it, so no two tasks write one manifest or units file.
+        needs = {sid: n for sid, n in needs.items() if jobs.owns(sid)}
+        units = {sid: u for sid, u in units.items() if jobs.owns(sid)}
     identified = identify.Result()
     if args.dry_run:
         pending = sum(len(n.tiles) for n in needs.values())

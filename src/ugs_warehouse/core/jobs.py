@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import os
 import sys
+import zlib
 from typing import TypeVar
 
 T = TypeVar("T")
@@ -27,6 +28,14 @@ def shard(items: list[T]) -> list[T]:
     list; a count of 1 returns it unchanged."""
     i, n = task()
     return items[i::n] if n > 1 else items
+
+
+def owns(key: str) -> bool:
+    """Whether this task owns `key` (`--tasks=N`), by a stable hash of the key alone. Unlike `shard`,
+    it never depends on list order or on state another task may change mid-run. Always True for a
+    count of 1."""
+    i, n = task()
+    return n <= 1 or zlib.crc32(key.upper().encode()) % n == i
 
 
 def start_topic_thumbs(item_ids: list[str] | None = None) -> None:

@@ -2289,14 +2289,31 @@ def test_an_unsharded_run_extracts_and_heals_everything(monkeypatch, shard_run):
     assert identify_runs == 1
 
 
-def test_sharded_tasks_extract_and_heal_disjoint_strides(monkeypatch, shard_run, capsys):
+def test_sharded_tasks_extract_and_heal_disjoint_sets_owned_by_series_id(monkeypatch, shard_run):
     out = [_run_task(monkeypatch, shard_run, i, 3) for i in range(3)]
-    assert [o[0] for o in out] == [SHARD_SIDS[0::3], SHARD_SIDS[1::3], SHARD_SIDS[2::3]]
-    assert [o[1][0][0] for o in out] == [["M-1", "M-4"], ["M-2", "M-5"], ["M-3"]]
-    units = [o[1][0][1] for o in out]
-    assert sorted(x for s in units for x in s) == sorted(SHARD_SIDS)
-    assert len({x for s in units for x in s}) == len(SHARD_SIDS)
-    assert "shard 3/3: 2 publications" in capsys.readouterr().out
+    for i, (extracted, heals, _) in enumerate(out):
+        healed, units = heals[0]
+        # Every pub a task extracts, heals or upgrades is one it owns by series id.
+        assert all(jobs_owner(s) == i for s in [*extracted, *healed, *units])
+    assert sorted(s for o in out for s in o[0]) == sorted(SHARD_SIDS)
+    assert sorted(s for o in out for s in o[1][0][1]) == sorted(SHARD_SIDS)
+
+
+def jobs_owner(sid: str, n: int = 3) -> int:
+    import zlib
+    return zlib.crc32(sid.upper().encode()) % n
+
+
+def test_ownership_does_not_depend_on_list_order_or_state(monkeypatch):
+    from ugs_warehouse.core import jobs
+    monkeypatch.setenv("CLOUD_RUN_TASK_COUNT", "3")
+    owners = {}
+    for i in range(3):
+        monkeypatch.setenv("CLOUD_RUN_TASK_INDEX", str(i))
+        for sid in ("M-1", "OFR-784DM", "ds-5", "DS-5"):
+            if jobs.owns(sid):
+                owners.setdefault(sid.upper(), set()).add(i)
+    assert all(len(v) == 1 for v in owners.values())  # exactly one owner, case-insensitive
 
 
 def test_identify_runs_only_in_task_zero(monkeypatch, shard_run):

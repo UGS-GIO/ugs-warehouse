@@ -88,6 +88,13 @@ GEOPACKAGE_SKIPPED = "geopackage_skipped"
 GEOPACKAGE_FAILED = "geopackage_failed"
 # Warning code for a rebuild that failed while an earlier GeoPackage is still published.
 GEOPACKAGE_STALE = "geopackage_stale"
+# Warning code for a table left out of the GeoPackage because it has more columns than SQLite allows.
+GEOPACKAGE_TABLE_SKIPPED = "geopackage_table_skipped"
+# SQLite's default column limit per table; the GeoPackage's feature id and geometry count against it.
+GPKG_MAX_COLUMNS = 2000
+# The feature id column the GeoPackage layers are created with. GDAL's default, `fid`, collides with
+# a source column of that name.
+GPKG_FID_COLUMN = "gpkg_fid"
 # Bump when the GeoPackage layout changes; a manifest below it is packaged again by the heal.
 GEOPACKAGE_VERSION = 1
 GEOPACKAGE_MIME = "application/geopackage+sqlite3"
@@ -1289,6 +1296,9 @@ def _record_layer_files(series_id: str, layers: list[dict]) -> None:
         entry.update(bytes=meta.size, checksum=meta.checksum)
 
 
+_LAYER_OPTIONS = {"FID": GPKG_FID_COLUMN}
+
+
 def _append_layer(src: str, out: str, entry: dict) -> None:
     """Append the GeoParquet `src` to the GeoPackage `out` as the layer `entry["label"]`, in record
     batches so a layer is never held whole. A spatial layer keeps its own CRS (from the file's
@@ -1305,7 +1315,7 @@ def _append_layer(src: str, out: str, entry: dict) -> None:
     if not entry.get("spatial"):
         for batch in pf.iter_batches(batch_size=GPKG_BATCH_ROWS):
             pyogrio.write_dataframe(batch.to_pandas(), out, layer=label, driver="GPKG",
-                                    append=os.path.exists(out))
+                                    append=os.path.exists(out), layer_options=_LAYER_OPTIONS)
         return
     geo = json.loads((pf.schema_arrow.metadata or {}).get(b"geo") or b"{}")
     name = geo.get("primary_column")
@@ -1322,7 +1332,8 @@ def _append_layer(src: str, out: str, entry: dict) -> None:
     keep = [n for n in pf.schema_arrow.names if n != covering[0]]
     for batch in pf.iter_batches(batch_size=GPKG_BATCH_ROWS, columns=keep):
         write_arrow(pa.Table.from_batches([batch]), out, layer=label, driver="GPKG",
-                    geometry_name=name, geometry_type=kind, crs=crs, append=os.path.exists(out))
+                    geometry_name=name, geometry_type=kind, crs=crs, append=os.path.exists(out),
+                    layer_options=_LAYER_OPTIONS)
 
 
 def _write_geopackage(series_id: str, manifest: dict, out: str, work: str) -> None:
@@ -1332,6 +1343,14 @@ def _write_geopackage(series_id: str, manifest: dict, out: str, work: str) -> No
     layers, rels = _packaged(manifest)
     for entry in layers:
         label = entry["label"]
+        width = len(entry.get("columns") or [])
+        if width >= GPKG_MAX_COLUMNS:
+            msg = (f"{label} left out of the GeoPackage: {width} columns, over SQLite's limit of "
+                   f"{GPKG_MAX_COLUMNS}")
+            manifest["warnings"].append({"label": label, "code": GEOPACKAGE_TABLE_SKIPPED,
+                                         "warning": msg})
+            print(f"  {series_id}: {msg}", file=sys.stderr)
+            continue
         local = os.path.join(work, f"{label}.parquet")
         gcs.download(f"{VECTORS_PREFIX}/{series_id}/{label}.parquet", local)
         try:
@@ -1359,8 +1378,9 @@ def _geopackage_into(series_id: str, manifest: dict) -> list[str]:
     record `geopackage` {bytes, checksum, version, inputs} in `manifest`. A pub whose GeoParquet
     totals over `MAX_GPKG_BYTES` gets a GEOPACKAGE_SKIPPED warning and no file; a failed build gets
     GEOPACKAGE_FAILED and no record, so the next heal tries again. Returns an error for a failure."""
-    skipped = [w for w in manifest.get("warnings") or [] if w.get("code") == GEOPACKAGE_SKIPPED]
-    codes = (GEOPACKAGE_SKIPPED, GEOPACKAGE_FAILED, GEOPACKAGE_STALE)
+    codes = (GEOPACKAGE_SKIPPED, GEOPACKAGE_FAILED, GEOPACKAGE_STALE, GEOPACKAGE_TABLE_SKIPPED)
+    skipped = [w for w in manifest.get("warnings") or []
+               if w.get("code") in (GEOPACKAGE_SKIPPED, GEOPACKAGE_TABLE_SKIPPED)]
     manifest["warnings"] = [w for w in manifest.get("warnings") or [] if w.get("code") not in codes]
     if not needs_geopackage(manifest):
         manifest["warnings"] += skipped  # a skip stays on the manifest until its inputs change

@@ -292,3 +292,41 @@ def test_extraction_packages_the_pub_and_reports_a_failed_build(pub, monkeypatch
 def test_the_geopackage_object_path():
     assert vectors.geopackage_object(SID) == f"{vectors.VECTORS_PREFIX}/{SID}/{SID}.gpkg"
     assert os.path.basename(vectors.geopackage_object(SID)) == f"{SID}.gpkg"
+
+
+def test_a_source_column_named_fid_is_kept_as_data(pub, tmp_path):
+    frame = pd.DataFrame({"fid": [10, 20], "Name": ["a", "b"]})
+    polys = gpd.GeoDataFrame(frame, geometry=[box(0, 0, 1, 1), box(1, 1, 2, 2)], crs="EPSG:26912")
+    entries = [pub.put_parquet(tmp_path, "geo__Fid", polys, True),
+               pub.put_parquet(tmp_path, "geo__FidTable", frame, False)]
+    manifest = pub.read_manifest()
+    manifest["layers"] += entries
+    pub.manifest(manifest)
+
+    built, errors = vectors._geopackage_series(SID)
+
+    assert built and errors == []
+    path = tmp_path / "out.gpkg"
+    path.write_bytes(pub.store[f"{PREFIX}/{SID}.gpkg"])
+    assert gpd.read_file(path, layer="geo__Fid")["fid"].tolist() == [10, 20]
+    assert pyogrio.read_dataframe(path, layer="geo__FidTable", read_geometry=False)["fid"].tolist() == [10, 20]
+
+
+def test_a_table_over_the_sqlite_column_limit_is_left_out_with_a_warning(pub, tmp_path):
+    wide = pd.DataFrame({f"c{i}": [i] for i in range(2100)})
+    entry = pub.put_parquet(tmp_path, "geo__Wide", wide, False)
+    entry["columns"] = [{"name": c, "type": "int64"} for c in wide.columns]
+    manifest = pub.read_manifest()
+    manifest["layers"].append(entry)
+    pub.manifest(manifest)
+
+    built, errors = vectors._geopackage_series(SID)
+
+    assert built and errors == []
+    path = tmp_path / "out.gpkg"
+    path.write_bytes(pub.store[f"{PREFIX}/{SID}.gpkg"])
+    names = {row[0] for row in pyogrio.list_layers(path)}
+    assert names == {"geo__Polys", "geo__DMU", vectors.GPKG_RELATIONSHIPS}
+    [warning] = [w for w in pub.read_manifest()["warnings"]
+                 if w["code"] == vectors.GEOPACKAGE_TABLE_SKIPPED]
+    assert "geo__Wide" in warning["warning"] and "2100 columns" in warning["warning"]

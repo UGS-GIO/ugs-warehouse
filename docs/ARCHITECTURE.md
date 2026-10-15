@@ -314,6 +314,9 @@ downloaded, appended in 20,000-row record batches with pyogrio (`write_arrow` fo
 covering column dropped; `write_dataframe` for tables), and deleted, so no layer is held whole. The
 file is built on the job's RAM-backed disk, uploaded with `application/geopackage+sqlite3`, then
 deleted.
+Layers are created with the feature id column `gpkg_fid`, so a source column named `fid` stays
+data. A table with 2,000 or more columns (SQLite's limit) is left out with a
+`geopackage_table_skipped` warning naming it and its column count; the rest of the file still builds.
 
 The manifest records `geopackage` {`bytes`, `checksum`, `version`, `inputs`}. `inputs` digests every
 layer's GeoParquet checksum (recorded per layer at upload, filled in for older manifests) and the

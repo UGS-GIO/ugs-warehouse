@@ -1,11 +1,10 @@
 // How to use an item from other software, in STAC's terms: its assets (the files on the CDN) and its
-// links (live services: OGC API Features, ArcGIS FeatureServer, XYZ, the GL style, ArcGIS vector
-// tiles).
+// links (live services: OGC API Features, ArcGIS FeatureServer, XYZ, the GL style).
 import { useEffect, useRef, useState } from "react";
 
 import { serviceUrlOf } from "./catalog";
 import { Panel } from "./panel";
-import { assetKind, esriVectorTileUrl, featureServerUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
+import { assetKind, featureServerUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
   tilesStyleUrl, xyzTilesUrl } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
@@ -81,13 +80,13 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   const [pickedRender, setPickedRender] = useState<string>();
   // Explicit choice wins; otherwise track the map so the two never disagree silently.
   const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
-  const renderPick = (
+  const renderPick = esriRenders.length > 1 ? (
     <UiSelect value={chosen} onValueChange={setPickedRender}
       title="Which published symbology this service serves"
       items={esriRenders.map((r) => ({ value: r, label: r }))}
       className="max-w-[11rem] shrink-0 text-sm" />
-  );
-  type Row = { label: string; desc: string; url: string; pick?: React.ReactNode; unavailable?: string };
+  ) : undefined;
+  type Row = { label: string; desc: string; url: string; pick?: React.ReactNode };
   const rows: Row[] = [];
   if (coll) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
@@ -99,7 +98,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
       label: "ArcGIS feature layer",
       desc: "ArcGIS Online Map Viewer, Experience Builder, StoryMaps. Popups, tables and symbology included",
       url: fs,
-      pick: esriRenders.length > 1 ? renderPick : undefined,
+      pick: renderPick,
     });
   }
   // The tiles service exists for clients that cannot read PMTiles directly. Only offered when the
@@ -109,41 +108,16 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
     if (xyz) rows.push({ label: "XYZ tiles (fallback)", desc: "For clients that cannot read PMTiles. Prefer the PMTiles asset", url: xyz });
     const style = tilesStyleUrl(id, chosen);
     if (style) rows.push({ label: "Vector tile style", desc: "Complete GL style — MapLibre, Mapbox GL, ArcGIS JS SDK", url: style });
-    // Esri needs a style, so a render-less topic gets the greyed row rather than a dead link.
-    if (!esriRenders.length) {
-      rows.push({
-        label: "ArcGIS vector tiles",
-        desc: "ArcGIS Pro / AGOL",
-        url: "",
-        unavailable: "needs a published style — ArcGIS cannot add a layer without one",
-      });
-    }
-    const esri = esriRenders.length ? esriVectorTileUrl(id, chosen, esriRenders) : undefined;
-    if (esri) {
-      // One service per symbology, so the URL has to name one.
-      rows.push({
-        label: "ArcGIS vector tiles",
-        desc: "ArcGIS Pro / AGOL — the one client that needs its own service contract. Symbology included",
-        url: esri,
-        pick: esriRenders.length > 1 ? renderPick : undefined,
-      });
-    }
   }
   if (!rows.length) return null;
   const row = (r: Row) => (
-    <div key={r.label} className={`flex flex-wrap items-center gap-2 text-sm ${r.unavailable ? "opacity-55" : ""}`}>
-      <span className={`w-36 shrink-0 font-semibold ${r.unavailable ? "text-muted-foreground" : "text-foreground"}`} title={r.desc}>{r.label}</span>
+    <div key={r.label} className="flex flex-wrap items-center gap-2 text-sm">
+      <span className="w-36 shrink-0 font-semibold text-foreground" title={r.desc}>{r.label}</span>
       {r.pick}
-      {r.unavailable ? (
-        <span className="min-w-0 flex-1 text-sm text-muted-foreground italic">{r.unavailable}</span>
-      ) : (
-        <>
-          {/* The narrow column cut every URL to "https://ugs-…", so it shows on hover only. */}
-          <span className="min-w-0 flex-1" title={r.url} />
-          <CopyBtn text={r.url} />
-          <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
-        </>
-      )}
+      {/* The narrow column cut every URL to "https://ugs-…", so it shows on hover only. */}
+      <span className="min-w-0 flex-1" title={r.url} />
+      <CopyBtn text={r.url} />
+      <a href={r.url} target="_blank" rel="noopener" className="text-primary no-underline">open ↗</a>
     </div>
   );
   return (

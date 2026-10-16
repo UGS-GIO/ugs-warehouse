@@ -145,10 +145,12 @@ async function select(layer, p) {
   }
   if (p.box && p.ids.length && layer.bbox) {
     // both filters: keep the id rows the box prefilter keeps
-    const inBox = new Set(await select(layer, { ...p, ids: [] }));
+    const inBox = new Set(await select(layer, { ...p, ids: [], page: null }));
     rows = rows.filter((r) => inBox.has(r));
   }
-  return rows.sort((a, b) => a - b);
+  rows.sort((a, b) => a - b);
+  // A page of a filtered selection (the plain page above is already one); one extra row says more.
+  return p.page && (p.box || p.ids.length) ? rows.slice(p.page.offset, p.page.offset + p.page.limit + 1) : rows;
 }
 
 // Records for the selected rows: the plan's columns, plus geometry as GeoJSON when asked.

@@ -7,6 +7,9 @@ const { plan, toMercator, MERCATOR } = require('./plan');
 const { simplify } = require('./simplify');
 
 const MAX_RECORDS = 2000;
+// A request Koop must still filter by `where` reads at most this many geometries, so one query
+// cannot exhaust memory; past it the response says the transfer limit was exceeded.
+const MAX_GEOMETRY_ROWS = Number(process.env.MAX_GEOMETRY_ROWS ?? 50000);
 
 function projectExtent(e, wkid) {
   if (!MERCATOR.has(wkid)) return { ...e, spatialReference: { wkid: 4326 } };
@@ -47,24 +50,28 @@ class Model {
     if (!/\/query\/?$/.test(req.path)) return { type: 'FeatureCollection', features: [], metadata };
 
     const params = { ...req.query, ...req.body };
-    const p = plan(params, layer);
+    let p = plan(params, layer, MAX_RECORDS);
+    // Small-scale requests on a heavy layer read its generalized copy (vector/sink_archive.py).
+    const overview = item.assets.overview;
+    const coarse = overview && p.kind === 'features' && p.geometry && !p.ids.length
+      && p.tolerance >= Number(overview['ugs:simplify_tolerance'] ?? Infinity);
+    const source = coarse ? await parquet.open(overview.href) : layer;
+    if (coarse) p = plan(params, source, MAX_RECORDS);
     if (p.kind === 'count') return { type: 'FeatureCollection', features: [], count: layer.rows, metadata };
     if (p.kind === 'extent') {
       return { type: 'FeatureCollection', features: [], count: layer.rows, metadata,
         extent: layer.extent && projectExtent(layer.extent, p.outSR) };
     }
 
-    const rows = await parquet.select(layer, p);
-    let exceededTransferLimit = false;
-    if (p.page && rows.length > p.page.limit) {
-      rows.length = p.page.limit;
-      exceededTransferLimit = true;
-    }
+    const rows = await parquet.select(source, p);
+    const cap = p.page ? p.page.limit : p.geometry ? MAX_GEOMETRY_ROWS : Infinity;
+    const exceededTransferLimit = rows.length > cap;
+    if (exceededTransferLimit) rows.length = cap;
     const features = [];
-    for (const r of await parquet.records(layer, p, rows)) {
+    for (const r of await parquet.records(source, p, rows)) {
       const properties = {};
       for (const name of p.columns) properties[name] = value(r[name]);
-      const geometry = p.geometry ? simplify(r[layer.geom], p.tolerance) : null;
+      const geometry = p.geometry ? simplify(r[source.geom], p.tolerance) : null;
       // A feature simplified to nothing at this scale is too small to draw; leave it out.
       if (p.geometry && !geometry) continue;
       features.push({ type: 'Feature', properties, geometry });

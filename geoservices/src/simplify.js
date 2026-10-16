@@ -1,5 +1,7 @@
 // GeoJSON geometry for drawing at a scale: 2D, Douglas-Peucker simplified to `tolerance` (degrees).
-// A ring or line that simplifies away is dropped; a feature with nothing left returns null.
+// A polygon or line smaller than the tolerance keeps a speck (its bounding box, or its two ends)
+// rather than vanishing, so a statewide view still shows where many small features are, as the
+// vector tiles do. Holes that simplify away are dropped.
 'use strict';
 
 function douglasPeucker(points, tolerance) {
@@ -37,15 +39,21 @@ function douglasPeucker(points, tolerance) {
 const flat = (coords) => coords.map(([x, y]) => [x, y]);
 const line = (coords, t) => {
   const out = douglasPeucker(flat(coords), t);
-  return out.length >= 2 ? out : null;
+  return out.length >= 2 ? out : [flat(coords)[0], flat(coords)[coords.length - 1]];
 };
 const ring = (coords, t) => {
   const out = douglasPeucker(flat(coords), t);
   return out.length >= 4 ? out : null;
 };
+function speck(coords) {
+  const xs = coords.map((c) => c[0]);
+  const ys = coords.map((c) => c[1]);
+  const [x0, y0, x1, y1] = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)];
+  return [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
+}
 const polygon = (rings, t) => {
   const [outer, ...holes] = rings.map((r) => ring(r, t));
-  return outer ? [outer, ...holes.filter(Boolean)] : null;
+  return [outer ?? speck(rings[0]), ...holes.filter(Boolean)];
 };
 
 function simplify(geometry, tolerance) {

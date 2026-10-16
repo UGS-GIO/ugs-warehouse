@@ -48,9 +48,21 @@ test('records carry the planned columns and GeoJSON geometry', async () => {
   assert.equal(r.geom.type, 'Polygon');
 });
 
-test('simplification keeps rings closed and drops what collapses', () => {
+test('simplification keeps rings closed and a speck of what collapses', () => {
   const square = { type: 'Polygon', coordinates: [[[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 0]]] };
   assert.deepEqual(simplify(square, 0.1).coordinates[0][0], [0, 0]);   // 2D
   assert.equal(simplify(square, 0.1).coordinates[0].length, 5);
-  assert.equal(simplify(square, 10), null);
+  const circle = { type: 'Polygon', coordinates: [Array.from({ length: 33 }, (_, i) =>
+    [Math.cos((i / 32) * 2 * Math.PI), Math.sin((i / 32) * 2 * Math.PI)])] };
+  const [speck] = simplify(circle, 10).coordinates;   // its bounding box, not nothing
+  assert.equal(speck.length, 5);
+  assert.deepEqual([speck[0][0], speck[2][0]], [-1, 1]);
+});
+
+test('a bbox selection is cut to the page, plus one row to say there is more', async () => {
+  const layer = await open();
+  const p = plan({ geometry: '-113,39,-110,42', inSR: '4326' }, layer, 100);
+  const rows = await parquet.select(layer, p);
+  assert.equal(rows.length, 101);
+  assert.deepEqual(rows.slice(0, 3), [0, 1, 2]);
 });

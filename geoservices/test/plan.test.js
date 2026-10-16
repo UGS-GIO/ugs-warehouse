@@ -33,7 +33,7 @@ test('a web mercator envelope becomes a lon/lat bbox prefilter', () => {
   const geometry = JSON.stringify({ xmin: -12485000, ymin: 4970000, xmax: -12445000, ymax: 5010000, spatialReference: { wkid: 102100 } });
   const [x0, y0, , y1] = filterBox({ geometry });
   assert.ok(x0 < -112 && x0 > -112.3 && y0 > 40.6 && y1 < 41.1);
-  assert.equal(plan({ geometry, outFields: '*' }, layer).page, null);   // Koop still filters exactly
+  assert.deepEqual(plan({ geometry, outFields: '*' }, layer, 2000).page, { offset: 0, limit: 2000 });
 });
 
 test('point identify with a distance grows the box', () => {
@@ -54,4 +54,10 @@ test('simplification follows maxAllowableOffset, in degrees for mercator output'
 test('objectIds must be integers', () => {
   assert.deepEqual(plan({ objectIds: '1,2' }, layer).ids, [1, 2]);
   assert.throws(() => plan({ objectIds: '1;DROP' }, layer), /integers/);
+});
+
+test('a page is at most maxRecords, like ArcGIS Server; ids-only queries are not paged', () => {
+  assert.deepEqual(plan({}, layer, 2000).page, { offset: 0, limit: 2000 });
+  assert.deepEqual(plan({ resultRecordCount: '5000' }, layer, 2000).page, { offset: 0, limit: 2000 });
+  assert.equal(plan({ returnIdsOnly: 'true' }, layer, 2000).page, null);
 });

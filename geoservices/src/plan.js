@@ -77,7 +77,7 @@ const trivialWhere = (w) => w == null || /^\s*(1\s*=\s*1)?\s*$/i.test(String(w))
  * @returns {{ kind: 'count' | 'extent' | 'features', box, ids, columns, geometry, tolerance,
  *   page, filtersApplied, outSR }}
  */
-function plan(params, layer) {
+function plan(params, layer, maxRecords = Infinity) {
   const box = filterBox(params);
   const ids = String(params.objectIds ?? '').split(',').map((s) => s.trim()).filter(Boolean).map(Number);
   if (!ids.every(Number.isInteger)) throw Object.assign(new Error('objectIds must be integers'), { code: 400 });
@@ -111,14 +111,16 @@ function plan(params, layer) {
     ? (MERCATOR.has(outSR ?? 4326) ? offset / 111320 : offset)
     : 0;
 
-  // Paging is ours only when Koop has nothing left to filter out. Rows are stored in feature_id
-  // order, so a page of rows is a page of features.
+  // Paging is ours when Koop has no `where` left to filter by. Rows are stored in feature_id order,
+  // so a page of rows is a page of features. Like ArcGIS Server, a page is at most maxRecords,
+  // which also bounds what one request can hold in memory.
   let page = null;
-  const count = Number(params.resultRecordCount);
+  const asked = Number(params.resultRecordCount);
+  const limit = Math.min(Number.isInteger(asked) && asked > 0 ? asked : Infinity, maxRecords);
   const ordered = !params.orderByFields || /^\s*feature_id(\s+asc)?\s*$/i.test(String(params.orderByFields));
-  if (simple && !box && ordered && !isTrue(params.returnCountOnly) && !params.outStatistics
-    && Number.isInteger(count) && count > 0) {
-    page = { offset: Math.max(0, Number(params.resultOffset || 0)), limit: count };
+  if (simple && ordered && Number.isFinite(limit) && !isTrue(params.returnCountOnly)
+    && !isTrue(params.returnIdsOnly) && !params.outStatistics) {
+    page = { offset: Math.max(0, Number(params.resultOffset || 0)), limit };
     Object.assign(base.filtersApplied, { offset: true, limit: true, resultRecordCount: true, orderByFields: true });
   }
   return { ...base, kind: 'features', columns, geometry, tolerance, page };

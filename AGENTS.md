@@ -44,7 +44,8 @@ uvicorn service.main:app --host 0.0.0.0 --port 8080
 Do not write code that a dependency or a helper in this repo already provides. Before you add a helper, search `core/` and the libraries below. If none fits, say why in the PR.
 
 - STAC: `pystac` (dev only), `rustac` (items.parquet mirror), `rio-stac` (COG asset fields), `stactools`. The catalog builders in `core/stac.py` are the only place that builds catalog JSON.
-- GeoParquet: `geoparquet-io` (gpio) to write and check. DuckDB `COPY` for the vector archive.
+- GeoParquet: `geoparquet-io` (gpio) to write and check. pyarrow's `ParquetWriter` for the vector
+  archive, for the page index DuckDB's `COPY` cannot write (`vector/sink_archive.py`).
 - PMTiles: the tippecanoe step in `vector/sink_pmtiles.py` (`TILE_OPTS`). Do not add a second set of tippecanoe flags.
 - COGs: `rio-cogeo`, `rasterio`. GDAL CLIs read COGs in place over `/vsigs/`; do not download them first.
 - Object storage: `obstore` through `core/gcs.py`. One `obs.delete(store, paths)` call deletes a batch.

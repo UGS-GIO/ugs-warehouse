@@ -16,9 +16,11 @@ ID_FIELD = "feature_id"
 
 
 def _source(item: dict) -> str | None:
-    """The `gs://` path of the item's GeoParquet asset, or None when it has none on our CDN."""
+    """The `gs://` path of the item's GeoParquet asset, or None when it has none on our CDN. The
+    full-detail `data` asset first: a heavy layer also has a generalized `overview` parquet."""
     base = config.public_url("")
-    for asset in (item.get("assets") or {}).values():
+    assets = item.get("assets") or {}
+    for asset in sorted(assets.values(), key=lambda a: a is not assets.get("data")):
         href = asset.get("href") or ""
         if asset.get("type") == config.PARQUET_MIME and href.startswith(base):
             return f"gs://{config.BUCKET}/{href.removeprefix(base)}"

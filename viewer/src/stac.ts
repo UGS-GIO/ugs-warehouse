@@ -535,8 +535,11 @@ export function useIndexes(collections: { id: string; href: string }[]) {
 export const isParquetAsset = (a: Asset): boolean =>
   Boolean(a.type?.includes("parquet")) || a.href.endsWith(".parquet");
 
-export const parquetAsset = (item: StacDoc): Asset | undefined =>
-  Object.values(item.assets ?? {}).find(isParquetAsset);
+// The full-detail `data` asset first: a heavy layer also has a generalized `overview` parquet.
+export const parquetAsset = (item: StacDoc): Asset | undefined => {
+  const data = item.assets?.data;
+  return data && isParquetAsset(data) ? data : Object.values(item.assets ?? {}).find(isParquetAsset);
+};
 
 export const ducklakeAsset = (item: StacDoc): Asset | undefined =>
   Object.entries(item.assets ?? {}).find(([k, a]) => k === "ducklake"

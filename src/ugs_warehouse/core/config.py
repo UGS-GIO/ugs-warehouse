@@ -125,6 +125,11 @@ def archive_path(stem: str) -> str:
     return f"{ARCHIVE_PREFIX}/{stem}/{stem}.parquet"
 
 
+def overview_path(stem: str) -> str:
+    """The topic's generalized GeoParquet, for small-scale display (vector/sink_archive.py)."""
+    return f"{ARCHIVE_PREFIX}/{stem}/{stem}_overview.parquet"
+
+
 def topic_thumbnail_path(stem: str) -> str:
     """The topic's styled preview (WEBP_MIME). The thumbs job writes it and the ingest stamps it, so
     both take the path from here."""

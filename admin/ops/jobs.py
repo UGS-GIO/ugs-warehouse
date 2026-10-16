@@ -58,8 +58,9 @@ STAGES = [
               "rebuilds from the same pub set."},
     {"n": "⑥", "title": "Geologic-map rasters", "jobs": ["mosaics"],
      "blurb": "Per-scale raster PMTiles mosaics of the published geologic maps (GDAL warp → pmtiles). "
-              "One mosaic per portal layer. The intermediate and 500k tiers build here; the statewide "
-              "24k tier runs on Cloud Batch (scripts/submit_mosaics_batch.sh --statewide). Add the 250k "
+              "One mosaic per portal layer. The 500k tier builds here; the statewide 24k and "
+              "intermediate tiers run on Cloud Batch (scripts/submit_mosaics_batch.sh --statewide "
+              "[--scale 100k]). Add the 250k "
               "(1 x 2 degree) tier to this console and the job's args once one of those sheets has a COG."},
 ]
 
@@ -98,11 +99,11 @@ JOBS: dict[str, Job] = {j.key: j for j in [
         modes=(("report", "Report"), ("dry-run", "Dry run"))),
     Job("fts", "ugs-pubs-fts", "Build full-text search",
         "Rebuild the all-pub full-text-search DuckDB (BM25 FTS) → CDN. Run after pub text changes."),
-    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (intermediate + 500k)",
-        "Rebuild the intermediate-scale and 1:500,000 raster PMTiles mosaics of the published geologic "
-        "maps. Use the per-tier buttons to regenerate just one. The 24k tier is not built here: it "
-        "runs on Cloud Batch, and a Cloud Run build would overwrite its z17 mosaic with a z14 one.",
-        danger=True, tiers=(("100k", "Intermediate"), ("500k", "1:500,000"))),
+    Job("mosaics", "ugs-geolmap-mosaics", "Raster mosaics (500k)",
+        "Rebuild the 1:500,000 raster PMTiles mosaic of the published geologic maps. The 24k and "
+        "intermediate tiers are not built here: they run on Cloud Batch, and a Cloud Run build would "
+        "overwrite their z17 and z15 mosaics with lower-zoom ones, or run out of memory.",
+        danger=True, tiers=(("500k", "1:500,000"),)),
     Job("topics-thumbs", "ugs-topics-thumbs", "Topic thumbnails",
         "Render each vector serving-topic's styled PMTiles → preview WebP (headless MapLibre; a neutral "
         "sand style when unstyled). Content-hash skip — re-renders only topics whose data or style "

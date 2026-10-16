@@ -22,6 +22,7 @@ tmp/
 *.parquet
 # test fixtures are small and committed
 !viewer/src/**/__fixtures__/*.parquet
+!geoservices/testdata/*.parquet
 
 # generated discovery dump (not source)
 discovered_topics.txt

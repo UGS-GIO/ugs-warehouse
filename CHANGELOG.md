@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.8.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.7.0...v1.8.0) (2026-10-16)
+
+
+### Features
+
+* **geoservices:** serve each topic as an ArcGIS FeatureServer, in Go ([#581](https://github.com/UGS-GIO/ugs-warehouse/issues/581)) ([f69c4e9](https://github.com/UGS-GIO/ugs-warehouse/commit/f69c4e9b4eb9d80731777366436bdba510e2c169))
+
+
+### Performance Improvements
+
+* **archive:** write a page index and an overview so bbox reads fetch only their pages ([#580](https://github.com/UGS-GIO/ugs-warehouse/issues/580)) ([e36de88](https://github.com/UGS-GIO/ugs-warehouse/commit/e36de886b1c398a2d0a016cf518b897fd642ca10))
+
 ## [1.7.0](https://github.com/UGS-GIO/ugs-warehouse/compare/v1.6.0...v1.7.0) (2026-10-13)
 
 

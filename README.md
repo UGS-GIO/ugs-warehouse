@@ -1,23 +1,31 @@
-# ugs-warehouse
+# UGS Warehouse
 
-Cloud-native data warehouse for the Utah Geological Survey. Two **producers** sit on a **shared
-core** and emit one strict-STAC catalog (+ DuckLake, GeoParquet, PMTiles, COG) to a private GCS
-bucket, served read-only through the maps-assets CDN and a static STAC viewer.
+Cloud-native data warehouse for the Utah Geological Survey. It publishes UGS map layers, rasters
+and publications as open files on a CDN, indexed by one STAC catalog.
 
-- **vector** — Postgres `{schema}.{topic}_current` serving tables → DuckLake table, GeoParquet
-  archive, PMTiles, STAC item.
-- **pubs** — UGS publications → COG (geologic plates), footprints + unit polygons, cover
-  thumbnails, STAC item. See `docs/ARCHITECTURE.md`.
+**[Open the viewer](https://data.geology.utah.gov/)** ·
+[User guide](https://data.geology.utah.gov/guide) ·
+[STAC catalog](https://maps-assets.geology.utah.gov/warehouse/stac/catalog.json)
 
-One STAC catalog spans both, laid out with collections (`ugs-serving-topics`, `ugs-publications`,
-`ugs-rasters`). `ugs-serving-topics` and `ugs-publications` nest one level — per dbt mart schema
-(`ugs-serving-topics/hazards`) and per publication series (`ugs-publications/DS`) — and serving
-topics also publish a rollup `ugs-serving-topics/items.json` spanning every schema. The root
-`items.json` indexes every item in the catalog in one file, and each collection carries an
-`items.parquet` (stac-geoparquet) mirror of its items. An optional
-Django **ops console** (`admin/`) drives + observes the Cloud Run jobs.
+![Quaternary faults on the Map page](docs/img/readme/map.webp)
 
-## Architecture
+| Discover | Publication |
+|---|---|
+| ![Discover page with filters, cards and coverage map](docs/img/readme/discover.webp) | ![Publication detail with citation, data assets and PDF](docs/img/readme/publication.webp) |
+
+## What it publishes
+
+| Source | Artifacts |
+|---|---|
+| Serving tables (`{schema}.{layer}_current` in Postgres) | DuckLake table, GeoParquet, PMTiles, STAC item |
+| UGS publications | COG plates, map-unit polygons, cover thumbnails, STAC item |
+| Standalone rasters | COG, STAC item |
+
+All files sit in one private GCS bucket behind the `maps-assets` CDN. Clients read them directly:
+the [viewer](viewer/), QGIS, STAC Browser, DuckDB, or OGC API Features through
+[featureserv](featureserv/). No app server is in the read path.
+
+## How it works
 
 ```
 vector producer                         pubs producer
@@ -32,70 +40,52 @@ vector producer                         pubs producer
          STAC catalog (collections + items.json index)          viewer/  +  STAC Browser
 ```
 
-Styling rides the catalog: `ugs-styles` (neighbor repo) → a `ugs:renders` block + `roles:["style"]`
-asset per item, rebound by the `restyle` job without a reingest. See `docs/STYLING.md`.
+- Producers share `core/` (config, GCS, STAC). The catalog is rebuilt from what is in the bucket.
+- The stack is DuckDB + DuckLake on the existing Cloud SQL Postgres, and Cloud Run. There is no
+  Spark or Iceberg; UGS data fits on one node.
+- Styles come from `ugs-styles` and are attached to each item. The `restyle` job rebinds them
+  without a reingest.
 
-## Cheap-path choices
+More: [Architecture](docs/ARCHITECTURE.md) · [Serving](docs/SERVING.md) ·
+[Styling](docs/STYLING.md) · [Deploy](docs/DEPLOY.md) · [User guide](docs/USER_GUIDE.md)
 
-| Concern | Choice |
-|---|---|
-| Compute engine | DuckDB embedded (single node — UGS fits) |
-| Lakehouse format | DuckLake (native DuckDB geom + tz, simpler than Iceberg at this scale) |
-| Catalog DB | DuckLake-on-Postgres in the existing `mapping-db` Cloud SQL (no new database) |
-| Data files | parquet/COG/PMTiles on one GCS bucket (private; CDN-fronted) |
-| Serving | static STAC on the CDN + OGC API Features (`featureserv`); no app server in the read path |
-| Runtime | Cloud Run (vector: service, scale-to-zero; pubs: sharded Jobs) |
+## Quick start
 
-No Spark, no Dataproc, no PyIceberg. Iceberg's multi-engine federation buys nothing at UGS scale;
-DuckLake handles native geometry + timestamps directly.
-
-## Layout
-
-```
-src/ugs_warehouse/
-├── core/        shared by both producers
-│   ├── config.py    one bucket + CDN base + object prefixes
-│   ├── gcs.py       obstore upload/list + Cache-Control + CDN URLs
-│   ├── stac.py      item builder, collections hierarchy, derive-from-truth catalog refresh
-│   ├── styles.py    ugs-styles bridge → ugs:renders block + style asset
-├── vector/      producer A: Postgres _current → DuckLake/GeoParquet/PMTiles/STAC
-│   ├── source.py transform.py ducklake.py sink_archive.py sink_pmtiles.py sink_stac.py
-│   ├── related.py   FK relationships → related links + ugs:foreign_keys + aspatial child tables
-│   └── ingest.py topics.py
-├── pubs/        producer B: publications → COG/footprints/units/thumbs/STAC
-│   ├── harvest.py (zip→COG) footprints.py vectors.py units_pmtiles.py thumbs.py
-│   └── source.py identity.py sink_stac.py topic.py ingest.py
-├── raster/      standalone raster COGs → STAC (consume.py, sink_stac.py)
-└── restyle.py   rebind ugs:renders from the manifest, no reingest
-
-service/         Cloud Run service: Pub/Sub push → vector ingest
-admin/           Django + HTMX ops console (IAP): run/observe the Cloud Run jobs
-featureserv/     pygeoapi: OGC API Features over the GeoParquet
-viewer/          React + MapLibre STAC viewer (static, on Firebase Hosting; catalog off the CDN)
-scripts/         CLI: bootstrap catalog, manual ingest, provision pub/sub
-docs/            MkDocs site (ARCHITECTURE, SERVING, STYLING, USER_GUIDE, …)
+```bash
+pip install -e ".[dev]"
+python -m pytest tests/ -q        # hermetic, no network
+ruff check src service scripts
 ```
 
-## Local dev (vector)
-
-Personal `gcloud` auth + the existing `cloud_sql_proxy` to reach `mapping-db`:
+Dry-run or ingest one serving table locally. This needs `gcloud` auth and `cloud_sql_proxy` to `mapping-db`:
 
 ```bash
 cloud_sql_proxy -instances=ut-dnr-ugs-mappingdb-prod:us-west3:mapping-db=tcp:5433
-
-pip install -e ".[dev]"
 
 export POSTGRES_DSN="host=127.0.0.1 port=5433 dbname=seamlessgeolmap user=$USER password=$PASS"
 export DUCKLAKE_CATALOG_DSN="$POSTGRES_DSN"
 export DUCKLAKE_DATA_PATH=gs://ut-dnr-ugs-maps-prod-public/warehouse/ducklake/
 
-# dotted form: schema.layer_current
-python -m ugs_warehouse.vector.ingest --topic hazards.hazards_qfaults_current
 python -m ugs_warehouse.vector.ingest --topic hazards.hazards_qfaults_current --dry-run
-
-# --all discovers every _current in the mart schemas at runtime
-python -m ugs_warehouse.vector.ingest --all
+python -m ugs_warehouse.vector.ingest --all     # every _current in the mart schemas
 ```
 
-The pubs producer runs as `python -m ugs_warehouse.pubs.ingest` (each `pubs/` stage takes `--help`);
-the ops console lives in `admin/`. CI + dedicated service accounts come at deploy time (`docs/DEPLOY.md`).
+The pubs producer runs as `python -m ugs_warehouse.pubs.ingest`; each stage takes `--help`.
+For the viewer, see [viewer/](viewer/).
+
+## Repository layout
+
+```
+src/ugs_warehouse/
+├── core/        shared by all producers: config, GCS (obstore), STAC builder, styles
+├── vector/      Postgres _current → DuckLake / GeoParquet / PMTiles / STAC
+├── pubs/        publications → COG / footprints / units / thumbnails / STAC
+├── raster/      standalone raster COGs → STAC
+└── restyle.py   rebind styles from the manifest, no reingest
+service/         Cloud Run service: Pub/Sub push → vector ingest
+admin/           Django + HTMX ops console (IAP) for the Cloud Run jobs
+featureserv/     pygeoapi: OGC API Features over the GeoParquet
+viewer/          React + MapLibre STAC viewer, on Firebase Hosting
+scripts/         bootstrap catalog, manual ingest, provision Pub/Sub
+docs/            MkDocs site
+```

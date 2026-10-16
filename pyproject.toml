@@ -21,8 +21,9 @@ dependencies = [
   "CacheControl>=0.14",  # caches the signing keys (iap.py)
   "pytz>=2024.1",        # DuckDB timestamptz -> Python conversion
   "rustac>=0.9",         # writes the stac-geoparquet item mirror (core/item_mirror.py); no deps
-  # NB: no pyarrow / shapely — the vector ingest streams Postgres→DuckDB→CDN entirely in DuckDB
-  # (no Python materialization). They live in the [pubs] extra (geopandas/pyogrio need them).
+  "pyarrow>=19",         # writes the archive GeoParquet with a page index (vector/sink_archive.py)
+  # NB: no shapely — the vector ingest streams Postgres→DuckDB→CDN in DuckDB; pyarrow only writes
+  # DuckDB's Arrow batches out. shapely lives in the [pubs] extra (geopandas/pyogrio need it).
 ]
 
 [project.optional-dependencies]
@@ -42,7 +43,7 @@ dependencies = [
 # duckdb below 1.6, so CI tests a 1.5 duckdb until gpio moves.
 # pyyaml: tests/test_thumbs_trigger.py parses cloudbuild.yaml to pin the thumbs job's deploy args
 # to what core/jobs.py sends; declared, not left to pre-commit's dependency, so it can't vanish.
-dev = ["pytest>=8", "ruff==0.16.0", "pre-commit>=3.7", "pystac[validation]>=1.11", "httpx>=0.27",
+dev = ["pytest>=8", "ruff==0.17.0", "pre-commit>=3.7", "pystac[validation]>=1.11", "httpx>=0.27",
        "rashid>=0.1.8", "geopandas>=1.0", "shapely>=2.0", "rio-stac>=0.12", "geoparquet-io>=1.6",
        "pyyaml>=6"]
 # pubs/COG producer — heavy raster deps; installed in Dockerfile.harvest (needs system

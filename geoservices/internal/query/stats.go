@@ -127,7 +127,8 @@ func (a *accumulator) result(kind string) any {
 		return a.sum / float64(a.count)
 	case "VAR":
 		if a.varCount > 1 {
-			return (a.varSumSq - a.varSum*a.varSum/float64(a.varCount)) / float64(a.varCount-1)
+			// Round-off can leave a constant column a hair below zero.
+			return max(0, (a.varSumSq-a.varSum*a.varSum/float64(a.varCount))/float64(a.varCount-1))
 		}
 		return 0.0
 	case "STDDEV":
@@ -135,7 +136,7 @@ func (a *accumulator) result(kind string) any {
 			return 0.0
 		}
 		mean := a.sum / float64(a.n)
-		return math.Sqrt(a.sumSq/float64(a.n) - mean*mean)
+		return math.Sqrt(max(0, a.sumSq/float64(a.n)-mean*mean))
 	}
 	return jsonx.Undefined
 }

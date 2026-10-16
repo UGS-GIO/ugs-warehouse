@@ -17,6 +17,11 @@ func TestStaleOnError(t *testing.T) {
 	if err != nil || v != 1 {
 		t.Fatalf("stale value not served: %v %v", v, err)
 	}
+	asked := false
+	c.Get("k", func() (any, error) { asked = true; return nil, errors.New("cdn down") })
+	if asked {
+		t.Fatal("a failed refresh should not be retried on the very next request")
+	}
 	if _, err := c.Get("other", func() (any, error) { return nil, errors.New("down") }); err == nil {
 		t.Fatal("no stale value: the error should surface")
 	}

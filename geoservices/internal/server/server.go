@@ -175,6 +175,15 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 		s.send(w, r, hit, tag)
 		return
 	}
+	// A full scan waits for its own few slots first, so scans queued behind each other hold no work slot.
+	if isQuery && fullScan(raw) {
+		release, err := slot(r.Context(), s.scans, s.Limits.ScanWait, errScanBusy)
+		if err != nil {
+			s.fail(w, r, err)
+			return
+		}
+		defer release()
+	}
 	// Every computed query holds a slot, so memory is bounded however many arrive at once.
 	if isQuery {
 		slots := s.light
@@ -182,14 +191,6 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 			slots = s.work
 		}
 		release, err := slot(r.Context(), slots, s.Limits.WorkWait, errWorkBusy)
-		if err != nil {
-			s.fail(w, r, err)
-			return
-		}
-		defer release()
-	}
-	if isQuery && fullScan(raw) {
-		release, err := slot(r.Context(), s.scans, s.Limits.ScanWait, errScanBusy)
 		if err != nil {
 			s.fail(w, r, err)
 			return

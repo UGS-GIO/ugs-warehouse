@@ -21,6 +21,10 @@ type ttlEntry struct {
 	value any
 }
 
+// staleRetry is how long a stale value is served after a failed refresh before the next try, so
+// an origin that is down is not asked again on every request.
+const staleRetry = 10 * time.Second
+
 // NewTTL makes a cache whose values are fresh for ttl.
 func NewTTL(ttl time.Duration) *TTL { return &TTL{ttl: ttl, values: map[string]ttlEntry{}} }
 
@@ -35,6 +39,11 @@ func (c *TTL) Get(key string, produce func() (any, error)) (any, error) {
 	v, err, _ := c.group.Do(key, func() (any, error) {
 		v, err := produce()
 		if err != nil {
+			if ok {
+				c.mu.Lock()
+				c.values[key] = ttlEntry{time.Now().Add(staleRetry - c.ttl), hit.value}
+				c.mu.Unlock()
+			}
 			return nil, err
 		}
 		c.mu.Lock()

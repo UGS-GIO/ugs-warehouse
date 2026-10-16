@@ -78,8 +78,8 @@ func TestVersionedReads(t *testing.T) {
 	if _, err := f1.ReadAt(buf, 100); err != nil || buf[0] != 'a' {
 		t.Fatalf("old cached read %q %v", buf, err)
 	}
-	if _, err := f1.ReadAt(buf, 500<<10); err == nil {
-		t.Fatal("reading an overwritten version should fail (If-Match)")
+	if _, err := f1.ReadAt(buf, 500<<10); !errors.Is(err, ErrChanged) {
+		t.Fatalf("reading an overwritten version should fail with ErrChanged (If-Match), got %v", err)
 	}
 }
 

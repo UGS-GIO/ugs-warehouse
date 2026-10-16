@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -22,12 +23,17 @@ import (
 // fixture serves the testdata topics from local GeoParquet files.
 func fixture(t *testing.T) *httptest.Server {
 	root, _ := filepath.Abs("../../testdata")
-	items, err := os.ReadFile(filepath.Join(root, "items.json"))
+	return fixtureAt(t, root)
+}
+
+// fixtureAt serves the testdata topics with their data files under base (a directory or URL).
+func fixtureAt(t *testing.T, base string) *httptest.Server {
+	items, err := os.ReadFile("../../testdata/items.json")
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(t.TempDir(), "items.json")
-	os.WriteFile(path, []byte(strings.ReplaceAll(string(items), `"testdata/`, `"`+root+"/")), 0o644)
+	os.WriteFile(path, []byte(strings.ReplaceAll(string(items), `"testdata/`, `"`+base+"/")), 0o644)
 	p := &provider.Provider{Catalog: catalog.New(path, time.Minute), Reader: pq.NewReader(32<<20, 64<<20, 64<<20),
 		Shapes: geom.NewShapes(16 << 20), MaxRecords: 2000, TileMaxRecords: 8000, MaxGeometryRows: 50000}
 	s := New(p, 300, "", Limits{MaxWhere: 100, MaxBody: 1024, MaxObjectIDs: 5, Timeout: 10 * time.Second,
@@ -135,5 +141,56 @@ func TestBodyLimit(t *testing.T) {
 	json.NewDecoder(res.Body).Decode(&body)
 	if body["count"] != 300.0 {
 		t.Errorf("form POST: %v", body)
+	}
+}
+
+// A request that gives up while a layer opens must not fail the requests waiting on the same open.
+func TestCancelledOpenDoesNotFailWaiters(t *testing.T) {
+	root, _ := filepath.Abs("../../testdata")
+	files := http.FileServer(http.Dir(root))
+	origin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(100 * time.Millisecond)
+		files.ServeHTTP(w, r)
+	}))
+	t.Cleanup(origin.Close)
+	ts := fixtureAt(t, origin.URL)
+	u := ts.URL + "/ugs/rest/services/qfaults/default/FeatureServer/0/query?where=1=1&returnCountOnly=true&f=json"
+
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	go func() {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if res, err := http.DefaultClient.Do(req); err == nil {
+			res.Body.Close()
+		}
+	}()
+	time.Sleep(10 * time.Millisecond)
+	res, body := get(t, u)
+	if res.StatusCode != 200 || body["count"] != 300.0 {
+		t.Fatalf("waiter got %d %v", res.StatusCode, body)
+	}
+}
+
+// A POST's query string and form body resolve to one value per parameter for the plan, the limits
+// and the filters alike (the query string wins, as in Koop).
+func TestPostParameterPrecedence(t *testing.T) {
+	ts := fixture(t)
+	post := func(query, form string) map[string]any {
+		res, err := http.Post(ts.URL+"/ugs/rest/services/qfaults/default/FeatureServer/0/query?"+query,
+			"application/x-www-form-urlencoded", strings.NewReader(form))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer res.Body.Close()
+		var body map[string]any
+		json.NewDecoder(res.Body).Decode(&body)
+		return body
+	}
+	if b := post("where="+url.QueryEscape("feature_id < 10")+"&returnCountOnly=true&f=json", "where=1%3D1"); b["count"] != 9.0 {
+		t.Errorf("count %v, want 9", b)
+	}
+	long := url.QueryEscape("feature_id IN (" + strings.Repeat("1,", 60) + "1)")
+	if b := post("where="+long+"&f=json", "where=1%3D1"); errorCode(b) != 400 {
+		t.Errorf("a long where in the query string passed the limit: %v", b)
 	}
 }

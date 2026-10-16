@@ -51,6 +51,14 @@ func (c *TTL) Get(key string, produce func() (any, error)) (any, error) {
 	return v, nil
 }
 
+// Forget drops key, so the next Get produces it again.
+func (c *TTL) Forget(key string) {
+	c.mu.Lock()
+	delete(c.values, key)
+	c.mu.Unlock()
+	c.group.Forget(key)
+}
+
 // Last returns key's value however old it is.
 func (c *TTL) Last(key string) (any, bool) {
 	c.mu.Lock()

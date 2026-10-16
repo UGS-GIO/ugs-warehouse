@@ -356,8 +356,14 @@ func (e permanentError) Unwrap() error { return e.error }
 
 func permanent(err error) error { return permanentError{err} }
 
+// ErrChanged is a range read refused because the file was replaced (a re-ingest) after it was opened.
+var ErrChanged = errors.New("data file changed since it was opened")
+
 // statusError retries server errors and gives up on the rest (a 412 means the file changed).
 func statusError(code int) error {
+	if code == http.StatusPreconditionFailed {
+		return permanent(ErrChanged)
+	}
 	err := fmt.Errorf("status %d", code)
 	if code >= 500 || code == http.StatusTooManyRequests {
 		return err

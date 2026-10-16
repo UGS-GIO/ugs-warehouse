@@ -70,7 +70,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/ugs/rest/services/{topic}/{render}/FeatureServer/{layer}/{op}", s.service)
 	mux.HandleFunc("/ugs/rest/services/{topic}/{render}/{rest...}", func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.PathValue("rest"), "MapServer") {
-			s.fail(w, &query.Error{Code: 400, Message: "Invalid URL", Details: []string{"Invalid URL"}})
+			s.fail(w, r, &query.Error{Code: 400, Message: "Invalid URL", Details: []string{"Invalid URL"}})
 			return
 		}
 		notFound(w, r)
@@ -124,7 +124,7 @@ func (s *Server) restInfo(w http.ResponseWriter, r *http.Request) {
 		err = infoFormat(p)
 	}
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	// Koop always advertises an https token URL on the request's host.
@@ -158,12 +158,12 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 		err = s.checkLimits(raw)
 	}
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
-	version, err := s.Provider.Version(r.Context(), topic)
+	version, err := s.Provider.Version(r.Context(), topic, render)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	tag := etag(version, r)
@@ -183,7 +183,7 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 		}
 		release, err := slot(r.Context(), slots, s.Limits.WorkWait, errWorkBusy)
 		if err != nil {
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
 		}
 		defer release()
@@ -191,14 +191,14 @@ func (s *Server) service(w http.ResponseWriter, r *http.Request) {
 	if isQuery && fullScan(raw) {
 		release, err := slot(r.Context(), s.scans, s.Limits.ScanWait, errScanBusy)
 		if err != nil {
-			s.fail(w, err)
+			s.fail(w, r, err)
 			return
 		}
 		defer release()
 	}
 	out, err := s.answer(r.Context(), topic, render, layer, isQuery, p, raw)
 	if err != nil {
-		s.fail(w, err)
+		s.fail(w, r, err)
 		return
 	}
 	out = pack(out)

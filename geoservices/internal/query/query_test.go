@@ -2,6 +2,7 @@ package query
 
 import (
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/paulmach/orb"
@@ -80,4 +81,12 @@ func FuzzRun(f *testing.F) {
 		}
 		Run(collection(), p)
 	})
+}
+
+func TestGeometryPrecisionIsBounded(t *testing.T) {
+	for _, q := range []string{"geometryPrecision=100000000", "geometryPrecision=-1"} {
+		if got := run(t, q); !strings.HasPrefix(got, "error: ") {
+			t.Errorf("%s answered %.80s", q, got)
+		}
+	}
 }

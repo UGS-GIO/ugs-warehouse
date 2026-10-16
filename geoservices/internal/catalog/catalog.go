@@ -123,6 +123,28 @@ func (c *Catalog) Topic(ctx context.Context, id string) (*Item, error) {
 // Renderer is the Esri drawing info for one render: renderer, labelingInfo, minScale (raw JSON),
 // or an empty map for a render with no esri_url.
 func (c *Catalog) Renderer(ctx context.Context, it *Item, name string) (map[string]json.RawMessage, error) {
+	d, err := c.drawing(ctx, it, name)
+	if err != nil {
+		return nil, err
+	}
+	return d.info, nil
+}
+
+// RendererVersion changes when the render's Esri JSON does, though its URL stays the same.
+func (c *Catalog) RendererVersion(ctx context.Context, it *Item, name string) (string, error) {
+	d, err := c.drawing(ctx, it, name)
+	if err != nil {
+		return "", err
+	}
+	return d.version, nil
+}
+
+type drawing struct {
+	info    map[string]json.RawMessage
+	version string
+}
+
+func (c *Catalog) drawing(ctx context.Context, it *Item, name string) (*drawing, error) {
 	var r *Render
 	names := make([]string, len(it.Renders))
 	for i := range it.Renders {
@@ -135,7 +157,7 @@ func (c *Catalog) Renderer(ctx context.Context, it *Item, name string) (map[stri
 		return nil, &Error{404, fmt.Sprintf("unknown render '%s' for %s (have: %s)", name, it.ID, strings.Join(names, ", "))}
 	}
 	if r.EsriURL == "" {
-		return map[string]json.RawMessage{}, nil
+		return &drawing{info: map[string]json.RawMessage{}}, nil
 	}
 	v, err := c.Cache.Get("esri:"+r.EsriURL, func() (any, error) {
 		raw, err := c.getBytes(ctx, r.EsriURL)
@@ -146,12 +168,14 @@ func (c *Catalog) Renderer(ctx context.Context, it *Item, name string) (map[stri
 		if err := json.Unmarshal(raw, &doc); err != nil {
 			return nil, err
 		}
-		return doc, nil
+		h := fnv.New64a()
+		h.Write(raw)
+		return &drawing{doc, strconv.FormatUint(h.Sum64(), 36)}, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-	return v.(map[string]json.RawMessage), nil
+	return v.(*drawing), nil
 }
 
 // GetBytes reads a URL or local file.

@@ -15,17 +15,19 @@ import (
 // empty strings dropped, "true"/"false" as booleans and anything that parses as JSON parsed.
 type Params map[string]any
 
-// Raw is the request as the provider saw it: query then body (body wins), as strings.
+// Raw is the same request as strings, with the same precedence, so the plan, the limits and the
+// filters all see one value per parameter.
 type Raw map[string]string
 
 // Normalize builds both views of a request.
 func Normalize(query, body url.Values) (Params, Raw) {
 	raw := Raw{}
-	for k, v := range query {
-		raw[k] = v[0]
-	}
-	for k, v := range body {
-		raw[k] = v[0]
+	for _, src := range []url.Values{body, query} {
+		for k, v := range src {
+			if v[0] != "" || raw[k] == "" {
+				raw[k] = v[0]
+			}
+		}
 	}
 	p := Params{}
 	for _, src := range []url.Values{body, query} {

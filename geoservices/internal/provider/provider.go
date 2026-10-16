@@ -26,6 +26,7 @@ import (
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/plan"
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/pq"
 	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/query"
+	"github.com/UGS-GIO/ugs-warehouse/geoservices/internal/remote"
 )
 
 const unlimited = int64(1) << 50
@@ -72,8 +73,9 @@ func (pr *Provider) dataURL(href string) string {
 	return strings.TrimSuffix(pr.Mirror, "/") + u.Path
 }
 
-// Version names everything a topic's responses depend on: its catalog entry and data file.
-func (pr *Provider) Version(ctx context.Context, topicID string) (string, error) {
+// Version names everything a render's responses depend on: its catalog entry, data file and
+// Esri renderer.
+func (pr *Provider) Version(ctx context.Context, topicID, render string) (string, error) {
 	item, err := pr.Catalog.Topic(ctx, topicID)
 	if err != nil {
 		return "", err
@@ -82,7 +84,11 @@ func (pr *Provider) Version(ctx context.Context, topicID string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	return item.Version + "|" + layer.ID(), nil
+	style, err := pr.Catalog.RendererVersion(ctx, item, render)
+	if err != nil {
+		return "", err
+	}
+	return item.Version + "|" + layer.ID() + "|" + style, nil
 }
 
 // Open opens a data file, cached like the catalog.
@@ -90,6 +96,8 @@ func (pr *Provider) Open(ctx context.Context, href string) (*pq.Layer, error) {
 	u := pr.dataURL(href)
 	key := "layer:" + u
 	v, err := pr.Catalog.Cache.Get(key, func() (any, error) {
+		// Shared with every request waiting on this key, so one that is cancelled cannot fail the rest.
+		ctx := context.WithoutCancel(ctx)
 		// Once per CACHE_TTL: keep the open layer when a HEAD says the file has not changed.
 		if last, ok := pr.Catalog.Cache.Last(key); ok {
 			if v, err := pr.Reader.Version(ctx, u); err == nil && v == last.(*pq.Layer).Version() {
@@ -105,12 +113,24 @@ func (pr *Provider) Open(ctx context.Context, href string) (*pq.Layer, error) {
 }
 
 // Load returns the collection for a request. Service and layer descriptors (isQuery false) only
-// need the metadata.
+// need the metadata. A read refused because the file was re-ingested since it was opened reopens
+// the topic's files once, rather than failing until the next version check.
 func (pr *Provider) Load(ctx context.Context, topicID, render string, isQuery bool, params query.Raw) (*query.Collection, error) {
 	item, err := pr.Catalog.Topic(ctx, topicID)
 	if err != nil {
 		return nil, err
 	}
+	c, err := pr.load(ctx, item, topicID, render, isQuery, params)
+	if errors.Is(err, remote.ErrChanged) {
+		for _, a := range item.Assets {
+			pr.Catalog.Cache.Forget("layer:" + pr.dataURL(a.Href))
+		}
+		c, err = pr.load(ctx, item, topicID, render, isQuery, params)
+	}
+	return c, err
+}
+
+func (pr *Provider) load(ctx context.Context, item *catalog.Item, topicID, render string, isQuery bool, params query.Raw) (*query.Collection, error) {
 	var layer *pq.Layer
 	var style map[string]json.RawMessage
 	g, gctx := errgroup.WithContext(ctx)

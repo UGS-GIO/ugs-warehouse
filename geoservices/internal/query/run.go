@@ -251,6 +251,10 @@ func newWinnow(c *Collection, p Params) (*winnow, error) {
 		w.geometry = false
 	}
 	if n, ok := p.Number("geometryPrecision"); ok && n != 0 {
+		// Koop's Number.prototype.toFixed throws outside 0..100; past it, formatting is unbounded work.
+		if n < 0 || n > 100 {
+			return nil, bad("geometryPrecision must be between 0 and 100")
+		}
 		v := int(n)
 		w.precision = &v
 	}

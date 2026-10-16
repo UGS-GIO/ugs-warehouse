@@ -1,7 +1,10 @@
 package catalog
 
 import (
+	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -37,5 +40,28 @@ func TestParseTopics(t *testing.T) {
 	}
 	if c := tp.byID["c"]; len(c.Renders) != 1 || c.Renders[0].Name != "default" || c.Title != nil {
 		t.Errorf("a topic without renders is served as default: %+v", c)
+	}
+}
+
+func TestRendererVersionFollowsTheFile(t *testing.T) {
+	dir := t.TempDir()
+	esri := filepath.Join(dir, "b.json")
+	items := filepath.Join(dir, "items.json")
+	os.WriteFile(items, []byte(`{"items":[{"id":"a","properties":{"ugs:renders":{"b":{"esri_url":"`+esri+`"}}},"assets":{"data":{"href":"a.parquet"}}}]}`), 0o644)
+	c := New(items, 0)
+	version := func(renderer string) string {
+		os.WriteFile(esri, []byte(`{"renderer":`+renderer+`}`), 0o644)
+		it, err := c.Topic(context.Background(), "a")
+		if err != nil {
+			t.Fatal(err)
+		}
+		v, err := c.RendererVersion(context.Background(), it, "b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+	if version(`{"type":"simple"}`) == version(`{"type":"uniqueValue"}`) {
+		t.Fatal("a republished renderer kept its version")
 	}
 }

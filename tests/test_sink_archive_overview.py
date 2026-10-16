@@ -55,3 +55,17 @@ def test_points_and_light_layers_remove_a_stale_overview(uploads):
         sink_archive.write_overview(TOPIC, _con(sql), "v")
     assert not uploads["upload"]
     assert len(uploads["delete"]) == 2
+
+
+def test_a_failed_overview_removes_the_stale_one(uploads, monkeypatch):
+    """Otherwise the item would go on listing the old overview beside the new archive."""
+    monkeypatch.setattr(sink_archive, "OVERVIEW_MIN_BYTES", 1)
+
+    def fail(*_, **__):
+        raise OSError("upload failed")
+
+    monkeypatch.setattr(sink_archive.gcs, "upload", fail)
+    with pytest.raises(OSError):
+        con = _con("SELECT 1 AS feature_id, ST_Buffer(ST_Point(0, 0), 1) AS geom")
+        sink_archive.write_overview(TOPIC, con, "v")
+    assert uploads["delete"] == [sink_archive.config.overview_path(TOPIC.stem)]

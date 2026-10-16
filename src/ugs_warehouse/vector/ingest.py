@@ -114,8 +114,10 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
 
     def _archive() -> None:
         written["data"] = sink_archive.write(topic, con, view)
-        overview = sink_archive.write_overview(topic, con, view)
-        if overview:
+
+    def _overview() -> None:
+        # Only beside an archive written this run; when the archive failed the old pair stays.
+        if "data" in written and (overview := sink_archive.write_overview(topic, con, view)):
             written["overview"] = overview
 
     def _pmtiles() -> None:
@@ -124,6 +126,7 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
     data_sinks = [] if unchanged else [
         ("ducklake", lambda: sink_ducklake.write(topic, con, view)),
         ("archive",  _archive),
+        ("overview", _overview),
         ("pmtiles",  _pmtiles),
     ]
     data_failed = False

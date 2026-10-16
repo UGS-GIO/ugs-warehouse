@@ -10,23 +10,30 @@ from ugs_warehouse.vector import sink_archive
 
 
 class _FakeCon:
-    """Records the COPY, and answers the bytes-per-row sample with `per_row`."""
+    """Answers the bytes-per-row sample with `per_row`."""
 
-    def __init__(self, per_row: float = 2_000.0) -> None:
-        self.sql = ""
+    def __init__(self, per_row: float) -> None:
         self._per_row = per_row
 
     def execute(self, sql: str):
-        if sql.lstrip().upper().startswith("SELECT"):
-            return self
-        self.sql = sql
         return self
 
     def fetchone(self):
         return (self._per_row,)
 
-    def fetchall(self):
-        return [("MULTIPOLYGON", False)]
+
+def test_row_group_size_targets_bytes_not_rows() -> None:
+    # The point of the bound is a group a clipped read can skip, and that is a size in bytes.
+    heavy = sink_archive._row_group_size(_FakeCon(per_row=40_000), "v")
+    light = sink_archive._row_group_size(_FakeCon(per_row=40), "v")
+    assert heavy * 40_000 <= sink_archive.TARGET_ROW_GROUP_BYTES
+    assert heavy < light
+    assert sink_archive.ROW_GROUP_MIN <= heavy <= sink_archive.ROW_GROUP_MAX
+
+    # wetlands_riverine: 1.55 GB of geometry over 147,506 rows went out as 2 groups, the larger
+    # 1.06 GB. At its real weight the bound puts it in dozens.
+    riverine = sink_archive._row_group_size(_FakeCon(per_row=1.55 * 1024**3 / 147_506), "v")
+    assert 147_506 / riverine > 20, f"{riverine} rows/group still leaves too few groups"
 
 
 def _written(tmp_path, rows: int = 5000):

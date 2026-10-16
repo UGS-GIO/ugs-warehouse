@@ -83,6 +83,41 @@ def _geo_metadata(con: duckdb.DuckDBPyConnection, view: str) -> str:
         "geom": {"encoding": "WKB", "geometry_types": types, "covering": {"bbox": covering}}}})
 
 
+# DuckDB types the pyarrow writer cannot write, or writes differently from DuckDB's COPY: INTERVAL
+# fails outright, BIT and BIGNUM come out as raw bytes, and TIMETZ drops its offset. COPY wrote
+# HUGEINT as a DOUBLE. UUID and JSON reach arrow as plain strings and are tagged again below.
+_AS_TEXT = {"INTERVAL", "BIT", "BIGNUM", "VARINT", "TIME WITH TIME ZONE"}
+_AS_DOUBLE = {"HUGEINT", "UHUGEINT"}
+
+
+def _replacements(con: duckdb.DuckDBPyConnection, view: str) -> tuple[list[str], list[str], list[str]]:
+    """REPLACE terms for the archive SELECT, and the UUID and JSON columns to tag."""
+    terms, uuids, jsons = ["ST_AsWKB(geom) AS geom"], [], []
+    for name, typ, *_ in con.execute(f"DESCRIBE {view}").fetchall():
+        col = '"' + name.replace('"', '""') + '"'
+        if typ in _AS_TEXT:
+            terms.append(f"{col}::VARCHAR AS {col}")
+        elif typ in _AS_DOUBLE:
+            terms.append(f"{col}::DOUBLE AS {col}")
+        elif typ == "UUID":
+            terms.append(f"unhex(replace({col}::VARCHAR, '-', '')) AS {col}")
+            uuids.append(name)
+        elif typ == "JSON":
+            jsons.append(name)
+    return terms, uuids, jsons
+
+
+def _tagged(batch: pa.RecordBatch, uuids: list[str], jsons: list[str]) -> pa.RecordBatch:
+    """The batch with its UUID and JSON columns as arrow's uuid and json types, which Parquet keeps
+    as logical types."""
+    cols = {n: pa.ExtensionArray.from_storage(pa.uuid(), batch[n].cast(pa.binary(16))) for n in uuids}
+    cols |= {n: pa.ExtensionArray.from_storage(pa.json_(batch[n].type), batch[n]) for n in jsons}
+    if not cols:
+        return batch
+    return pa.RecordBatch.from_arrays([cols.get(n, batch[n]) for n in batch.schema.names],
+                                      names=batch.schema.names)
+
+
 def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> None:
     """Stream the transformed `view` into a GeoParquet file.
 
@@ -104,20 +139,26 @@ def _copy_geoparquet(con: duckdb.DuckDBPyConnection, view: str, path: str) -> No
     rows_per_group = _row_group_size(con, view)
     print(f"[archive] row group size: {rows_per_group} rows (~{TARGET_ROW_GROUP_BYTES // 1024**2} MB)")
     geo = _geo_metadata(con, view)
+    replace, uuids, jsons = _replacements(con, view)
     batches = con.execute(
-        f"SELECT * REPLACE (ST_AsWKB(geom) AS geom), "
+        f"SELECT * REPLACE ({', '.join(replace)}), "
         f"ST_XMin(geom) AS bbox_xmin, ST_YMin(geom) AS bbox_ymin, "
         f"ST_XMax(geom) AS bbox_xmax, ST_YMax(geom) AS bbox_ymax, "
         f"{{'xmin': ST_XMin(geom), 'ymin': ST_YMin(geom), 'xmax': ST_XMax(geom), 'ymax': ST_YMax(geom)}} AS bbox "
         f"FROM {view}"
     ).to_arrow_reader(rows_per_group)
-    schema = batches.schema.with_metadata({"geo": geo})
+    schema = batches.schema
+    tags = [(n, pa.uuid()) for n in uuids] + [(n, pa.json_(schema.field(n).type)) for n in jsons]
+    for name, typ in tags:
+        schema = schema.set(schema.get_field_index(name), pa.field(name, typ))
+    schema = schema.with_metadata({"geo": geo})
     dictionary = [f.name for f in schema if f.name != "geom" and (
         pa.types.is_string(f.type) or pa.types.is_large_string(f.type) or pa.types.is_integer(f.type))]
     with pq.ParquetWriter(path, schema, compression="zstd", compression_level=9, write_page_index=True,
                           data_page_size=PAGE_BYTES, write_batch_size=64, use_dictionary=dictionary) as out:
         for batch in batches:   # one DuckDB batch per row group, so only one is ever in memory
-            out.write_table(pa.Table.from_batches([batch], schema), row_group_size=rows_per_group)
+            out.write_table(pa.Table.from_batches([_tagged(batch, uuids, jsons)], schema),
+                            row_group_size=rows_per_group)
 
 
 def _upload(topic: Topic, local: str) -> gcs.FileMeta:
@@ -177,10 +218,14 @@ def write_overview(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> g
         f"REPLACE (CASE WHEN ST_IsEmpty(_simple) AND ST_Dimension(geom) = 2 THEN ST_Envelope(geom) "
         f"ELSE _simple END AS geom) FROM (SELECT *, ST_Simplify(geom, {OVERVIEW_TOLERANCE}) AS _simple "
         f"FROM {view})) WHERE NOT ST_IsEmpty(geom)")
-    with tempfile.TemporaryDirectory() as tmp:
-        local = os.path.join(tmp, os.path.basename(path))
-        _copy_geoparquet(con, f"{view}_overview", local)
-        meta = gcs.upload(local, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+    try:
+        with tempfile.TemporaryDirectory() as tmp:
+            local = os.path.join(tmp, os.path.basename(path))
+            _copy_geoparquet(con, f"{view}_overview", local)
+            meta = gcs.upload(local, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+    except Exception:
+        gcs.delete(path)   # the old overview is of the old archive; the item must not list it
+        raise
     print(f"[{topic.fqn}] overview: {config.public_url(path)}")
     return meta
 

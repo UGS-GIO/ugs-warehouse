@@ -4,9 +4,12 @@
 const catalog = require('./catalog');
 const parquet = require('./parquet');
 const { plan, toMercator, MERCATOR } = require('./plan');
-const { simplify } = require('./simplify');
+const { fromWkb } = require('./simplify');
 
 const MAX_RECORDS = 2000;
+// Map Viewer splits a tile whose response exceeds its limit into four and asks again, so a tile
+// request gets ArcGIS Server's larger tile page; a dense small-scale tile then answers once.
+const TILE_MAX_RECORDS = 8000;
 // A request Koop must still filter by `where` reads at most this many geometries, so one query
 // cannot exhaust memory; past it the response says the transfer limit was exceeded.
 const MAX_GEOMETRY_ROWS = Number(process.env.MAX_GEOMETRY_ROWS ?? 50000);
@@ -50,32 +53,44 @@ class Model {
     if (!/\/query\/?$/.test(req.path)) return { type: 'FeatureCollection', features: [], metadata };
 
     const params = { ...req.query, ...req.body };
-    let p = plan(params, layer, MAX_RECORDS);
+    const maxRecords = params.resultType === 'tile' ? TILE_MAX_RECORDS : MAX_RECORDS;
+    let p = plan(params, layer, maxRecords);
     // Small-scale requests on a heavy layer read its generalized copy (vector/sink_archive.py).
     const overview = item.assets.overview;
     const coarse = overview && p.kind === 'features' && p.geometry && !p.ids.length
       && p.tolerance >= Number(overview['ugs:simplify_tolerance'] ?? Infinity);
     const source = coarse ? await parquet.open(overview.href) : layer;
-    if (coarse) p = plan(params, source, MAX_RECORDS);
+    if (coarse) p = plan(params, source, maxRecords);
     if (p.kind === 'count') return { type: 'FeatureCollection', features: [], count: layer.rows, metadata };
     if (p.kind === 'extent') {
       return { type: 'FeatureCollection', features: [], count: layer.rows, metadata,
         extent: layer.extent && projectExtent(layer.extent, p.outSR) };
     }
 
-    const rows = await parquet.select(source, p);
+    // At a drawing scale, read past the page: specks are thinned below, as the vector tiles do,
+    // so a dense small-scale tile still fits in one page instead of splitting into hundreds.
+    const thin = p.page && p.tolerance > 0;
+    const rows = await parquet.select(source, thin ? { ...p, page: { ...p.page, limit: MAX_GEOMETRY_ROWS } } : p);
     const cap = p.page ? p.page.limit : p.geometry ? MAX_GEOMETRY_ROWS : Infinity;
-    const exceededTransferLimit = rows.length > cap;
-    if (exceededTransferLimit) rows.length = cap;
+    if (!thin && rows.length > cap) rows.length = cap + 1;
     const features = [];
-    for (const r of await parquet.records(source, p, rows)) {
+    const cells = new Set();
+    for (const r of await parquet.records(source, p, rows.slice(0, thin ? MAX_GEOMETRY_ROWS : cap + 1))) {
       const properties = {};
       for (const name of p.columns) properties[name] = value(r[name]);
-      const geometry = p.geometry ? simplify(r[source.geom], p.tolerance) : null;
-      // A feature simplified to nothing at this scale is too small to draw; leave it out.
+      const geometry = p.geometry ? fromWkb(r[source.geom], p.tolerance) : null;
       if (p.geometry && !geometry) continue;
+      if (thin && geometry.speck) {
+        // One speck per tolerance-sized cell per symbol class: the rest would draw on the same pixel.
+        const [x, y] = geometry.type === 'Polygon' ? geometry.coordinates[0][0] : geometry.coordinates[0][0][0];
+        const key = `${Math.floor(x / p.tolerance)}:${Math.floor(y / p.tolerance)}:${p.columns.filter((c) => c !== 'feature_id').map((c) => properties[c]).join('|')}`;
+        if (cells.has(key)) continue;
+        cells.add(key);
+      }
       features.push({ type: 'Feature', properties, geometry });
     }
+    const exceededTransferLimit = features.length > cap || (thin && rows.length > MAX_GEOMETRY_ROWS);
+    if (features.length > cap) features.length = cap;
     return { type: 'FeatureCollection', features, metadata: { ...metadata, exceededTransferLimit },
       filtersApplied: p.filtersApplied };
   }

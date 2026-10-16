@@ -5,11 +5,17 @@
 // holding them (the warehouse writes ~100-row pages; vector/sink_archive.py).
 'use strict';
 
+const zlib = require('node:zlib');
 const catalog = require('./catalog');
 
 let lib;
+// Node's native zstd is several times faster than the JS one, and geometry stays WKB bytes: the
+// simplifier reads it directly (src/simplify.js), with no GeoJSON built for points it drops.
 const hyparquet = () => (lib ??= Promise.all([import('hyparquet'), import('hyparquet-compressors')])
-  .then(([h, c]) => ({ ...h, compressors: c.compressors })));
+  .then(([h, c]) => ({ ...h, compressors: zlib.zstdDecompressSync
+    ? { ...c.compressors, ZSTD: (input) => new Uint8Array(zlib.zstdDecompressSync(input)) }
+    : c.compressors })));
+const WKB = { geometryFromBytes: (bytes) => bytes };
 
 // Our GeoParquet columns that are not attributes: the covering and the source CRS.
 const INTERNAL = new Set(['bbox', 'bbox_xmin', 'bbox_ymin', 'bbox_xmax', 'bbox_ymax', 'target_epsg']);
@@ -113,7 +119,7 @@ const overlaps = (g, [x0, y0, x1, y1]) =>
 
 async function read(h, layer, columns, rowStart, rowEnd) {
   return h.parquetReadObjects({ file: layer.file, metadata: layer.metadata, columns, rowStart, rowEnd,
-    compressors: h.compressors, useOffsetIndex: true });
+    compressors: h.compressors, parsers: WKB, useOffsetIndex: true });
 }
 
 // The rows a plan selects, in file (= feature_id) order.

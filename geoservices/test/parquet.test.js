@@ -7,7 +7,7 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const parquet = require('../src/parquet');
 const { plan } = require('../src/plan');
-const { simplify } = require('../src/simplify');
+const { fromWkb } = require('../src/simplify');
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'grid.parquet');
 const open = () => parquet.open(FIXTURE);
@@ -39,22 +39,36 @@ test('a page reads one extra row to know whether there is more', async () => {
   assert.deepEqual(rows, [1195, 1196, 1197, 1198, 1199]);
 });
 
-test('records carry the planned columns and GeoJSON geometry', async () => {
+test('records carry the planned columns and WKB geometry', async () => {
   const layer = await open();
   const p = plan({ objectIds: '42', outFields: 'name' }, layer);
   const [r] = await parquet.records(layer, p, await parquet.select(layer, p));
   assert.equal(r.name, 'unit 41');
   assert.equal(Number(r.feature_id), 42);
-  assert.equal(r.geom.type, 'Polygon');
+  const g = fromWkb(r.geom, 0);
+  assert.equal(g.type, 'Polygon');
+  assert.ok(Math.abs(g.coordinates[0][0][0] - -111.95) < 0.02);
 });
 
-test('simplification keeps rings closed and a speck of what collapses', () => {
-  const square = { type: 'Polygon', coordinates: [[[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0], [0, 0, 0]]] };
-  assert.deepEqual(simplify(square, 0.1).coordinates[0][0], [0, 0]);   // 2D
-  assert.equal(simplify(square, 0.1).coordinates[0].length, 5);
-  const circle = { type: 'Polygon', coordinates: [Array.from({ length: 33 }, (_, i) =>
-    [Math.cos((i / 32) * 2 * Math.PI), Math.sin((i / 32) * 2 * Math.PI)])] };
-  const [speck] = simplify(circle, 10).coordinates;   // its bounding box, not nothing
+// Little-endian WKB polygon (ISO Z) from rings of [x, y].
+function wkbPolygonZ(rings) {
+  const n = rings.reduce((s, r) => s + 4 + r.length * 24, 9);
+  const v = new DataView(new ArrayBuffer(n));
+  v.setUint8(0, 1); v.setUint32(1, 1003, true); v.setUint32(5, rings.length, true);
+  let o = 9;
+  for (const ring of rings) {
+    v.setUint32(o, ring.length, true); o += 4;
+    for (const [x, y] of ring) { v.setFloat64(o, x, true); v.setFloat64(o + 8, y, true); v.setFloat64(o + 16, 0, true); o += 24; }
+  }
+  return new Uint8Array(v.buffer);
+}
+
+test('simplification keeps rings closed, 2D, and a speck of what collapses', () => {
+  const square = wkbPolygonZ([[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]);
+  assert.deepEqual(fromWkb(square, 0.1).coordinates, [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]]);
+  const circle = wkbPolygonZ([Array.from({ length: 33 }, (_, i) =>
+    [Math.cos((i / 32) * 2 * Math.PI), Math.sin((i / 32) * 2 * Math.PI)])]);
+  const [speck] = fromWkb(circle, 10).coordinates;   // its bounding box, not nothing
   assert.equal(speck.length, 5);
   assert.deepEqual([speck[0][0], speck[2][0]], [-1, 1]);
 });

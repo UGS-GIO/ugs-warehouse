@@ -80,14 +80,15 @@ func (s *Server) params(r *http.Request) (query.Params, query.Raw, error) {
 		switch ct := r.Header.Get("Content-Type"); {
 		case strings.HasPrefix(ct, "application/json"):
 			var m map[string]any
-			if json.Unmarshal(b, &m) == nil {
-				for k, v := range m {
-					if str, ok := v.(string); ok {
-						body.Set(k, str)
-					} else {
-						j, _ := json.Marshal(v)
-						body.Set(k, string(j))
-					}
+			if json.Unmarshal(b, &m) != nil {
+				return nil, nil, bad("Malformed JSON body")
+			}
+			for k, v := range m {
+				if str, ok := v.(string); ok {
+					body.Set(k, str)
+				} else {
+					j, _ := json.Marshal(v)
+					body.Set(k, string(j))
 				}
 			}
 		case strings.HasPrefix(ct, "application/x-www-form-urlencoded"):

@@ -162,6 +162,9 @@ func notFound(w http.ResponseWriter, r *http.Request) {
 
 // fail writes an error: an Esri error body with HTTP 200 (as ArcGIS does), or 503 when shedding.
 func (s *Server) fail(w http.ResponseWriter, err error) {
+	if errors.Is(err, context.Canceled) {
+		return // the client left (Map Viewer cancels tiles it panned away from)
+	}
 	code, msg, details := 500, err.Error(), []string{}
 	var qe *query.Error
 	var ce *catalog.Error

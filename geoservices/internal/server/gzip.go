@@ -26,6 +26,7 @@ func compress(body []byte) []byte {
 	w.Reset(&buf)
 	w.Write(body)
 	w.Close()
+	w.Reset(io.Discard) // the pooled writer must not keep this body alive
 	gzipWriters.Put(w)
 	return buf.Bytes()
 }

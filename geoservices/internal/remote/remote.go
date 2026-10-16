@@ -145,11 +145,15 @@ func (s *Store) Open(ctx context.Context, url string) (*File, error) {
 			return err
 		}
 		defer res.Body.Close()
-		if body, err = io.ReadAll(res.Body); err != nil {
+		// One byte past the tail: a 200 longer than that is a server ignoring Range on a big file.
+		if body, err = io.ReadAll(io.LimitReader(res.Body, tailBytes+1)); err != nil {
 			return err
 		}
 		switch res.StatusCode {
 		case http.StatusOK:
+			if len(body) > tailBytes {
+				return permanent(errNoRanges)
+			}
 			f.Size = int64(len(body))
 		case http.StatusPartialContent:
 			cr := res.Header.Get("Content-Range")
@@ -332,20 +336,19 @@ func (f *File) get(ctx context.Context, start, end int64, b []byte) error {
 		return err
 	}
 	defer res.Body.Close()
-	if res.StatusCode != http.StatusPartialContent && res.StatusCode != http.StatusOK {
-		return statusError(res.StatusCode)
-	}
 	if res.StatusCode == http.StatusOK {
-		// No range support: skip to the part we asked for.
-		if _, err := io.CopyN(io.Discard, res.Body, start); err != nil {
-			return err
-		}
+		return permanent(errNoRanges) // reading the whole file for every range would not end well
+	}
+	if res.StatusCode != http.StatusPartialContent {
+		return statusError(res.StatusCode)
 	}
 	if _, err := io.ReadFull(res.Body, b); err != nil {
 		return fmt.Errorf("short read: %w", err)
 	}
 	return nil
 }
+
+var errNoRanges = errors.New("server ignored the Range header")
 
 type permanentError struct{ error }
 

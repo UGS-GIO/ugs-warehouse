@@ -3,6 +3,7 @@ package remote
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -119,5 +120,16 @@ func TestPrefetchParts(t *testing.T) {
 	}
 	if _, err := f.ReadAt(got, int64(len(data))-10); err != io.EOF {
 		t.Fatal(fmt.Sprint("short read at the end should say EOF, got ", err))
+	}
+}
+
+func TestRefusesAServerIgnoringRanges(t *testing.T) {
+	big := make([]byte, tailBytes+1)
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(big) // 200 with the whole file, whatever the Range
+	}))
+	defer ts.Close()
+	if _, err := NewStore(1<<20).Open(context.Background(), ts.URL); !errors.Is(err, errNoRanges) {
+		t.Fatalf("Open = %v, want errNoRanges", err)
 	}
 }

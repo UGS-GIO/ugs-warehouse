@@ -21,6 +21,16 @@ function projectExtent(e, wkid) {
   return { xmin, ymin, xmax, ymax, spatialReference: { wkid: 102100, latestWkid: 3857 } };
 }
 
+// Width plus height of a geometry's bounds, to rank features by how much of a tile they cover.
+function extent(g) {
+  let x0 = Infinity; let y0 = Infinity; let x1 = -Infinity; let y1 = -Infinity;
+  const walk = (c) => {
+    if (typeof c[0] === 'number') { if (c[0] < x0) x0 = c[0]; if (c[0] > x1) x1 = c[0]; if (c[1] < y0) y0 = c[1]; if (c[1] > y1) y1 = c[1]; } else c.forEach(walk);
+  };
+  walk(g.coordinates);
+  return (x1 - x0) + (y1 - y0);
+}
+
 // Parquet values as the JSON types the layer's fields declare: BigInt -> number, Date -> epoch ms.
 const value = (v) => (typeof v === 'bigint' ? Number(v) : v instanceof Date ? v.getTime() : v);
 
@@ -55,10 +65,13 @@ class Model {
     const params = { ...req.query, ...req.body };
     const maxRecords = params.resultType === 'tile' ? TILE_MAX_RECORDS : MAX_RECORDS;
     let p = plan(params, layer, maxRecords);
-    // Small-scale requests on a heavy layer read its generalized copy (vector/sink_archive.py).
-    const overview = item.assets.overview;
-    const coarse = overview && p.kind === 'features' && p.geometry && !p.ids.length
-      && p.tolerance >= Number(overview['ugs:simplify_tolerance'] ?? Infinity);
+    // Small-scale requests on a heavy layer read its coarsest generalized copy that is still finer
+    // than the request (vector/sink_archive.py).
+    const overview = Object.entries(item.assets)
+      .filter(([key, a]) => key.startsWith('overview') && Number(a['ugs:simplify_tolerance']) <= p.tolerance)
+      .map(([, a]) => a)
+      .sort((a, b) => b['ugs:simplify_tolerance'] - a['ugs:simplify_tolerance'])[0];
+    const coarse = overview && p.kind === 'features' && p.geometry && !p.ids.length;
     const source = coarse ? await parquet.open(overview.href) : layer;
     if (coarse) p = plan(params, source, maxRecords);
     if (p.kind === 'count') return { type: 'FeatureCollection', features: [], count: layer.rows, metadata };
@@ -70,12 +83,15 @@ class Model {
     // At a drawing scale, read past the page: specks are thinned below, as the vector tiles do,
     // so a dense small-scale tile still fits in one page instead of splitting into hundreds.
     const thin = p.page && p.tolerance > 0;
-    const rows = await parquet.select(source, thin ? { ...p, page: { ...p.page, limit: MAX_GEOMETRY_ROWS } } : p);
+    // An overview's rows are small, so a drawing tile reads all of them rather than cutting the
+    // Hilbert-ordered rows off partway across the tile.
+    const readLimit = source === layer ? MAX_GEOMETRY_ROWS : Infinity;
+    const rows = await parquet.select(source, thin ? { ...p, page: { ...p.page, limit: readLimit } } : p);
     const cap = p.page ? p.page.limit : p.geometry ? MAX_GEOMETRY_ROWS : Infinity;
     if (!thin && rows.length > cap) rows.length = cap + 1;
     const features = [];
     const cells = new Set();
-    for (const r of await parquet.records(source, p, rows.slice(0, thin ? MAX_GEOMETRY_ROWS : cap + 1))) {
+    for (const r of await parquet.records(source, p, rows.slice(0, thin ? readLimit : cap + 1))) {
       const properties = {};
       for (const name of p.columns) properties[name] = value(r[name]);
       const geometry = p.geometry ? fromWkb(r[source.geom], p.tolerance) : null;
@@ -89,7 +105,14 @@ class Model {
       }
       features.push({ type: 'Feature', properties, geometry });
     }
-    const exceededTransferLimit = features.length > cap || (thin && rows.length > MAX_GEOMETRY_ROWS);
+    // A drawing tile over the cap keeps its largest features, as the vector tiles drop the
+    // smallest: flagging it exceeded makes Map Viewer split it into four and ask again, repeatedly.
+    const tile = params.resultType === 'tile' && thin;
+    if (tile && features.length > cap) {
+      const size = (f) => (f.geometry.speck ? 0 : extent(f.geometry));
+      features.sort((a, b) => size(b) - size(a));
+    }
+    const exceededTransferLimit = !tile && (features.length > cap || (thin && rows.length > readLimit));
     if (features.length > cap) features.length = cap;
     return { type: 'FeatureCollection', features, metadata: { ...metadata, exceededTransferLimit },
       filtersApplied: p.filtersApplied };

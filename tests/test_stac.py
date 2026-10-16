@@ -1147,6 +1147,18 @@ def test_feature_service_skips_an_item_without_our_geoparquet():
     assert feature_service.collection({"id": "b", "assets": {}}) is None
 
 
+@pytest.mark.parametrize("stac, expected", [("warehouse/stac", "warehouse/featureserv"),
+                                             ("warehouse-sandbox/stac", "warehouse-sandbox/featureserv")])
+def test_a_sandbox_refresh_keeps_its_own_layer_list(stac, expected):
+    import subprocess
+    import sys
+
+    code = "from ugs_warehouse.core import config; print(config.FEATURES_PREFIX)"
+    env = {"PATH": "", "WAREHOUSE_STAC_PREFIX": stac}
+    out = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert out.stdout.strip() == expected, out.stderr
+
+
 def test_feature_service_serves_the_data_asset_not_the_overview():
     from ugs_warehouse.core import feature_service
 

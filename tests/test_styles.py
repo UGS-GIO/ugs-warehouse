@@ -12,7 +12,7 @@ MANIFEST = (
      "path": "styles/enmin_gravity/default.json"},
     {"itemId": "enmin_ut_counties", "render": "default", "kind": "vector",
      "assets": ["pmtiles"], "path": "styles/enmin_ut_counties/default.json",
-     "glyphs": "fonts/{fontstack}/{range}.pbf"},
+     "glyphs": "fonts/{fontstack}/{range}.pbf", "esri": "esri/enmin_ut_counties/default.json"},
     {"layer": "legacy_layer", "render": "default", "kind": "vector",  # older layer-keyed entry
      "assets": ["pmtiles"], "path": "styles/legacy_layer/default.json"},
 )
@@ -124,3 +124,11 @@ def test_label_render_carries_absolute_glyphs():
     assert renders["default"]["glyphs"].endswith("/fonts/{fontstack}/{range}.pbf")
     assert renders["default"]["glyphs"].startswith("http")
     assert "glyphs" not in styles.renders_for("hazards_qfaults", {"pmtiles"})[0]["default"]
+
+
+def test_render_carries_absolute_esri_url():
+    """The FeatureServer reads the Esri renderer from here, so it must be an absolute URL."""
+    renders, _ = styles.renders_for("enmin_ut_counties", {"pmtiles"})
+    assert renders["default"]["esri_url"].startswith("http")
+    assert renders["default"]["esri_url"].endswith("/esri/enmin_ut_counties/default.json")
+    assert "esri_url" not in styles.renders_for("hazards_qfaults", {"pmtiles"})[0]["default"]

@@ -137,6 +137,9 @@ which preserves object paths.
 - OGC API Features for ArcGIS Pro / QGIS: pygeoapi over the GeoParquet, scale-to-zero.
 - `ugs-warehouse-tiles`: XYZ tiles, ready-made MapLibre styles, and an Esri VectorTileServer facade
   so AGOL and Pro can add a layer at all.
+- `ugs-warehouse-geoservices`: an ArcGIS FeatureServer over the GeoParquet, one layer per ugs-styles
+  render, so Map Viewer, Experience Builder and StoryMaps get the symbology, popups and attribute
+  tables (`geoservices/README.md`).
 - Background jobs: topic thumbnails, the `restyle` rebind, and weekly DuckLake maintenance.
 - External catalogs (USWB) federate in as children of the root, so one catalog URL covers them.
 
@@ -155,6 +158,11 @@ The vector pipeline is end-to-end in production. The honest gaps:
   don't render on the viewer map because the visual asset is the native-CRS COG (#84), `native_crs`
   is trusted text that's never verified against the promoted COG (#83), and promote shares an
   instance with ingest with no dead-letter policy, so one bad message is an outage (#81).
+- 🟧 **FeatureServer at scale** — every query is computed at the origin. Map Viewer asks for the
+  same fixed grid of tile queries for every user, so the plan is: a CDN in front that caches GET
+  responses (purged on reingest), z5-z10 tile responses of heavy layers baked to the bucket at
+  reingest, a native origin with an encoded-response cache and load shedding, the paged archive and
+  overviews, and min-instances 1 with concurrency set from the measured breaking point.
 - 🟧 **STAC `datetime`** is ingest time, not data-validity time — waiting on an upstream validity timestamp.
 - 🟧 **Publication files** — only the map-pub slice is mirrored; the rest live on the legacy host (#120).
 - 🟧 **Legacy pubs** — 1,163 catalog items, mostly legacy mining district scans, have no record in

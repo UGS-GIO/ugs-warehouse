@@ -196,8 +196,8 @@ The Hosting *site* is tofu-managed (`infra/firebase.tf`). Served at
 
 1. Add the repo secret `FIREBASE_SERVICE_ACCOUNT_UT_DNR_UGS_MAPS_PROD` — copy the value from
    `ugs-map-viewer`, which already holds a key for the same project.
-2. Optional repo variables `VITE_FEATURES_BASE` / `VITE_TILES_BASE`: the deployed OGC API Features
-   and tiles URLs. Cloud Build resolves these with `gcloud run services describe`; an Action has no
+2. Optional repo variables `VITE_FEATURES_BASE` / `VITE_TILES_BASE` / `VITE_GEOSERVICES_BASE`: the
+   deployed OGC API Features, tiles and FeatureServer URLs. Cloud Build resolves these with `gcloud run services describe`; an Action has no
    GCP credentials, so they are variables here. Left unset, the viewer hides those links rather
    than printing dead ones.
 

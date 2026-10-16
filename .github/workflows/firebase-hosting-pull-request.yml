@@ -44,6 +44,7 @@ jobs:
         env:
           VITE_FEATURES_BASE: ${{ vars.VITE_FEATURES_BASE }}
           VITE_TILES_BASE: ${{ vars.VITE_TILES_BASE }}
+          VITE_GEOSERVICES_BASE: ${{ vars.VITE_GEOSERVICES_BASE }}
         run: |
           npm ci
           npm run build

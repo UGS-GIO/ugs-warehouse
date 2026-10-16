@@ -1,10 +1,11 @@
 // How to use an item from other software, in STAC's terms: its assets (the files on the CDN) and its
-// links (live services: OGC API Features, XYZ, the GL style, ArcGIS vector tiles).
+// links (live services: OGC API Features, ArcGIS FeatureServer, XYZ, the GL style, ArcGIS vector
+// tiles).
 import { useEffect, useRef, useState } from "react";
 
 import { serviceUrlOf } from "./catalog";
 import { Panel } from "./panel";
-import { assetKind, esriVectorTileUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
+import { assetKind, esriVectorTileUrl, featureServerUrl, parquetAsset, featuresCollectionUrl, FEATURES_BASE, pmtilesLink, rendersOf, type StacDoc,
   tilesStyleUrl, xyzTilesUrl } from "@/stac";
 import { usePreviewMap } from "@/map/preview-map";
 import { UiSelect } from "@/ui/select";
@@ -80,11 +81,26 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
   const [pickedRender, setPickedRender] = useState<string>();
   // Explicit choice wins; otherwise track the map so the two never disagree silently.
   const chosen = [pickedRender, shown].find((r) => r && esriRenders.includes(r)) ?? esriRenders[0];
+  const renderPick = (
+    <UiSelect value={chosen} onValueChange={setPickedRender}
+      title="Which published symbology this service serves"
+      items={esriRenders.map((r) => ({ value: r, label: r }))}
+      className="max-w-[11rem] shrink-0 text-sm" />
+  );
   type Row = { label: string; desc: string; url: string; pick?: React.ReactNode; unavailable?: string };
   const rows: Row[] = [];
   if (coll) {
     rows.push({ label: "OGC API Features", desc: "REST feature service — collection metadata", url: coll });
     rows.push({ label: "Features (GeoJSON)", desc: "Query features as GeoJSON (paged)", url: `${coll}/items?limit=50` });
+  }
+  const fs = pq ? featureServerUrl(id, chosen) : undefined;
+  if (fs) {
+    rows.push({
+      label: "ArcGIS feature layer",
+      desc: "ArcGIS Online Map Viewer, Experience Builder, StoryMaps. Popups, tables and symbology included",
+      url: fs,
+      pick: esriRenders.length > 1 ? renderPick : undefined,
+    });
   }
   // The tiles service exists for clients that cannot read PMTiles directly. Only offered when the
   // item actually has PMTiles, since that archive is what it serves.
@@ -109,12 +125,7 @@ export function EndpointsPanel({ item }: { item: StacDoc }) {
         label: "ArcGIS vector tiles",
         desc: "ArcGIS Pro / AGOL — the one client that needs its own service contract. Symbology included",
         url: esri,
-        pick: esriRenders.length > 1 ? (
-          <UiSelect value={chosen} onValueChange={setPickedRender}
-            title="Which published symbology this service serves"
-            items={esriRenders.map((r) => ({ value: r, label: r }))}
-            className="max-w-[11rem] shrink-0 text-sm" />
-        ) : undefined,
+        pick: esriRenders.length > 1 ? renderPick : undefined,
       });
     }
   }

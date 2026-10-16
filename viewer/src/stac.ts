@@ -201,6 +201,19 @@ export const esriVectorTileUrl = (id: string, render?: string, renders?: string[
   return `${TILES_BASE}/rest/services/${encodeURIComponent(id)}${seg}/VectorTileServer`;
 };
 
+// ArcGIS FeatureServer (the `geoservices/` service) for Map Viewer, Experience Builder and
+// StoryMaps. Same shape as TILES_BASE. Every topic with a GeoParquet is a layer, one per render,
+// and a topic without renders is served as `default`.
+export const GEOSERVICES_BASE = (
+  new URLSearchParams(LOC.search).get("geoservices")
+  || ((import.meta as { env?: Record<string, string> }).env?.VITE_GEOSERVICES_BASE)
+  || ""
+).replace(/\/+$/, "");
+export const featureServerUrl = (id: string, render = "default"): string | undefined =>
+  GEOSERVICES_BASE
+    ? `${GEOSERVICES_BASE}/ugs/rest/services/${encodeURIComponent(id)}/${encodeURIComponent(render)}/FeatureServer/0`
+    : undefined;
+
 const isCog = (a: Asset) =>
   a.type?.includes("profile=cloud-optimized")
   || a.roles?.includes("cloud-optimized")

@@ -18,6 +18,9 @@ on:
       tiles_base:
         type: string
         default: ""
+      geoservices_base:
+        type: string
+        default: ""
 
 jobs:
   deploy:
@@ -36,6 +39,7 @@ jobs:
         env:
           VITE_FEATURES_BASE: ${{ inputs.features_base }}
           VITE_TILES_BASE: ${{ inputs.tiles_base }}
+          VITE_GEOSERVICES_BASE: ${{ inputs.geoservices_base }}
         run: |
           npm ci
           npm run build

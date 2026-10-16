@@ -38,6 +38,12 @@ ROW_GROUP_MIN = 512          # heavy geometry: a few hundred rows is already ten
 ROW_GROUP_MAX = 122_880      # DuckDB's own default, the ceiling for very light rows
 PAGE_BYTES = 64 * 1024       # ~100 rows of polygon geometry: what a page-index reader fetches
 
+# A statewide map of a heavy layer cannot be drawn from the archive without reading all of it, so
+# heavy line and polygon layers also get a generalized copy. 0.0005 deg (~50 m) is finer than a
+# pixel through zoom 11; nonriverine wetlands go from 891 MB of geometry to 10 MB.
+OVERVIEW_TOLERANCE = 0.0005
+OVERVIEW_MIN_BYTES = 64 * 1024**2
+
 
 def _row_group_size(con: duckdb.DuckDBPyConnection, view: str) -> int:
     """Rows per group so a group lands near TARGET_ROW_GROUP_BYTES, from the view's own geometry.
@@ -148,6 +154,32 @@ def is_current(topic: Topic) -> bool:
     paged = geom is not None and meta.num_row_groups > 0 and meta.row_group(0).column(geom).has_offset_index
     return (geo.get("version") == GEOPARQUET_VERSION and "bbox" in (column.get("covering") or {})
             and paged)
+
+
+def write_overview(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta | None:
+    """Write `{stem}_overview.parquet`, the archive simplified to OVERVIEW_TOLERANCE, when the
+    layer is heavy enough to need one; otherwise remove a stale one. Rows keep their feature_id,
+    so a feature drawn from the overview is the same feature in the archive."""
+    path = config.overview_path(topic.stem)
+    weight, points = con.execute(
+        f"SELECT sum(octet_length(ST_AsWKB(geom))), bool_and(ST_GeometryType(geom)::VARCHAR LIKE '%POINT') "
+        f"FROM {view}").fetchone()
+    if points or (weight or 0) < OVERVIEW_MIN_BYTES:
+        gcs.delete(path)
+        return None
+    # A polygon smaller than the tolerance keeps its envelope, a speck where it is, as the vector
+    # tiles keep one; dropping it would empty a statewide view of a layer made of small features.
+    simple = f"ST_Simplify(geom, {OVERVIEW_TOLERANCE})"
+    con.execute(
+        f"CREATE OR REPLACE TEMP VIEW {view}_overview AS SELECT * FROM (SELECT * REPLACE ("
+        f"CASE WHEN ST_IsEmpty({simple}) AND ST_Dimension(geom) = 2 THEN ST_Envelope(geom) "
+        f"ELSE {simple} END AS geom) FROM {view}) WHERE NOT ST_IsEmpty(geom)")
+    with tempfile.TemporaryDirectory() as tmp:
+        local = os.path.join(tmp, os.path.basename(path))
+        _copy_geoparquet(con, f"{view}_overview", local)
+        meta = gcs.upload(local, path, content_type=PARQUET_MIME, cache_control=gcs.CACHE_MUTABLE)
+    print(f"[{topic.fqn}] overview: {config.public_url(path)}")
+    return meta
 
 
 def write(topic: Topic, con: duckdb.DuckDBPyConnection, view: str) -> gcs.FileMeta:

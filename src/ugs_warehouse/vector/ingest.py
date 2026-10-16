@@ -114,6 +114,9 @@ def _run_sinks(topic: Topic, con, view: str, backend, dry_run: bool, skip_refres
 
     def _archive() -> None:
         written["data"] = sink_archive.write(topic, con, view)
+        overview = sink_archive.write_overview(topic, con, view)
+        if overview:
+            written["overview"] = overview
 
     def _pmtiles() -> None:
         written["pmtiles"] = sink_pmtiles.build(topic, con, view)
